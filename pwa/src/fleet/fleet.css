@@ -2071,6 +2071,74 @@ button.sess-held {
    selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
    5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
    until this selector named its ancestor). */
+/* Wave 6, spec §8: the caps dial, beside the pause banner and grounded the same
+   way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
+   recover a ground and measure the contrast — a colourless rule lands in
+   `uncovered` and the gate cannot see it at all. */
+.caps-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+
+.caps-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.caps-control .caps-label {
+  color: var(--ink-secondary);
+}
+
+.caps-input {
+  width: 4.5rem;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-1);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+}
+
+/* The reading an operator acts on: usage against the cap. Dimmer than the
+   input, because it is a measurement and not a control. */
+.caps-control .caps-usage {
+  color: var(--ink-tertiary);
+}
+
+.caps-save {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+
+.caps-save:active { transform: scale(0.97); }
+
+/* Named-ancestor descendant for the same reason `.coord-error` is one. */
+.caps-control .caps-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-dead-text);
+}
+
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;

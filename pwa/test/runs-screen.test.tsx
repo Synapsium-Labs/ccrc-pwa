@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runItems } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
@@ -49,6 +49,13 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
+
+/** The caps dial's reader, held for every board render in this file. The screen
+ *  injects it for the reason its own prop docstring gives: a loader left to the
+ *  global `fetch` puts a request into every test that renders the board, and one
+ *  of them asserts that none is sent. `never` (a promise that does not settle)
+ *  keeps the control unrendered unless a test says otherwise. */
+const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 
 describe('the run vocabulary tracks RUN_STATES, not a hand-copied list', () => {
   it('RUN_ORDER names every RunState exactly once — the same drift guard RUN_STATES itself exists for', () => {
@@ -155,7 +162,7 @@ describe('the run board', () => {
         runsFrameSeen: true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const group = screen.getByRole('group', { name: /build4-transcript-surface/i });
     expect(group.tagName).toBe('DIV');
     expect(document.querySelectorAll('section[aria-label]')).toHaveLength(0);
@@ -164,7 +171,7 @@ describe('the run board', () => {
   it('says the wave and the work-item tally, in tabular mono', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('wave 3/4')).toBeInTheDocument();
     expect(screen.getByText('3/7')).toBeInTheDocument();
     // No blocked/failed cell: RunItemTally shipped as {done,total} only —
@@ -177,7 +184,7 @@ describe('the run board', () => {
     // clauses rather than print `0 X`") applied to the one place it was not.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('—');
     expect(screen.queryByText('0/0')).toBeNull();
   });
@@ -185,14 +192,14 @@ describe('the run board', () => {
   it('renders 3/7 for a run that declared seven', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('3/7');
   });
 
   it('renders 0/7 for a declared ledger nothing has settled yet — only total 0 is the dash', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 7 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('0/7');
   });
 
@@ -201,7 +208,7 @@ describe('the run board', () => {
     // second cue invented for it (spec §3.3).
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const tally = document.querySelector('.run-tally');
     expect(tally?.querySelector('[aria-hidden="true"]')).toBeNull();
     expect(tally?.getAttribute('title')).toBeNull();
@@ -221,7 +228,7 @@ describe('the run board', () => {
     // dot alone". A run board that colour-coded alone would fail the same rule.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ state: 'awaiting-review' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText(RUN_WORD['awaiting-review'])).toBeInTheDocument();
     expect(document.querySelector('.run-glyph')).not.toBeNull();
   });
@@ -236,7 +243,7 @@ describe('the run board', () => {
     const store = makeStore();
     const fromNewerBuild = { ...r(), state: 'quarantined' } as unknown as RunSummary;
     act(() => { store.setState({ runs: [fromNewerBuild], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText(RUN_WORD.unknown)).toBeInTheDocument();
   });
 
@@ -246,7 +253,7 @@ describe('the run board', () => {
     delete noItems.items;
     const bad = noItems as unknown as RunSummary;
     act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
-    expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />)).not.toThrow();
+    expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />)).not.toThrow();
     // `runItems`' `{done:0,total:0}` default, rendered through
     // `itemTallyLabel`: a row that reached this renderer without a tally
     // reads as "no declared ledger" (spec §3.3's em dash), never as `0/0` —
@@ -261,7 +268,7 @@ describe('the run board', () => {
     delete noClosedAt.closedAt;
     const bad = noClosedAt as unknown as RunSummary;
     act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('clear-cove')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
   });
@@ -378,7 +385,7 @@ describe('the run board', () => {
         runsFrameSeen: true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('wave 2/4')).toBeInTheDocument();
     expect(screen.queryByText('wave 1/4')).toBeNull();
   });
@@ -386,12 +393,12 @@ describe('the run board', () => {
   it('opens the run’s session — and renders an INERT row when there is no session to open', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    const { rerender } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { rerender } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     fireEvent.click(screen.getByRole('button', { name: /clear-cove/i }));
     expect(location.pathname).toBe('/s/ccrc-pwa-clear-cove');
 
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    rerender(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    rerender(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // A dead button that navigates to a session that does not exist is worse
     // than a row you cannot tap.
     expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
@@ -408,7 +415,7 @@ describe('the run board', () => {
     act(() => {
       store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess({ unmeasured: ['workdir'] })] });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const note = screen.getByText('unreadable');
     expect(note).toHaveClass('sess-unmeasured');
     expect(note).toHaveAttribute('title', 'registry workdir temporarily unreadable — retrying');
@@ -484,7 +491,7 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
         coordFrameSeen: true,
       });
     });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     const banner = container.querySelector('.coord-banner');
     const offline = container.querySelector('.offline-banner');
@@ -496,6 +503,23 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
     // for, so this checks order, not just membership.
     const order = [...container.querySelectorAll('.offline-banner, .coord-banner')];
     expect(order).toEqual([offline, banner]);
+  });
+
+  // Wave 6: the caps dial ships by ONE mounted line too, and for exactly the
+  // reason the paragraph above this describe gives — `caps-control.test.tsx`
+  // pins its behaviour and would stay green if the line were dropped.
+  it('renders .caps-control after .coord-banner once its own read lands', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear' }, coordFrameSeen: true }); });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })}
+      loadCaps={async () => ({ caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
+                               usage: { running: 1, dispatchedIn24h: 4 } })} />);
+    // The control's read is its own, not the store's — so this waits for it
+    // rather than asserting into a tree that has not resolved.
+    await waitFor(() => expect(container.querySelector('.caps-control')).not.toBeNull());
+    const order = [...container.querySelectorAll('.coord-banner, .caps-control')];
+    expect(order).toEqual([container.querySelector('.coord-banner'),
+                           container.querySelector('.caps-control')]);
   });
 });
 
@@ -510,7 +534,7 @@ describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-28
   it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     const abandon = screen.getByRole('button', { name: /abandon run 3/i });
     expect(abandon).toHaveClass('run-abandon');
@@ -709,7 +733,7 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
   const board = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   /** A run in the shape a `planned` one actually reaches the wire in: no
    *  session id (the server learns it by registry diff, AFTER `ws-add`
@@ -900,7 +924,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
   const withSession = (over: Partial<FleetSession>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   const chip = (): HTMLElement | null => document.querySelector('.sess-spawn');
 
@@ -945,7 +969,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     // not exist.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(chip()).toBeNull();
   });
 
@@ -1023,7 +1047,7 @@ describe('the run row renders the resume it has always carried (D-1, Task 5)', (
   const board2 = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   const cellR = (): HTMLElement | null => document.querySelector('.run-resumed');
 
@@ -1111,7 +1135,7 @@ describe('the resume door on the run board', () => {
         sessions: opts.sessions, fleetFrameSeen: opts.fleetFrameSeen,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
 
   it('offers the door when the claimant is measured dead', () => {
@@ -1246,7 +1270,7 @@ describe('the resume door on the run board', () => {
         sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true,
       });
     });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }

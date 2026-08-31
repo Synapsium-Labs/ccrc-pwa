@@ -266,6 +266,48 @@ describe('PR lifecycle (Task 13)', () => {
 // `workspaceReap`), so a change to the path or the body key ships as a red
 // test rather than a live 400 the first time someone taps Pause.
 describe('coordPause (Task 11, spec §4.2)', () => {
+  it('GETs /api/coord/caps and returns the parsed view', async () => {
+    // The component tests always inject, so without a fetch-level block here a
+    // new client method has NO coverage at all — measured for `coordPause`,
+    // which is why this describe exists.
+    const view = { caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
+                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    expect(await api.coordCaps()).toEqual(view);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/caps');
+    expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('POSTs only the given fields as JSON to /api/coord/caps', async () => {
+    const view = { caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 },
+                   usage: { running: 1, dispatchedIn24h: 4 } };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, view));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    expect(await api.setCoordCaps({ maxConcurrentWorkers: 5 })).toEqual(view);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/caps');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ maxConcurrentWorkers: 5 });
+    // No box token on this call — it is an operator dial, not a machine lane.
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
+  });
+
+  it('answers `unreadable` when a 2xx caps write comes back unparseable (D-1150)', async () => {
+    // The distinction the control depends on: the write may have LANDED, so
+    // this must not reject the way a failed request does.
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true, status: 200, json: () => Promise.reject(new Error('truncated')),
+      text: () => Promise.resolve(''),
+    });
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.setCoordCaps({ maxConcurrentWorkers: 5 })).resolves.toBe('unreadable');
+  });
+
   it('POSTs {paused} as JSON to /api/coord/pause', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, requested: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);

@@ -1461,13 +1461,27 @@ cd "$(git rev-parse --show-toplevel)/pwa"
 
   | mutation | first-fail assertion |
   |---|---|
-  | delete the `<CapsControl/>` line from `RunsScreen.tsx` | *(measured at execution)* |
-  | render the typed value instead of the response body | *(measured at execution)* |
-  | send both fields always, instead of only the changed one | *(measured at execution)* |
-  | treat `'unreadable'` as a failure | *(measured at execution)* |
-  | drop the render gate (render before the first read lands) | *(measured at execution)* |
-  | swap `var(--tap-min)` for `44px` in `.caps-save` | *(measured at execution)* |
-  | swap `postJsonOr` for `postJson` | *(measured at execution)* |
+  | delete the `<CapsControl/>` line from `RunsScreen.tsx` | `AssertionError: expected null not to be null` (the mount pin) |
+  | render the typed value instead of the response body | `TestingLibraryElementError: Unable to find an element with the text: 1 / 4` |
+  | send both fields always, instead of only the changed one | `AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times` |
+  | treat `'unreadable'` as a failure | `TestingLibraryElementError: Unable to find an element with the text: /unconfirmed/i` |
+  | drop the render gate (render before the first read lands) | `AssertionError: expected <div class="caps-control" …(2)>…(3)</div> to be null` (3 failed) |
+  | swap `var(--tap-min)` for `44px` in `.caps-save` | `AssertionError: expected 'flex: none; min-height: 44px; padding…' not to contain '44px'` |
+  | swap `postJsonOr` for `postJson` | `AssertionError: promise rejected "Error: truncated" instead of resolving` |
+
+  7/7 red, no holes — but three of them LOOKED green on the first pass and were not. The harness grepped
+  the run for `AssertionError` alone, and two of these rows fail as `TestingLibraryElementError` while a
+  third had been mis-written into a syntax error that never reached an assertion at all. A mutation whose
+  output you filter is a mutation you have not measured; all three were re-run with the filter widened and
+  the failing text read.
+
+  **A regression this task caused, and how it was fixed.** Mounting `CapsControl` with its own default
+  reader made the board issue a request on every render, which broke two PRE-EXISTING tests that stub the
+  global `fetch` and assert the board calls nothing else (`runs-screen.test.tsx`'s resume-door two-tap
+  test and `abandon-sheet.test.tsx`'s). Those assertions are worth keeping exactly as strict as they
+  were, so the fix was NOT to loosen them: the reader was hoisted to a `loadCaps` prop on `RunsScreen`,
+  beside the `loadRuns` prop that exists for precisely this reason, and injected at every board render in
+  the three affected suites. The screen's own prop docstring records the measurement.
 
 - [ ] **6.9 — Commit.**
 
