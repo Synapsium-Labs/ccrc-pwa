@@ -19,7 +19,10 @@ import { readWorkerSkillState } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
-// coordinator kickoff idiom, StartProgramSheet.kickoff). One constant, one place.
+// coordinator kickoff idiom, `shared/api.ts`'s `programKickoff`). One constant,
+// one place — and since wave 4 (D-1043) that is a fact rather than an aspiration:
+// the coordinator kickoff is queued by `coord/kickoff.ts` from that same L0
+// constant, so BOTH kickoffs on this fleet now name their skill from one home.
 //
 // THE SKILL IT NAMES SHIPS ON THIS SAME BRANCH (`ccd/worker-skill/SKILL.md`) and
 // reaches no box until that branch's installer has run there — prefix and skill
@@ -641,7 +644,15 @@ export async function dispatchRun(
     // `body`, not `brief`: what lands in the worker is its standing protocol
     // followed by the wave's specifics, as ONE mail — the kickoff is never a
     // message of its own, so a path that queues no brief queues nothing at all.
-    queueSystemMail(coord, run, { toId: sessionId, runId: id, kind: 'status', subject: 'wave-brief', body });
+    // The return value is deliberately dropped HERE and at the other two
+    // run-mail call sites (D-1042). `queueSystemMail` now answers whether it
+    // queued or found an identical one already outstanding, because the wave-4
+    // kickoff route has to tell an operator which happened — but each of these
+    // three has at most ONE instance in flight per run by construction, which
+    // is the standing claim in that function's own dedupe comment, so there is
+    // nothing here for the answer to change.
+    queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: id,
+      kind: 'status', subject: 'wave-brief', body });
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,

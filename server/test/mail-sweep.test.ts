@@ -1977,6 +1977,63 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     expect(sent).toEqual([]);
   });
 
+  // D-1040 (program-leverage wave 4). Both arms of one rule: a ROLE is not a
+  // session id, and `tellSender` used to know that about exactly one role.
+  //
+  // Wave 4 queues the first RUN-LESS system mail in this tree — the program
+  // kickoff, sent before run 1 exists because opening run 1 is the first thing
+  // it asks its recipient to do. That broke the old expression in both
+  // directions at once, which is why the sender vocabulary and this resolution
+  // are one change:
+  //
+  //   * sent as `'coordinator'`, it would reach `resolveCoordinator(null)`,
+  //     whose answer is whichever program happens to be the SINGLE active one —
+  //     so an unrelated program's coordinator would be told a kickoff it never
+  //     sent, for a session it has nothing to do with, and could do nothing
+  //     about. "Exactly one active program" is the ordinary steady state: a
+  //     `programs` row only leaves `'active'` when a close route retires it.
+  //   * sent as `'operator'` — the honest sender, and the word
+  //     `run_events.causedBy` has carried since Build 4 — it would fall through
+  //     to the else branch and be pushed at AS IF it were a session id, the
+  //     exact failure the resolution's own comment forbids.
+  it('never pushes a role AS a session: a run-less operator mail notifies nobody', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    // An ACTIVE program with a real claimant, so the wrong-coordinator arm has
+    // something to resolve TO. A fixture with no program could not tell the
+    // guard working from `resolveCoordinator` merely having nothing to say —
+    // the blind spot that made the sibling test above pass for its own reason.
+    openRunClaimedBy(coord, 'demo-the-coordinator');
+    queueFrom(coord, 'operator', null);
+
+    await w.sweepMail();
+    expect(sent.map((p) => p.sessionId)).not.toContain('operator');
+    expect(sent.map((p) => p.sessionId)).not.toContain('demo-the-coordinator');
+    expect(sent).toEqual([]);
+  });
+
+  it('will not name a coordinator for a mail that names no run, even when exactly one program is active', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    openRunClaimedBy(coord, 'demo-the-coordinator');
+    queueFrom(coord, 'coordinator', null);
+
+    // `resolveCoordinator(null)` WOULD answer here — that is what it is for, on
+    // the addressing side, where `toId:'coordinator'` with no run is the
+    // documented recovery for a retired program. As SENDER attribution it is a
+    // guess: a mail that belongs to no run cannot be inferred to belong to the
+    // one program that happens to be open. Degrade, never guess — the same
+    // sentence the resolution already carried, applied to both its arms.
+    await w.sweepMail();
+    expect(sent).toEqual([]);
+  });
+
   // THE DEVIATION, pinned in both directions: the park lands in the DURABLE
   // FEED and leaves `run_events` alone.
   it('the park writes a durable feed row and NOT a run_events row', async () => {

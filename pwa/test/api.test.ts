@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, apiErrorText, clipUrl, createApi, sendErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, sendErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -353,13 +355,78 @@ describe('abandonRun (Task 12, spec §4.3)', () => {
   });
 });
 
+// program-leverage wave 4 (F4). The sheet's kickoff prop is injected in
+// `start-program.test.tsx`'s cases, so the real client method — the one the
+// production sheet's default prop actually calls — is pinned here, exactly as
+// `createSession` below it is and for the same reason.
+describe('kickoff (program-leverage wave 4)', () => {
+  it('POSTs {slug, title} to /api/sessions/:id/kickoff', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, queued: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.kickoff('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/claude-ccrc-pwa/kickoff');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ slug: 'build9-demo', title: 'Build 9 demo' });
+  });
+
+  it('sends NO prose — the server composes the sentence from the L0 constant', () => {
+    // The route is narrower than `POST /api/sessions/:id/prompt` on purpose: it
+    // can queue a program kickoff and nothing else. A `text` or `body` key here
+    // would hand that narrowing back.
+    //
+    // WAVE-4 REVIEW, MINOR 5 (D-1122). This selected the first line containing
+    // ``/kickoff` `` — which is the JSDoc line SEVENTEEN lines above the
+    // implementation, so it asserted that a COMMENT lacked `text` and `body`
+    // and could never red on the mutation it names. Two repairs: the predicate
+    // now names the DECLARATION (`kickoff:`) and the call (`post(`), and there
+    // is an anti-vacuity assertion that the line really is the one that posts
+    // the payload. `toBeDefined()` therefore also fails if the call site ever
+    // grows a multi-line body — which is correct: this pin would silently stop
+    // measuring, and it has to be rewritten rather than quietly kept.
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
+    const line = src.split('\n').find((l) => l.includes('kickoff:') && l.includes('post('));
+    expect(line, 'the kickoff call site — a one-liner; rewrite this pin if it grew a body').toBeDefined();
+    expect(line, 'not the declaration that posts the payload').toContain('slug');
+    expect(line).not.toMatch(/\btext\b|\bbody\b/);
+  });
+
+  it('encodes the session id, like every other session-scoped call', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, queued: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.kickoff('a/b', { slug: 's', title: 't' });
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toBe('/api/sessions/a%2Fb/kickoff');
+  });
+
+  it('throws ApiError on a non-2xx — the sheet needs the code to say what failed', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(501, { ok: false, error: 'not-configured' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' }).then(
+      () => { throw new Error('expected kickoff to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(501);
+    // …and the code becomes a sentence rather than reaching the operator as a
+    // bare slug. A box with no coord.db is an ordinary, silent state.
+    expect(apiErrorText(err)).toMatch(/coordination/i);
+  });
+});
+
 // Task 13 review lesson (Task 11/12's own reviews, applied here ahead of
-// time): `StartProgramSheet` always takes its `createSession`/`prompt` props
+// time): `StartProgramSheet` always takes its `createSession`/kickoff props
 // INJECTED in `start-program.test.tsx`'s copy/refusal cases, so the real
 // `api.createSession` — the one the production sheet's default prop value
 // actually calls — needs its own pin here, same idiom as `coordPause`/
 // `abandonRun` above. `prompt`'s own pin already exists at the top of this
-// file.
+// file, and stays: this wave retires the kickoff's use of that route, never
+// the route.
 describe('createSession (Task 13)', () => {
   it('POSTs {wrapper, project, workdir} to /api/sessions', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
@@ -438,6 +505,30 @@ describe('apiErrorText and the code translators that compose with it', () => {
       expect(uploadErrorText(apiErrorText(asError(415, { ok: false, error: code }))), code)
         .not.toBe(code);
     }
+  });
+
+  // WAVE-4 REVIEW, MINOR 3 (D-1120). The kickoff route names five codes and
+  // `API_ERROR_TEXT` can only ever teach two of them: `uploadErrorText` OWNS
+  // `unknown-session`, `bad-session-id` and `bad-request`, and it consumes this
+  // function's OUTPUT as a KEY, so a sentence there shadows the upload
+  // translator's own. The fourth per-surface map is the answer this file's own
+  // idiom already prescribes, and it composes the same way `useAttachImage.ts`
+  // composes the upload one.
+  it('does not shadow any code the KICKOFF translator owns either', () => {
+    for (const code of ['unknown-session', 'bad-session-id', 'bad-request', 'oversize']) {
+      expect(apiErrorText(asError(404, { ok: false, error: code })), code).toBe(code);
+      expect(kickoffErrorText(apiErrorText(asError(404, { ok: false, error: code }))), code)
+        .not.toBe(code);
+    }
+  });
+
+  it('leaves a sentence apiErrorText already owns exactly as it is', () => {
+    // The composition runs on EVERY kickoff failure, including the two codes
+    // `API_ERROR_TEXT` does own — so `kickoffErrorText` has to be a no-op on a
+    // sentence, not only on an unmapped slug.
+    const sentence = apiErrorText(asError(501, { ok: false, error: 'not-configured' }));
+    expect(sentence).toMatch(/does not run coordination/i);
+    expect(kickoffErrorText(sentence)).toBe(sentence);
   });
 
   it('does not shadow any code the SEND translator owns either', () => {

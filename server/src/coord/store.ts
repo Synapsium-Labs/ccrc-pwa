@@ -1336,20 +1336,36 @@ export class CoordStore {
    *  second producer for, the dedupe guard structurally could not fire.
    *  SQLite's `IS` is null-safe on both arms, so a number still matches its
    *  own rows and ONLY a null matches the null ones: one query, one reader,
-   *  no second method. */
-  hasOutstandingMail(runId: number | null, toId: string, subject: string): boolean {
+   *  no second method.
+   *
+   *  `m.fromId = ?` since program-leverage wave 4 (D-1041). The paragraph above
+   *  used to end "…keyed WITHOUT the sender, because the coordinator is its only
+   *  sender", and that premise was true only while every system mail carried a
+   *  RUN. Wave 4 queues one that does not — the program kickoff, sent before the
+   *  coordinator has opened anything to be the coordinator OF — so system mail
+   *  and PEER mail now share the `runId IS NULL` key space, and peer `subject` is
+   *  caller-chosen free text bounded only in bytes. Un-scoped, a peer mail that
+   *  happened to carry the kickoff's subject would have made `queueSystemMail`
+   *  return with no row, no error and no record. The collision was one-way, which
+   *  is why nothing had caught it: `hasOutstandingPeerDuplicate` below was
+   *  sender-scoped from the start, so a kickoff never blocked a peer — only a
+   *  peer could swallow a kickoff. */
+  hasOutstandingMail(fromId: string, runId: number | null, toId: string, subject: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
-      `WHERE m.runId IS ? AND d.toId = ? AND m.subject = ? AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
-    ).get(runId, toId, subject);
+      'WHERE m.fromId = ? AND m.runId IS ? AND d.toId = ? AND m.subject = ? ' +
+      `AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
+    ).get(fromId, runId, toId, subject);
     return row !== undefined;
   }
 
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
    *  triple exists — the 409 'duplicate' probe (Build 9b wave 0, D10 hole 2).
-   *  `runId IS NULL` scopes it to the peer lane by construction; run mail has
-   *  its own dedupe (`hasOutstandingMail` above, via `queueSystemMail`) keyed
-   *  WITHOUT the sender, because the coordinator is its only sender. `toId`
+   *  `runId IS NULL` no longer scopes it to the peer lane by construction —
+   *  program-leverage wave 4 (D-1041) put a run-less SYSTEM mail in that space,
+   *  the program kickoff — but `m.fromId = ?` still does, and always did. System
+   *  mail has its own dedupe (`hasOutstandingMail` above, via `queueSystemMail`),
+   *  now keyed by sender for the same reason this one always was. `toId`
    *  here is the RESOLVED recipient — the id `mail_deliveries.toId` actually
    *  carries — never the pre-resolution role. */
   hasOutstandingPeerDuplicate(fromId: string, toId: string, subject: string): boolean {

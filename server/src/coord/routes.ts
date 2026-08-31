@@ -1099,8 +1099,8 @@ export function registerCoordRoutes(
       );
       if (!verdict.ok) {
         coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-        queueSystemMail(coord, run, { toId: run.sessionId, runId: id, kind: 'status',
-          subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
+        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
+          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
         return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
       }
     }

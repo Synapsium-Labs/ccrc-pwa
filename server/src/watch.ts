@@ -26,7 +26,7 @@ import { JournalMirror } from './coord/mirror.js';
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
-import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
+import { COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
@@ -2699,12 +2699,28 @@ export class FleetWatcher {
         const tellSender = (why: string, tag: string): void => {
           const origin = store.mailOrigin(d.mailId);
           if (!origin) return;
-          const senderId = origin.fromId === 'coordinator'
-            ? store.resolveCoordinator(origin.runId)
-            : origin.fromId;
-          // Degrade, never guess: an unresolvable 'coordinator' ROLE has no
-          // session to notify, and inventing one would tag and presence-gate
-          // against an id no registry row carries.
+          // A ROLE is not a session id, and until wave 4 this knew that about
+          // exactly one role (D-1040). `'coordinator'` is the only role that can
+          // ever be resolved to a session, and only through the RUN it names:
+          // the run's `claimedBy` is the fact, and a mail that names no run
+          // carries no such fact. `resolveCoordinator(null)`'s answer — whichever
+          // program happens to be the single active one — is exactly right on the
+          // ADDRESSING side, where `toId:'coordinator'` with no run is the
+          // documented recovery for a retired program, and is a guess here: a
+          // message that belongs to no run cannot be inferred to belong to the one
+          // program that happens to be open. Every other role (`'operator'`, wave
+          // 4's program kickoff) has no session behind it at all — the operator
+          // taps a button in a browser.
+          //
+          // Degrade, never guess, on all three arms: inventing a session id would
+          // tag and presence-gate against an id no registry row carries, and
+          // naming the wrong live one is worse — it tells a coordinator running an
+          // unrelated program about a message it never sent and cannot act on.
+          const senderId = !MAIL_ROLE_IDS.has(origin.fromId)
+            ? origin.fromId
+            : origin.fromId === 'coordinator' && origin.runId !== null
+              ? store.resolveCoordinator(origin.runId)
+              : null;
           if (senderId === null) return;
           this.pushOne({
             kind: 'mail', sessionId: senderId,
