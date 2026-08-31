@@ -791,22 +791,22 @@ derivation pinned before the guard, import purity last) and its two-subject nami
 
 | mutation | first-fail assertion |
 | --- | --- |
-| `RECLAIM_REFUSE_CODE_MAP` loses `'no-claimant': true` | `<measured at execution>` |
-| `RECLAIM_REFUSE_CODES` becomes the hand-written `['claimant-alive', 'no-claimant']` | `<measured at execution>` |
-| `RECLAIM_REFUSE_CODE_MAP` gains a third entry the union does not declare | `<measured at execution>` |
-| `isReclaimRefuseCode` body becomes `return typeof v === 'string' && v in RECLAIM_REFUSE_CODE_MAP;` | `<measured at execution>` |
-| `isReclaimRefuseCode` body becomes `return v === 'no-claimant';` | `<measured at execution>` |
-| `'claimant-alive'` is added to `RunRefuseCode` and `RUN_REFUSE_CODE_MAP` | `<measured at execution>` |
-| `'claimant-alive'` is renamed `'alive'` (single word, invisible to the coord scanner) | `<measured at execution>` |
-| one word of `resume.md` §4's brief block is changed, `programResumeKickoff` untouched | `<measured at execution>` |
-| one word of `programResumeKickoff`'s template is changed, `resume.md` untouched | `<measured at execution>` |
-| `programResumeKickoff`'s line 2 is inlined as `` `Its ledger is \`docs/superpowers/programs/${slug}.md\`.\n` `` | `<measured at execution>` |
-| `programResumeKickoff`'s last line is replaced with `programKickoff`'s (`…and open the run for wave 1.`) | `<measured at execution>` |
-| the old `claimedBy` docstring is restored verbatim | `<measured at execution>` |
-| `POST /api/runs/:id/reclaim` is added to the new `claimedBy` docstring | `<measured at execution>` |
-| `claimedBy` is moved above `state` in `RunSummary` (the docstring slice comes back empty) | `<measured at execution>` |
-| `\|\| isReclaimRefuseCode(tok)` is deleted from `mail-routes.test.ts`, with `// 'claimant-alive'` appended to `server/src/coord/kickoff.ts` | `<measured at execution>` |
-| `\|\| isReclaimRefuseCode(tok)` is deleted and both members are added to `NOT_CODES` instead | `<measured at execution>` |
+| `RECLAIM_REFUSE_CODE_MAP` loses `'no-claimant': true` | runtime (reported first): `derives the runtime list from the map, in declaration order` — `AssertionError: expected [ 'claimant-alive' ] to deeply equal [ 'claimant-alive', 'no-claimant' ]`. tsc, same run, blocks [3/4]–[4/4]: `server/test/ has type errors: ../shared/api.ts(3644,7): error TS2741: Property '"no-claimant"' is missing in type '{ 'claimant-alive': true; }' but required in type 'Record<ReclaimRefuseCode, true>'.` |
+| `RECLAIM_REFUSE_CODES` becomes the hand-written `['claimant-alive', 'no-claimant']` | `builds the list with Object.keys, never a second hand-written array` — `AssertionError: expected '// Shared API types — single source o…' to match /export const RECLAIM_REFUSE_CODES: re…/` |
+| `RECLAIM_REFUSE_CODE_MAP` gains a third entry the union does not declare | runtime (reported first): `derives the runtime list…` — `AssertionError: expected [ 'claimant-alive', …(2) ] to deeply equal [ 'claimant-alive', 'no-claimant' ]`. tsc: `../shared/api.ts(3644,113): error TS2353: Object literal may only specify known properties, and ''no-run'' does not exist in type 'Record<ReclaimRefuseCode, true>'.` |
+| `isReclaimRefuseCode` body becomes `return typeof v === 'string' && v in RECLAIM_REFUSE_CODE_MAP;` | `refuses the prototype keys an \`in\` check would let through` — `AssertionError: toString: expected true to be false // Object.is equality` |
+| `isReclaimRefuseCode` body becomes `return v === 'no-claimant';` | `isReclaimRefuseCode is the only narrowing door, and it refuses the near-misses` — `AssertionError: claimant-alive: expected false to be true // Object.is equality` |
+| `'claimant-alive'` is added to `RunRefuseCode` and `RUN_REFUSE_CODE_MAP` | `is deliberately NOT a RunRefuseCode — the corpus census must never reach it` — `AssertionError: claimant-alive: expected [ 'claimed-by-another', …(13) ] to not include 'claimant-alive'` |
+| `'claimant-alive'` is renamed `'alive'` (single word, invisible to the coord scanner) | `derives the runtime list…` — `AssertionError: expected [ 'alive', 'no-claimant' ] to deeply equal [ 'claimant-alive', 'no-claimant' ]` (4 tests red, the kebab one among them) |
+| one word of `resume.md` §4's brief block is changed, `programResumeKickoff` untouched | `IS resume.md §4 with the placeholders filled — one text, two speakers` — `AssertionError: expected 'You are the coordinator for program \`…' to be 'You are the coordinator for program \`…' // Object.is equality`, diff `- rests. Do not open the run for wave 5 again…` / `+ stands. …` (the word changed was `stands.`→`rests.`) |
+| one word of `programResumeKickoff`'s template is changed, `resume.md` untouched | same test, same assertion, diff reversed: `- stands. …` / `+ rests. …` |
+| `programResumeKickoff`'s line 2 is inlined as `` `Its ledger is \`docs/superpowers/programs/${slug}.md\`.\n` `` | **`resume-reclaim-l0` stays GREEN.** Killer is `single-definition.test.ts > the program ledger is parsed by nothing > no shipped source reads the program ledger off disk` — `AssertionError: expected [ Array(1) ] to deeply equal []`, received `["shared/api.ts:3126: \`Its ledger is \\\`docs/superpowers/programs/${slug}.md\\\`.\\n\` +"]` |
+| `programResumeKickoff`'s last line is replaced with `programKickoff`'s (`…and open the run for wave 1.`) | `IS resume.md §4 with the placeholders filled…` — `Object.is equality`, diff drops the three ALREADY-OPEN lines for `+ Run the ccrc-coordinator skill and open the run for wave 1.` |
+| the old `claimedBy` docstring is restored verbatim | `drops the three claims the reclaim door falsified` — `AssertionError: expected '/** The ONE coordinator that owns thi…' not to contain 'rewritten by no route afterwards'` |
+| `POST /api/runs/:id/reclaim` is added to the new `claimedBy` docstring | `teaches no call — the reclaim PATH appears nowhere in it` — `AssertionError: expected '/** The ONE coordinator that owns thi…' not to contain '/api/runs/:id/reclaim'` |
+| `claimedBy` is moved above `state` in `RunSummary` (the docstring slice comes back empty) | `is reading a real docstring — anti-vacuity before anything is asserted about it` — ``AssertionError: RunSummary no longer declares `claimedBy: string \| null;` after it: expected -1 to be greater than 203954`` |
+| `\|\| isReclaimRefuseCode(tok)` is deleted from `mail-routes.test.ts`, with `// 'claimant-alive'` appended to `server/src/coord/kickoff.ts` | `mail-routes.test.ts > … every quoted kebab token …` — `AssertionError: claimant-alive is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle or ReclaimRefuseCode: expected false to be true // Object.is equality` (the L0 structural test reds too) |
+| `\|\| isReclaimRefuseCode(tok)` is deleted and both members are added to `NOT_CODES` instead | **`mail-routes.test.ts` goes GREEN** — only `resume-reclaim-l0 > the coord kebab scanner admits them through the guard, never through NOT_CODES` reds: `AssertionError: expected '// The ingress. Two halves: the rejec…' to contain '\|\| isReclaimRefuseCode(tok)'` |
 
 - [ ] **1.10 — Commit:**
 
@@ -1094,14 +1094,14 @@ git commit -m "feat(wave5): the L0 reclaim vocabulary, the resume kickoff, and c
 
   | mutation | first-fail assertion |
   |---|---|
-  | `recordRunEvent`'s body writes `Date.now()` again, ignoring `at` | `<measured at execution>` |
-  | `reclaimProgram`'s SELECT and UPDATE both gain `AND state NOT IN ('done','failed')` | `<measured at execution>` |
-  | `AND claimedBy IS NOT NULL` dropped from the UPDATE | `<measured at execution>` |
-  | `AND claimedBy != ?` dropped from the SELECT | `<measured at execution>` |
-  | the `run.claimedBy === null` refusal deleted | `<measured at execution>` |
-  | the `!run` refusal deleted | `<measured at execution>` |
-  | the `tx(this.db, …)` wrapper removed — the statements run bare | `<measured at execution>` |
-  | the 4th argument dropped from the `this.recordRunEvent(...)` call inside the loop | `<measured at execution>` |
+  | `recordRunEvent`'s body writes `Date.now()` again, ignoring `at` | `stamps the moment it is given…` — `AssertionError: expected 1788182469835 to be 1700000000000 // Object.is equality` (`:1432:23`) |
+  | `reclaimProgram`'s SELECT and UPDATE both gain `AND state NOT IN ('done','failed')` | `rewrites the TERMINAL run too… (R1)` — `AssertionError: expected { ok: true, program: 'build4', …(2) } to deeply equal { ok: true, program: 'build4', …(2) }` — diff shows `"runIds": [ - 1, 2, 3, 4, 5 ]` (`:1463:8`) |
+  | `AND claimedBy IS NOT NULL` dropped from the UPDATE | `leaves a reconstructed row NULL… (D-12)` — `AssertionError: expected 'ccrc-pwa-new-coordinator' to be null` (`:1482:39`) |
+  | `AND claimedBy != ?` dropped from the SELECT | `a \`to\` that is already the claimant is a no-op SUCCESS…` — `AssertionError: expected { ok: true, program: 'build4', …(2) } to deeply equal { ok: true, program: 'build4', …(2) }` — diff shows `- "runIds": []` / `+ "runIds": [1,2,3,4,5]` (`:1511:8`) |
+  | the `run.claimedBy === null` refusal deleted | `refuses an id no run carries…` — `AssertionError: expected { ok: true, program: 'build4', …(2) } to deeply equal { ok: false, kind: 'no-claimant' }` (`:1523:8`) |
+  | the `!run` refusal deleted | `refuses an id no run carries…` — `TypeError: Cannot read properties of undefined (reading 'claimedBy')` at `src/coord/store.ts:473:15`, via `tx src/coord/db.ts:248:17` (`:1519:14`) |
+  | the `tx(this.db, …)` wrapper removed — the statements run bare | `is ONE transaction — an attribution row that throws rolls the whole rewrite back` — `AssertionError: expected [ 'ccrc-pwa-new-coordinator', …(4) ] to deeply equal [ 'ccrc-pwa-old-coordinator', …(4) ]` (`:1539:51`) |
+  | the 4th argument dropped from the `this.recordRunEvent(...)` call inside the loop | `writes one attribution row per rewritten run, every one carrying the SAME moment` — `AssertionError: expected 1788182590322 to be 1777000123456 // Object.is equality` (`:1494:27`) |
 
 - [ ] **2.9 — Commit.**
 
@@ -1142,9 +1142,22 @@ cannot tell them apart.
 **The three-answer argument, and the census of inputs.**
 
 - **`dead`** — reclaim may proceed. Reached from exactly two inputs: (a) the registry directory
-  **listed cleanly** and carried no row for this id; (b) a listed row whose pane tmux calls `gone`
-  **and** whose lifecycle is one of the three words `lifecycleIsDead` names — `stopped`, `orphan`,
-  `never-started` (`shared/api.ts:1663-1673`).
+  **listed cleanly** and did not name `<id>.uuid` **at all**, re-confirmed by a second listing; (b) a
+  listed row whose pane tmux calls `gone` **and** whose lifecycle is one of the three words
+  `lifecycleIsDead` names — `stopped`, `orphan`, `never-started` (`shared/api.ts:1663-1673`).
+  **(a) is corrected by D-1144** (fix round, must-fix 4). It was written here as "listed cleanly and
+  carried no row for this id", which is what `SingleRead` SAYS and not what it MEANS:
+  `readSessionRecord` answers `reason:'absent'` from THREE places (`registry.ts:895`), and the middle
+  one is a row the listing DID name whose `buildRecord` came back null — its own docstring's "a session
+  mid-write or mid-teardown", which on a live fleet is a coordinator between two `_reg_set` writes.
+  Folded into (a) it reclaimed a LIVE session's program under a sentence that is false about that
+  input, in the one direction that proceeds. Rung 1 now re-splits `absent` at the consumer with one
+  `readdir` — the same split the mail ingress already makes (`routes.ts:578-585`) — ahead of the tmux
+  consultation, so that condition answers `unmeasurable`, as does a re-listing that fails. **The
+  `unmeasurable` bullet below is undercounted by the same correction: it has four inputs, not two.**
+  D-1145 records the debt left unpaid: `SingleRead` still folds the three conditions at the source,
+  this is the SECOND consumer to re-split them by hand (the mail ingress was the first), and the third
+  one must widen the type instead of copying the split a third time.
 - **`alive`** — refuse, with evidence. Two inputs that are the same *answer*: (a) tmux says the pane is
   `live`; (b) the pane is `gone` **but** the lifecycle reads `running`, `unsupervised`, `unclaimed`,
   `restarting` or `unmeasurable`. `restarting` is the arm this file exists to keep: a supervisor is
@@ -1741,22 +1754,22 @@ and this file keeps them separate all the way to the wire.
 
   | mutation | first-fail assertion |
   |---|---|
-  | `measureClaimant` rung 1: `unlistable` answers `{state:'dead'}` | `<measured at execution>` |
-  | `measureClaimant` rung 1: both `!found` reasons answer `{state:'unmeasurable'}` (the absent arm deleted) | `<measured at execution>` |
-  | `measureClaimant` rung 2: the `live` arm deleted, so a live pane falls through to the lifecycle | `<measured at execution>` |
-  | `measureClaimant` rung 2: `unknown` folded into `gone` (the `sv.verdict === 'unknown'` line deleted) | `<measured at execution>` |
-  | `measureClaimant` rung 3: `lifecycleIsDead(lc)` replaced by `true` — the naive `!alive` collapse | `<measured at execution>` |
-  | `measureClaimant` rung 3: `lifecycleInputFor(read.record, false, nowMs)` → `Math.floor(nowMs / 1000)` | `<measured at execution>` |
-  | `reclaimRun` rung 3: the `unlistable` arm answers `{kind:'unknown-session'}` | `<measured at execution>` |
-  | `reclaimRun` rung 3: the incoming `readSessionRecord` call deleted outright | `<measured at execution>` |
-  | `reclaimRun` rung 4: the `claimant.state === 'alive'` refusal deleted (proceed on alive) | `<measured at execution>` |
-  | `reclaimRun` rung 4: the `unmeasurable` refusal deleted (fall through to the commit) | `<measured at execution>` |
-  | `reclaimRun` rung 2: the `from === null` check deleted | `<measured at execution>` |
-  | `reclaimRun` rung 1: the `run === null` check deleted | `<measured at execution>` |
-  | `reclaimRun`: the `to !== from` guard removed, so the ladder runs on an identity assignment | `<measured at execution>` |
-  | `reclaim.ts` switched to `deps.tmux.hasSession(id)` (port widened to `Tmux`) | `<measured at execution>` |
-  | `reclaim.ts` switched to `readRegistry(deps.io, deps.cfg)` + `.find(r => r.id === id)` | `<measured at execution>` |
-  | the `'unknown-session'` entry removed from `mail-routes.test.ts`'s `NOT_CODES` | `<measured at execution>` |
+  | `measureClaimant` rung 1: `unlistable` answers `{state:'dead'}` | `AssertionError: expected 'dead' to be 'unmeasurable' // Object.is equality` — *an unlistable registry is UNMEASURABLE, never dead* |
+  | `measureClaimant` rung 1: both `!found` reasons answer `{state:'unmeasurable'}` (the absent arm deleted) | `AssertionError: expected 'unmeasurable' to be 'dead'` — *no row in a directory that listed cleanly is DEAD* |
+  | `measureClaimant` rung 2: the `live` arm deleted, so a live pane falls through to the lifecycle | `AssertionError: expected 'dead' to be 'alive'` — *a live pane is ALIVE, and the lifecycle is never consulted* |
+  | `measureClaimant` rung 2: `unknown` folded into `gone` (the `sv.verdict === 'unknown'` line deleted) | `AssertionError: expected 'dead' to be 'unmeasurable'` — *tmux that did not answer is UNMEASURABLE* |
+  | `measureClaimant` rung 3: `lifecycleIsDead(lc)` replaced by `true` — the naive `!alive` collapse | `AssertionError: expected 'dead' to be 'alive'` — *gone + a FRESH supervisor heartbeat is ALIVE* |
+  | `measureClaimant` rung 3: `lifecycleInputFor(read.record, false, nowMs)` → `Math.floor(nowMs / 1000)` | `AssertionError: expected 'dead' to be 'alive'` — same test. **Probed the collapse directly**: the verdict becomes `{ state: 'dead', why: 'the pane is gone and the lifecycle reads orphan' }` — `restarting` → `orphan` → dead, exactly the silent failure `fleet.ts:175-185` documents. Probe file deleted. |
+  | `reclaimRun` rung 3: the `unlistable` arm answers `{kind:'unknown-session'}` | `expected { ok: false, kind: 'unknown-session' } to match object { ok: false, …(1) }` — *registry-unmeasurable when the directory will not list* |
+  | `reclaimRun` rung 3: the incoming `readSessionRecord` call deleted outright | `expected { ok: true, program: 'f5-demo', …(3) } to deeply equal { ok: false, kind: 'unknown-session' }` — it **committed the reclaim** to a session with no registry row |
+  | `reclaimRun` rung 4: the `claimant.state === 'alive'` refusal deleted (proceed on alive) | `expected { ok: true, program: 'f5-demo', …(3) } to match object { ok: false, …(2) }` — *claimant-alive …* |
+  | `reclaimRun` rung 4: the `unmeasurable` refusal deleted (fall through to the commit) | **GREEN against the plan's fixtures** — the only `registry-unmeasurable` fixture used `blindIO`, which rung 3 catches first; the arm's second producer (tmux did not answer) had no fixture. After adding the missing fixture: `expected { ok: true, … } to match object { ok: false, …(1) }` — *registry-unmeasurable when the CLAIMANT cannot be measured* |
+  | `reclaimRun` rung 2: the `from === null` check deleted | **GREEN against the plan's fixtures** — `reclaimProgram` re-checks `no-claimant` inside its transaction, so deleting the rung changed nothing observable; what the rung buys is the ORDER. After adding the order pin (a `blindIO` fixture): `expected { ok: false, …(2) } to deeply equal { ok: false, kind: 'no-claimant' }`, received `kind: "registry-unmeasurable"` |
+  | `reclaimRun` rung 1: the `run === null` check deleted | `TypeError: Cannot read properties of null (reading 'claimedBy')` at `src/coord/reclaim.ts:224` |
+  | `reclaimRun`: the `to !== from` guard removed, so the ladder runs on an identity assignment | `expected { ok: false, …(3) } to match object { ok: true, runIds: [], …(2) }` — *a `to` that is already the claimant is a no-op SUCCESS* |
+  | `reclaim.ts` switched to `deps.tmux.hasSession(id)` (port widened to `Tmux`) | `TypeError: deps.tmux.hasSession is not a function` (the fixture cannot express the boolean — the port's whole point); 8 failures, including the ring pin `calls neither hasSession nor readRegistry` |
+  | `reclaim.ts` switched to `readRegistry(deps.io, deps.cfg)` + `.find(r => r.id === id)` | `AssertionError: expected 'dead' to be 'unmeasurable'` — the fail-open; ring pin also red |
+  | ~~the `'unknown-session'` entry removed from `mail-routes.test.ts`'s `NOT_CODES`~~ **STRUCK — the row outlived its step (wave-5 review, MAJOR 3)** | **"Unrunnable — no such entry exists."** Step 3.7 above was struck for naming an entry that was never written, so the mutation this row describes was unrunnable by construction. What the executor measured INSTEAD, and what keeps the cell non-vacuous, was a substitute: planting `'unknown-heir'` in `reclaim.ts` reds the same scanner — `AssertionError: unknown-heir is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle or ReclaimRefuseCode: expected false to be true`. Struck rather than deleted, on this file's own stated grounds. |
 
 - [ ] **3.10 — Commit.**
 
@@ -2373,21 +2386,21 @@ something in both directions for the first time (**D-1128**).
 
   | mutation | first-fail assertion |
   |---|---|
-  | add `if (!requireMailToken(req, reply, 'POST /api/runs/:id/reclaim')) return;` to the reclaim handler | `<measured at execution>` |
-  | delete `'/api/runs/:id/reclaim'` from `coord-pause-route.test.ts`'s `UNGATED` | `<measured at execution>` |
-  | rename the route to `/api/runs/:id/reclaim2` in `routes.ts` only (the anti-vacuity guard) | `<measured at execution>` |
-  | trim the reclaim docstring below 600 characters | `<measured at execution>` |
-  | delete the `Number.isInteger(id)` arm from the reclaim handler | `<measured at execution>` |
-  | delete the `claimedBy` non-empty-string arm | `<measured at execution>` |
-  | answer `unknown-session` with `unknown-run`'s 404 body | `<measured at execution>` |
-  | answer `registry-unmeasurable` with 404 instead of 502 | `<measured at execution>` |
-  | drop `by` from the `claimant-alive` 409 body | `<measured at execution>` |
-  | drop `detail` from the `registry-unmeasurable` 502 body | `<measured at execution>` |
-  | move the `Number.isInteger` arm after `coordMutex.run(...)` | `<measured at execution>` |
-  | add a seventh member to `ReclaimOutcome` with no `case` arm (the `_exhaustive: never` guard) | `<measured at execution>` |
-  | remove `'POST /api/runs/:id/reclaim'` from `coordinator-skill.test.ts`'s parity EXEMPT set | `<measured at execution>` |
-  | revert `auth-gate.test.ts:198` to `.toBe(22)` | `<measured at execution>` |
-  | revert `auth-gate.test.ts:469` to `.toBe(41)` | `<measured at execution>` |
+  | add `if (!requireMailToken(req, reply, 'POST /api/runs/:id/reclaim')) return;` to the reclaim handler | `AssertionError: listed as UNGATED, and yet the handler checks the box token: expected [ '/api/runs/:id/reclaim' ] to deeply equal []` (coord-pause-route). Bonus red in auth-gate:429 — `POST /api/runs/:id/reclaim` joined the 18 gated lanes |
+  | delete `'/api/runs/:id/reclaim'` from `coord-pause-route.test.ts`'s `UNGATED` | `AssertionError: write routes with no box-token gate ahead of their first await: expected [ '/api/runs/:id/reclaim' ] to deeply equal []` ❯ `:222:87` |
+  | rename the route to `/api/runs/:id/reclaim2` in `routes.ts` only (the anti-vacuity guard) | `AssertionError: a name in UNGATED that no app.post registers: expected [ '/api/claims/:id/break', …(2) ] to deeply equal [ …(3) ]` ❯ `:246:73` (3 tests red) |
+  | trim the reclaim docstring below 600 characters | `AssertionError: /api/runs/:id/reclaim carries no docstring: expected 162 to be greater than 600` ❯ `:291:57` |
+  | delete the `Number.isInteger(id)` arm from the reclaim handler | **GREEN as written — hole. Closed, then:** `AssertionError: expected 404 to be 400` ❯ `test/reclaim-route.test.ts:269:33` |
+  | delete the `claimedBy` non-empty-string arm | `AssertionError: expected 404 to be 400 // Object.is equality` ❯ `:241:28` (all 4 `400 bad-request for %s` rows) |
+  | answer `unknown-session` with `unknown-run`'s 404 body | `AssertionError: expected { ok: false, error: 'unknown-run' } to deeply equal { ok: false, error: 'unknown-session' }` ❯ `:168:24` |
+  | answer `registry-unmeasurable` with 404 instead of 502 | `AssertionError: expected 404 to be 502` ❯ `:191:28` |
+  | drop `by` from the `claimant-alive` 409 body | `AssertionError: expected { ok: false, …(2) } to match object { ok: false, …(2) }` / `- "by": "demo-coordinator-old"` ❯ `:210:18` |
+  | drop `detail` from the `registry-unmeasurable` 502 body | `TypeError: Cannot read properties of undefined (reading 'length')` ❯ `:196:24` |
+  | move the `Number.isInteger` arm after `coordMutex.run(...)` | **GREEN as written — hole. Closed, then:** `AssertionError: the malformed id was refused only AFTER a store read: expected 500 to be 400` ❯ `:279:87` |
+  | add a seventh member to `ReclaimOutcome` with no `case` arm (the `_exhaustive: never` guard) | `src/coord/routes.ts(1103,15): error TS2322: Type '{ ok: false; kind: "seventh"; }' is not assignable to type 'never'.` ❯ `test/typecheck-tests.test.ts:58:62` |
+  | remove `'POST /api/runs/:id/reclaim'` from `coordinator-skill.test.ts`'s parity EXEMPT set | `AssertionError: POST /api/runs/:id/reclaim is registered in coord/routes.ts but is named nowhere in the route corpus …: expected false to be true` ❯ `:256:10` |
+  | revert `auth-gate.test.ts:198` to `.toBe(22)` | `AssertionError: expected 23 to be 22` ❯ `:200:50` |
+  | revert `auth-gate.test.ts:469` to `.toBe(41)` | `AssertionError: expected 42 to be 41` ❯ `:476:26` |
 
 - [ ] **4.10 — Commit.**
 
@@ -2722,15 +2735,15 @@ The gate block's empty row is the worst case, not the best one: it says "leaves 
 
   | mutation | first-fail assertion |
   |---|---|
-  | in the count test, replace `CARDINAL[UNGATED.size]` with the literal `'THREE'` — the hand-typed count all five sites carried | `<measured at execution>` |
-  | revert `CLAUDE.md`'s bullet to its pre-wave text (`THREE`, reclaim unnamed, no kickoff clause) | `<measured at execution>` |
-  | revert the pause docstring's `FOUR` to `THREE`, leaving the rest of 5.4 in place | `<measured at execution>` |
-  | revert `coord-pause-route.test.ts`'s own header from `FOUR` to `THREE` | `<measured at execution>` |
-  | revert `auth/gate.ts`'s "the FOUR routes" to "leaves **these** off" — the countless shape it had | `<measured at execution>` |
-  | revert the break docstring to "the THIRD route in this file that is UNGATED" (no cardinal at all) | `<measured at execution>` |
-  | change the break docstring's ordinal to `the FIFTH of the FOUR routes` | `<measured at execution>` |
-  | drop `` `POST /api/runs/:id/reclaim` `` from `auth/gate.ts`'s NOT-EXEMPT list, keeping the word `FOUR` | `<measured at execution>` |
-  | change `passage`'s `CLAUDE.md` opening anchor to a string not in the file — the slicer's own anti-vacuity guard | `<measured at execution>` |
+  | in the count test, replace `CARDINAL[UNGATED.size]` with the literal `'THREE'` — the hand-typed count all five sites carried | `AssertionError: coord/routes.ts, the pause docstring does not state the count as THREE: expected Set{ 'FOUR' } to deeply equal Set{ 'THREE' }` |
+  | revert `CLAUDE.md`'s bullet to its pre-wave text (`THREE`, reclaim unnamed, no kickoff clause) | `AssertionError: CLAUDE.md, the box-token bullet does not state the count as FOUR: expected Set{ 'THREE' } to deeply equal Set{ 'FOUR' }` (and, in the second test, `…does not name /api/runs/:id/reclaim`) |
+  | revert the pause docstring's `FOUR` to `THREE`, leaving the rest of 5.4 in place | `AssertionError: coord/routes.ts, the pause docstring does not state the count as FOUR: expected Set{ 'THREE' } to deeply equal Set{ 'FOUR' }` |
+  | revert `coord-pause-route.test.ts`'s own header from `FOUR` to `THREE` | `AssertionError: coord-pause-route.test.ts, this file's own header does not state the count as FOUR: expected Set{ 'THREE' } to deeply equal Set{ 'FOUR' }` |
+  | revert `auth/gate.ts`'s "the FOUR routes" to "leaves **these** off" — the countless shape it had | `AssertionError: auth/gate.ts, the NOT-EXEMPT block does not state the count as FOUR: expected Set{} to deeply equal Set{ 'FOUR' }` |
+  | revert the break docstring to "the THIRD route in this file that is UNGATED" (no cardinal at all) | `AssertionError: coord/routes.ts, the break docstring does not state the count as FOUR: expected Set{} to deeply equal Set{ 'FOUR' }` |
+  | change the break docstring's ordinal to `the FIFTH of the FOUR routes` | `AssertionError: coord/routes.ts, the break docstring names the FIFTH ungated door and there are 4: expected 5 to be less than or equal to 4` — the row that would have gone green under a mechanical THREE→FOURTH sed and doesn't: the ordinal check is a bound, not an equality |
+  | drop `` `POST /api/runs/:id/reclaim` `` from `auth/gate.ts`'s NOT-EXEMPT list, keeping the word `FOUR` | `AssertionError: auth/gate.ts, the NOT-EXEMPT block does not name /api/runs/:id/reclaim: expected ' *  - \`POST /api/coord/pause\`, \`POST …' to contain '/api/runs/:id/reclaim'` |
+  | change `passage`'s `CLAUDE.md` opening anchor to a string not in the file — the slicer's own anti-vacuity guard | `AssertionError: the box-token bullet: the opening anchor is gone: expected -1 to be greater than -1` |
 
 - [ ] **5.11 — Check `CLAUDE.md`'s pinned README-size claim, and record that this wave does not move it.** The claim is at **`CLAUDE.md:10`**, not `:9`: `` **`README.md` (~1931 lines) is the canonical system overview.`` `server/test/oss-metadata.test.ts:89-101` extracts it with `` /README\.md` \(~?([0-9,]+) lines\)/ `` and asserts `Math.abs(said - real) / real < 0.1` against `read('README.md').split('\n').length - 1`. Measured now: said **1931**, real **2033** → 5.02% drift, green; it reds at 2146 lines, i.e. **113 more lines of README**. This wave adds none — no task in the plan names `README.md` as a file it edits — so the sentence stands unchanged at `~1931`. Verify rather than assume, and if the number moved, the fix is the sentence, not the threshold:
 
@@ -3185,14 +3198,14 @@ for this session — nothing was queued" is the truth, and "the re-kickoff faile
 
 | mutation | first-fail assertion |
 |---|---|
-| `kickoff.ts`: drop the `resume` branch — always `programKickoff(program.slug, program.title)` | `<measured at execution>` |
-| `kickoff.ts`: compose `programResumeKickoff(slug, title, resume?.runId ?? 0, resume?.wave ?? 1)` unconditionally | `<measured at execution>` |
-| `kickoff.ts`: measure the cap on `program.title` instead of the composed `body` | `<measured at execution>` |
-| `kickoff.ts`: pass `runId: resume ? resume.runId : null` into `queueSystemMail` (namespacing the dedupe key by run) | `<measured at execution>` — **6.2's fixture as drafted could NOT express this row, and the hole was closed at execution.** With a resume naming run 7 in a store holding no runs, the mutant died on `Error: FOREIGN KEY constraint failed` inside `insertMail` rather than on either assertion: red for a reason that evaporates in production, where the run a revive names is exactly the run that already exists. The ENVELOPE test now opens a real run and passes the id it got back, so the mutant dies on the `run:` absence assertion instead. |
-| `server.ts`: delete the both-or-neither refusal, letting a lone field fall through as absent | `<measured at execution>` |
-| `server.ts`: relax the pair check to `typeof body.runId === 'number' && typeof body.wave === 'number'` | `<measured at execution>` |
-| `server.ts`: drop the fourth argument at the `queueProgramKickoff` call site | `<measured at execution>` |
-| ADDED at execution — `kickoff.ts`: compute the cap on `programKickoff(program.slug, program.title)` before the branch (the composition the resume body is NOT) | `<measured at execution>` — the row this task actually needed. The prescribed `program.title` row above is killed by wave 4's own cap tests, so it measures nothing new; this one is killed by EXACTLY ONE test, 6.2's `a title the WAVE-1 body accepts is refused as a resume`, with every wave-4 cap test still green. |
+| `kickoff.ts`: drop the `resume` branch — always `programKickoff(program.slug, program.title)` | ````AssertionError: expected '```ccrc-mail…' to contain 'You are the coordinator for program `…'```` — `coord-kickoff.test.ts:221:22` (also `kickoff-route.test.ts:281:30`); 3 failed / 44 passed |
+| `kickoff.ts`: compose `programResumeKickoff(slug, title, resume?.runId ?? 0, resume?.wave ?? 1)` unconditionally | ````AssertionError: expected '```ccrc-mail…' to contain 'You are the coordinator for program `…'```` — first at the *wave-4* pin `coord-kickoff.test.ts:60:22`; isolated against the new fixture (`-t "NO resume argument"`) it reds at `:238:22`, received body `find run 0 at wave 1`. 4 failed |
+| `kickoff.ts`: measure the cap on `program.title` instead of the composed `body` | `AssertionError: expected true to be false` — `coord-kickoff.test.ts:149:22` (wave-4 pin); the new block also kills it at `:278:22` and `:299:10`. 6 failed |
+| `kickoff.ts`: pass `runId: resume ? resume.runId : null` into `queueSystemMail` (namespacing the dedupe key by run) | ````AssertionError: expected '```ccrc-mail…' not to contain 'run:'````, received envelope carrying `run: 1` — `coord-kickoff.test.ts:263:37` — **6.2's fixture as drafted could NOT express this row, and the hole was closed at execution.** With a resume naming run 7 in a store holding no runs, the mutant died on `Error: FOREIGN KEY constraint failed` inside `insertMail` rather than on either assertion: red for a reason that evaporates in production, where the run a revive names is exactly the run that already exists. The ENVELOPE test now opens a real run and passes the id it got back, so the mutant dies on the `run:` absence assertion instead. |
+| `server.ts`: delete the both-or-neither refusal, letting a lone field fall through as absent | `AssertionError: expected 200 to be 400 // Object.is equality` — `kickoff-route.test.ts:321:28`, 5 failed (all five payload rows) |
+| `server.ts`: relax the pair check to `typeof body.runId === 'number' && typeof body.wave === 'number'` | `AssertionError: expected 200 to be 400` — `kickoff-route.test.ts:321:28`, **1 failed**: `a fractional wave` |
+| `server.ts`: drop the fourth argument at the `queueProgramKickoff` call site | ````AssertionError: expected '```ccrc-mail…' to contain 'You are the coordinator for program `…'```` — `kickoff-route.test.ts:281:30`, 1 failed |
+| ADDED at execution — `kickoff.ts`: compute the cap on `programKickoff(program.slug, program.title)` before the branch (the composition the resume body is NOT) | `AssertionError: expected true to be false` — `coord-kickoff.test.ts:299:10`, **1 failed, killed by exactly one test** — the row this task actually needed. The prescribed `program.title` row above is killed by wave 4's own cap tests, so it measures nothing new; this one is killed by EXACTLY ONE test, 6.2's `a title the WAVE-1 body accepts is refused as a resume`, with every wave-4 cap test still green. |
 
 - [ ] **6.11 — Commit.**
   `git add server/src/coord/kickoff.ts server/src/server.ts server/test/coord-kickoff.test.ts server/test/kickoff-route.test.ts && git commit -m "feat(wave5): the wave-N re-kickoff — one composer argument, one cap, no new route"`
@@ -3575,15 +3588,15 @@ prose and the pin are rewritten here, not amended.
 
   | mutation | first-fail assertion |
   | --- | --- |
-  | `reclaimRun` posts to `` `/api/runs/${id}/abandon` `` | `<measured at execution>` |
-  | `reclaimRun` sends `{ to: claimedBy }` instead of `{ claimedBy }` | `<measured at execution>` |
-  | `reclaimRun` adds `headers: { 'x-ccrc-mail-token': 't' }` to the request | `<measured at execution>` |
-  | `reclaimRun` catches the non-2xx and resolves `{ program: '', runIds: [], from: '', to: '' }` | `<measured at execution>` |
-  | `kickoff` reverts to `post(...)` and resolves `{ queued: true }` without reading | `<measured at execution>` |
-  | `kickoff` returns `{ queued: answer.queued === true }` (absence reads false) | `<measured at execution>` |
-  | `kickoff` destructures and sends `{ slug: b.slug, title: b.title }` only | `<measured at execution>` |
-  | `kickoff`'s local is renamed `answer` → `body` | `<measured at execution>` |
-  | `StartProgramSheet`'s `queueKickoff` prop reverts to `Promise<void>` (`tsc --noEmit`) | `<measured at execution>` |
+  | `reclaimRun` posts to `` `/api/runs/${id}/abandon` `` | `expected '/api/runs/18/abandon' to be '/api/runs/18/reclaim' // Object.is equality` |
+  | `reclaimRun` sends `{ to: claimedBy }` instead of `{ claimedBy }` | `expected { to: 'coordinator-new' } to deeply equal { claimedBy: 'coordinator-new' }` |
+  | `reclaimRun` adds `headers: { 'x-ccrc-mail-token': 't' }` to the request | `the reclaim call carries no credential header: expected [ 'accept', 'content-type', …(1) ] to deeply equal [ 'accept', 'content-type' ]` |
+  | `reclaimRun` catches the non-2xx and resolves `{ program: '', runIds: [], from: '', to: '' }` | `Error: expected reclaimRun to reject` (`test/api.test.ts:424:21`) |
+  | `kickoff` reverts to `post(...)` and resolves `{ queued: true }` without reading | `not the declaration that posts the payload: expected '    kickoff: async (\n      id: strin…' to contain 'postJson'` |
+  | `kickoff` returns `{ queued: answer.queued === true }` (absence reads false) | `expected { queued: false } to deeply equal { queued: true }` |
+  | `kickoff` destructures and sends `{ slug: b.slug, title: b.title }` only | `expected { slug: 'program-leverage', …(1) } to deeply equal { slug: 'program-leverage', …(3) }` (`- "runId": 18, - "wave": 5`) |
+  | `kickoff`'s local is renamed `answer` → `body` | `expected '    kickoff: async (\n      id: strin…' not to match /\btext\b\|\bbody\b/` |
+  | `StartProgramSheet`'s `queueKickoff` prop reverts to `Promise<void>` (`tsc --noEmit`) | `TS2322` ×3 (`StartProgramSheet.tsx(252,3)`, `start-program.test.tsx(107,9)`, `(1221,38)`) — **vitest was 117/117 green with the mutation in place, `Type Errors no errors`**. D-1137 measured directly. |
 
 - [ ] **7.10 — Commit.**
 
@@ -4679,29 +4692,29 @@ standing substrate fault opens it.
 
   | mutation | first-fail assertion |
   | --- | --- |
-  | `coordPresence`: delete the `if (!frameSeen) return 'unknown'` arm | `<measured at execution>` |
-  | `coordPresence`: answer `'dead'` for a session missing from the array | `<measured at execution>` |
-  | `coordPresence`: delete the `substrateFault(session) !== null` arm | `<measured at execution>` |
-  | `coordPresence`: delete the `lifecycle === null \|\| lifecycle === 'unmeasurable'` arm | `<measured at execution>` |
-  | `coordPresence`: gate on `session.status === 'dead'` alone, dropping `lifecycleIsDead` | `<measured at execution>` |
-  | `coordPresence`: return `'alive'` instead of `'unknown'` when `claimedBy === null` | `<measured at execution>` |
-  | store: drop `fleetFrameSeen: true` from the `fleet`-frame `set` | `<measured at execution>` |
-  | store: initialise `fleetFrameSeen: true` | `<measured at execution>` |
-  | `RunRow`: render `resumeButton` unconditionally | `<measured at execution>` |
-  | `RunRow`: drop the `!isRunClosed(run)` half of the gate | `<measured at execution>` |
-  | `RunRow`: pass `session` where `coordSession` belongs (worker for claimant) | `<measured at execution>` |
-  | `ResumeSheet`: delete the `gen.current !== mine` guard in `reclaim`'s reject arm | `<measured at execution>` |
-  | `ResumeSheet`: delete the effect's `setReclaimOpen(false); setTo('')` reset | `<measured at execution>` |
-  | `ResumeSheet`: set `reclaimOpen` initially `true` (offer the third door up front) | `<measured at execution>` |
-  | `ResumeSheet`: render one sentence for both `queued` answers | `<measured at execution>` |
-  | `ResumeSheet`: `reclaimErrorText` 404 → always `RECLAIM_COPY['unknown-run']` | `<measured at execution>` |
-  | `ResumeSheet`: `reclaimErrorText` 409 → the `unknown` catch-all for both codes | `<measured at execution>` |
-  | `ResumeSheet`: `reclaimErrorText` 409 `claimant-alive` → drop `by`/`detail` | `<measured at execution>` |
-  | `ResumeSheet`: `reclaimErrorText` 502 → ignore `detail` | `<measured at execution>` |
-  | `ResumeSheet`: call `onClose()` on a refusal | `<measured at execution>` |
-  | `ResumeSheet`: send `{slug, title}` only, dropping `runId`/`wave` | `<measured at execution>` |
-  | `fleet.css`: remove `.run-row .run-resume` from the grouped selector list | `<measured at execution>` |
-  | `fleet.css`: add `width: 100%` to `.run-row .run-open` | `<measured at execution>` |
+  | `coordPresence`: delete the `if (!frameSeen) return 'unknown'` arm | `expected 'dead' to be 'unknown'` — resume-sheet:61; also runs-screen "hides it … no fleet frame has landed" (`expected <button …> to be null`) |
+  | `coordPresence`: answer `'dead'` for a session missing from the array | `expected 'dead' to be 'unknown'` — resume-sheet:61 (both null and undefined rows) |
+  | `coordPresence`: delete the `substrateFault(session) !== null` arm | `expected 'dead' to be 'unknown'` — resume-sheet:61 |
+  | `coordPresence`: delete the `lifecycle === null \|\| lifecycle === 'unmeasurable'` arm | `expected 'alive' to be 'unknown'` — resume-sheet:61 — **measured as TWO mutations at execution: the whole arm cannot be deleted without a `tsc` error**, so the `'unmeasurable'` half and the `null` half were dropped separately and each red with that same text |
+  | `coordPresence`: gate on `session.status === 'dead'` alone, dropping `lifecycleIsDead` | `expected 'dead' to be 'alive'` — resume-sheet:77 |
+  | `coordPresence`: return `'alive'` instead of `'unknown'` when `claimedBy === null` | `expected 'alive' to be 'unknown'` — resume-sheet:61 |
+  | store: drop `fleetFrameSeen: true` from the `fleet`-frame `set` | `expected false to be true` — stores:835 |
+  | store: initialise `fleetFrameSeen: true` | `expected true to be false` — stores:828 |
+  | `RunRow`: render `resumeButton` unconditionally | `expected <button …> to be null` — runs-screen:1036 (4 failed) |
+  | `RunRow`: drop the `!isRunClosed(run)` half of the gate | `expected <button …> to be null` — runs-screen:1062 |
+  | `RunRow`: pass `session` where `coordSession` belongs (worker for claimant) | `Unable to find … name /resume run 3/i` |
+  | `ResumeSheet`: delete the `gen.current !== mine` guard in `reclaim`'s reject arm | **GREEN as prescribed — hole closed**, then `expected <p class="abandon-error"> to be null` — resume-sheet:351 |
+  | `ResumeSheet`: delete the effect's `setReclaimOpen(false); setTo('')` reset | `expected <input …> to be null` (aria-label "Hand run 7…", value `ccrc-pwa-far-mesa`) |
+  | `ResumeSheet`: set `reclaimOpen` initially `true` (offer the third door up front) | `expected <input …> to be null` (14 failed) |
+  | `ResumeSheet`: render one sentence for both `queued` answers | `Unable to find an element with the text: /already waiting/i` |
+  | `ResumeSheet`: `reclaimErrorText` 404 → always `RECLAIM_COPY['unknown-run']` | `Unable to find … /no registry row for that id/i` |
+  | `ResumeSheet`: `reclaimErrorText` 409 → the `unknown` catch-all for both codes | `Unable to find … /nobody claims this run/i` |
+  | `ResumeSheet`: `reclaimErrorText` 409 `claimant-alive` → drop `by`/`detail` | `expected 'the coordinator is not dead' to contain 'ccrc-pwa-coordinator'` — resume-sheet:202 |
+  | `ResumeSheet`: `reclaimErrorText` 502 → ignore `detail` | `Unable to find … /the registry directory could not be listed/i` |
+  | `ResumeSheet`: call `onClose()` on a refusal | `expected "vi.fn()" to not be called at all, but actually been called 1 times` |
+  | `ResumeSheet`: send `{slug, title}` only, dropping `runId`/`wave` | `expected [ … { …(2) } ] to deeply equal [ … { …(4) } ]` — resume-sheet:130 |
+  | `fleet.css`: remove `.run-row .run-resume` from the grouped selector list | contrast `expected [ …(2) ] to have a length of 4 but got 2`; fleet-css grouping pin also red |
+  | `fleet.css`: add `width: 100%` to `.run-row .run-open` | `expected '100%' to be null` — fleet-css:691 |
 
 - [ ] **8.15 — Record this task's three deviations** in the plan's `## Deviations found`, numbered from the
   wave block (`D-1123..1140`) at assembly — **grep `origin/main` across `docs/` AND source before
@@ -5567,14 +5580,14 @@ today (18 after the SWEEP's `<deliveryId>` → `:id` normalisation), and every o
 
   | mutation | first-fail assertion |
   |---|---|
-  | `resume.md` §2 reverted to ``nothing in the HTTP API ever rewrites `claimedBy` `` | `<measured at execution>` |
-  | the corpus-wide negative (b) deleted, and the old sentence restored in `SKILL.md` **only** | `<measured at execution>` |
-  | `SKILL.md`'s `Handing the program to a different session is an operator act` deleted, rest kept | `<measured at execution>` |
-  | `resume.md` §6's second paragraph deleted (the two cases folded back into one) | `<measured at execution>` |
-  | `resume.md` §4's `the console sends exactly this text` softened to `the console can send it` | `<measured at execution>` |
-  | `resume.md` §4 given a method: ``POST `/api/sessions/:id/kickoff` `` | `<measured at execution>` |
-  | `/api/sessions/:id/kickoff` deleted from `resume.md` §4, leaving the sentence otherwise intact | `<measured at execution>` |
-  | `/api/runs/:id/reclaim` written into `resume.md` §2 in place of "a console door" | `<measured at execution>` |
+  | `resume.md` §2 reverted to ``nothing in the HTTP API ever rewrites `claimedBy` `` | `says why a revive under a different id wedges the program until an OPERATOR moves it` → `AssertionError: expected '# Resuming a coordinator A coordinato…' to contain 'no call named in this corpus ever rew…'` (2 failed \| 60 passed) |
+  | the corpus-wide negative (b) deleted, and the old sentence restored in `SKILL.md` **only** | `states the wedge as a stop for THIS session…` → `AssertionError: expected '--- name: ccrc-coordinator descriptio…' to contain 'no call named in this corpus ever rew…'` (1 failed \| 60 passed of 61) |
+  | `SKILL.md`'s `Handing the program to a different session is an operator act` deleted, rest kept | `states the wedge as a stop for THIS session…` → `AssertionError: expected '--- name: ccrc-coordinator descriptio…' to contain 'Handing the program to a different se…'` |
+  | `resume.md` §6's second paragraph deleted (the two cases folded back into one) | `splits the terminal recovery in two…` → `AssertionError: expected '# Resuming a coordinator A coordinato…' to contain 'a second run row is a second ledger, …'` |
+  | `resume.md` §4's `the console sends exactly this text` softened to `the console can send it` | `says the console sends the wave-N text…` → `AssertionError: expected '# Resuming a coordinator A coordinato…' to contain 'the console sends exactly this text'` |
+  | `resume.md` §4 given a method: ``POST `/api/sessions/:id/kickoff` `` | **two suites**: `THE SWEEP…` → `AssertionError: these are mandated by a skill and REFUSED by the armed gate — the D-149 shape: expected [ 'POST /api/sessions/:id/kickoff' ] to deeply equal []`; and `spells the revive route WITHOUT a method…` → ``AssertionError: a method in front of the revive path reads as "a call you make", and reds auth-passkey: expected '# Resuming a coordinator\n\nA coordin…' not to match /(GET\|POST\|PUT\|PATCH\|DELETE)\s+`?\…/api\`` |
+  | `/api/sessions/:id/kickoff` deleted from `resume.md` §4, leaving the sentence otherwise intact | `says the console sends the wave-N text…` → `AssertionError: expected '# Resuming a coordinator\n\nA coordin…' to contain '/api/sessions/:id/kickoff'` |
+  | `/api/runs/:id/reclaim` written into `resume.md` §2 in place of "a console door" | **both mechanisms**: `never names the reclaim door…` → `AssertionError: expected '---\nname: ccrc-coordinator\ndescript…' not to contain '/api/runs/:id/reclaim'`; and `names none of the ungated operator doors — the list DERIVED, not typed` → `AssertionError: resume.md names /api/runs/:id/reclaim — a door the coordinator is not the one to walk through`. Measured at the §6 phrase the plan's wording actually names, and again as supplementary row 8b at §2 — identical pair of failures from either section; NOT the conditional green the plan allowed for (Task 4 had landed, so the harvest ran in its four-member shape). |
 
   Row 2 is the one that matters most and the one a per-file pin would have missed: it reproduces the
   exact half-fix — one file corrected, one file still lying — that this task exists to make impossible.
@@ -5716,9 +5729,18 @@ that is not gate-EXEMPT.
 afterwards", that this immutability "is the mechanism behind the `claimed-by-another` refusal", that a
 second coordinator is "refused FOREVER, because nothing lowers this flag", and that recovery means
 "never reassigning the run". The same sentence is restated at `pwa/src/fleet/nestFleet.ts:4-7`. All of
-it is false after this wave, and it is the docstring four scanners and every reader trust. Rewritten in
-the same commit as the route, saying what still holds — a second coordinator is still refused **at open
-time**, and the nesting edge is unchanged — and what no longer does.
+it is false after this wave, and it is the docstring four scanners and every reader trust.
+
+**CORRECTED BY THE FIX ROUND (D-1153), because this paragraph's own closing claim was false twice.**
+It said "rewritten in the same commit as the route". Measured: `shared/api.ts`'s docstring was
+rewritten in `bf962622`, **four commits BEFORE** the route landed in `425c4ad1` (`5389336b`,
+`9c7228e8`, `ed1f7443`, `d642bb58` in between). And it was rewritten in ONE of the two places this
+entry itself names: neither commit touched `pwa/src/fleet/nestFleet.ts`, whose restatement at `:4-7`
+went on asserting the claim while citing the corrected docstring as its authority for the opposite of
+what that docstring now says. What still holds is unchanged — a second coordinator is still refused
+**at open time**, and the nesting edge is untouched. The survivor was fixed, and the pin widened from
+`shared/api.ts` alone to every source file under `shared/`, `server/src`, `pwa/src` and `agent/src`, by
+**D-1153**.
 
 ### D-1126 (the brief's reuse is not a reuse) — `queueProgramKickoff` cannot brief a wave-N revive
 
@@ -5957,3 +5979,414 @@ re-pointing — and only the word is wrong.** Kept rather than split into a four
 branches on it identically; `detail` carries which of the three inputs produced it, and the sheet is
 required to render `detail` (D-1139) rather than the code alone. Recorded so the next reader of that
 `otherwise` does not mistake its name for its contents.
+
+---
+
+## Execution record
+
+Task 11 asked for this section and the wave shipped without it. The wave-5 review
+(`runId 18`, mail 123) raised that as **MAJOR 3** and its ruling is the reason this section
+exists: *"your sharpest claim — ten rows GREEN or red for the WRONG reason — names rows
+nobody but you can locate or re-measure. I believe you; the record is what makes belief
+unnecessary."*
+
+Every number and every assertion below was **measured at execution** and recovered from the
+ten executing agents' own final reports, which are the primary source. Nothing here is
+reconstructed from recollection, and no cell anywhere in this plan was filled with
+plausible-looking assertion text: of the 112 placeholders, **112 were fillable from a
+measurement and 0 were not**, so no cell carries `<not recorded at execution>`.
+
+### 11.1 — Full suites (measured at handoff, foreground, `timeout 600000`, cd'd in)
+
+| suite | files | passed | skipped |
+|---|---|---|---|
+| `server` | 244 | 6108 | 56 |
+| `agent` | 18 | 281 | 0 |
+| `pwa` | 76 | 2077 | 0 |
+
+`cd pwa && ./node_modules/.bin/tsc --noEmit` → no output, exit 0. Tails were read, not
+grepped (wave 4's own correction). The server suite includes `typecheck-tests.test.ts`,
+which is the arbiter: **vitest strips types**, and this wave proved it four separate times —
+Task 7 measured `117/117` green with a real `TS2322` in the tree.
+
+The intermediate totals the tasks measured on the way, which is why the final number is not
+a single reading: task 6 measured the server suite at **244 files / 6104 passed / 56
+skipped**; tasks 7 and 8 measured `pwa` at **75 files / 2020 tests** and **76 files / 2064
+passed** respectively, before later tasks added their own.
+
+> **The review's verification gap, honoured.** The reviewer reproduced `pwa 76/2077/0`
+> twice but could NOT reproduce the server total — only targeted suites were run there — and
+> asked for a re-measurement with tails read. That re-measurement is in the fix-round section
+> below, on the fix round's own tree, since the fix round changes server code and a stale
+> total would be worse than none.
+
+### 11.2 — Known load flakes, re-run IN ISOLATION
+
+`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state` — all five
+re-run individually, all five green. Per this file's own standing caveat, a single green
+isolated run of `ccd-session-state` is **not** proof the red was load (it measured 0/6 on an
+idle box), so the honest statement is: they were green in isolation, and this wave cannot
+tell you which of them would have been red under load.
+
+### 11.3 — The mutation table, counted twice
+
+**Count A — structural.** Scan every mutation table's rows between its header row and the
+first non-table line, across all ten tasks: 127 lines, of which 3 are `| --- | --- |`
+separators (tasks 1, 7 and 8), leaving **124 data rows**.
+
+**Count B — arithmetic, independent of the scan.** Placeholders filled at fix-round time
+(112) plus task 9's rows, which were the one table already filled at execution (12) =
+**124**.
+
+The two agree at **124**. They are stated separately because wave 3 miscounted by one and
+wave 4's record repeated the lesson; a single count that agrees with itself is not a check.
+
+Per-task, after subtracting separators: T1 16, T2 8, T3 16, T4 15, T5 9, T6 8, T7 9, T8 23,
+T9 12, T10 8.
+
+**Did any guard ship with no row? Yes — and the review found them, not this record.** Stated
+plainly because 11.3 asks the question and the answer is the useful part:
+
+- `pwa/test/stores.test.ts`'s `fleetFrameSeen` pin shipped **inert**: `beforeEach` clears
+  localStorage, so the fixture never hydrated and the mutation the pin names
+  (`sessions.length > 0`) survived the whole PWA suite. A row existed; it could not fire.
+  (Review MINOR 10, fixed in the fix round.)
+- `ResumeSheet`'s `reclaimErrorText` 409 arm and `coordPresence`'s `?? null` have **no
+  killer** — a row was never written for either. (Review notes, recorded.)
+- Rung 1's fold of `SingleRead`'s `absent` had no row at all, because the plan's census
+  asserted the fold did not exist. (Review MUST-FIX 4 — the census was wrong, not the row.)
+
+### The ten repaired rows, named as repaired
+
+This is the claim the review asked to be made locatable. Each of these came back **GREEN**,
+or **RED FOR THE WRONG REASON**, against the mutation the plan prescribed. Every one was a
+hole in a **fixture** — not a defect in the shipped guard — and every one was closed and
+re-measured rather than recorded as a pass.
+
+| # | task | the prescribed row | what actually happened, and the hole behind it |
+|---|---|---|---|
+| 1 | 1 | `programResumeKickoff`'s line 2 inlined | **GREEN.** `expect(resume[1]).toBe(…)` compares VALUES, and inlining the ledger path yields an identical string — the L0 suite is structurally blind to it. Killer is `single-definition > no shipped source reads the program ledger off disk`: `expected [ Array(1) ] to deeply equal []`. |
+| 2 | 1 | the scanner arm deleted, both members added to `NOT_CODES` | **GREEN** — in the suite the row names. `mail-routes.test.ts` cannot see it. Killed instead by the L0 structural assertion: `expected '// The ingress. Two halves: the rejec…' to contain '\|\| isReclaimRefuseCode(tok)'`. |
+| 3 | 3 | rung 4's `unmeasurable` refusal deleted | **GREEN.** The arm was **unreachable**: the only `registry-unmeasurable` fixture used `blindIO`, which rung 3 catches first, and the arm's second producer (tmux did not answer) had no fixture at all. Closed with a fixture for that producer, pinning `detail` verbatim. |
+| 4 | 3 | rung 2's `from === null` check deleted | **GREEN.** `reclaimProgram` re-checks `no-claimant` inside its own transaction, so the rung buys the ORDER and no fixture tested order. Closed with an order pin: without the rung, a NULL-claimant run on a box whose registry will not list answers 502 `registry-unmeasurable` instead of 409 `no-claimant`. |
+| 5 | 4 | delete the `Number.isInteger(id)` arm from the reclaim handler | **GREEN.** The sweep probe injected the route **with no payload**, so the `claimedBy` arm answered first and the integer arm was never exercised. |
+| 6 | 4 | move that arm below `coordMutex.run(...)` | **GREEN**, same shadow. Both closed by giving the probe three injections; the reordering now reds `the malformed id was refused only AFTER a store read: expected 500 to be 400`, because a status alone cannot tell "refused before anything was measured" from "refused after". |
+| 7 | 6 | `runId: resume ? resume.runId : null` into `queueSystemMail` | **RED FOR THE WRONG REASON.** With `{runId: 7}` against a store holding no runs, the mutant died on `Error: FOREIGN KEY constraint failed` inside `insertMail` before either assertion ran — a red that evaporates in production, where the run a revive names is exactly the run that exists. Closed by opening a real run first. |
+| 8 | 7 | `queueKickoff`'s prop reverts to `Promise<void>` | **GREEN in vitest — `117/117`, `Type Errors no errors`.** The runner was the hole, not a fixture: types are stripped. Pinned by `tsc --noEmit` alone; killer recorded as `TS2322` ×3. |
+| 9 | 8 | delete the `gen.current !== mine` guard in `reclaim`'s REJECT arm | **GREEN.** The prescribed supersession case only ever *resolves* the in-flight promise, so the reject arm had no killer at all. Closed with a test that REJECTS it after another run's sheet is open. |
+| 10 | 8 | remove `.run-row .run-resume` from the grouped selector list | **The sharpest one: the prescribed filter would have PASSED about the wrong rows.** `label.includes('.run-row .run-resume')` also harvests `.run-row .run-resumed`, the resumed-wave note two rules up — measured `got 2` before `.run-resume` existed and would have read 6 after, so `toHaveLength(4)` was a passing assertion about four rows nobody chose. Replaced with the anchored `/\.run-row \.run-resume(?![\w-])/`. |
+
+Three further rows are recorded in their own cells as something other than a clean red, and
+are **not** counted among the ten because none was a fixture hole:
+
+- **T3** — the `'unknown-session'`/`NOT_CODES` row was **unrunnable**: step 3.7 was struck for
+  naming an entry that was never written, and the row outlived the step. Struck in the fix
+  round (review MAJOR 3), with the executor's measured substitute kept so the cell stays
+  non-vacuous.
+- **T8** — `coordPresence`'s combined arm could not be deleted as ONE mutation without a
+  `tsc` error; the two halves were dropped separately and each measured.
+- **T10** — row 8 named a phrase this task's own rewrite had moved between sections; it was
+  run at both the phrase and the section and reds identically from either.
+
+One row is recorded as **wider than the shipped comment claims**: T1's `'claimant-alive'`
+renamed `'alive'` ships a comment saying it "reds this and nothing else", and four tests
+went red. The executor left the plan-dictated comment as written and recorded the
+discrepancy rather than silently correcting it — which is the right call for a record and the
+wrong text to leave in the tree, so it is listed here as outstanding.
+
+### 11.4 — The eight scanner suites, re-read against the tree
+
+`auth-gate`, `coord-pause-route`, `coordinator-skill`, `mail-routes`, `single-definition`,
+`deviation-refs`, `topology-clean`, `dtbd` — all green. Task 4's final sweep measured **15
+files / 558 tests**; task 5's nine-suite gate **427 tests** and its extra sweep **18 files /
+749 passed / 10 skipped**; task 10's five-suite gate **260 passed** plus **322 passed** on the
+tree-scanning six and 9 on `typecheck-tests`.
+
+`README.md` drift check (5.11): `wc -l README.md` → 2033 against `CLAUDE.md`'s stated `~1931`
+= 5.02% drift; green, and reds at 2146 — 113 lines of headroom.
+
+### 11.5 — Self-review against this plan's Global Constraints
+
+| constraint | how it was met |
+|---|---|
+| `FLEET_PROTO` not bumped | measured: untouched in the diff. The wave is additive-only. |
+| `EXEC_COMMANDS` untouched | measured: untouched. No new ccd verb; the door rides the HTTP surface only. |
+| no `ccrc-api` row added | measured: the client's closed verb table is unchanged — the reclaim door is deliberately **not** reachable from a fleet session, which is what makes it an operator door. |
+| no absolute home path or real box name in any byte | measured across the diff. |
+| every `D-` number cited is defined | measured: every in-diff `D-N` resolves, `D-1122` tracing to wave 4's plan. `deviation-refs` green. |
+| the door's docstring spells `requireMailToken` in backticks with no open paren | measured — and it matters, because both scanners slice a handler to the NEXT registration, so this docstring lands in abandon's slice. |
+| no account-name list in any shipped source | measured: none added. |
+| L0 `shared/*.ts` imports nothing | measured: the sixth union and the composer add no import. |
+| no overloaded null at a seam | **this is the one the review found a breach of** — rung 1's `absent` fold (MUST-FIX 4). Fixed in the fix round; recorded here as a constraint the wave asserted and did not fully meet. |
+
+### 11.6–11.10 — Branch, PR, fingerprint, handoff
+
+- **11.6** `git branch --show-current` → `ws/quiet-meadow`. Every commit landed on the
+  workspace branch; no feature branch was cut (clause 2).
+- **11.7** PR **#37** opened from `ws/quiet-meadow`; CI **5/5 green** (`test-macos` 26m42s).
+  Not deployed — the deploy is the coordinator's act, and this wave is **AGENT-FIRST**
+  (ruling R2, D-1124).
+- **11.8** Fingerprint measured ONCE after the last push:
+  `branchTip` = `handoffCommit` = `963889bf7027fb8fc0152e1bfaf1af8107fcb3e5`,
+  `prNumber` 37, `prPhase` `open`, MERGEABLE/CLEAN, tree clean, tip == PR head.
+  Mailed as `wave-done` (mail 121) naming `runId 18`; pushing stopped there.
+- **11.9** The coordinator was told: the AGENT-FIRST lane; that the ledger's carried
+  constraint moves from "waves 1 and 8" to **waves 1, 5 and 8**; the fold left closed
+  (D-1132) with the measurement that closes it; and every place the wave's record disagrees
+  with the brief (D-1123, D-1126, D-1130).
+- **11.10** Claim 14 (30 paths) deliberately **held**, so a fix round could edit without
+  re-taking it — which is exactly what happened.
+
+### Two mistakes this wave made in its own bookkeeping
+
+Recorded because the review's standard is that an unrecorded miss is worth less than a
+recorded one:
+
+1. **The deviation renumbering reconciled by FILE, not by SITE.** Two docstrings shipped
+   numbers whose meaning had moved (the union's not-a-`RunRefuseCode` argument cited D-1123
+   where D-1127 belonged; the composer's two-speakers pin cited D-1124 where D-1126 belonged).
+   Fixed in source and plan at `d642bb58`.
+2. **A commit message used `git commit -m` with backticks**, and the shell's command
+   substitution ate the word `unknown-session` out of the subject. Amended with
+   `git commit --amend -F <file>`; every later agent was instructed to use `-F`.
+
+---
+
+## Deviations found — the fix round (review mail 123)
+
+The wave-5 review returned **SHIP-WITH-FIXES**: three MAJORs, one minor the reviewer RAISED to
+must-fix, seven minors and eleven record-only notes, from a 47-agent pass (8 lenses,
+refute-default verifiers; 22 confirmed, 2 refuted). This block is `D-1141..D-1156`, allocated from
+`POST /api/ledger/deviations` at fix-round start — the wave's own `D-1123..D-1140` and the
+programme's `D-999..D-1046` / `D-1119..D-1122` are all spent. `deviation-refs.test.ts` reds on a
+source ref to an allocated-but-unentered number, so every number cited in the fix-round diff is
+defined below.
+
+
+### D-1141 — The reclaim moved the chair and left the mail on the corpse — role-addressed mail now follows the role
+
+`reclaimProgram` rewrote `runs.claimedBy` and nothing else. `mail_deliveries.toId` is frozen to the RESOLVED id at queue time (`coord/routes.ts` resolves `coordinator` once through `resolveCoordinator` and hands the answer to `queueDelivery`, the column's only writer in the tree) and `GET /api/mail` is recipient-scoped, so a wave-done queued minutes before a reclaim stayed addressed to the corpse while `resolveCoordinator(runId)` answered the heir: the heir's box read empty and the sweep walked the report to `rejected('undeliverable')`. The coordinator corpus sends the heir to exactly that empty box (`references/resume.md`: "read outstanding mail before deciding anything").
+
+FIXED IN THE SAME `tx()`, with `mail.toId` deciding, because it already records the addressing: `mail.toId` keeps the PRE-resolution recipient (the literal role `coordinator`, or a literal session id) beside `mail_deliveries.toId`'s resolved answer, so "sent to the chair" and "sent to that session" are already two distinguishable facts in this schema and no new column is needed. One UPDATE, four clauses, no TypeScript branches: `state IN OUTSTANDING_STATES_SQL` is arm (c) (the constant, so this query agrees with `cancelOutstandingDeliveries`, `hasOutstandingMail` and the read-side predicate by construction); `d.toId IN (<displaced>)` scopes it to the ids this reclaim actually took the chair from; `m.toId = 'coordinator'` is arm (b); the inner `JOIN runs r ON r.id = m.runId … r.program = ?` scopes it to this program and drops runId-NULL rows on the way, which is arm (d).
+
+THE DISPLACED SET, not `from`. The result's `from` names ONE row's claimant; `moved` is the set the runs UPDATE actually rewrote, and on a program whose rows disagree (a hand-finished `reconstruct`) that set has more than one member. The runs half already rewrites all of them, so a mail half addressed to only one would leave the others' reports on corpses the same act just declared displaced. `to` is never in the set — the existing `claimedBy != ?` selection excludes it.
+
+THE COUNTERS ARE NOT TOUCHED, measured rather than assumed. A repointed row keeps `attempts`, `nextAttemptAt` and its gate columns, all accumulated against the corpse. `attempts` only ratchets on a SEND FAILURE or a provably-dead recipient — every gate (`not-idle`, `not-quiet`, `pending-ask`, cooldown) `continue`s without touching it — so against a live heir the next due sweep delivers and the ratchet stops; the whole cost is one backoff step, at most 8 minutes. Resetting them would erase the row's own record of what happened to it.
+
+
+### D-1142 — The runId-NULL fold, recorded and deliberately left closed — plus the envelope decision
+
+THE FOLD (arm d), on D-1132's shape. A mail addressed to the ROLE with no run named IS reachable: `POST /api/mail` accepts `{toId:'coordinator', runId:null}` and resolves it through `resolveCoordinator(null)`'s single-active-program arm. Once queued, nothing on the row records WHICH program the sender meant — the resolution is spent, `mail.runId` is NULL, and `resolveCoordinator(null)`'s answer is a function of the fleet's state at the moment it ran, not a fact stored anywhere. MEASURED: no column, no join and no read in this store can recover it. Repointing such a row would therefore be the store GUESSING that a message with no program on it belonged to the program being reclaimed, on a door whose whole discipline is refusing to guess (`resolveCoordinator`'s "no guessing", `measureClaimant`'s "doubt is not evidence"). LEFT CLOSED: the row stays on the outgoing claimant, outstanding and visible at `outstandingMailFor(<that id>)` — the honest outcome, since the party that can tell which program it meant is the human reading it. Pinned as a DECISION (`ARM (d) — THE FOLD (D-1142)`), and the mutation that opens it (inner JOIN → LEFT JOIN + `OR m.runId IS NULL`) goes red.
+
+THE ENVELOPE IS NOT RE-RENDERED. `renderEnvelope` runs exactly once, at queue time (spec:174-177, "verbatim, never re-rendered"; `setDeliveryEnvelope`'s own docstring calls itself the second half of that INSERT, not a second render). A repointed delivery therefore still carries a `to:` line naming the OUTGOING id. ACCEPTED, deliberately, and written into the docstring rather than papered over: it is a TRUE record of who held the chair when the message was queued; the `ack:` line names the DELIVERY id, which this statement does not change; and the nudge the lane actually types is `renderMailNudge(d.toId)`, a function of the row's CURRENT recipient — so the heir is nudged correctly and meets the stale `to:` only inside the body it fetches. Re-rendering would trade a true historical line for a violation of the one rule the mail body has.
+
+
+### D-1143 — The kickoff cancellation — and the read-side exclusion it needed
+
+MINOR 9: a re-kickoff queued minutes before a reclaim still briefed the DISPLACED session — two coordinators, the state the skill's clause 8 exists to prevent. `queueProgramKickoff` addresses the kickoff to a LITERAL session id with `runId: null`, so the repoint's `m.toId = 'coordinator'` filter already declines it (arm b) and the opposite verb is what handles it: an outstanding kickoff to a displaced claimant is CANCELLED, on `cancelOutstandingDeliveries`'s precedent — `rejected` + `undeliverable` + its own `lastError`. Not a DELETE (nothing in this tree deletes from `mail_deliveries`).
+
+THE KEY IS THE DEDUPE KEY: the same `(fromId, runId IS NULL, subject)` triple `hasOutstandingMail` reads, with `toId` bound to each displaced claimant — not `subject` alone, because peer `subject` is caller-chosen free text (D-1041's own finding) and an operator clearing a wedge must not terminate an unrelated worker-to-worker message. `PROGRAM_KICKOFF_SUBJECT` is imported from `shared/api.ts`, never retyped: its own docstring says it lives there so no hyphenated literal appears under `server/src/coord` for `mail-routes.test.ts`'s scanner to arbitrate.
+
+THE ORDER IS A MEASURABILITY DECISION, stated in the code. The two statements are disjoint by construction (this one matches only `mail.runId IS NULL`, the repoint only rows that JOIN a `runs` row), so on correct code the order cannot change the outcome. On INCORRECT code it can: run FIRST, an over-broad cancel swallows the row the repoint was supposed to move and the repoint's `state IN` guard leaves it visibly parked; run SECOND, that same over-broad cancel would find the row already repointed to `to` (never a member of `displaced`) and quietly miss it — a mutation that cannot go red. Narrowing statement first, so a widened one is caught by the suite instead of by a program. Measured: mutation M6 fails 7 tests as written, and would have been GREEN in the other order.
+
+THE READ SIDE, which the reviewer told me to measure and which does need extending. The new park writes a `lastError` that is NOT `'run closed'`, and the kickoff's `mail.runId` is NULL so `OUTSTANDING_OR_ABANDONED_SQL`'s terminal-run `LEFT JOIN runs rr` arm cannot reach it either (`rr.state` NULL → `COALESCE` → `''`). Every reader was walked: `outstandingMailFor(toId)` BREAKS — `GET /api/mail?to=<dead id>` and `sessionws.ts`'s `checkMail`, which is keyed on the session's OWN id, and a reclaimed workspace id is not gone for good (`ccd start`/`ws-restore` bring it back, `_ws_slug_new` recycles a purged slug), so the returning session's mail strip would open on a kickoff briefing it to coordinate a program somebody else now holds — MINOR 9's own hazard re-entered through the READ side. `unreadMailCount` is unaffected and not by luck (`WHERE m.runId = ?` cannot match a NULL runId). `mailForRecipient` (`?all=1`) is unaffected on purpose — it is the history read. `hasOutstandingMail`/`dueDeliveries`/the peer-quota reads all sit on the narrower `OUTSTANDING_STATES_SQL`, for which `rejected` is simply terminal — so the lane stops replaying and the dedupe slot frees up, which is correct: the cancelled kickoff no longer blocks a fresh one to that id.
+
+SO THE EXCLUSION WAS EXTENDED, and the two literals it needed were made one definition. `'run closed'` was ALREADY typed twice — by `cancelOutstandingDeliveries` and by the read predicate — which is precisely the drift `MAIL_REPLAY_CEILING_ERROR`'s own docstring exists to forbid. Both are now constants (`MAIL_RUN_CLOSED_ERROR`, `MAIL_RECLAIM_CANCELLED_ERROR`) collected in `DELIBERATE_CANCEL_ERRORS_SQL`: the parks that are DECISIONS, which is the set the predicate excludes. A park that means "we gave up" must never join it — those are the rows that predicate exists to keep visible, and that rule is written beside the constant. The reclaim park is deliberately NOT spelled `'run closed'`: no run closed here, and `lastError` is free text a maintainer greps.
+
+
+### D-1144 — Rung 1 answers three ways: a listed-but-unassembled registry row is `unmeasurable`, never `dead`
+
+`SingleRead`'s `reason:'absent'` is THREE conditions wearing one shape (registry.ts:895): the listing did not name `<id>.uuid` at all (a proven absence), `buildRecord` came back null for a row the listing DID name (its own docstring's "a session mid-write or mid-teardown" — an identity-triple member missing or measured-empty), and the identity reconfirm's twice-observed absence. The first and third are deaths; the second is a LIVE coordinator between two `_reg_set` writes, and rung 1 handed its program away under the sentence "no registry row in a directory that listed cleanly", which is false about that input and false in the one direction that PROCEEDS. Rung 1 now re-splits `absent` at the consumer with one `io.readdir` — the same split the mail ingress already draws (routes.ts:578-585: `names.includes(<toId>.uuid)` -> 502 `registry-unmeasurable`, otherwise 404 `unknown-recipient`) — placed AHEAD of the tmux consultation, because a pane's absence must not get to speak about a row the registry itself is still writing. A re-listing that FAILS also answers `unmeasurable`: the first listing knew which condition fired and `SingleRead` dropped that fact, so a failed second listing leaves the question genuinely unanswered, and fail-shut is the only safe direction in front of a destructive re-pointing (cost of being wrong: one operator retry, against a cost that is not recoverable). `why` carries the evidence — the listed `<id>.uuid` and the words "could not be assembled" — because the route sends it as `detail` and it is the only thing separating this producer of `registry-unmeasurable` from the unlistable-directory one. Pinned by five tests in coord-reclaim.test.ts, incl. a fixture-reachability precondition (`expectListedButUnassembled`) and a placement pin that asserts the tmux port is never called.
+
+
+### D-1145 — The debt this does not pay: `SingleRead` still folds the distinction at its source, and this is the SECOND hand re-split
+
+The split above is a consumer-side re-derivation of a fact the type threw away. `SingleRead` (registry.ts:863-866) still collapses three conditions into one `reason:'absent'`, and reclaim.ts is now the second consumer to re-split them by hand — the mail ingress (routes.ts:578-585) was the first. Widening the type with a third arm was considered for this fix and declined on scope, not on merit: `SingleRead` has ~8 consumers (sessionws.ts:466, skillstate.ts:82, server.ts:1532 and 1699, fleet.ts:116, watch.ts:2911, reclaim.ts's own rung 3, plus the readiness/hookstate/livestate analogues), each of which needs a deliberate direction rather than a mechanical one, and the ruling that produced D-1144 is scoped to the one rung that stands in front of a destructive act. THE THIRD CONSUMER THAT NEEDS THE DISTINCTION MUST WIDEN THE TYPE INSTEAD: three hand-copies of a split the source could carry is "no overloaded null at a seam" losing by attrition instead of by argument. Recorded as a comment in reclaim.ts beside the split, and in the plan's corrected census bullet.
+
+
+### D-1146 — The resume door was gated on the ROW, so it disappeared exactly when the program needed it
+
+`RunsScreen.tsx`'s resume control was `presence === 'dead' && !isRunClosed(run)`. The second term was argued as "a done wave's coordinator being dead is the ORDINARY end state, not a wedge" — true of a finished wave sitting beside one that can still move, false of the case the door exists for. `closeRun` retires a program at zero open runs, so between closing wave N and opening wave N+1 — the close-then-open window ruling R1 already names as dangerous — every row of the program is terminal. `ResumeSheet` has exactly ONE opener (this button) and the wave ships no `ccrc-api` verb on purpose, so a program whose coordinator died in that window rendered no control anywhere while the server half worked: wave N+1's `POST /api/runs` refuses `claimed-by-another` naming the corpse, and a reclaim is what makes the same call answer ok. `Abandon` on the last open run reached the same dead end from the other side, by removing the only Resume the program had. RULING (reviewer's): gate on the PROGRAM, not the row — the control renders when the coordinator is measured dead AND (this run is open OR the program has no open run). Shipped as `programsWithOpenRun(active)` in `runWords.ts` (a Set of slugs, re-filtered through `isRunClosed` itself so "open" keeps ONE definition and cannot drift onto `closedAt`), derived once in `RunsScreen` and handed to each row as `programHasOpenRun`. The first term is untouched: `coordPresence`'s `unknown` still hides the door, including on the newly reachable path (pinned in both directions). The empty-set answer is a MEASURED empty in every window this board passes through — a terminal row can only reach the screen through the cold read, the cold read is `?closed=1` which carries the active half too, and `CoordStore.runs`'s `closedLimit` clamp is asymmetric by design (review finding 24), dropping archive rows but never an active one — so a truncated cold read can lose a row the door would have appeared on, never the open row whose presence withholds it.
+
+
+### D-1147 — RECORDED, NOT FIXED: reclaiming an all-terminal program does not restore runId-less coordinator mail
+
+In the all-terminal case D-1146 now opens the door for, the program row stays `done`: the close route calls `setProgramState('done')` once `programOpenRunCount` reads zero. `resolveCoordinator(null)` refuses on its single-active-program guard (`active.length !== 1`) BEFORE it ever reads `claimedBy`, so the column the reclaim rewrites is not the one that arm is stuck on — a `toId:'coordinator'` mail carrying no `runId` stays unresolvable for a retired program even after a successful hand-over. Out of scope for this fix and deliberately not worked around here: the explicit-runId path (`resolveCoordinator(runId)`, a direct row read) is unaffected and is the path the coordinator corpus already sends a resumed coordinator down. Written into `RunsScreen.tsx` beside the gate it qualifies, so the next reader of that door meets the limit at the same place as the fix.
+
+
+### D-1148 — CLAUDE.md asserted the two coordination prefixes were the whole box-token surface
+
+The wave-5 sentence at CLAUDE.md:151 read "The two prefixes above are the whole box-token surface, which is why one coordination WRITE sits outside this rule without being an ungated door". Measured false against the tree: `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call `requireMailToken` (server/src/coord/routes.ts:1679, :1795, :1933, :2052) and all four sit outside `/api/mail*` and `/api/runs*`; `auth/gate.ts`'s EXEMPT table states the same, route by route. The false premise was also load-bearing for the sentence that followed it — kickoff's exceptionality was being derived from a census that did not hold. Reworded to: the prefixes are the BULK of the surface, not the whole of it; `auth/gate.ts`'s EXEMPT reasons are the census, not this bullet; and the point worth keeping is restated on its own footing — `POST /api/sessions/:id/kickoff` is a coordination WRITE that carries no box token and is session-gated only. The reason it needs prose at all is now stated: `coord-pause-route.test.ts` scans `server/src/coord/routes.ts` alone and that route is registered in `server.ts`, so a door opened outside that one file is invisible to the set that pins the doors. Edit kept surgical — no paragraph reflowed that was not being corrected, and `D-282 (was D-B4-9)` untouched on its own line.
+
+
+### D-1149 — The run-board arm retired a standing kickoff recovery — an arm displacing something further DOWN the chain
+
+Wave 5's open-run/unmeasured arm sits above the confirm fragment, and wave 4's kickoff-failure recovery (the statement plus the retry and open-anyway doors) lived INSIDE that fragment. `openRunProjects` is rebuilt by the run board every ~2s, so a run opening in the project while a queue failure was standing swapped a live retry door — the only control that can re-post for that session — for a sentence about a collision, on a poll tick the operator never touched. FIX: the recovery is hoisted to a `recovery` node in the component and rendered by BOTH the run arm and the confirm fragment; D-1130's comment block gains the third reason it never had. NOT the lead's carve-out (suppressing the arm while a failure stands): that renders the confirm fragment, whose Start is withheld only by `existing !== null`, and `existing` goes null the moment the operator picks a DIFFERENT project — which is exactly D-1121's own flow — so D-1130's structural no-button refusal would have had to be re-derived as a sixth `disabled` term plus a matching early return in `start()`. The hoist leaves the refusal's slot, copy and posture untouched and only stops it eating an act that was never its business. PIN: `start-program.test.tsx` constructs the real sequence (failure driven through `finish()`, THEN the board answers via a rerender), asserts both facts render, and tapping the retry still re-posts to the measured id and navigates.
+
+
+### D-1150 — A docstring promising a degrade the code did not implement — and a wave-5 regression behind it
+
+`kickoff`'s docstring claimed an absent/truncated answer reads `queued:true`, `abandonRun`'s direction. But `postJson` is `(await request(…)).json()` with no `.catch`, so an unreadable answer THREW — and on `main` `kickoff` read no answer at all, making this a regression: a 200 that really did queue the kickoff reached the operator as "nothing was sent, and it has no brief yet", above a retry that would queue a second one. FIX: a named degrading twin, `postJsonOr(path, unreadable, body)`, taking the Response from `request` first and catching only the parse — because a connection dropped before the request left and a payload truncated after a 200 both arrive as a TypeError, so a `.catch` around `postJson` would fold "never sent" into "sent, unreadable" and claim a write that never happened. Not a default or an option on `postJson`: the passkey ceremonies and `reclaimRun` read fields off their answers, where a silent `{}` is an overloaded null at the seam. The POST init is factored into one `jsonInit` used by both helpers, so `reclaimRun`'s header pin still measures one shape. PINS: an unreadable 200 (truncated, and emptied) degrades to `{queued:true}`; a fetch that never completed still rejects; a non-2xx still throws ApiError.
+
+
+### D-1151 — The borrowed integer check dropped its lower bound — and the dedupe key is what it cost
+
+`POST /api/sessions/:id/kickoff` took its resume-pair reader from `coord/routes.ts`'s integer body checks and left one term behind. `POST /api/runs` reads `typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1` (`server/src/coord/routes.ts:894`); only the integer half made the trip. So `{runId:-5, wave:0}` typechecked AS A PAIR: `resume` was defined, the both-or-neither guard (D-1126) below it never fired, and `programResumeKickoff(slug, title, -5, 0)` composed and durably queued a brief telling a revived coordinator to "read `GET /api/runs`, find run -5 at wave 0, and pick that wave up". Nothing downstream catches it — the composer interpolates, `queueSystemMail` writes, and the recipient is a session reading prose. Both fields need the bound, not just the wave: `runs.id` is `INTEGER PRIMARY KEY AUTOINCREMENT` (`coord/schema.ts:66`) and a wave is refused below 1 at open, so the smallest either can be is 1.
+
+The false sentence is the cheap half. The expensive half is the DEDUPE KEY: `queueProgramKickoff`'s key is `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — deliberately not namespaced by slug, one outstanding kickoff per session whatever program it names — so the nonsense brief TAKES THE SLOT. The operator's corrected re-kickoff a second later answers `queued:false`, which the sheet renders as "one is already waiting": true, and useless, because the one waiting names run -5. A refusal writes nothing and so cannot occupy anything, which is why the range test belongs in the pair reader before the queue and not as a repair downstream.
+
+FIX: `&& body.runId >= 1` and `&& body.wave >= 1` restored into the same conjunction, written positively to fit the ternary (the source convention `x < 1` negated, not a new one invented). The out-of-range pair then reads `undefined` — the same value an ABSENT pair produces — and lands on the D-1126 refusal rather than on the wave-1 fallthrough, because that guard tests the RAW body keys and not the computed value. The two are one mechanism: measured, deleting either half reds `kickoff-route.test.ts`, and each reds on its own damage (mutation rows 3-5).
+
+
+### D-1152 — The `fleetFrameSeen` pin could not fire — its premise was cleared by the enclosing beforeEach
+
+pwa/test/stores.test.ts's `a hydrated snapshot is not a frame` built a store on a localStorage that `describe('fleet store')`'s `beforeEach` had just cleared, so `sessions` was `[]` and the test re-stated the empty case the two tests above it already own. MEASURED: with the store's initial value written as `(snapshot?.sessions ?? []).length > 0` — the exact mutation the pin names — the whole file passed, 62 passed. Fixed by hydrating through the PRODUCTION writer (`saveFleetSnapshot`, what the live `fleet` frame calls) rather than a hand-written storage key, so a renamed key, a bumped snapshot version or a tightened refusal in that writer reds the fixture instead of quietly re-emptying it; and by asserting `sessions` has length 1 BEFORE the flag assertion — the premise is the fixture's own smoke alarm, and a premise checked after the claim is a premise nobody checked. Re-measured: the same mutation now reds with `expected true to be false`, restored green.
+
+
+### D-1153 — D-1125 was applied to one of the two sites it named, and its pin was per-file
+
+D-1125's own ledger entry names two sites — `shared/api.ts` and `pwa/src/fleet/nestFleet.ts:4-7` — and only the first was corrected. The survivor was the worse of the two: it is the file closest to the render, it asserted `claimedBy` is "rewritten by no route", and it cited `shared/api.ts`'s docstring as its authority for a claim that docstring now explicitly retracts. Corrected here, and the wording deliberately PARAPHRASES the old claim rather than quoting it (a correction that recites its own falsehood verbatim would red the widened scan; `shared/api.ts` already paraphrases for the same reason, and both files now say so). The pin in server/test/resume-reclaim-l0.test.ts was widened from `shared/api.ts` alone to a directory-walked corpus of every `.ts`/`.tsx`/`.mjs` under `shared/`, `server/src`, `pwa/src`, `agent/src` (183 files measured), flattened so a claim wrapped across comment lines is still found, with an anti-vacuity walk-check beside it. This is `coordinator-skill.test.ts`'s `carries no copy of the pre-reclaim absolute, in EITHER corpus file` finding arriving a second time in the same programme, in the same shape, in a different corpus: "a per-file pin would have let the survivor go on teaching … the D-1000 shape, one file at a time." `docs/` and `ccd/` are deliberately outside the corpus, with the reason for each written into the docstring.
+
+### D-1154 (process defect — MAJOR) — the wave shipped no execution record, so its sharpest claim was unverifiable
+
+Task 11 asks for a `## Execution record`: suite totals, the mutation table counted twice, flake
+isolation, the Global-Constraints self-review, and every row's verbatim first-fail. The wave shipped
+with **113 `<measured at execution>` placeholders and zero verbatim assertions**, nine of ten mutation
+tables unfilled (only task 9's was real), and no such section at all. Waves 1–4 carry zero
+placeholders; wave 4 carries 19 filled rows.
+
+The reviewer's ruling is the argument, and it is about evidence rather than formatting: *"your
+sharpest claim — ten rows GREEN or red for the WRONG reason — names rows nobody but you can locate or
+re-measure. I believe you; the record is what makes belief unnecessary."*
+
+**The measurements existed.** Each of the ten executing agents measured its reds and reported them
+verbatim; the record was simply never written back, and the lead's context was compacted before it
+was. The ten final reports were recovered from the session transcripts and are the primary source for
+every cell now in this plan. Of the **112** real placeholders (the 113th match is prose inside an
+existing correction note, not a cell), **112 were fillable from a measurement and 0 were not** — no
+cell carries `<not recorded at execution>`, and none was filled with plausible-looking assertion text.
+
+Recorded as a DEFECT rather than an omission because the failure mode is specific: a wave that
+measures well and records nothing is indistinguishable, to its reviewer and to every later wave, from
+a wave that measured nothing. The mutation-table discipline exists to make a guard's absence loud; a
+missing record makes the whole apparatus quiet.
+
+### D-1155 (record-only) — the review's eleven notes, kept because a note that vanishes is a note that recurs
+
+The review closed with eleven findings marked *record, no code*, and two REFUTED. They are kept here so
+the next wave meets them rather than rediscovers them. No code was changed for any of these.
+
+- `reclaimRun`'s use of `postJson` is justified in its docstring by "a render depends on `runIds`";
+  measured, that render does not exist.
+- D-1136 was measured one way only.
+- `measureClaimant`'s `otherwise` census names three inputs; two of them reach it.
+- `reclaim-route.test.ts:114`'s comment says "`reclaimProgram`'s SELECT carries no ORDER BY" — the SQL
+  has carried `ORDER BY id` since it was written. Verified by the lead against the source.
+- "UNNAMED IN BOTH SKILL CORPORA" — only the coordinator corpus has a mechanism behind it.
+- `openRunProjects` folds "not yet answered" with "read FAILED".
+- The cheapest-dead case renders no door (`coordWords.ts:93`) — fail-shut, so the door hides; correct
+  direction, unpinned.
+- Two docstrings say this door re-kickoffs; it queues no mail.
+- `reclaimErrorText`'s 409 arm and `coordPresence`'s `?? null` have no killer.
+- Plan step 5.12's README measurement names no command that could produce it.
+- REFUTED, and deliberately NOT acted on: the "ONLY if" census claim against `SKILL.md:25`, and a
+  duplicate of the placeholder finding.
+
+### D-1156 (measured gap, reported not fixed) — a corrected prose census with no mechanism behind it, and its twin in the README
+
+D-1148 corrects `CLAUDE.md`'s false "the two prefixes above are the whole box-token surface". The
+correction is **unpinned, and that was measured, not assumed**: the false sentence was restored into
+the passage and the suite stayed green. `coord-pause-route.test.ts` reads that bullet, but only for the
+four door NAMES and the CAPS cardinal — nothing in the tree pins the truth of the surface claim.
+
+The same defect stands twice more in `README.md`, pre-existing and measured by the lead this round:
+
+- `README.md:528-531` — "nine box-token-gated coordination routes". Measured, `requireMailToken` guards
+  **eleven** (`GET /api/ledger`, `GET /api/mail`, `GET /api/mail/:id`, `POST /api/claims`,
+  `POST /api/claims/:id/release`, `POST /api/ledger/deviations`, `POST /api/runs`,
+  `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch`,
+  `POST /api/runs/:id/items`), with `POST /api/mail` and its ack route gated through the mail pair.
+- `README.md:1403-1407` — calls "the run routes" box-token gated as a class. False since Build 4:
+  `/:id/abandon`, and now `/:id/reclaim`, are ungated by design (D-282).
+
+NOT FIXED, and the reason is scope rather than doubt: this wave wrote the `CLAUDE.md` sentence, so
+correcting it is this wave's business; the README's two are pre-existing, the reviewer ruled on
+neither, and the lead flagged them at the previous handoff without a ruling coming back. They are one
+decision, not three — **a prose census with no mechanism behind it** — and the mechanism that would
+settle all three is the same: derive the box-token surface from the `requireMailToken` /
+`checkMailToken` call sites and assert that no prose site under-claims it, the shape
+`coord-pause-route.test.ts` already uses one field over for the door count ("every prose site that
+states the door count states the DERIVED one"). Deliberately not written here, because a scanner that
+asserts the truth of all three claims reds the build until the README is corrected too, and that is
+the coordinator's call to make.
+
+---
+
+## Execution record — the fix round (review mail 123)
+
+### Suites, measured after the last edit (foreground, `timeout 900000`, cd'd in, tails read)
+
+| suite | files | passed | skipped |
+|---|---|---|---|
+| `server` | 244 | **6131** | 56 |
+| `pwa` | 76 | **2085** | 0 |
+| `agent` | 18 | **281** | 0 |
+
+`pwa` reports `Type Errors  no errors`; `server` includes `typecheck-tests.test.ts`. Server duration
+300.09s, pwa 52.34s, agent 2.90s.
+
+**This closes the review's stated verification gap.** The reviewer reproduced `pwa 76/2077/0` twice
+but could not reproduce the server total — only targeted suites ran there — and asked for a
+re-measurement with tails read. Measured above on the fix round's own tree: **244 / 6131 / 56**, up 23
+tests from the wave's `6108`, which is the fix round's own additions. `pwa` is up 8 from `2077`.
+
+**Flake isolation (11.2): not required this round, and that is the honest statement rather than a
+claim of having done it.** All three suites were green in one full foreground run, the five known load
+flakes (`ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`) among them.
+Nothing was red, so nothing needed isolating to decide whether it was load.
+
+### The fix round's own mutation table
+
+Every guard below was measured RED on its own deletion or mutation and green again on restore; the
+verbatim first-fail text lives in each deviation entry and in the agents' records. 30 rows across six
+findings: D-1141/1142/1143 nine rows, D-1144 five, D-1146 four, D-1148/1152/1153 four, D-1149/1150
+three, D-1151 five.
+
+**Four more fixture holes were found by measuring, and closed** — the same failure mode this wave
+keeps rediscovering, now four rounds running:
+
+1. **Two kickoff-route tests were red for the wrong reason.** Both led with the status assertion, so
+   under the pre-fix handler they died on the status — the identical failure five `it.each` rows above
+   already owned — and never executed the sentence each was named for. A test whose name promises the
+   durable cost must red ON the durable cost. Reordered cost-first.
+2. **A green test was holding the wedge in place.** `hides it on a closed run — a finished wave has no
+   coordinator to bring back` had as its fixture *literally* the all-terminal program with a dead
+   coordinator, asserting the resume door is absent. MAJOR 2 was therefore not an unpinned defect but a
+   PINNED one, by a test whose title described a different situation.
+3. **Statement order hid a mutant.** With the repoint before the cancel, the over-broad-cancel mutation
+   came back green — the repoint had already moved the row beyond the cancel's reach. *"A hole in the
+   ARRANGEMENT, not in the fixture: no fixture can catch a mutant the code order hides."* Cancel-first,
+   it fails seven tests. Nothing about correct behaviour changed; only detectability did.
+4. **A correction that would have red its own pin.** The first nestFleet.ts draft QUOTED the falsified
+   sentence while widening a tree-wide negative against it. Closed by paraphrasing, and by writing the
+   corollary into the pin's docstring: a file correcting one of these claims may paraphrase it but may
+   never quote it.
+
+**One pin is flagged as anti-regression rather than mutation-backed**, because the distinction is the
+whole doctrine: `expect(s.run(ids[4]!)!.unreadMail).toBe(0)` is green with or without the read-side
+exclusion, so it states a measured fact and kills no mutant. The mutant-killer for that read side is a
+different row, on `outstandingMailFor`.
+
+### Two things measured and deliberately NOT fixed
+
+- **MAJOR 1's fix has a ~15.5-minute window** (`MAIL_MAX_ATTEMPTS` 6 on a 30s doubling backoff). Arm
+  (c) — the reviewer's own "acked/terminal, never move" — means that once the sweep parks a
+  never-delivered report to a provably-dead recipient, there is nothing outstanding left to repoint.
+  The reviewer's repro sits inside the window; an operator who notices the wedge over lunch does not.
+  The ruling was followed exactly and the bound written into `reclaimProgram`'s docstring. Closing it
+  would need a fifth arm re-queueing a parked role-addressed delivery — a different decision on a
+  different door, and the coordinator's to make.
+- **`coord/routes.ts`'s two other `runId` body readers** (`POST /api/mail`, the claims route) carry no
+  lower bound either, so the convention is now inconsistent across three readers. They write an id into
+  a column rather than into prose a coordinator acts on, so the blast radius differs. Reported, not
+  changed.
