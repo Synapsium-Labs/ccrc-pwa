@@ -1336,10 +1336,17 @@ export function registerCoordRoutes(
    *  settle it. No frame carries caps, so the honest answer is the stored value
    *  RE-READ after the write — never the value the caller sent, which is what
    *  they asked for and not what is now true. */
+  /** The answer shape, defined ONCE and shared by both halves (coordinator
+   *  ruling on wave 6, item 1): the read must not carry a copy of what the
+   *  write answers. Typed as `CoordCapsView` so the two cannot drift silently —
+   *  an inline object literal in either half would satisfy the compiler while
+   *  saying something the other does not. */
+  const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
+    ({ caps: store.caps(), usage: store.capsUsage() });
+
   app.get('/api/coord/caps', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    const coord = deps.coord;
-    return reply.code(200).send({ ok: true, caps: coord.caps(), usage: coord.capsUsage() });
+    return reply.code(200).send({ ok: true, ...capsView(deps.coord) });
   });
 
   app.post('/api/coord/caps', async (req, reply) => {
@@ -1382,7 +1389,7 @@ export function registerCoordRoutes(
       // ever stops being true it is a 500 that says so and not a silent 200.
       if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
       coord.setCaps(merged.next);
-      return { before: current, view: { caps: coord.caps(), usage: coord.capsUsage() } };
+      return { before: current, view: capsView(coord) };
     });
     // A `run_events` row would be WRONG here: there is no run, and
     // `recordRunEvent` writes `fromState === toState`, which `pushNewRuns`

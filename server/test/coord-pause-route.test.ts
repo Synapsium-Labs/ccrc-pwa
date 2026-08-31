@@ -199,7 +199,17 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *
    *  `/api/coord/caps`: the operator's dial on `maxConcurrentWorkers` and
    *  `maxSessionsPerDay`, which before it had no door at all and changed only by
-   *  hand-editing sqlite. Raising a cap releases no wedge. */
+   *  hand-editing sqlite. Raising a cap releases no wedge.
+   *
+   *  A BLIND SPOT, recorded beside the set rather than papered over by widening
+   *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
+   *  kickoff` is the natural second member — a coordination WRITE that is
+   *  session-gated only — and it is ABSENT here because this file scans
+   *  `coord/routes.ts` alone and that route is registered in `server.ts`. Its
+   *  absence is therefore not a judgement that it belongs elsewhere; it is the
+   *  scanner's reach, and the difference matters: dodging a pin by placement is
+   *  not being ungated, it is being unmeasured. Whoever widens the scan to
+   *  `server.ts` should add it here in the same change. */
   const SESSION_ONLY = new Set(['/api/coord/caps']);
 
   /** The two mechanisms that count as "the token was checked" — the shared

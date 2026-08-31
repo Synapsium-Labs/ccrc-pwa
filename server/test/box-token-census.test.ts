@@ -19,6 +19,14 @@
 // to speak that set rather than the scanner widened to tolerate three
 // vocabularies.
 //
+// HOW TO ADD A SITE, because the next one is already known. Wave 8 inherits
+// `ccd/ccrc-api:32-38`, which states the ungated set as TWO against the four in
+// `UNGATED` (D-1168) — out of scope here because `ccd/` is on the coordinator's
+// agent-first deploy lane. Pointing this mechanism at it is meant to be a few
+// lines, not a redesign: read the file, slice the passage with `passage()`, and
+// compare `numeralsIn()` against `word(<the derived size>)` — the same
+// set-naming, one more site. Nothing about the derivation needs to change.
+//
 // CORPUS SCOPING, stated so it cannot creep. Repo-root docs plus the source that
 // states a census. NOT `docs/superpowers/{plans,specs,programs}`, whose archived
 // generations say TWO doors, THREE doors and "all six coordinator write routes"

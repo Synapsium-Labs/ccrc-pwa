@@ -2315,3 +2315,55 @@ per the merged-first-keeps-them precedent.
 
 `tsc --noEmit` clean in all three. Server gained two tests over the fix round — #38's own, arriving with
 the merge. No flake shed on any of the three runs.
+
+### 9.11 — The coordinator's adjudication (mail 129), and the ruling round it required
+
+**It arrived 1h42m after it was sent, gated `not-idle` for 911 delivery attempts.** Sent 20:40 UTC in
+answer to the pre-implementation flags (mail 128); read at 22:22, after the wave-done. This is the
+carried constraint repeating and WORSENING — wave 5 measured 722 attempts on the same lane — and the
+cause is the same: the recipient never idled. Two things follow, and both belong in the ledger rather
+than in a shrug.
+
+First, the mail was written to survive it: "written so it reads correctly whether it reaches you before
+or after the code: every design call is ENDORSED as you framed it, so late arrival costs nothing." That
+is the discipline the carried constraint asks for, applied by the sender, and it is why this cost a
+verification pass rather than a wave.
+
+Second, **this wave's own change does not fix this case and it would be wrong to imply otherwise.**
+`COORD_QUIET_MS` narrows the window for a session that is the `claimedBy` of a non-terminal run — the
+COORDINATOR. The blocked party here was the WORKER, mid-wave, which is exactly the session the 60-second
+floor exists to protect. The gate did its job. What this measurement argues for is not a shorter worker
+floor but a way for a worker to know steering mail is waiting, which is wave 7's board (F7) territory:
+911 attempts on one delivery is precisely the "replay counts approaching the ceiling" signal §9 of the
+spec says surfaces nowhere.
+
+**The adjudication: six items, all endorsed as framed, one BINDING, one correcting a coordinator ruling.**
+Verified rather than assumed:
+
+| item | requirement | state when the mail was read |
+|---|---|---|
+| 2 (BINDING) | `SESSION_ONLY` ships with BOTH directions from birth — a member is session-gated-only, is NOT box-token-gated, is NOT in `UNGATED` | **already met**: three tests shipped in task 5 — disjointness, really-ungated, and not-in-`EXEMPT` |
+| 1(a) | the GET carries the SAME gate posture as the POST, pinned dark-vs-armed with exact status equality | **already met, and derived**: `auth-gate.test.ts`'s sweep loops every HTTP route with three probes each (dark, armed-anonymous, armed-with-session) and asserts dark ≡ authenticated; both caps routes enter it from the source scan |
+| 1(b) | the caps shape has ONE definition the GET and POST share, never a read-side copy | **NOT met — fixed in this round.** The GET built `{caps, usage}` inline and unannotated while the POST built a typed `CoordCapsView`: the shape was spelled twice and only one was checked. Extracted to a shared `capsView()` helper, and measured: a GET that rebuilds the shape now reds (`expected { running: +0, dispatchedIn24h: +0 } to deeply equal { running: 1, dispatchedIn24h: 1 }`) |
+| 2 (optional) | add the kickoff route to the set if the scanner can see it; otherwise RECORD the blind spot beside the set | **not met — done in this round.** The scanner reads `coord/routes.ts` alone and kickoff is registered in `server.ts`, so it cannot be seen. The blind spot is now recorded in `SESSION_ONLY`'s own docstring, with the coordinator's sentence for why it matters: dodging a pin by placement is not being ungated, it is being unmeasured |
+| 6 | build the census so wave 8 can POINT it at `ccd/ccrc-api`'s prose rather than redesign it | **done in this round**: a how-to-add-a-site note at the top of the census, naming that file as the known next site and the four helpers that already do the work |
+| 3, 4, 5, 7 | `'coord'` kind endorsed; fold the gate.ts finding in; build the census the measured way; both brief premises accepted | **already met** — all four were the shape already shipped |
+
+Nothing in the adjudication reversed a decision, and the one correction ran the other way: the
+coordinator withdrew its own single-surface premise for item 3 in favour of the three-set measurement,
+which is the shape that shipped.
+
+**Cost of the round:** three small changes, all of them closing an instruction rather than changing a
+decision. The fingerprint was re-measured after them and re-sent — a claim is never re-asserted without
+new commits and a fresh measurement, and this has both.
+
+### 9.12 — Final verification, after the ruling round
+
+| suite | files | passed | skipped |
+|---|---|---|---|
+| server | 247 | 6210 | 56 |
+| agent | 18 | 281 | 0 |
+| pwa | 77 | 2099 | 0 |
+
+`tsc --noEmit` clean in all three. One mutation row added (the shared shape), bringing the wave to
+**62 rows**.
