@@ -381,6 +381,17 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 
 ## Carried constraints
 
+- **A steering mail sent mid-wave may arrive AFTER the work it was meant to steer** (measured
+  2026-08-31, wave 5): the coordinator's corpus bound (mail 120, sent ~12:20 UTC) sat gated
+  `not-idle` for **722 delivery attempts** and reached the worker only after the corpus commit AND
+  after the wave-done — because the session never idled between planning and handoff. The idle gate
+  is working as designed; the lesson is about what may be entrusted to it. **Any constraint that must
+  SHAPE implementation belongs in the dispatch brief; follow-up mail is advisory and post-hoc by
+  default.** Wave 5 survived on the worker independently arriving at the same design and then
+  MEASURING the shipped commit against the bound (mail 122) — corroboration, not a mechanism. When a
+  bound cannot wait for the next wave's brief, treat delivery as unproven until the worker's ack
+  shows in `GET /api/runs`'s `unreadMail` dropping, and say in the mail itself that it may arrive
+  late so the worker measures rather than assumes.
 - Waves 1, **5** and 8 are **AGENT-FIRST** deploys (wave 1 and wave 5 touch
   `ccd/coordinator-skill/`, wave 8 the agent's IO half). **Wave 5's classification CHANGED
   mid-wave** (operator ruling 2026-08-31): its brief said NOT agent-first, and the corpus
