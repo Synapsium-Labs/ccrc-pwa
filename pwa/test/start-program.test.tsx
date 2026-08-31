@@ -904,6 +904,70 @@ describe('StartProgramSheet', () => {
     expect(screen.queryByText(/already has a run open/i)).toBeNull();
   });
 
+  // — WAVE-5 REVIEW, MINOR 6 (D-1149). The run arm sits ABOVE the confirm
+  // fragment, and wave 4's kickoff-failure recovery — a standing statement with
+  // a retry and an open-anyway door beside it — lives INSIDE that fragment. So a
+  // run appearing in this project while a failure was standing swallowed the
+  // recovery whole: `openRunProjects` is rebuilt by the run board every ~2 s
+  // (`screens/RunsScreen.tsx`), and the operator was left reading a sentence
+  // about a collision with no way to finish the recovery they were in the middle
+  // of — the retry door being the ONLY control that can re-post for that
+  // session (`retryKickoff`'s own docstring).
+  //
+  // THE SEQUENCE IS CONSTRUCTED, not asserted about arm order: the failure is
+  // driven through the real `finish()` path first, and only THEN does the board
+  // answer. An order-only assertion would have stayed green on the shape that
+  // shipped. —
+  it('a run appearing mid-failure never retires the standing kickoff recovery (D-1149)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockResolvedValueOnce({ queued: true });
+    const store = makeStore();
+    // Stable across the rerender: an inline arrow would be a NEW `loadProjects`
+    // identity on the second render, re-firing the sheet's own fetch effect and
+    // blanking the picker mid-assertion — a fixture defect that reads as the
+    // component dropping state.
+    const loadProjects = async (): Promise<{ roots: string[]; projects: ReturnType<typeof proj>[] }> =>
+      ({ roots: [], projects: [proj()] });
+    const { rerender } = render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={NO_OPEN_RUNS}
+      createSession={async () => {}} queueKickoff={queueKickoff} loadProjects={loadProjects} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // …and NOW the board answers: a run is open in this very project. (On the
+    // live board this is one poll tick later, not a prop the operator touched.)
+    rerender(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      createSession={async () => {}} queueKickoff={queueKickoff} loadProjects={loadProjects} />);
+
+    // BOTH facts, not one. The collision is stated — it is why no Start is
+    // offered…
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start build9-demo/i })).toBeNull();
+    // …and the recovery is still standing, doors and all.
+    expect(screen.getByText(/could not be queued/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open it without a brief/i })).toBeInTheDocument();
+
+    // LIVE, not merely rendered: the retry still re-posts to the id
+    // `startedSessionFor` measured, and still navigates on success. The router
+    // is parked somewhere that is not the target first — this file has measured
+    // once already that a stale `/s/claude-ccrc-pwa` makes a navigation
+    // assertion vacuous.
+    act(() => { history.pushState(null, '', '/runs'); });
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+    expect(queueKickoff.mock.calls[1]).toEqual([
+      'claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+    ]);
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
   // — Whole-branch review, C1: `wrapper`+`project` alone is not the target
   // `cmd_start` would collide with. `cmd_ws_add` writes `project` AND a
   // `_ws_least_loaded` wrapper onto every WORKSPACE row (`ccd/ccd:1164+`),

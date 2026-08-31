@@ -476,6 +476,13 @@ describe('kickoff (program-leverage wave 4)', () => {
     // declaration through its own `},` — strictly more of the file than the line
     // form ever saw — and it is anti-vacuous three ways: the slice must be
     // found, it must terminate, and it must contain both the call and the payload.
+    //
+    // `postJson` stayed the anchor when MINOR 7 (D-1150) moved this method onto
+    // the degrading twin `postJsonOr`: the substring holds for both spellings on
+    // purpose, because what THIS pin measures is that a JSON-answering POST
+    // sends the program identity and no prose — the degrade itself is pinned by
+    // behaviour two tests below, which is the mechanism that reds if the method
+    // is ever walked back to the throwing helper.
     const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
     const lines = src.split('\n');
     const start = lines.findIndex((l) => l.includes('kickoff: async ('));
@@ -531,6 +538,50 @@ describe('kickoff (program-leverage wave 4)', () => {
     // was already waiting that never was.
     const older = createApi(async () => jsonResponse(200, { ok: true }));
     expect(await older.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+  });
+
+  it('an UNREADABLE 200 degrades the same way absence does, instead of rejecting (D-1150)', async () => {
+    // WAVE-5 REVIEW, MINOR 7. The docstring above `kickoff` promised this
+    // degrade before any code implemented it: this method went through plain
+    // `postJson`, which is `(await request(…)).json()` with no `.catch` at all,
+    // so an answer that cannot be parsed THREW. And on `main` this method read no answer at
+    // all, which makes the gap a REGRESSION rather than a missing nicety — a 200
+    // that really did queue the kickoff reached the operator as "nothing was
+    // sent, and it has no brief yet", above a retry that would queue a SECOND
+    // one.
+    //
+    // Two fixtures, because "unreadable" arrives two ways and the promise names
+    // both: a truncated answer, and an emptied one (a stripping proxy, a 200
+    // with no payload at all).
+    const truncated = createApi(async () => new Response('{"ok":true,"queu', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    expect(await truncated.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+
+    const emptied = createApi(async () => new Response('', { status: 200 }));
+    expect(await emptied.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+  });
+
+  it('degrades ONLY what it measured — a request that never completed still rejects (D-1150)', async () => {
+    // THE LINE, and why the fix is `abandonRun`'s shape rather than a `.catch`
+    // around `postJson`. Reading the answer only after `request` has handed back
+    // a 2xx makes "the exchange completed and the answer was unreadable"
+    // separable from "the exchange never happened"; a catch wrapped around the
+    // parsed call cannot separate them at all, because a dropped connection and
+    // a body that never arrived both surface as a TypeError. Degrading the
+    // second would tell the operator a kickoff was queued by a POST that never
+    // left the phone — the unsafe half of the same coin the degrade direction is
+    // chosen for.
+    const offline = createApi(async () => { throw new TypeError('Failed to fetch'); });
+    await expect(offline.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' }))
+      .rejects.toThrow(/failed to fetch/i);
+
+    // …and a non-2xx is untouched: the codes are what the sheet turns into a
+    // sentence, so swallowing one would be the same regression in the other
+    // direction. (The 501 case above pins the full translation.)
+    const refused = createApi(async () => jsonResponse(409, { ok: false, error: 'bad-request' }));
+    await expect(refused.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' }))
+      .rejects.toBeInstanceOf(ApiError);
   });
 
   it('carries {runId, wave} when the caller has them, and omits the keys entirely when it does not', async () => {

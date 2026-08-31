@@ -283,20 +283,49 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     );
   };
 
+  /** The init a JSON-answering POST sends, spelled ONCE for the two helpers
+   *  below. `accept: application/json` on both arms, and no `content-type` at
+   *  all when there is nothing to send — the byte-identical request every
+   *  `postJson` caller has always made (`reclaimRun`'s own header pin measures
+   *  exactly this pair, so a second copy of this shape would be a second thing
+   *  to keep in step with it). */
+  const jsonInit = (body?: unknown): RequestInit =>
+    body === undefined
+      ? { method: 'POST', headers: { accept: 'application/json' } }
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(body),
+        };
+
   /** A POST whose RESPONSE is JSON — the passkey ceremonies' shape, where `post`
    *  (which resolves to `void`) would throw the answer away. Same funnel, so a
    *  401 still raises the one login screen. */
   const postJson = async <T>(path: string, body?: unknown): Promise<T> =>
-    (await request(
-      path,
-      body === undefined
-        ? { method: 'POST', headers: { accept: 'application/json' } }
-        : {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify(body),
-          },
-    )).json() as Promise<T>;
+    (await request(path, jsonInit(body))).json() as Promise<T>;
+
+  /** `postJson`'s DEGRADING twin (wave-5 review, MINOR 7, D-1150): the same
+   *  send, the same funnel, but an answer that cannot be READ resolves to
+   *  `unreadable` instead of rejecting.
+   *
+   *  THE RESPONSE IS IN HAND BEFORE THE PARSE, and that ordering is the whole
+   *  design rather than an accident of expression. By the time `.json()` is
+   *  attempted, `request` has already established that the exchange completed
+   *  and answered 2xx — so "the answer came back unreadable" is a measured,
+   *  separate condition from "the request never happened". A `.catch` wrapped
+   *  around `postJson` instead cannot separate them: a connection dropped
+   *  before the request left, and a payload truncated after a 200, both arrive
+   *  as a TypeError, and folding those together would tell a caller its write
+   *  landed when nothing was ever sent. Non-2xx still rejects through the same
+   *  funnel, 401 included, so the one login screen still rises.
+   *
+   *  NOT a default on `postJson` itself, and not an optional argument to it:
+   *  the passkey ceremonies and `reclaimRun` all read fields off their answers,
+   *  where a silent `{}` is an overloaded null at the seam. Only a caller that
+   *  can state a SAFE reading of "no answer" may have this, and it states that
+   *  reading in the call. */
+  const postJsonOr = async <T>(path: string, unreadable: T, body?: unknown): Promise<T> =>
+    (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
@@ -464,22 +493,37 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  the START path both answers still mean "a kickoff is on its way"; on the
      *  REVIVE path "one was already waiting, unread" is the likelier answer and
      *  a different thing to tell the operator, so `ResumeSheet` renders them
-     *  apart. Hence `postJson`, whose own docstring (:286-288) names exactly
-     *  what `post` was doing to this value.
+     *  apart. Hence the `postJson` family (:301-303), whose own docstring names
+     *  exactly what `post` was doing to this value — this method takes the
+     *  degrading member of it, for the reason the next paragraph gives.
      *
      *  An absent `queued` reads TRUE — `abandonRun`'s degrade direction, for
-     *  its reason. No deployed server can produce it; it covers a truncated
-     *  body, where claiming a kickoff was already waiting that never was is the
-     *  unsafe half. */
+     *  its reason. No deployed server can produce it; it covers a truncated or
+     *  proxy-rewritten body, where claiming a kickoff was already waiting that
+     *  never was is the unsafe half.
+     *
+     *  AND SO DOES AN UNREADABLE ONE (wave-5 review, MINOR 7, D-1150). The
+     *  paragraph above shipped one edit ahead of the code that honours it:
+     *  through plain `postJson` — `(await request(…)).json()`, no `.catch` — the
+     *  parse THREW, so the sentence describing the degrade named the exact input
+     *  that could not reach it. And it was a REGRESSION, not merely an
+     *  unimplemented nicety: on `main` this method read no answer at all, so
+     *  wave 5 turned a 200 that really did queue the kickoff into "nothing was
+     *  sent, and it has no brief yet" on the sheet, above a retry that would
+     *  queue a second one. `postJsonOr` above is the shape that makes the
+     *  promise true; its docstring carries why the Response has to be in hand
+     *  first — a failure to READ an answer is degradable, a request that never
+     *  completed is not, and only that ordering can tell them apart. */
     kickoff: async (
       id: string, b: { slug: string; title: string; runId?: number; wave?: number },
     ): Promise<{ queued: boolean }> => {
-      const answer = await postJson<{ queued?: unknown }>(`${sid(id)}/kickoff`, b);
+      const answer = await postJsonOr<{ queued?: unknown }>(`${sid(id)}/kickoff`, {}, b);
       // The local is `answer` on purpose. This method's structural pin proves it
       // sends no prose key by scanning the whole method for the two words such a
       // payload would use, and a local named after either of them would blind it.
       // The pin is worth more than naming symmetry with `abandonRun` three doors
-      // down.
+      // down — and it is also why the degrade is reached through a named helper
+      // rather than spelled inline the way that door spells it (D-1150).
       return { queued: answer.queued !== false };
     },
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
