@@ -216,8 +216,14 @@ describe('D-46: dispatchRun/closeRun are never invoked outside CoordMutex', () =
     // A scan that found nothing would pass the assertion below vacuously —
     // require it to have actually found the two real call sites first.
     expect(ALL_SITES.length).toBeGreaterThan(0);
-    expect(ALL_SITES.some((s) => s.name === 'dispatchRun')).toBe(true);
-    expect(ALL_SITES.some((s) => s.name === 'closeRun')).toBe(true);
+    // EVERY target, not a hand-named two: an entry added to `TARGETS` whose
+    // call site the scanner never finds is decoration, and it satisfies the
+    // all-guarded assertion below vacuously. Derived from the set itself, so a
+    // future target inherits the floor without anyone remembering to add it
+    // (self-review: `coord.setCaps` shipped with no such floor).
+    for (const t of TARGETS) {
+      expect(ALL_SITES.some((s) => s.name === t), `no call site found for target ${t}`).toBe(true);
+    }
     expect(ALL_SITES.filter((s) => !s.guarded).map(show)).toEqual([]);
   });
 });

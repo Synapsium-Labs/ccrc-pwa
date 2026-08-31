@@ -196,6 +196,58 @@ describe('POST /api/coord/caps', () => {
     expect(coord.feedEvents(10)).toEqual([]);
   });
 
+  it('writes the caps even when the feed archive itself THROWS', async () => {
+    // The try/catch around `recordFeedEvent`, which shipped with no row of its
+    // own until the self-review asked for one. `recordFeedEvent` throws
+    // SYNCHRONOUSLY (`node:sqlite`), so without the catch the operator's write
+    // lands and the response is a 500 — the worst pair available, since the
+    // caller then retries a write that already succeeded.
+    //
+    // The throw is manufactured by removing the table the feed writes to, which
+    // needs the raw db handle: no public method can put the store in this state.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { app, coord, db } = await withCoord();
+      db.prepare('DROP TABLE feed_events').run();
+      const res = await postCaps(app, { maxConcurrentWorkers: 5 });
+      expect(res.statusCode).toBe(200);
+      expect(coord.caps().maxConcurrentWorkers).toBe(5);
+      // …and it SAYS the archive degraded, rather than failing silently — this
+      // is the case where a warning is the honest output, unlike the
+      // no-notify-log case above where it would be noise.
+      expect(warn.mock.calls.flat().join(' ')).toContain('recordFeedEvent failed');
+    } finally { warn.mockRestore(); }
+  });
+
+  it('two concurrent partial writes both land', async () => {
+    // WHAT THIS PINS, AND WHAT IT DOES NOT — measured, not assumed.
+    //
+    // It pins the end-to-end property: two disjoint dials written together both
+    // survive, in either order. That is worth having.
+    //
+    // It does NOT witness the self-review's MAJOR (the merge base being read
+    // outside `coordMutex.run`). Measured: reverting the fix — capturing
+    // `coord.caps()` before the lock and merging onto that — leaves this test
+    // GREEN, because `app.inject` does not interleave the two handlers'
+    // synchronous prologues; the second request's read happens after the
+    // first's write. Reproducing the lost update needs the mutex held across a
+    // real await by a THIRD actor (a dispatch doing ccd/tmux I/O), which no
+    // fixture in this suite can stage.
+    //
+    // So the fix rests on the argument and on conformance, not on this test:
+    // `CoordMutex`'s own docstring names the hazard ("two dispatches can no
+    // longer both read the count before either writes it") and `POST /api/runs`
+    // puts its whole body inside the lock for exactly this reason. Recorded in
+    // the plan's mutation table as reported-not-witnessed rather than left to
+    // look pinned.
+    const { app, coord } = await withCoord();
+    await Promise.all([
+      postCaps(app, { maxConcurrentWorkers: 5 }),
+      postCaps(app, { maxSessionsPerDay: 20 }),
+    ]);
+    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 20 });
+  });
+
   it('accepts the boundary values the policy allows', async () => {
     const { app, coord } = await withCoord();
     expect((await postCaps(app, { maxConcurrentWorkers: CAP_MAX })).statusCode).toBe(200);

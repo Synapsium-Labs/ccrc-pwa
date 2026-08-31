@@ -2170,10 +2170,96 @@ README grew from 2033 to 2039 lines against `CLAUDE.md:10`'s stated ~1931 (10% u
 ### 9.7 — Branch and PR
 
 `git branch --show-current` → `ws/quiet-meadow`, this workspace's own branch, checked before the push
-rather than assumed. Ten commits, `8ba1c572..d46680c6`, pushed to `origin/ws/quiet-meadow`.
-PR **#39** → `main`.
+rather than assumed. Pushed to `origin/ws/quiet-meadow`; PR **#39** → `main`. The commit COUNT is
+deliberately not restated here — an earlier draft said "ten" and the branch already carried eleven by
+the time the record was committed, which is the same hand-kept-number-beside-a-growing-list defect
+this wave spent a task removing from README and `gate.ts`. `git log --oneline origin/main..HEAD` is
+the count, and it is always right.
 
 ### 9.8 — The fingerprint
 
 *(measured once, after the final push, and sent once)*
 
+---
+
+## Deviations found — the self-review round
+
+Before claiming the wave done, the whole branch was reviewed adversarially: six lenses filed findings,
+and every finding was then handed to an independent agent told to REFUTE it and to default to
+`real:false`. 38 filed, 17 verdicts came back `real:true`, deduplicating to **eleven distinct defects**.
+The 21 refutations are as valuable as the confirmations and are not listed individually; two are worth
+naming because they were nearly acted on: the claim that `lanesIn` mis-attributes a docstring to the
+preceding route (true of the mechanism, but the census's own anti-vacuity floor proves it does not
+happen here), and the claim that CLAUDE.md's box-token bullet became false (its sentence is scoped by
+its own next clause).
+
+### D-1170 (self-review MAJOR — lost update) — the caps read-modify-write straddled the mutex
+
+`const before = coord.caps()` and the `decideCaps` merge it feeds ran OUTSIDE `coordMutex.run`; only
+`setCaps` and the re-read were inside. A partial body writes `{...before, ...asked}`, so a merge base
+captured before the lock is a classic lost update: with a dispatch holding the mutex across seconds of
+real ccd/tmux I/O, two operator saves of DISJOINT dials both read `{3, 12}` and the second write reverts
+the first's field — while the first operator was told, by a reply whose whole justification is that it
+re-reads the store, that their value was stored. The `dispatch-mutex-gate` target added in task 5 cannot
+see this: it only requires `setCaps` to SIT inside the lock. Fixed by moving the read and the merge into
+the thunk; the shape refusal stays outside, which is all the reclaim route's rule ever asked for.
+
+**Unwitnessed by any fixture, and recorded as such rather than left looking pinned.** A test firing two
+concurrent partial writes was added and MEASURED against the reverted code: it stays GREEN, because
+`app.inject` does not interleave the two handlers' synchronous prologues. Reproducing the lost update
+needs a third actor holding the mutex across a real await. The test was kept for the end-to-end property
+it does hold, with a comment stating exactly what it does not.
+
+### D-1171 (self-review MINOR) — the caps route was the one `NotifyLog.record()` caller that never flushed
+
+`record()` bumps the in-memory seq and appends to the ring; `flush()` persists `{epoch, seq}`, and had
+exactly one call site (`watch.ts:1230`, immediately after its own `record`). A seq handed to a client but
+never persisted lets a restart re-mint the same pair for a different event — the stale-but-valid landing
+`NotifyLog.flush`'s own docstring says `catchUp` cannot tell from the truth. Fixed with `void log.flush()`
+beside the record, matching the other caller exactly.
+
+### D-1172 (self-review, nine smaller confirmations) — the rest of the round
+
+- **The `recordFeedEvent` try/catch shipped with no row.** Now measured: dropping it turns a landed write
+  into a 500 (`expected 500 to be 200`), the worst pair available, since the caller then retries a write
+  that already succeeded. Witnessed by DROPping `feed_events` through the raw db handle.
+- **`shared/api.ts:2827` — a mangled JSDoc line**, `it is not.   *`, where the paragraph splice replaced
+  the closing `*/` with a separator. Cosmetic, and confirmed four separate times.
+- **The `coord.setCaps` mutex target had no anti-vacuity floor.** The floor is now DERIVED from `TARGETS`,
+  so a future entry whose call site the scanner never finds fails on its own rather than passing
+  vacuously — the failure the entry itself demonstrated.
+- **`.caps-input` was the only text entry in the app off `--text-input`**, so iOS Safari zoom-jumps on
+  focus. On the token now.
+- **Twenty-plus board renders still reached the real `api.coordCaps()`** through the control's default.
+  Every `<RunsScreen>` in `pwa/test` now injects the reader.
+- **`tap-targets.test.tsx`'s title said "eighteen" over a list of twenty-one** — a hand-kept number beside
+  a growing list, which is the exact defect this wave spent a task removing from README and `gate.ts`,
+  sitting in the wave's own diff. The count is gone rather than corrected: the list is the claim.
+- **The census's bare `POST /api/runs` needle was structurally vacuous** — it degraded to `/api/runs`,
+  which any sibling satisfies. Matched on its full backticked spelling now, and measured red.
+- **The census's CLAUDE.md pin accepted a longer sibling for a shorter lane** (`POST /api/claims` is a
+  substring of `POST /api/claims/:id/release`). Anchored on the backticked spelling, and the bullet is
+  flattened first because it is hard-wrapped prose — a route name routinely spans a newline, and a literal
+  check would have been a false RED, the failure mode that gets a scanner deleted. Measured red.
+- **README stated "No route in this PR changes them" about the caps** — a site this wave's own route
+  falsified, in a paragraph the census does not scan. Corrected, along with the mail-lane paragraph's
+  `MAIL_QUIET_MS` sentence, which this wave also made incomplete.
+
+**Reported, not fixed, and deliberately:** three unconfirmed PWA findings — a cleared input reading as
+`0` (the route refuses it with a clear message, so it is roughness rather than data loss), the notes
+sitting in no ARIA live region, and the unconfirmed state naming "reload". They were refuted or
+unverified, and a fix round is for confirmed findings; widening it is how a wave stops being reviewable.
+They belong to whoever takes the next PWA pass.
+
+### 9.9 — Fix round verification
+
+| suite | files | passed | skipped |
+|---|---|---|---|
+| server | 247 | 6208 | 56 |
+| agent | 18 | 281 | 0 |
+| pwa | 77 | 2099 | 0 |
+
+`tsc --noEmit` clean in all three — and it earned its place a second time: vitest's `typecheck` reported
+"no errors" while a duplicate JSX attribute sat in `runs-screen.test.tsx`, because that setting only
+covers `*.test-d.*` files. Two more mutation rows measured in this round (the try/catch, and the
+merge-under-lock which stays unwitnessed), bringing the wave to **61 rows**.

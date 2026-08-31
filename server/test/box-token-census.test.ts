@@ -87,6 +87,14 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty'];
 const SCAN_RE = new RegExp(`\\b(${WORDS.slice(2).join('|')})\\b`, 'gi');
 
+// A LIMIT OF THAT REGEX, recorded because it is silent and dated. Leftmost-first
+// alternation plus `\b` means a hyphenated word matches only its first half:
+// `twenty-one` scans as `twenty`, `twenty-five` as `{twenty, five}`. Harmless
+// while the surface is nineteen lanes — no scanned passage can legitimately hold
+// a number above twenty today — but the day the count passes twenty this scanner
+// reds on CORRECT prose, and the fix is to match the hyphenated forms first
+// rather than to widen `word()`.
+
 // A CONSTRAINT ON PROSE INSIDE THE SCANNED PASSAGES, stated because it is easy
 // to trip and the failure reads like a false alarm until you know: within a
 // scanned passage, ANY number word from `two` upward is read as a claim about
@@ -161,8 +169,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const key of COORD_LANES.filter((k) => k.startsWith('POST /api/runs'))) {
       // The paragraph names the sub-routes in the shorthand prose actually uses
       // (`/:id/dispatch`), so the needle is the key with the shared prefix
-      // stripped — and the bare `POST /api/runs` keeps its whole path.
-      const needle = key.replace('POST /api/runs', '') || '/api/runs';
+      // stripped. The BARE `POST /api/runs` has no suffix to strip, and the
+      // degraded needle `/api/runs` would be satisfied by any of its own
+      // siblings — a structurally vacuous check (self-review). It is matched on
+      // its full backticked spelling instead, which nothing else can satisfy.
+      const needle = key === 'POST /api/runs'
+        ? '`POST /api/runs`'
+        : key.replace('POST /api/runs', '');
+      expect(needle.length, `no usable needle for ${key}`).toBeGreaterThan(2);
       expect(p, `the mail-bus paragraph omits the gated ${key}`).toContain(needle);
     }
     for (const door of UNGATED_DOORS.filter((d) => d.startsWith('/api/runs'))) {
@@ -201,8 +215,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // THE PIN D-1156 ASKED FOR. Wave 5 corrected this bullet and measured that
     // nothing held it — the false sentence went back in and the suite stayed
     // green. Each claim is now checked against the source it describes.
-    const bullet = passage('CLAUDE.md, the box-token bullet', CLAUDE_MD,
+    const raw = passage('CLAUDE.md, the box-token bullet', CLAUDE_MD,
       '- **Box token gates every coordination WRITE**', '\n- **');
+    // FLATTENED before matching, the same way `resume-reclaim-l0.test.ts`
+    // flattens its corpus and for the same reason: this bullet is hard-wrapped
+    // prose, so a backticked route name routinely spans a newline
+    // (`\`POST\n  /api/claims\``) and a literal containment check would miss it
+    // — a false RED, which is the failure mode that gets a scanner deleted.
+    const bullet = raw.replace(/\s+/g, ' ');
     // THE UNDER-CLAIM PIN, DERIVED — not a hand-kept list of four names.
     //
     // The bullet's claim is precise and worth reading exactly: the two prefixes
@@ -228,9 +248,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     })();
     expect(requireSites.length, 'the outside-the-prefixes scan collapsed').toBeGreaterThan(2);
     for (const key of requireSites) {
+      // `toContain` on a bare key would let a LONGER sibling satisfy a shorter
+      // one — `POST /api/claims` is a substring of `POST /api/claims/:id/release`
+      // (self-review) — so the match is anchored on the backticked spelling the
+      // bullet actually uses, which ends the path.
       expect(bullet,
         `the bullet promises to name every requireMailToken lane outside the two prefixes, ` +
-        `and does not name ${key} — the surface grew and the sentence did not`).toContain(key);
+        `and does not name ${key} — the surface grew and the sentence did not`)
+        .toContain(`\`${key}\``);
       expect(COORD_LANES, `${key} is named as a box-token lane and is not one`).toContain(key);
     }
     // …and the route it names as carrying NO box token really carries none.

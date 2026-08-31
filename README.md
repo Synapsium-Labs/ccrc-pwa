@@ -1396,10 +1396,14 @@ question | answer | status | artifact` — through `POST /api/mail`, attributed
 forgery-proofness) and capped (an 8 KiB body, typed rejection codes, every
 rejection itself recorded, win or lose). A watcher lane (`MAIL_SWEEP_MS`,
 10 s) walks queued deliveries and, once a recipient has been idle-quiet for
-`MAIL_QUIET_MS` (60 s) with no dialog or ask pending, injects the fenced
+`MAIL_QUIET_MS` (60 s) with no dialog or ask pending — or `COORD_QUIET_MS`
+(15 s) when the recipient is a COORDINATOR, i.e. the `claimedBy` of a
+non-terminal run, which its own contract requires to be sitting idle at a wave
+boundary — injects the fenced
 envelope through `sendPrompt`'s full proof discipline — never re-rendered,
-replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`,
-and again every `MAIL_REPLAY_MS`) until the recipient POSTs
+replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`, or
+`COORD_COOLDOWN_MS` for a coordinator, and again every `MAIL_REPLAY_MS`) until
+the recipient POSTs
 `/api/mail/:id/ack`.
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
@@ -1442,10 +1446,15 @@ because that exact placeholder is committed to this public repo.
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
 terminal) and `maxSessionsPerDay` (default 12 — dispatches inside a rolling
 24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. No route in
-this PR changes them; until PR J adds one, an operator edits the row
-directly: `sqlite3 ~/.ccrc/coord.db "UPDATE coordinator_state SET
-maxConcurrentWorkers=…, maxSessionsPerDay=… WHERE id=1"`. Pause is a
+`POST /api/runs/:id/dispatch` before anything else is touched. Both are an
+operator control: `GET`/`POST /api/coord/caps` reads them beside their current
+usage and writes either or both, bounds-checked, and the `/runs` board renders
+the dial. (For a stretch of this build's history there was no route at all and
+an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
+caller in the server for as long as it did.) Like every other same-origin PWA
+write the caps route carries **no box token**; unlike the four operator doors
+below it is not a release valve, so nothing may rely on it to open a wedge.
+Pause is a
 **file**, on ccd's own `*-disabled`-marker convention, read from `$REG`
 (the fleet host's session registry, `~/.cc-sessions`) before every dispatch:
 `touch $REG/coordinator-paused` refuses every dispatch with `409

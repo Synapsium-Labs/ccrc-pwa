@@ -1345,25 +1345,44 @@ export function registerCoordRoutes(
   app.post('/api/coord/caps', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
-    // The DECISION is L1 and runs BEFORE the mutex: a malformed body is decided
-    // by this request alone, and queueing it behind a live dispatch would make
-    // the answer depend on the fleet's weather (the reclaim route's own rule).
-    const before = coord.caps();
-    const decided = decideCaps(before, req.body ?? {});
-    if (!decided.ok) {
-      return reply.code(400).send({ ok: false, error: 'bad-request', detail: decided.detail });
+    // SHAPE FIRST, AND OUTSIDE THE MUTEX: a malformed body is decided by this
+    // request alone, and queueing it behind a live dispatch would make the
+    // answer depend on the fleet's weather (the reclaim route's own rule).
+    // This is a shape probe only — the merge that is actually written is
+    // recomputed under the lock below, so the caps it reads here do not matter.
+    const shape = decideCaps(coord.caps(), req.body ?? {});
+    if (!shape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
     }
-    // …and the WRITE is serialised, because `dispatchRun` reads `caps()` and
-    // `capsUsage()` across await boundaries (`dispatch.ts:236-237`) — the exact
-    // interleaving `CoordMutex` exists for. The pause route needs no mutex
-    // because it touches no store at all.
-    // `CoordMutex.run` takes `() => Promise<T>`; the body is synchronous
-    // (`node:sqlite` is, and its synchrony is a stated concurrency invariant of
-    // this store, not something to wrap away), so the thunk is `async` and the
-    // work inside it is not.
-    const view: CoordCapsView = await coordMutex.run(async () => {
-      coord.setCaps(decided.next);
-      return { caps: coord.caps(), usage: coord.capsUsage() };
+    // THE READ-MODIFY-WRITE IS ONE CRITICAL SECTION, and that is the whole
+    // reason the mutex is here (self-review MAJOR). A partial body means the
+    // value written is `{...before, ...asked}`, so a merge base read OUTSIDE
+    // the lock is a lost update rather than a style point: with a dispatch
+    // holding the mutex across seconds of real ccd/tmux I/O, two operator saves
+    // of DISJOINT dials both read `{3, 12}`, and the second thunk writes back
+    // the first's field unchanged. `CoordMutex`'s own docstring names exactly
+    // this hazard — "two dispatches can no longer both read the count before
+    // either writes it" — and `POST /api/runs` puts its whole body inside for
+    // the same reason.
+    //
+    // `before` is therefore read HERE, under the lock, and is what the feed
+    // event reports: the "3 → 5" it prints is the transition that actually
+    // happened rather than one composed from a reading taken before the wait.
+    //
+    // The thunk is `async` because `CoordMutex.run` takes `() => Promise<T>`;
+    // the work inside it is synchronous, because `node:sqlite` is and this
+    // store's synchrony is a stated concurrency invariant, not an accident to
+    // be wrapped away.
+    const { before, view } = await coordMutex.run(async () => {
+      const current = coord.caps();
+      const merged = decideCaps(current, req.body ?? {});
+      // Unreachable: the same body passed the identical shape check above, and
+      // `decideCaps`'s verdict depends on the BODY alone — `current` only
+      // supplies the untouched fields. Thrown rather than swallowed, so if that
+      // ever stops being true it is a 500 that says so and not a silent 200.
+      if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
+      coord.setCaps(merged.next);
+      return { before: current, view: { caps: coord.caps(), usage: coord.capsUsage() } };
     });
     // A `run_events` row would be WRONG here: there is no run, and
     // `recordRunEvent` writes `fromState === toState`, which `pushNewRuns`
@@ -1378,12 +1397,21 @@ export function registerCoordRoutes(
     const log = deps.notifyLog;
     if (log) {
       try {
-        coord.recordFeedEvent(log.epoch, log.record({
+        const ev = log.record({
           kind: 'coord', sessionId: '',
           title: 'caps changed',
           body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
                 `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
-        }));
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+        // FLUSH, like the only other `record()` caller in the tree
+        // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
+        // gives: `record()` bumps the in-memory seq, and a seq handed to a
+        // client but never persisted lets a restart re-mint the same
+        // `{epoch, seq}` pair for a different event — the stale-but-valid
+        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
+        // flush never rejects, and the caps write must not wait on it.
+        void log.flush();
       } catch (err) {
         console.warn('ccrc-server: recordFeedEvent failed ' +
           `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);

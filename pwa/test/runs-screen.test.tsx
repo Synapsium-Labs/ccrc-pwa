@@ -90,7 +90,7 @@ describe('the run board', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     const load = vi.fn().mockResolvedValue({ runs: [] });
-    render(<RunsScreen store={store} loadRuns={load} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
     // The cold read is now UNCONDITIONAL (finding 1) — it is the only
     // possible source of the Finished half — but the active row born from
     // the live frame renders synchronously, before that promise has any
@@ -116,7 +116,7 @@ describe('the run board', () => {
       const store = makeStore();
       act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
       const load = vi.fn().mockResolvedValue({ runs: [] });
-      render(<RunsScreen store={store} loadRuns={load} />);
+      render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
       expect(load).toHaveBeenCalledTimes(1);
     } finally {
@@ -128,7 +128,7 @@ describe('the run board', () => {
     // The deep-link case, and the older-server case: /ws/fleet may never send
     // a runs frame at all, and a blank board would be a lie about the program.
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r()] })} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
   });
 
@@ -146,7 +146,7 @@ describe('the run board', () => {
     const finishedRun = r({ id: 9, wave: 1, state: 'done', closedAt: Date.now() });
     render(
       <StrictMode>
-        <RunsScreen store={store} loadRuns={async () => ({ runs: [finishedRun] })} />
+        <RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [finishedRun] })} />
       </StrictMode>,
     );
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -280,7 +280,7 @@ describe('the run board', () => {
     // halves (finding 1: driven through the real seam, not `setState`).
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ id: 2 })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
       runs: [r({ id: 1, wave: 1, state: 'done', closedAt: Date.now() - 1 }), r({ id: 2 })],
     })} />);
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -295,7 +295,7 @@ describe('the run board', () => {
     // itself uses) finds it correctly.
     const store = makeStore();
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
       runs: [r({ id: 1, wave: 1, state: 'done', closedAt: null })],
     })} />);
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -304,7 +304,7 @@ describe('the run board', () => {
 
   it('a run that closes stops being active the instant the live frame says so — never resurrected by a stale cold snapshot (finding 3, failure A)', async () => {
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
     // The cold read lands: run 7, active.
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     // The live frame then lands, agreeing run 7 is active…
@@ -333,7 +333,7 @@ describe('the run board', () => {
         ? { runs: [r({ id: 7 })] }
         : { runs: [r({ id: 7, state: 'done', closedAt: Date.now() })] };
     });
-    render(<RunsScreen store={store} loadRuns={loadRuns} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={loadRuns} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
     expect(screen.getByText('clear-cove')).toBeInTheDocument();
@@ -347,7 +347,7 @@ describe('the run board', () => {
 
   it('the Finished group survives a new active run landing — it never re-reads from `live` (finding 3, failure B)', async () => {
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
       runs: [r({ id: 1, wave: 1, state: 'done', closedAt: Date.now() - 1 })],
     })} />);
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -367,7 +367,7 @@ describe('the run board', () => {
   it('renders no Finished group at all when the archive genuinely has none — an empty role=group is a dead end, not an honest state', async () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r()] })} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
   });
@@ -426,7 +426,7 @@ describe('the run board', () => {
     // the loading render (finding 19: "loading" and "confirmed empty" are no
     // longer the same state) — `findByText` waits for the real answer, which
     // is what a live app would show.
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
   });
@@ -435,7 +435,7 @@ describe('the run board', () => {
     // Review finding 19's own failure scenario: phone offline, or the server
     // mid-restart, with a program in flight — this must not assert the
     // program never existed.
-    render(<RunsScreen store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
     expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
     expect(screen.queryByText(/^no runs\./i)).toBeNull();
   });
@@ -449,7 +449,7 @@ describe('the run board', () => {
     // a positive claim about the WHOLE program history a failed archive
     // read has no standing to make.
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => { throw new Error('offline'); }} />);
     // The live frame lands separately, honestly reporting no active runs —
     // it says nothing at all about the archive.
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
@@ -464,7 +464,7 @@ describe('the run board', () => {
     // genuinely empty" from "the archive could not be read".
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => { throw new Error('offline'); }} />);
     // The active group renders as normal — this is not the whole-board
     // failure state, only the Finished half's own.
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
@@ -556,13 +556,13 @@ describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-28
 // (spec §4.4: "one door, rendered at zero runs too").
 describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
   it('renders even at zero runs — one door, always there', async () => {
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
   });
 
   it('opens the sheet on tap', async () => {
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
   });
@@ -598,7 +598,7 @@ describe('the run board tells the start sheet which projects already have a run 
     // landed — `noSignalYet` (`RunsScreen.tsx`'s own name for it), the
     // cold-deep-link window and the too-old-server window before its cold read
     // returns.
-    render(<RunsScreen store={makeStore()} loadRuns={() => new Promise<{ runs: RunSummary[] }>(() => {})} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={() => new Promise<{ runs: RunSummary[] }>(() => {})} />);
 
     await openAndPick();
 
@@ -608,7 +608,7 @@ describe('the run board tells the start sheet which projects already have a run 
 
   it('names a project whose ACTIVE run only the COLD read found — the no-frame fallback path', async () => {
     mockDoors();
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'working' })] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'working' })] })} />);
 
     await openAndPick();
 
@@ -618,7 +618,7 @@ describe('the run board tells the start sheet which projects already have a run 
 
   it('does NOT name a project whose only run is CLOSED — the list is `active`, already filtered', async () => {
     mockDoors();
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'done' })] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'done' })] })} />);
 
     await openAndPick();
 
@@ -1179,7 +1179,7 @@ describe('the resume door on the run board', () => {
         fleetFrameSeen: opts.fleetFrameSeen ?? true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: opts.cold })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: opts.cold })} />);
   };
 
   /** The `<li>` a control actually sits on. Every assertion below reads the ROW

@@ -233,7 +233,13 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the eighteen on the token, never a bare 44px literal', () => {
+  it('keeps every floored rule on the token, never a bare 44px literal', () => {
+    // The title no longer states a COUNT. It said "eighteen" while the list
+    // below held twenty-one — a hand-kept number beside a list that grows,
+    // which is the exact defect the box-token census (D-1156/D-1162) exists to
+    // stop, found in this file by wave 6's own self-review. The list IS the
+    // claim; a number restating its length is a second thing to keep in step
+    // with it and buys nothing, so it is gone rather than corrected.
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
     // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,

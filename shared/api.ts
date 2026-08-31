@@ -2824,7 +2824,8 @@ export interface NotifyEvent {
    *  this union was closed and unvalidated — a bare `getJson<CatchUp>`
    *  (`pwa/src/lib/api.ts`) hands a browser's JSON straight to a renderer that
    *  switches on three members, so a fourth arrived typed as one of the three
-   *  it is not.   *
+   *  it is not.
+   *
    *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or
    *  lowered — and it is a seventh member rather than a reuse of `run` because
    *  there is no run: `recordRunEvent` writes `fromState === toState` and

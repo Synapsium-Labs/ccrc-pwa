@@ -2107,7 +2107,10 @@ button.sess-held {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  /* `--text-input`, not `--text-2xs`: iOS Safari zooms the viewport on focus
+     for any text entry under 16px, and this is the only text entry on the runs
+     board. Every other input in the app is already on this token. */
+  font: var(--weight-regular) var(--text-input) / 1 var(--font-mono);
 }
 
 /* The reading an operator acts on: usage against the cap. Dimmer than the
