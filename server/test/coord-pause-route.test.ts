@@ -1,9 +1,10 @@
 // `POST /api/coord/pause` — the operator's door onto `$REG/coordinator-paused`,
-// and one of the THREE write routes in `coord/routes.ts` deliberately not behind
+// and one of the FOUR write routes in `coord/routes.ts` deliberately not behind
 // `requireMailToken` (D-282 (was D-B4-9)). The others are `POST /api/runs/:id/abandon` (same
-// build, same reason) and `POST /api/claims/:id/break` (build 9 D12, the same
-// abandon-door shape); the `UNGATED` set below is the whole list, and the
-// scanner holds it to exactly those three.
+// build, same reason), `POST /api/claims/:id/break` (build 9 D12, the same
+// abandon-door shape) and `POST /api/runs/:id/reclaim` (F5, D-1123 — the same
+// shape again, for the coordinator itself); the `UNGATED` set below is the whole
+// list, and the scanner holds it to exactly those four IN BOTH DIRECTIONS.
 //
 // The authorization ruling is spec §4.1 and it is the whole reason this file
 // asserts an ABSENCE: the box token authenticates the FLEET HOST, the
@@ -168,8 +169,22 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  coordinator holds.
    *  `/api/claims/:id/break`: the sessions that hold claims hold the box token;
    *  a wedge's release valve must not be behind the wedger's own key — build 9
-   *  D12. */
-  const UNGATED = new Set(['/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break']);
+   *  D12.
+   *  `/api/runs/:id/reclaim`: the same door one turn further on — the release
+   *  valve for a program whose COORDINATOR is the corpse. The box token is that
+   *  coordinator's own key, so gating the act of replacing it would be the
+   *  D-282 shape exactly (F5, D-1123). */
+  const UNGATED = new Set([
+    '/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break',
+    '/api/runs/:id/reclaim',
+  ]);
+
+  /** The two mechanisms that count as "the token was checked" — the shared
+   *  helper AND the two inline `checkMailToken` sites. Hoisted because BOTH
+   *  directions below read it now: a narrowed copy in one test and not the
+   *  other would let a route be gated for one assertion and ungated for the
+   *  other, which is the drift this file exists to prevent. */
+  const GATE_PATTERNS = [/requireMailToken\(req/, /checkMailToken\(/];
 
   /** Each `app.post` handler's own text, from its route line to the next
    *  handler in the file. */
@@ -195,7 +210,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     for (const { route, body } of handlers()) {
       if (UNGATED.has(route)) continue;
       const gate = Math.min(
-        ...[/requireMailToken\(req/, /checkMailToken\(/].map((re) => {
+        ...GATE_PATTERNS.map((re) => {
           const m = re.exec(body);
           return m ? m.index : Number.POSITIVE_INFINITY;
         }),
@@ -206,6 +221,30 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
       if (gate === Number.POSITIVE_INFINITY || (firstAwait >= 0 && gate > firstAwait)) missing.push(route);
     }
     expect(missing, 'write routes with no box-token gate ahead of their first await').toEqual([]);
+  });
+
+  it('every UNGATED route really IS ungated — the direction this set could not fail in', () => {
+    // THE MISSING HALF, and the reason a name in `UNGATED` was until now a
+    // one-way promise. The test above SKIPS the listed routes; the docstring test
+    // below only reads prose. Between them, a route added to this set whose
+    // handler ALSO checked the box token passed both, and the set would be
+    // documenting an exemption the code does not take — the mirror image of
+    // `auth-gate.test.ts:400-402`'s "an exemption whose stated justification is a
+    // gate the route does not actually have", which that file calls the worst
+    // kind of hole. Measured red by adding the gate to the reclaim handler.
+    const seen: string[] = [];
+    const gated: string[] = [];
+    for (const { route, body } of handlers()) {
+      if (!UNGATED.has(route)) continue;
+      seen.push(route);
+      if (GATE_PATTERNS.some((re) => re.test(body))) gated.push(route);
+    }
+    // Guard the guard, and it is not decoration: `handlers()` keys on the exact
+    // registration text, so a route renamed in `coord/routes.ts` and not here
+    // drops silently out of the loop and leaves this green over an empty set.
+    // Every listed name must have been FOUND.
+    expect(seen.sort(), 'a name in UNGATED that no app.post registers').toEqual([...UNGATED].sort());
+    expect(gated, 'listed as UNGATED, and yet the handler checks the box token').toEqual([]);
   });
 
   it('finds the routes it claims to scan — a scanner that matches nothing proves nothing', () => {

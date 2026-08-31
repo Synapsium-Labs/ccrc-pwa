@@ -19,6 +19,7 @@ import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
@@ -1018,6 +1019,91 @@ export function registerCoordRoutes(
       fleetState: deps.fleetState };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
     return sendCloseOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/runs/:id/reclaim` — the FOURTH route in this file that is
+   * UNGATED, and the one the other three implied. `POST /api/coord/pause`
+   * lifts a marker a stuck coordinator cannot lift for itself;
+   * `POST /api/runs/:id/abandon` releases the run that coordinator wedged;
+   * `POST /api/claims/:id/break` frees the claim a dead holder still holds.
+   * None of them can hand a LIVE program to a new session once the old
+   * claimant is a corpse — `openRun`'s one-coordinator guard and
+   * `resolveCoordinator` both read the same lowest-id `claimedBy` with no
+   * state predicate, so until this door existed the dead name answered both
+   * for ever and every later wave opened onto a grave.
+   *
+   * Deliberately NOT behind `requireMailToken`, for D-282's argument
+   * unchanged: the box token authenticates the FLEET HOST and the coordinator
+   * holds it by design, so putting a wedge's release valve behind that key
+   * leaves the wedge no door. With `CCRC_AUTH` armed this still sits behind
+   * the session gate, exactly as the other three do — ungated means "no box
+   * token", never "no authentication".
+   *
+   * THE BODY IS READ, and that is where this door parts company with the
+   * abandon and break handlers above. `claimedBy` — which session takes the
+   * program over — is a fact only the operator has, so it arrives in the body
+   * and is validated here as a non-empty string. What does NOT arrive in the
+   * body is the ATTRIBUTION: `causedBy` is the hardcoded literal `operator`
+   * at the store call site (`reclaimProgram`), so a caller may name the heir
+   * and can never forge who did the naming. Reading one field is not the
+   * same licence as reading the act's own provenance.
+   *
+   * UNNAMED IN BOTH SKILL CORPORA, the abandon-door shape again: a
+   * coordinator that reclaims its own program has learned nothing, and one
+   * that reclaims someone else's has stopped coordinating. The operator with
+   * a phone is the only caller this door has.
+   */
+  app.post('/api/runs/:id/reclaim', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // Read BEFORE the mutex, not inside it: a malformed body is decided by this
+    // request alone, and queueing it behind a live dispatch would make the
+    // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
+    // probe — no payload, a `:id` of `x` — deterministic on a busy box.
+    const body = (req.body ?? {}) as { claimedBy?: unknown };
+    if (typeof body.claimedBy !== 'string' || body.claimedBy.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const to = body.claimedBy.trim();
+
+    const reclaimDeps: ReclaimDeps = { coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux };
+    // Inside the mutex for abandon's reason (`CoordMutex`'s docstring,
+    // routes.ts:32-64): the measurement of the old claimant and the UPDATE that
+    // replaces it are separated by awaits over live fleet acts, and a concurrent
+    // dispatch reading `claimedBy` between them would read a name that is
+    // already being retired.
+    const r = await coordMutex.run(() => reclaimRun(reclaimDeps, id, to));
+    if (r.ok) {
+      return reply.code(200).send({
+        ok: true, program: r.program, runIds: r.runIds, from: r.from, to: r.to,
+      });
+    }
+    switch (r.kind) {
+      case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
+      // 502, the coord-route family's status for this condition
+      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
+      // server.ts's own vocabulary. `detail` rides along because it is a
+      // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
+      // this layer cannot recompute it.
+      case 'registry-unmeasurable':
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable', detail: r.detail });
+      // `by` and `detail` both: the first is who still holds it, the second is
+      // HOW that was measured — a live pane and a restarting supervisor are one
+      // answer told apart by this sentence, and collapsing it would leave the
+      // operator with a refusal and no next move.
+      case 'claimant-alive':
+        return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      default: {
+        const _exhaustive: never = r;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+      }
+    }
   });
 
   /**

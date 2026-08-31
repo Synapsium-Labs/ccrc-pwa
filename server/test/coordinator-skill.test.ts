@@ -237,6 +237,14 @@ describe('the coordinator skill: linkage', () => {
       // claim has stopped coordinating). The claimant's own door is
       // POST /api/claims/:id/release, which IS named.
       'POST /api/claims/:id/break',
+      // F5 (D-1123) — the abandon-door shape, FOURTH instance, and the one with
+      // the sharpest reason to stay unnamed: this door rewrites `claimedBy`. A
+      // coordinator told about it would be told how to reclaim its own program
+      // from itself, which is a no-op it would spend a wave discovering, or how
+      // to take someone else's, which is the thing clause 1 forbids. The
+      // corpus-wide forbid-mention pin (the `/api/claims/:id/break` shape) is
+      // what turns this permission-to-omit into a prohibition.
+      'POST /api/runs/:id/reclaim',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1077,6 +1085,15 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     // The one real hazard of naming a revive door in this corpus: a
     // coordinator reaching for it on a WORKER instead of re-dispatching.
     expect(rb()).toContain('A dead WORKER is not this door');
+  });
+
+  it('never names the reclaim door — the release valve for a wedge the coordinator IS', () => {
+    // The fourth ungated door (D-1123), and the same accounting D16 gave the third:
+    // the EXEMPT entry above only PERMITS the omission; this is what FORBIDS the
+    // mention. Wider than the `resume.md` harvest below, which reads one reference
+    // file — a door named in `SKILL.md`, or in any of the other four references,
+    // passes that and fails here.
+    expect(allSkillText).not.toContain('/api/runs/:id/reclaim');
   });
 
   it('names none of the ungated operator doors — the list DERIVED, not typed', () => {
