@@ -34,6 +34,15 @@ import { floorFromScan } from './coord/ledger.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
+import { readLaunchRecord, sidecarDirFor, type LaunchRecord } from './subagents.js';
+
+/** Positive launch records held for the process's life. 512 is `resolve.ts`'s
+ *  own MEMO_MAX — one bound, one reason, not a second number invented here. */
+const LAUNCH_CACHE_MAX = 512;
+/** How many times one agentId's record may fail to read before this stops
+ *  asking. Three, matching the retry budgets elsewhere in this file: a record
+ *  that is not there after three sweeps is not going to appear. */
+const LAUNCH_MAX_TRIES = 3;
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
@@ -323,6 +332,13 @@ export class FleetWatcher {
    *  local JSON read per session, cheap enough not to need its own slower
    *  clock the way task/PR sweeps do. */
   private hookStates = new Map<string, HookState>();
+  /** agentId -> its launch record. Positive entries only, and kept for the
+   *  life of the process: the record describes a launch, a fact that cannot
+   *  change. See `describeSubagents`. */
+  private launchCache = new Map<string, LaunchRecord>();
+  /** agentId -> how many times its record has failed to read. Bounded so a
+   *  record that will never exist stops costing io. */
+  private launchMisses = new Map<string, number>();
   /** Per-PROJECT backoff after a failed read: one repo failing must not slow
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
@@ -1249,10 +1265,75 @@ export class FleetWatcher {
           return;
         }
         const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, r.id, r.uuid, now);
-        if (hs) next.set(r.id, hs);
+        if (hs) next.set(r.id, await this.describeSubagents(r, hs));
       }),
     );
     this.hookStates = next;
+  }
+
+  /**
+   * Join each subagent row to the launch record Claude Code already wrote, so
+   * the disclosure says what a subagent is DOING rather than repeating its
+   * type five times.
+   *
+   * ENRICHES THE HookState IN PLACE rather than adding a tenth parameter to
+   * `assembleFleet`. That signature's trailing parameters are all OPTIONAL, so
+   * a new one compiles silently at every call site that does not pass it —
+   * `server.ts`'s two HTTP-route calls would have shipped `null` for the field
+   * with nothing red. The map this lane already owns is the honest home: it
+   * holds what the SERVER knows about a session's subagents, which is now
+   * sourced from two files rather than one.
+   *
+   * THE CACHE IS THE POINT. A launch record describes an event that has
+   * already happened, so it can never change: a positive read is kept for the
+   * life of the process and steady state costs ZERO io. It also means a
+   * dropped read can never blank a description already on screen — the
+   * retain-don't-erase rule `sweepTasks` follows, for the same reason.
+   *
+   * A miss is retried a bounded number of times and then given up on, so a
+   * subagent whose record genuinely does not exist (an older Claude Code, a
+   * different harness) does not cost one read per session per tick forever.
+   */
+  private async describeSubagents(r: SessionRecord, hs: HookState): Promise<HookState> {
+    if (hs.subagents.length === 0) return hs;
+    // Only rows carrying an id can be joined at all: `id` is null for every
+    // row written by the pre-agent_id hook, and there is nothing to look up.
+    const wanted = hs.subagents.filter((sa) => sa.id !== null && !this.launchCache.has(sa.id));
+    if (wanted.length > 0) {
+      const file = (await this.transcripts.resolve({
+        configDir: configDirFor(this.deps.cfg, r.wrapper) ?? '',
+        dir: r.workdir, registryWorkdir: r.workdir, uuid: r.uuid,
+      })).path;
+      if (file !== null) {
+        const dir = sidecarDirFor(file);
+        await Promise.all(wanted.map(async (sa) => {
+          const id = sa.id!;
+          const tries = this.launchMisses.get(id) ?? 0;
+          if (tries >= LAUNCH_MAX_TRIES) return;
+          const read = await readLaunchRecord(this.deps.io, dir, id);
+          if (read.found) {
+            this.launchMisses.delete(id);
+            // Bounded, oldest-out. The id space is per session and a reaped
+            // session's ids never return, so this only has to survive a long
+            // uptime, not a hostile one.
+            if (this.launchCache.size >= LAUNCH_CACHE_MAX) {
+              const oldest = this.launchCache.keys().next().value;
+              if (oldest !== undefined) this.launchCache.delete(oldest);
+            }
+            this.launchCache.set(id, read.record);
+          } else {
+            this.launchMisses.set(id, tries + 1);
+          }
+        }));
+      }
+    }
+    return {
+      ...hs,
+      subagents: hs.subagents.map((sa) => ({
+        ...sa,
+        description: sa.id === null ? null : (this.launchCache.get(sa.id)?.description ?? null),
+      })),
+    };
   }
 
   /**

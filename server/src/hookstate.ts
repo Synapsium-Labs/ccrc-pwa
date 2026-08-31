@@ -36,7 +36,14 @@ export interface HookState {
    *  recognise is simply not the edge it was looking for. */
   event: string | null;
   ask: HookAsk | null;
-  subagents: { name: string; startedAt: number }[];
+  /** The subagent roster, joined with what each one is DOING.
+   *
+   *  `name` and `startedAt` and `id` come from the hookstate FILE; `description`
+   *  does not — it is filled by the watcher from Claude Code's own launch
+   *  record, keyed on `id`. So this type describes what the SERVER knows about
+   *  a session's subagents, from two sources, and `reviveSubagents` below
+   *  always reads `description: null` because the file never carries one. */
+  subagents: { name: string; startedAt: number; id: string | null; description: string | null }[];
   interrupted: boolean;
 }
 
@@ -107,7 +114,7 @@ function reviveAsk(raw: unknown): HookAsk {
   throw new Malformed('ask');
 }
 
-function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
+function reviveSubagents(raw: unknown): { name: string; startedAt: number; id: string | null; description: string | null }[] {
   // Absent (a file written before this field existed) or explicit null both
   // read as "no subagents", never a crash — the writer always includes the
   // field today, but the reader must not assume every file on disk agrees.
@@ -118,7 +125,21 @@ function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
         typeof item['startedAt'] !== 'number' || !Number.isFinite(item['startedAt'])) {
       throw new Malformed('subagents[]');
     }
-    return { name: item['name'], startedAt: item['startedAt'] };
+    // `id` ABSENT is null — no identity, which is what a row written by the
+    // pre-agent_id hook genuinely has. A PRESENT non-string is malformed and
+    // fails the whole read, the same stance every other field here takes: the
+    // file is one write, so one bad field means the write cannot be trusted.
+    const rawId = item['id'];
+    if (rawId !== undefined && typeof rawId !== 'string') throw new Malformed('subagents[].id');
+    return {
+      name: item['name'],
+      startedAt: item['startedAt'],
+      id: rawId === undefined || rawId === '' ? null : rawId,
+      // Never in the file — the hook cannot know it. The watcher fills it from
+      // the launch record; null here means "not joined yet", which renders as
+      // today's behaviour.
+      description: null,
+    };
   });
 }
 

@@ -6,9 +6,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { NewWorkspaceSheet } from '../fleet/NewWorkspaceSheet';
+import { SubagentsStrip } from '../fleet/SubagentsStrip';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
@@ -382,6 +383,7 @@ export function FleetScreen({
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}
+      <SubagentsStrip sessions={sessions} roster={roster} onOpen={open} />
       <HotFilesStrip />
 
       {sessions.length === 0 && conn !== 'open' ? (

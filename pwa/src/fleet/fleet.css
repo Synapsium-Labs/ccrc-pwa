@@ -2196,3 +2196,58 @@ button.sess-held {
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 .hotfiles-path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+
+/* ── the fleet-wide subagent strip ────────────────────────────────────────
+   HotFilesStrip's register, deliberately: the two strips sit adjacent on the
+   fleet screen and a second visual language between them would read as two
+   unrelated features. Rows borrow `.sess-subagent-*`'s type scale so the
+   fleet-wide list and the per-card disclosure describe the same thing the
+   same way. */
+.subagents-strip {
+  margin: 0 var(--sp-4) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  overflow: hidden;
+}
+.subagents-strip-head {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  padding: var(--sp-2) var(--sp-3); background: none; border: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+  position: relative;
+}
+/* The invisible overlay convention: the row is shorter than the tap floor and
+   growing its padding would change the strip's height. */
+.subagents-strip-head::before {
+  content: ''; position: absolute; inset: 50% 0 auto 0;
+  transform: translateY(-50%); height: var(--tap-min);
+}
+.subagents-strip-mark { color: var(--ink-tertiary); }
+.subagents-strip-headline { flex: 1; }
+.subagents-strip-chevron { color: var(--ink-tertiary); }
+.subagents-strip-body { padding: 0 var(--sp-3) var(--sp-2); }
+.subagents-strip-groups { list-style: none; margin: 0; padding: 0; max-height: 40dvh; overflow-y: auto; overscroll-behavior: contain; }
+.subagents-strip-group { border-top: 1px solid var(--edge-subtle); }
+.subagents-strip-parent {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  padding: var(--sp-1) 0; background: none; border: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+  position: relative;
+}
+.subagents-strip-parent::before {
+  content: ''; position: absolute; inset: 50% 0 auto 0;
+  transform: translateY(-50%); height: var(--tap-min);
+}
+.subagents-strip-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagents-strip-acct { font-size: var(--text-xs); color: var(--ink-secondary); }
+.subagents-strip-count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
+.subagents-strip-rows { list-style: none; margin: 0; padding: 0 0 var(--sp-1) var(--sp-4); }
+.subagents-strip-row { display: flex; align-items: baseline; gap: var(--sp-2); }
+.subagents-strip-bracket { color: var(--ink-tertiary); font-family: var(--font-mono); font-size: var(--text-xs); }
+.subagents-strip-name {
+  flex: 1; font-size: var(--text-xs); color: var(--ink-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.subagents-strip-elapsed { font-size: var(--text-xs); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
+.subagents-strip-note { margin: var(--sp-2) 0 0; font-size: var(--text-xs); color: var(--ink-tertiary); }

@@ -53,7 +53,10 @@ describe('readHookState', () => {
           options: [{ label: 'A', description: 'a' }, { label: 'B' }],
         }],
       },
-      subagents: [{ name: 'reviewer', startedAt: NOW - 1000 }],
+      // `id` is null (this fixture's file carries none — an older hook) and
+      // `description` is ALWAYS null out of the reader: the hookstate file
+      // never carries one, the watcher fills it from the launch record.
+      subagents: [{ name: 'reviewer', startedAt: NOW - 1000, id: null, description: null }],
       interrupted: true,
     });
   });

@@ -65,7 +65,7 @@ describe('fleetstate', () => {
       ...session('claude-quiet-basin'),
       hookState: 'waiting',
       askSummary: 'Which approach?',
-      subagents: [{ name: 'reviewer', startedAt: 5 }],
+      subagents: [{ name: 'reviewer', startedAt: 5, description: null }],
     };
     await saveSnapshot([populated], cachePath);
     const s = (await loadSnapshot(cachePath))?.sessions[0];

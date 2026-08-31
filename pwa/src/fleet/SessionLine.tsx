@@ -18,6 +18,7 @@
 // There is no `inGroup` prop. A line is always inside a project card now, so
 // the conditional that made SessionCard mean two different things is gone.
 import { useId, useRef, useState } from 'react';
+import { useNow } from '../lib/useNow';
 import type { CSSProperties, ReactNode } from 'react';
 import {
   substrateFault, unmeasuredFields,
@@ -67,8 +68,8 @@ let stamped: HTMLElement | null = null;
  *  the same reason that file gives: there is no shared time-formatting
  *  module yet to import from. Unlike `rel()`, this never returns null: a
  *  subagent row always shows SOME elapsed time, even a fresh one. */
-function subagentElapsed(startedAt: number): string {
-  const m = Math.floor(Math.max(0, Date.now() - startedAt) / 60_000);
+function subagentElapsed(startedAt: number, nowMs: number): string {
+  const m = Math.floor(Math.max(0, nowMs - startedAt) / 60_000);
   if (m < 1) return '<1m';
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
@@ -184,6 +185,12 @@ export function SessionLine({
   // verify, not a second, disconnected flag that could drift from it.
   const subagentList = dead ? null : session.subagents;
   const [subagentsOpen, setSubagentsOpen] = useState(false);
+  // The clock only ticks while the disclosure is OPEN. Without it these values
+  // are computed once per fleet frame — and the fleet JSON is byte-diff
+  // suppressed, so a long-running subagent's `5m` can sit unchanged for
+  // minutes while the row claims to be live. `active:false` means twenty
+  // collapsed rows cost exactly what they cost today: no timer at all.
+  const nowMs = useNow(30_000, subagentsOpen);
   // Names the region the toggle owns, so `aria-expanded` is about something a
   // screen reader can then be taken to — the same useId + aria-controls
   // pairing DialogSheet's `OptionPreview` uses, including its conditional
@@ -503,18 +510,41 @@ export function SessionLine({
             `<ul>/<li>`, not `role="list"` spans: flow content is legal here
             now that this is a <div> and not the row's <button> — the ARIA
             stand-ins only ever existed to satisfy that button's
-            phrasing-content model. Name + elapsed time, nothing else; see the
-            toggle's own comment for why there is no third field to add. The
-            hook itself caps the set at 32; nothing here re-caps it. */}
+            phrasing-content model. STILL EXACTLY TWO CELLS — what changed is
+            what the first one SAYS, not how many there are. The hook itself
+            caps the set at 32; nothing here re-caps it. */}
         {subagentsOpen && subagentList !== null && subagentList.length > 0 && (
           <ul id={subagentsId} className="sess-subagent-list">
+            {/* Keyed on name+startedAt, NOT on an agent id: the id is the
+                server's join key and is deliberately kept off the wire (a
+                field nobody reads is a field that rots). Two subagents of one
+                type starting in the same millisecond would collide; that was
+                already true and is not worth a wire field to fix. */}
             {subagentList.map((sa) => (
               <li key={`${sa.name}-${sa.startedAt}`} className="sess-subagent-row">
-                {/* `title`, because .sess-subagent-name ellipsises: a long
-                    agent name is otherwise unreadable on this row and the
-                    row is not a link to anywhere that would show it. */}
-                <span className="sess-subagent-name" title={sa.name}>{sa.name}</span>
-                <span className="sess-subagent-elapsed">{subagentElapsed(sa.startedAt)}</span>
+                {/* THE DESCRIPTION, falling back to the type. `name` is the
+                    hook's `.agent_name // .subagent_name // .agent_type`
+                    ladder and the first two keys are not in the shipped
+                    schema, so it is ALWAYS the agent type — five concurrent
+                    subagents read `workflow-subagent` five times, which is a
+                    count wearing a name. The description comes from the launch
+                    record Claude Code already wrote, joined on `agent_id`.
+                    Null means the join found nothing (an older hook with no
+                    id, an unread record), and then this is byte-identical to
+                    what it has always shown.
+
+                    `title`, because .sess-subagent-name ellipsises: a long
+                    description is otherwise unreadable on this row, and the
+                    row is not a link to anywhere that would show it. It
+                    carries BOTH facts when both exist — the type is still
+                    worth having, it is just not worth the cell. */}
+                <span
+                  className="sess-subagent-name"
+                  title={sa.description === null ? sa.name : `${sa.name} — ${sa.description}`}
+                >
+                  {sa.description ?? sa.name}
+                </span>
+                <span className="sess-subagent-elapsed">{subagentElapsed(sa.startedAt, nowMs)}</span>
               </li>
             ))}
           </ul>

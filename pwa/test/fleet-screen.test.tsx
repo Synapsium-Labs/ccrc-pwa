@@ -183,7 +183,7 @@ describe('FleetScreen', () => {
     render(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 }] })],
+      sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })],
     });
 
     expect(screen.getByLabelText('1 subagent')).toHaveTextContent('⑂ 1');

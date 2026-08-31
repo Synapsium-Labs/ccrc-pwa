@@ -121,6 +121,23 @@ case "$event" in
     # boundary (absence-permits: the pre-`source` payload was the F1 startup).
     src=$(jq -r '.source // empty' <<<"$payload" 2>/dev/null) || src=""
     [[ "$src" == compact ]] && exit 0
+    # AND THE SUBAGENT SET IS DROPPED HERE, which is the only place it can be.
+    # Nothing else clears it: the set is read back and written forward on every
+    # event, so a subagent whose `SubagentStop` never landed — a killed pane, a
+    # box reboot, a crashed turn — is carried indefinitely. Measured on a live
+    # box: rows aged 4037 and 3814 MINUTES riding a SessionStart write.
+    #
+    # A compacting session is mid-turn, its subagents are still running, and
+    # clearing there would blank a live roster in the middle of the work it
+    # describes. What protects that case is the `exit 0` one line above — the
+    # compact arm writes NOTHING at all — not this line's position, which was
+    # measured: hoisting it above the guard changes no behaviour, because the
+    # process is already gone. Deleting the `exit 0` is what breaks it, and
+    # `session-hook.test.ts` goes red for exactly that.
+    #
+    # `startup`, `resume` and `clear` are all real boundaries where no subagent
+    # can have survived.
+    clear_subs=1
     state="done" ;;
   Stop)
     state="done"
@@ -131,17 +148,49 @@ esac
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
+# The one exception is a real SessionStart boundary — see `clear_subs` above.
 subs=$(jq -c '.subagents // []' "$f" 2>/dev/null) || subs="[]"
+(( ${clear_subs:-0} )) && subs="[]"
 prev_state=$(jq -r '.state // empty' "$f" 2>/dev/null) || prev_state=""
 
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
-  name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
+  # NAME AND ID IN ONE jq CALL. The fork count on this path is a measured
+  # budget (`session-hook.test.ts` pins p95 < 150ms across ~20 live sessions),
+  # so reading a second field must not cost a second process.
+  #
+  # `agent_id` is a REQUIRED field on both SubagentStart and SubagentStop in
+  # Claude Code's own schema, and the hook has always been receiving it and
+  # throwing it away. Keeping it fixes a real defect: `del` by NAME removes the
+  # FIRST match, i.e. the OLDEST — and `name` resolves to the agent TYPE (the
+  # first two keys in the ladder are not in the schema), so concurrent
+  # same-typed subagents are the ORDINARY case, not an edge one. Measured on a
+  # live box: one session carrying five rows all reading `workflow-subagent`.
+  # Stopping any one of them retired the oldest row, leaving a survivor whose
+  # `startedAt` belonged to the subagent that had just finished.
+  #
+  # It is also the join key the server needs: Claude Code writes
+  # `subagents/agent-<agent_id>.meta.json` beside the transcript, carrying the
+  # human `description` that turns five identical rows into five sentences.
+  IFS=$'\t' read -r name aid < <(jq -r '[(.agent_name // .subagent_name // .agent_type // "subagent"),
+                                          (.agent_id // "")] | @tsv' <<<"$payload" 2>/dev/null) \
+    || { name="subagent"; aid=""; }
+  [[ -n "$name" ]] || name="subagent"
   now=$(_hook_epoch_ms)
   if [[ "$event" == SubagentStart ]]; then
-    subs=$(jq -c --arg n "$name" --argjson t "$now" \
-      '(. + [{name:$n, startedAt:$t}]) | .[-32:]' <<<"$subs" 2>/dev/null) || subs="[]"
+    # `id` is omitted rather than written empty when the harness sends none —
+    # absence-permits, and the server's reviver reads a missing `id` as null
+    # (no identity) rather than as an identity that is the empty string.
+    subs=$(jq -c --arg n "$name" --arg i "$aid" --argjson t "$now" \
+      '(. + [{name:$n, startedAt:$t} + (if $i == "" then {} else {id:$i} end)]) | .[-32:]' \
+      <<<"$subs" 2>/dev/null) || subs="[]"
   else
-    subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
+    # BY ID when there is one, falling back to the old name match when there is
+    # not — an older harness, or a row written before this shipped, must still
+    # be retirable.
+    subs=$(jq -c --arg n "$name" --arg i "$aid" \
+      'if $i != "" and (map(.id // "") | index($i)) != null
+       then del(.[ (map(.id // "") | index($i)) ])
+       else del(.[ (map(.name) | index($n)) // empty ]) end' <<<"$subs" 2>/dev/null) || subs="[]"
   fi
   # Session state untouched: keep the previous state (or skip entirely when
   # no state was ever written — a subagent event before any turn is inert).

@@ -536,7 +536,7 @@ describe('hook state on the wire', () => {
       ['claude-demo', mkHookState({
         state: 'waiting',
         ask: { questions: [{ question: 'Pick one', header: 'Choose', options: [{ label: 'A' }, { label: 'B' }] }] },
-        subagents: [{ name: 'reviewer', startedAt: 1000 }],
+        subagents: [{ name: 'reviewer', startedAt: 1000, id: null, description: null }],
       })],
     ]);
     const fleet = await assembleFleet(
@@ -546,7 +546,7 @@ describe('hook state on the wire', () => {
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.hookState).toBe('waiting');
     expect(s.askSummary).toBe('Choose');
-    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000 }]);
+    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000, id: null, description: null }]);
   });
 
   it('a hookless session carries all three fields as null', async () => {

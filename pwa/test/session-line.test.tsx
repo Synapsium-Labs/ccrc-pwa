@@ -249,7 +249,7 @@ describe('away from home', () => {
 // subagents and for how long, rather than only how many.
 describe('subagent disclosure', () => {
   it('renders a collapsed toggle with the count and a singular aria-label for one', () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     expect(toggle).toHaveTextContent('⑂ 1');
@@ -258,7 +258,7 @@ describe('subagent disclosure', () => {
 
   it('pluralizes the aria-label for more than one', () => {
     render(<SessionLine session={s({
-      subagents: [{ name: 'a', startedAt: 1 }, { name: 'b', startedAt: 2 }],
+      subagents: [{ name: 'a', startedAt: 1 , description: null }, { name: 'b', startedAt: 2 , description: null }],
     })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: '2 subagents' })).toHaveTextContent('⑂ 2');
   });
@@ -278,7 +278,7 @@ describe('subagent disclosure', () => {
   it('expands the subagent tally into named rows with elapsed time', async () => {
     const now = Date.now();
     render(<SessionLine session={s({ bucket: 'working',
-      subagents: [{ name: 'code-reviewer', startedAt: now - 65_000 }] })}
+      subagents: [{ name: 'code-reviewer', startedAt: now - 65_000 , description: null }] })}
       onOpen={() => {}} onActions={() => {}} />);
 
     expect(screen.queryByText('code-reviewer')).toBeNull();
@@ -299,7 +299,7 @@ describe('subagent disclosure', () => {
   // getByRole cannot see that, so these assert the DOM shape directly.
   it('is a real <button>, not a control nested inside another control', () => {
     const { container } = render(
-      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
                    onOpen={() => {}} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     expect(toggle.tagName).toBe('BUTTON');
@@ -315,7 +315,7 @@ describe('subagent disclosure', () => {
   // for exactly this. Round 1 had neither, and the list was not even a DOM
   // sibling of the toggle.
   it('points aria-controls at the list it opens', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     await userEvent.click(toggle);
@@ -332,7 +332,7 @@ describe('subagent disclosure', () => {
   // state a user would follow it from — the collapsed row. `aria-expanded`
   // carries the whole contract there.
   it('carries no aria-controls while the list it would name does not exist', () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -348,7 +348,7 @@ describe('subagent disclosure', () => {
   // Enter must toggle the disclosure and NOT navigate to the session.
   it('toggles on Enter and on Space, without opening the session', async () => {
     const onOpen = vi.fn();
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
                         onOpen={onOpen} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: '1 subagent' });
     toggle.focus();
@@ -368,8 +368,8 @@ describe('subagent disclosure', () => {
     const now = Date.now();
     render(<SessionLine session={s({
       subagents: [
-        { name: 'code-reviewer', startedAt: now - 65_000 },
-        { name: 'test-runner', startedAt: now - 5_000 },
+        { name: 'code-reviewer', startedAt: now - 65_000 , description: null },
+        { name: 'test-runner', startedAt: now - 5_000 , description: null },
       ],
     })} onOpen={() => {}} onActions={() => {}} />);
 
@@ -382,8 +382,53 @@ describe('subagent disclosure', () => {
   // start time and nothing else, so an Orca-style working/blocked glyph
   // would be a claim this row cannot source — a row is exactly two children,
   // the name and the elapsed time, never a third.
+  //
+  // THAT RULING SURVIVES THE LAUNCH-RECORD JOIN, and this pin is the proof.
+  // What changed is what the FIRST cell says, not how many cells there are:
+  // per-subagent STATE is still unsourceable (the launch record has no status
+  // field and SubagentStart carries only `{agent_id, agent_type}`), so it
+  // still gets no glyph. A description is a fact Claude Code wrote down; a
+  // state would be one we invented.
+  it('says what the subagent is DOING, not just its type', async () => {
+    // `name` is the hook's `.agent_name // .subagent_name // .agent_type`
+    // ladder and the first two keys are not in the shipped schema — so it is
+    // ALWAYS the agent type. Measured live: five concurrent rows all reading
+    // `workflow-subagent`, a count wearing a name. The description comes from
+    // the launch record Claude Code already wrote, joined on `agent_id`.
+    render(<SessionLine session={s({ subagents: [
+      { name: 'workflow-subagent', startedAt: Date.now(), description: 'Judge offline evidence blind' },
+      { name: 'workflow-subagent', startedAt: Date.now(), description: 'Inventory the provider' },
+    ] })} onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /2 subagents/ }));
+    expect(screen.getByText('Judge offline evidence blind')).toBeInTheDocument();
+    expect(screen.getByText('Inventory the provider')).toBeInTheDocument();
+    // The type no longer occupies the cell — it moved to the tooltip.
+    expect(screen.queryByText('workflow-subagent')).toBeNull();
+  });
+
+  it('falls back to the type when the join found nothing', async () => {
+    // Null description = an older hook with no id to join on, or a record that
+    // did not read. Byte-identical to what this row has always shown, which is
+    // what makes the whole feature safe to ship before the join is proven.
+    render(<SessionLine session={s({ subagents: [
+      { name: 'reviewer', startedAt: Date.now(), description: null },
+    ] })} onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(screen.getByText('reviewer')).toBeInTheDocument();
+  });
+
+  it('keeps both facts in the tooltip when both exist', async () => {
+    // The type is still worth having — it is just not worth the cell.
+    render(<SessionLine session={s({ subagents: [
+      { name: 'Explore', startedAt: Date.now(), description: 'Map the auth seam' },
+    ] })} onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    expect(screen.getByText('Map the auth seam').getAttribute('title'))
+      .toBe('Explore — Map the auth seam');
+  });
+
   it('shows no invented state — a name and an elapsed time, nothing else', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() , description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     const row = screen.getByText('reviewer').closest('.sess-subagent-row')!;
@@ -396,7 +441,7 @@ describe('subagent disclosure', () => {
   // of expanding.
   it('does not open the session when the toggle is tapped', async () => {
     const onOpen = vi.fn();
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() , description: null }] })}
                         onOpen={onOpen} onActions={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     expect(onOpen).not.toHaveBeenCalled();
@@ -408,7 +453,7 @@ describe('subagent disclosure', () => {
   it('still opens the session from the dead space around the meta cells', async () => {
     const onOpen = vi.fn();
     const { container } = render(
-      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+      <SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
                    onOpen={onOpen} onActions={() => {}} />);
     await userEvent.click(container.querySelector('.sess-meta')!);
     expect(onOpen).toHaveBeenCalledWith('demo-quiet-mesa');
@@ -420,7 +465,7 @@ describe('subagent disclosure', () => {
   // name also had no way to be read — you could not even select it.
   it('does not open the session when a subagent row is tapped', async () => {
     const onOpen = vi.fn();
-    render(<SessionLine session={s({ subagents: [{ name: 'code-reviewer', startedAt: Date.now() }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'code-reviewer', startedAt: Date.now() , description: null }] })}
                         onOpen={onOpen} onActions={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     onOpen.mockClear();
@@ -431,7 +476,7 @@ describe('subagent disclosure', () => {
   });
 
   it('carries the full name in a title, since the row ellipsises it', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'a-very-long-subagent-name', startedAt: 1 }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'a-very-long-subagent-name', startedAt: 1 , description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     expect(screen.getByText('a-very-long-subagent-name'))
@@ -439,7 +484,7 @@ describe('subagent disclosure', () => {
   });
 
   it('collapses again on a second tap', async () => {
-    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'reviewer', startedAt: Date.now() , description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     const toggle = screen.getByRole('button', { name: /1 subagent/ });
     await userEvent.click(toggle);
@@ -450,7 +495,7 @@ describe('subagent disclosure', () => {
 
   it('never shows the disclosure on a dead session, even with stale hook data', () => {
     render(<SessionLine session={s({ status: 'dead', bucket: 'dead',
-      subagents: [{ name: 'reviewer', startedAt: 1 }] })}
+      subagents: [{ name: 'reviewer', startedAt: 1 , description: null }] })}
       onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();
   });
@@ -464,7 +509,7 @@ describe('subagent elapsed time', () => {
   /** Render one subagent started `ageMs` ago, expand, return its elapsed cell. */
   const elapsedFor = async (startedAt: number): Promise<string> => {
     cleanup();
-    render(<SessionLine session={s({ subagents: [{ name: 'sub', startedAt }] })}
+    render(<SessionLine session={s({ subagents: [{ name: 'sub', startedAt, description: null }] })}
                         onOpen={() => {}} onActions={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
     return document.querySelector('.sess-subagent-elapsed')!.textContent!;

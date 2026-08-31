@@ -177,6 +177,76 @@ describe('subagents', () => {
     for (let i = 0; i < 40; i++) run({ hook_event_name: 'SubagentStart', agent_name: `a${i}` });
     expect(readState().subagents.length).toBeLessThanOrEqual(32);
   });
+  // ── agent_id: identity, and letting go of a dead set ──
+  it('keeps the agent_id the harness has always been sending', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'SubagentStart', agent_type: 'workflow-subagent', agent_id: 'abc123' });
+    expect(readState().subagents[0].id).toBe('abc123');
+  });
+
+  it('omits `id` rather than writing an empty one when the harness sends none', () => {
+    // Absence-permits at the seam: a missing `id` means NO IDENTITY, and `''`
+    // would be an identity that happens to be blank — two rows carrying it
+    // would then look like the same subagent.
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
+    expect('id' in readState().subagents[0]).toBe(false);
+  });
+
+  it('Stop retires the row that actually stopped, not the oldest of that name', () => {
+    // THE DEFECT THIS EXISTS TO CLOSE. `name` resolves to the agent TYPE, so
+    // concurrent same-typed subagents are the ordinary case (measured live:
+    // five rows all reading `workflow-subagent`). Deleting by name removed the
+    // FIRST match — the oldest — leaving a survivor whose startedAt belonged
+    // to the one that had just finished.
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'SubagentStart', agent_type: 'workflow-subagent', agent_id: 'first' });
+    run({ hook_event_name: 'SubagentStart', agent_type: 'workflow-subagent', agent_id: 'second' });
+    const before = readState().subagents;
+    expect(before).toHaveLength(2);
+    run({ hook_event_name: 'SubagentStop', agent_type: 'workflow-subagent', agent_id: 'second' });
+    const after = readState().subagents;
+    expect(after).toHaveLength(1);
+    expect(after[0].id, 'the SURVIVOR must be the one that did not stop').toBe('first');
+    expect(after[0].startedAt).toBe(before[0].startedAt);
+  });
+
+  it('still retires by name when no id is present, so an older harness works', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
+    run({ hook_event_name: 'SubagentStop', agent_name: 'reviewer' });
+    expect(readState().subagents).toHaveLength(0);
+  });
+
+  it('a real SessionStart drops the whole set — nothing else ever does', () => {
+    // The set is read back and written forward on every event, so a subagent
+    // whose Stop never landed (a killed pane, a reboot) rides indefinitely.
+    // Measured live: rows aged 4037 and 3814 minutes on a SessionStart write.
+    for (const source of ['startup', 'resume', 'clear']) {
+      run({ hook_event_name: 'UserPromptSubmit' });
+      run({ hook_event_name: 'SubagentStart', agent_type: 'x', agent_id: `id-${source}` });
+      expect(readState().subagents, source).toHaveLength(1);
+      run({ hook_event_name: 'SessionStart', source });
+      expect(readState().subagents, source).toHaveLength(0);
+    }
+  });
+
+  it('a COMPACT SessionStart leaves the set alone — that session is mid-turn', () => {
+    // A compacting session's subagents are still running; blanking there
+    // erases a live roster in the middle of the work it describes. The guard
+    // is the compact arm's own `exit 0` — measured: this goes red when that
+    // exit is removed, and is unmoved by where the clear itself sits.
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'SubagentStart', agent_type: 'x', agent_id: 'alive' });
+    const before = readState();
+    run({ hook_event_name: 'SessionStart', source: 'compact' });
+    const after = readState();
+    expect(after.subagents).toHaveLength(1);
+    expect(after.subagents[0].id).toBe('alive');
+    // Nothing at all was written: compact is inert here.
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
   it('the cap keeps the newest arrivals, not the oldest', () => {
     run({ hook_event_name: 'UserPromptSubmit' });
     for (let i = 0; i < 40; i++) run({ hook_event_name: 'SubagentStart', agent_name: `a${i}` });

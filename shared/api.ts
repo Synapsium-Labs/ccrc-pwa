@@ -112,7 +112,7 @@ export interface FleetSession {
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
-  subagents: { name: string; startedAt: number }[] | null;
+  subagents: { name: string; startedAt: number; description: string | null }[] | null;
   bucket: SessionBucket;
   /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
    *  record — never a watcher's memory of when it noticed, which would reset on
@@ -1628,10 +1628,15 @@ function revivePr(raw: unknown): PrState {
   };
 }
 
-type SubagentEntry = { name: string; startedAt: number };
+type SubagentEntry = { name: string; startedAt: number; description: string | null };
 const reviveSubagentEntry = (raw: unknown, at: string): SubagentEntry => {
   const o = asObj(raw, at);
-  return { name: reqStr(o, 'name'), startedAt: reqNum(o, 'startedAt') };
+  // `description` is OPTIONAL on the wire: absent from every snapshot written
+  // before the launch-record join shipped, and null for a subagent whose
+  // record could not be read or whose row carries no id to join on. Absence
+  // and "read, nothing to say" both render as today's behaviour — the row
+  // falls back to the agent type — so they need no separate arm here.
+  return { name: reqStr(o, 'name'), startedAt: reqNum(o, 'startedAt'), description: optStr(o, 'description') };
 };
 /** `FleetSession.subagents` — `null` is NO HOOK DATA (same reason `hookState`
  *  is null), `[]` is MEASURED NONE. Same array-of-objects discipline as
