@@ -10,6 +10,12 @@ import {
   isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
+  // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
+  // exactly one home — `shared/api.ts`, beside the body it labels. Its own
+  // docstring gives the second reason it lives there rather than in
+  // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
+  // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
+  PROGRAM_KICKOFF_SUBJECT,
   RUN_TRANSITIONS,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
@@ -200,6 +206,15 @@ const RUN_ROW_COLUMNS =
  */
 const OUTSTANDING_STATES_SQL = "('queued','delivered')";
 
+/** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
+ *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
+ *  where a value would slip into the statement text. One home, and it can emit
+ *  nothing but question marks whatever it is handed: every value still travels as
+ *  a positional bind. Callers guard `n > 0` themselves — an empty `IN ()` is a
+ *  syntax error in SQLite, and a helper that silently returned a
+ *  matches-nothing fragment would hide the caller's own missing guard. */
+const placeholders = (n: number): string => new Array(n).fill('?').join(',');
+
 /** The replay-ceiling park's own `lastError`, written by exactly one call
  *  site (`watch.ts`'s `sweepMail`, `store.rejectDelivery(d.id, 'undeliverable',
  *  MAIL_REPLAY_CEILING_ERROR)`) and read back by exactly one other
@@ -207,6 +222,45 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  constant rather than the same string literal typed twice, so the two can
  *  never drift apart and silently stop recognising each other's writes. */
 export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay ceiling';
+
+/** `cancelOutstandingDeliveries`'s own park sentence, promoted to a constant on
+ *  `MAIL_REPLAY_CEILING_ERROR`'s exact argument (D-1143). It was already typed
+ *  twice — once by the writer at `cancelOutstandingDeliveries`, once by the
+ *  READ-side exclusion in `OUTSTANDING_OR_ABANDONED_SQL` below — which is the
+ *  drift the constant above exists to forbid: the day one of the two is reworded
+ *  the park silently stops being recognised as deliberate and every closed run's
+ *  cancelled mail reappears as "still needs a human's attention". Two literals
+ *  that MUST match are one definition, wherever they happen to live. */
+export const MAIL_RUN_CLOSED_ERROR = 'run closed';
+
+/**
+ * The reclaim's own park sentence (D-1143), and the second member of the pair
+ * below. Written by `reclaimProgram`'s kickoff cancellation and read back by the
+ * same READ-side exclusion — the identical writer/reader pair the constant above
+ * describes, minted as a constant from the start rather than as two literals a
+ * later fix round has to notice.
+ *
+ * IT IS NOT `MAIL_RUN_CLOSED_ERROR`, and reusing that string would have been the
+ * cheap way to inherit the exclusion for free: no run closed here. A reclaim
+ * moves the chair while every run of the program stays exactly as open as it
+ * was, and `lastError` is free text a maintainer greps for the ROW's own history
+ * — a park that lies about why it happened is worse than a park nobody
+ * excluded. Contains no apostrophe, deliberately: it is interpolated into the
+ * SQL fragment below, where the surrounding quotes are the only escaping there
+ * is.
+ */
+export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
+
+/** The two parks that are DECISIONS rather than abandonment — a run closing
+ *  (`closeRun`) and a chair changing hands (`reclaimProgram`) — as one SQL list,
+ *  so the read-side exclusion below names a set rather than growing a second
+ *  hand-written `!=` per writer. Every future "this delivery was cancelled on
+ *  purpose" park joins HERE and inherits the exclusion; a park that means "we
+ *  gave up" (the replay ceiling, the attempt ceiling, a purged recipient) must
+ *  never be added, because those are exactly the rows that predicate exists to
+ *  keep visible. */
+const DELIBERATE_CANCEL_ERRORS_SQL =
+  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}')`;
 
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
@@ -224,10 +278,43 @@ export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay c
  * the lane stopped trying to hand it over.
  *
  * DELIBERATELY EXCLUDES `cancelOutstandingDeliveries`'s own park
- * (`lastError = 'run closed'`): that one is not abandonment, it is the run
+ * (`MAIL_RUN_CLOSED_ERROR`): that one is not abandonment, it is the run
  * closing making the delivery moot BY DESIGN — surfacing it as "still needs
  * attention" would be exactly the false alarm this predicate exists to
- * avoid on the other end. `COALESCE(d.lastError, '')` (nit I7): SQLite's `!=`
+ * avoid on the other end.
+ *
+ * …AND, SINCE D-1143, `MAIL_RECLAIM_CANCELLED_ERROR` BESIDE IT — the same
+ * argument, measured rather than assumed. `reclaimProgram`'s kickoff
+ * cancellation writes a `rejected` row whose `mail.runId` IS NULL (the program
+ * kickoff names no run, by construction — `kickoff.ts`'s own docstring), so the
+ * `LEFT JOIN runs rr` arm two paragraphs down cannot help: `rr.state` is NULL,
+ * `COALESCE(rr.state,'')` is `''`, and the row would have stayed abandoned-and-
+ * visible FOREVER, on the corpse's own `toId`. Every reader was walked before
+ * this clause was written, and the answer differs per reader — which is why the
+ * fix is here and not in a writer:
+ *   `outstandingMailFor(toId)` — the one that breaks. `GET /api/mail?to=<dead
+ *     id>` and `sessionws.ts`'s `checkMail` both read it, and `checkMail` is
+ *     keyed on the SESSION's own id. A reclaimed workspace id is not gone for
+ *     good: `ccd start` / `ws-restore` bring the same id back, and `_ws_slug_new`
+ *     recycles a purged slug outright (`ccd/ccd:3516`) — so the returning
+ *     session's mail strip would open on a kickoff briefing it to coordinate a
+ *     program somebody else now holds. That is MINOR 9's own two-coordinator
+ *     hazard, re-entered through the READ side after the write side closed it.
+ *   `unreadMailCount(runId, sessionId)` — unaffected, and not by luck: its
+ *     `WHERE m.runId = ?` cannot match a NULL `runId` at all, so no
+ *     `RunSummary.unreadMail` ever counted the kickoff, before or after the
+ *     cancellation.
+ *   `mailForRecipient` (`?all=1`) — unaffected ON PURPOSE. It is the history
+ *     read; a cancelled kickoff is exactly the kind of fact an operator
+ *     inspecting `/mail` should still find.
+ *   `hasOutstandingMail` / `dueDeliveries` / the peer-quota reads — all built on
+ *     the narrower `OUTSTANDING_STATES_SQL`, for which `rejected` is simply
+ *     terminal. The lane stops replaying and the dedupe slot frees up, which is
+ *     the correct consequence: the cancelled kickoff no longer blocks a fresh
+ *     one to that same id.
+ *
+ * `COALESCE(d.lastError, '')` (nit I7): SQLite's `!=` — and `NOT IN`, which
+ * D-1143 widened it to for the second member, on the identical NULL rule —
  * is NULL, not true, against a NULL `lastError` (a delivery rejected for a
  * reason that never wrote one), and NULL is FALSY in a `WHERE` — the bare
  * comparison silently dropped exactly that row out of the whole OR chain
@@ -267,7 +354,7 @@ export const MAIL_REPLAY_CEILING_ERROR = 'replayed without ack past the replay c
  */
 const OUTSTANDING_OR_ABANDONED_SQL =
   `(d.state IN ${OUTSTANDING_STATES_SQL} OR (d.state = 'rejected' ` +
-  "AND COALESCE(d.lastError, '') != 'run closed' " +
+  `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
   "AND COALESCE(rr.state, '') NOT IN ('done','failed')))";
 
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
@@ -462,6 +549,73 @@ export class CoordStore {
    * never read from a request body. Attribution, not authentication
    * (spec:26-30) — and on an operator door that carries no box token, a
    * body-supplied `causedBy` is a free-text field writing the audit trail.
+   *
+   * THE MAIL MOVES WITH THE CHAIR, IN THIS SAME TRANSACTION (D-1141/D-1143,
+   * blocking review MAJOR 1 and MINOR 9). Until this round the reclaim rewrote
+   * `runs.claimedBy` and NOTHING else, and `mail_deliveries.toId` is frozen to
+   * the RESOLVED id at queue time — `coord/routes.ts` resolves `coordinator` once
+   * through `resolveCoordinator` and hands the answer to `queueDelivery`, which
+   * is the only writer of that column in the tree. `GET /api/mail` is
+   * recipient-scoped. So a wave-done the worker sent minutes before the reclaim
+   * stayed addressed to the corpse while `resolveCoordinator(runId)` answered the
+   * heir: the heir's box read empty, the sweep walked the report to
+   * `rejected('undeliverable')`, and the wave's own report was lost — with the
+   * coordinator corpus (`ccd/coordinator-skill/references/resume.md`) sending the
+   * heir to that empty box in as many words, "read outstanding mail before
+   * deciding anything".
+   *
+   * `mail.toId` DECIDES, because it already records the addressing. It keeps the
+   * PRE-resolution recipient — the literal role `coordinator`, or a literal
+   * session id — beside `mail_deliveries.toId`'s resolved answer, which is
+   * exactly the distinction this fix turns on and the reason no new column is
+   * needed for it:
+   *   (a) role-addressed (`mail.toId = 'coordinator'`), naming a run of THIS
+   *       program, still outstanding, addressed to a displaced claimant ->
+   *       REPOINTED. Mail sent to a ROLE follows the role.
+   *   (b) addressed to a literal session id -> LEFT. It was sent to a session,
+   *       not to a chair, and the session is the same session it always was.
+   *   (c) already `acked` or otherwise terminal -> NEVER MOVED. That is
+   *       `OUTSTANDING_STATES_SQL`, the constant, not a fourth hand-written pair
+   *       of words.
+   *   (d) role-addressed with `mail.runId` NULL -> LEFT. See D-1142 on
+   *       `repointCoordinatorMail` below: it cannot be PROVEN to be this
+   *       program's, and the fold is recorded rather than opened.
+   * …and, in the opposite direction, an outstanding `program-kickoff` to a
+   * displaced claimant is CANCELLED rather than repointed (D-1143,
+   * `cancelKickoffsTo`): a re-kickoff queued minutes before a reclaim would
+   * otherwise still brief the session the reclaim just displaced, which is two
+   * coordinators — the exact state the skill's clause 8 exists to prevent.
+   *
+   * THE COUNTERS ARE NOT TOUCHED, measured rather than assumed. A repointed row
+   * keeps its `attempts`, its `nextAttemptAt` and its gate columns, all of them
+   * accumulated against the corpse. That reads wrong and is not: `attempts` only
+   * ever ratchets on a SEND FAILURE or a provably-dead recipient (`watch.ts`'s
+   * two dead rungs) — every gate (`not-idle`, `not-quiet`, `pending-ask`,
+   * cooldown) `continue`s without touching it — so against a LIVE heir the very
+   * next due sweep delivers and the ratchet stops. The whole cost is one backoff
+   * step of delay, at most `MAIL_BACKOFF_BASE_MS * 2^4` = 8 minutes, and the
+   * benefit of resetting them would be to erase the row's own record of what
+   * already happened to it. What DOES bound this fix is arm (c) and it is worth
+   * knowing: `MAIL_MAX_ATTEMPTS` is 6 on a 30 s doubling, so a never-delivered
+   * mail to a provably-dead coordinator parks itself `undeliverable` about
+   * fifteen and a half minutes after it was queued. Past that window there is
+   * nothing outstanding left to repoint and the report stays on the corpse,
+   * visible to `outstandingMailFor(<corpse>)` and to nobody else. Reopening a
+   * parked row is a different decision, on a different door, and this one does
+   * not make it.
+   *
+   * THE ENVELOPE IS NOT RE-RENDERED, deliberately (D-1142). `renderEnvelope`
+   * runs exactly ONCE, at queue time (spec:174-177, "verbatim, never
+   * re-rendered"; `setDeliveryEnvelope`'s own docstring calls itself the second
+   * half of that one INSERT and not a second render). A repointed delivery
+   * therefore still carries a `to:` line naming the OUTGOING id, and that is
+   * accepted rather than papered over: it is a TRUE record of who held the chair
+   * when the message was queued, the `ack:` line names the DELIVERY id — which
+   * this statement does not change — and the nudge the lane actually types is
+   * `renderMailNudge(d.toId)`, a function of the row's CURRENT recipient, so the
+   * heir is nudged correctly and finds the stale `to:` only inside the body it
+   * fetches. Re-rendering it here would trade a true historical line for a
+   * violation of the one rule the mail body has.
    */
   reclaimProgram(runId: number, to: string, at: number): ReclaimProgramResult {
     return tx(this.db, () => {
@@ -488,11 +642,127 @@ export class CoordStore {
         // reads five clock samples describes five acts.
         this.recordRunEvent(m.id, 'operator', `reclaim:${m.claimedBy} -> ${to}`, at);
       }
+      // EVERY id THIS RECLAIM DISPLACED, not just `run.claimedBy`. The result's
+      // `from` names one row's claimant; `moved` is the set the UPDATE above
+      // actually rewrote, and on a program whose rows somehow disagree (a
+      // hand-recovered row, a `reconstruct` a human finished by hand) that set
+      // has more than one member. The runs half already rewrites all of them —
+      // the mail half addressed to only one of them would leave the others'
+      // reports on corpses the same rewrite just declared displaced. `to` is
+      // never in this set: the `claimedBy != ?` selection above excludes it.
+      const displaced = [...new Set(moved.map((m) => m.claimedBy))];
+      if (displaced.length > 0) {
+        this.cancelKickoffsTo(displaced);
+        this.repointCoordinatorMail(run.program, to, displaced);
+      }
       return {
         ok: true as const, program: run.program,
         runIds: moved.map((m) => m.id), from: run.claimedBy,
       };
     });
+  }
+
+  /**
+   * D-1143 (blocking review MINOR 9) — the reclaim's OPPOSITE verb, and the
+   * reason it is a second statement rather than a widening of the repoint below.
+   *
+   * `queueProgramKickoff` addresses the kickoff to a LITERAL session id with
+   * `runId: null` (`coord/kickoff.ts`: "It names NO run, because there is none"),
+   * so the repoint's own `mail.toId = 'coordinator'` filter already declines it —
+   * arm (b). Left at that, a re-kickoff queued minutes before a reclaim goes on
+   * briefing the session the reclaim just displaced: two sessions each told they
+   * coordinate this program, which is precisely the state
+   * `ccd/coordinator-skill/SKILL.md`'s clause 8 exists to prevent. A kickoff is
+   * not a report that needs a new reader; it is an INSTRUCTION to take a chair
+   * that has just been given to somebody else, and the only honest thing to do
+   * with it is to end it.
+   *
+   * THE PARK IS `cancelOutstandingDeliveries`'s, precedent for precedent:
+   * `rejected` + `undeliverable` + a `lastError` of its own
+   * (`MAIL_RECLAIM_CANCELLED_ERROR`, excluded from the read-side "needs
+   * attention" predicate by `DELIBERATE_CANCEL_ERRORS_SQL` — see that constant
+   * and `OUTSTANDING_OR_ABANDONED_SQL`'s own docstring for the reader-by-reader
+   * measurement). Not a DELETE: nothing in this tree deletes from
+   * `mail_deliveries` ("bound the producer, never the record").
+   *
+   * THE KEY IS `queueProgramKickoff`'S DEDUPE KEY, three quarters of it: the same
+   * `(fromId, runId, subject)` triple `hasOutstandingMail` reads, with `toId`
+   * bound to each displaced claimant instead of to one recipient. Written that
+   * way on purpose and not as `subject = ?` alone — peer `subject` is
+   * caller-chosen free text (D-1041's own finding), so a peer mail that happened
+   * to carry this subject would otherwise be parked by an act that has nothing to
+   * do with it. The pleasant consequence of matching the key exactly: once these
+   * rows are terminal the dedupe slot is free, so a fresh kickoff to that same id
+   * is no longer swallowed by the one this cancelled.
+   *
+   * IT RUNS BEFORE THE REPOINT, and the order is a deliberate choice about
+   * MEASURABILITY rather than about behaviour. The two statements are disjoint by
+   * construction — this one matches only `mail.runId IS NULL`, the repoint only
+   * rows that JOIN a `runs` row — so on correct code the order cannot change the
+   * outcome. On INCORRECT code it can: an over-broad cancel running first
+   * swallows the row the repoint was supposed to move, and the repoint's own
+   * `state IN` guard then leaves it visibly parked. Run second, the same
+   * over-broad cancel would find that row already repointed to `to` (never a
+   * member of `displaced`) and quietly miss it — a mutation that cannot go red.
+   * Narrowing statement first, so a widened one is caught by the suite instead of
+   * by a program.
+   */
+  private cancelKickoffsTo(displaced: readonly string[]): void {
+    this.db.prepare(
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
+      `lastError = '${MAIL_RECLAIM_CANCELLED_ERROR}' ` +
+      `WHERE state IN ${OUTSTANDING_STATES_SQL} AND toId IN (${placeholders(displaced.length)}) ` +
+      'AND mailId IN (SELECT id FROM mail WHERE runId IS NULL AND fromId = ? AND subject = ?)',
+    ).run(...displaced, 'operator', PROGRAM_KICKOFF_SUBJECT);
+  }
+
+  /**
+   * D-1141 (blocking review MAJOR 1) — role-addressed mail follows the role.
+   *
+   * Every arm of the ruling is one clause of this one statement, and none of them
+   * is a branch in TypeScript:
+   *   `state IN OUTSTANDING_STATES_SQL` is arm (c) — an `acked` delivery, or one
+   *     already parked by any writer, is never moved. The CONSTANT, so this query
+   *     agrees with `cancelOutstandingDeliveries`, `hasOutstandingMail` and the
+   *     read-side predicate by construction rather than by four texts matching.
+   *   `d.toId IN (<displaced>)` scopes it to the ids this reclaim actually took
+   *     the chair from — never a delivery already addressed to `to`, and never
+   *     one addressed to a third session that has nothing to do with this act.
+   *   `m.toId = 'coordinator'` is arm (b), and it is the whole reason no new
+   *     column is needed: `mail.toId` keeps the PRE-resolution addressing while
+   *     `mail_deliveries.toId` carries the resolved answer, so "sent to the
+   *     chair" and "sent to that session" are already two distinguishable facts
+   *     in this schema.
+   *   `JOIN runs r ON r.id = m.runId` scopes it to THIS program — and, being an
+   *     inner join, drops every `m.runId IS NULL` row on the way, which is arm
+   *     (d) falling out of the SQL rather than needing a branch of its own.
+   *
+   * D-1142 — THE `runId IS NULL` FOLD, RECORDED AND DELIBERATELY LEFT CLOSED,
+   * beside D-1132's own entry in this wave (`coord-kickoff.test.ts`'s
+   * `THE FOLD (D-1132)` and the plan's ledger) and for the same shape of reason.
+   * A mail addressed to the ROLE with no run named IS reachable: `POST /api/mail`
+   * accepts `{toId:'coordinator', runId:null}` and resolves it through
+   * `resolveCoordinator(null)`, the single-active-program arm. Once queued,
+   * nothing about that row records WHICH program the sender meant — the
+   * resolution is spent, `mail.runId` is NULL, and `resolveCoordinator(null)`'s
+   * own answer is a function of the fleet's state at the moment it ran, not a
+   * fact stored anywhere. Measured: no column, no join and no read in this store
+   * can recover it. So repointing such a row would be this method GUESSING that a
+   * message with no program on it belonged to the program being reclaimed, on a
+   * door whose entire discipline is refusing to guess (`resolveCoordinator`'s own
+   * "no guessing", `measureClaimant`'s "doubt is not evidence"). It stays on the
+   * outgoing claimant, outstanding and visible at `outstandingMailFor(<that
+   * id>)` — the honest outcome, since the party that can tell which program it
+   * meant is the human reading it. Recorded here rather than opened; an operator
+   * door that re-points one by id is a decision somebody makes on purpose.
+   */
+  private repointCoordinatorMail(program: string, to: string, displaced: readonly string[]): void {
+    this.db.prepare(
+      `UPDATE mail_deliveries SET toId = ? WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
+      `AND toId IN (${placeholders(displaced.length)}) AND mailId IN (` +
+      'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
+      "WHERE m.toId = 'coordinator' AND r.program = ?)",
+    ).run(to, ...displaced, program);
   }
 
   /**
@@ -705,7 +975,7 @@ export class CoordStore {
   cancelOutstandingDeliveries(runId: number): void {
     this.db.prepare(
       "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
-      `lastError = 'run closed' WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
+      `lastError = '${MAIL_RUN_CLOSED_ERROR}' WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
       'AND mailId IN (SELECT id FROM mail WHERE runId = ?)',
     ).run(runId);
   }
@@ -1352,10 +1622,11 @@ export class CoordStore {
    * own replay/attempt ceiling is `state:'rejected'` on the wire, distinct
    * from `'queued'`/`'delivered'` — a reader that cares can tell the
    * difference — but it stays in THIS list rather than disappearing from it,
-   * because it was never acked and never acted on. Excludes the one
-   * `'rejected'` shape that is not abandonment (`cancelOutstandingDeliveries`'s
-   * `lastError:'run closed'` park, the run closing making the delivery moot
-   * on purpose) AND, since orchestrator ruling I2(a), an abandoned row whose
+   * because it was never acked and never acted on. Excludes the two
+   * `'rejected'` shapes that are not abandonment (`DELIBERATE_CANCEL_ERRORS_SQL`
+   * — `cancelOutstandingDeliveries`'s park, the run closing making the delivery
+   * moot on purpose, and D-1143's reclaim park, the chair changing hands making
+   * a kickoff moot the same way) AND, since orchestrator ruling I2(a), an abandoned row whose
    * OWN run has since reached a terminal state — see the predicate's own
    * docstring for why that is derived here, in the `LEFT JOIN runs rr` below,
    * rather than written by any mutation.
