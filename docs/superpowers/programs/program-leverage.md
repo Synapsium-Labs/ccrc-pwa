@@ -17,7 +17,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
-| 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
+| 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | run 18 | dispatched 2026-08-31 ~06:08 UTC (resumed quiet-meadow, brief queued, `skillState:present`) |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
 | 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. | — | planned |
@@ -285,6 +285,14 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   the SERVER LANE from a scratch worktree at the merge sha, `/health` reports `592ec425`,
   service stable (NOT agent-first). Items 4/4. Deviation floor now 1123 — wave 5 allocates via
   `POST /api/ledger/deviations`, never from the exhausted block.
+
+- **Wave 5 opens as run 18 and dispatches (2026-08-31 ~06:08 UTC):** opened BEFORE closing run 16
+  (the ordering rule); run 16 then closed `done`, `released:false` (expected handover: run 18
+  holds quiet-meadow, hold rewritten `program:program-leverage wave:5/8`). The worker's Claim 12
+  (15 paths) released with the close — claims table empty, verified. Note the id: **run 18**, not
+  17 — global sequence shared with the other active program, read from the open response. Wave-5
+  mail therefore names **runId 18**. Dispatch resumed the workspace (`resumed:true`,
+  `briefQueued:true`, `adopted:false`) and the preflight measured `skillState:present` live.
 
 ## Carried constraints
 
