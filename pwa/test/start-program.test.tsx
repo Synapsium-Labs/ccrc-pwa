@@ -37,7 +37,7 @@ import { programKickoff, readyVerdict } from '../../shared/api';
 import type {
   CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
 } from '../../shared/api';
-import { StartProgramSheet, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { StartProgramSheet, openRunVerdict, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
@@ -65,6 +65,11 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
 });
+
+/** The measured-and-empty answer — "the board has answered, nothing is open".
+ *  Spelled once so the 45 pre-existing render sites all say the same thing, and
+ *  so the four fixtures that mean something else stand out on the page. */
+const NO_OPEN_RUNS: ReadonlySet<string> = new Set<string>();
 
 const projected = (wrapper = 'claude', score = 5): { accounts: never[]; projected: { wrapper: string; score: number }; roster: never[] } =>
   ({ accounts: [], projected: { wrapper, score }, roster: [] });
@@ -99,9 +104,14 @@ function OpenHarness({
           a `queryByText` against the closed sheet would report absence whether
           the guard held or not. */}
       <button type="button" onClick={() => setOpen(true)}>reopen sheet</button>
+      {/* `openRunProjects` is passed directly rather than threaded through this
+          harness's own props: every case that uses it is about the supersession
+          guard, not about the run board, and the measured-and-empty answer is
+          what all of them want. */}
       <StartProgramSheet
         open={open}
         onClose={() => setOpen(false)}
+        openRunProjects={NO_OPEN_RUNS}
         fleet={fleet}
         createSession={createSession}
         queueKickoff={queueKickoff}
@@ -167,6 +177,39 @@ describe('startedSessionFor — the wait arm, directly (B-2)', () => {
   });
 });
 
+// THREE answers, and the third is the whole reason this is a function rather
+// than a `.has()` at the call site. It follows `startedSessionFor`'s precedent
+// in the same file (`StartProgramSheet.tsx`'s own docstring on it): the
+// `unmeasured` answer is reachable through the component only via a prop
+// fixture, and a pure predicate is the cheapest place to pin all three arms
+// against each other.
+describe('openRunVerdict — the run-board arm, directly (D-1130)', () => {
+  it('answers unmeasured for null — NOT MEASURED is never folded into "no open run"', () => {
+    expect(openRunVerdict(null, 'ccrc-pwa')).toBe('unmeasured');
+  });
+
+  it('answers open-run for a project the measured set names', () => {
+    expect(openRunVerdict(new Set(['ccrc-pwa']), 'ccrc-pwa')).toBe('open-run');
+  });
+
+  it('answers clear for a measured set that does not name it — an EMPTY set included', () => {
+    expect(openRunVerdict(new Set(['other-repo']), 'ccrc-pwa')).toBe('clear');
+    expect(openRunVerdict(new Set<string>(), 'ccrc-pwa')).toBe('clear');
+  });
+
+  // The join between `RunSummary.project` and `ProjectRow.name` is CONVENTION:
+  // `POST /api/runs` validates the field as a non-empty string and nothing more
+  // (`server/src/coord/routes.ts:889-897`), so a run can name a string this
+  // picker never lists. A prefix or case-folded match would refuse a real
+  // project on the strength of a lookalike; an exact one means the sheet simply
+  // has nothing to say about that run, which is the honest answer.
+  it('matches EXACTLY — never by prefix, never case-folded', () => {
+    expect(openRunVerdict(new Set(['ccrc-pwa-brisk-harbor']), 'ccrc-pwa')).toBe('clear');
+    expect(openRunVerdict(new Set(['CCRC-PWA']), 'ccrc-pwa')).toBe('clear');
+    expect(openRunVerdict(new Set(['ccrc']), 'ccrc-pwa')).toBe('clear');
+  });
+});
+
 describe('StartProgramSheet', () => {
   // Coordinator review B-4: nothing pinned `useProjectedHome(open)`. The one
   // test that could have caught its removal was widened to exclude
@@ -178,7 +221,7 @@ describe('StartProgramSheet', () => {
   it('does not poll /api/accounts while the door is closed — the open gate is real (B-4)', async () => {
     const accounts = vi.spyOn(api, 'accounts').mockResolvedValue(projected());
 
-    const { rerender } = render(<StartProgramSheet open={false} onClose={() => {}} fleet={makeStore()}
+    const { rerender } = render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open={false} onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
     // Give the effect (and any immediate `load()`) a chance to run.
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -186,14 +229,14 @@ describe('StartProgramSheet', () => {
 
     // Opening it is what asks — otherwise this would pass against a hook that
     // never polls at all.
-    rerender(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    rerender(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
     await waitFor(() => expect(accounts).toHaveBeenCalled());
   });
 
   it('collects slug, title and project, and refuses an empty slug', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: 'Build 9 demo' } });
@@ -208,7 +251,7 @@ describe('StartProgramSheet', () => {
 
   it('names the account it will place into BEFORE the tap (the projection, not a guess)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2', 40));
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -219,7 +262,7 @@ describe('StartProgramSheet', () => {
 
   it('refuses with copy when the projection is null: nothing is placeable (D-284 (was D-B4-11))', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -231,7 +274,7 @@ describe('StartProgramSheet', () => {
   it('renders the in-flight state on the session create — the one long call', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn(() => new Promise<void>(() => {})); // never resolves
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={createSession}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -250,7 +293,7 @@ describe('StartProgramSheet', () => {
   // takes ~200ms; a tap inside that window must not be a dead tap.
   it('renders a disabled "checking placement…" control while the projection has not answered yet — no dead tap (Important 1)', async () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {})); // never resolves — the pending window
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -270,7 +313,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -291,7 +334,7 @@ describe('StartProgramSheet', () => {
 
   it('says in one line that the run row arrives later, from the coordinator', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -304,7 +347,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -345,7 +388,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     render(
       <>
-        <StartProgramSheet open onClose={() => {}} fleet={store}
+        <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
           createSession={createSession} queueKickoff={queueKickoff}
           loadProjects={async () => ({ roots: [], projects: [proj()] })} />
         <ToastHost />
@@ -386,7 +429,7 @@ describe('StartProgramSheet', () => {
       .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
       .mockResolvedValueOnce(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -418,7 +461,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     render(
       <>
-        <StartProgramSheet open onClose={() => {}} fleet={store}
+        <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
           createSession={async () => {}} queueKickoff={queueKickoff}
           loadProjects={async () => ({ roots: [], projects: [proj()] })} />
         <ToastHost />
@@ -443,7 +486,7 @@ describe('StartProgramSheet', () => {
       new ApiError(404, { ok: false, error: 'unknown-session' }),
     );
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -476,7 +519,7 @@ describe('StartProgramSheet', () => {
       new ApiError(501, { ok: false, error: 'not-configured' }),
     );
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({
         roots: [],
@@ -513,7 +556,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     // Deliberately no createSession/prompt injection — the REAL api.* default
     // props, so this exercises the production composition, not a fake.
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -538,7 +581,7 @@ describe('StartProgramSheet', () => {
 
   it('never claims the ledger exists — it names the path the operator committed', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
@@ -552,7 +595,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ coord: { pause: 'set', mail: 'clear' }, coordFrameSeen: true }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -575,7 +618,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ coord: { pause: 'unmeasurable', mail: 'clear' }, coordFrameSeen: true }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -593,7 +636,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     const fromNewerBuild = { pause: 'quarantined', mail: 'clear' } as unknown as CoordStatus;
     act(() => { store.setState({ coord: fromNewerBuild, coordFrameSeen: true }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -609,7 +652,7 @@ describe('StartProgramSheet', () => {
     // !== 'clear'` wrap would warn here — about a fleet nothing has reported
     // anything about yet.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -624,7 +667,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession400 = vi.fn().mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-request' }));
     const { rerender } = render(
-      <StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
         createSession={createSession400}
         loadProjects={async () => ({ roots: [], projects: [proj()] })} />,
     );
@@ -637,7 +680,7 @@ describe('StartProgramSheet', () => {
       new ApiError(502, { ok: false, stderr: 'ccd: start: workdir missing' }),
     );
     rerender(
-      <StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
         createSession={createSession502}
         loadProjects={async () => ({ roots: [], projects: [proj()] })} />,
     );
@@ -650,7 +693,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -687,7 +730,7 @@ describe('StartProgramSheet', () => {
     const createSession = vi.fn().mockResolvedValue(undefined);
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -732,7 +775,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', project: 'ccrc-pwa' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -745,7 +788,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-alpha', wrapper: 'claude', project: 'alpha' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({
         roots: [],
         projects: [proj({ name: 'alpha', workdir: '/w/alpha' }), proj({ name: 'beta', workdir: '/w/beta' })],
@@ -758,6 +801,107 @@ describe('StartProgramSheet', () => {
     fireEvent.click(await screen.findByRole('button', { name: /beta/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toBeInTheDocument();
     expect(screen.queryByText(/already running/i)).toBeNull();
+  });
+
+  // — Program-leverage wave 5, D-1130. The run board is a fact this sheet never
+  // had. `POST /api/runs` will happily open a SECOND program in a project that
+  // already has one: it validates `project` as a non-empty string and nothing
+  // else (`server/src/coord/routes.ts:889-897`), and `openRun`'s own refusal is
+  // per-PROGRAM (its one-coordinator guard, `store.ts`), so it never fires for
+  // a different slug. The sheet is the last place the operator can still be
+  // told. —
+  it('refuses when the board already shows a run in that project — no confirm button at all (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  // THE ARM THIS EXISTS FOR. `null` is NOT MEASURED, and the failure it prevents
+  // is fold-to-permit — `(openRunProjects ?? new Set()).has(name)` answers
+  // `false` here, indistinguishable from a measured empty board, and offers
+  // Start on a question nobody answered.
+  it('refuses when the board has NOT answered — null is not "no open run" (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={null}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+    expect(await screen.findByText(/has not answered yet/i)).toBeInTheDocument();
+    // …and it must not claim a run EXISTS. The sheet holds exactly one fact
+    // here — that the board is silent — and the copy states that one.
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+  });
+
+  it('yields to the D-292 sentence when BOTH are true — that one names a session the operator can open (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', project: 'ccrc-pwa' })] }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/claude-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  // THE INDEPENDENCE PIN. `existing` is evaluated only when `projected != null`
+  // (its own declaration in `StartProgramSheet.tsx`), so a run refusal written
+  // into THAT expression is invisible on a fleet where nothing is placeable: the
+  // operator reads "Nothing is placeable", enables an account, and walks
+  // straight into the collision. The run arm is computed from `project` alone
+  // and sits ABOVE the D-284 arm for exactly that reason.
+  it('refuses the open run even when NOTHING is placeable — the run arm never depends on the projection (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
+
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it('does NOT refuse for a run naming a project the picker never lists — the join is exact (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['ccrc-pwa-brisk-harbor', 'CCRC-PWA'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /^start build9-demo on/i })).not.toBeDisabled();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+  });
+
+  it('re-evaluates the run refusal when the chosen project changes (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['alpha'])}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj({ name: 'alpha', workdir: '/w/alpha' }), proj({ name: 'beta', workdir: '/w/beta' })],
+      })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /alpha/i }));
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /beta/i }));
+    expect(await screen.findByRole('button', { name: /^start/i })).toBeInTheDocument();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
   });
 
   // — Whole-branch review, C1: `wrapper`+`project` alone is not the target
@@ -785,7 +929,7 @@ describe('StartProgramSheet', () => {
         id: 'ccrc-pwa-brisk-harbor', wrapper: 'claude', project: 'ccrc-pwa', workspace: 'brisk-harbor',
       })] });
     });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -803,7 +947,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ status: 'dead' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -826,7 +970,7 @@ describe('StartProgramSheet', () => {
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -876,7 +1020,7 @@ describe('StartProgramSheet', () => {
     history.pushState(null, '', '/runs');
     const stale = sess({ id: 'claude-ccrc-pwa', wrapper: 'claude2', status: 'dead' });
     act(() => { store.setState({ sessions: [stale] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -911,7 +1055,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     history.pushState(null, '', '/runs');
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'dead' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -944,7 +1088,7 @@ describe('StartProgramSheet', () => {
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -978,7 +1122,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const createSession = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ccd: start: boom' }));
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -1011,7 +1155,7 @@ describe('StartProgramSheet', () => {
         id: 'claude-ccrc-pwa', wrapper: 'claude2', project: 'ccrc-pwa', workspace: null, status: 'idle',
       })] });
     });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -1034,7 +1178,7 @@ describe('StartProgramSheet', () => {
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -1073,7 +1217,7 @@ describe('StartProgramSheet', () => {
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -1111,7 +1255,7 @@ describe('StartProgramSheet', () => {
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -1143,7 +1287,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -1185,7 +1329,7 @@ describe('StartProgramSheet', () => {
       })] });
     });
     const createSession = vi.fn().mockResolvedValue(undefined);
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession}
       loadProjects={async () => ({
         roots: [],
@@ -1217,7 +1361,7 @@ describe('StartProgramSheet', () => {
     // never settles, so nothing about what this measures moved.
     const queueKickoff = vi.fn(() => new Promise<{ queued: boolean }>(() => {})); // hangs — finish() is mid-flight
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -1256,7 +1400,7 @@ describe('StartProgramSheet', () => {
   // button aimed somewhere else entirely.
   it('forgets a timeout when the target changes — "not shown yet" never sits above a Start aimed elsewhere (M3)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={async () => {}}
       loadProjects={async () => ({
         roots: [],
@@ -1410,7 +1554,7 @@ describe('StartProgramSheet', () => {
       .mockImplementationOnce(refuse)   // B's kickoff fails      -> door B
       .mockImplementationOnce(hang);    // retry #2               -> outstanding
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({
         roots: [],
@@ -1508,7 +1652,7 @@ describe('the program-ready badge', () => {
 
   const openSheet = (loadProjects: () => Promise<unknown>) => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={loadProjects as never} />);
   };
 

@@ -216,9 +216,61 @@ function startErrorText(err: unknown): string {
   return apiErrorText(err);
 }
 
+/** "Is a program already running in this project?" — THREE answers, and the
+ *  third is why this is a function instead of a `.has()` at the call site.
+ *
+ *  `openRunProjects === null` is NOT MEASURED: the run board has had neither a
+ *  `runs` frame nor a finished cold read. A `(openRunProjects ?? new Set()).has()`
+ *  answers `false` there, which is indistinguishable from a measured empty board
+ *  — the sheet would offer Start on the strength of a question nobody answered.
+ *  That fold is the single failure this arm exists to prevent, so the state gets
+ *  its own word and the render gets its own sentence.
+ *
+ *  The set carries PROJECT NAMES and nothing else, so the copy below can name
+ *  the project and cannot name the program. That is a limit, not an omission: a
+ *  set of names is not a run row, and naming a program would be a claim this
+ *  measurement never made.
+ *
+ *  The match is EXACT. `RunSummary.project` is whatever string the coordinator
+ *  passed to `POST /api/runs`, which validates it as a non-empty string and
+ *  nothing more (`server/src/coord/routes.ts:889-897`); `ProjectRow.name` comes
+ *  from the projects listing. Nothing joins the two but convention, so a run
+ *  naming a project this picker never lists is a run this sheet cannot speak
+ *  about — loosening to a prefix would refuse real projects over a lookalike.
+ *
+ *  EXPORTED for its own unit test, on `startedSessionFor`'s precedent above. */
+export type OpenRunVerdict = 'clear' | 'open-run' | 'unmeasured';
+
+export function openRunVerdict(
+  openRunProjects: ReadonlySet<string> | null,
+  project: string,
+): OpenRunVerdict {
+  if (openRunProjects === null) return 'unmeasured';
+  return openRunProjects.has(project) ? 'open-run' : 'clear';
+}
+
 export interface StartProgramSheetProps {
   open: boolean;
   onClose: () => void;
+  /** The projects that already carry a NON-CLOSED run, measured by the run
+   *  board from its own combined live+cold `active` list
+   *  (`screens/RunsScreen.tsx`) and handed down. THE SHEET DOES NOT FETCH
+   *  IT: `start-program.test.tsx`'s `expect(urls).toHaveLength(2)` pins this
+   *  composition at exactly two network calls, so a third fetch here reds a
+   *  suite rather than merely costing a request.
+   *
+   *  `null` is NOT MEASURED, and it is a third state on purpose — the board has
+   *  neither a `runs` frame nor a finished cold read (`noSignalYet`,
+   *  `RunsScreen.tsx`): a deep link straight to `/runs`, or a server too old
+   *  to send the frame at all, in the window before `api.runs(true)` answers.
+   *  Both of those paths END in a measured set; `null` is the window, not the
+   *  outcome, and in it this sheet refuses rather than guesses.
+   *
+   *  REQUIRED, not defaulted. `new Set()` as a default would be a fold-to-permit
+   *  written into the type; `null` as a default would silently refuse every
+   *  caller that forgot. A compile error is the same discipline
+   *  `reviveFleetSession` uses for a new wire field — every path computes it. */
+  openRunProjects: ReadonlySet<string> | null;
   /** Injectable for tests; defaults to the app-wide fleet store — same shape
    *  every other sheet in this file uses. */
   fleet?: FleetStore;
@@ -247,6 +299,7 @@ export interface StartProgramSheetProps {
 export function StartProgramSheet({
   open,
   onClose,
+  openRunProjects,
   fleet = useFleetStore,
   createSession = api.createSession,
   queueKickoff = api.kickoff,
@@ -511,10 +564,29 @@ export function StartProgramSheet({
     && myAttemptRef.current !== null
     && existing.project === myAttemptRef.current.project;
 
+  // Computed from `project` ALONE, and deliberately NOT written into
+  // `existing`'s expression above. That one carries a `projected != null`
+  // conjunct, which is harmless for D-292 only because the D-284 arm renders
+  // directly beneath it — a run-based refusal riding the same conjunct would be
+  // silently replaced by "Nothing is placeable" on exactly the fleet where
+  // nothing is placeable: a state that has nothing to do with whether this
+  // project already has a coordinator, and one the operator fixes by enabling an
+  // account and walking straight into the collision. Two independent facts, two
+  // independent measurements.
+  const runVerdict: OpenRunVerdict | null =
+    project === null ? null : openRunVerdict(openRunProjects, project.name);
+
   const start = async (): Promise<void> => {
     if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
     if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
+    // …and the run-board arm above it in the same `? :` chain withholds the
+    // button on the same terms, so `runVerdict` needs no return of its own here.
+    // Deliberate: React dispatches the handler attached by the render that
+    // decided to draw the control, so no tap can carry a stale verdict — and a
+    // guard no test can reach is exactly what `startedSessionFor`'s own
+    // docstring refuses to ship. If a later change ever demotes either refusal
+    // to a `disabled` term, BOTH need a return here.
 
     const wrapper = projected.wrapper;
     const projectName = project.name;
@@ -730,6 +802,51 @@ export function StartProgramSheet({
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
                 + 'Starting here would either make that session the coordinator for this program, '
                 + 'whatever it was started for, or leave the project running two coordinators.'}
+            </p>
+          ) : runVerdict === 'open-run' || runVerdict === 'unmeasured' ? (
+            // The run-board arm: BELOW D-292, ABOVE D-284, and the order is the
+            // argument rather than an accident of where it was pasted.
+            //
+            // Below D-292 because when both are true both sentences are true, and
+            // that one names a SESSION the operator can open right now; this one
+            // names only a project, because a set of project names is all it was
+            // given. The more actionable sentence wins the single slot.
+            //
+            // Above D-284 because "this project already has a run" holds whether
+            // or not anything is placeable, while "nothing is placeable" is fixed
+            // by enabling an account — which would then walk the operator into
+            // this collision with the refusal never shown.
+            //
+            // NO CONFIRM BUTTON — the D-292 posture, not a disabled control and
+            // not a warning beside a live Start: there is nothing to render here
+            // that could open a second run. The five-term `disabled` below is left
+            // alone deliberately; a sixth term there would be dead code, since
+            // this arm means the button was never rendered.
+            //
+            // KNOWN NARROWER THAN THE HARM, and the copy is written to that limit
+            // (D-1131). `resolveCoordinator(null)` needs exactly one program in
+            // `state='active'` BOX-WIDE (`server/src/coord/store.ts`, its
+            // "no single active program: ambiguous or absent" guard), so a second
+            // program in a DIFFERENT project wedges run-less coordinator mail just
+            // as hard and this arm cannot see it; and `POST /api/runs` applies no
+            // project predicate at all (`server/src/coord/routes.ts:889-897`), so
+            // nothing behind this catches what it misses. The sentence claims a
+            // consequence of THIS start and never that the fleet is otherwise
+            // clean.
+            //
+            // The `unmeasured` sentence does not say a run exists. It says the
+            // board has not answered, which is the only fact held, and it is a
+            // WAIT — the cold read resolves it within one round trip and this
+            // recomputes on the next render.
+            <p className="program-start-refuse">
+              {runVerdict === 'open-run'
+                ? `${project.name} already has a run open — open it from the run board, or pick `
+                  + 'another project. A second program here leaves the project with two coordinators, '
+                  + 'and coordinator mail that carries no run id then has more than one active '
+                  + 'program to choose from, which the server refuses rather than guesses.'
+                : 'The run board has not answered yet, so this sheet cannot tell whether '
+                  + `${project.name} already has a program running. It will know in a moment — or `
+                  + 'open the run board and look.'}
             </p>
           ) : projected === null ? (
             // D-284: the server's own "nothing is placeable" — refuse with

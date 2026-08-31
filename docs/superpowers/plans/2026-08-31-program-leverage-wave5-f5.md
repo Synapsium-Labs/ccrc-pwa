@@ -4978,6 +4978,15 @@ are `:490-502`, `start()`'s three defensive returns are `:504-507`, and the two-
 - [ ] **9.7 — Measure the six red and record the first failing assertion verbatim.** They fail
   because the sheet ignores an unknown prop and renders the confirm fragment — the RIGHT reason.
   `cd pwa && ./node_modules/.bin/vitest run test/start-program.test.tsx`.
+
+  **Measured: FOUR red, not six** (D-1130's execution note 2). `yields to the D-292 sentence when BOTH
+  are true` and `does NOT refuse for a run naming a project the picker never lists` assert an ABSENCE
+  that is already true while nothing refuses at all, so no pre-implementation state can red them —
+  their killers are the two render-order/prefix mutation rows, measured red there. First failure of the
+  four: `StartProgramSheet > refuses when the board already shows a run in that project — no confirm
+  button at all (D-1130)` — `TestingLibraryElementError: Unable to find an element with the text:
+  /already has a run open/i`. Do not read the two greens as coverage; read them as the mutation table's
+  job.
 - [ ] **9.8 — Write the three board-level cases, red,** in `pwa/test/runs-screen.test.tsx`. This is the
   file whose own header (`:525-531`) states the lesson: a control that only ever renders in its own
   isolated test file ships broken the moment a line leaves the screen. Add
@@ -5047,6 +5056,14 @@ are `:490-502`, `start()`'s three defensive returns are `:504-507`, and the two-
 
   Run `cd pwa && ./node_modules/.bin/vitest run test/runs-screen.test.tsx` and **record the first
   failing assertion verbatim.**
+
+  **Measured: TWO red of the three**, for the same reason as 9.7 — the CLOSED-run case asserts an
+  absence. First failure: `the run board tells the start sheet which projects already have a run
+  (D-1130) > says NOT MEASURED while neither the frame nor the cold read has answered` —
+  `TestingLibraryElementError: Unable to find an element with the text: /has not answered yet/i`. The
+  third case's killer is the `[...active, ...finished]` mutation row, measured red there. This file's
+  `setInterval` census (its `cadenceOf` docstring) needed NO edit: this task adds a prop, not a
+  component, so the screen's tree is unchanged.
 - [ ] **9.9 — Add the prop, and pay for it at every call site.** In `StartProgramSheetProps`
   (`:219-235`), after `open`/`onClose` and before the injectables:
 
@@ -5209,18 +5226,26 @@ are `:490-502`, `start()`'s three defensive returns are `:504-507`, and the two-
   first failing assertion into the row, revert. Row 10 is a `tsc` error rather than an assertion —
   record the compiler's text verbatim in the same column.
 
+  **Measured.** Every row run as `cd pwa && ./node_modules/.bin/vitest run test/start-program.test.tsx
+  test/runs-screen.test.tsx` (foreground), reverted from a scratchpad snapshot, never
+  `git checkout`. The "first-fail" column carries the FIRST failure vitest printed for that run; the
+  count beside it is how many cases that one mutation reds, because three of the rows are the only
+  killers a pre-implementation-green case has (see D-1130's execution note 2).
+
   | mutation | first-fail assertion |
   |---|---|
-  | `openRunVerdict`: `if (openRunProjects === null) return 'unmeasured';` → `return 'clear';` (the fold-to-permit) | `<measured at execution>` |
-  | `openRunVerdict`: `openRunProjects.has(project) ? 'open-run' : 'clear'` → `'clear'` | `<measured at execution>` |
-  | `openRunVerdict`: exact `.has(project)` → `[...openRunProjects].some((p) => p.startsWith(project))` | `<measured at execution>` |
-  | render chain: move the run arm BELOW the `projected === null` arm | `<measured at execution>` |
-  | render chain: move the run arm ABOVE the `existing !== null && !isOwnAttempt` arm | `<measured at execution>` |
-  | render chain: demote the run arm from a chain arm to a `<p>` inside the final `<>` fragment, leaving the confirm button rendered | `<measured at execution>` |
-  | copy: `runVerdict === 'open-run' ? A : B` → always `A` (the unmeasured arm asserts a run exists) | `<measured at execution>` |
-  | `RunsScreen`: `noSignalYet ? null : new Set(active.map(...))` → `new Set(active.map(...))` unconditionally | `<measured at execution>` |
-  | `RunsScreen`: build the set from `[...active, ...finished]` instead of `active` | `<measured at execution>` |
-  | `RunsScreen:553`: delete `openRunProjects={openRunProjects}` — pinned by `tsc --noEmit`, not by a suite | `<measured at execution>` |
+  | `openRunVerdict`: `if (openRunProjects === null) return 'unmeasured';` → `return 'clear';` (the fold-to-permit) | 3 red. `runs-screen … says NOT MEASURED while neither the frame nor the cold read has answered` — `TestingLibraryElementError: Unable to find an element with the text: /has not answered yet/i`; and `openRunVerdict … answers unmeasured for null` — `AssertionError: expected 'clear' to be 'unmeasured' // Object.is equality` |
+  | `openRunVerdict`: `openRunProjects.has(project) ? 'open-run' : 'clear'` → `'clear'` | 5 red. `runs-screen … names a project whose ACTIVE run only the COLD read found` — `TestingLibraryElementError: Unable to find an element with the text: /already has a run open/i`; and `openRunVerdict … answers open-run for a project the measured set names` — `AssertionError: expected 'clear' to be 'open-run' // Object.is equality` |
+  | `openRunVerdict`: exact `.has(project)` → `[...openRunProjects].some((p) => p.startsWith(project))` | 2 red. `openRunVerdict … matches EXACTLY — never by prefix, never case-folded` — `AssertionError: expected 'open-run' to be 'clear' // Object.is equality`; and the component case that is green pre-implementation, `does NOT refuse for a run naming a project the picker never lists` — ``TestingLibraryElementError: Unable to find role="button" and name `/^start build9-demo on/i` `` |
+  | render chain: move the run arm BELOW the `projected === null` arm | 1 red. `StartProgramSheet … refuses the open run even when NOTHING is placeable — the run arm never depends on the projection (D-1130)` — `TestingLibraryElementError: Unable to find an element with the text: /already has a run open/i` |
+  | render chain: move the run arm ABOVE the `existing !== null && !isOwnAttempt` arm | 1 red, and it is the case that is green pre-implementation. `StartProgramSheet … yields to the D-292 sentence when BOTH are true` — `TestingLibraryElementError: Unable to find an element with the text: /claude-ccrc-pwa is already running/i` |
+  | render chain: demote the run arm from a chain arm to a `<p>` inside the final `<>` fragment, leaving the confirm button rendered | 5 red. `runs-screen … says NOT MEASURED while neither the frame nor the cold read has answered` — `AssertionError: expected <button type="button" …(1)></button> to be null` (the same assertion reds in three more cases; the fifth is the not-placeable one, which reds on the missing text because D-284 wins the slot) |
+  | copy: `runVerdict === 'open-run' ? A : B` → always `A` (the unmeasured arm asserts a run exists) | 2 red. `runs-screen … says NOT MEASURED while neither the frame nor the cold read has answered` — `TestingLibraryElementError: Unable to find an element with the text: /has not answered yet/i`; same text in `StartProgramSheet … refuses when the board has NOT answered` |
+  | `RunsScreen`: `noSignalYet ? null : new Set(active.map(...))` → `new Set(active.map(...))` unconditionally | 1 red. `runs-screen … says NOT MEASURED while neither the frame nor the cold read has answered` — `TestingLibraryElementError: Unable to find an element with the text: /has not answered yet/i` |
+  | `RunsScreen`: build the set from `[...active, ...finished]` instead of `active` | 1 red, and it is the third case that is green pre-implementation. `runs-screen … does NOT name a project whose only run is CLOSED — the list is \`active\`, already filtered` — ``TestingLibraryElementError: Unable to find role="button" and name `/^start build9-demo/i` `` |
+  | `RunsScreen`: delete `openRunProjects={openRunProjects}` at the `<StartProgramSheet …/>` mount — predicted `tsc`-only, measured BOTH | `tsc --noEmit`: `src/screens/RunsScreen.tsx(622,8): error TS2741: Property 'openRunProjects' is missing in type '{ open: boolean; onClose: () => void; fleet: FleetStore; }' but required in type 'StartProgramSheetProps'.` and `src/screens/RunsScreen.tsx(472,9): error TS6133: 'openRunProjects' is declared but its value is never read.` — plus 3 red in `runs-screen`, all `TypeError: Cannot read properties of undefined (reading 'has')` |
+  | **added at execution** — the prop made OPTIONAL with a `= new Set<string>()` default, every call site still passing it (the fold-to-permit written into the type) | **GREEN everywhere**: `tsc --noEmit` clean, 152/152 pass. The hole is real and is closed by the row below rather than by the type |
+  | **added at execution** — the same optional default, AND the board's own `openRunProjects={openRunProjects}` dropped (what a fold-to-permit default actually ships as) | 2 red — `runs-screen … says NOT MEASURED …` (`Unable to find an element with the text: /has not answered yet/i`) and `… names a project whose ACTIVE run only the COLD read found` (`/already has a run open/i`) — plus `error TS6133` on the now-unread local. The board-level cases are the mechanism, not the required type |
 - [ ] **9.14 — Commit.**
 
   ```
@@ -5775,6 +5800,37 @@ so last. Computed independently of `projected` — today's `existing` is only ev
 `project !== null && projected != null`, so an arm written into that expression would be hidden in
 exactly the state where a program is most likely to be started twice.
 
+**Measured at execution (task 9), four sub-findings under the same number.**
+
+1. *Every anchor into `StartProgramSheet.tsx` is ten lines short.* Task 7's `queueKickoff` docstring
+   (D-1137) pushed the file from 839 to 849 lines before this task opened it: the D-292 arm is at `:695`
+   not `:685`, the D-284 arm at `:734` not `:724`, the five-term `disabled` at `:829-832` not `:819-822`,
+   `existing`/`isOwnAttempt` at `:500-512` not `:490-502`, and `start()`'s three defensive returns at
+   `:515-517` not `:505-507`. **Every FACT the entry rests on is unchanged** — two arms withhold the
+   button, the `disabled` expression has five terms, `start()` has three returns — so the position
+   argument stands as written. The source comments shipped in this task cite SYMBOLS rather than lines,
+   per this plan's own note that stale citations are endemic here.
+2. *Two of the six component cases cannot be red before the arm exists, and the plan's 9.7 says six.*
+   "yields to the D-292 sentence when BOTH are true" and "does NOT refuse for a run naming a project the
+   picker never lists" both assert an ABSENCE that is trivially true while nothing refuses at all —
+   measured 4 red / 2 green, not 6 red. The same shape holds for the third board case in 9.8 ("does NOT
+   name a project whose only run is CLOSED"), measured 2 red / 1 green. **All three greens are the
+   ordering being visible, not coverage that is missing:** their killers are mutation rows 5, 3 and 9,
+   each of which was measured red against exactly that case. Recorded rather than passed over, because a
+   green step in a red-first plan is the shape a missing pin also wears.
+3. *Row 10 was predicted to be a compiler-only kill; measured it reds both gates.* Dropping
+   `openRunProjects={openRunProjects}` from `RunsScreen` gives `tsc --noEmit` **two** errors — `TS2741`
+   for the missing required prop and `TS6133` for the now-unread local — and reds three `runs-screen`
+   cases at runtime with `TypeError: Cannot read properties of undefined (reading 'has')`, because
+   `undefined` is not `null` and the predicate's first arm does not catch it.
+4. *"REQUIRED, not defaulted" is held by row 10, not by the type alone.* Measured as an eleventh row:
+   making the prop `openRunProjects?:` and defaulting it to `new Set<string>()` — the fold-to-permit
+   written into the type the docstring argues against — leaves `tsc` clean and all 152 cases green while
+   every call site still passes it. It only bites once a caller omits it, and then the three
+   `runs-screen` board cases red. The board-level cases are therefore the mechanism the plan's own
+   comment claims they are ("the refusal lives in `StartProgramSheet`; the MEASUREMENT lives here"),
+   and a reviewer must not read the required type as self-enforcing.
+
 ### D-1131 (the refusal is narrower than the harm, stated not discovered) — one project is not the boundary
 
 The sheet's new refusal is per-project, and the invariant a second open program actually breaks is
@@ -5786,6 +5842,18 @@ checked against `listProjects`, so a differently-spelled project name silently e
 arm is still worth shipping (it catches the common case at the only surface that can ask the question,
 since there is no `/api/programs` route for the PWA to read), but its copy must not claim to prevent
 the ambiguity, and this entry is why.
+
+**Measured at execution (task 9).** Both halves re-read before the copy was written, and both hold —
+with one anchor correction. `POST /api/runs`'s validation is exactly where this entry says
+(`server/src/coord/routes.ts:889-897`, `typeof project !== 'string' || project.trim() === ''` and no
+predicate over it anywhere in the handler). `resolveCoordinator`'s box-wide guard has MOVED: task 2's
+`reclaimProgram` grew `store.ts` by roughly ninety lines, so
+`SELECT slug FROM programs WHERE state = 'active'` and `if (active.length !== 1) return null` are at
+`:1279-1281`, not `:1185-1187`. The shipped comment names the guard by its own sentence ("no single
+active program: ambiguous or absent") rather than by a line that will move again. The copy the arm
+renders states a consequence of THIS start — two coordinators in this project, and coordinator mail
+carrying no run id having more than one active program to choose from — and never that the fleet is
+otherwise clean, which is what this entry required of it.
 
 ### D-1132 (a known fold, inherited, deliberately left closed) — `queued:false`
 

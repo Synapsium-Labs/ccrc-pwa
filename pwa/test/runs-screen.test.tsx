@@ -5,6 +5,7 @@ import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, resumeNote, runItems } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
+import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -540,6 +541,66 @@ describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
+  });
+});
+
+// The refusal lives in `StartProgramSheet`; the MEASUREMENT lives here. A sheet
+// handed a fold-to-permit default would pass every case in
+// `start-program.test.tsx` while the real board fed it the wrong answer, which
+// is the same gap the door block's own header above was written for.
+describe('the run board tells the start sheet which projects already have a run (D-1130)', () => {
+  // Matched on the WORKDIR: `/^start/i` also matches the board's own "Start a
+  // program" door, and a run row for `ccrc-pwa` is on screen in two of the three
+  // cases, so the project row needs a needle nothing else carries.
+  const openAndPick = async (): Promise<void> => {
+    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
+    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
+    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: 'Build 9 demo' } });
+    fireEvent.click(await screen.findByRole('button', { name: /\/home\/u\/projects\/ccrc-pwa/ }));
+  };
+
+  const mockDoors = (): void => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({
+      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
+    });
+    vi.spyOn(api, 'projects').mockResolvedValue({
+      roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/home/u/projects/ccrc-pwa' }],
+    });
+  };
+
+  it('says NOT MEASURED while neither the frame nor the cold read has answered', async () => {
+    mockDoors();
+    // Never resolves: `coldState` stays `'loading'` and no `runs` frame has
+    // landed — `noSignalYet` (`RunsScreen.tsx`'s own name for it), the
+    // cold-deep-link window and the too-old-server window before its cold read
+    // returns.
+    render(<RunsScreen store={makeStore()} loadRuns={() => new Promise<{ runs: RunSummary[] }>(() => {})} />);
+
+    await openAndPick();
+
+    expect(await screen.findByText(/has not answered yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start build9-demo/i })).toBeNull();
+  });
+
+  it('names a project whose ACTIVE run only the COLD read found — the no-frame fallback path', async () => {
+    mockDoors();
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'working' })] })} />);
+
+    await openAndPick();
+
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start build9-demo/i })).toBeNull();
+  });
+
+  it('does NOT name a project whose only run is CLOSED — the list is `active`, already filtered', async () => {
+    mockDoors();
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'done' })] })} />);
+
+    await openAndPick();
+
+    expect(await screen.findByRole('button', { name: /^start build9-demo/i })).toBeInTheDocument();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+    expect(screen.queryByText(/has not answered yet/i)).toBeNull();
   });
 });
 

@@ -2194,9 +2194,10 @@ button.sess-held {
 /* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
    `.coord-banner .coord-error`/`.abandon-sheet .abandon-error` already use
    (6.80:1 DARK / 5.73:1 LIGHT), reused rather than a fifth rule re-deriving
-   the same ratio. Three genuine refusals share this register: D-292 (was D-B4-19) (a
-   session already running), D-284 (was D-B4-11) (nothing placeable) and an ordinary
-   create failure. */
+   the same ratio. Four genuine refusals share this register: D-292 (was D-B4-19) (a
+   session already running), D-1130 (a project the run board already shows a run
+   in, or has not answered about yet), D-284 (was D-B4-11) (nothing placeable)
+   and an ordinary create failure. The order is the render chain's own. */
 .program-start-sheet .program-start-existing,
 .program-start-sheet .program-start-refuse,
 .program-start-sheet .program-start-error {

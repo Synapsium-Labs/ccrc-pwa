@@ -454,6 +454,23 @@ export function RunsScreen({
   // source). When NEITHER has ever answered, this screen knows nothing at
   // all, and must say so rather than rendering the ordinary empty state.
   const noSignalYet = !runsFrameSeen && coldState !== 'ok';
+  // The board's own answer to "does this project already have a program
+  // running?", handed to the sheet rather than fetched by it — the sheet's
+  // composition is pinned at exactly two network calls
+  // (`start-program.test.tsx`'s `expect(urls).toHaveLength(2)`).
+  //
+  // THREE-STATE, and `noSignalYet` is the third. Before either signal has
+  // answered, `new Set()` would tell the sheet this board had measured an empty
+  // world; `null` says it has measured nothing, which is what is true. Both of
+  // the paths that reach it (a cold deep link, a server too old to send the
+  // frame — the two `active`'s own comment above names) resolve to a measured
+  // set the moment `api.runs(true)` returns, so this is a window and not a dead
+  // end.
+  //
+  // Built from `active`, which is already `!isRunClosed`-filtered: a project
+  // whose only run is `done` is not carrying a coordinator any more.
+  const openRunProjects: ReadonlySet<string> | null =
+    noSignalYet ? null : new Set(active.map((r) => r.project));
   const hasAny = active.length > 0 || finished.length > 0;
   // I6 (residual): `coldState === 'error'` is a fact about the FINISHED half
   // specifically — `active` can be fully answered by the live frame alone
@@ -602,7 +619,8 @@ export function RunsScreen({
           the program, terminal ones included (contract R1), and the finished
           half of this board has no source but the cold read. */}
       <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
-      <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store} />
+      <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}
+        openRunProjects={openRunProjects} />
     </div>
   );
 }
