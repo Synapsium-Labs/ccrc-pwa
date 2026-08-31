@@ -3908,7 +3908,7 @@ export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: nu
  *  stored counter is a second copy of what `runs` already knows, and the copy
  *  is always the one that drifts).
  *
- *  Named here only since the operator dial shipped (D-1158): before that the
+ *  Named here only since the operator dial shipped (D-1209): before that the
  *  shape existed solely as an inline structural type on one method, because
  *  `dispatchRun` was its only reader and never had to name it. */
 export interface CoordCapsUsage { running: number; dispatchedIn24h: number }

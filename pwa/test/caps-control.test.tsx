@@ -3,7 +3,7 @@
 // that shows nothing until the first read lands — with ONE deliberate
 // departure: the pause toggle refuses to be optimistic because a
 // `{type:'coord'}` frame exists to settle it, and no frame carries caps, so
-// this control settles on the response body instead (D-1158).
+// this control settles on the response body instead (D-1209).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CapsControl } from '../src/fleet/CapsControl';

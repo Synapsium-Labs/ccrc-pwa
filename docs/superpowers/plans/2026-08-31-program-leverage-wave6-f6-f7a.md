@@ -49,12 +49,12 @@ wave's brief, and its wave-5 close record carries the two rulings folded in as i
   assertion whose fixture cannot produce the presence is this program's recurring defect class; so is a
   pin whose premise (a hydrated store, a populated set) is never established. Wave 5 shipped one of each,
   and a third that was pinned by a green test whose title described a different situation.
-- **Deviations.** This wave's block is `D-1157..1172`, allocated from `POST /api/ledger/deviations` at
+- **Deviations.** This wave's numbers are `D-1159..1172` plus `D-1208`, `D-1209` and `D-1210`, allocated from `POST /api/ledger/deviations` at
   planning time (floor was 1157, is now 1173). Never invent, predict or reuse a number. Every number
   cited in the diff must be DEFINED in this plan's `## Deviations found` section in the same commit as
   (or before) the source comment citing it — `server/test/deviation-refs.test.ts:137-152` reds otherwise,
   and its `DEFINED` regex is `/^(?:#{2,4} |- \*\*)D-(\d+)\b/`, so an entry must be an H3/H4 heading or a
-  `- **D-N**` bullet. Spell an unconsumed range with ONE prefix and a bare upper bound (`D-1157..1172`), never with a second `D-` on the upper bound: `floorFromScan` reads every tracked `D-<n>` as a REF, so writing the top of an unspent range as a ref seeds the fleet's floor there for ever.
+  `- **D-N**` bullet. Spell an unconsumed range with ONE prefix and a bare upper bound (`D-1159..1172`), never with a second `D-` on the upper bound: `floorFromScan` reads every tracked `D-<n>` as a REF, so writing the top of an unspent range as a ref seeds the fleet's floor there for ever.
 - **Suites run in the FOREGROUND, `timeout 600000`, cd'd into the package**, tails READ not grepped.
   `./node_modules/.bin/vitest run` — NEVER bare `npx vitest` (it resolves a global copy with no jsdom and
   falsely reports "no tests"). All three packages are already installed; do not `npm ci`.
@@ -145,7 +145,7 @@ each task re-confirms the ones it depends on and STOPS if one has moved.
 | The pause route has NO `notConfigured` arm, deliberately, because a pause is a file | `coord/routes.ts:1265-1269` |
 | There is no `ccd coord-caps` verb, so the pause route's 501/502 spine has no analogue | `ccd/ccd:13453`; `server/src/ccdargv.ts:313` |
 | `coord-pause-route.test.ts` direction-one: every `app.post` with no gate ahead of its first `await` must be in `UNGATED` | `coord-pause-route.test.ts:199-224` |
-| `UNGATED` is a hand-written 4-element Set; what wave 5 derived is the COUNT and the ENUMERATIONS | `coord-pause-route.test.ts:177-180`; the derived count shipped in `ca711141`, NOT `5ff7c33c` (D-1157) |
+| `UNGATED` is a hand-written 4-element Set; what wave 5 derived is the COUNT and the ENUMERATIONS | `coord-pause-route.test.ts:177-180`; the derived count shipped in `ca711141`, NOT `5ff7c33c` (D-1208) |
 | The derived-count scanner reads five prose passages and `CARD_RE` matches only CAPS `TWO..SEVEN` | `coord-pause-route.test.ts:325-336`, `:375-394` |
 | `passage()` fails loudly on a missing anchor and on a slice under 300 chars | `coord-pause-route.test.ts:343-357` |
 | Five hand-pinned integers move when a route is added: 46 / 23 / 69 / 66 / 42 | `auth-gate.test.ts:195`, `:200`, `:201`, `:204`, `:476` |
@@ -903,7 +903,7 @@ the frozen migration body. Then, beside `CoordCaps` at `shared/api.ts:3896`:
 ```ts
 /** The two counts `CoordStore.capsUsage` derives from `runs` — never stored
  *  beside the limits, for the reason its own docstring gives. Named here
- *  because the operator dial ships them to the PWA (D-1158); before that they
+ *  because the operator dial ships them to the PWA (D-1209); before that they
  *  had no consumer outside `dispatchRun` and so no name. */
 export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
 
@@ -943,7 +943,7 @@ Add the `coord` entries to `MailScreen.tsx`'s two total maps.
 
 ```bash
 git add shared/api.ts server/src/coord/schema.ts pwa/src/screens/MailScreen.tsx server/test/coord-store.test.ts pwa/test
-git commit -m "feat(wire): a feed kind for a coordination-config change, and a name for capsUsage (D-1163, D-1158)"
+git commit -m "feat(wire): a feed kind for a coordination-config change, and a name for capsUsage (D-1163, D-1209)"
 ```
 
 ---
@@ -980,7 +980,7 @@ Those two facts cannot both be asserted with the vocabulary the tree has (D-1159
 only ungated POSTs in the file. The fix is a SECOND named set with its own argument, asserted disjoint
 from `UNGATED` in both directions. `UNGATED.size` stays 4, so no prose cardinal anywhere moves.
 
-**Why a GET (D-1158).** The brief's "capsUsage is already computed" is true server-side and irrelevant to
+**Why a GET (D-1209).** The brief's "capsUsage is already computed" is true server-side and irrelevant to
 the PWA: `capsUsage`, `CoordCaps` and `maxConcurrentWorkers` occur zero times in `pwa/src`, `CoordStatus`
 carries only `{pause, mail}`, and no route reads either. Caps must NOT be bolted onto the `{type:'coord'}`
 frame: `emitCoord`'s docstring says it needs no try/catch precisely because it touches no `node:sqlite`,
@@ -1144,7 +1144,7 @@ it carries the posture argument, and a reviewer reads it before the code:
    *  casts an undefined row rather than returning null — copying the pause
    *  handler's opening verbatim would ship a route that throws on such a box.
    *
-   *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1158).
+   *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
    *  `capsUsage` is computed server-side and reaches the PWA nowhere;
    *  `CoordStatus` carries `pause` and `mail` and no numbers. Caps are NOT
    *  added to that frame: `emitCoord` states it needs no try/catch because it
@@ -1313,7 +1313,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 ```bash
 git add server/src/coord/routes.ts server/test/coord-caps-route.test.ts \
         server/test/coord-pause-route.test.ts server/test/auth-gate.test.ts
-git commit -m "feat(coord): caps become an operator dial, and the ungated set learns a second argument (D-1158, D-1159, D-1166)"
+git commit -m "feat(coord): caps become an operator dial, and the ungated set learns a second argument (D-1209, D-1159, D-1166)"
 ```
 
 ---
@@ -1487,7 +1487,7 @@ cd "$(git rev-parse --show-toplevel)/pwa"
 
 ```bash
 git add pwa/src pwa/test
-git commit -m "feat(pwa): the caps dial on the runs board, settling on what the server stored (D-1158)"
+git commit -m "feat(pwa): the caps dial on the runs board, settling on what the server stored (D-1209)"
 ```
 
 ---
@@ -1870,7 +1870,7 @@ unknown` — read, never invented. Then STOP PUSHING: a lint fix after the mail 
 claimed sha and the coordinator gets `stale-tip` for a wave that was finished.
 
 - [ ] **9.9 — Report what the coordinator must act on**, in the wave-done mail: the two corrected brief
-premises (D-1157, D-1158), the out-of-scope `ccd/` finding (D-1168), the new `SESSION_ONLY` vocabulary
+premises (D-1208, D-1209), the out-of-scope `ccd/` finding (D-1168), the new `SESSION_ONLY` vocabulary
 (D-1159), and every deviation defined below.
 
 - [ ] **9.10 — Release the claim.**
@@ -1885,15 +1885,45 @@ JSON
 
 ## Deviations found
 
-This wave's block is `D-1157..1172`, allocated from `POST /api/ledger/deviations` at planning time (floor
-1157 → 1173). The program block `D-999..1046` and `D-1119..D-1156` are all spent. Every number cited
-anywhere in this plan or in the diff is defined below; `deviation-refs.test.ts` reds on a source ref to
-an allocated-but-unentered number, so an entry lands in the same commit as (or before) the comment
-citing it. Three numbers of the block — 1170, 1171 and 1172 — are allocated and UNSPENT as this plan
-is written; each is either defined here as its own entry at execution, or reported unspent in the
-execution record. An unspent number is never silently dropped and never re-used.
+This wave's numbers are `D-1159..1172` plus `D-1208`, `D-1209` and `D-1210`, allocated from `POST /api/ledger/deviations` at planning time (floor
+1157 → 1173, then 1208/1209 and 1210 after the collision recorded in D-1210 below). The program block
+`D-999..1046` and `D-1119..D-1156` are all spent. Every number cited anywhere in this plan or in the diff
+is defined below; `deviation-refs.test.ts` reds on a source ref to an allocated-but-unentered number, so
+an entry lands in the same commit as (or before) the comment citing it.
 
-### D-1157 (brief premise corrected by measurement — record-only) — the derived door count shipped in a different commit
+Every number is now SPENT. The three that were allocated-and-unspent at planning time — 1170, 1171, 1172
+— were all consumed by the self-review round, which is the shape this section predicted (defined at
+execution, never silently dropped). The two originally at the head of the block, 1157 and 1158, were
+surrendered to PR #38 and replaced by 1208 and 1209.
+
+### D-1210 (ledger collision, resolved by renumbering — process) — PR #38 took two of this wave's allocated numbers
+
+**What happened.** This wave allocated `D-1157..1172` from `POST /api/ledger/deviations` at planning
+time; the allocator recorded the block against this session and moved the floor to 1173. While the wave
+was executing, PR #38 ("the archived-but-live census could never fire") merged to `main` DEFINING
+`- **D-1157**` and `- **D-1158**` in its own plan — numbers it did not hold. The ledger now showed both
+as `landed`, against THIS wave's allocation title, while the content that landed was #38's: one number,
+two meanings, in two plan files.
+
+**How it was resolved, and why that way.** By this repo's own precedent — wave 5's handoff records
+`stage3a` and `fleetio-measured-read` both reading "next free is D-108", and the one that merged FIRST
+keeping the numbers — #38 is on `main`, so THIS wave renumbers. `D-1157` → **D-1208** and `D-1158` →
+**D-1209**, allocated fresh from the allocator (floor now 1210). The renumber touched only this wave's
+own citations: one line each in `shared/api.ts`, `pwa/src/fleet/CapsControl.tsx`,
+`pwa/test/caps-control.test.tsx` and `server/src/coord/routes.ts`, plus this plan. Every `D-1157`/`D-1158`
+remaining in the tree is #38's and was deliberately left alone.
+
+**What was NOT done.** The commits already pushed cite the old numbers in their messages. History was not
+rewritten to hide that: a force-push over a reviewed branch to make a ledger read tidily is a worse
+trade than a commit message that needs this entry to interpret. The renumber lands as an ordinary commit.
+
+**The mechanism gap this exposes, reported not fixed.** The allocator hands out numbers, but nothing
+stops a plan from DEFINING a number it never allocated — `deviation-refs.test.ts` checks that no tracked
+ref sits ABOVE the high-water, and both colliding numbers were below it, so the suite was green on both
+branches simultaneously. A check that every DEFINED number is one the definer actually holds would have
+caught this at the source. That belongs to whichever wave owns the ledger surface next, not to this one.
+
+### D-1208 (brief premise corrected by measurement — record-only) — the derived door count shipped in a different commit
 
 The brief and the ledger both attribute the `UNGATED.size` derivation to `5ff7c33c`. That commit does not
 touch `server/test/coord-pause-route.test.ts` at all — its four files are `CLAUDE.md`,
@@ -1903,7 +1933,7 @@ now derived"), eleven commits earlier. The five commits the brief names are wave
 idioms worth copying live in its feature commits. Planning against the named commit would have looked in
 the wrong diff.
 
-### D-1158 (spec/brief premise corrected by measurement — scope) — `capsUsage` reaches the PWA nowhere
+### D-1209 (spec/brief premise corrected by measurement — scope) — `capsUsage` reaches the PWA nowhere
 
 The brief's "(capsUsage is already computed)" is true server-side and does not mean what it implies:
 `capsUsage`, `CoordCaps` and `maxConcurrentWorkers` occur ZERO times in `pwa/src`, `CoordStatus` carries
@@ -2163,7 +2193,7 @@ README grew from 2033 to 2039 lines against `CLAUDE.md:10`'s stated ~1931 (10% u
   the record and not the write, and says nothing rather than warning as though a write failed; the caps
   control renders NOTHING rather than zeroes when it cannot read.
 - **TDD red-first, reds recorded verbatim** — 59 measured rows, 0 placeholders, written as measured.
-- **Deviations** — D-1157..1169 defined in this plan; 1170..1172 allocated and unspent, recorded as such.
+- **Deviations** — D-1208..1169 defined in this plan; 1170..1172 allocated and unspent, recorded as such.
   `deviation-refs` green.
 - **Suites foreground** — all runs foreground with `timeout 600000`, cd'd into the package, tails read.
 
@@ -2263,3 +2293,25 @@ They belong to whoever takes the next PWA pass.
 "no errors" while a duplicate JSX attribute sat in `runs-screen.test.tsx`, because that setting only
 covers `*.test-d.*` files. Two more mutation rows measured in this round (the try/catch, and the
 merge-under-lock which stays unwitnessed), bringing the wave to **61 rows**.
+
+### 9.10 — Merge of `origin/main`, the ledger collision, and final verification
+
+`main` moved during execution: PR #38 merged as `d3de4ec7`, touching `server/src/watch.ts` — a file this
+wave also changes. Merged into the branch rather than left to the coordinator: **no conflicts**, and the
+two `watch.ts` changes are in different functions (#38's is in the divergence sweep, this wave's in
+`sweepMail`). Merging before the claim is what keeps `stale-tip` and a conflicting-PR CI hole off the
+coordinator's plate — wave 5's own record has a PR whose CI never ran because GitHub cannot compute a
+merge ref for a conflicting PR.
+
+That merge is also what surfaced the ledger collision recorded as **D-1210**: PR #38 defines `D-1157` and
+`D-1158`, two numbers this wave held. Resolved by renumbering this wave's two (→ `D-1208`, `D-1209`),
+per the merged-first-keeps-them precedent.
+
+| suite | files | passed | skipped |
+|---|---|---|---|
+| server | 247 | 6210 | 56 |
+| agent | 18 | 281 | 0 |
+| pwa | 77 | 2099 | 0 |
+
+`tsc --noEmit` clean in all three. Server gained two tests over the fix round — #38's own, arriving with
+the merge. No flake shed on any of the three runs.

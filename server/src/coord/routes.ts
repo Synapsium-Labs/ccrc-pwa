@@ -1323,7 +1323,7 @@ export function registerCoordRoutes(
    *  verbatim, the natural move since it is the only other `/api/coord/*` route,
    *  ships a route that throws on such a box.
    *
-   *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1158).
+   *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
    *  `capsUsage` is computed server-side and reaches the PWA nowhere;
    *  `CoordStatus` carries `pause` and `mail` and no numbers at all. Caps are
    *  deliberately NOT added to that frame: `emitCoord` states it needs no

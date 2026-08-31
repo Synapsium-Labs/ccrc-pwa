@@ -1,4 +1,4 @@
-// The operator's dial on the two coordination caps (spec §8, D-1158). Before it
+// The operator's dial on the two coordination caps (spec §8, D-1209). Before it
 // there was no door at all: `CoordStore.setCaps` had no caller in `server/src`
 // and the caps changed by hand-editing `coord.db`.
 //
