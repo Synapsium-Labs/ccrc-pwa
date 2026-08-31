@@ -20,7 +20,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18, PR #37 (merged `6458a14d`) | done 2026-08-31 ~18:57 UTC — fix round `8262d2b3` verified hunk-by-hunk (all 11 rulings landed with measured reds), CI 5/5, merged, deployed **AGENT-FIRST** (fleet host then server; `ccd` and `/health` both report `6458a14d`, all live sessions verified active through it). Review was SHIP-WITH-FIXES: 3 majors + 1 raised to must-fix, 7 minors, 2 refuted. D-1123..D-1156 spent, floor 1157 |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial + D-1156's derived box-token census | run 19 | dispatched 2026-08-31 ~19:00 UTC (resumed quiet-meadow, brief queued, `skillState:present`) |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
-| 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. | — | planned |
+| 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm (re-queue a parked role-addressed delivery after a reclaim), and `ccd/ccrc-api:32-38`'s stale two-door census | — | planned |
 
 ## Decisions & deviations
 
@@ -435,6 +435,50 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   item 3 and, per the lesson below, states the agent-first escalation rule UP FRONT: if a finding
   pushes wave 6 into `ccd/coordinator-skill/`, the worker mails BEFORE implementing, because it
   changes the coordinator's deploy lane.
+
+- **Wave 6 pre-implementation flags, all six adjudicated (2026-08-31 ~19:20 UTC, worker finding 128,
+  coordinator ruling mail 129):** the worker measured before planning and mailed early, which is the
+  carried constraint below working as intended. **Three design calls ENDORSED as framed.** (1)
+  `GET /api/coord/caps` alongside the POST — a board cannot render usage-vs-cap without a read, and
+  bolting caps onto the `{type:'coord'}` frame would cost `emitCoord` the no-try/catch property its
+  docstring earns by touching no `node:sqlite`, then re-emit on nearly every 2s tick because
+  `dispatchedIn24h` drifts with the clock; required: same gate posture as the POST pinned both ways,
+  and ONE shared caps shape. (2) **A SECOND NAMED SET** for session-only PWA-surface writes — the
+  best call in the mail: `coord-pause-route.test.ts`'s direction-one asserts every `app.post` in
+  `coord/routes.ts` without a box-token gate IS in `UNGATED`, so the brief's "neither box-token nor
+  ungated" is a contradiction until a second set names it. Registering the route in `server.ts`
+  instead would have "resolved" it by leaving the scanner's reach — precisely wave 5's minor 5
+  blind spot, which is how `POST /api/sessions/:id/kickoff` escapes that scanner today. **BINDING:
+  the new set ships with BOTH directions from birth** — a one-way set is D-1128, the defect wave 5
+  just fixed. `UNGATED.size` stays four so no prose cardinal moves. (3) A **seventh `NotifyEvent`
+  kind `'coord'`** rather than riding `'run'` — there is no run, so `'run'` would be an overloaded
+  value at a seam readers branch on; additive, no `FLEET_PROTO` bump, `isNotifyKind` degrades an
+  older peer to `'unknown'`.
+- **Wave 6 also folds in a finding the ticket never named, and corrects a ruling of this
+  coordinator's.** `auth/gate.ts:75,77,80,90,663` says SEVENTEEN box-token lanes / "All eighteen"
+  against a measured eighteen in `coord/routes.ts` plus `/api/notify` = nineteen — and `:80` is wrong
+  in KIND, not only number: five of the eighteen take a session cookie, so they do not "refuse every
+  verdict but `ok`", which is a false statement about an AUTH surface and outranks the cardinal
+  (`auth-gate.test.ts:401,438` carry the same off-by-one in their TITLES over a correct 18-element
+  assertion). Folded into item 3: same defect family, same file class. **The correction to my own
+  ruling:** I ruled "derive the surface and assert no prose site under-claims it" on the premise of
+  ONE surface; the worker measured THREE different sets — README:530's hard-require, `gate.ts`'s
+  lanes-that-consult including the five dual-credential GETs, and D-1156's own `requireMailToken`
+  sites (eleven). A scanner built on my premise would demand one number from passages legitimately
+  describing different things, and would force the prose to become wrong to satisfy it. **Accepted:
+  the mechanism NAMES the set each site speaks of and the prose is rewritten to speak it.** Also
+  corrected by measurement: "`capsUsage` is already computed" (mine, inherited from the spec and
+  never measured) is true server-side but reaches the PWA nowhere — zero occurrences in `pwa/src`,
+  `CoordStatus` carries only `{pause,mail}`, no route — which is why design call 1 is the missing
+  half of item 2 rather than scope creep.
+- **Escalated out of wave 6 → WAVE 8 (agent-first):** `ccd/ccrc-api:32-38` states the ungated set as
+  TWO ("D-282 leaves that door and `POST /api/runs/:id/abandon` ungated on purpose"), stale against
+  four. It is a shipped bash client under `ccd/`, so touching it would silently convert wave 6's
+  deploy lane — the worker reported and did not fix, which is exactly the escalation the brief asked
+  for. Wave 8 now carries THREE inherited items (the fifth repoint arm, the terminality audit's own
+  scope, and this). Instruction already given: build wave 6's set-naming mechanism so wave 8 can
+  POINT it at that prose rather than redesign it — `ccrc-api.test.ts:138-152` scans the ROUTES table
+  but never the prose, the same one-way shape as everything else in this ruling.
 
 ## Carried constraints
 
