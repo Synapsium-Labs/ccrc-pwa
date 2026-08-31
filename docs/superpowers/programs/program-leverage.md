@@ -367,8 +367,11 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   reclaim still briefs the displaced session (cancel, don't repoint); the `fleetFrameSeen` pin cannot
   fire (mutation survives the whole PWA suite, measured); D-1125 named two sites of the falsified
   sentence and only one was corrected. **Verification gap stated in the ruling:** pwa 76/2077/0 was
-  independently reproduced twice; the server total 244/6108/56 was NOT (targeted suites only) and is
-  being measured separately. **Coordinator ruling on the deferred README staleness:** wave 5 was
+  independently reproduced twice; the server total was NOT (targeted suites only), so this
+  coordinator ran the full server suite itself in a scratch worktree at `963889bf` — **244 files /
+  6108 passed / 56 skipped, exit 0, 294s — an exact match** to the worker's claim (mail 124). The
+  whole handoff baseline is therefore independently confirmed, and fix-round totals are a delta
+  against 244/6108/56 and 76/2077/0. **Coordinator ruling on the deferred README staleness:** wave 5 was
   right to leave it — neither passage went stale from this wave (the run-route sentence already
   omitted `/:id/items` and misdescribed `/:id/abandon`; the "nine coordination routes" count is stale
   by nine). Both belong to **wave 6**, which adds `POST /api/coord/caps` and so changes that count —
