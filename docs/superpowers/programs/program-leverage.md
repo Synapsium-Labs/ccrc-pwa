@@ -17,7 +17,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
-| 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18 | dispatched 2026-08-31 ~06:08 UTC; in flight — two operator rulings landed 2026-08-31 ~12:18 UTC (rewrite scope = ALL runs; corpus correction makes the wave AGENT-FIRST), D-1123..D-1140 allocated, Claim 14 (30 paths) |
+| 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18, PR #37 (`963889bf`) | reviewed 2026-08-31 ~17:20 UTC — SHIP-WITH-FIXES: 3 majors (mail stranding, door unreachable when all runs terminal, no execution record) + 1 raised to must-fix (rung-1 absent/unassembled fold), 7 minors, 2 refuted; fix round mailed (mail 123). Two operator rulings mid-wave (ALL-runs rewrite; AGENT-FIRST). D-1123..D-1140 spent, floor 1141 |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
 | 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. | — | planned |
@@ -333,6 +333,48 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   missing direction. (3) A new kebab refusal code cannot join `RunRefuseCode` without forcing the
   word into the corpus that must not name the door. Deviations **D-1123..D-1140** (floor 1141),
   Claim 14 (30 paths).
+
+- **Wave 5 verdict (2026-08-31 ~17:20 UTC):** wave-done (delivery 121) fingerprint `963889bf` (PR #37,
+  MERGEABLE/CLEAN, CI 5/5 on that exact sha) verified independently, run advanced
+  dispatched→working→awaiting-review, items 4/4. Review: 8 lenses + per-finding refute-default
+  verifiers, **47 agents**, 0 errors. **22 confirmed (3 MAJOR + 1 raised by this coordinator, 7
+  minors, 11 notes), 2 refuted → fix round (mail 123)**, run returned to `working`. Verified clean by
+  the coordinator's own reading: the R2 corpus correction (no numbered clause touched, the false
+  permanence sentence pinned ABSENT in both files and the true one PRESENT, door path named nowhere,
+  runbook pointed at the operator console exactly as ruled), the three-answer ladder's structure
+  (`readSessionRecord` over `readRegistry`, `sessionVerdict` over `hasSession`, `restarting` and
+  `unmeasurable` both answered `alive` — fail-shut), the one-transaction commit, and ResumeSheet's
+  supersession guards on all three doors with no `finally` (wave 4's D-1046 lesson landed).
+  **MAJOR 1:** reclaim rewrites `runs.claimedBy` and nothing else, so mail already queued to the
+  corpse strands — reproduced end-to-end, and the sweep then walks it to `undeliverable`, losing a
+  worker's report; the corpus THIS wave edited sends the heir to that empty box. Ruled: repoint
+  inside the same transaction, letting `mail.toId` decide (role-addressed follows the role,
+  id-addressed stays, acked never moves). **MAJOR 2:** the door is unreachable from the PWA when every
+  run is terminal (`resumeButton` gated on `!isRunClosed`), which is exactly the state `closeRun`
+  produces at zero open runs; verified live that the server half lifts the wedge there and the
+  operator cannot ask for it. Ruled: gate on the PROGRAM, not the row. **MAJOR 3:** the wave shipped
+  **no execution record** — 113 `<measured at execution>` placeholders, zero verbatim first-fail
+  rows, nine of ten mutation tables unfilled, against four prior waves at zero placeholders; the
+  handoff's own "ten rows green or red for the wrong reason" claim rests on rows nobody else can
+  locate. **RAISED by this coordinator from minor to must-fix:** rung 1 folds "no `.uuid` in the
+  listing" with "listed but could not be ASSEMBLED" and answers `dead` before tmux is consulted — so
+  a live coordinator mid-write can be reclaimed out from under itself; the mail ingress 500 lines
+  away already ships the exact split (`names.includes(<id>.uuid)`). Minors: CLAUDE.md's new
+  "whole box-token surface" sentence is false (four token-gated routes live outside both prefixes);
+  the new open-run arm masks wave 4's kickoff-failure recovery doors; `api.kickoff`'s promised
+  truncated-body degrade is unimplemented (a regression); the borrowed integer check dropped
+  `wave < 1`, so a brief naming wave 0 queues AND takes the dedupe key; a re-kickoff queued before a
+  reclaim still briefs the displaced session (cancel, don't repoint); the `fleetFrameSeen` pin cannot
+  fire (mutation survives the whole PWA suite, measured); D-1125 named two sites of the falsified
+  sentence and only one was corrected. **Verification gap stated in the ruling:** pwa 76/2077/0 was
+  independently reproduced twice; the server total 244/6108/56 was NOT (targeted suites only) and is
+  being measured separately. **Coordinator ruling on the deferred README staleness:** wave 5 was
+  right to leave it — neither passage went stale from this wave (the run-route sentence already
+  omitted `/:id/items` and misdescribed `/:id/abandon`; the "nine coordination routes" count is stale
+  by nine). Both belong to **wave 6**, which adds `POST /api/coord/caps` and so changes that count —
+  the rule that made F1 and F5 each write the count they changed — and wave 6 should extend wave 5's
+  own derivation machinery (door count derived from `UNGATED.size`) to the README rather than
+  hand-correcting prose that will rot again.
 
 ## Carried constraints
 
