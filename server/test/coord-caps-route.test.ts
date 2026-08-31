@@ -1,0 +1,302 @@
+// The caps door. Before it, `CoordStore.setCaps` had NO caller anywhere in
+// `server/src` (D-1164): the only way to change `maxConcurrentWorkers` or
+// `maxSessionsPerDay` was to edit `coord.db` by hand.
+//
+// Its POSTURE is the part worth reading twice. NOT box-token — the box token
+// gates MACHINE lanes, callers on the fleet host with no cookie jar, and an
+// operator turning a dial in the PWA is not one. NOT `UNGATED` either —
+// `UNGATED` is the D-282 family, whose whole argument is that the party locked
+// out is the party holding the key, and raising a cap releases no wedge
+// (D-1159). Session-gated when armed, open dark, like every other same-origin
+// PWA write. `coord-pause-route.test.ts` holds both halves of that.
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { FastifyInstance } from 'fastify';
+import { buildServer, type Deps } from '../src/server.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { NotifyLog } from '../src/notifylog.js';
+import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const srcRoot = path.resolve(here, '..', 'src');
+
+/** The shipped defaults, seeded by migration 1 — every partial-write assertion
+ *  below is stated against these rather than re-reading them, so a changed
+ *  default is a failing test rather than a silently-rebased expectation. */
+const DEFAULTS = { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 };
+
+const apps: FastifyInstance[] = [];
+afterEach(async () => { while (apps.length) await apps.pop()!.close(); });
+
+const withCoord = async (over: Partial<Deps> = {}) => {
+  const home = mkTmp('ccrc-caps-');
+  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
+  const coord = new CoordStore(db);
+  const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+  await notifyLog.load();
+  const app = await buildServer({ ...testDeps(home), coord, notifyLog, ...over });
+  apps.push(app);
+  // `db` is handed back for ONE test: the singleton `coordinator_state` row is
+  // reachable through no public method, and D-1164's disagreement between
+  // `setCaps` (silent no-op) and `caps()` (throws) is only observable without it.
+  return { app, coord, notifyLog, db };
+};
+
+/** A box with no coordination database — no `coord` key at all, the same shape
+ *  `run-routes.test.ts` uses for its own not-configured cases. */
+const withoutCoord = async () => {
+  const app = await buildServer(testDeps(mkTmp('ccrc-caps-none-')));
+  apps.push(app);
+  return { app };
+};
+
+const getCaps = (app: FastifyInstance) => app.inject({ method: 'GET', url: '/api/coord/caps' });
+const postCaps = (app: FastifyInstance, payload: unknown) =>
+  app.inject({ method: 'POST', url: '/api/coord/caps', payload: payload as Record<string, unknown> });
+
+describe('GET /api/coord/caps', () => {
+  it('answers the stored limits and the derived usage', async () => {
+    const { app, coord } = await withCoord();
+    coord.setCaps({ maxConcurrentWorkers: 4, maxSessionsPerDay: 16 });
+    const res = await getCaps(app);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true,
+      caps: { maxConcurrentWorkers: 4, maxSessionsPerDay: 16 },
+      usage: { running: 0, dispatchedIn24h: 0 } });
+  });
+
+  it('answers 501 not-configured on a box with no coordination database', async () => {
+    // The arm `POST /api/coord/pause` deliberately does NOT have, because a
+    // pause is a marker file and a box with no database can still be paused.
+    // Caps are rows, and `caps()` casts an undefined row rather than returning
+    // null — copying pause's opening verbatim ships a route that throws (D-1166).
+    const { app } = await withoutCoord();
+    const res = await getCaps(app);
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'not-configured' });
+  });
+
+  it('reports usage a dispatched run actually moved', async () => {
+    // The fixture that could witness the change: without it, `running: 0` above
+    // is satisfied by a query that always answers zero.
+    const { app, coord } = await withCoord();
+    const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
+      wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
+    coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
+    expect((await getCaps(app)).json().usage).toEqual({ running: 1, dispatchedIn24h: 1 });
+  });
+});
+
+describe('POST /api/coord/caps', () => {
+  it('writes a partial and answers what was STORED', async () => {
+    const { app, coord } = await withCoord();
+    const res = await postCaps(app, { maxConcurrentWorkers: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true,
+      caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: DEFAULTS.maxSessionsPerDay },
+      usage: { running: 0, dispatchedIn24h: 0 } });
+    // …and it really landed in the store, not merely in the reply.
+    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 12 });
+  });
+
+  it('takes the other field alone, leaving the first untouched', async () => {
+    const { app, coord } = await withCoord();
+    await postCaps(app, { maxSessionsPerDay: 20 });
+    expect(coord.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 20 });
+  });
+
+  it('refuses a bad body with the policy detail, and writes NOTHING', async () => {
+    const { app, coord } = await withCoord();
+    const before = coord.caps();
+    const res = await postCaps(app, { maxConcurrentWorkers: 0 });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-request',
+      detail: `maxConcurrentWorkers must be an integer between ${CAP_MIN} and ${CAP_MAX}` });
+    expect(coord.caps()).toEqual(before);
+  });
+
+  it('refuses a body that asks for nothing', async () => {
+    const { app } = await withCoord();
+    const res = await postCaps(app, {});
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toContain('at least one of');
+  });
+
+  it('answers 501 not-configured on a box with no coordination database', async () => {
+    const { app } = await withoutCoord();
+    expect((await postCaps(app, { maxConcurrentWorkers: 5 })).statusCode).toBe(501);
+  });
+
+  it('records a coord feed event naming the old value and the new', async () => {
+    const { app, coord } = await withCoord();
+    await postCaps(app, { maxConcurrentWorkers: 5 });
+    const ev = coord.feedEvents(10).at(-1)!;
+    expect(ev.kind).toBe('coord');
+    expect(ev.body).toContain('3');
+    expect(ev.body).toContain('5');
+  });
+
+  it('records NO feed event when the body is refused', async () => {
+    const { app, coord } = await withCoord();
+    const before = coord.feedEvents(10).length;
+    await postCaps(app, { maxConcurrentWorkers: 0 });
+    expect(coord.feedEvents(10).length).toBe(before);
+  });
+
+  it('writes NO run_events row — there is no run to attribute it to', async () => {
+    // `recordRunEvent` would write fromState === toState, which `pushNewRuns`
+    // skips outright: the row would land and be seen by nobody. The premise is
+    // established rather than assumed — a run EXISTS here, so a route reaching
+    // for `recordRunEvent` would have something to write against.
+    const { app, coord } = await withCoord();
+    const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
+      wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
+    const before = coord.runEvents(r.id).length;
+    await postCaps(app, { maxConcurrentWorkers: 5 });
+    expect(coord.runEvents(r.id).length).toBe(before);
+  });
+
+  it('still writes the caps when there is no notify log to record into, and says NOTHING about it', async () => {
+    // The seam: a missing NotifyLog degrades the RECORD, never the write. The
+    // opposite collapse — refusing the operator's write because the feed archive
+    // is unavailable — is what the status assertion guards.
+    //
+    // The console assertion guards the OTHER half, and it is the half a
+    // try/catch alone cannot give (measured: deleting the `if (log)` guard
+    // leaves every status assertion green, because the throw lands in the
+    // catch). A box with no feed configured is not a box whose feed write
+    // FAILED, and a warning on every caps write would collapse the two in the
+    // one place an operator would look.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { app, coord } = await withCoord({ notifyLog: undefined });
+      const res = await postCaps(app, { maxSessionsPerDay: 20 });
+      expect(res.statusCode).toBe(200);
+      expect(coord.caps().maxSessionsPerDay).toBe(20);
+      expect(warn.mock.calls.flat().join(' '), 'a box with no feed warned as though a write had failed')
+        .not.toContain('recordFeedEvent');
+    } finally { warn.mockRestore(); }
+  });
+
+  it('a refused body does not reach the store even if the handler kept going', async () => {
+    // The ordering IS the guard here — decide, then write — so the mutation that
+    // tests it is the slip that actually happens: a refusal that sends its 400
+    // without RETURNING. The `writes NOTHING` assertion above cannot see that,
+    // because fastify keeps the first reply; only the store can.
+    const { app, coord } = await withCoord();
+    const before = coord.caps();
+    await postCaps(app, { maxSessionsPerDay: CAP_MAX + 1 });
+    expect(coord.caps()).toEqual(before);
+    expect(coord.feedEvents(10)).toEqual([]);
+  });
+
+  it('accepts the boundary values the policy allows', async () => {
+    const { app, coord } = await withCoord();
+    expect((await postCaps(app, { maxConcurrentWorkers: CAP_MAX })).statusCode).toBe(200);
+    expect(coord.caps().maxConcurrentWorkers).toBe(CAP_MAX);
+    expect((await postCaps(app, { maxConcurrentWorkers: CAP_MIN })).statusCode).toBe(200);
+    expect(coord.caps().maxConcurrentWorkers).toBe(CAP_MIN);
+  });
+
+  it('fails LOUDLY when the singleton caps row is gone', async () => {
+    // WHAT THIS PINS, stated exactly, because a first draft of this comment
+    // claimed more: that answering `decided.next` instead of the re-read
+    // `coord.caps()` would be caught here. It would NOT. The route reads
+    // `caps()` as `before` in its very first statement, so a missing row throws
+    // there and both spellings answer 500 — measured. The re-read is a
+    // truthfulness choice with no observable consequence (see the plan's
+    // mutation table), not a guard, and this test does not pretend otherwise.
+    //
+    // What it DOES pin is D-1164's disagreement reaching the caller as a fault
+    // rather than as a success: `setCaps` is `UPDATE … WHERE id = 1` returning
+    // `void`, so with the row gone it changes nothing and reports nothing, while
+    // `caps()` casts an undefined row and throws. A route that swallowed that
+    // would answer 200 for a write that did not happen.
+    const { app, db } = await withCoord();
+    db.prepare('DELETE FROM coordinator_state WHERE id = 1').run();
+    const res = await postCaps(app, { maxConcurrentWorkers: 5 });
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain('"maxConcurrentWorkers":5');
+  });
+
+  it('needs NO box token — it is an operator dial, not a machine lane', async () => {
+    // Stated here as behaviour; `coord-pause-route.test.ts` holds it
+    // structurally, in both directions, against the source.
+    const { app } = await withCoord();
+    const res = await app.inject({ method: 'POST', url: '/api/coord/caps',
+      headers: { 'x-ccrc-mail-token': 'wrong-token-entirely' },
+      payload: { maxConcurrentWorkers: 5 } });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+/** Blank out comments and string/template bodies, preserving byte positions and
+ *  newlines — `dispatch-mutex-gate.test.ts`'s own helper, copied unchanged, so a
+ *  call site mentioned only in prose is invisible to the scanner. */
+function blankCommentsAndStrings(text: string): string {
+  const out = text.split('');
+  const blank = (a: number, b: number): void => {
+    for (let k = a; k < b; k++) if (out[k] !== '\n') out[k] = ' ';
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const d = text[i + 1];
+    if (c === '/' && d === '/') {
+      const j = text.indexOf('\n', i);
+      const e = j < 0 ? text.length : j;
+      blank(i, e); i = e;
+    } else if (c === '/' && d === '*') {
+      const j = text.indexOf('*/', i + 2);
+      const e = j < 0 ? text.length : j + 2;
+      blank(i, e); i = e;
+    } else if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < text.length) {
+        if (text[j] === '\\') j += 2;
+        else if (text[j] === c) break;
+        else j++;
+      }
+      blank(i + 1, Math.min(j, text.length));
+      i = Math.min(j + 1, text.length);
+    } else i++;
+  }
+  return out.join('');
+}
+
+const sourcesUnder = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    if (e.name.startsWith('__')) return [];
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return sourcesUnder(full);
+    return /\.tsx?$/.test(e.name) ? [full] : [];
+  });
+
+describe('the caps door is the ONE caller of setCaps', () => {
+  it('setCaps is called from exactly one file in server/src, and it is the route', () => {
+    // The negative half needs a positive floor or a regex that stopped matching
+    // satisfies it vacuously — the failure mode this tree names by name.
+    const files = sourcesUnder(srcRoot);
+    expect(files.length, 'the source walk found nothing — this scan is over nothing')
+      .toBeGreaterThan(30);
+    const callers = files
+      .filter((f) => !f.endsWith(path.join('coord', 'store.ts')))       // the DECLARATION lives here
+      .filter((f) => /\bsetCaps\s*\(/.test(blankCommentsAndStrings(readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(srcRoot, f));
+    expect(callers).toEqual([path.join('coord', 'routes.ts')]);
+  });
+
+  it('…and the scanner can actually see a call site — it is not matching nothing', () => {
+    // Anti-vacuity for the scanner itself: the declaration file DOES contain the
+    // token, so a scanner that had silently stopped matching would fail here.
+    const store = blankCommentsAndStrings(
+      readFileSync(path.join(srcRoot, 'coord', 'store.ts'), 'utf8'));
+    expect(/\bsetCaps\s*\(/.test(store)).toBe(true);
+  });
+});

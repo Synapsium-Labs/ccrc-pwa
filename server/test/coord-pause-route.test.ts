@@ -179,6 +179,29 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/runs/:id/reclaim',
   ]);
 
+  /** Write routes that carry NO box token and are NOT release valves — the
+   *  distinction `UNGATED` alone cannot express, and which stayed invisible for
+   *  as long as the D-282 doors were the only ungated POSTs in this file
+   *  (D-1159).
+   *
+   *  `UNGATED` is an argument about a WEDGE: the locked-out party holds the box
+   *  token, so the valve must not sit behind it. A name in the set below makes
+   *  no such claim. These are ordinary same-origin PWA writes that no machine
+   *  lane calls, so the fleet's shared secret is simply the wrong key for them
+   *  — and nothing may rely on one of them to open a wedge.
+   *
+   *  Kept DISJOINT from `UNGATED` below, in both directions, so a door cannot
+   *  quietly acquire the release-valve argument by being listed twice. Keeping
+   *  the sets apart also leaves `UNGATED.size` alone, which matters beyond
+   *  tidiness: five prose sites are checked against it, and folding an ordinary
+   *  write in here would have moved a cardinal in all five to record something
+   *  that is not a D-282 door.
+   *
+   *  `/api/coord/caps`: the operator's dial on `maxConcurrentWorkers` and
+   *  `maxSessionsPerDay`, which before it had no door at all and changed only by
+   *  hand-editing sqlite. Raising a cap releases no wedge. */
+  const SESSION_ONLY = new Set(['/api/coord/caps']);
+
   /** The two mechanisms that count as "the token was checked" — the shared
    *  helper AND the two inline `checkMailToken` sites. Hoisted because BOTH
    *  directions below read it now: a narrowed copy in one test and not the
@@ -208,7 +231,11 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     // scanner — exactly the failure this file exists to prevent.
     const missing: string[] = [];
     for (const { route, body } of handlers()) {
-      if (UNGATED.has(route)) continue;
+      // TWO exemptions, not one, and they are different arguments — see
+      // `SESSION_ONLY`'s own docstring (D-1159). Both are checked back the other
+      // way below, so neither list can document an exemption the code does not
+      // actually take.
+      if (UNGATED.has(route) || SESSION_ONLY.has(route)) continue;
       const gate = Math.min(
         ...GATE_PATTERNS.map((re) => {
           const m = re.exec(body);
@@ -221,6 +248,39 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
       if (gate === Number.POSITIVE_INFINITY || (firstAwait >= 0 && gate > firstAwait)) missing.push(route);
     }
     expect(missing, 'write routes with no box-token gate ahead of their first await').toEqual([]);
+  });
+
+  it('SESSION_ONLY and UNGATED are disjoint — a door gets one argument, not both', () => {
+    expect([...SESSION_ONLY].filter((r) => UNGATED.has(r)),
+      'a route claims both the release-valve argument and the ordinary-write one').toEqual([]);
+    // …and neither set is empty, or every assertion over them is vacuous.
+    expect(SESSION_ONLY.size, 'SESSION_ONLY emptied — the scans over it prove nothing')
+      .toBeGreaterThan(0);
+    expect(UNGATED.size, 'UNGATED emptied — the scans over it prove nothing').toBeGreaterThan(0);
+  });
+
+  it('every SESSION_ONLY route really IS ungated, and really EXISTS', () => {
+    // The mirror of the UNGATED direction below, for the same reason: a name in
+    // a set that skips a check is a one-way promise until something checks the
+    // other way. Both halves — the route exists, and it takes no box token.
+    const listed = handlers().filter((h) => SESSION_ONLY.has(h.route));
+    expect(listed.map((h) => h.route).sort(), 'a SESSION_ONLY name matches no app.post in this file')
+      .toEqual([...SESSION_ONLY].sort());
+    const gated = listed.filter((h) => GATE_PATTERNS.some((re) => re.test(h.body))).map((h) => h.route);
+    expect(gated, 'a SESSION_ONLY route checks the box token after all').toEqual([]);
+  });
+
+  it('no SESSION_ONLY route is EXEMPT — armed, it sits behind the session gate', () => {
+    // This is what "session-gated when armed" MEANS. Without it the phrase is
+    // prose: a route could be added to the EXEMPT table and still pass every
+    // other assertion in this file.
+    for (const route of SESSION_ONLY) {
+      for (const verb of ['GET', 'POST']) {
+        expect(GATE_SRC.includes(`'${verb} ${route}'`),
+          `${verb} ${route} is in auth/gate.ts's EXEMPT table; a PWA-surface write must not be`)
+          .toBe(false);
+      }
+    }
   });
 
   it('every UNGATED route really IS ungated — the direction this set could not fail in', () => {

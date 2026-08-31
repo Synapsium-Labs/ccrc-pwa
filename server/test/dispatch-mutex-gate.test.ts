@@ -62,7 +62,15 @@ function blankCommentsAndStrings(text: string): string {
 
 interface Site { file: string; line: number; name: string; guarded: boolean }
 
-const TARGETS = new Set(['dispatchRun', 'closeRun']);
+// `coord.setCaps` joins the two bare functions, and the scanner needs no change
+// to take it: `head` is the whole identifier chain including its dots, which is
+// what already makes `coord.closeRun` a non-match for the bare `closeRun`
+// target. The reason it belongs here is the same D-46 reason: `dispatchRun`
+// reads `caps()` and `capsUsage()` across await boundaries
+// (`coord/dispatch.ts:236-237`), so a caps write landing between those two
+// reads is the identical un-serialised-decision hazard, and `POST
+// /api/coord/caps` is the first and only writer (D-1159/D-1164).
+const TARGETS = new Set(['dispatchRun', 'closeRun', 'coord.setCaps']);
 const GUARD = 'coordMutex.run';
 
 /** Index of the `)` matching the `(` at `open`, by plain depth counting —

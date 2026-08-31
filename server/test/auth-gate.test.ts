@@ -197,11 +197,14 @@ describe('the scanner is looking at something', () => {
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
     // and the first route in this file whose whole job is to rewrite `claimedBy`.
-    expect(scanRoutes('coord/routes.ts').length).toBe(23);
-    expect(ROUTES.length).toBe(69);
-    // …and the three partitions add up: 3 websockets + 66 HTTP.
+    // 25 since `GET`/`POST /api/coord/caps` — the operator dial on the two
+    // coordination caps, and the first pair in this file that is neither
+    // box-token gated nor one of the D-282 ungated doors (D-1159).
+    expect(scanRoutes('coord/routes.ts').length).toBe(25);
+    expect(ROUTES.length).toBe(71);
+    // …and the three partitions add up: 3 websockets + 68 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(66);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(68);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -473,7 +476,10 @@ describe('with the gate ARMED and no cookie', () => {
     // raised the scanned count and the exempt count by one each and left the
     // difference alone. A new route that is NOT exempt moves this number, which
     // is exactly what the kickoff route just did.
-    expect(gated.length).toBe(42);
+    // 44 since the caps pair: both are NOT exempt (an operator dial is not a
+    // machine lane), so both raise the scanned count without raising the exempt
+    // count — the arithmetic this comment's own paragraph above describes.
+    expect(gated.length).toBe(44);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 

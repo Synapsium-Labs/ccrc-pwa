@@ -1280,22 +1280,33 @@ cd "$(git rev-parse --show-toplevel)/server"
 
   | mutation | first-fail assertion |
   |---|---|
-  | drop the `notConfigured` arm from `GET /api/coord/caps` | *(measured at execution)* |
-  | drop the `notConfigured` arm from the POST | *(measured at execution)* |
-  | call `setCaps` before `decideCaps` (write-then-validate) | *(measured at execution)* |
-  | record the feed event on the refusal path too | *(measured at execution)* |
-  | make the feed event's absence fatal (`log!.record(...)`, no guard) | *(measured at execution)* |
-  | remove `'/api/coord/caps'` from `SESSION_ONLY` | *(measured at execution)* |
-  | move `'/api/coord/caps'` from `SESSION_ONLY` into `UNGATED` | *(measured at execution)* |
-  | add `requireMailToken` to the caps POST handler | *(measured at execution)* |
-  | add `'POST /api/coord/caps'` to `auth/gate.ts`'s EXEMPT table | *(measured at execution)* |
-  | revert `scanRoutes('coord/routes.ts')` to 23 | *(measured at execution)* |
-  | reply with `decided.next` instead of the re-read `coord.caps()` | *(measured at execution)* |
-  | drop `coordMutex.run` and write bare | *(measured at execution)* |
+  | drop the `notConfigured` arm from `GET /api/coord/caps` | `AssertionError: expected 500 to be 501` |
+  | drop the `notConfigured` arm from the POST | `AssertionError: expected 500 to be 501` |
+  | write before validate (`setCaps` moved above the refusal) | **GREEN as written — hole (mutation mis-designed).** Redesigned as the slip that actually happens — the refusal sends its 400 without RETURNING — then: `AssertionError: expected { maxConcurrentWorkers: 99, …(1) } to deeply equal { maxConcurrentWorkers: 3, …(1) }` |
+  | record the feed event on the refusal path too | `AssertionError: expected 1 to be +0` |
+  | make the feed event's absence fatal (`log!.record(...)`, no guard) | **GREEN as written — hole.** The throw lands in the handler's own try/catch, so every status assertion stays green. Closed by asserting the CONSOLE, then: `AssertionError: a box with no feed warned as though a write had failed: expected 'ccrc-server: recordFeedEvent failed (…' not to contain 'recordFeedEvent'` |
+  | remove `'/api/coord/caps'` from `SESSION_ONLY` | `AssertionError: write routes with no box-token gate ahead of their first await: expected [ '/api/coord/caps' ] to deeply equal []` |
+  | move `'/api/coord/caps'` from `SESSION_ONLY` into `UNGATED` | `AssertionError: a route claims both the release-valve argument and the ordinary-write one: expected [ '/api/coord/caps' ] to deeply equal []` |
+  | add `requireMailToken` to the caps POST handler | `AssertionError: expected [ 'GET /api/claims', …(18) ] to deeply equal [ 'GET /api/claims', …(17) ]` |
+  | add `'POST /api/coord/caps'` to `auth/gate.ts`'s EXEMPT table | *(covered by the row above from the other side —* `no SESSION_ONLY route is EXEMPT` *reds; measured together with it)* |
+  | revert `scanRoutes('coord/routes.ts')` to 23 | `AssertionError: expected 25 to be 23` |
+  | revert the armed-sweep `gated.length` to 42 | `AssertionError: expected 44 to be 42` |
+  | drop `coordMutex.run` and write bare | **GREEN as written — hole.** Closed by extending `dispatch-mutex-gate.test.ts`'s `TARGETS` to `coord.setCaps` — the tree's own structural mechanism for exactly this (D-46), needing no scanner change because `head` is the whole dotted identifier chain. Then: `AssertionError: expected [ Array(1) ] to deeply equal []` |
+  | reply with `decided.next` instead of the re-read `coord.caps()` | **GREEN, and it STAYS green — reported, not closed.** See below. |
 
-The last row is expected to come back GREEN — there is no fixture in this file that can drive two
-concurrent dispatches against a caps write. Do not round it up to a pass: record it as a HOLE, close it
-with a fixture modelled on `run-routes.test.ts:1656`'s concurrent-dispatch pair, and re-measure.
+  **Four holes in twelve rows. Three closed; the fourth is reported as a non-guard, which is the honest
+  answer.** `decided.next` and the re-read `coord.caps()` cannot be made to differ: the only state that
+  would separate them is a missing `coordinator_state` row (D-1164's silent-no-op-versus-throw
+  disagreement), and the route reads `caps()` as `before` in its FIRST statement, so that state throws
+  there and both spellings answer 500 — measured, after building the state with a raw `DELETE` through a
+  db handle the test harness now returns. The re-read is therefore a truthfulness choice with no
+  observable consequence, not a guard, and this plan does not claim it as one.
+
+  The test written while chasing that row was KEPT, with its comment corrected to say what it actually
+  pins — that a corrupt store reaches the caller as a fault rather than as a confident 200 for a write
+  that did not happen. Its first draft claimed to witness the re-read; leaving that in would have been
+  precisely the defect wave 5's review found and named, a guard pinned by a green test whose title
+  described a different situation.
 
 - [ ] **5.9 — Commit.**
 
