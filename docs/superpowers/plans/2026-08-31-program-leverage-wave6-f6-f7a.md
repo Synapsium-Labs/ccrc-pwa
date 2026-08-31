@@ -2048,8 +2048,130 @@ deltas this wave reports are measured against a baseline confirmed on this box, 
 prior wave's prose. No load flake shed on any of the three runs.
 
 
-*(Filled AT EXECUTION, row by row, the moment each measurement is taken — never assembled at the end.
-Wave 5 lost its whole record to a compaction between measuring and writing back, and the review, not the
-record, is what found the gap. Sections: 9.1 full suites; 9.2 load-flake isolation; 9.3 typecheck; 9.4
-the mutation table counted twice, plus the repaired-rows table; 9.5 the scanner suites; 9.6 the
-self-review; 9.7 branch and PR; 9.8 the fingerprint.)*
+### 9.1 — Full suites (measured at handoff, foreground, `timeout 600000`, cd'd in, tails read)
+
+| suite | files | passed | skipped | delta vs baseline |
+|---|---|---|---|---|
+| server | 247 | 6206 | 56 | +3 files, +75 tests |
+| agent | 18 | 281 | 0 | unchanged |
+| pwa | 77 | 2099 | 0 (Type Errors: none) | +1 file, +14 tests |
+
+The baseline at the top of this record was measured on this box BEFORE the first line of
+implementation, so these deltas are measured rather than inherited from a prior wave's prose.
+
+### 9.2 — Load-flake isolation
+
+**None shed.** The first full server run after task 8 came back `1 failed | 246 passed`, and the failure
+was NOT a flake — it was `coordinator-skill.test.ts`'s route-corpus linkage, a real finding this wave
+caused (see 9.4's late-guard table). After that was addressed the full server suite ran 247/247 in one
+pass, and agent and pwa each passed in one pass. No test in the known-flaky five (`ccd-ws-gc`,
+`pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`) failed at any point during this wave,
+so nothing needed an isolated re-run and nothing is being written off as load.
+
+### 9.3 — Typecheck
+
+`./node_modules/.bin/tsc --noEmit` in each package: **server CLEAN, agent CLEAN, pwa CLEAN.**
+
+Worth recording because vitest did not catch it: `tsc` found a real defect the green suites did not.
+`coordMutex.run` takes `() => Promise<T>`, and the caps route's first draft handed it a synchronous
+thunk — `TS2345`, plus two `TS18046`s and a `TS2698` downstream from the resulting `unknown`. The server
+suite does not typecheck `server/src`, so all sixteen route tests passed against code that would not
+compile. The plan's separate typecheck step is what surfaced it.
+
+### 9.4 — The mutation table, counted twice by independent methods
+
+- **Count A (structural).** Scan the plan for `| mutation | first-fail assertion |` headers and count the
+  data rows under each: **8 tables, 56 rows** — per task 4 / 6 / 9 / 3 / 13 / 7 / 10 / 4.
+- **Count B (outcome classification).** Independently classify each row's SECOND cell by what it
+  records: **47 measured red + 8 recorded GREEN + 1 cross-referenced to the row above = 56, with 0
+  unfilled.**
+
+Both methods agree at 56, and Count B additionally proves the table has no `(measured at execution)`
+placeholder left anywhere — the specific failure wave 5 shipped and its review had to catch.
+
+**Eight rows came back GREEN. Six were closed and re-measured red; two are reported, with reasons, and
+not closed.**
+
+| # | task | the prescribed row | what actually happened, and the hole behind it |
+|---|---|---|---|
+| 1 | 1 | drop `claimedBy IS NOT NULL` | Every fixture went through `openRun`, whose signature requires a `claimedBy: string`, so no row in the suite could carry a null. `reconstruct`'s recovery INSERT can, on a NON-terminal wave — the row the guard exists for. Closed; re-measured `expected [ null ] to deeply equal []`. |
+| 2 | 3 | drop the `Array.isArray(body)` arm | All three shape arms fall through to the asks-for-nothing refusal, so `ok === false` held for every one and the test could not see them. What the arms decide is the DETAIL. Closed by asserting the whole refusal object, which made all three witnessable — and showed that dropping the null arm THROWS rather than mis-wording. |
+| 3 | 5 | write before validate | The MUTATION was mis-designed, not the guard: moving `setCaps` above the refusal still ran it only on the `ok` arm. Redesigned as the slip that actually happens — a refusal that sends its 400 without RETURNING — and red at once. |
+| 4 | 5 | make the feed event's absence fatal | The throw lands in the handler's own try/catch, so every status assertion stayed green. What the `if (log)` guard actually protects is the LOG: a box with no feed configured is not a box whose feed write failed, and warning on every caps write collapses the two in the one place an operator looks. Closed by asserting the console. |
+| 5 | 5 | drop `coordMutex.run` | No fixture in that file can drive a concurrent dispatch against a caps write. Closed with the tree's own structural mechanism instead of a bespoke race fixture: `dispatch-mutex-gate.test.ts`'s `TARGETS` gained `coord.setCaps`, needing no scanner change because `head` is the whole dotted identifier chain. |
+| 6 | 8 | drop `Number.isInteger` | Every case sent an integer at or below zero, which `>= 1` refuses on its own. Closed by adding fractional cases. |
+| 7 | 5 | reply with `decided.next` instead of the re-read | **REPORTED, NOT CLOSED.** The two cannot be made to differ: the only state that separates them is a missing `coordinator_state` row, and the route reads `caps()` as `before` in its FIRST statement, so that state throws there and both spellings answer 500 — measured, after building the state with a raw `DELETE` through a db handle the harness now returns. The re-read is a truthfulness choice with no observable consequence, not a guard, and is not claimed as one. |
+| 8 | 7 | restore CLAUDE.md's whole-surface claim | **REPORTED, NOT CLOSED — and it is the hole D-1156 itself reported.** A phrase-absence scan cannot fix it: the corrected bullet QUOTES the false claim in order to retract it, so such a scan would red on the correction. The pin holds the PROPERTY instead, derived — the bullet names every `requireMailToken` lane outside the two prefixes — measured in the forward direction by adding one. Restoring the clause produces a self-contradicting sentence a human reviewer catches and no scanner should be asked to. |
+
+**DID ANY GUARD SHIP WITH NO ROW? YES — three did, and the answer is the check working rather than a
+clean bill.** Asking the question rather than assuming the tables were complete found three guards with
+no prescribed row: the `setCaps`-has-exactly-one-caller pin (task 5), and both halves of the
+coordinator-corpus accounting added during verification. All three were measured after the fact:
+
+| late-found guard | first-fail assertion |
+|---|---|
+| a SECOND `setCaps` caller appears in `server/src` | `AssertionError: expected [ 'coord/routes.ts', 'watch.ts' ] to deeply equal [ 'coord/routes.ts' ]` |
+| the coordinator corpus NAMES the caps dial (forbid-mention) | `AssertionError: expected '---\nname: ccrc-coordinator\ndescript…' not to contain '/api/coord/caps'` |
+| remove the caps routes from the coordinator `EXEMPT` set | `AssertionError: GET /api/coord/caps is registered in coord/routes.ts but is named nowhere in the route corpus` |
+
+That brings the wave to **59 measured rows**: 50 red as prescribed, 6 holes closed and re-measured red,
+2 reported-not-closed, 1 cross-referenced.
+
+**A finding the plan did not anticipate, and the scope call it forced.** The full server suite's one
+failure was `coordinator-skill.test.ts`: every coordinator-domain route registered in `coord/routes.ts`
+must be NAMED in the coordinator skill corpus. The caps dial is not a coordinator lane, so the resolution
+is an exemption — and the brief requires MAILING the coordinator before any change that reaches
+`ccd/coordinator-skill/`, because it changes the coordinator's deploy lane. It does not reach it: both
+the `EXEMPT` set and the companion forbid-mention pin live in `server/test/coordinator-skill.test.ts`,
+so the fix is a server-test change and this wave stays NOT agent-first. Verified by measurement, not by
+reading: `git diff --stat origin/main..HEAD -- ccd/ session-hook.sh deploy/` is empty.
+
+The exemption's argument is `POST /api/coord/pause`'s, one turn sharper. The caps bound how much a
+coordinator may dispatch; a coordinator told about this route would be told how to raise its own limit,
+which is the cap's own defeat the way unpausing itself would be the pause marker's. Both halves are
+exempt — the READ too, because a coordinator that can read a dial it may not turn has no use for the
+number, and naming it would be the first half of an invitation. A forbid-mention pin turns the
+permission-to-omit into a prohibition, the shape `/api/claims/:id/break` and `/api/runs/:id/reclaim`
+already use.
+
+### 9.5 — The scanner suites that police this diff
+
+Run together, green: `single-definition`, `deviation-refs`, `coord-routes-single-file`,
+`coordinator-skill`, `worker-skill`, `topology-clean`, `oss-metadata`, `node-floor`, `coord-db`,
+`deliverability-parity`, `lifecycle-sweep`, `readme-holds`, `box-token-census`, `auth-gate`,
+`coord-pause-route`, `dispatch-mutex-gate`.
+
+`coordinator-skill` and `worker-skill` are in that list to PROVE the corpus was not touched — a green
+pass on both is the fixture that witnesses "NOT agent-first", rather than a sentence asserting it.
+`deliverability-parity` and `lifecycle-sweep` are there for the same reason on the sweep side: this wave
+changed only TRANSIENT rungs, and `peerDeliverable` mirrors only the STRUCTURAL ones.
+
+README grew from 2033 to 2039 lines against `CLAUDE.md:10`'s stated ~1931 (10% upper edge ≈ 2124), so
+`oss-metadata` needed no change and CLAUDE.md's line-count figure was left alone.
+
+### 9.6 — Self-review against the Global Constraints
+
+- **Branch** — `ws/quiet-meadow`, this workspace's own. Verified with `git branch --show-current`.
+- **NOT agent-first** — `ccd/`, `session-hook.sh` and `deploy/` are absent from the diff, measured.
+  One finding pushed toward the skill corpus and was resolved inside `server/test/` (9.4).
+- **Wire discipline** — `FLEET_PROTO` untouched. Three additive shared types (`CoordCapsUsage`,
+  `CoordCapsView`, the `'coord'` kind); no field removed, no frame changed; the new kind degrades to
+  `unknown` on an older client through the reviver that already exists. No new ccd verbs;
+  `EXEC_COMMANDS` untouched.
+- **No overloaded null at a new seam** — `notConfigured` (501) is distinct from a refused body (400) and
+  from a corrupt store (500); `'unreadable'` is distinct from a rejection; a missing `NotifyLog` degrades
+  the record and not the write, and says nothing rather than warning as though a write failed; the caps
+  control renders NOTHING rather than zeroes when it cannot read.
+- **TDD red-first, reds recorded verbatim** — 59 measured rows, 0 placeholders, written as measured.
+- **Deviations** — D-1157..1169 defined in this plan; 1170..1172 allocated and unspent, recorded as such.
+  `deviation-refs` green.
+- **Suites foreground** — all runs foreground with `timeout 600000`, cd'd into the package, tails read.
+
+### 9.7 — Branch and PR
+
+*(filled at push)*
+
+### 9.8 — The fingerprint
+
+*(measured once, after the final push, and sent once)*
+
