@@ -35,8 +35,12 @@ a fresh run.
 
 `POST /api/runs` refuses any later call for a program whose `claimedBy` differs from whichever session
 first opened it — `claimed-by-another`, contract clause 8, decided in `CoordStore.openRun`. The refusal
-is PERMANENT: it does not lapse when the named session dies, and nothing in the HTTP API ever rewrites
-`claimedBy`. A fresh coordinator under a new id can never take the program over through the API at all.
+does not lapse when the named session dies, and no call named in this corpus ever rewrites `claimedBy`:
+a fresh coordinator under a new id cannot take the program over by any move of its own. Handing the
+program to a different session is an operator act, performed from the console, and it sits outside this
+session's reach for the reason clause 4's pause marker does — a wedge's release valve behind the wedged
+session's own key is not a release valve. So the refusal is still a STOP for you: report it, and say
+which run is wedged and which id it names.
 
 Everything else keeps working, which is what makes this easy to misread. Mail still routes to the dead
 id, the board still renders the program, and only this one call refuses. The wedge surfaces at the wave
@@ -78,7 +82,13 @@ this hits the same banner again — the account lane has to be fixed, or the ses
 ## 4. Briefing the revived coordinator
 
 The machine kickoff the PWA writes when a program is STARTED hardcodes wave 1 — correct exactly once,
-and wrong for every revive after it. A revive is briefed by hand, and this is the text:
+and wrong for every revive after it. A revive gets the wave-N text below instead, and the console sends
+exactly this text: the resume control on a run whose coordinator reads dead composes it from that run's
+own id and wave, out of `programResumeKickoff` in `shared/api.ts` — one source, so this file and that
+control cannot drift — and queues it as mail rather than typing it into a pane
+(`/api/sessions/:id/kickoff`, spelled without a method for the same reason `/api/sessions/:id/ensure`
+is above: the browser's own cookie-bearing call, not one a fleet-host session can make). Hand-typing it
+at a terminal is still the fallback. Either way, this is the text:
 
     You are the coordinator for program `<slug>` (<title>).
     Its ledger is `docs/superpowers/programs/<slug>.md`.
@@ -106,11 +116,14 @@ and leaves a wave nobody advanced. This runbook is about the COORDINATOR's own d
 
 ## 6. When the id is already lost — the terminal recovery
 
-If the program was re-opened under a different id, or the original id can no longer be revived, no
-sequence of API calls fixes it: every `POST /api/runs` for that program answers `claimed-by-another`,
-naming a session that may no longer exist. Stop and report it to the operator. This is a recovery on the
-box, not a retry, and a coordinator that keeps retrying is spending turns on a refusal that is working
-exactly as designed.
+If the original id can no longer be revived, this session is not the one that fixes it: every
+`POST /api/runs` for that program answers `claimed-by-another`, naming a session that may no longer
+exist, and retrying spends turns on a refusal that is working exactly as designed. Stop and report,
+naming the run and the id it claims. That report IS the act — the operator has a console door that
+hands the program to a living session, and the report is how it gets reached.
+
+If the program was ALSO re-opened under a different id, that half is a recovery on the box rather than
+a call: a second run row is a second ledger, and no reassignment merges them.
 
 Two things make that recovery ordinary rather than frightening. The database is snapshotted before every
 deploy — the newest `~/ccrc-backups/<ts>/coord.db` is the restore path, and it is the FIRST thing to
