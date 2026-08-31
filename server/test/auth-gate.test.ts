@@ -401,7 +401,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the EIGHTEEN box-token lanes in EXEMPT are the eighteen that really check the token', () => {
+  it('the eighteen box-token lanes in EXEMPT are those coord routes, and nineteen with notify', () => {
     // The claim "they are already guarded" is checked against the source, not
     // trusted: an exemption whose stated justification is a gate the route does
     // not actually have is the worst kind of hole.
@@ -438,7 +438,9 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the eighteenth, which lives in server.ts.
+    // …and `/api/notify`, the nineteenth lane, which lives in server.ts (D-1161:
+    // this comment used to call it the eighteenth, double-counting the coord
+    // routes' own eighteen).
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
   });

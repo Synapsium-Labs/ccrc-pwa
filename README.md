@@ -526,10 +526,10 @@ step 10 of
 [`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the ten machine lanes the fleet
-host posts to (nine box-token-gated coordination routes plus `/api/notify`,
-which still tolerates an absent token for one deploy generation — none of them
-has a cookie jar), the login and passkey-assertion doors themselves,
+liveness gate reads the shipped sha out of it), the nineteen machine lanes the
+fleet host posts to (eighteen box-token-consulting coordination routes plus
+`/api/notify`, which still tolerates an absent token for one deploy generation —
+none of them has a cookie jar), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
@@ -1402,8 +1402,11 @@ replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`,
 and again every `MAIL_REPLAY_MS`) until the recipient POSTs
 `/api/mail/:id/ack`.
 
-`/api/mail` (and its ack route), the run routes (`POST /api/runs`,
-`/:id/dispatch`, `/:id/close`, `/:id/advance`), `GET /api/mail?to=<id>` and
+`/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
+`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`) — but **not** the
+operator doors `/api/runs/:id/abandon` and `/api/runs/:id/reclaim`, which carry
+no box token by design (D-282), any more than `/api/coord/pause` or
+`/api/claims/:id/break` do — `GET /api/mail?to=<id>` and
 `/api/notify` (ccd's swap hook) all require the same **box token** — one
 shared secret per box, read from a file, deliberately never an env var
 (`deploy/ccrc.service` ships no `EnvironmentFile=`, and this build does not
@@ -1420,9 +1423,12 @@ design note argued they were no worse than the pre-existing, also-open
 inverted the intent (`ccd ws-add`, an injected `/clear` and
 `ws-release`/`ws-archive` are strictly more dangerous than inserting a mail
 row, which required the token all along) and closed it: every coordinator
-write route now fails the same way the mail pair always has. None of these
-six routes tolerates a missing token — a request with none is `401
-unauthenticated`, full stop. `/api/notify` alone accepts a request with
+write route that is a MACHINE lane now fails the same way the mail pair always
+has. None of the lanes enumerated above tolerates a missing token — a request
+with none is `401 unauthenticated`, full stop. (The operator doors excepted just
+above are the other half of that sentence, and they are not an oversight in it:
+they are reachable from a phone precisely because the party a wedge locks out is
+the party holding the box token.) `/api/notify` alone accepts a request with
 **no** token header for one deploy generation, logged as `legacy` so the
 swap hook cannot go dark mid-rollout; that tolerance comes out in the deploy
 *after* the one that ships `notify.sh`'s token read — it is a rollout

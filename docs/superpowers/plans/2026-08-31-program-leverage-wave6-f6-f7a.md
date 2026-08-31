@@ -1683,19 +1683,38 @@ cd "$(git rev-parse --show-toplevel)/server"
 
   | mutation | first-fail assertion |
   |---|---|
-  | restore README's "nine box-token-gated coordination routes" | *(measured at execution)* |
-  | restore README's "None of these six routes" | *(measured at execution)* |
-  | drop `/:id/items` from README's run-route list | *(measured at execution)* |
-  | restore gate.ts's "SEVENTEEN" | *(measured at execution)* |
-  | restore CLAUDE.md's "the two prefixes above are the whole box-token surface" wording | *(measured at execution)* |
-  | delete `POST /api/ledger/deviations` from CLAUDE.md's bullet | *(measured at execution)* |
-  | add `requireMailToken` to the kickoff handler in `server.ts` | *(measured at execution)* |
-  | narrow `GATE_PATTERNS` to `requireMailToken` alone | *(measured at execution)* |
-  | make `passage()` return `''` on a missing anchor instead of failing | *(measured at execution)* |
-  | point `lanesIn` at a file that does not exist | *(measured at execution)* |
+  | restore README's "nine box-token-gated coordination routes" | `AssertionError: README's auth paragraph states a count this tree does not have: expected Set{ 'ten', 'nine' } to deeply equal Set{ 'nineteen', 'eighteen' }` |
+  | restore README's "None of these six routes" | `AssertionError: the mail-bus paragraph grew a hand-kept count again: expected Set{ 'six' } to deeply equal Set{}` |
+  | drop `/:id/items` from README's run-route list | `AssertionError: the mail-bus paragraph omits the gated POST /api/runs/:id/items: expected '…' to contain '/:id/items'` |
+  | restore gate.ts's "SEVENTEEN" | `AssertionError: gate.ts, EXEMPT reason 2 states a count this tree does not have: expected Set{ 'seventeen', 'nineteen' } to deeply equal Set{ 'nineteen', 'eighteen' }` |
+  | delete `POST /api/ledger/deviations` from CLAUDE.md's bullet | `AssertionError: the bullet promises to name every requireMailToken lane outside the two prefixes, and does not name POST /api/ledger/deviations` |
+  | **forward direction** — add a NEW `requireMailToken` lane outside the two prefixes | `AssertionError: … does not name POST /api/brandnew — the surface grew and the sentence did not` |
+  | narrow `GATE_PATTERNS` to `requireMailToken` alone | `AssertionError: the inline-gated mail route is missing — the scanner narrowed: expected [ 'GET /api/mail', …(10) ] to include 'POST /api/mail'` |
+  | break a `passage()` anchor | `AssertionError: README, the auth paragraph: the opening anchor is gone: expected -1 to be greater than -1` |
+  | make `passage()` return `''` on a missing anchor AND break that anchor | `AssertionError: README's auth paragraph states a count this tree does not have: expected Set{} to deeply equal Set{ 'nineteen', 'eighteen' }` |
+  | restore CLAUDE.md's "the two prefixes above are the whole box-token surface" | **GREEN as written — hole, and it is the hole D-1156 itself reported.** See below. |
 
-The fifth row is THE row: it is the exact measurement wave 5 made and reported as unpinned. It must now
-come back RED.
+  **The row wave 5 named, and why it could not be closed the obvious way.** Wave 5 measured that the
+  CLAUDE.md correction was unpinned by restoring the false sentence and observing green. Restoring it
+  here is STILL green, and a phrase-absence scan cannot fix that: the corrected bullet *quotes* the false
+  claim in order to retract it (`correcting a "whole box-token surface" claim this file carried for one
+  wave`), so any scanner forbidding that phrasing would red on the correction itself — the trap wave 5's
+  own review recorded as "a correction may paraphrase the false claim but may never quote it".
+
+  So the pin is not on the WORDS, it is on the PROPERTY the sentence asserts, derived: the bullet promises
+  to name every `requireMailToken` lane sitting outside `/api/mail*` and `/api/runs*`, and the scanner
+  computes that set from the source and requires each member to be named. That holds the claim in the
+  direction it will actually rot — a route added outside the two prefixes, with the sentence left behind —
+  which the forward-direction row above measures by adding one. Restoring the false clause remains green,
+  and that is now a stated limit rather than an unexamined gap: it produces a self-contradicting sentence
+  (`the whole box-token surface, not the whole of it`) that a human reviewer catches and no scanner
+  should be asked to.
+
+  **A constraint the scanner imposes on its own corpus, found by tripping it.** Inside a scanned passage,
+  every number word from `two` upward is read as a claim about this surface. A correction to `gate.ts`
+  that said "in TWO directions rather than one" reddened the scanner that was checking it; the fix was
+  "BOTH directions", which is better prose anyway. The constraint is documented at the top of the test
+  rather than left to be rediscovered.
 
 - [ ] **7.10 — Commit.**
 
