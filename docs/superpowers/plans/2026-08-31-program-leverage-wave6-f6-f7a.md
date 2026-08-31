@@ -583,12 +583,18 @@ witnesses the claim "the peer surface is unaffected", not a comment asserting it
 
   | mutation | first-fail assertion |
   |---|---|
-  | revert the not-quiet gate to bare `MAIL_QUIET_MS` | *(measured at execution)* |
-  | invert the not-quiet ternary (`isCoordinator ? MAIL_QUIET_MS : COORD_QUIET_MS`) | *(measured at execution)* |
-  | make the narrow window universal (`COORD_QUIET_MS` with no ternary) | *(measured at execution)* |
-  | revert the cooldown gate to bare `MAIL_COOLDOWN_MS` | *(measured at execution)* |
-  | `coordinators` built from `records.map(r => r.id)` instead of the store | *(measured at execution)* |
-  | `COORD_QUIET_MS` raised to `60_000` (equal to the worker floor) | *(measured at execution)* |
+  | revert the not-quiet gate to bare `MAIL_QUIET_MS` | `AssertionError: expected [] to deeply equal [ Array(1) ]` ❯ `:2433:35` (1 failed) |
+  | invert the not-quiet ternary (`isCoordinator ? MAIL_QUIET_MS : COORD_QUIET_MS`) | `AssertionError: expected [ Array(1) ] to deeply equal []` ❯ `:434:35` (4 failed) |
+  | make the narrow window universal (`COORD_QUIET_MS` with no ternary) | `AssertionError: expected [ Array(1) ] to deeply equal []` ❯ `:434:35` (3 failed) |
+  | revert the cooldown gate to bare `MAIL_COOLDOWN_MS` | `AssertionError: expected [ Array(1) ] to deeply equal [ …(2) ]` ❯ `:2513:35` (1 failed) |
+  | `coordinators` built from `records.map(r => r.id)` instead of the store | `AssertionError: expected [ Array(1) ] to deeply equal []` ❯ `:434:35` (4 failed) |
+  | `COORD_QUIET_MS` raised to `60_000` (equal to the worker floor) | `AssertionError: expected [] to deeply equal [ Array(1) ]` ❯ `:2433:35` (1 failed) |
+
+  6/6 red, no holes. Worth naming: three of the six first-fail at `:434`, which is NOT one of this
+  wave's tests — it is the file's own pre-existing "does NOT deliver until the session has been quiet for
+  `MAIL_QUIET_MS`". Every mutation that widens the window for everybody is caught by the worker pin that
+  was already there, which is the strongest form this direction could take: the guard is held by a test
+  written before the guard existed and with no knowledge of it.
 
 - [ ] **2.10 — Commit.**
 

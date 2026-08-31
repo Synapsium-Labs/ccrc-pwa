@@ -45,6 +45,12 @@ const NOW = 1_800_000_000_000; // arbitrary fixed epoch ms, no relation to real 
 const MAIL_SWEEP_MS = 10_000;
 const MAIL_QUIET_MS = 60_000;
 const MAIL_COOLDOWN_MS = 120_000;
+// The COORDINATOR pair, mirrored the same way and for the same reason. Both
+// are deliberately a fraction of the two above: every test below asserts a
+// window BETWEEN them, so a mirror that drifted into agreement with the
+// worker pair would make those assertions unsatisfiable rather than wrong.
+const COORD_QUIET_MS = 15_000;
+const COORD_COOLDOWN_MS = 30_000;
 const MAIL_REPLAY_MS = 600_000;
 const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
@@ -2386,5 +2392,144 @@ describe('D-792 structure: the ladder is total, and nothing schedules on a gate'
     expect(outside,
       'watch.ts reads a gate column outside the `gated` helper — a diagnostic has become an input to the lane it diagnoses')
       .toEqual([]);
+  });
+});
+
+// A coordinator idling AT a wave boundary is doing what its own contract clause
+// 7 mandates — end the turn and wait — so the worker-sized floor is a delay with
+// nothing behind it, on the one session every other session is waiting for.
+// Every test here pins a window BETWEEN the two thresholds; the worker half is
+// the guard's mutation direction and the half a careless fixture omits.
+describe('sweepMail: the coordinator quiet window', () => {
+  /** Make ID the `claimedBy` of a NON-terminal run — the one fact the sweep reads. */
+  const seedCoordinatorRun = (coord: CoordStore): void => {
+    coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+      wave: 6, waveOf: 8, claimedBy: ID });
+  };
+
+  /** …and make ID the WORKER of someone else's run instead. */
+  const seedWorkerRun = (coord: CoordStore): void => {
+    const r = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+      wave: 6, waveOf: 8, claimedBy: 'some-other-coordinator' }) as { id: number };
+    coord.markDispatched(r.id, ID, 'demo', 'ws/demo', false, NOW);
+  };
+
+  it('delivers to a COORDINATOR inside MAIL_QUIET_MS, once COORD_QUIET_MS has passed', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    const quietFor = COORD_QUIET_MS + 1_000;
+    // The fixture is IN the window this wave opens — asserted, not assumed, so a
+    // constant that drifted could not quietly make this test about something else.
+    expect(quietFor).toBeGreaterThan(COORD_QUIET_MS);
+    expect(quietFor).toBeLessThan(MAIL_QUIET_MS);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - quietFor });
+    seedCoordinatorRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
+
+  it('does NOT deliver to a WORKER in that same window — the mutation direction', async () => {
+    // Byte-identical to the test above but for the ONE fact: this session is the
+    // run's `sessionId`, not its `claimedBy`. Without this half, a guard that
+    // handed the narrow window to everybody would pass.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - (COORD_QUIET_MS + 1_000) });
+    seedWorkerRun(coord);
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+  });
+
+  it('still holds a COORDINATOR below COORD_QUIET_MS', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - (COORD_QUIET_MS - 5_000) });
+    seedCoordinatorRun(coord);
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+  });
+
+  it('does NOT give the narrow window to a session whose only claimed run is TERMINAL', async () => {
+    // The reclaim trap, at the lane rather than at the store: this pins that the
+    // sweep reads the store's answer and not a looser question of its own.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - (COORD_QUIET_MS + 1_000) });
+    const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
+      wave: 1, waveOf: 8, claimedBy: ID }) as { id: number };
+    coord.advance(r.id, 'dispatched', 'operator');
+    coord.advance(r.id, 'closing', 'operator');
+    coord.advance(r.id, 'done', 'operator');
+    // The premise, established: this session IS a claimedBy, just not a live one.
+    expect(coord.run(r.id)!.claimedBy).toBe(ID);
+    queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+  });
+
+  it('puts a COORDINATOR back on the lane after COORD_COOLDOWN_MS', async () => {
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+    seedCoordinatorRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+    // Past the coordinator cooldown and short of the worker one — the window,
+    // asserted rather than assumed, exactly as above.
+    const waited = COORD_COOLDOWN_MS + 1_000;
+    expect(waited).toBeGreaterThan(COORD_COOLDOWN_MS);
+    expect(waited).toBeLessThan(MAIL_COOLDOWN_MS);
+    expect(waited).toBeGreaterThan(PAST_SWEEP_MS);   // …and past the lane's own re-sweep gate
+    advance(waited);
+    seedLiveState(h.home, { statusUpdatedAt: Date.now() - MAIL_QUIET_MS - 1_000 });
+    queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+  });
+
+  it('holds a WORKER in that same cooldown window — the other mutation direction', async () => {
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+    seedWorkerRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+    advance(COORD_COOLDOWN_MS + 1_000);
+    seedLiveState(h.home, { statusUpdatedAt: Date.now() - MAIL_QUIET_MS - 1_000 });
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
   });
 });
