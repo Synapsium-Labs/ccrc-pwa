@@ -94,6 +94,17 @@ export interface FleetState {
    *  live frame it should have deferred to says `[]` (fix round 1, task 5,
    *  findings 1 and 3). */
   runsFrameSeen: boolean;
+  /** Has `/ws/fleet` ever actually sent a `{type:'fleet'}` frame THIS store
+   *  instance's lifetime — `runsFrameSeen`'s own sticky idiom just above, for a
+   *  sharper version of its own reason. `sessions.length > 0` cannot answer it
+   *  in EITHER direction: an honestly empty fleet broadcasts `[]`, and a cold
+   *  start hydrates `sessions` from the persisted snapshot (`loadFleetSnapshot`,
+   *  below) before a socket exists at all — so a populated array is not evidence
+   *  that anything has spoken. The resume door (`coordPresence`,
+   *  `fleet/coordWords.ts`) is the consumer: without this it would read a
+   *  claimant's absence from a STALE array as proof the coordinator is gone
+   *  (D-1138). */
+  fleetFrameSeen: boolean;
   /** Build 4, spec §4.2 (Task 11). The pause/mail marker readout, off the SAME
    *  `{type:'coord'}` frame `runs`/`runsFrameSeen` above are the precedent
    *  for. `null` means "no `coord` frame has ever arrived" — the CLIENT-side
@@ -216,6 +227,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       blocked: false,
       runs: [],
       runsFrameSeen: false,
+      fleetFrameSeen: false,
       coord: null,
       coordFrameSeen: false,
       roster: snapshot?.roster ?? [],
@@ -333,7 +345,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // snapshot's own roster has to be read off current state
               // rather than out of `msg` — a `fleet` frame carries none.
               saveFleetSnapshot(msg.sessions, get().roster); // keep the offline snapshot fresh
-              set({ sessions: msg.sessions });
+              // ONE `set`, so the array and the flag can never disagree (D-1138).
+              set({ sessions: msg.sessions, fleetFrameSeen: true });
             } else if (msg.type === 'notice') {
               noticeSeq += 1;
               const notice: FleetNotice = { id: noticeSeq, message: msg.message };

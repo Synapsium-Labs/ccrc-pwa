@@ -815,6 +815,45 @@ describe('fleet store', () => {
     });
   });
 
+  // program-leverage wave 5: the `fleet` frame's own `frameSeen`, the third
+  // instance of `runsFrameSeen`'s idiom (D-1138). The resume door on /runs has
+  // to tell "this box says nothing claims that id" apart from "no frame has
+  // arrived yet", and `sessions` cannot answer it in EITHER direction.
+  describe('the `fleet` frame and its own frameSeen', () => {
+    it('accepts a well-formed fleet frame and flips `fleetFrameSeen`', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().fleetFrameSeen).toBe(false);
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      expect(store.getState().sessions).toHaveLength(1);
+      // `RunsScreen`'s resume door reads this to tell "this box says nothing
+      // claims that id" apart from "no frame has arrived yet" — `sessions` cannot
+      // answer it, because a cold start HYDRATES that array from localStorage
+      // before any socket exists.
+      expect(store.getState().fleetFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('a well-formed fleet frame carrying `[]` still flips it — an honest empty fleet is not silence', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [] }));
+      expect(store.getState().sessions).toEqual([]);
+      expect(store.getState().fleetFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('a hydrated snapshot is not a frame — `fleetFrameSeen` starts false with sessions already present', () => {
+      // The whole reason this flag exists rather than `sessions.length > 0`.
+      const store = createFleetStore({ makeSocket });
+      expect(store.getState().fleetFrameSeen).toBe(false);
+    });
+  });
+
   // Build 4, Task 11, spec §4.2: additive on the same terms as `runs` above —
   // an already-deployed PWA drops this frame silently, and this build accepts
   // it once it knows the shape. `coordFrameSeen` is `runsFrameSeen`'s own

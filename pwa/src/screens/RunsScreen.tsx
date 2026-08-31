@@ -38,6 +38,8 @@ import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
+import { coordPresence } from '../fleet/coordWords';
+import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
@@ -70,7 +72,10 @@ function RunRow({
   run,
   nowMs,
   session,
+  coordSession,
+  frameSeen,
   onAbandon,
+  onResume,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -86,8 +91,20 @@ function RunRow({
    *  it yet). Looked up by the caller so this component stays a pure
    *  renderer of the one row it owns. */
   session: FleetSession | null;
+  /** The run's CLAIMANT as the live fleet snapshot has it — a different
+   *  lookup from `session` above, which is the run's WORKER. Both come off
+   *  `sessionById`, and conflating them would put the resume door on a row
+   *  whose worker died while its coordinator is fine. */
+  coordSession: FleetSession | null;
+  /** Has a `{type:'fleet'}` frame ever landed. Passed rather than inferred
+   *  from `coordSession !== null`: absence from a snapshot that never arrived
+   *  and absence from one that did are opposite facts, and only the second is
+   *  evidence of anything (D-1138). */
+  frameSeen: boolean;
   /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-287 (was D-B4-14)). */
   onAbandon: (run: RunSummary) => void;
+  /** Opens the ResumeSheet for this row (spec §7.3). */
+  onResume: (run: RunSummary) => void;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -216,6 +233,27 @@ function RunRow({
     </button>
   );
 
+  // The resume door. `coordPresence` decides — three answers, and only `dead`
+  // opens it: `unknown` is what a substrate fault, a missing row and an
+  // unarrived frame all read as, and each of those would otherwise offer to
+  // hand a live coordinator's program to somebody else (D-309's collapse,
+  // quoted on `coordPresence`'s own docstring; D-1129).
+  //
+  // `!isRunClosed(run)` is the second half and not a nicety: `finished` rows
+  // render through this same component, and a done wave's coordinator being
+  // dead is the ORDINARY end state, not a wedge.
+  const presence = coordPresence(run.claimedBy, coordSession, frameSeen);
+  const resumeButton = presence === 'dead' && !isRunClosed(run) ? (
+    <button
+      type="button"
+      className="run-resume"
+      aria-label={`Resume run ${run.id}`}
+      onClick={() => onResume(run)}
+    >
+      Resume
+    </button>
+  ) : null;
+
   // A run with no session has nothing to open. An inert row says that; a
   // button that navigates to a session that does not exist says something
   // false.
@@ -229,12 +267,13 @@ function RunRow({
   // row tappable to let the affordance through would have traded a true
   // sentence for a dead tap onto a session id that does not exist yet.
   return run.sessionId === null
-    ? <li className="run-row" data-inert="true">{body}{abandonButton}</li>
+    ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row">
         <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
           {body}
         </button>
+        {resumeButton}
         {abandonButton}
       </li>
     );
@@ -250,6 +289,7 @@ export function RunsScreen({
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
   const sessions = store((s) => s.sessions);
+  const fleetFrameSeen = store((s) => s.fleetFrameSeen);
   const conn = store((s) => s.conn);
   const [cold, setCold] = useState<RunSummary[] | null>(null);
   // Review finding 19: `cold`'s own `null` used to mean BOTH "still loading"
@@ -267,6 +307,10 @@ export function RunsScreen({
   // `SessionActionsSheet`'s single actions sheet uses rather than mounting
   // one sheet per row.
   const [abandonTarget, setAbandonTarget] = useState<RunSummary | null>(null);
+
+  // Spec §7.3: which run's ResumeSheet is open, or `null`. ONE sheet at screen
+  // level, reused across rows — `abandonTarget`'s own shape, one line up.
+  const [resumeTarget, setResumeTarget] = useState<RunSummary | null>(null);
 
   // Task 13, spec §4.4: the run board's own door onto a new program. ONE
   // door, rendered unconditionally below — including at zero runs, the same
@@ -430,7 +474,10 @@ export function RunsScreen({
       run={run}
       nowMs={now}
       session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
+      coordSession={run.claimedBy === null ? null : sessionById.get(run.claimedBy) ?? null}
+      frameSeen={fleetFrameSeen}
       onAbandon={setAbandonTarget}
+      onResume={setResumeTarget}
     />
   );
 
@@ -550,6 +597,11 @@ export function RunsScreen({
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
       <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
+      {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
+          abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
+          the program, terminal ones included (contract R1), and the finished
+          half of this board has no source but the cold read. */}
+      <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
       <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store} />
     </div>
   );

@@ -691,6 +691,36 @@ describe('the abandon sheet is not a living pane, and its own control is a real 
     expect(declValue(ruleFor('.run-row .run-open'), 'width')).toBeNull();
   });
 
+  // program-leverage wave 5 (D-1129). The resume door's tap floor, its
+  // `flex: none` and its no-glow discipline are all the SAME declarations
+  // `.run-abandon` is already held to — which is only true while the two share
+  // one rule. Read the grouping back, so a well-meaning split into a second
+  // rule (which would silently drop all three and leave the class in
+  // `design/audit.mjs`'s uncovered census) reds here.
+  it('.run-resume shares .run-abandon’s rule — that grouping IS its floor and its ground', () => {
+    expect(selectorsOf(css, '.run-row .run-abandon'))
+      .toEqual(['.run-row .run-abandon', '.run-row .run-resume']);
+    expect(declValue(ruleFor('.run-row .run-resume'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.run-row .run-resume'), 'min-width')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.run-row .run-resume'), 'flex')).toBe('none');
+    const rule = norm(stripComments(ruleFor('.run-row .run-resume')));
+    expect(rule).not.toContain('--glow');
+    expect(rule).not.toContain('animation');
+    expect(rule).not.toContain('box-shadow');
+  });
+
+  // The board's row has three controls now, not two, and `.run-open` must still
+  // decline to claim the width — the measurement above (a full-width
+  // `.run-open` roughly doubled every row's height) gets worse with a third
+  // sibling, not better. The `flex` half is the assertion the width pin above
+  // does NOT make: `1 1 auto` is what lets the row's opener yield the space the
+  // other two need, and a `flex: none` here would push them onto their own line
+  // just as surely as `width: 100%` would.
+  it('.run-open still claims no width and still yields the line, now that a THIRD control shares it', () => {
+    expect(declValue(ruleFor('.run-row .run-open'), 'width')).toBeNull();
+    expect(declValue(ruleFor('.run-row .run-open'), 'flex')).toBe('1 1 auto');
+  });
+
   it('.abandon-sheet is self-grounded — it declares its own color AND background', () => {
     const rule = ruleFor('.abandon-sheet');
     expect(declValue(rule, 'color')).not.toBeNull();

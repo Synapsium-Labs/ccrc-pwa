@@ -5744,6 +5744,25 @@ offer to reclaim a healthy coordinator during a tmux outage. The board answers t
 `unmeasurable` or absent lifecycle, a standing substrate fault — **hides the door**. The server's guard
 re-measures regardless of what the client believed; the client's job is only to decide what to offer.
 
+**Measured at execution (task 8), three sub-findings under the same number.**
+
+1. *The anchor.* The contract cites D-309 at `server/src/fleet.ts:241-252`; measured, the comment sits at
+   `:245-250` and the `hasSession` call it describes at `:251`. The quoted text is unchanged. Neither the
+   source comment nor `coordPresence`'s docstring now carries a line number — the file name and the symbol
+   are what survive a rebase, and this plan's own "prefer the SYMBOL over the line" note says so.
+2. *A new class was unavoidable, and it ships GROUPED.* `.run-abandon` names an act the resume control does
+   not perform, so `.run-resume` was added to `.run-abandon`'s existing rule rather than given one of its
+   own. That is what makes it automatically MEASURED by `design/audit.mjs` with no `GROUNDS`/
+   `INHERITED_GROUNDS` entry (it recovers `.run-row`'s ground through the descendant route) and floored on
+   `var(--tap-min)` with `flex: none` by the same declarations. Pinned in both directions —
+   `fleet-css.test.ts` reads the grouping back, `contrast.test.ts` counts four measured rows.
+3. *The contrast pin's own matcher was a hole.* `report.measured.filter((m) => m.label.includes('.run-row
+   .run-resume'))`, as drafted, ALSO harvests `.run-row .run-resumed` — the resumed-wave note two rules up,
+   a strict prefix-extension of the new class. Measured: the assertion read `got 2` before `.run-resume`
+   existed at all, and would have read 6 once it did, so `toHaveLength(4)` would have been a passing
+   assertion about the wrong four rows. Replaced with a negative-lookahead regex that keeps `:active` and
+   drops the neighbour.
+
 ### D-1130 (the brief's premise, corrected) — StartProgramSheet already refuses more than one thing
 
 The brief says the sheet "today refuses only on a live main checkout". Measured, two arms withhold the
@@ -5843,6 +5862,10 @@ the first frame, a persisted last-known-good row can read `dead` and show the do
 seam rather than name the residual.** `fleetFrameSeen` is four source lines and one store pin, and the
 alternative is a guess wearing the same typeface as a measurement — which is the defect class this
 program has now filed three times.
+
+**Measured at execution (task 8):** shipped as drafted — one interface field, one initialiser, one flip
+folded into the `fleet` arm's existing `set` so the array and the flag cannot disagree. Both directions are
+pinned in `stores.test.ts` (dropping the flip, and initialising it `true`, each red).
 
 ### D-1139 (a refusal the client cannot read) — `claimant-alive` rides `refused`, not `error`
 

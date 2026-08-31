@@ -17,7 +17,9 @@
 // (`server/src/coord/dispatch.ts`), so the phone has to say exactly what that
 // means for a program the operator might otherwise expect to dispatch — not
 // "unknown", and never a blank cell.
-import { isMarkerState, type MarkerState } from '../../../shared/api';
+import {
+  isMarkerState, lifecycleIsDead, substrateFault, type FleetSession, type MarkerState,
+} from '../../../shared/api';
 
 export const MARKER_WORD: Record<MarkerState, string> = {
   clear: 'not paused',
@@ -54,3 +56,56 @@ export const markerState = (v: unknown): MarkerState => (isMarkerState(v) ? v : 
  *  paused. "We don't know yet" is a state this banner can render truthfully;
  *  a guessed state is not. */
 export const COORD_CONFIRM_MS = 15_000;
+
+/** The client's answer to "is the run's coordinator there?" — program-leverage
+ *  wave 5, D-1129. */
+export type CoordPresence = 'alive' | 'dead' | 'unknown';
+
+/** THREE answers, because the client cannot measure what the server measures.
+ *
+ *  `assembleFleet` (`server/src/fleet.ts`, D-309) collapses a tmux `unknown`
+ *  into `alive = false`, and says so: "a substrate fault reads 'dead' in the
+ *  PWA — a false dead". So `status === 'dead'` is not proof of a dead
+ *  coordinator, and a door hung on it alone would offer, during a tmux outage,
+ *  to hand a live coordinator's program to somebody else. A session MISSING
+ *  from the fleet array is weaker still — that is indistinguishable from a
+ *  frame that has not landed, which is why `frameSeen` is a parameter rather
+ *  than a length check (D-1138).
+ *
+ *  `unknown` HIDES the door. That is the whole asymmetry: a hidden door costs
+ *  the operator one refresh; a door offered over a live coordinator costs a
+ *  running program its ledger.
+ *
+ *  NOT a fourth condition on `statusUnmeasured`: that flag is only ever set
+ *  inside `assembleFleet`'s own `if (alive)` block, so a `dead` row
+ *  structurally cannot carry it — reading it here would be a guard over a
+ *  state this field cannot be in.
+ *
+ *  Clock-free and store-free, the ladder discipline `lifecycleQualifier`
+ *  (`lifecycleWords.ts`) already states: every input is an argument. */
+export function coordPresence(
+  claimedBy: string | null,
+  session: FleetSession | null | undefined,
+  frameSeen: boolean,
+): CoordPresence {
+  if (claimedBy === null) return 'unknown';
+  if (!frameSeen) return 'unknown';
+  if (session === null || session === undefined) return 'unknown';
+  // `?? null`, never the typed field directly — the `fleet` frame is CAST on
+  // arrival (`stores/fleet.ts`'s `asFleetMsg` validates only
+  // `Array.isArray(sessions)`), so a row from a server that predates this
+  // field lacks the key at runtime. `lifecycleQualifier`'s own docstring
+  // records what reading one of these directly cost the last time.
+  const lifecycle = session.lifecycle ?? null;
+  if (lifecycle === null || lifecycle === 'unmeasurable') return 'unknown';
+  // The ONE reader for this field (`substrateFault`'s own docstring,
+  // `shared/api.ts`): a supervisor that has flagged the substrate has
+  // withdrawn its own claim to know anything about this pane.
+  if (substrateFault(session) !== null) return 'unknown';
+  // BOTH halves. `lifecycleIsDead` is the tree's one answer to "does this
+  // state resolve on its own" — `restarting` does, `orphan` does not — and it
+  // deliberately answers FALSE for `unmeasurable` ("doubt is not evidence",
+  // LIFECYCLE_DEAD's own comment).
+  if (session.status === 'dead' && lifecycleIsDead(lifecycle)) return 'dead';
+  return 'alive';
+}

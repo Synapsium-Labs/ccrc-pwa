@@ -744,8 +744,12 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
    *  second-granular (`formatAge` rounds everything under two minutes to "just
    *  now"), so no readout can report the cadence. `useNow` is the only
    *  `setInterval` in this screen's whole tree — measured across `pwa/src`:
-   *  `CoordBanner`, `AbandonSheet` and `StartProgramSheet` run none, and this
-   *  store never connects — so every recorded call is the tick.
+   *  `CoordBanner`, `AbandonSheet`, `StartProgramSheet` and — re-measured when
+   *  it joined this screen's tree in program-leverage wave 5 — `ResumeSheet`
+   *  run none, and this store never connects (its own roster poll is the one
+   *  `setInterval` under `stores/fleet.ts`, and `connect()` is what arms it)
+   *  — so every recorded call is the tick. Re-measure this list when the tree
+   *  grows a component, rather than inheriting the sentence.
    *
    *  `mockRestore()` BEFORE `useRealTimers()`, deliberately: the spy wraps the
    *  FAKE `setInterval`, and unwinding in the other order would hand the
@@ -995,5 +999,93 @@ describe('the run row renders the resume it has always carried (D-1, Task 5)', (
     const older = { ...r() } as Partial<RunSummary>;
     delete older.resumed;
     expect(resumeNote(older as RunSummary, 0)).toBeNull();
+  });
+});
+
+// The resume door on the board (program-leverage wave 5, D-1129). `coordPresence`
+// decides (its own table lives in `resume-sheet.test.tsx`); this pins that the
+// BOARD asks it, with the right three arguments, and renders nothing when the
+// answer is not `dead`.
+describe('the resume door on the run board', () => {
+  const coord = (over: Partial<FleetSession> = {}): FleetSession =>
+    sess({ id: 'ccrc-pwa-coordinator', workspace: null, branch: null, ...over });
+
+  const board = (opts: {
+    sessions: FleetSession[]; fleetFrameSeen: boolean; run?: Partial<RunSummary>;
+  }): void => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        runs: [r(opts.run)], runsFrameSeen: true,
+        sessions: opts.sessions, fleetFrameSeen: opts.fleetFrameSeen,
+      });
+    });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+  };
+
+  it('offers the door when the claimant is measured dead', () => {
+    board({ sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true });
+    expect(screen.getByRole('button', { name: /resume run 3/i })).toBeInTheDocument();
+  });
+
+  it('hides it while the answer is unknown — no fleet frame has landed', () => {
+    // The row LOOKS identical; the difference is entirely whether this box has
+    // heard from the fleet at all. A board that read the hydrated snapshot as
+    // an answer would offer this door on every cold start.
+    board({ sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: false });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  it('hides it while the answer is unknown — the claimant is not in the array', () => {
+    board({ sessions: [], fleetFrameSeen: true });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  it('hides it when the claimant is alive', () => {
+    board({ sessions: [coord({ status: 'idle', lifecycle: 'running' })], fleetFrameSeen: true });
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  it('hides it on a closed run — a finished wave has no coordinator to bring back', async () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        runs: [], runsFrameSeen: true,
+        sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true,
+      });
+    });
+    render(<RunsScreen store={store}
+                       loadRuns={async () => ({ runs: [r({ state: 'done', closedAt: Date.now() })] })} />);
+    // The row lands via the cold read (`finished` reads only `cold`), so wait
+    // for it before asserting on the absence of a control ON it.
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+    // …and the release valve is still there: a closed run can still be the
+    // wedge `.run-abandon` exists for.
+    expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+  });
+
+  it('needs two taps: the row control opens the sheet, nothing is sent by opening it', async () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    board({ sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true });
+    fireEvent.click(screen.getByRole('button', { name: /resume run 3/i }));
+    expect(await screen.findByRole('button', { name: /^re-kickoff$/i })).toBeInTheDocument();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('the row still never nests a button inside a button, with three controls on it', () => {
+    const store = makeStore();
+    act(() => {
+      store.setState({
+        runs: [r()], runsFrameSeen: true,
+        sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true,
+      });
+    });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    for (const btn of container.querySelectorAll('button')) {
+      expect(btn.querySelector('button')).toBeNull();
+    }
   });
 });
