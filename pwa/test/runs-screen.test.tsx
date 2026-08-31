@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, resumeNote, runItems } from '../src/fleet/runWords';
+import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runItems } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -1063,10 +1063,40 @@ describe('the run row renders the resume it has always carried (D-1, Task 5)', (
   });
 });
 
+describe('programsWithOpenRun — the program-level half of the resume door (D-1146)', () => {
+  it('names a program that still has a run which can move, and omits one whose rows are all terminal', () => {
+    const set = programsWithOpenRun([
+      r({ id: 1, program: 'alpha', state: 'done' }),
+      r({ id: 2, program: 'alpha', state: 'failed' }),
+      r({ id: 3, program: 'beta', state: 'done' }),
+      r({ id: 4, program: 'beta', state: 'awaiting-review' }),
+    ]);
+    expect([...set]).toEqual(['beta']);
+  });
+
+  it('reads STATE, never closedAt — a reconstructed archive carries done rows with closedAt null forever', () => {
+    // `CoordStore.reconstruct` never writes `closedAt` (`reconstruction-drill`
+    // pins it as one of the twelve facts the drill cannot recover), so a set
+    // built on the timestamp would call every rebuilt archive row OPEN and
+    // hide the D-1146 door on precisely the programs a disaster rebuild left
+    // behind — the ones most likely to be carrying a dead coordinator.
+    const set = programsWithOpenRun([r({ program: 'alpha', state: 'done', closedAt: null })]);
+    expect([...set]).toEqual([]);
+  });
+});
+
 // The resume door on the board (program-leverage wave 5, D-1129). `coordPresence`
 // decides (its own table lives in `resume-sheet.test.tsx`); this pins that the
 // BOARD asks it, with the right three arguments, and renders nothing when the
 // answer is not `dead`.
+//
+// The gate's SECOND term is the program's, not the row's (D-1146, review
+// MAJOR 2): the control renders when the coordinator is measured dead AND
+// (this run is open OR its program has no open run). The four cases below hold
+// both halves — the all-terminal program that previously rendered no control
+// anywhere, the terminal row that must still stay bare while its program has a
+// wave that can move, and `unknown`/`alive` still closing the door on the newly
+// reachable path.
 describe('the resume door on the run board', () => {
   const coord = (over: Partial<FleetSession> = {}): FleetSession =>
     sess({ id: 'ccrc-pwa-coordinator', workspace: null, branch: null, ...over });
@@ -1107,23 +1137,95 @@ describe('the resume door on the run board', () => {
     expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
   });
 
-  it('hides it on a closed run — a finished wave has no coordinator to bring back', async () => {
+  /** The terminal-row fixture. A closed row can only reach this screen through
+   *  the COLD read (`finished` has no other source), so these cases hand the
+   *  archive to `loadRuns` and let the live frame answer the active half — an
+   *  honest, ANSWERED `[]` when the program has nothing left open, which is the
+   *  exact state D-1146 turns on and NOT the same as a frame that never landed
+   *  (`runsFrameSeen` stays true throughout). */
+  const closedBoard = (opts: {
+    cold: RunSummary[]; live?: RunSummary[];
+    sessions?: FleetSession[]; fleetFrameSeen?: boolean;
+  }): void => {
     const store = makeStore();
     act(() => {
       store.setState({
-        runs: [], runsFrameSeen: true,
-        sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true,
+        runs: opts.live ?? [], runsFrameSeen: true,
+        sessions: opts.sessions ?? [coord({ status: 'dead', lifecycle: 'orphan' })],
+        fleetFrameSeen: opts.fleetFrameSeen ?? true,
       });
     });
-    render(<RunsScreen store={store}
-                       loadRuns={async () => ({ runs: [r({ state: 'done', closedAt: Date.now() })] })} />);
-    // The row lands via the cold read (`finished` reads only `cold`), so wait
-    // for it before asserting on the absence of a control ON it.
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: opts.cold })} />);
+  };
+
+  /** The `<li>` a control actually sits on. Every assertion below reads the ROW
+   *  IDENTITY rather than a count of matched nodes: an earlier round of this
+   *  wave shipped a filter that matched `.run-resume` AND `.run-resumed` — one
+   *  character apart, one a control and the other a caption — so a length
+   *  assertion passed while describing entirely the wrong rows. */
+  const rowOf = (btn: HTMLElement): HTMLElement => {
+    const li = btn.closest('li.run-row');
+    expect(li).not.toBeNull();
+    return li as HTMLElement;
+  };
+
+  it('OFFERS the door on an all-terminal program — the case that had no control anywhere (D-1146)', async () => {
+    // Review MAJOR 2: `closeRun` retires a program at zero open runs, so
+    // between closing wave N and opening wave N+1 every row of the program is
+    // terminal. The old gate (`!isRunClosed(run)`) rendered nothing on any of
+    // them, `ResumeSheet` has one opener, and the wave ships no `ccrc-api`
+    // verb — so the operator could not ask for the one call that unwedges it
+    // (measured live: wave N+1's `POST /api/runs` refuses `claimed-by-another`
+    // naming the corpse, and a reclaim makes the same call answer ok).
+    closedBoard({ cold: [r({ state: 'done', closedAt: Date.now() })] });
+    // The row lands via the cold read, so wait for it before asserting on a
+    // control ON it.
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    const btn = screen.getByRole('button', { name: /resume run 3/i });
+    const row = rowOf(btn);
+    // Identity, not presence: this control is on the DONE row of this program,
+    // and it is the control (`run-resume`), never the caption (`run-resumed`).
+    expect(btn.className).toBe('run-resume');
+    expect(row.querySelector('.run-state')?.textContent).toBe('done');
+    expect(row.querySelector('.run-ws')?.textContent).toBe('clear-cove');
+  });
+
+  it('still hides it on a terminal row whose program has a wave that can move', async () => {
+    // The narrower half of the same gate, and the reason it is a program-level
+    // question rather than a row-level one: a finished wave sitting BESIDE a
+    // live one is the ordinary end state, and the door belongs on the wave
+    // that can still move, not on the archive underneath it.
+    const open = r({ id: 4, wave: 4, state: 'working', workspace: 'open-cove', branch: 'ws/open-cove' });
+    const done = r({ id: 3, wave: 3, state: 'done', closedAt: Date.now() });
+    closedBoard({ cold: [open, done], live: [open] });
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-    // …and the release valve is still there: a closed run can still be the
-    // wedge `.run-abandon` exists for.
+    // …and the absence above is the gate's second term, not a dead board: the
+    // door IS on the open row of the same program, in the same render.
+    const btn = screen.getByRole('button', { name: /resume run 4/i });
+    expect(rowOf(btn).querySelector('.run-ws')?.textContent).toBe('open-cove');
+    // The release valve on the terminal row is untouched either way: a closed
+    // run can still be the wedge `.run-abandon` exists for.
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+  });
+
+  it('hides it on an all-terminal program while the claimant is only UNKNOWN — the widened term does not weaken the first', async () => {
+    // D-1146 widened the SECOND half of the gate and nothing else. `unknown`
+    // still hides the door (D-309's false dead), and it must keep hiding it on
+    // this newly-reachable path too — otherwise every cold start on a retired
+    // program would offer to hand a coordinator's ledger to somebody else.
+    closedBoard({ cold: [r({ state: 'done', closedAt: Date.now() })], fleetFrameSeen: false });
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+  });
+
+  it('hides it on an all-terminal program whose claimant is alive', async () => {
+    closedBoard({
+      cold: [r({ state: 'done', closedAt: Date.now() })],
+      sessions: [coord({ status: 'idle', lifecycle: 'running' })],
+    });
+    expect(await screen.findByText('clear-cove')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
   });
 
   it('needs two taps: the row control opens the sheet, nothing is sent by opening it', async () => {
