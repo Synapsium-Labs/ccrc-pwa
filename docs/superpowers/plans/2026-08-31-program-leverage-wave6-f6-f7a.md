@@ -920,9 +920,24 @@ Add the `coord` entries to `MailScreen.tsx`'s two total maps.
 
   | mutation | first-fail assertion |
   |---|---|
-  | remove `'coord'` from `NOTIFY_KINDS` but leave it in the union | *(measured at execution)* |
-  | remove the `coord` entry from `KIND_WORD` | *(measured at execution)* |
-  | remove the `coord` entry from `KIND_GLYPH` | *(measured at execution)* |
+  | remove `'coord'` from `NOTIFY_KINDS` but leave it in the union | `AssertionError: expected [ { seq: 1, at: 10, …(4) } ] to deeply equal [ { seq: 1, at: 10, …(4) } ]` (the row reads back `unknown`) |
+  | remove the `coord` entry from `KIND_GLYPH` | `AssertionError: no glyph for coord: expected '' to be '⚙'` ❯ `mail-screen.test.tsx:235:88` |
+  | remove the `coord` entry from `KIND_WORD` | `AssertionError: no word for coord: expected '⚙' to contain 'config'` |
+
+  **A third hole, named — and it is the same class as the other two.** The PWA test's first draft
+  asserted `container.textContent).not.toContain('undefined')`, on the reasoning that a total map with a
+  missing entry yields `undefined`. It does at the TYPE level; at RUNTIME React renders `undefined` as
+  NOTHING, never as the string. The test passed against the unimplemented feature. Closed by asserting
+  the rendered glyph and word themselves, and by giving the fixture a title that carries no glyph of its
+  own so the glyph assertion cannot be satisfied by the title. Three for three: every hole this wave has
+  found so far is an absence assertion whose fixture could not produce the presence.
+
+  **The frozen migration was NOT edited.** `coord/schema.ts:210`'s column comment enumerates the
+  vocabulary as it stood at `user_version` 1, and migration 1 is frozen — its bytes are history, and
+  sqlite stores the original `CREATE TABLE` text, so editing it would make a fresh database's
+  `sqlite_master` disagree with every existing one for a comment. The file HEADER, which that comment
+  already defers to ("see this file's header"), now says the enumeration is a v1 snapshot and names
+  `shared/api.ts` as the live list.
 
 - [ ] **4.7 — Commit.**
 

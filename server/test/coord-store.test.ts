@@ -1800,6 +1800,21 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 // which sessions are COORDINATING something live. Three of the four tests below
 // exist for a direction the obvious implementation gets wrong — the worker
 // column, a terminal row, a repeated coordinator (D-1160).
+describe('CoordStore: the coord feed kind', () => {
+  it('round-trips a coord feed event through the durable table', () => {
+    // The absence half is what makes this worth a test: `feedEvents` reads
+    // `kind` back through `isNotifyKind`, so before the union grew a seventh
+    // member a 'coord' row came back as 'unknown' — a fixture asserting only
+    // that the row lands would have passed against exactly that defect.
+    const s = store();
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'coord', sessionId: '',
+      title: 'caps', body: 'workers 3 to 5' });
+    expect(s.feedEvents(10)).toEqual([
+      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5' },
+    ]);
+  });
+});
+
 describe('CoordStore: openCoordinatorIds', () => {
   it('names a session that is the claimedBy of a non-terminal run', () => {
     const s = store();
