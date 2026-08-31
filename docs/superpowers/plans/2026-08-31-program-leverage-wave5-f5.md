@@ -1630,7 +1630,10 @@ and this file keeps them separate all the way to the wire.
    *      evidence sentence, or `registry-unmeasurable`;
    *   5. the commit, as ONE transaction the store owns.
    *
-   * `to === from` SHORT-CIRCUITS PAST 3 AND 4, and it is not a special case dressed
+   * `to === from` SHORT-CIRCUITS PAST 4 BUT NOT PAST 3 (D-1136 — this line was
+   * drafted as "past 3 AND 4" and CONTRADICTED that entry, which is the reasoned
+   * decision and wins; the executor implemented D-1136 and was right to), and it is
+   * not a special case dressed
    * up as one: the ladder's entire job is to prove nobody is being overwritten, and
    * an assignment to the id already in the column overwrites nobody. Run there, it
    * would refuse `claimant-alive` about the session the operator just named as the
@@ -1686,7 +1689,17 @@ and this file keeps them separate all the way to the wire.
   `cd server && ./node_modules/.bin/vitest run test/coord-reclaim.test.ts` — foreground, timeout
   600000.
 
-- [ ] **3.7 — The kebab scanner: one allowlist entry, written in the house style.** `mail-routes.test.ts:469`
+> **CORRECTION, measured at execution: step 3.7 below is WRONG and must be SKIPPED.** `unknown-session`
+> is not ungoverned — it is a declared `ClaimRefuseCode` (`shared/api.ts`, admitted to the scanner by
+> `isClaimRefuseCode`), which this plan's own `## Verified facts` table already states two pages up. All
+> five of this file's kebab spellings are therefore declared members and the suite is green with **zero**
+> edits to `mail-routes.test.ts`. Adding the `NOT_CODES` entry the step describes would allowlist a word
+> that is already typed — the weaker of the two remedies that file's own comments argue between. Run the
+> suite to confirm green; add nothing. Kept here, struck rather than deleted, because a step that was
+> wrong for a stated reason is worth more to the next reader than a step that vanished.
+
+- [ ] ~~**3.7 — The kebab scanner: one allowlist entry, written in the house style.**~~ **SKIP — see the
+  correction above.** `mail-routes.test.ts:469`
   scans every `.ts` directly under `server/src/coord` for a fully-kebab single-quoted token. Of this
   file's five `kind` spellings, four are already declared — `registry-unmeasurable` and `unknown-run`
   are `MAIL_REJECT_CODES` members (shared/api.ts:3421-3438), `claimant-alive` and `no-claimant` are
