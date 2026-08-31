@@ -3610,7 +3610,7 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
   echo $(( kb / 1024 / 1024 ))
 }
 
-cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
+cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] [--title <text>] project [slug] — new worktree + session for an existing project
   # PER-WORKER RC and the DECLARED ACTOR, both stripped before any positional
   # binds — `cmd_ws_hold`'s shape (ccd:3711) and its reason: a run like
   # `ws-add --no-rc <project> --surface agent --actor '…'` must not bind
@@ -3640,7 +3640,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # `--actor` (`run:<id> dispatch`). Same ruling as `cmd_ws_hold`'s at
   # ccd:3699-3705, for the same reason — never put a second string on a verb
   # with nothing to say which one a reader is looking at.
-  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
+  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() ws_title='' ws_gt=0 named=0
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -3657,9 +3657,18 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--title <text>] <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      # THE DISPLAY TITLE, in `--actor`'s exact shape: same arity check, same
+      # length bound, same blank refusal, positionless like the other three.
+      # It is NOT a third dec flag — it never reaches the lifecycle journal.
+      # It carries the one thing a SLUG cannot: `_ws_slug_valid` is lowercase,
+      # dashes and 31 characters, so `ENG-1234 - Fix the login flow` has to
+      # live BESIDE the slug, not inside it.
+      --title)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--title <text>] <project> [slug]"
+                   ws_gt=1; ws_title="$2"; shift 2 ;;
+      --title=*)   ws_gt=1; ws_title="${1#--title=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -3679,6 +3688,14 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
     _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  # The same two refusals as --actor, and they land in the same place for the
+  # same reason: before the disk floor, before the lock, before a worktree, a
+  # branch or a registry row exists. A refusal here leaves the box exactly as
+  # it found it.
+  if (( ws_gt )); then
+    [[ -n "${ws_title//[[:space:]]/}" ]] || die "--title must be non-blank"
+    _lc_dec_ok "$ws_title" || die "--title is longer than $_LC_DEC_MAX bytes"
   fi
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
@@ -3739,9 +3756,17 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # an interrupted purge — and "slug in use" on its own would send the operator
   # looking for a workspace that is not there. The field list is the reclaim
   # instruction: those are the files, in $REG, and nothing else holds the slug.
+  # `named=1` IS SET INSIDE THIS ARM, AND THE PLACEMENT IS THE WHOLE POINT:
+  # one line below, `$slug` is non-empty either way and the distinction between
+  # "the caller chose this" and "we drew it" is gone. Hoisting it past the
+  # `[[ -z "$slug" ]]` line marks EVERY workspace as operator-named and
+  # silently disables the ai-title sweep fleet-wide. That is D-410's shape one
+  # flag to the left, and `ccd-workspaces.test.ts` carries a case whose only
+  # job is to catch it.
   [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
                         _ws_slug_free "$project" "$slug" \
-                          || die "slug in use: $slug — $REG/$project-$slug.{$(_ws_slug_residue "$project" "$slug")}"; }
+                          || die "slug in use: $slug — $REG/$project-$slug.{$(_ws_slug_residue "$project" "$slug")}"; \
+                        named=1; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
                         || die "could not find a free slug for $project"; }
 
@@ -3790,6 +3815,16 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # reap via _reg_purge's shape match. Absent = follow the box (D-99's
   # fail-safe direction, per session).
   (( norc )) && _reg_set "$id" rc off
+  # The operator named this one. Read by the server as
+  # `SessionRecord.namedByOperator`; its only consumer is the naming sweep's
+  # thirteenth condition. ABSENCE IS THE AUTO CASE, so nothing is written for a
+  # drawn slug and every row already on the box keeps behaving exactly as it
+  # does today.
+  (( named )) && _reg_set "$id" named 1
+  # The display title, when one came with the slug. Independent of `named` on
+  # purpose: a caller may name a workspace without having a sentence for it,
+  # and `sessionLabel` falls back through branch/workspace when it does.
+  (( ws_gt )) && _reg_set "$id" title "$ws_title"
 
   # GIVEN BACK HERE, before the setup hook and long before the settle, for the
   # reason cmd_ws_reap states at its own close: `flock` treats two `open()`s of

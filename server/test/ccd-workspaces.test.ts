@@ -1209,3 +1209,100 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(path.join(h.home, '.local', 'bin', 'gh'));
   });
 });
+
+// ── the operator's name, and the marker that protects it ────────────────────
+// `$REG/<id>.named` is the whole mechanism behind the server's naming-sweep
+// exemption (`SessionRecord.namedByOperator` -> sweepNames' thirteenth
+// condition). If ccd writes it for a DRAWN slug, the sweep stops renaming
+// anything fleet-wide; if it never writes it, an operator's chosen name is
+// overwritten within ~10s of the first turn. Both directions are pinned here,
+// against the real binary in a fixture HOME.
+describe('ws-add records that a human chose the name', () => {
+  it('writes .named for a positionally-supplied slug', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add demo eng-1234 ) 2>&1`);
+    expect(reg('demo-eng-1234', 'workspace')).toBe('eng-1234');
+    expect(reg('demo-eng-1234', 'named')).toBe('1');
+  });
+
+  it('writes NO .named for a drawn slug — absence IS the auto case', () => {
+    // The mutation this exists to catch: hoisting `named=1` below the
+    // `[[ -z "$slug" ]]` generator line, where `$slug` is non-empty either
+    // way. That marks every workspace as operator-named and silently disables
+    // the ai-title sweep for the whole fleet. D-410's shape, one flag left.
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add demo ) 2>&1`);
+    const drawn = fs.readdirSync(path.join(home, '.cc-sessions'))
+      .filter((f) => f.endsWith('.workspace'))
+      .map((f) => f.slice(0, -'.workspace'.length));
+    expect(drawn, 'the generated add did not land').toHaveLength(1);
+    expect(reg(drawn[0]!, 'named'), 'a drawn slug must not be marked as named').toBeNull();
+  });
+
+  it('a refused slug leaves no marker, because it leaves nothing at all', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add demo QUIET-MESA ) 2>&1 || true`);
+    expect(reg('demo-QUIET-MESA', 'named')).toBeNull();
+    expect(reg('demo-quiet-mesa', 'named')).toBeNull();
+  });
+});
+
+describe('ws-add --title', () => {
+  it('records the display title beside the slug', () => {
+    // The two strings a ticket produces: the slug ccd can live with, and the
+    // sentence the board shows. `_ws_slug_valid` forbids spaces, uppercase and
+    // anything over 31 characters, so the title cannot be the slug.
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add --title 'ENG-1234 - Fix the login flow' demo eng-1234 ) 2>&1`);
+    expect(reg('demo-eng-1234', 'workspace')).toBe('eng-1234');
+    expect(reg('demo-eng-1234', 'title')).toBe('ENG-1234 - Fix the login flow');
+    expect(reg('demo-eng-1234', 'named')).toBe('1');
+  });
+
+  it('is positionless, like the other three flags', () => {
+    // The strip loop's contract. A trailing flag must not be read as the slug
+    // — that is exactly what D-410 was.
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add demo eng-9 --title 'After the positionals' ) 2>&1`);
+    expect(reg('demo-eng-9', 'title')).toBe('After the positionals');
+    expect(reg('demo-eng-9', 'workspace')).toBe('eng-9');
+  });
+
+  it('takes --title=<text> as well', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add --title='Equals form' demo eng-8 ) 2>&1`);
+    expect(reg('demo-eng-8', 'title')).toBe('Equals form');
+  });
+
+  it('writes no title when none is given, and the add is otherwise identical', () => {
+    makeRepo('demo');
+    sh(`${WS_ADD} ( cmd_ws_add demo eng-7 ) 2>&1`);
+    expect(reg('demo-eng-7', 'title')).toBeNull();
+    expect(reg('demo-eng-7', 'named')).toBe('1');
+  });
+
+  it('refuses a blank title, and refuses it before anything is created', () => {
+    makeRepo('demo');
+    const out = sh(`${WS_ADD} ( cmd_ws_add --title '   ' demo eng-6 ) 2>&1 || echo REFUSED`);
+    expect(out).toContain('REFUSED');
+    expect(out).toContain('--title must be non-blank');
+    expect(reg('demo-eng-6', 'uuid'), 'nothing was created').toBeNull();
+    expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'eng-6'))).toBe(false);
+  });
+
+  it('refuses a title past the dec budget, before anything is created', () => {
+    makeRepo('demo');
+    const long = 'x'.repeat(600);
+    const out = sh(`${WS_ADD} ( cmd_ws_add --title '${long}' demo eng-5 ) 2>&1 || echo REFUSED`);
+    expect(out).toContain('REFUSED');
+    expect(out).toContain('--title is longer than');
+    expect(reg('demo-eng-5', 'uuid'), 'nothing was created').toBeNull();
+  });
+
+  it('refuses a --title with no value rather than looping or eating the project', () => {
+    makeRepo('demo');
+    const out = sh(`${WS_ADD} ( cmd_ws_add demo eng-4 --title ) 2>&1 || echo REFUSED`);
+    expect(out).toContain('REFUSED');
+    expect(reg('demo-eng-4', 'uuid')).toBeNull();
+  });
+});
