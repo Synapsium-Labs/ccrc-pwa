@@ -2929,9 +2929,22 @@ for this session — nothing was queued" is the truth, and "the re-kickoff faile
   ```
 
   Run `cd server && ./node_modules/.bin/vitest run test/coord-kickoff.test.ts` (foreground, timeout
-  600000) and **record the exact first failing assertion text, verbatim** — expect a TypeScript arity
-  error on the fourth argument rather than an assertion, and record it as such, the way
-  `docs/superpowers/plans/2026-08-30-program-leverage-wave4-f4.md:956` records a resolution error.
+  600000) and **record the exact first failing assertion text, verbatim**.
+
+  **CORRECTED AT EXECUTION — this step predicted the wrong failure.** It said to expect a TypeScript
+  arity error on the fourth argument rather than an assertion. Measured: vitest strips types, so the
+  fourth argument is silently ignored at runtime and the named suite fails on a REAL assertion —
+  an `AssertionError` that the rendered envelope does not contain the resume sentence, at
+  `test/coord-kickoff.test.ts:221`, with the received envelope carrying wave 1's
+  `Run the ccrc-coordinator skill and open the run for wave 1.` where the expected one carries the
+  ALREADY OPEN sentences (2 failed, 20 passed). The arity error is real but lives in ANOTHER suite:
+  `typecheck-tests.test.ts` reports `error TS2554: Expected 3 arguments, but got 4.` six times over
+  this file. Same lesson the execution-order table already records for task 1's missing export and
+  D-1137 records for the PWA, in a third place: **vitest sees no types, so a type-level red must be
+  measured in `typecheck-tests`, never in the suite under edit.** Run both — and expect only TWO of the
+  seven new cases to red at this step. The other five pin behaviour the wave-1 path already satisfies
+  (a null `runId`, the dedupe decline, the oversize refusal) and only become live once the branch
+  exists; they are the reason 6.10's rows and not this step's colour are what measures this task.
 
 - [ ] **6.3 — Widen the seam.** In `server/src/coord/kickoff.ts`, extend the import at `:3` to
   `import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../../shared/api.js';`,
@@ -3157,6 +3170,15 @@ for this session — nothing was queued" is the truth, and "the re-kickoff faile
   slug/title arm fires first and dark/armed-authenticated stay equal. Confirm that in the output rather
   than reasoning about it.
 
+  **CORRECTED AT EXECUTION — the arm named here is not the arm that fires.** The drift loop is silent
+  on success (it asserts an empty `drift` array), so it was instrumented to push the kickoff route's
+  three probes and then reverted from a scratchpad snapshot. Measured:
+  `POST /api/sessions/:id/kickoff: dark=501 anon=401 auth=501 darkBody={"ok":false,"error":"not-configured"}`.
+  `deps.coord` is undefined in those fixtures, so the `notConfigured` arm answers before the slug/title
+  arm is ever reached, and the new pair-reading arms are further down still. Dark and
+  armed-authenticated are equal at 501; the route stays gated (401 anonymous). The conclusion the step
+  wanted holds — it holds for a stronger reason than the one written here.
+
 - [ ] **6.10 — Measure every mutation row.** Apply each mutation below one at a time, run the named
   suite, record the exact first failing assertion text verbatim into the table, then revert. A row
   that stays green is a guard with no pin and must be fixed before the commit.
@@ -3166,10 +3188,11 @@ for this session — nothing was queued" is the truth, and "the re-kickoff faile
 | `kickoff.ts`: drop the `resume` branch — always `programKickoff(program.slug, program.title)` | `<measured at execution>` |
 | `kickoff.ts`: compose `programResumeKickoff(slug, title, resume?.runId ?? 0, resume?.wave ?? 1)` unconditionally | `<measured at execution>` |
 | `kickoff.ts`: measure the cap on `program.title` instead of the composed `body` | `<measured at execution>` |
-| `kickoff.ts`: pass `runId: resume ? resume.runId : null` into `queueSystemMail` (namespacing the dedupe key by run) | `<measured at execution>` |
+| `kickoff.ts`: pass `runId: resume ? resume.runId : null` into `queueSystemMail` (namespacing the dedupe key by run) | `<measured at execution>` — **6.2's fixture as drafted could NOT express this row, and the hole was closed at execution.** With a resume naming run 7 in a store holding no runs, the mutant died on `Error: FOREIGN KEY constraint failed` inside `insertMail` rather than on either assertion: red for a reason that evaporates in production, where the run a revive names is exactly the run that already exists. The ENVELOPE test now opens a real run and passes the id it got back, so the mutant dies on the `run:` absence assertion instead. |
 | `server.ts`: delete the both-or-neither refusal, letting a lone field fall through as absent | `<measured at execution>` |
 | `server.ts`: relax the pair check to `typeof body.runId === 'number' && typeof body.wave === 'number'` | `<measured at execution>` |
 | `server.ts`: drop the fourth argument at the `queueProgramKickoff` call site | `<measured at execution>` |
+| ADDED at execution — `kickoff.ts`: compute the cap on `programKickoff(program.slug, program.title)` before the branch (the composition the resume body is NOT) | `<measured at execution>` — the row this task actually needed. The prescribed `program.title` row above is killed by wave 4's own cap tests, so it measures nothing new; this one is killed by EXACTLY ONE test, 6.2's `a title the WAVE-1 body accepts is refused as a resume`, with every wave-4 cap test still green. |
 
 - [ ] **6.11 — Commit.**
   `git add server/src/coord/kickoff.ts server/src/server.ts server/test/coord-kickoff.test.ts server/test/kickoff-route.test.ts && git commit -m "feat(wave5): the wave-N re-kickoff — one composer argument, one cap, no new route"`
