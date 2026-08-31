@@ -359,8 +359,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
       post('/api/sessions', b),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
-    workspaceAdd: (project: string): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    /** `{name}` ONLY when the operator typed one — an absent or blank name
+     *  sends the byte-identical bodyless request this route has always taken
+     *  (no `content-type`, no body), which is `archive`'s idiom below and the
+     *  reason the route's original tests stay green unchanged.
+     *
+     *  The name is sent RAW, not pre-slugified. The server derives the slug
+     *  with the same function the sheet previews it with, so there is exactly
+     *  one slug rule and the client cannot disagree with the box; and the raw
+     *  text is what a Linear lookup needs. */
+    workspaceAdd: (project: string, name?: string): Promise<void> =>
+      post(`/api/projects/${encodeURIComponent(project)}/workspaces`,
+        name !== undefined && name.trim() !== '' ? { name } : undefined),
     stop: (id: string) => post(`${sid(id)}/stop`),
     swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),

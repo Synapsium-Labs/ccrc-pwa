@@ -222,6 +222,31 @@ export const CCD_ARGV = {
   forget:    (id: string) => argv(['forget', id]),
   swap:      (id: string, w: string) => argv(['swap', id, w]),
   wsAdd:     (p: string) => argv(['ws-add', p]),
+  /** The operator-named add. A NEW KEY rather than an optional second
+   *  parameter on `wsAdd`, and that is a mechanism rather than a preference:
+   *  `whitelist-subset.test.ts` enumerates this table by
+   *  `Object.keys(CCD_ARGV)` and its `EXPECTED` is a
+   *  `Record<keyof typeof CCD_ARGV, string[]>`, so a NEW key fails both until
+   *  its sample is written — and a WIDENED optional fails neither, hiding the
+   *  second argv shape from the very check that exists to catch a verb
+   *  shipping whitelisted-out.
+   *
+   *  No agent grant changes: `['ws-add']` is a one-token PREFIX and trailing
+   *  tokens are unconstrained (`agent/src/whitelist.ts:665`), which is the
+   *  same rule that already carries `stop --surface`.
+   *
+   *  THE SLUG IS A POSITIONAL AND THE TITLE IS A FLAG, in that order, because
+   *  `cmd_ws_add` binds `slug` from `$2` AFTER its strip loop: a flag may sit
+   *  anywhere, a positional may not. `--title` rides last for the same reason
+   *  every other builder here appends its dec last.
+   *
+   *  The caller must never pass an empty slug. `['ws-add','demo','']` reaches
+   *  ccd, fails `[[ -n "$slug" ]]`, passes `[[ -z "$slug" ]]`, DRAWS A RANDOM
+   *  ADJECTIVE-NOUN and exits 0 — so the route would answer 200 for a
+   *  workspace nobody named. `server.ts` decides between this and `wsAdd`;
+   *  the type cannot, because `''` is a string. */
+  wsAddNamed: (p: string, slug: string, title: string | null) =>
+               argv(['ws-add', p, slug, ...(title === null ? [] : ['--title', title])]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after

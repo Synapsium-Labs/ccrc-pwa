@@ -23,6 +23,8 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
          type ActorFlags, type CcdArgv } from './ccdargv.js';
+import { deriveWorkspaceSlug } from './slug.js';
+import { lookupLinearIssue, ticketTitle } from './linear.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -1536,7 +1538,51 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+    const body = (req.body ?? {}) as { name?: unknown };
+    const typed = typeof body.name === 'string' ? body.name : '';
+
+    // ABSENT / NON-STRING / BLANK IS THE AUTO PATH, byte for byte what this
+    // route has always sent — `deriveWorkspaceSlug('')` answers `auto` and the
+    // builder below is the untouched one. That is the additivity proof, and
+    // `workspaces-route.test.ts`'s original bodyless cases stay green
+    // unchanged to say so.
+    const ask = deriveWorkspaceSlug(typed);
+    if (ask.kind === 'auto') return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+
+    // L4 MAPS A VERDICT TO A STATUS; IT DOES NOT DECIDE. The reason came from
+    // `slug.ts` and is echoed, not re-derived — and `bad-slug` is its own code
+    // rather than `bad-request` so a client can tell a name it can fix from a
+    // project the fleet does not know.
+    if (ask.kind === 'refused') {
+      return reply.code(400).send({ ok: false, error: 'bad-slug', reason: ask.reason });
+    }
+
+    // The title. A ticket gets `[TICKET] - {title}` when Linear can be reached
+    // and the operator's own words otherwise — a lookup NEVER blocks the
+    // create, so every failure arm here falls through to the offline name.
+    let title: string | null = ask.ticket === null ? typed.trim() : null;
+    if (ask.ticket !== null) {
+      const look = await lookupLinearIssue(ask.ticket, deps.cfg.linearToken);
+      title = look.ok
+        ? ticketTitle(look.identifier, look.title)
+        // No key, no ticket, no network: the identifier the operator pasted is
+        // still the best name we have, and it beats the slug.
+        : `${ask.ticket.key.toUpperCase()}-${ask.ticket.num}`;
+    }
+
+    // Composed from `deps.runCcd` directly rather than `runCcdOr502`, which
+    // that helper's own docstring invites: a slug COLLISION is ordinary user
+    // input and must not read as a Bad Gateway. ccd's sentence names the exact
+    // files holding the slug, so it is carried verbatim rather than reworded.
+    const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, ask.slug, title));
+    if (res.ok) return { ok: true, id: `${project}-${ask.slug}`, slug: ask.slug, title };
+    if (res.stderr.includes('slug in use: ')) {
+      return reply.code(409).send({ ok: false, error: 'slug-taken', stderr: res.stderr });
+    }
+    if (res.stderr.includes("invalid slug '")) {
+      return reply.code(400).send({ ok: false, error: 'bad-slug', stderr: res.stderr });
+    }
+    return reply.code(502).send({ ok: false, stderr: res.stderr });
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {

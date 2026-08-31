@@ -27,6 +27,12 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   forget: ['claude-corp-demo'],
   swap: ['demo-quiet-basin', 'claude2'],
   wsAdd: ['demo'],
+  // The operator-named add, WITH its title flag: the sample proves the whole
+  // shape crosses the bare `['ws-add']` prefix, same reasoning as
+  // `wsAddWorker` below. And the same caveat applies — trailing tokens are
+  // unconstrained here, so `ccd-workspaces.test.ts` (real binary, fixture
+  // HOME) is what proves ccd can actually READ this.
+  wsAddNamed: ['demo', 'eng-1234', 'ENG-1234 - Fix the login flow'],
   // Same bare `['ws-add']` grant, second builder: the dispatch path's
   // worker-declaring form. Its sample proves the FLAGGED shape crosses the
   // existing prefix with no widening — tokens after the prefix are
@@ -316,6 +322,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     forget: ['forget', 'claude-corp-demo'],
     swap: ['swap', 'demo-quiet-basin', 'claude2'],
     wsAdd: ['ws-add', 'demo'],
+    wsAddNamed: ['ws-add', 'demo', 'eng-1234', '--title', 'ENG-1234 - Fix the login flow'],
     // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
     // before its positionals, so token order here is parse-load-bearing the
     // same way `prOpen`'s is. The dec rides LAST, after the positional, where

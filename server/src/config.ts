@@ -35,6 +35,8 @@ export interface CcrcConfig {
   agentUrl: string | null;
   agentToken: string | null;
   hetznerToken: string | null;
+  /** A Linear personal API key. Null is a supported state — see the reader. */
+  linearToken: string | null;
   fleetServerId: string | null;
   vapidPublic: string | null;
   vapidPrivate: string | null;
@@ -327,6 +329,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     agentUrl: env.CCRC_AGENT_URL ?? null,
     agentToken: env.CCRC_AGENT_TOKEN ?? null,
     hetznerToken: env.CCRC_HETZNER_TOKEN ?? null,
+    // A Linear personal API key, for resolving a pasted ticket to its title.
+    // NULL IS A SUPPORTED STATE, not a misconfiguration: without it the ticket
+    // parse still works offline (`ENG-1234` -> `eng-1234`, and a pasted URL
+    // keeps the title slug Linear put in it), so the feature degrades to a
+    // worse NAME rather than to an error.
+    //
+    // An env var beside `hetznerToken` rather than a token FILE, deliberately.
+    // The mail token is a file because two boxes and a shell script share it,
+    // which is what buys `coord/token.ts` its ~230 lines of ENOENT-vs-EACCES,
+    // empty-file and committed-placeholder ceremony. This value is read by one
+    // process, once, at boot; it inherits `hetznerToken`'s lane instead.
+    linearToken: env.CCRC_LINEAR_TOKEN ?? null,
     fleetServerId: env.CCRC_FLEET_SERVER_ID ?? null,
     vapidPublic: env.CCRC_VAPID_PUBLIC ?? null,
     vapidPrivate: env.CCRC_VAPID_PRIVATE ?? null,
