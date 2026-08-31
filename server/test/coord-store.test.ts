@@ -1417,3 +1417,125 @@ describe('CoordStore: a blocked delivery is visible on the wire', () => {
     expect(row!.lastError).toBe('registry row listed but unreadable (registry-unmeasurable)');
   });
 });
+
+describe('CoordStore.recordRunEvent — the caller owns the moment', () => {
+  it('stamps the moment it is given, and still reads the clock when it is not', () => {
+    // `markDispatchStarted` (store.ts:832-835) already states the precedent this
+    // widening applies: "the caller owns the moment being recorded." The default
+    // is what keeps dispatch.ts:370/409/615 byte-identical.
+    const s = store();
+    const r = openRun(s) as { id: number };
+    s.recordRunEvent(r.id, 'coordinator', 'skill-preflight:absent', 1_700_000_000_000);
+    const before = Date.now();
+    s.recordRunEvent(r.id, 'coordinator', 'skill-preflight:present');
+    const [given, defaulted] = s.runEvents(r.id);
+    expect(given!.at).toBe(1_700_000_000_000);
+    expect(defaulted!.at).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe('CoordStore.reclaimProgram — the whole program, in one transaction', () => {
+  const DEAD = 'ccrc-pwa-old-coordinator';
+  const LIVE = 'ccrc-pwa-new-coordinator';
+
+  /** The program as the wedge is actually found: five waves opened by ONE
+   *  coordinator, wave 1 already closed. The closed row is the LOWEST id, and
+   *  lowest-id-claimed is exactly the row both `claimedBy` readers pick
+   *  (store.ts:382 and store.ts:1283, both `ORDER BY id LIMIT 1` with no state
+   *  predicate). A fixture whose waves were all still open could not tell a
+   *  whole-program rewrite from a non-terminal-only one — it would pass both. */
+  const fiveWaves = (s: CoordStore): number[] => {
+    const ids: number[] = [];
+    for (let w = 1; w <= 5; w++) {
+      ids.push((openRun(s, { wave: w, waveOf: 5, claimedBy: DEAD }) as { id: number }).id);
+    }
+    expect(s.advance(ids[0]!, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(ids[0]!, 'closing', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(ids[0]!, 'done', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.run(ids[0]!)!.state).toBe('done');   // anti-vacuity: the fixture is really terminal
+    return ids;
+  };
+
+  it('rewrites the TERMINAL run too, so the next wave stops being refused (R1)', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+      .toEqual({ ok: true, program: 'build4', runIds: ids, from: DEAD });
+    // The closed wave-1 row is the whole assertion: it is the id both readers
+    // reach first, and a rewrite that skipped it leaves them on the corpse.
+    expect(s.run(ids[0]!)!.state).toBe('done');
+    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([LIVE, LIVE, LIVE, LIVE, LIVE]);
+    expect(s.resolveCoordinator(null)).toBe(LIVE);
+    expect(openRun(s, { wave: 6, waveOf: 6, claimedBy: LIVE })).toMatchObject({ state: 'planned' });
+  });
+
+  it('leaves a reconstructed row NULL rather than inventing a claimant for it (D-12)', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    // `reconstruct` mints every rebuilt run with `claimedBy` NULL — it cannot
+    // know who will resume the program — and D-12's clause (store.ts:373-380)
+    // exists to SKIP those rows. Written with the store's own handle, the shape
+    // this file already uses at :67 for a row no public method can produce.
+    s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[2]!);
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+      .toEqual({ ok: true, program: 'build4', runIds: [ids[0]!, ids[1]!, ids[3]!, ids[4]!], from: DEAD });
+    expect(s.run(ids[2]!)!.claimedBy).toBeNull();
+    expect(s.runEvents(ids[2]!)).toEqual([]);     // and no trail invented for it either
+  });
+
+  it('writes one attribution row per rewritten run, every one carrying the SAME moment', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    const at = 1_777_000_123_456;
+    s.reclaimProgram(ids[4]!, LIVE, at);
+    for (const id of ids) {
+      const mine = s.runEvents(id).filter((e) => e.causedBy === 'operator');
+      expect(mine.length).toBe(1);
+      expect(mine[0]!.at).toBe(at);
+      expect(mine[0]!.detail).toBe(`reclaim:${DEAD} -> ${LIVE}`);
+      // A non-transition encoded as one — `fromState === toState`, which is also
+      // what keeps the row off the notify lane (store.ts:566-569).
+      expect(mine[0]!.fromState).toBe(mine[0]!.toState);
+    }
+    const ats = ids.flatMap((id) =>
+      s.runEvents(id).filter((e) => e.causedBy === 'operator').map((e) => e.at));
+    expect(ats.length).toBe(5);
+    expect(new Set(ats).size).toBe(1);           // one operator act, one moment, not five
+  });
+
+  it('a `to` that is already the claimant is a no-op SUCCESS — never a refusal, never a trail', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    const before = ids.flatMap((id) => s.runEvents(id)).length;
+    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000))
+      .toEqual({ ok: true, program: 'build4', runIds: [], from: DEAD });
+    expect(ids.flatMap((id) => s.runEvents(id)).length).toBe(before);
+    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+  });
+
+  it('refuses an id no run carries, and a run whose claimant is NULL — writing nothing either way', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    expect(s.reclaimProgram(ids[4]! + 999, LIVE, 1_777_000_000_000))
+      .toEqual({ ok: false, kind: 'unknown-run' });
+    s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[4]!);
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+      .toEqual({ ok: false, kind: 'no-claimant' });
+    // The refusal returned BEFORE the UPDATE: the other four rows are untouched.
+    expect(s.run(ids[0]!)!.claimedBy).toBe(DEAD);
+  });
+
+  it('is ONE transaction — an attribution row that throws rolls the whole rewrite back', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    // The property `tx()` buys (db.ts:245-257, `BEGIN IMMEDIATE`) and the reason
+    // this method may not be three public store calls in a row: a crash between
+    // the UPDATE and the attribution rows leaves a program whose runs name a
+    // coordinator no `run_events` row ever says arrived. Patched on the instance
+    // because nothing else in this store can be made to fail on demand.
+    const patched = s as unknown as { recordRunEvent: () => void };
+    patched.recordRunEvent = () => { throw new Error('attribution failed'); };
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('attribution failed');
+    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+  });
+});

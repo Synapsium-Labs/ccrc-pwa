@@ -73,6 +73,18 @@ export type AdvanceResult =
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; error: 'unknown-run' };
 
+/** The reclaim's three answers. `kind`, not `error`, because these are not
+ *  `advance`'s arms and folding them into `AdvanceResult` would put two
+ *  vocabularies behind one discriminant. `unknown-run` is spelled the way its
+ *  `MailRejectCode` twin is (shared/api.ts:3446); `no-claimant` is this wave's
+ *  own word, admitted to `mail-routes.test.ts`'s scanner through the exported
+ *  `isReclaimRefuseCode` guard rather than an allowlist entry — the standing
+ *  remedy that file states for every union after the first. */
+export type ReclaimProgramResult =
+  | { ok: true; program: string; runIds: number[]; from: string }
+  | { ok: false; kind: 'unknown-run' }
+  | { ok: false; kind: 'no-claimant' };
+
 /** The three terminal members, ONCE (spec §3.2). The SQL literal in
  *  `setWorkItemState`'s `WHERE` is BUILT from this list and `settleItems`'
  *  pre-pass READS it, so the guard and the precheck cannot drift — and
@@ -370,8 +382,12 @@ export class CoordStore {
         'SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1',
       ).get(input.program) as { claimedBy: string | null } | undefined;
       // spec:291-292: multi-coordinator arbitration is a NON-GOAL. A second
-      // coordinator is refused, in words, rather than silently allowed to
-      // interleave dispatches with the first one's.
+      // coordinator is refused AT OPEN TIME, in words, rather than silently
+      // allowed to interleave dispatches with the first one's. What this refusal
+      // no longer means is "forever": `reclaimProgram` below rewrites the column
+      // this reads, for a claimant measured dead. The refusal is still the only
+      // answer to two LIVE coordinators — nothing arbitrates between them — and
+      // that is the non-goal spec:291-292 actually names.
       if (existing?.claimedBy != null && existing.claimedBy !== input.claimedBy) {
         return { refused: 'claimed-by-another' as const, by: existing.claimedBy };
       }
@@ -406,6 +422,76 @@ export class CoordStore {
         'VALUES (?, ?, ?, ?, ?, ?, ?)',
       ).run(input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now);
       return { id: Number(res.lastInsertRowid), program: input.program, state: 'planned' as const };
+    });
+  }
+
+  /**
+   * The whole reclaim commit, as ONE transaction — `dispatchRun`/`closeRun`'s
+   * shape (D-277's argument applied to a batch instead of a sequence). It is
+   * ONE `tx()` and it calls no public method that opens its own:
+   * `DatabaseSync` transactions do not nest, the rule `advanceInner`'s
+   * docstring (:514-520) states in full. `recordRunEvent` is safe here for the
+   * same reason `cancelOutstandingDeliveries` is safe inside `closeRun` — it
+   * holds no `tx()`.
+   *
+   * EVERY RUN OF THE PROGRAM IS REWRITTEN, TERMINAL ONES INCLUDED (operator
+   * ruling R1, D-1123). Both readers of this column — `openRun`'s
+   * one-coordinator guard (:381-383) and `resolveCoordinator(null)`
+   * (:1282-1284) — run the identical
+   * `SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL
+   * ORDER BY id LIMIT 1`, with NO state predicate and lowest id first. On a
+   * program standing at wave 5 the lowest claimed id IS wave 1's closed run, so
+   * a rewrite scoped to non-terminal runs leaves both readers answering the dead
+   * session and the wedge outlives the door built to clear it. Terminality is
+   * about what may still HAPPEN to a run; this column is about who is driving
+   * the program, and those are not the same question.
+   *
+   * SO THIS `WHERE` CARRIES NO STATE PREDICATE AT ALL, and the omission is a
+   * decision rather than an oversight (D-1135): this file holds two disagreeing
+   * answers to "terminal" — `TERMINAL_RUN_STATES` is DERIVED from
+   * `RUN_TRANSITIONS` and yields three words, while eight SQL predicates here
+   * hand-write two — and a method that needed the word would have to pick one.
+   * Ruling R1 means this one does not, so it does not inherit the disagreement.
+   *
+   * A row whose `claimedBy` IS NULL STAYS NULL. `reconstruct` mints rebuilt runs
+   * that way because it cannot know who will resume the program, and D-12's
+   * clause exists to skip them; writing a claimant into one here would hand the
+   * guard a row it was deliberately taught to ignore.
+   *
+   * `causedBy` is the literal `operator`, hardcoded at this one call site and
+   * never read from a request body. Attribution, not authentication
+   * (spec:26-30) — and on an operator door that carries no box token, a
+   * body-supplied `causedBy` is a free-text field writing the audit trail.
+   */
+  reclaimProgram(runId: number, to: string, at: number): ReclaimProgramResult {
+    return tx(this.db, () => {
+      const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
+        .get(runId) as { program: string; claimedBy: string | null } | undefined;
+      if (!run) return { ok: false as const, kind: 'unknown-run' as const };
+      // Refused BEFORE the UPDATE, so a refusal writes nothing at all: an
+      // unclaimed run names no handover to make, and rewriting its siblings off a
+      // row that never had a claimant is a reassignment nobody asked for.
+      if (run.claimedBy === null) return { ok: false as const, kind: 'no-claimant' as const };
+      // Read before the write, and excluding rows ALREADY naming `to`: the
+      // attribution rows record a CHANGE, so re-running the same reclaim writes
+      // none rather than a second identical trail. `ORDER BY id` so `runIds` is
+      // the same list twice — the query planner may reach these rows through
+      // `runs_by_program` (schema.ts:88) rather than by rowid.
+      const moved = this.db.prepare(
+        'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
+        'AND claimedBy != ? ORDER BY id',
+      ).all(run.program, to) as { id: number; claimedBy: string }[];
+      this.db.prepare('UPDATE runs SET claimedBy = ? WHERE program = ? AND claimedBy IS NOT NULL')
+        .run(to, run.program);
+      for (const m of moved) {
+        // One `at` for N rows (D-1134): the operator acted once, and a trail that
+        // reads five clock samples describes five acts.
+        this.recordRunEvent(m.id, 'operator', `reclaim:${m.claimedBy} -> ${to}`, at);
+      }
+      return {
+        ok: true as const, program: run.program,
+        runIds: moved.map((m) => m.id), from: run.claimedBy,
+      };
     });
   }
 
@@ -481,14 +567,22 @@ export class CoordStore {
    * row this method writes, by construction. A non-transition is not a
    * transition notification. The row still lands in `run_events`, which is the
    * trail callers want; what it no longer does is impersonate a state change.
+   *
+   * `at` IS THE CALLER'S NOW (wave 5, D-1134). The `markDispatchStarted`/
+   * `markDispatched` precedent, said there in full: "the caller owns the moment
+   * being recorded." Defaulted, so every existing call site (`dispatch.ts:370`,
+   * `:409`, `:615`) is unchanged — one call site, one fact, one clock read. The
+   * reason it had to become a parameter: a batch that writes N attribution rows
+   * for ONE operator act must stamp them with ONE moment, or the trail says the
+   * operator acted N times. `reclaimProgram` above is that batch.
    */
-  recordRunEvent(runId: number, causedBy: string, detail: string): void {
+  recordRunEvent(runId: number, causedBy: string, detail: string, at: number = Date.now()): void {
     const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
       { state: string } | undefined;
     if (!row) return;
     this.db.prepare(
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(runId, Date.now(), row.state, row.state, causedBy, detail);
+    ).run(runId, at, row.state, row.state, causedBy, detail);
   }
 
   /**
