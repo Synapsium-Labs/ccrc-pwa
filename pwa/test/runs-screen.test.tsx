@@ -37,7 +37,7 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'ccrc-pwa-clear-cove', wrapper: 'claude', home: 'claude', project: 'ccrc-pwa',
-  workdir: '/w', workspace: 'clear-cove', name: null, status: 'idle', statusUpdatedAt: null,
+  workdir: '/w', workspace: 'clear-cove', name: null, title: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/clear-cove', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,

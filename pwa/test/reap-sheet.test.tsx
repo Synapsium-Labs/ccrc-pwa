@@ -26,7 +26,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'custom-tools',
-  workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
+  workdir: '/w', workspace: 'quiet-basin', name: null, title: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,

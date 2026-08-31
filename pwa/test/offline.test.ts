@@ -17,7 +17,7 @@ const session = (id: string): FleetSession => ({
   project: 'OpenClawHetzner',
   workdir: '/home/rc/projects/OpenClawHetzner',
   workspace: null,
-  name: null,
+  name: null, title: null,
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },

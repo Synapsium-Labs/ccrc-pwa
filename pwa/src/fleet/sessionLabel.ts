@@ -1,7 +1,18 @@
 import type { FleetSession } from '../../../shared/api';
 
 /**
- * What to call a session, everywhere. `name ?? branch ?? workspace ?? id`.
+ * What to call a session, everywhere.
+ * `title ?? name ?? branch ?? workspace ?? id`.
+ *
+ * `title` LEADS, and it is the only rung a human typed on purpose: it is what
+ * the operator gave `ws-add --title`, held verbatim in `$REG/<id>.title`. It
+ * outranks `name` because `name` is Claude Code's — a title it derived from
+ * the conversation — and it outranks `branch` because the ai-title sweep
+ * rewrites `branch` and is specifically forbidden from touching a workspace
+ * the operator named (`sweepNames`' thirteenth condition). A named workspace
+ * therefore reads the same on every surface for its whole life, which is the
+ * property the slug cannot provide (31 characters, lowercase) and the reason
+ * the two are separate fields at all.
  *
  * `name` is only ever present when it is worth showing: the server drops
  * Claude Code's derived session handles (`openclawhetzner-42` — cwd basename
@@ -27,5 +38,5 @@ import type { FleetSession } from '../../../shared/api';
  * length of a program, which is a product decision, not a refactor.
  */
 export function sessionLabel(session: FleetSession): string {
-  return session.name ?? session.branch ?? session.workspace ?? session.id;
+  return session.title ?? session.name ?? session.branch ?? session.workspace ?? session.id;
 }

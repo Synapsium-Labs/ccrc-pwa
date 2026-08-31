@@ -36,6 +36,23 @@ export interface FleetSession {
    *  main checkout. Grouping and ws-rm both key off its presence. */
   workspace: string | null;
   name: string | null;                       // live display name from sessions/<pid>.json
+  /** The sentence the OPERATOR gave this workspace at `ws-add --title` time —
+   *  `$REG/<id>.title`, verbatim. Null when nobody gave one, which is every
+   *  workspace created before this shipped and every one created without a
+   *  name.
+   *
+   *  It exists because the SLUG cannot hold it. `_ws_slug_valid` is lowercase,
+   *  dashes and 31 characters, so a ticket produces two strings: the slug that
+   *  becomes the directory, the id, the branch and the systemd unit, and this,
+   *  which is the only one a human recognises (`ENG-1234 - Fix the login
+   *  flow`). `sessionLabel` reads it FIRST, ahead of `name` — the operator's
+   *  own words outrank Claude Code's derived handle.
+   *
+   *  Distinct from `name`, which is Claude Code's, read live from
+   *  `sessions/<pid>.json` and dropped by the server when it is a derived
+   *  handle. Two different authors, two different fields; folding them would
+   *  make "the operator named this" unanswerable. */
+  title: string | null;
   status: SessionStatus;
   statusUpdatedAt: number | null;            // epoch ms
   limits: { five: number | null; seven: number | null } | null;  // account of current wrapper
@@ -1731,6 +1748,11 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       workdir: reqStr(o, 'workdir'),
       workspace: optStr(o, 'workspace'),
       name: optStr(o, 'name'),
+      // Absent → null: every snapshot written before this field existed, and
+      // every workspace nobody named. `reviveFleetSession` returns a literal,
+      // so this line is what makes a missing computation a compile error
+      // rather than a silently absent field.
+      title: optStr(o, 'title'),
       status: status as SessionStatus,
       statusUpdatedAt: optNum(o, 'statusUpdatedAt'),
       limits,

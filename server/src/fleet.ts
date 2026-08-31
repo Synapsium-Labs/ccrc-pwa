@@ -364,7 +364,12 @@ export async function assembleFleet(
     };
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
-      project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      project: r.project, workdir: r.workdir, workspace: r.workspace, name,
+      // Carried, never derived. The adapter's job is to hand on what the
+      // registry measured; deriving a title from the slug here would narrow a
+      // distinction it received — the slug is lossy by construction (31
+      // characters, lowercase) and the title is the unlossy half.
+      title: r.title, status, statusUpdatedAt,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
       // AskUserQuestion/permission menu the hook never gets a write for

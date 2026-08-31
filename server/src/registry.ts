@@ -153,6 +153,13 @@ export interface SessionRecord {
    * a name anybody chose.
    */
   namedByOperator: boolean;
+  /** `$REG/<id>.title` — the sentence the operator gave at `ws-add --title`
+   *  time, verbatim, null when absent. Rides to the wire as
+   *  `FleetSession.title`; see that field for why it is not the slug and not
+   *  `name`. A plain `field()` read: this one has no fail-shut direction to
+   *  argue about, because an unreadable title costs a nicer label and nothing
+   *  else. */
+  title: string | null;
   /** `$REG/<id>.substrate` — a supervisor's own "I could not reach tmux"
    *  record (D-310 (was D-B8-14), spec §2): `<epoch-seconds> <verbatim reason>`, written
    *  by `_substrate_mark` on every unknown probe tick, removed by
@@ -536,7 +543,7 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, namedRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, namedRead, title] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -550,6 +557,7 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
     fieldMeasured(io, cfg.registryDir, id, 'named'),
+    field(io, cfg.registryDir, id, 'title'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -745,6 +753,9 @@ async function buildRecord(
     namedByOperator: namedRead.ok
       ? namedRead.content !== ''
       : (namedRead.reason === 'absent' ? false : namedListed),
+    // `field()` already trims; `''` would be a title that renders as nothing,
+    // so it reads as "no title" and `sessionLabel` falls through to branch.
+    title: title === null || title === '' ? null : title,
     // The `.hold` ladder, applied to the supervisor's fault record (D-310,
     // spec §2): presence from the LISTING, never from a non-null read — "no
     // fault recorded" re-enables every destructive affordance downstream, so

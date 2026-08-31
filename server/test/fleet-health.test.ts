@@ -44,7 +44,7 @@ function remoteDeps(
 // claims (server/tsconfig.json does not include test/, so nothing said so).
 const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
+  workspace: null, name: null, title: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,

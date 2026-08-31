@@ -28,7 +28,7 @@ const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   id: 'claude:OpenClawHetzner', wrapper: 'claude', home: 'claude',
   project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: Date.now() - 120_000,
+  workspace: null, name: null, title: null, status: 'idle', statusUpdatedAt: Date.now() - 120_000,
   limits: { five: 62, seven: 71 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null,

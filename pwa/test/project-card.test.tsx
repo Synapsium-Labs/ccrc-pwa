@@ -14,7 +14,7 @@ afterEach(cleanup);
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w', workspace: 'quiet-mesa', name: null, status: 'idle',
+  workdir: '/w', workspace: 'quiet-mesa', name: null, title: null, status: 'idle',
   statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
   model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, held: null,
