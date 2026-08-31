@@ -301,10 +301,19 @@ record the **first failing assertion verbatim**, then revert from a working-tree
 
   | mutation | first-fail assertion |
   |---|---|
-  | drop `AND state NOT IN ('done','failed')` from the query | *(measured at execution)* |
-  | change `claimedBy` to `sessionId` in both the SELECT and the WHERE | *(measured at execution)* |
-  | drop `DISTINCT` | *(measured at execution)* |
-  | drop `claimedBy IS NOT NULL` | *(measured at execution)* |
+  | drop `AND state NOT IN ('done','failed')` from the query | `AssertionError: expected [ 'the-corpse' ] to deeply equal []` ❯ the terminal-run test |
+  | change `claimedBy` to `sessionId` in both the SELECT and the WHERE | `AssertionError: expected [] to deeply equal [ 'the-coordinator' ]` |
+  | drop `DISTINCT` | `AssertionError: expected [ Array(2) ] to deeply equal [ 'the-coordinator' ]` |
+  | drop `claimedBy IS NOT NULL` | **GREEN as written — hole. Closed, then:** `AssertionError: expected [ null ] to deeply equal []` ❯ `test/coord-store.test.ts:1875:36` |
+
+  **The hole, named.** Every fixture in the first draft went through `openRun`, whose signature requires a
+  `claimedBy: string` — so no row in the suite could ever carry a null and the guard could not be
+  witnessed. A null `claimedBy` IS reachable: `reconstruct`'s disaster-recovery INSERT binds it (
+  `store.ts:2406`) and rebuilds a NON-terminal wave, which is precisely the row the guard exists for.
+  Closed with a fixture that establishes its own premise — the rebuilt run is asserted `working` and its
+  `claimedBy` asserted null BEFORE the method is called — and re-measured red. Without it the method
+  answers `[null]` typed `string[]`, a null wearing a session id's type, into a `Set` the mail lane then
+  asks about.
 
 - [ ] **1.7 — Commit.**
 
@@ -1941,6 +1950,22 @@ noted because a fixture that needs to pin a caps timestamp cannot.
 ---
 
 ## Execution record
+
+### Baseline, measured BEFORE the first line of implementation (2026-08-31 19:30-19:36 UTC)
+
+Merge-base `6458a14d`, worktree clean but for the plan file. Foreground, `timeout 600000`, cd'd into each
+package, tails read. Box load average 6.51 at start (16 cores).
+
+| suite | files | passed | skipped | duration |
+|---|---|---|---|---|
+| server | 244 | 6131 | 56 | 294.42s |
+| agent | 18 | 281 | 0 | 3.37s |
+| pwa | 76 | 2085 | 0 (Type Errors: none) | 53.33s |
+
+These are EXACTLY wave 5's close-record figures (server 244/6131/56, agent 18/281, pwa 76/2085), so the
+deltas this wave reports are measured against a baseline confirmed on this box, not inherited from a
+prior wave's prose. No load flake shed on any of the three runs.
+
 
 *(Filled AT EXECUTION, row by row, the moment each measurement is taken — never assembled at the end.
 Wave 5 lost its whole record to a compaction between measuring and writing back, and the review, not the
