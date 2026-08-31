@@ -3263,6 +3263,7 @@ prose and the pin are rewritten here, not amended.
       // every run of the program, terminal ones included, so a program with waves
       // behind it moves more than one row and the operator is told how many.
       expect(out).toEqual({
+        ok: true,
         program: 'program-leverage', runIds: [16, 18], from: 'coordinator-old', to: 'coordinator-new',
       });
     });
@@ -3271,6 +3272,17 @@ prose and the pin are rewritten here, not amended.
   Run `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts` (foreground). **Record the exact
   first failing assertion text verbatim** — expected to be the `TypeError` from calling
   `api.reclaimRun`, which does not exist yet.
+
+  **CORRECTED AT EXECUTION — `ok: true` is in the expectation above because it is in the ANSWER.**
+  As first drafted this step and step 7.3 contradicted each other: 7.3 implements `reclaimRun` as a
+  bare `postJson` passthrough, which hands back the parsed body verbatim, so `out` carries the
+  route's `ok: true` and the `toEqual` without it reds **on correct code** —
+  `AssertionError: expected { ok: true, …(4) } to deeply equal { program: 'program-leverage', …(3) }`.
+  Resolved in the fixture's favour rather than by projecting four fields out of the body in the
+  client: passthrough is what every other `postJson` caller in that file does, and `abandonRun`
+  projects only because it owes a degrade direction for an absent field, which this door does not.
+  Kept as a whole-body `toEqual` rather than softened to `toMatchObject`, so it still pins that the
+  client neither drops a field the sheet may later want nor invents one the server did not send.
 
 - [ ] **7.2 — Add the two remaining `reclaimRun` guards to the same describe, still RED.** The
   no-credential pin and the refusal pass-through:
@@ -3386,15 +3398,17 @@ prose and the pin are rewritten here, not amended.
 
     it('absence of `queued` degrades to TRUE, the abandonRun direction', async () => {
       // No deployed server produces this: the route has sent the field on every
-      // 200 it has ever answered (`server/src/server.ts:1527`). It covers a
-      // truncated or proxy-rewritten body, where the safe direction is not to
-      // assert a kickoff was already waiting that never was.
+      // 200 it has ever answered (`server/src/server.ts`'s kickoff handler ends
+      // `return { ok: true, queued: out.queued }` — the plan cited `:1527`; task
+      // 6's own edits moved it to `:1549`, so the SYMBOL is cited instead). It
+      // covers a truncated or proxy-rewritten body, where the safe direction is
+      // not to assert a kickoff was already waiting that never was.
       const older = createApi(async () => jsonResponse(200, { ok: true }));
       expect(await older.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
     });
 
     it('carries {runId, wave} when the caller has them, and omits the keys entirely when it does not', async () => {
-      const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, queued: true }));
+      const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { ok: true, queued: true }));
       const api = createApi(fetchImpl as unknown as typeof fetch);
 
       await api.kickoff('claude-ccrc-pwa', { slug: 'program-leverage', title: 'Program leverage', runId: 18, wave: 5 });
@@ -3411,6 +3425,16 @@ prose and the pin are rewritten here, not amended.
   ```
   Run `cd pwa && ./node_modules/.bin/vitest run test/api.test.ts`. **Record the first failing
   assertion verbatim** — expected from the first of the three, where `post` resolves `undefined`.
+
+  **CORRECTED AT EXECUTION — the third fixture above is shown REPAIRED; as first drafted it could not
+  survive step 7.6.** It is this file's only fixture that calls the same client method TWICE, and the
+  drafted `mockResolvedValue(jsonResponse(…))` resolves the SAME `Response` instance both times. A body can be read once, so the moment `kickoff` starts
+  reading its answer the second call dies `TypeError: Body is unusable: Body has already been read`
+  — inside `postJson`, i.e. red for a fixture's reason wearing the implementation's clothes.
+  `mockImplementation` gives each call a fresh body. **`vi.fn(async () => …)` is NOT the fix**: a zero-argument implementation passed
+  to `vi.fn` narrows `mock.calls` to `[] | undefined`, and the two `as [string, RequestInit]` casts
+  below then fail `tsc --noEmit` with `TS2352` — measured, and invisible to vitest for the same reason
+  D-1137 is.
 
 - [ ] **7.5 — Rewrite the wave-4 structural pin at `:377-396` from a LINE scan to a SLICE scan, and
   measure it red.** Its own message already says what to do (`:393`: "rewrite this pin if it grew a
@@ -3524,8 +3548,18 @@ prose and the pin are rewritten here, not amended.
   ```ts
     queueKickoff: (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
   ```
-  Every injection site is a `vi.fn().mockResolvedValue(undefined)` and needs no edit. Re-run
-  `./node_modules/.bin/tsc --noEmit` and confirm zero errors. **Also note in the execution record
+  **CORRECTED AT EXECUTION — "every injection site is a `vi.fn().mockResolvedValue(undefined)` and
+  needs no edit" is FALSE, measured.** Two of the twenty-odd sites name the promise's type themselves
+  and so follow the prop: `start-program.test.tsx:1216`'s
+  `vi.fn(() => new Promise<void>(() => {}))` (the deliberately hanging kickoff) and `:1323`'s
+  `vi.fn(() => new Promise<void>((resolve) => { resolveKickoff = resolve; }))`. Both red
+  `TS2322: Type 'Mock<() => Promise<void>>' is not assignable to …`. The second drags two more lines
+  with it — `resolveKickoff`'s own declared type and the `resolveKickoff!()` call, which must now pass
+  a value. All four edits are type-level: the first promise still never settles, and the second's
+  resolution value is read by nothing, so neither test's subject moves. Step 7.8's
+  "green **unchanged apart from `:89`**" is wrong for the same reason and should read "unchanged apart
+  from the four type-level lines named here" — a red at any OTHER site would still mean the prop was
+  widened in the wrong direction. Re-run `./node_modules/.bin/tsc --noEmit` and confirm zero errors. **Also note in the execution record
   whether `vitest run` surfaced the TS2322 on its own** (`vite.config.ts` sets
   `test.typecheck.enabled`) — if it did not, say so, because that is the difference between the type
   being pinned by the suite and being pinned only by `npm run build`.

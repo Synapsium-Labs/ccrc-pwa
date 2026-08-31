@@ -86,7 +86,7 @@ function OpenHarness({
   createSession, queueKickoff, fleet,
 }: {
   createSession: (b: { wrapper: string; project: string; workdir?: string }) => Promise<void>;
-  queueKickoff: (id: string, b: { slug: string; title: string }) => Promise<void>;
+  queueKickoff: (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
   fleet: FleetStore;
 }): ReactNode {
   const [open, setOpen] = useState(true);
@@ -1213,7 +1213,9 @@ describe('StartProgramSheet', () => {
   // after a D-291 timeout has already put `starting` back to false.
   it('never leaves an ENABLED Start while its own started session is being opened — no dead tap (B-3)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const queueKickoff = vi.fn(() => new Promise<void>(() => {})); // hangs — finish() is mid-flight
+    // Wave 5: the type argument follows the prop (D-1137). The promise still
+    // never settles, so nothing about what this measures moved.
+    const queueKickoff = vi.fn(() => new Promise<{ queued: boolean }>(() => {})); // hangs — finish() is mid-flight
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
       createSession={async () => {}} queueKickoff={queueKickoff}
@@ -1319,8 +1321,12 @@ describe('StartProgramSheet', () => {
   it('a superseded prompt response (in flight when the sheet closes) cannot navigate', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    let resolveKickoff: (() => void) | null = null;
-    const queueKickoff = vi.fn(() => new Promise<void>((resolve) => { resolveKickoff = resolve; }));
+    // Wave 5: the type argument follows the prop (D-1137). The sheet reads no
+    // field off this answer — it is the SETTLING, after the close, that this
+    // test is about — so the value below is arbitrary and the assertion at the
+    // end is unchanged.
+    let resolveKickoff: ((v: { queued: boolean }) => void) | null = null;
+    const queueKickoff = vi.fn(() => new Promise<{ queued: boolean }>((resolve) => { resolveKickoff = resolve; }));
     const store = makeStore();
     render(<OpenHarness createSession={createSession} queueKickoff={queueKickoff} fleet={store} />);
 
@@ -1338,7 +1344,7 @@ describe('StartProgramSheet', () => {
     const before = location.pathname;
 
     // The hanging `prompt()` finally resolves, after the close.
-    resolveKickoff!();
+    resolveKickoff!({ queued: true });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);

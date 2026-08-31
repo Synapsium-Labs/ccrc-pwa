@@ -449,17 +449,39 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  is; this is the machine's, and machines go through the idle-gated
      *  delivery lane like every wave brief since Build 4.
      *
-     *  `{slug, title}`, never prose. The server composes the sentence from the
+     *  `{slug, title}`, never prose. The server composes the sentence from an
      *  L0 constant, which makes this route strictly NARROWER than `prompt` — it
-     *  can queue a program kickoff and nothing else.
+     *  can queue a program kickoff and nothing else. `{runId, wave}` chooses
+     *  WHICH sentence: absent is a program being STARTED, present is a wave-N
+     *  revive of a run that is already open, and the two say opposite things
+     *  about re-opening it. Absence-permits, so every wave-4 call site sends a
+     *  byte-identical request; the server refuses a HALF pair with 400
+     *  `bad-request`, a pairing this signature does not model.
      *
-     *  Resolves to `void` through `post`, not `postJson`. The route's body
-     *  distinguishes "queued just now" from "one was already waiting", and the
-     *  sheet renders neither differently — both mean a kickoff is on its way.
-     *  `abandonRun` is the standing counter-example: it reads a body because a
-     *  render depends on a field. Reading one here would ship a distinction
-     *  nothing consumes. */
-    kickoff: (id: string, b: { slug: string; title: string }) => post(`${sid(id)}/kickoff`, b),
+     *  IT READS THE ANSWER NOW (D-1133), and the paragraph this replaces argued
+     *  it never should: "reading one here would ship a distinction nothing
+     *  consumes." Wave 5 is the consumer that sentence said did not exist. On
+     *  the START path both answers still mean "a kickoff is on its way"; on the
+     *  REVIVE path "one was already waiting, unread" is the likelier answer and
+     *  a different thing to tell the operator, so `ResumeSheet` renders them
+     *  apart. Hence `postJson`, whose own docstring (:286-288) names exactly
+     *  what `post` was doing to this value.
+     *
+     *  An absent `queued` reads TRUE — `abandonRun`'s degrade direction, for
+     *  its reason. No deployed server can produce it; it covers a truncated
+     *  body, where claiming a kickoff was already waiting that never was is the
+     *  unsafe half. */
+    kickoff: async (
+      id: string, b: { slug: string; title: string; runId?: number; wave?: number },
+    ): Promise<{ queued: boolean }> => {
+      const answer = await postJson<{ queued?: unknown }>(`${sid(id)}/kickoff`, b);
+      // The local is `answer` on purpose. This method's structural pin proves it
+      // sends no prose key by scanning the whole method for the two words such a
+      // payload would use, and a local named after either of them would blind it.
+      // The pin is worth more than naming symmetry with `abandonRun` three doors
+      // down.
+      return { queued: answer.queued !== false };
+    },
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
       post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
     /** Answer a hook-reported question by option index. `askKey` is minted
@@ -520,6 +542,34 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const body = (await res.json().catch(() => ({}))) as { released?: unknown };
       return { released: body.released !== false };
     },
+    /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
+     *  coordinator after the one they name has died. The wedge it opens is the
+     *  one two readers create between them by answering the lowest-id
+     *  `claimedBy` with no state predicate: while that name is a corpse, a
+     *  second coordinator is refused at open time and `toId:'coordinator'` mail
+     *  resolves to nobody at all.
+     *
+     *  UNGATED — no box token on this call — and NOT for `abandonRun`'s reason
+     *  (:502-503), which is that the wedged session is still holding the key.
+     *  Here the key-holder is the thing that DIED. A door whose only opener is
+     *  the credential of a dead session is a door with no opener, which is
+     *  where D-282 arrived from the other direction.
+     *
+     *  `claimedBy` is the only field it sends: the event trail's `causedBy` is
+     *  a hardcoded literal on the server, so no body of this client's can
+     *  attribute an operator act to somebody else.
+     *
+     *  `postJson`, because a render depends on `runIds` — the same test
+     *  `abandonRun` passes and `kickoff` used to fail. Note that the
+     *  `claimant-alive` 409 names its code in `refused`, not `error`, so
+     *  `apiErrorText` cannot turn it into a sentence (D-1139); the sheet reads
+     *  `err.body` itself, which is why `ResumeSheet` owns a status-first
+     *  translator rather than borrowing this file's — and why it renders
+     *  `detail`, the only thing telling `registry-unmeasurable`'s two
+     *  producers apart. */
+    reclaimRun: (id: number, claimedBy: string): Promise<{ program: string; runIds: number[]; from: string; to: string }> =>
+      postJson<{ program: string; runIds: number[]; from: string; to: string }>(
+        `/api/runs/${id}/reclaim`, { claimedBy }),
     /** The DURABLE feed. `catchUp` is the live tail and is volatile by
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */

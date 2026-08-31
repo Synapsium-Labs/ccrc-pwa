@@ -229,8 +229,18 @@ export interface StartProgramSheetProps {
   /** Program-leverage wave 4: the kickoff is QUEUED as durable system mail, not
    *  typed into the pane. Named `queueKickoff` rather than `kickoff` because the
    *  standing sentence itself is `programKickoff` in L0 and this file's tests
-   *  import it — one name for the text, another for the act. */
-  queueKickoff?: (id: string, b: { slug: string; title: string }) => Promise<void>;
+   *  import it — one name for the text, another for the act.
+   *
+   *  Wave 5 changed the RETURN, not the call. `api.kickoff` answers `{queued}`
+   *  now (D-1133), and `Promise<{queued: boolean}>` is not assignable to
+   *  `Promise<void>` (D-1137, `TS2322` — `npm run build` runs `tsc --noEmit`
+   *  before it builds anything, and vitest strips types, so the suite could
+   *  never have caught this), so the default on the line below forces this type.
+   *  THE SHEET STILL READS NO FIELD: "one was already waiting" is a distinction
+   *  only the revive path renders. Ignoring a field is a rendering decision;
+   *  declaring the shape an injected fake has to have is a contract one, and
+   *  only the second is worth spending a type on. */
+  queueKickoff?: (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
   loadProjects?: () => Promise<{ roots: string[]; projects: ProjectRow[] }>;
 }
 
