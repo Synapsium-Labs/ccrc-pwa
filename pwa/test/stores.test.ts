@@ -7,6 +7,7 @@ import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
+import { saveFleetSnapshot } from '../src/lib/offline';
 import { TEST_ROSTER } from './rosterFixture';
 
 // — fixtures —
@@ -812,6 +813,67 @@ describe('fleet store', () => {
       expect(store.getState().runs).toEqual([]);
       expect(store.getState().runsFrameSeen).toBe(true);
       store.getState().disconnect();
+    });
+  });
+
+  // program-leverage wave 5: the `fleet` frame's own `frameSeen`, the third
+  // instance of `runsFrameSeen`'s idiom (D-1138). The resume door on /runs has
+  // to tell "this box says nothing claims that id" apart from "no frame has
+  // arrived yet", and `sessions` cannot answer it in EITHER direction.
+  describe('the `fleet` frame and its own frameSeen', () => {
+    it('accepts a well-formed fleet frame and flips `fleetFrameSeen`', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      expect(store.getState().fleetFrameSeen).toBe(false);
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [fleetSession('s1', 'claude')] }));
+      expect(store.getState().sessions).toHaveLength(1);
+      // `RunsScreen`'s resume door reads this to tell "this box says nothing
+      // claims that id" apart from "no frame has arrived yet" — `sessions` cannot
+      // answer it, because a cold start HYDRATES that array from localStorage
+      // before any socket exists.
+      expect(store.getState().fleetFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('a well-formed fleet frame carrying `[]` still flips it — an honest empty fleet is not silence', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+
+      lastSocket().message(JSON.stringify({ type: 'fleet', sessions: [] }));
+      expect(store.getState().sessions).toEqual([]);
+      expect(store.getState().fleetFrameSeen).toBe(true);
+      store.getState().disconnect();
+    });
+
+    it('a hydrated snapshot is not a frame — `fleetFrameSeen` starts false with sessions already present', () => {
+      // The whole reason this flag exists rather than `sessions.length > 0` —
+      // and the fixture has to actually HYDRATE for that to be a claim about
+      // anything (D-1152). This test used to build a store on a localStorage
+      // the enclosing `beforeEach` had just cleared, so `sessions` was `[]`
+      // and the very mutation it names SURVIVED the whole file: measured
+      // green, 62 passed, with the store's initial value written as
+      // `(snapshot?.sessions ?? []).length > 0`. A pin whose premise is
+      // absent asserts nothing — it silently re-states the empty case the two
+      // tests above already own, in the one place a reader would look for the
+      // populated one.
+      //
+      // Hydrated through the PRODUCTION writer, never a hand-written storage
+      // key: `saveFleetSnapshot` is what the live `fleet` frame calls
+      // (`stores/fleet.ts`'s message handler), so a renamed key, a bumped
+      // snapshot version or a tightened refusal in that writer reds this
+      // fixture instead of quietly re-emptying it. The `sessions` assertion
+      // below is that alarm, and it has to come FIRST: it is the premise the
+      // flag assertion is worth making under, and a premise checked after the
+      // claim is a premise nobody checked.
+      saveFleetSnapshot([fleetSession('s1', 'claude')]);
+      const store = createFleetStore({ makeSocket });
+      expect(store.getState().sessions,
+        'the snapshot did not hydrate — without sessions on the store this pin is inert')
+        .toHaveLength(1);
+      expect(store.getState().fleetFrameSeen).toBe(false);
     });
   });
 

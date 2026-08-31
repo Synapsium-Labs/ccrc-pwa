@@ -195,11 +195,13 @@ describe('the scanner is looking at something', () => {
     expect(scanRoutes('server.ts').length).toBe(46);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
-    expect(scanRoutes('coord/routes.ts').length).toBe(22);
-    expect(ROUTES.length).toBe(68);
-    // …and the three partitions add up: 3 websockets + 65 HTTP.
+    // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
+    // and the first route in this file whose whole job is to rewrite `claimedBy`.
+    expect(scanRoutes('coord/routes.ts').length).toBe(23);
+    expect(ROUTES.length).toBe(69);
+    // …and the three partitions add up: 3 websockets + 66 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(65);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(66);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -451,11 +453,16 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 68 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 41; the gated non-exempt
+    // 69 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 42; the gated non-exempt
     // routes this file reasons about by name are `POST /api/claims/:id/break`,
     // which meets the session gate on an armed box exactly as abandon and pause
-    // do, and — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`.
+    // do, — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`, and —
+    // program-leverage wave 5 — `POST /api/runs/:id/reclaim`, the fourth
+    // ungated operator door and DELIBERATELY not EXEMPT: with `CCRC_AUTH` armed
+    // it must sit behind the session gate exactly as abandon, pause and break
+    // do (`auth/gate.ts`'s NOT-EXEMPT note: gating them there "strengthens
+    // D-282 rather than reversing it").
     //
     // The kickoff route is DELIBERATELY not EXEMPT: it is a cookie-bearing PWA
     // write, the browser has one, and nothing on a fleet host posts it
@@ -466,7 +473,7 @@ describe('with the gate ARMED and no cookie', () => {
     // raised the scanned count and the exempt count by one each and left the
     // difference alone. A new route that is NOT exempt moves this number, which
     // is exactly what the kickoff route just did.
-    expect(gated.length).toBe(41);
+    expect(gated.length).toBe(42);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 

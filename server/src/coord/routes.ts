@@ -19,6 +19,7 @@ import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
@@ -1021,6 +1022,91 @@ export function registerCoordRoutes(
   });
 
   /**
+   * `POST /api/runs/:id/reclaim` — the FOURTH route in this file that is
+   * UNGATED, and the one the other three implied. `POST /api/coord/pause`
+   * lifts a marker a stuck coordinator cannot lift for itself;
+   * `POST /api/runs/:id/abandon` releases the run that coordinator wedged;
+   * `POST /api/claims/:id/break` frees the claim a dead holder still holds.
+   * None of them can hand a LIVE program to a new session once the old
+   * claimant is a corpse — `openRun`'s one-coordinator guard and
+   * `resolveCoordinator` both read the same lowest-id `claimedBy` with no
+   * state predicate, so until this door existed the dead name answered both
+   * for ever and every later wave opened onto a grave.
+   *
+   * Deliberately NOT behind `requireMailToken`, for D-282's argument
+   * unchanged: the box token authenticates the FLEET HOST and the coordinator
+   * holds it by design, so putting a wedge's release valve behind that key
+   * leaves the wedge no door. With `CCRC_AUTH` armed this still sits behind
+   * the session gate, exactly as the other three do — ungated means "no box
+   * token", never "no authentication".
+   *
+   * THE BODY IS READ, and that is where this door parts company with the
+   * abandon and break handlers above. `claimedBy` — which session takes the
+   * program over — is a fact only the operator has, so it arrives in the body
+   * and is validated here as a non-empty string. What does NOT arrive in the
+   * body is the ATTRIBUTION: `causedBy` is the hardcoded literal `operator`
+   * at the store call site (`reclaimProgram`), so a caller may name the heir
+   * and can never forge who did the naming. Reading one field is not the
+   * same licence as reading the act's own provenance.
+   *
+   * UNNAMED IN BOTH SKILL CORPORA, the abandon-door shape again: a
+   * coordinator that reclaims its own program has learned nothing, and one
+   * that reclaims someone else's has stopped coordinating. The operator with
+   * a phone is the only caller this door has.
+   */
+  app.post('/api/runs/:id/reclaim', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // Read BEFORE the mutex, not inside it: a malformed body is decided by this
+    // request alone, and queueing it behind a live dispatch would make the
+    // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
+    // probe — no payload, a `:id` of `x` — deterministic on a busy box.
+    const body = (req.body ?? {}) as { claimedBy?: unknown };
+    if (typeof body.claimedBy !== 'string' || body.claimedBy.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const to = body.claimedBy.trim();
+
+    const reclaimDeps: ReclaimDeps = { coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux };
+    // Inside the mutex for abandon's reason (`CoordMutex`'s docstring,
+    // routes.ts:32-64): the measurement of the old claimant and the UPDATE that
+    // replaces it are separated by awaits over live fleet acts, and a concurrent
+    // dispatch reading `claimedBy` between them would read a name that is
+    // already being retired.
+    const r = await coordMutex.run(() => reclaimRun(reclaimDeps, id, to));
+    if (r.ok) {
+      return reply.code(200).send({
+        ok: true, program: r.program, runIds: r.runIds, from: r.from, to: r.to,
+      });
+    }
+    switch (r.kind) {
+      case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
+      // 502, the coord-route family's status for this condition
+      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
+      // server.ts's own vocabulary. `detail` rides along because it is a
+      // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
+      // this layer cannot recompute it.
+      case 'registry-unmeasurable':
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable', detail: r.detail });
+      // `by` and `detail` both: the first is who still holds it, the second is
+      // HOW that was measured — a live pane and a restarting supervisor are one
+      // answer told apart by this sentence, and collapsing it would leave the
+      // operator with a refusal and no next move.
+      case 'claimant-alive':
+        return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      default: {
+        const _exhaustive: never = r;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+      }
+    }
+  });
+
+  /**
    * `POST /api/runs/:id/advance` (fix, review findings 1/15: neither Build 7
    * plan actually authored this route — PR I's own D-9 said "PR J's
    * `POST /api/runs/:id/advance` is what reaches [awaiting-review/merging];
@@ -1145,13 +1231,21 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/coord/pause` — the OPERATOR's door, and one of the THREE routes
+   * `POST /api/coord/pause` — the OPERATOR's door, and one of the FOUR routes
    * in this file that are UNGATED: deliberately NOT behind `requireMailToken`
-   * (D-282). The others are `POST /api/runs/:id/abandon` above and
-   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape).
-   * Among them they are the WHOLE unauthenticated write surface of this file —
-   * a claim `coord-pause-route.test.ts`'s `UNGATED` set holds to exactly these
-   * three names, in both directions.
+   * (D-282). The others are `POST /api/runs/:id/abandon` above,
+   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape)
+   * and `POST /api/runs/:id/reclaim` (program-leverage wave 5 — that shape once
+   * more, for a program whose coordinator is dead and whose copy of the box
+   * token died on the box with it). Among them they are the WHOLE
+   * unauthenticated write surface of this file, and
+   * `coord-pause-route.test.ts`'s `UNGATED` set now holds that claim in BOTH
+   * directions: no route outside the set reaches its first `await` without a
+   * token check, and no route inside it may quietly acquire one. The second
+   * half arrived with the fourth door — the sentence had been claiming both
+   * directions while only the first was ever measured, so a listed door that
+   * had since been gated would have gone on being described here as ungated
+   * with nothing in the suite to say otherwise.
    *
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
@@ -1721,10 +1815,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
-   * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-282's argument, applied by build 9
-   * D12/D16). The box token authenticates the fleet host, and the sessions
+   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD of the FOUR
+   * routes in this file that are UNGATED: deliberately NOT behind
+   * `requireMailToken`, the `POST /api/runs/:id/abandon` shape (D-282's
+   * argument, applied by build 9 D12/D16). The ordinal is this door's PLACE in
+   * the order they were opened and stays true whatever opens next; the number
+   * beside it is a claim about the tree today, which is why it is now derived
+   * from `UNGATED.size` by a scanner rather than trusted —
+   * `POST /api/runs/:id/reclaim` (program-leverage wave 5) is the fourth. The
+   * box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
    * the holder used to take it. So this rides the PWA's session-gated surface:

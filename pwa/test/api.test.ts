@@ -355,10 +355,98 @@ describe('abandonRun (Task 12, spec §4.3)', () => {
   });
 });
 
+// program-leverage wave 5. `ResumeSheet` takes its `reclaimRun` prop INJECTED in
+// `resume-sheet.test.tsx`, so the real `api.reclaimRun` — the one the production
+// sheet's default prop value actually calls — needs its own pin here, the same
+// idiom `abandonRun` just above uses and for the same reason.
+describe('reclaimRun (program-leverage wave 5)', () => {
+  it('POSTs {claimedBy} as JSON to /api/runs/:id/reclaim', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, {
+      ok: true, program: 'program-leverage', runIds: [16, 18], from: 'coordinator-old', to: 'coordinator-new',
+    }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const out = await api.reclaimRun(18, 'coordinator-new');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/runs/18/reclaim');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    // ONE field. The event trail's `causedBy` is hardcoded `operator` server-side,
+    // so nothing this client sends can attribute the reclaim to anybody else — and
+    // a second field here would be the first step toward it trying.
+    expect(JSON.parse(init.body as string)).toEqual({ claimedBy: 'coordinator-new' });
+    // `runIds` is the answer the sheet renders: under ruling R1 the rewrite covers
+    // every run of the program, terminal ones included, so a program with waves
+    // behind it moves more than one row and the operator is told how many.
+    //
+    // `ok` is in the expectation because it is in the ANSWER: `postJson` hands
+    // back the parsed body verbatim rather than projecting four fields out of
+    // it, which is what every other `postJson` caller in this file does and
+    // what `abandonRun` deliberately does NOT (it projects, because it owes a
+    // degrade direction for an absent field). Written as a whole-body `toEqual`
+    // rather than a `toMatchObject`, so this also pins that the client neither
+    // drops a field the sheet may later want nor invents one the server did
+    // not send. The declared return type names the four the sheet reads.
+    expect(out).toEqual({
+      ok: true,
+      program: 'program-leverage', runIds: [16, 18], from: 'coordinator-old', to: 'coordinator-new',
+    });
+  });
+
+  it('sends NO box token — the credential belongs to the session that died', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, { ok: true, program: 'p', runIds: [1], from: 'a', to: 'b' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.reclaimRun(1, 'b');
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    // The EXACT header set, not `.get('x-ccrc-mail-token')` being null: a
+    // credential under any other spelling walks past that, and this door's
+    // ungatedness is the decision most likely to be "fixed" by someone who has
+    // not read D-282. Two names, because the JSON-reading helper asks for JSON
+    // back as well as sending it. Sorted, so header iteration order is not part
+    // of what this measures.
+    const names = [...new Headers(init.headers).keys()].sort();
+    expect(names, 'the reclaim call carries no credential header').toEqual(['accept', 'content-type']);
+  });
+
+  it('carries the 409 refusal through verbatim — the sheet renders it, not a toast', async () => {
+    const refusal = {
+      ok: false, refused: 'claimant-alive', by: 'coordinator-old', detail: 'tmux reports the pane live',
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(409, refusal));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const err = await api.reclaimRun(18, 'coordinator-new').then(
+      () => { throw new Error('expected reclaimRun to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual(refusal);
+    // The code rides `refused`, NOT `error`, so `ApiError`'s constructor
+    // (`api.ts:13-18`) finds no message and this degrades to the bare status
+    // sentence. Pinned so the sheet's own translator is written knowing it
+    // rather than discovering it on a phone.
+    expect(apiErrorText(err),
+      'the refusal code rides `refused`; if a later wave teaches apiErrorText that key, rewrite this pin')
+      .toBe('request failed (409)');
+  });
+});
+
 // program-leverage wave 4 (F4). The sheet's kickoff prop is injected in
 // `start-program.test.tsx`'s cases, so the real client method — the one the
 // production sheet's default prop actually calls — is pinned here, exactly as
 // `createSession` below it is and for the same reason.
+//
+// Wave 5 gave the same method a SECOND consumer: `ResumeSheet`'s re-kickoff
+// door, which passes the `{runId, wave}` pair and so asks the server for a
+// wave-N revive sentence rather than a program-start one. Both consumers'
+// default prop value is this one method, so both are pinned here — including
+// the answer it stopped discarding (D-1133), which only the second renders.
 describe('kickoff (program-leverage wave 4)', () => {
   it('POSTs {slug, title} to /api/sessions/:id/kickoff', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, queued: true }));
@@ -376,23 +464,36 @@ describe('kickoff (program-leverage wave 4)', () => {
 
   it('sends NO prose — the server composes the sentence from the L0 constant', () => {
     // The route is narrower than `POST /api/sessions/:id/prompt` on purpose: it
-    // can queue a program kickoff and nothing else. A `text` or `body` key here
-    // would hand that narrowing back.
+    // can queue a program kickoff and nothing else. A prose key here hands that
+    // narrowing back.
     //
-    // WAVE-4 REVIEW, MINOR 5 (D-1122). This selected the first line containing
-    // ``/kickoff` `` — which is the JSDoc line SEVENTEEN lines above the
-    // implementation, so it asserted that a COMMENT lacked `text` and `body`
-    // and could never red on the mutation it names. Two repairs: the predicate
-    // now names the DECLARATION (`kickoff:`) and the call (`post(`), and there
-    // is an anti-vacuity assertion that the line really is the one that posts
-    // the payload. `toBeDefined()` therefore also fails if the call site ever
-    // grows a multi-line body — which is correct: this pin would silently stop
-    // measuring, and it has to be rewritten rather than quietly kept.
+    // WAVE-4 REVIEW, MINOR 5 (D-1122) is why this reads the DECLARATION rather
+    // than the first line mentioning ``/kickoff` `` — that one was a JSDoc line
+    // seventeen rows above the code and could never red on the mutation it
+    // named. Wave 5 breaks the repair in turn: the method stopped being a
+    // one-liner the moment it started reading its answer, which is the case
+    // `toBeDefined()` was left there to catch. So it now scans the WHOLE method,
+    // declaration through its own `},` — strictly more of the file than the line
+    // form ever saw — and it is anti-vacuous three ways: the slice must be
+    // found, it must terminate, and it must contain both the call and the payload.
+    //
+    // `postJson` stayed the anchor when MINOR 7 (D-1150) moved this method onto
+    // the degrading twin `postJsonOr`: the substring holds for both spellings on
+    // purpose, because what THIS pin measures is that a JSON-answering POST
+    // sends the program identity and no prose — the degrade itself is pinned by
+    // behaviour two tests below, which is the mechanism that reds if the method
+    // is ever walked back to the throwing helper.
     const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
-    const line = src.split('\n').find((l) => l.includes('kickoff:') && l.includes('post('));
-    expect(line, 'the kickoff call site — a one-liner; rewrite this pin if it grew a body').toBeDefined();
-    expect(line, 'not the declaration that posts the payload').toContain('slug');
-    expect(line).not.toMatch(/\btext\b|\bbody\b/);
+    const lines = src.split('\n');
+    const start = lines.findIndex((l) => l.includes('kickoff: async ('));
+    expect(start, 'the kickoff declaration — rewrite this pin if the method was renamed or re-shaped')
+      .toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > start && l === '    },');
+    expect(end, 'the kickoff method never closes at its own indent — rewrite this pin').toBeGreaterThan(start);
+    const slice = lines.slice(start, end + 1).join('\n');
+    expect(slice, 'not the declaration that posts the payload').toContain('postJson');
+    expect(slice, 'the payload is the program identity and the wave, nothing else').toContain('slug');
+    expect(slice).not.toMatch(/\btext\b|\bbody\b/);
   });
 
   it('encodes the session id, like every other session-scoped call', async () => {
@@ -416,6 +517,95 @@ describe('kickoff (program-leverage wave 4)', () => {
     // …and the code becomes a sentence rather than reaching the operator as a
     // bare slug. A box with no coord.db is an ordinary, silent state.
     expect(apiErrorText(err)).toMatch(/coordination/i);
+  });
+
+  it('reads `queued` off the 200 body — wave 5 is the consumer the old docstring said did not exist', async () => {
+    const fresh = createApi(async () => jsonResponse(200, { ok: true, queued: true }));
+    expect(await fresh.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+
+    // NOT a failure — a kickoff IS waiting for that session — and on the revive
+    // path it is the likelier of the two answers, which is precisely why the
+    // sheet has to be able to tell them apart.
+    const waiting = createApi(async () => jsonResponse(200, { ok: true, queued: false }));
+    expect(await waiting.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: false });
+  });
+
+  it('absence of `queued` degrades to TRUE, the abandonRun direction', async () => {
+    // No deployed server produces this: the route has sent the field on every
+    // 200 it has ever answered (`server/src/server.ts`'s kickoff handler ends
+    // `return { ok: true, queued: out.queued }`). It covers a truncated or
+    // proxy-rewritten body, where the safe direction is not to assert a kickoff
+    // was already waiting that never was.
+    const older = createApi(async () => jsonResponse(200, { ok: true }));
+    expect(await older.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+  });
+
+  it('an UNREADABLE 200 degrades the same way absence does, instead of rejecting (D-1150)', async () => {
+    // WAVE-5 REVIEW, MINOR 7. The docstring above `kickoff` promised this
+    // degrade before any code implemented it: this method went through plain
+    // `postJson`, which is `(await request(…)).json()` with no `.catch` at all,
+    // so an answer that cannot be parsed THREW. And on `main` this method read no answer at
+    // all, which makes the gap a REGRESSION rather than a missing nicety — a 200
+    // that really did queue the kickoff reached the operator as "nothing was
+    // sent, and it has no brief yet", above a retry that would queue a SECOND
+    // one.
+    //
+    // Two fixtures, because "unreadable" arrives two ways and the promise names
+    // both: a truncated answer, and an emptied one (a stripping proxy, a 200
+    // with no payload at all).
+    const truncated = createApi(async () => new Response('{"ok":true,"queu', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    expect(await truncated.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+
+    const emptied = createApi(async () => new Response('', { status: 200 }));
+    expect(await emptied.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' })).toEqual({ queued: true });
+  });
+
+  it('degrades ONLY what it measured — a request that never completed still rejects (D-1150)', async () => {
+    // THE LINE, and why the fix is `abandonRun`'s shape rather than a `.catch`
+    // around `postJson`. Reading the answer only after `request` has handed back
+    // a 2xx makes "the exchange completed and the answer was unreadable"
+    // separable from "the exchange never happened"; a catch wrapped around the
+    // parsed call cannot separate them at all, because a dropped connection and
+    // a body that never arrived both surface as a TypeError. Degrading the
+    // second would tell the operator a kickoff was queued by a POST that never
+    // left the phone — the unsafe half of the same coin the degrade direction is
+    // chosen for.
+    const offline = createApi(async () => { throw new TypeError('Failed to fetch'); });
+    await expect(offline.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' }))
+      .rejects.toThrow(/failed to fetch/i);
+
+    // …and a non-2xx is untouched: the codes are what the sheet turns into a
+    // sentence, so swallowing one would be the same regression in the other
+    // direction. (The 501 case above pins the full translation.)
+    const refused = createApi(async () => jsonResponse(409, { ok: false, error: 'bad-request' }));
+    await expect(refused.kickoff('claude-ccrc-pwa', { slug: 's', title: 't' }))
+      .rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('carries {runId, wave} when the caller has them, and omits the keys entirely when it does not', async () => {
+    // `mockImplementation`, not `mockResolvedValue(jsonResponse(…))`: this is
+    // the file's only fixture that calls the same client method TWICE, and a
+    // single `Response` instance can be read once. Since `kickoff` started
+    // reading its answer (D-1133) the shared-instance form throws `Body is
+    // unusable: Body has already been read` on the second call — a fixture
+    // defect that would have been read as the implementation's. `vi.fn()` first
+    // and the implementation second, so `mock.calls` keeps the loose element
+    // type the two casts below need.
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { ok: true, queued: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.kickoff('claude-ccrc-pwa', { slug: 'program-leverage', title: 'Program leverage', runId: 18, wave: 5 });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string))
+      .toEqual({ slug: 'program-leverage', title: 'Program leverage', runId: 18, wave: 5 });
+
+    // Absence-permits, and it must be ABSENCE: the server refuses a HALF pair
+    // with 400 `bad-request`, so a body that always carried the two keys would
+    // turn wave 4's byte-identical request into a refusal.
+    await api.kickoff('claude-ccrc-pwa', { slug: 'program-leverage', title: 'Program leverage' });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string))
+      .toEqual({ slug: 'program-leverage', title: 'Program leverage' });
   });
 });
 

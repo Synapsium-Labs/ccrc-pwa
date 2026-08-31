@@ -422,6 +422,7 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
     });
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={new Set<string>()}
       loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');

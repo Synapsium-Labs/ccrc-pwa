@@ -1435,3 +1435,26 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
     }
   });
 });
+
+// ── the resume door's ink (program-leverage wave 5, D-1129) ─────────────────
+describe('the resume door is measured, not left in the blind spot', () => {
+  it('rides .run-abandon’s grouped rule, so both themes and both states are measured', () => {
+    // No GROUNDS/INHERITED_GROUNDS entry, and that is the point: the class was
+    // added to a rule whose ancestor `.run-row` is already self-grounded, so
+    // the descendant route recovers the ground on its own. A rule of its own
+    // would have needed a registry entry — or, forgotten, would have joined
+    // the uncovered census with the report still LOOKING complete.
+    // A BOUNDARY, not `includes`: `.run-row .run-resumed` (the resumed-wave
+    // note, two rules up in fleet.css) is a strict prefix-extension of this
+    // class, so a substring filter silently harvests its two rows as well —
+    // measured, this assertion read `got 2` before the class existed at all
+    // and would have read 6 after. The negative lookahead keeps `:active` (the
+    // row this pin exists to catch) and drops the neighbour.
+    const rows = report.measured.filter((m) => /\.run-row \.run-resume(?![\w-])/.test(m.label));
+    expect(rows).toHaveLength(4);            // base + :active, dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('on var(--bg-surface)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

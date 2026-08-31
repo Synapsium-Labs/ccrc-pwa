@@ -34,10 +34,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
+import { coordPresence } from '../fleet/coordWords';
+import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
@@ -70,7 +72,11 @@ function RunRow({
   run,
   nowMs,
   session,
+  coordSession,
+  frameSeen,
+  programHasOpenRun,
   onAbandon,
+  onResume,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -86,8 +92,26 @@ function RunRow({
    *  it yet). Looked up by the caller so this component stays a pure
    *  renderer of the one row it owns. */
   session: FleetSession | null;
+  /** The run's CLAIMANT as the live fleet snapshot has it — a different
+   *  lookup from `session` above, which is the run's WORKER. Both come off
+   *  `sessionById`, and conflating them would put the resume door on a row
+   *  whose worker died while its coordinator is fine. */
+  coordSession: FleetSession | null;
+  /** Has a `{type:'fleet'}` frame ever landed. Passed rather than inferred
+   *  from `coordSession !== null`: absence from a snapshot that never arrived
+   *  and absence from one that did are opposite facts, and only the second is
+   *  evidence of anything (D-1138). */
+  frameSeen: boolean;
+  /** Does this row's PROGRAM still have a run that can move, as the board
+   *  currently measures it (D-1146)? The row's own `state` cannot answer that
+   *  — it is a fact about the other rows — so the caller derives it once from
+   *  the same `active` slice it renders and hands each row the single bit it
+   *  needs, the same shape `session`/`coordSession` above are looked up in. */
+  programHasOpenRun: boolean;
   /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-287 (was D-B4-14)). */
   onAbandon: (run: RunSummary) => void;
+  /** Opens the ResumeSheet for this row (spec §7.3). */
+  onResume: (run: RunSummary) => void;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -216,6 +240,63 @@ function RunRow({
     </button>
   );
 
+  // The resume door. `coordPresence` decides the FIRST half — three answers,
+  // and only `dead` opens it: `unknown` is what a substrate fault, a missing
+  // row and an unarrived frame all read as, and each of those would otherwise
+  // offer to hand a live coordinator's program to somebody else (D-309's
+  // collapse, quoted on `coordPresence`'s own docstring; D-1129). D-1146 does
+  // not touch that half and it must stay exactly this strong: widening the
+  // second term below is only safe because the first one still refuses to act
+  // on doubt.
+  //
+  // THE SECOND HALF IS THE PROGRAM'S FACT, NOT THE ROW'S (D-1146, review
+  // MAJOR 2). It was `!isRunClosed(run)` alone, on the argument that "a done
+  // wave's coordinator being dead is the ORDINARY end state, not a wedge" —
+  // which is true of a finished wave sitting BESIDE one that can still move,
+  // and false of exactly the case that needs this door most. `closeRun`
+  // retires a program at zero open runs, and between closing wave N and
+  // opening wave N+1 a program has no open run at all — the close-then-open
+  // window ruling R1 names. There, every row is terminal, `ResumeSheet` has
+  // ONE opener (this button), and the wave shipped no `ccrc-api` verb on
+  // purpose, so the board rendered no control anywhere while the server half
+  // worked perfectly: measured live, wave N+1's `POST /api/runs` refuses
+  // `claimed-by-another by:<dead id>` and a reclaim is what makes it answer
+  // ok. `Abandon` on the last open run reached the same dead end from the
+  // other side, by removing the only Resume the program had.
+  //
+  // So: this run is open, OR its program has nothing open. A terminal row
+  // whose program is still running keeps the old answer — the door belongs on
+  // the wave that can move, not on the archive underneath it.
+  //
+  // The door is per ROW while the reclaim is per PROGRAM (contract R1 rewrites
+  // `claimedBy` on every run of the program, terminal ones included), so an
+  // all-terminal program with several waves offers the same door several
+  // times — one action repeated, never two different ones. Electing a single
+  // row to carry it would be this renderer deciding which wave represents a
+  // program, and `programWave`'s own docstring records what that guess cost
+  // the last time it was made here.
+  //
+  // D-1147, RECORDED AND DELIBERATELY NOT FIXED HERE: reclaiming an
+  // all-terminal program does not make runId-less `toId:'coordinator'` mail
+  // resolvable again. The close route retires the program
+  // (`setProgramState('done')` once `programOpenRunCount` reads zero) and
+  // `resolveCoordinator(null)` refuses on its single-active-program guard
+  // BEFORE it ever reads `claimedBy` — so the column this door rewrites is not
+  // the one that arm is stuck on. Mail naming an explicit `runId` resolves
+  // through a direct row read and is unaffected, which is the path the
+  // coordinator corpus already sends a resumed coordinator down.
+  const presence = coordPresence(run.claimedBy, coordSession, frameSeen);
+  const resumeButton = presence === 'dead' && (!isRunClosed(run) || !programHasOpenRun) ? (
+    <button
+      type="button"
+      className="run-resume"
+      aria-label={`Resume run ${run.id}`}
+      onClick={() => onResume(run)}
+    >
+      Resume
+    </button>
+  ) : null;
+
   // A run with no session has nothing to open. An inert row says that; a
   // button that navigates to a session that does not exist says something
   // false.
@@ -229,12 +310,13 @@ function RunRow({
   // row tappable to let the affordance through would have traded a true
   // sentence for a dead tap onto a session id that does not exist yet.
   return run.sessionId === null
-    ? <li className="run-row" data-inert="true">{body}{abandonButton}</li>
+    ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row">
         <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
           {body}
         </button>
+        {resumeButton}
         {abandonButton}
       </li>
     );
@@ -250,6 +332,7 @@ export function RunsScreen({
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
   const sessions = store((s) => s.sessions);
+  const fleetFrameSeen = store((s) => s.fleetFrameSeen);
   const conn = store((s) => s.conn);
   const [cold, setCold] = useState<RunSummary[] | null>(null);
   // Review finding 19: `cold`'s own `null` used to mean BOTH "still loading"
@@ -267,6 +350,10 @@ export function RunsScreen({
   // `SessionActionsSheet`'s single actions sheet uses rather than mounting
   // one sheet per row.
   const [abandonTarget, setAbandonTarget] = useState<RunSummary | null>(null);
+
+  // Spec §7.3: which run's ResumeSheet is open, or `null`. ONE sheet at screen
+  // level, reused across rows — `abandonTarget`'s own shape, one line up.
+  const [resumeTarget, setResumeTarget] = useState<RunSummary | null>(null);
 
   // Task 13, spec §4.4: the run board's own door onto a new program. ONE
   // door, rendered unconditionally below — including at zero runs, the same
@@ -410,6 +497,47 @@ export function RunsScreen({
   // source). When NEITHER has ever answered, this screen knows nothing at
   // all, and must say so rather than rendering the ordinary empty state.
   const noSignalYet = !runsFrameSeen && coldState !== 'ok';
+  // The board's own answer to "does this project already have a program
+  // running?", handed to the sheet rather than fetched by it — the sheet's
+  // composition is pinned at exactly two network calls
+  // (`start-program.test.tsx`'s `expect(urls).toHaveLength(2)`).
+  //
+  // THREE-STATE, and `noSignalYet` is the third. Before either signal has
+  // answered, `new Set()` would tell the sheet this board had measured an empty
+  // world; `null` says it has measured nothing, which is what is true. Both of
+  // the paths that reach it (a cold deep link, a server too old to send the
+  // frame — the two `active`'s own comment above names) resolve to a measured
+  // set the moment `api.runs(true)` returns, so this is a window and not a dead
+  // end.
+  //
+  // Built from `active`, which is already `!isRunClosed`-filtered: a project
+  // whose only run is `done` is not carrying a coordinator any more.
+  const openRunProjects: ReadonlySet<string> | null =
+    noSignalYet ? null : new Set(active.map((r) => r.project));
+  // D-1146: the programs this board measures as still having a run that can
+  // move — the resume door's PROGRAM-level half, derived once here rather than
+  // re-asked per row. Deliberately a second, separate set from
+  // `openRunProjects` above: that one is keyed by PROJECT and answers the
+  // start-program sheet's "is this project already carrying a program?", this
+  // one is keyed by PROGRAM and answers "is there still a wave to hang the
+  // door on?" — two questions over one list that stop agreeing the moment one
+  // project carries two programs.
+  //
+  // Built from `active`, and an EMPTY answer here is a measured empty rather
+  // than silence in every window this board passes through — which is the
+  // whole condition D-1146 turns on. A terminal row can only reach the screen
+  // through the cold read (`finished` has no other source), and the cold read
+  // is `?closed=1`, which carries the ACTIVE half too. So whenever there is a
+  // finished row on screen to ask this about, `active` is either the live
+  // frame's fleet-wide answer (`runsFrameSeen`) or that same cold read's own
+  // active rows — never the not-yet-answered `null` window, which renders no
+  // rows at all (`noSignalYet`, below). And the archive clamp cannot fake the
+  // condition either: `CoordStore.runs`'s `closedLimit` is ASYMMETRIC BY
+  // DESIGN (review finding 24) — it caps the newest closed rows and drops no
+  // active run at any age, so a truncated cold read can lose an archive row
+  // this door would have appeared on, never the open row whose presence
+  // WITHHOLDS it.
+  const programsOpen = programsWithOpenRun(active);
   const hasAny = active.length > 0 || finished.length > 0;
   // I6 (residual): `coldState === 'error'` is a fact about the FINISHED half
   // specifically — `active` can be fully answered by the live frame alone
@@ -430,7 +558,11 @@ export function RunsScreen({
       run={run}
       nowMs={now}
       session={run.sessionId === null ? null : sessionById.get(run.sessionId) ?? null}
+      coordSession={run.claimedBy === null ? null : sessionById.get(run.claimedBy) ?? null}
+      frameSeen={fleetFrameSeen}
+      programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}
+      onResume={setResumeTarget}
     />
   );
 
@@ -550,7 +682,13 @@ export function RunsScreen({
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
       <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
-      <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store} />
+      {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
+          abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
+          the program, terminal ones included (contract R1), and the finished
+          half of this board has no source but the cold read. */}
+      <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
+      <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}
+        openRunProjects={openRunProjects} />
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -490,8 +490,21 @@ describe('the rejection table is total, in both directions', () => {
         // `'never-started'` as a `SessionLifecycle` record key, the exact way
         // `mirrorplan.ts` brought `'rotated-away'` here. Same remedy, same
         // reason: the exported guard, never an allowlist pin per member.
-        || isSessionLifecycle(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode or SessionLifecycle`).toBe(true);
+        || isSessionLifecycle(tok)
+        // PROGRAM-LEVERAGE WAVE 5 — the SIXTH union, checked together and never
+        // merged, on the standing rule `enter-ignored` states above. `reclaim.ts`
+        // lives in `server/src/coord` and spells both of its own refusals as
+        // literals. It is a vocabulary of its own and not an extension of
+        // `RunRefuseCode` FOR A REASON THIS SCANNER CANNOT SEE:
+        // `coordinator-skill.test.ts` requires every `RunRefuseCode` member to be
+        // named in the coordinator corpus, and this door is the operator's act on a
+        // coordinator that is already dead — a live one reading about it has found a
+        // recovery for a problem it does not have. Admitted through the exported
+        // guard rather than NOT_CODES, for the reason the `LifecycleGapReason` note
+        // above gives: an allowlist accepts one spelling for ever, a guard accepts a
+        // member added later and still rejects a typo'd one.
+        || isReclaimRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle or ReclaimRefuseCode`).toBe(true);
     }
   });
 });

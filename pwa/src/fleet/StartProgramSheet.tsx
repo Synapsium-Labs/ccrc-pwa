@@ -216,9 +216,61 @@ function startErrorText(err: unknown): string {
   return apiErrorText(err);
 }
 
+/** "Is a program already running in this project?" — THREE answers, and the
+ *  third is why this is a function instead of a `.has()` at the call site.
+ *
+ *  `openRunProjects === null` is NOT MEASURED: the run board has had neither a
+ *  `runs` frame nor a finished cold read. A `(openRunProjects ?? new Set()).has()`
+ *  answers `false` there, which is indistinguishable from a measured empty board
+ *  — the sheet would offer Start on the strength of a question nobody answered.
+ *  That fold is the single failure this arm exists to prevent, so the state gets
+ *  its own word and the render gets its own sentence.
+ *
+ *  The set carries PROJECT NAMES and nothing else, so the copy below can name
+ *  the project and cannot name the program. That is a limit, not an omission: a
+ *  set of names is not a run row, and naming a program would be a claim this
+ *  measurement never made.
+ *
+ *  The match is EXACT. `RunSummary.project` is whatever string the coordinator
+ *  passed to `POST /api/runs`, which validates it as a non-empty string and
+ *  nothing more (`server/src/coord/routes.ts:889-897`); `ProjectRow.name` comes
+ *  from the projects listing. Nothing joins the two but convention, so a run
+ *  naming a project this picker never lists is a run this sheet cannot speak
+ *  about — loosening to a prefix would refuse real projects over a lookalike.
+ *
+ *  EXPORTED for its own unit test, on `startedSessionFor`'s precedent above. */
+export type OpenRunVerdict = 'clear' | 'open-run' | 'unmeasured';
+
+export function openRunVerdict(
+  openRunProjects: ReadonlySet<string> | null,
+  project: string,
+): OpenRunVerdict {
+  if (openRunProjects === null) return 'unmeasured';
+  return openRunProjects.has(project) ? 'open-run' : 'clear';
+}
+
 export interface StartProgramSheetProps {
   open: boolean;
   onClose: () => void;
+  /** The projects that already carry a NON-CLOSED run, measured by the run
+   *  board from its own combined live+cold `active` list
+   *  (`screens/RunsScreen.tsx`) and handed down. THE SHEET DOES NOT FETCH
+   *  IT: `start-program.test.tsx`'s `expect(urls).toHaveLength(2)` pins this
+   *  composition at exactly two network calls, so a third fetch here reds a
+   *  suite rather than merely costing a request.
+   *
+   *  `null` is NOT MEASURED, and it is a third state on purpose — the board has
+   *  neither a `runs` frame nor a finished cold read (`noSignalYet`,
+   *  `RunsScreen.tsx`): a deep link straight to `/runs`, or a server too old
+   *  to send the frame at all, in the window before `api.runs(true)` answers.
+   *  Both of those paths END in a measured set; `null` is the window, not the
+   *  outcome, and in it this sheet refuses rather than guesses.
+   *
+   *  REQUIRED, not defaulted. `new Set()` as a default would be a fold-to-permit
+   *  written into the type; `null` as a default would silently refuse every
+   *  caller that forgot. A compile error is the same discipline
+   *  `reviveFleetSession` uses for a new wire field — every path computes it. */
+  openRunProjects: ReadonlySet<string> | null;
   /** Injectable for tests; defaults to the app-wide fleet store — same shape
    *  every other sheet in this file uses. */
   fleet?: FleetStore;
@@ -229,14 +281,25 @@ export interface StartProgramSheetProps {
   /** Program-leverage wave 4: the kickoff is QUEUED as durable system mail, not
    *  typed into the pane. Named `queueKickoff` rather than `kickoff` because the
    *  standing sentence itself is `programKickoff` in L0 and this file's tests
-   *  import it — one name for the text, another for the act. */
-  queueKickoff?: (id: string, b: { slug: string; title: string }) => Promise<void>;
+   *  import it — one name for the text, another for the act.
+   *
+   *  Wave 5 changed the RETURN, not the call. `api.kickoff` answers `{queued}`
+   *  now (D-1133), and `Promise<{queued: boolean}>` is not assignable to
+   *  `Promise<void>` (D-1137, `TS2322` — `npm run build` runs `tsc --noEmit`
+   *  before it builds anything, and vitest strips types, so the suite could
+   *  never have caught this), so the default on the line below forces this type.
+   *  THE SHEET STILL READS NO FIELD: "one was already waiting" is a distinction
+   *  only the revive path renders. Ignoring a field is a rendering decision;
+   *  declaring the shape an injected fake has to have is a contract one, and
+   *  only the second is worth spending a type on. */
+  queueKickoff?: (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
   loadProjects?: () => Promise<{ roots: string[]; projects: ProjectRow[] }>;
 }
 
 export function StartProgramSheet({
   open,
   onClose,
+  openRunProjects,
   fleet = useFleetStore,
   createSession = api.createSession,
   queueKickoff = api.kickoff,
@@ -501,10 +564,29 @@ export function StartProgramSheet({
     && myAttemptRef.current !== null
     && existing.project === myAttemptRef.current.project;
 
+  // Computed from `project` ALONE, and deliberately NOT written into
+  // `existing`'s expression above. That one carries a `projected != null`
+  // conjunct, which is harmless for D-292 only because the D-284 arm renders
+  // directly beneath it — a run-based refusal riding the same conjunct would be
+  // silently replaced by "Nothing is placeable" on exactly the fleet where
+  // nothing is placeable: a state that has nothing to do with whether this
+  // project already has a coordinator, and one the operator fixes by enabling an
+  // account and walking straight into the collision. Two independent facts, two
+  // independent measurements.
+  const runVerdict: OpenRunVerdict | null =
+    project === null ? null : openRunVerdict(openRunProjects, project.name);
+
   const start = async (): Promise<void> => {
     if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
     if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
+    // …and the run-board arm above it in the same `? :` chain withholds the
+    // button on the same terms, so `runVerdict` needs no return of its own here.
+    // Deliberate: React dispatches the handler attached by the render that
+    // decided to draw the control, so no tap can carry a stale verdict — and a
+    // guard no test can reach is exactly what `startedSessionFor`'s own
+    // docstring refuses to ship. If a later change ever demotes either refusal
+    // to a `disabled` term, BOTH need a return here.
 
     const wrapper = projected.wrapper;
     const projectName = project.name;
@@ -592,6 +674,84 @@ export function StartProgramSheet({
     // the stale binding B-2 closed.
     checkForMatch();
   };
+
+  /** The standing kickoff-failure recovery — the statement, plus the two acts
+   *  that finish it — as ONE node, rather than a run of JSX buried in the last
+   *  arm of the chain below.
+   *
+   *  Program-leverage wave 4 minted it: a standing statement with an act beside
+   *  it, not a toast (see `kickoffFailed`'s own declaration for why), and both
+   *  controls reuse classes that are already grounded and pinned
+   *  (`program-start-error`, `program-start-go`) rather than introducing a
+   *  coloured rule the contrast census has never seen.
+   *
+   *  WAVE-5 REVIEW, MINOR 6 (D-1149) is why it is a node. It lived inside the
+   *  confirm fragment, which is the LAST arm of that chain, so EVERY arm above
+   *  it retired the recovery by rendering instead of it — and one of those arms
+   *  is now driven by a prop the run board rebuilds every ~2 s
+   *  (`openRunProjects`, `screens/RunsScreen.tsx`). A run opening in this
+   *  project while a queue failure was standing therefore replaced a live retry
+   *  door and an open-anyway door with a sentence about a collision, on a poll
+   *  tick the operator never touched — and the retry door is the ONLY control
+   *  that can re-post for that session (`retryKickoff`). A recovery that
+   *  vanishes mid-recovery is worse than one never offered: nothing durable
+   *  exists to retry from anywhere else.
+   *
+   *  HOISTING, deliberately, and not the other available fix — carving the
+   *  standing-failure case out of the run arm's own condition. That one renders
+   *  the CONFIRM fragment while a failure stands, whose Start is withheld only
+   *  by `existing !== null`; and `existing` goes null the moment the operator
+   *  picks a DIFFERENT project, which is exactly the move D-1121 exists to
+   *  support. D-1130's refusal would then have to be re-derived as a sixth
+   *  `disabled` term — and, by `start()`'s own note, a matching early return —
+   *  demoting a structural no-button refusal to a disabled control for a case
+   *  that is ordinary rather than rare. This way the refusal keeps its slot,
+   *  its copy and its posture, and simply stops eating something that was never
+   *  its business.
+   *
+   *  KNOWN INCOMPLETE, and measured rather than assumed. The two OTHER arms
+   *  above the confirm fragment still retire this node, and both were measured
+   *  doing it while this fix was written: the D-284 arm swallows it when the
+   *  accounts poll turns `projected` null twenty seconds later — no operator act
+   *  at all, the same poll-tick shape the run arm had — and the D-292 arm
+   *  swallows it when the operator picks a DIFFERENT project that already has a
+   *  live main checkout. Both interactions predate this wave (the recovery is
+   *  wave 4's; both arms are older) and both were out of this review's scope.
+   *  They are named here so the next reader MEASURES the rest of the chain
+   *  rather than reading this fix as having cleaned it.
+   *
+   *  `null` when no failure is standing, so an arm that renders it says nothing
+   *  extra in the ordinary case. */
+  const recovery = kickoffFailed === null ? null : (
+    <>
+      <p className="program-start-error">
+        {/* Wave-4 review, MINOR 3 (D-1120). This used to open
+            "<id> is running, but…", which on a 404 asserts the exact
+            fact the registry had just denied — above a retry that
+            cannot succeed. What the sheet KNOWS is that it started
+            the session and that nothing was queued for it; the
+            reason comes last, where a `why` with no trailing period
+            (the `err.message` floor) does not read as a typo. */}
+        {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
+          + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
+      </p>
+      <button
+        type="button"
+        className="program-start-go"
+        disabled={retrying}
+        onClick={() => void retryKickoff()}
+      >
+        {retrying ? 'Queueing…' : 'Queue the kickoff again'}
+      </button>
+      <button
+        type="button"
+        className="program-start-go"
+        onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
+      >
+        Open it without a brief
+      </button>
+    </>
+  );
 
   return (
     <Sheet open={open} onClose={onClose} eyebrow="new program" title="Start a program">
@@ -721,6 +881,67 @@ export function StartProgramSheet({
                 + 'Starting here would either make that session the coordinator for this program, '
                 + 'whatever it was started for, or leave the project running two coordinators.'}
             </p>
+          ) : runVerdict === 'open-run' || runVerdict === 'unmeasured' ? (
+            // The run-board arm: BELOW D-292, ABOVE D-284, and the order is the
+            // argument rather than an accident of where it was pasted.
+            //
+            // Below D-292 because when both are true both sentences are true, and
+            // that one names a SESSION the operator can open right now; this one
+            // names only a project, because a set of project names is all it was
+            // given. The more actionable sentence wins the single slot.
+            //
+            // Above D-284 because "this project already has a run" holds whether
+            // or not anything is placeable, while "nothing is placeable" is fixed
+            // by enabling an account — which would then walk the operator into
+            // this collision with the refusal never shown.
+            //
+            // NO CONFIRM BUTTON — the D-292 posture, not a disabled control and
+            // not a warning beside a live Start: there is nothing to render here
+            // that could open a second run. The five-term `disabled` below is left
+            // alone deliberately; a sixth term there would be dead code, since
+            // this arm means the button was never rendered.
+            //
+            // KNOWN NARROWER THAN THE HARM, and the copy is written to that limit
+            // (D-1131). `resolveCoordinator(null)` needs exactly one program in
+            // `state='active'` BOX-WIDE (`server/src/coord/store.ts`, its
+            // "no single active program: ambiguous or absent" guard), so a second
+            // program in a DIFFERENT project wedges run-less coordinator mail just
+            // as hard and this arm cannot see it; and `POST /api/runs` applies no
+            // project predicate at all (`server/src/coord/routes.ts:889-897`), so
+            // nothing behind this catches what it misses. The sentence claims a
+            // consequence of THIS start and never that the fleet is otherwise
+            // clean.
+            //
+            // The `unmeasured` sentence does not say a run exists. It says the
+            // board has not answered, which is the only fact held, and it is a
+            // WAIT — the cold read resolves it within one round trip and this
+            // recomputes on the next render.
+            //
+            // AND IT NO LONGER RETIRES A STANDING RECOVERY (wave-5 review,
+            // MINOR 6, D-1149) — the THIRD reason this arm needed, which the two
+            // above could not supply because the thing it displaces lives
+            // further DOWN the chain rather than beside it. Wave 4's
+            // kickoff-failure recovery renders in the last arm; this one
+            // rendering instead of that one took the retry door away from an
+            // operator mid-recovery, on a poll tick, because `openRunProjects`
+            // is rebuilt every ~2 s. The refusal keeps its slot and its copy —
+            // ordering is an argument about which SENTENCE wins the one slot,
+            // and never was an argument for withdrawing an ACT the operator
+            // still needs — and `recovery` (non-null only while a failure is
+            // actually standing, see its own docstring) rides beneath it.
+            <>
+              <p className="program-start-refuse">
+                {runVerdict === 'open-run'
+                  ? `${project.name} already has a run open — open it from the run board, or pick `
+                    + 'another project. A second program here leaves the project with two coordinators, '
+                    + 'and coordinator mail that carries no run id then has more than one active '
+                    + 'program to choose from, which the server refuses rather than guesses.'
+                  : 'The run board has not answered yet, so this sheet cannot tell whether '
+                    + `${project.name} already has a program running. It will know in a moment — or `
+                    + 'open the run board and look.'}
+              </p>
+              {recovery}
+            </>
           ) : projected === null ? (
             // D-284: the server's own "nothing is placeable" — refuse with
             // copy rather than guessing a wrapper.
@@ -766,43 +987,12 @@ export function StartProgramSheet({
                 </p>
               )}
               {error !== null && <p className="program-start-error">{error}</p>}
-              {/* Program-leverage wave 4: the kickoff could not be QUEUED.
-                  Deliberately a standing statement with an act beside it, not a
-                  toast — see `kickoffFailed`'s own declaration for why, and note
-                  that both controls reuse classes that are already grounded and
-                  pinned (`program-start-error`, `program-start-go`) rather than
-                  introducing a coloured rule the contrast census has never
-                  seen. */}
-              {kickoffFailed !== null && (
-                <>
-                  <p className="program-start-error">
-                    {/* Wave-4 review, MINOR 3 (D-1120). This used to open
-                        "<id> is running, but…", which on a 404 asserts the exact
-                        fact the registry had just denied — above a retry that
-                        cannot succeed. What the sheet KNOWS is that it started
-                        the session and that nothing was queued for it; the
-                        reason comes last, where a `why` with no trailing period
-                        (the `err.message` floor) does not read as a typo. */}
-                    {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
-                      + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
-                  </p>
-                  <button
-                    type="button"
-                    className="program-start-go"
-                    disabled={retrying}
-                    onClick={() => void retryKickoff()}
-                  >
-                    {retrying ? 'Queueing…' : 'Queue the kickoff again'}
-                  </button>
-                  <button
-                    type="button"
-                    className="program-start-go"
-                    onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
-                  >
-                    Open it without a brief
-                  </button>
-                </>
-              )}
+              {/* Program-leverage wave 4's kickoff-failure recovery, which is
+                  no longer written out here: it is `recovery` above (D-1149),
+                  because the run arm renders it too. Rendered in the same slot
+                  it has always occupied — under the ledger note, over the
+                  confirm control. */}
+              {recovery}
               {/* B-3: `existing !== null` reaches this branch only when
                   `isOwnAttempt` suppressed the refusal above — the sheet's own
                   session has appeared and `finish()` is sending its kickoff.
