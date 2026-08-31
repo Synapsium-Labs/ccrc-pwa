@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   LINEAR_API, LINEAR_FAILURES, lookupLinearIssue, ticketTitle, type FetchLike,
 } from '../src/linear.js';
-import { parseLinearRef } from '../src/slug.js';
+import { parseLinearRef } from '../../shared/slug.js';
 
 const REF = parseLinearRef('ENG-1234')!;
 

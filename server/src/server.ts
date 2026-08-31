@@ -23,7 +23,7 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
          type ActorFlags, type CcdArgv } from './ccdargv.js';
-import { deriveWorkspaceSlug } from './slug.js';
+import { deriveWorkspaceSlug } from '../../shared/slug.js';
 import { lookupLinearIssue, ticketTitle } from './linear.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';

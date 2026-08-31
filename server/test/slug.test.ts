@@ -11,7 +11,7 @@ import { SLUG_MAX, deriveBranch, slugifyWords, fitSlug } from '../src/naming.js'
 import {
   WS_SLUG_MAX, WS_SLUG_MIN, NAME_REFUSALS, NAME_REFUSAL_TEXT,
   parseLinearRef, deriveWorkspaceSlug,
-} from '../src/slug.js';
+} from '../../shared/slug.js';
 // The path to the script is spelled in ONE test file and imported everywhere
 // else — `single-definition.test.ts:267` fails the build on a second spelling,
 // and it caught this file writing its own. Measured: red before this import.

@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
+import { NewWorkspaceSheet } from '../fleet/NewWorkspaceSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
@@ -23,6 +24,7 @@ import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
 import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
+import { accountLabel } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseen, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
@@ -136,13 +138,29 @@ export function FleetScreen({
   // used to allow — and a settle that runs out is now a REPORT against a
   // workspace that exists, is claimed and is supervised, not an orphan.
   const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set());
-  const addWorkspace = async (project: string): Promise<void> => {
+  /** The project whose naming sheet is open; null = closed. Screen-level, not
+   *  card-level: creating flips the card, which would unmount a card-owned
+   *  sheet mid-answer. */
+  const [addProject, setAddProject] = useState<string | null>(null);
+  /** The card's `+` no longer creates — it opens the door. The create itself
+   *  is `createWorkspace` below, called by the sheet. */
+  const addWorkspace = (project: string): void => { setAddProject(project); };
+  const createWorkspace = async (project: string, name?: string): Promise<void> => {
     if (adding.has(project)) return;
     setAdding((s) => new Set(s).add(project));
     try {
-      await api.workspaceAdd(project);
+      await api.workspaceAdd(project, name);
     } catch (err) {
-      toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
+      // RETHROWN, NOT TOASTED. The sheet is the single surface for this
+      // failure: it is open, it holds the operator's text, and its inline line
+      // is where the next action happens (edit the name and retry). A toast as
+      // well would report one failure twice — and the toast existed only
+      // because, before the sheet, there was nowhere else to say it.
+      //
+      // `apiErrorText` first, so the sheet shows ccd's own sentence (which
+      // names the exact files holding a taken slug) rather than a generic
+      // "request failed".
+      throw new Error(apiErrorText(err));
     } finally {
       // finally, not the try tail: a refusal must re-arm the button, or ccd
       // saying no leaves a `+` that can never be pressed again.
@@ -529,6 +547,16 @@ export function FleetScreen({
       </button>
 
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
+      <NewWorkspaceSheet
+        project={addProject}
+        onClose={() => setAddProject(null)}
+        onCreate={createWorkspace}
+        /* The same sentence the card's `+` carries in its accessible name —
+           said out loud here, because a phone never renders a title attr. */
+        projectedLabel={projected
+          ? `Lands on ${accountLabel(roster, projected.wrapper)}.`
+          : 'Where this lands is decided when it is created.'}
+      />
 
       <SessionActionsSheet
         session={actionsSession}

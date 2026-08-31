@@ -1,19 +1,19 @@
 /**
- * The workspace name an operator types, or the Linear ticket they paste.
+ * The workspace name an operator types, or the Linear ticket they paste — and
+ * the two string helpers that build it.
  *
- * L1 POLICY. This decides; it does not read a file, build an argv, or answer a
- * request. `naming.ts` is its only import (for the shared slugifier), the route
- * maps its verdict to a status, and the PWA imports the same function to render
- * the preview — so the client can never disagree with the server about what a
- * name becomes.
+ * L0. IMPORTS NOTHING, because BOTH the PWA and the server need it: the sheet
+ * previews the slug the operator will get, the route validates the one it was
+ * sent, and they must be the same function or the preview is a lie. `URL` is a
+ * platform global in both runtimes, which is the only non-local thing here.
  *
  * THE BUDGET IS 31, AND IT IS NOT `naming.ts`'s 40. That one is the BRANCH
- * budget, validated on the box by `_ws_branch_valid` (`ccd/ccd:3063-3071`); this
- * one is the SLUG budget, validated by `_ws_slug_valid` (`ccd/ccd:3403`), a
- * different and stricter rule. Reusing 40 here ships names ccd refuses at
+ * budget, validated on the box by `_ws_branch_valid` (`ccd/ccd:3063-3071`);
+ * this is the SLUG budget, validated by `_ws_slug_valid` (`ccd/ccd:3403`), a
+ * different and stricter rule. Reusing 40 ships names ccd refuses at
  * `ccd/ccd:3742`, before a worktree, a branch or a registry row exists.
  * `slug.test.ts` reads ccd's own regex out of the shipped file and pins every
- * slug we generate against it, so a change to that grammar reds this suite
+ * slug we generate against it, so a change to that grammar reds the suite
  * instead of reaching the fleet.
  *
  * WHY A SUBSET OF ccd's RULE, DELIBERATELY. ccd's regex also accepts a TRAILING
@@ -23,7 +23,52 @@
  * the verdict still comes from the box — it only avoids sending names that are
  * certain to be refused, and writes ccd's undocumented floor down.
  */
-import { slugifyWords, fitSlug } from './naming.js';
+
+/**
+ * Lowercase, every non-alphanumeric run to one dash, no leading or trailing
+ * dash. `''` when there is nothing alphanumeric to keep — a real answer, not a
+ * failure: the two callers treat it differently (`deriveBranch` returns null
+ * and makes no call; `deriveWorkspaceSlug` refuses with a named reason).
+ *
+ * EXTRACTED, NOT COPIED. `slug.ts` needs the identical transformation at a
+ * different budget, and a second spelling of it is what
+ * `single-definition.test.ts` exists to fail the build over.
+ */
+export function slugifyWords(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * `slug` cut to fit `max`, at a word boundary where there is one, plus whether
+ * anything was dropped. `shortened` is the caller's business, not decoration:
+ * the PWA tells the operator their name did not fit before they commit to a
+ * slug they cannot rename.
+ *
+ * Two details the naive form gets wrong, both inherited from `deriveBranch`
+ * where this logic was first written and measured:
+ *   * `slug[max] === '-'` means the cut ALREADY landed on a word boundary, so
+ *     there is nothing to drop back over — a blind `lastIndexOf` would throw
+ *     the last whole word away.
+ *   * no `-` at all in the first `max` characters (one long word) means there
+ *     is no boundary to find, and the rule hard-cuts rather than emitting
+ *     nothing.
+ *
+ * The trailing-dash strip is belt-and-braces: `slugifyWords` collapses dash
+ * runs, so a cut can only land after a dash when `slug[max] === '-'`, and that
+ * arm excludes it already. It is written anyway because the guarantee is what
+ * callers depend on, and a future cut rule must not be able to break it
+ * silently.
+ */
+export function fitSlug(slug: string, max: number): { slug: string; shortened: boolean } {
+  if (slug.length <= max) return { slug, shortened: false };
+  const cut = slug.slice(0, max);
+  const kept = slug[max] === '-' ? cut : (() => {
+    const at = cut.lastIndexOf('-');
+    return at === -1 ? cut : cut.slice(0, at);
+  })();
+  return { slug: kept.replace(/-+$/, ''), shortened: true };
+}
+
 
 /** ccd's `_ws_slug_valid` upper bound (`ccd/ccd:3403`), total characters. */
 export const WS_SLUG_MAX = 31;
@@ -80,17 +125,21 @@ export function parseLinearRef(input: string): LinearRef | null {
     const at = segs.findIndex((s) => s.toLowerCase() === 'issue');
     if (at === -1) return null;
     const m = IDENTIFIER.exec(segs[at + 1] ?? '');
+    // `m[1]`/`m[2]` are non-optional under the regex above (two capture groups
+    // that cannot match without capturing), but `noUncheckedIndexedAccess`
+    // cannot know that — and the PWA compiles this file under it. `?? ''` is
+    // unreachable, and cheaper than an assertion the linter would flag.
     if (m === null) return null;
     const tail = segs[at + 2];
     return {
-      key: m[1],
-      num: m[2],
+      key: m[1] ?? '',
+      num: m[2] ?? '',
       titleSlug: tail === undefined || slugifyWords(tail) === '' ? null : tail,
     };
   }
 
   const m = IDENTIFIER.exec(trimmed);
-  return m === null ? null : { key: m[1], num: m[2], titleSlug: null };
+  return m === null ? null : { key: m[1] ?? '', num: m[2] ?? '', titleSlug: null };
 }
 
 /**

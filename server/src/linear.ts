@@ -1,7 +1,7 @@
 /**
  * Resolving a Linear ticket to its title.
  *
- * L3 ADAPTER. The decision of what a pasted string MEANS lives in `slug.ts`
+ * L3 ADAPTER. The decision of what a pasted string MEANS lives in `shared/slug.ts`
  * (L1, pure); this only fetches. It is the second outbound call in the whole
  * server and the first to a third party the operator configures, so the two
  * rules it inherits are stated rather than assumed:
@@ -23,7 +23,7 @@
  * `agent/src/whitelist.ts:309-315` refuses to add. So the only place the call
  * can live is here.
  */
-import type { LinearRef } from './slug.js';
+import type { LinearRef } from '../../shared/slug.js';
 
 /** Linear's GraphQL endpoint. */
 export const LINEAR_API = 'https://api.linear.app/graphql';

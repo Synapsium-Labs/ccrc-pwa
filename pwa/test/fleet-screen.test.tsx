@@ -316,6 +316,16 @@ describe('FleetScreen', () => {
     expect(screen.queryByText('OpenClawHetzner moved to team·alt')).not.toBeInTheDocument();
   });
 
+
+  /** The `+` opens the naming sheet; the create happens on the sheet's confirm.
+   *  These five flows kept their properties (per-project disable, the toast,
+   *  the stderr translation) and gained one step, because `+` is no longer an
+   *  unconfirmed irreversible create. */
+  const confirmInSheet = async (): Promise<void> => {
+    const go = await screen.findByRole('button', { name: /^Add a workspace to / });
+    fireEvent.click(go);
+  };
+
   it('creates a workspace on the tapped project', async () => {
     const calls: string[] = [];
     vi.spyOn(api, 'workspaceAdd').mockImplementation(async (p: string) => {
@@ -332,10 +342,13 @@ describe('FleetScreen', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    // The + itself creates NOTHING now — that is the point of the sheet.
+    expect(calls).toEqual([]);
+    await confirmInSheet();
     await waitFor(() => expect(calls).toEqual(['alpha']));
   });
 
-  it('surfaces a failure as a toast rather than a silent no-op', async () => {
+  it('surfaces a failure in the sheet rather than a silent no-op', async () => {
     vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new Error('no origin/HEAD'));
     const store = makeStore();
     render(
@@ -353,7 +366,12 @@ describe('FleetScreen', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
-    await waitFor(() => expect(screen.getByText(/no origin\/HEAD/)).toBeInTheDocument());
+    await confirmInSheet();
+    // ONE surface, not two. The sheet stays open holding the refusal, which is
+    // where the next action is; a toast as well would report one failure
+    // twice. `findAllByText` would hide exactly that regression, so this
+    // asserts the single occurrence.
+    await waitFor(() => expect(screen.getAllByText(/no origin\/HEAD/)).toHaveLength(1));
   });
 
   it('offers a + on a project holding a single session', () => {
@@ -385,10 +403,17 @@ describe('FleetScreen', () => {
     const alpha = screen.getByRole('button', { name: /New workspace on alpha/i });
     const beta = screen.getByRole('button', { name: /New workspace on beta/i });
     fireEvent.click(alpha);
+    await confirmInSheet();
     await waitFor(() => expect(alpha).toBeDisabled());
 
-    // A second tap on the same project is refused…
-    fireEvent.click(alpha);
+    // A second attempt while the first is in flight fires nothing. The guard
+    // is now in TWO places and either alone would satisfy this: the sheet's
+    // own confirm goes to "Creating…" and disables, and FleetScreen's
+    // per-project `adding` set refuses the call underneath it. Both are
+    // asserted, so removing either is visible.
+    const creating = await screen.findByRole('button', { name: 'Creating…' });
+    expect(creating).toBeDisabled();
+    fireEvent.click(creating);
     expect(add).toHaveBeenCalledTimes(1);
     // …while another project's + is untouched: the guard is per project.
     expect(beta).not.toBeDisabled();
@@ -413,6 +438,7 @@ describe('FleetScreen', () => {
 
     const plus = screen.getByRole('button', { name: /New workspace on alpha/i });
     fireEvent.click(plus);
+    await confirmInSheet();
     await waitFor(() => expect(plus).toBeDisabled());
     await act(async () => { reject(new Error('no origin/HEAD')); });
     await waitFor(() => expect(plus).not.toBeDisabled());
@@ -439,9 +465,10 @@ describe('FleetScreen', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /New workspace on alpha/i }));
+    await confirmInSheet();
     await waitFor(() =>
-      expect(screen.getByText(/origin\/HEAD — run: git -C \/repo remote set-head/))
-        .toBeInTheDocument());
+      expect(screen.getAllByText(/origin\/HEAD — run: git -C \/repo remote set-head/))
+        .toHaveLength(1));
     expect(screen.queryByText(/request failed/)).toBeNull();
   });
 
