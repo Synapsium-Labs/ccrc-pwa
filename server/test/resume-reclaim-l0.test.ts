@@ -1,6 +1,6 @@
 // Wave 5 (F5) — the L0 slice: a sixth typed refusal union, the wave-N re-kickoff,
 // and the one docstring in `shared/api.ts` that stopped being true the day an
-// operator could succeed a dead coordinator (D-1123, D-1124, D-1125).
+// operator could succeed a dead coordinator (D-1125, D-1126, D-1127).
 //
 // WHY ITS OWN FILE. `server/test/peers-claims-l0.test.ts:1-19` declares itself
 // "Build 9b, wave 1 — the L0 slice", subjects peers/claims/ledger. A wave-5 union

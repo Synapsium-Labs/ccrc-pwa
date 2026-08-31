@@ -3118,7 +3118,7 @@ export const programKickoff = (slug: string, title: string): string =>
  *  L0 for the reason `programKickoff` is: the runbook says this text and the server
  *  now composes it, and a template with two speakers and no home is the drift this
  *  file's own header warns about. `resume-reclaim-l0.test.ts` checks the two against
- *  each other rather than each against itself (D-1124). */
+ *  each other rather than each against itself (D-1126). */
 export const programResumeKickoff = (
   slug: string, title: string, runId: number, wave: number,
 ): string =>
@@ -3630,7 +3630,7 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
  *  live coordinator reading about it has found a recovery for a problem it does not
  *  have. Membership here would drag the word into that corpus by force of a passing
  *  test, which is exactly backwards: the census would be satisfied and the design
- *  broken. (D-1123.)
+ *  broken. (D-1127.)
  *
  *    claimant-alive — the run's current claimant was MEASURED and answers alive.
  *                     Refused, 409, and the answer carries `by` plus the sentence

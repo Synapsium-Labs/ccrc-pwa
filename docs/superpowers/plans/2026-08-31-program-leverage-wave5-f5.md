@@ -174,12 +174,18 @@ measured by the task that depends on it, not inferred:
 
 | after | before | the edge |
 |---|---|---|
-| 1 (L0) | 2, 3, 6 | `no-claimant` is a hyphenated literal under `server/src/coord/` the moment the store method exists, and `mail-routes.test.ts`'s kebab scanner refuses it until `isReclaimRefuseCode` and its scanner arm ship. Task 6's red-first step needs `programResumeKickoff` EXPORTED: vitest transpiles without typechecking, so an extra argument to a 3-parameter function is silently dropped (a real assertion red), but a missing named export throws at ESM link time and the suite errors instead of asserting. |
+| 1 (L0) | 2, 3, 6 | `no-claimant` is a hyphenated literal under `server/src/coord/` the moment the store method exists, and `mail-routes.test.ts`'s kebab scanner refuses it until `isReclaimRefuseCode` and its scanner arm ship. Task 6's red-first step needs `programResumeKickoff` EXPORTED. **The reason first written here was wrong and task 1 measured it so:** a missing named export does NOT throw at ESM link time under this tree's vitest — the binding is `undefined` and the suite ASSERTS (measured twice: `expected undefined to deeply equal [ … ]`, and `TypeError: programResumeKickoff is not a function`). The edge is real; expect an assertion or a `TypeError`, never a link error, and do not read a green link step as proof the export landed. |
 | 2 (store) | 3 | `reclaimRun` calls `coord.reclaimProgram`; task 3 cannot go green without it. |
 | 3 (L1) | 4 | the route is a union→status map over `ReclaimOutcome`. |
 | 4 (door) | 5, 10 | task 5's count guard derives from `UNGATED.size` and calls `docstringFor` on every member — run before the fourth member lands and it reds for the wrong reason. Two of task 10's mutation rows fire off the UNGATED harvest and the new corpus-wide pin, and are GREEN-and-expected until task 4 has landed. |
 | 7 (client) | 8, 9 | the ResumeSheet is typed against `api.reclaimRun` and against `kickoff` returning `{queued}`, neither of which exists first; and task 7's D-1137 prop widening edits the same `StartProgramSheet` props block task 9 edits. |
 | 8 (board) | 9 (sheet) | both touch `pwa/src/screens/RunsScreen.tsx`. They do not overlap by line, but **task 9 owns `openRunProjects` end to end** — both the prop on `StartProgramSheet` and the line in `RunsScreen` that supplies it. Task 8 must not pass a prop that does not exist yet (a `TS2322` in whichever lands first), and task 9 must not re-add one task 8 already wrote. |
+
+**A pin whose killer is in another suite.** Task 1 measured one mutation its own suite cannot see: inlining
+the ledger path into `programResumeKickoff` produces a byte-identical string, so the value comparison stays
+green and the only killer is `single-definition.test.ts`'s "no shipped source reads the program ledger off
+disk". Any step that says "run the named suite" to prove a ledger-path guard must run `single-definition`
+too — a suite that cannot express a change cannot witness it, which is wave 2's lesson in a third place.
 
 **One consequence worth stating plainly:** tasks 2 and 3 are red for a reason that is not their own until
 task 1 lands, and task 10's row 8 is green for a reason that is not its own until task 4 lands. Both are
@@ -314,7 +320,7 @@ derivation pinned before the guard, import purity last) and its two-subject nami
   ```ts
   // Wave 5 (F5) — the L0 slice: a sixth typed refusal union, the wave-N re-kickoff,
   // and the one docstring in `shared/api.ts` that stopped being true the day an
-  // operator could succeed a dead coordinator (D-1123, D-1124, D-1125).
+  // operator could succeed a dead coordinator (D-1125, D-1126, D-1127).
   //
   // WHY ITS OWN FILE. `server/test/peers-claims-l0.test.ts:1-19` declares itself
   // "Build 9b, wave 1 — the L0 slice", subjects peers/claims/ledger. A wave-5 union
@@ -464,7 +470,7 @@ derivation pinned before the guard, import purity last) and its two-subject nami
    *  live coordinator reading about it has found a recovery for a problem it does not
    *  have. Membership here would drag the word into that corpus by force of a passing
    *  test, which is exactly backwards: the census would be satisfied and the design
-   *  broken. (D-1123.)
+   *  broken. (D-1127.)
    *
    *    claimant-alive — the run's current claimant was MEASURED and answers alive.
    *                     Refused, 409, and the answer carries `by` plus the sentence
@@ -577,7 +583,7 @@ derivation pinned before the guard, import purity last) and its two-subject nami
    *  L0 for the reason `programKickoff` is: the runbook says this text and the server
    *  now composes it, and a template with two speakers and no home is the drift this
    *  file's own header warns about. `resume-reclaim-l0.test.ts` checks the two against
-   *  each other rather than each against itself (D-1124). */
+   *  each other rather than each against itself (D-1126). */
   export const programResumeKickoff = (
     slug: string, title: string, runId: number, wave: number,
   ): string =>
