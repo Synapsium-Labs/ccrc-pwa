@@ -169,6 +169,25 @@ function persistedPr(r: SessionRecord): PrState | null {
 }
 
 /**
+ * A registry stamp in the units every clock in this server actually compares
+ * against. `ccd` writes them with `date +%s` — epoch SECONDS, as
+ * `registry.ts`'s own field docstrings say ("Epoch SECONDS, registry-native
+ * … `fleet.ts` is the one place it becomes ms") — while `Date.now()`,
+ * `SUPERVISED_FRESH_MS` and every other threshold in the tree are
+ * milliseconds.
+ *
+ * D-1157 gave that sentence a FUNCTION rather than leaving it a convention
+ * repeated inline. `sweepDivergences` had handed raw seconds to a census that
+ * subtracts them from `Date.now()`, which makes every age ~1.78e12 ms — past
+ * every freshness window there is, so `archived-but-live` could never fire.
+ * A convention that lives only in prose is one a second consumer does not
+ * inherit; a named function is one it has to go out of its way to skip.
+ */
+export function registrySecondsToMs(seconds: number | null): number | null {
+  return seconds === null ? null : seconds * 1000;
+}
+
+/**
  * A `LifecycleInput` from a registry record — ONE spelling, because there are
  * now two callers and `single-definition.test.ts` exists for the second copy.
  *
@@ -188,7 +207,7 @@ export function lifecycleInputFor(
 ): LifecycleInput {
   return {
     alive,
-    supervisedAt: r.supervisedAt === null ? null : r.supervisedAt * 1000,
+    supervisedAt: registrySecondsToMs(r.supervisedAt),
     stoppedAt: r.stopped === null ? null : r.stopped.at * 1000,
     stopSurface: r.stopped?.surface ?? null,
     started: r.started,
