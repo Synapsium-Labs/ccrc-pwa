@@ -16,7 +16,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 1 | F1 — drift fixes (ungated-door count, coordinator trigger/resume wording, stale `_id()` anchor) + the coordinator-resume runbook (`references/resume.md`). AGENT-FIRST deploy. | run 10, PR #28 (merged `f5dfd2d9`) | done 2026-08-28 18:08 UTC — CI 5/5 green on `8135118b`, deployed both boxes agent-first, `/health` and fleet `ccd` both report `f5dfd2d9` |
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
-| 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (`9df76bf0`) | reviewed 2026-08-30 ~18:15 UTC — SHIP-WITH-FIXES: 1 major (retryKickoff supersession), 7 minors, 0 refuted-that-stood; fix round mailed (mail 113); D-1039..D-1045 consumed, D-1046 last in block |
+| 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | — | planned |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
@@ -261,6 +261,31 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   queue-not-inject pin is a measured-stronger superset of the brief's literal spelling. Fix
   deviations: D-1046 then `ledger allocate` (block exhausted).
 
+- **Wave 4 closes (2026-08-31 ~06:05 UTC):** fix-round wave-done (delivery 117) fingerprint
+  `f1ccd9cd` re-measured independently (tip via ls-remote = PR #36 head, MERGEABLE/CLEAN, CI
+  success on that exact sha) and verified **hunk-by-hunk against mail 113** — the waves-1–3
+  precedent, no second workflow. All 8 rulings landed with measured-red pins (verbatim first-fail
+  rows F1a..F6 appended to the plan's mutation table): the MAJOR shipped with THREE guarded arms,
+  not two — the worker's own self-review found the `finally` (a superseded retry clearing
+  `retrying` re-enables a button whose newer call is still outstanding; pinned as F1c, a write a
+  superseded call must not UNDO, invisible to both write-pins). MINOR 6 escalated from copy to
+  guard defect: the four D-292 suppression pins matched a sentence the wave had reworded — absence
+  assertions, trivially green — re-pointed at `/two coordinators/i`, 11 red against an
+  `!isOwnAttempt` mutant (second half of D-1122). `KickoffOutcome` now INTERSECTS
+  `SystemMailQueued` (drift note acted on); the cap sits at `queueProgramKickoff` so wave 5's
+  reclaim door inherits it (D-1119). **Scope declined and ACCEPTED by this review:** the retry
+  door still renders for `unknown-session` — suppressing controls per code class would re-derive
+  a server-stated distinction in the client for a harm of one wasted round trip; the copy no
+  longer lies, which was the defect. Fold: PR #35 (`5d6c5c2d`, D-1068/D-1069) auto-merged clean
+  mid-round, read semantically — its edits sit at the two STRUCTURAL mail gates that return
+  before any send; `tellSender` fires only on the three post-send outcomes, so it is disjoint
+  from D-1040 and refines (not extends) D-1045's park list; zero post-merge edits to either file.
+  Suites after the round: server 241/6031/56, pwa 75/2014/0, agent 18/281, tails read. Advanced
+  working→awaiting-review→merging on the exact reported fingerprint; merged `592ec425`; deployed
+  the SERVER LANE from a scratch worktree at the merge sha, `/health` reports `592ec425`,
+  service stable (NOT agent-first). Items 4/4. Deviation floor now 1123 — wave 5 allocates via
+  `POST /api/ledger/deviations`, never from the exhausted block.
+
 ## Carried constraints
 
 - Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
@@ -278,6 +303,52 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   deletion; TDD red-first; deviations recorded against this program's allocated block.
 
 ## Next-wave brief
+
+**Wave 5 — F5: coordinator resume — the reclaim door and the PWA affordance.** Spec:
+`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §7, operator ruling §11 (fetch
+`ws/brisk-meadow` from origin). Same workspace as waves 1–4 (`quiet-meadow`, reclaimed). The
+wedge: `claimedBy` is written once by `openRun`'s INSERT and nothing rewrites it — a dead
+coordinator whose id cannot be re-landed wedges the program `claimed-by-another` permanently.
+Build `POST /api/runs/:id/reclaim`, the FOURTH ungated operator door (same D-282 logic as
+abandon: the release valve must not sit behind the wedged party's key), **dead-proof by operator
+ruling**: the guard is a RE-MEASUREMENT, not a credential — refuse `claimant-alive` unless the
+current `claimedBy` session is measured dead/absent (registry row proven absent from a LISTED
+directory, or present with a gone/dead tmux verdict); an unmeasurable registry refuses
+`registry-unmeasurable`, NEVER proceeds (no overloaded arms — unmeasurable ≠ alive ≠ dead). Body
+`{claimedBy: <new id>}`, shape-checked, new claimant must exist in the registry; rewrite
+`claimedBy` on the program's non-terminal runs in ONE transaction with a `run_events` attribution
+row each (`causedBy:'operator'` hardcoded, like abandon's). Ungated-set obligations:
+`coord-pause-route.test.ts`'s `UNGATED` grows to four (two-direction pin); NOT in the auth gate's
+EXEMPT table (armed → session-gated, strengthening D-282 like the existing three); the skill
+corpus must NOT name it (parity-EXEMPT + forbid-mention pin, like `/api/claims/:id/break`).
+**Root CLAUDE.md is corrected BY this wave, once:** door count → four, AND fold in the box-token
+sentence's now-unnamed exception (wave 4's `POST /api/sessions/:id/kickoff` is a coordination
+WRITE that is session-gated only — recorded in wave 4's plan notes). PWA resume affordance: the
+/runs board detects an open run whose `claimedBy` session is dead and offers in order
+revive-same-id (`ensure`), wave-aware re-kickoff (REUSE wave 4's mail-lane kickoff —
+`queueProgramKickoff` is importable without the route, and the composed-body cap D-1119 is
+inherited by calling it; the text template comes from wave 1's runbook), and reclaim onto a named
+live session only when the id cannot be revived. StartProgramSheet refuses to start a NEW program
+for a project with an open run (today it refuses only on a live main checkout). Known fold you
+inherit (wave 4 plan, notes): `queueProgramKickoff`'s `queued:false` folds "this program's
+kickoff already waiting" with "a DIFFERENT program's kickoff waiting" — the re-kickoff lane is
+the first consumer that may need them apart; open the fold only if you actually consume the
+distinction, and record the decision either way. Tests: dead-proof mutation table (alive →
+`claimant-alive`; unmeasurable → `registry-unmeasurable`; dead → rewritten + event rows; terminal
+runs untouched); gate-posture pinned dark-vs-armed with exact status equality; every guard ships
+WITH a test measured red on its deletion, TDD red-first, verbatim first-fail rows in the plan's
+mutation table; every "behaviour unchanged" claim gets a fixture that could witness the change.
+Wire: additive-only, single reader per field, older-peer omission tolerated, no `FLEET_PROTO`
+bump, no new ccd verbs, no overloaded null. **Deviations: the program block (`D-999..D-1046`) is
+EXHAUSTED and D-1119..D-1122 are consumed — allocate from `POST /api/ledger/deviations` (floor
+1123); if the allocator is unreachable write `D-TBD-program-leverage` and it reconciles at
+review.** NOT agent-first (server+PWA+root docs only). Commit on the workspace's own branch; all
+coordinator mail names the new run's `runId`. Plan first (superpowers:writing-plans), execute
+with superpowers:executing-plans. Deploy is not the worker's act.
+
+---
+
+Prior wave's brief (wave 4, retired — kept for the record):
 
 **Wave 4 — F4: the program kickoff rides the idle-gated mail lane.** Spec:
 `docs/superpowers/specs/2026-08-28-program-leverage-design.md` §6 (fetch `ws/brisk-meadow` from
@@ -308,29 +379,3 @@ tolerated, no `FLEET_PROTO` bump, no new ccd verbs, no overloaded null. Deviatio
 Commit on the workspace's own branch; all coordinator mail names the new run's `runId`. Plan
 first (superpowers:writing-plans), execute with superpowers:executing-plans. Deploy is not the
 worker's act.
-
----
-
-Prior wave's brief (wave 3, retired — kept for the record):
-
-**Wave 3 — F3: the per-project program-ready badge.** Spec:
-`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §5 (fetch `ws/brisk-meadow` from
-origin). Same workspace as waves 1–2 (`quiet-meadow`, reclaimed). Server-side per-project
-readiness from reads the server ALREADY owns — four preconditions: worker+coordinator skill
-present in every rostered wrapper HOME (REUSE wave 2's `SkillState` vocabulary and
-`server/src/skillstate.ts` reader — extend, don't duplicate; `single-definition` forbids a 2nd
-copy), deviation floor seeded (coord.db), box token configured (measured at boot), coord DB
-available (`not-configured` arm). Ships ADDITIVELY on an existing read the /runs board already
-consumes (`GET /api/runs` summary or the coord status emit, `server/src/registry.ts:775-783` —
-the plan picks the seam and says why); PWA: compact per-project badge on the /runs board
-("program-ready" / list of missing preconditions). No new ccd verbs; reads only. Tests: every
-precondition's measurement has an `unmeasurable` arm DISTINCT from false (no overloaded null);
-a mutation test per precondition (delete the measurement → red); write pins BEFORE the prose
-they pin (D-1009), and give every "behaviour unchanged" claim a fixture that could actually
-witness the change (wave 2's sweep lesson). Wire: additive field, single reader, older-server
-omission tolerated, no `FLEET_PROTO` bump. Fold: the graphify lane is now ON origin
-(`ws/ccrc-with-graphify-integration`, `92bf6b76`, fetchable); its skill-convergence machinery
-is bash/doctor-side — converge on the VOCABULARY, not the code; `single-definition.test.ts`
-merges cleanly with it. Deviations from **D-1023** up. Commit on the workspace's own branch;
-all coordinator mail names the new run's `runId`. Plan first (superpowers:writing-plans),
-execute with superpowers:executing-plans. Deploy is not the worker's act.
