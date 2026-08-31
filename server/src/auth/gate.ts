@@ -153,16 +153,27 @@ import type { SessionStore } from './sessions.js';
  *    passphrase — so a forged registration is an operator enrolling a key they
  *    control, i.e. exactly what enrolling a key is. (`webauthn.ts`'s module
  *    docstring states the same argument from the crypto side.)
- *  - `POST /api/coord/pause`, `POST /api/runs/:id/abandon` and
- *    `POST /api/claims/:id/break` — `coord/routes.ts` leaves these off the
+ *  - `POST /api/coord/pause`, `POST /api/runs/:id/abandon`,
+ *    `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim` — the FOUR
+ *    routes `coord/routes.ts` leaves off the
  *    BOX-TOKEN gate on purpose (D-282 (was D-B4-9): the coordinator holds that token, and a
  *    pause it can lift is not a pause; build 9 D12 applies the same argument to
  *    the claim-break door, the third instance — the sessions that hold claims
- *    hold that token too). That argument is about the box token specifically and
- *    does not transfer: they are the OPERATOR's doors, the operator is the one
- *    holding a session, and a session cookie is precisely the credential the
- *    coordinator does not have. Gating them here strengthens D-282 rather than
- *    reversing it.
+ *    hold that token too; program-leverage wave 5 applies it to the fourth,
+ *    where the locked-out party is a whole program whose coordinator is dead
+ *    and whose copy of that token died on the box with it). That argument is
+ *    about the box token specifically and does not transfer: they are the
+ *    OPERATOR's doors, the operator is the one holding a session, and a
+ *    session cookie is precisely the credential the coordinator does not
+ *    have. Gating them here strengthens D-282 rather than reversing it.
+ *
+ *    The fourth door is where that last sentence has to be READ rather than
+ *    assumed, because unlike the other three it takes a body: `claimedBy`,
+ *    the session the run is handed to. The gate is what stops an anonymous
+ *    caller naming one on an armed box. What stops a WRONG one is not a
+ *    credential at all — it is the route's own re-measurement of the claimant
+ *    it would displace, which refuses while that session is alive and refuses
+ *    again when the registry cannot be measured.
  */
 export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /health',

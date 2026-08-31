@@ -313,4 +313,94 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     expect(doc).toMatch(/single-uid box any session can `rm` this marker directly/i);
     expect(doc).toMatch(/convention with a speed bump/i);
   });
+
+  /** THE COUNT, DERIVED — because the wave that opened the fourth door found
+   *  FIVE prose sites still saying THREE and not one of them had a test.
+   *  `UNGATED` is the only place the door list is decided, so it is the only
+   *  place the count may be spelled; every site below is checked against
+   *  `UNGATED.size`, and the enumerating ones against the names themselves.
+   *
+   *  A CARDINAL is a claim about the tree NOW. An ORDINAL is a PLACE in the
+   *  order the doors were opened and stays true for ever. Confusing the two is
+   *  exactly what left "the THIRD route in this file that is UNGATED", written
+   *  at the end of a list of three, reading as a completeness claim. CAPS is
+   *  the convention that makes the difference checkable: a number in capitals
+   *  is a claim this scanner reads, a number in lower case is history it
+   *  leaves alone. */
+  const CARDINAL = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN'];
+  const ORDINAL = ['ZEROTH', 'FIRST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH', 'SIXTH', 'SEVENTH'];
+  // ZERO/ONE/FIRST stay out of both patterns: they are this repo's ordinary
+  // CAPS emphasis ("Exactly ONE field is read", "the FIRST await"), and
+  // scanning for them would fire on passages that state no count at all.
+  const CARD_RE = /\b(?:TWO|THREE|FOUR|FIVE|SIX|SEVEN)\b/g;
+  const ORD_RE = /\b(?:SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH)\b/g;
+
+  const REPO = path.resolve(__dirname, '..', '..');
+  const SELF = readFileSync(path.resolve(__dirname, 'coord-pause-route.test.ts'), 'utf8');
+  const GATE_SRC = readFileSync(path.resolve(__dirname, '../src/auth/gate.ts'), 'utf8');
+  const CLAUDE_MD = readFileSync(path.resolve(REPO, 'CLAUDE.md'), 'utf8');
+
+  /** A named passage, or a loud failure. An anchor that stopped matching would
+   *  otherwise yield the empty string, and the empty string satisfies the
+   *  negative half of every assertion below — `docstringFor`'s own lesson
+   *  (review finding F-A: a window whose contents depend on how long the
+   *  neighbours are) applied to three more slices. */
+  const passage = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    const out = text.slice(a, b);
+    expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(300);
+    return out;
+  };
+
+  /** The sites that ENUMERATE the doors. Two docstrings in `coord/routes.ts`
+   *  are deliberately absent: the break door's and the reclaim door's each
+   *  argue about THEMSELVES and name two of the four. They state a place, not
+   *  a census, and demanding the full roster there would mint two more copies
+   *  of the list this scanner exists to stop copying. */
+  const enumerations = (): [string, string][] => [
+    ['coord/routes.ts, the pause docstring', docstringFor('/api/coord/pause')],
+    ["coord-pause-route.test.ts, this file's own header",
+      passage('the file header', SELF, '// `POST /api/coord/pause`', 'import {')],
+    ['auth/gate.ts, the NOT-EXEMPT block',
+      passage('the NOT-EXEMPT block', GATE_SRC,
+        ' *  - `POST /api/coord/pause`', 'export const EXEMPT')],
+    ['CLAUDE.md, the box-token bullet',
+      passage('the box-token bullet', CLAUDE_MD,
+        '- **Box token gates every coordination WRITE**', '\n- **')],
+  ];
+
+  it('every prose site that states the door count states the DERIVED one', () => {
+    const want = CARDINAL[UNGATED.size];
+    expect(want, 'the door count outgrew the word list').toBeDefined();
+    const sites: [string, string][] = [
+      ...enumerations(),
+      ['coord/routes.ts, the break docstring', docstringFor('/api/claims/:id/break')],
+    ];
+    // A site deleted from this list rather than corrected is the failure this
+    // pin exists to prevent; five is the number this wave measured stale.
+    expect(sites.length, 'a count site was dropped instead of corrected').toBe(5);
+    for (const [name, text] of sites) {
+      expect(new Set([...text.matchAll(CARD_RE)].map((m) => m[0])),
+        `${name} does not state the count as ${want}`).toEqual(new Set([want]));
+      for (const ord of [...text.matchAll(ORD_RE)].map((m) => m[0])) {
+        expect(ORDINAL.indexOf(ord),
+          `${name} names the ${ord} ungated door and there are ${UNGATED.size}`)
+          .toBeLessThanOrEqual(UNGATED.size);
+      }
+    }
+  });
+
+  it('every site that lists the doors lists ALL of them', () => {
+    // The half that catches the NEXT door rather than this one: a fifth member
+    // joins `UNGATED` and four passages go red until each names it. Nothing
+    // here is typed by hand, so there is no second list to forget.
+    for (const [name, text] of enumerations()) {
+      for (const door of UNGATED) {
+        expect(text, `${name} does not name ${door}`).toContain(door);
+      }
+    }
+  });
 });

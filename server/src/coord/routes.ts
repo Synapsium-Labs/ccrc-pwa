@@ -1231,13 +1231,21 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/coord/pause` — the OPERATOR's door, and one of the THREE routes
+   * `POST /api/coord/pause` — the OPERATOR's door, and one of the FOUR routes
    * in this file that are UNGATED: deliberately NOT behind `requireMailToken`
-   * (D-282). The others are `POST /api/runs/:id/abandon` above and
-   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape).
-   * Among them they are the WHOLE unauthenticated write surface of this file —
-   * a claim `coord-pause-route.test.ts`'s `UNGATED` set holds to exactly these
-   * three names, in both directions.
+   * (D-282). The others are `POST /api/runs/:id/abandon` above,
+   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape)
+   * and `POST /api/runs/:id/reclaim` (program-leverage wave 5 — that shape once
+   * more, for a program whose coordinator is dead and whose copy of the box
+   * token died on the box with it). Among them they are the WHOLE
+   * unauthenticated write surface of this file, and
+   * `coord-pause-route.test.ts`'s `UNGATED` set now holds that claim in BOTH
+   * directions: no route outside the set reaches its first `await` without a
+   * token check, and no route inside it may quietly acquire one. The second
+   * half arrived with the fourth door — the sentence had been claiming both
+   * directions while only the first was ever measured, so a listed door that
+   * had since been gated would have gone on being described here as ungated
+   * with nothing in the suite to say otherwise.
    *
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
@@ -1807,10 +1815,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
-   * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-282's argument, applied by build 9
-   * D12/D16). The box token authenticates the fleet host, and the sessions
+   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD of the FOUR
+   * routes in this file that are UNGATED: deliberately NOT behind
+   * `requireMailToken`, the `POST /api/runs/:id/abandon` shape (D-282's
+   * argument, applied by build 9 D12/D16). The ordinal is this door's PLACE in
+   * the order they were opened and stays true whatever opens next; the number
+   * beside it is a claim about the tree today, which is why it is now derived
+   * from `UNGATED.size` by a scanner rather than trusted —
+   * `POST /api/runs/:id/reclaim` (program-leverage wave 5) is the fourth. The
+   * box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
    * the holder used to take it. So this rides the PWA's session-gated surface:
