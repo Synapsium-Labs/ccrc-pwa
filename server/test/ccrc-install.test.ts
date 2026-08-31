@@ -429,7 +429,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // every test in this file's suite, non-deterministically, on exactly one
   // machine.
   //
-  // D-1071 GENERALISED THIS FILTER. It used to drop exactly `/usr/local/bin` —
+  // D-1158 GENERALISED THIS FILTER. It used to drop exactly `/usr/local/bin` —
   // the one directory the box this comment was written on happened to keep a
   // stray graphify in. Containment pinned to a path is containment for one
   // machine: a second box keeps an unrelated `graphify` in `$HOME/.local/bin`

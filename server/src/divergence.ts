@@ -25,7 +25,7 @@ export interface DivergenceInput {
     readonly held: string | null;
     readonly archivedAt: number | null;
     /**
-     * MILLISECONDS, and the name says so (D-1070). The registry's own
+     * MILLISECONDS, and the name says so (D-1157). The registry's own
      * `.supervised` is epoch SECONDS; this seam is compared against
      * `input.nowMs`, so the producer converts. It was spelled `supervisedAt`
      * and fed raw seconds, which made every age ~1.78e12 ms — past

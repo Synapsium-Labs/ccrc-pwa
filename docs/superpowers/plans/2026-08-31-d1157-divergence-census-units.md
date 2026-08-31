@@ -1,4 +1,4 @@
-# D-1070 — the `archived-but-live` census could never fire
+# D-1157 — the `archived-but-live` census could never fire
 
 > **Not a multi-task plan.** This is the ledger record for a single fix, written in
 > plan shape because that is where this repo's deviation ledger lives
@@ -42,7 +42,7 @@ contain …` — an empty census — and passes after.
 
 ## Deviations found
 
-- **D-1070** (2026-08-31) — `sweepDivergences` fed `SessionRecord.supervisedAt`, epoch
+- **D-1157** (2026-08-31) — `sweepDivergences` fed `SessionRecord.supervisedAt`, epoch
   SECONDS, into `DivergenceInput.records[].supervisedAt`, which `divergence.ts` compares
   against `input.nowMs`. Every computed age was ~1.78e12 ms, so the `archived-but-live`
   arm could never fire. Fixed at the producer, and the seam now declares its own unit:
@@ -56,7 +56,7 @@ contain …` — an empty census — and passes after.
   rewritten guard below), `server/test/divergence.test.ts` (fixture field renamed —
   its values were already milliseconds and were always right).
 
-- **D-1071** (2026-08-31, found by running the full suite for D-1070) —
+- **D-1158** (2026-08-31, found by running the full suite for D-1157) —
   `ccrc-install.test.ts`'s `ccrcEnv` contained the doctor's graphify shadow check by
   filtering exactly `/usr/local/bin` out of the child's `PATH`, because that is where the
   box the fixture was written on keeps a stray `graphify`. Containment pinned to a path is

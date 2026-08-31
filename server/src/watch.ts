@@ -1781,7 +1781,7 @@ export class FleetWatcher {
         // already measured `.supervised` for every row (`registry.ts:185`), and
         // a re-read here would be a whole-fleet field sweep a minute for a
         // number sitting in scope.
-        // D-1070. `r.supervisedAt` is epoch SECONDS and this seam is compared
+        // D-1157. `r.supervisedAt` is epoch SECONDS and this seam is compared
         // against `nowMs`; `registrySecondsToMs` is the one place that
         // conversion lives, and `supervisedAtMs` is what the field is called
         // so a raw stamp assigned here reads wrong on sight.
