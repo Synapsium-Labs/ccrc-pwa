@@ -2169,7 +2169,9 @@ README grew from 2033 to 2039 lines against `CLAUDE.md:10`'s stated ~1931 (10% u
 
 ### 9.7 — Branch and PR
 
-*(filled at push)*
+`git branch --show-current` → `ws/quiet-meadow`, this workspace's own branch, checked before the push
+rather than assumed. Ten commits, `8ba1c572..d46680c6`, pushed to `origin/ws/quiet-meadow`.
+PR **#39** → `main`.
 
 ### 9.8 — The fingerprint
 
