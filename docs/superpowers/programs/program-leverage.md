@@ -17,7 +17,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 2 | F2 — dispatch-time `skillState` preflight (measure, never refuse) + synchronous deviation-floor seed on first allocation | run 12, PR #30 (merged `4e2a04f5`) | done 2026-08-29 ~10:45 UTC — fix round `c026e151` verified (all findings fixed, D-1020..D-1022), CI 5/5, merged, deployed both boxes agent-first; `/health` and fleet `ccd` both report `4e2a04f5` |
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
-| 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four | run 18 | dispatched 2026-08-31 ~06:08 UTC (resumed quiet-meadow, brief queued, `skillState:present`) |
+| 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18 | dispatched 2026-08-31 ~06:08 UTC; in flight — two operator rulings landed 2026-08-31 ~12:18 UTC (rewrite scope = ALL runs; corpus correction makes the wave AGENT-FIRST), D-1123..D-1140 allocated, Claim 14 (30 paths) |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial | — | planned |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
 | 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. | — | planned |
@@ -294,10 +294,53 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   mail therefore names **runId 18**. Dispatch resumed the workspace (`resumed:true`,
   `briefQueued:true`, `adopted:false`) and the preflight measured `skillState:present` live.
 
+- **Wave 5, two operator rulings mid-wave (2026-08-31 ~12:18 UTC, worker finding 119):** twelve
+  read-only scouts measured two things that defeated the spec as written; both went to the
+  operator with evidence and are ruled. **Ruling 1 — the rewrite covers ALL the program's runs,
+  terminal included.** `openRun`'s claimed-by-another guard (`store.ts:369-371`) and
+  `resolveCoordinator(null)` (`store.ts:1188-1191`) run the IDENTICAL query —
+  `SELECT claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ORDER BY id LIMIT 1` —
+  with **no state predicate and lowest-id-first** (re-verified on `origin/main` by this
+  coordinator). At wave 5 the wave-1 run (run 10) is `done` and holds the lowest id, so a
+  non-terminal-only rewrite leaves BOTH readers naming the dead session: the door would answer
+  `ok` while the program stayed wedged at exactly the boundary it was wedged at. Attribution moves
+  from the column into `run_events` (one row per run, `causedBy:'operator'`, old → new). The
+  rejected alternative (state predicates on those two queries) was measured worse — it makes
+  `resolveCoordinator(null)` answer null in the close-then-open window. **Consumer-side evidence
+  added by this coordinator:** the only `claimedBy` readers outside the store are
+  `pwa/src/fleet/nestFleet.ts` (the /runs board's parent edge, already filtered by `onList`, so a
+  dead coordinator's edge is dropped TODAY — the rewrite restores nesting rather than falsifying
+  it) and `watch.ts:2705` (mail sender resolution, which is the door's whole point). Nothing reads
+  a terminal run's `claimedBy` as an archival record of who ran wave N, so the move loses nothing
+  measurable. **Ruling 2 — the wave is AGENT-FIRST.** The shipped corpus asserts the opposite of
+  this door: `resume.md:38` ("The refusal is PERMANENT … nothing in the HTTP API ever rewrites
+  `claimedBy`"), `resume.md:110`, `SKILL.md:31`. The pin asserts PRESENCE
+  (`coordinator-skill.test.ts:1053`), so the suite stays green while the runbook tells every
+  revived coordinator its program is unrecoverable — standing in front of the one door built for
+  it. Corrected in THIS wave, without naming the route (forbid-mention + the UNGATED harvest at
+  `:1082-1105` + auth-passkey's method-spelling sweep all forbid it). **Bound this coordinator
+  measured and mailed back:** clause 8 itself (`:112`) stays TRUE and must NOT be touched — a
+  softened clause is a red suite; what F5 falsifies is the PERMANENCE prose, none of which is a
+  numbered clause, and exactly ONE verbatim pin reads it.
+- **Wave-5 findings the worker decided itself, all three confirmed by this coordinator:** (1)
+  "REUSE `queueProgramKickoff`" from the brief is **superseded** — its L0 composer
+  `programKickoff()` hardcodes "open the run for wave 1" (`shared/api.ts`), so a wave-aware
+  re-kickoff needs a sibling composer and a widened seam; wave 1's own corpus already anticipated
+  this (`coordinator-skill.test.ts` "carries a wave-N re-kickoff template, not the wave-1 text the
+  machine hardcodes"). What is reused is the LANE (`queueSystemMail` + D-1119's composed-body cap),
+  not the sentence. (2) The UNGATED "two-direction pin" both the brief and root CLAUDE.md describe
+  is only half-measured — nothing asserts a listed door is actually ungated; wave 5 writes the
+  missing direction. (3) A new kebab refusal code cannot join `RunRefuseCode` without forcing the
+  word into the corpus that must not name the door. Deviations **D-1123..D-1140** (floor 1141),
+  Claim 14 (30 paths).
+
 ## Carried constraints
 
-- Waves 1 and 8 are **AGENT-FIRST** deploys (they touch `ccd/coordinator-skill/` and the agent's
-  IO half respectively).
+- Waves 1, **5** and 8 are **AGENT-FIRST** deploys (wave 1 and wave 5 touch
+  `ccd/coordinator-skill/`, wave 8 the agent's IO half). **Wave 5's classification CHANGED
+  mid-wave** (operator ruling 2026-08-31): its brief said NOT agent-first, and the corpus
+  correction the ruling requires puts two markdown files under `ccd/coordinator-skill/` in the
+  diff — fleet host first, then server. No `ccd/ccd`, no `session-hook.sh`, no worker corpus.
 - The destructive-verb census (`coordinator-skill.test.ts:97-105`) counts the three destructive
   verbs across SKILL.md + ALL references — wave 1's new `resume.md` must not name them.
 - Wire discipline everywhere: additive-only fields, single reader per field, older-peer omission
@@ -312,7 +355,13 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 
 ## Next-wave brief
 
-**Wave 5 — F5: coordinator resume — the reclaim door and the PWA affordance.** Spec:
+**Wave 5 — F5: coordinator resume — the reclaim door and the PWA affordance.** *(This is the
+brief AS SENT on 2026-08-31 ~06:08 UTC, kept as the record. **Two sentences in it are SUPERSEDED**
+by the operator rulings of ~12:18 UTC — see the Decisions entry above: the rewrite covers ALL the
+program's runs, not only the non-terminal ones; and the wave is **AGENT-FIRST**, not "NOT
+agent-first", because the corpus correction puts `ccd/coordinator-skill/` in the diff. A third
+line is corrected by measurement: "REUSE wave 4's mail-lane kickoff" reuses the LANE, not
+`programKickoff()`, whose text hardcodes wave 1.)* Spec:
 `docs/superpowers/specs/2026-08-28-program-leverage-design.md` §7, operator ruling §11 (fetch
 `ws/brisk-meadow` from origin). Same workspace as waves 1–4 (`quiet-meadow`, reclaimed). The
 wedge: `claimedBy` is written once by `openRun`'s INSERT and nothing rewrites it — a dead
