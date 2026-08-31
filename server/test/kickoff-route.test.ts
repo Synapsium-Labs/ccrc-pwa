@@ -19,10 +19,12 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { EXEC_WHITELIST } from '../../agent/src/whitelist.js';
-import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../shared/api.js';
 
 const ID = 'demo-quiet-mesa';
 const BODY = { slug: 'build9-demo', title: 'Build 9 demo' };
+const RESUME = { runId: 7, wave: 5 };
+const RESUME_BODY = { ...BODY, ...RESUME };
 
 /** The tmux vocabulary, DERIVED. `agent/src/whitelist.ts` is the ONE definition
  *  of what a tmux argv may even be, so a sixth grant appearing there widens this
@@ -258,6 +260,83 @@ describe('POST /api/sessions/:id/kickoff — what it queues, and what it answers
     const w = await openApp(home, run); app = w.app;
     expect((await post(app, ID, { slug: BODY.slug, title: 'x'.repeat(64 * 1024) })).statusCode).toBe(413);
     expect((await post(app)).json()).toMatchObject({ ok: true, queued: true });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000).length).toBe(1);
+  });
+});
+
+describe('POST /api/sessions/:id/kickoff — the wave-N re-kickoff', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { await app?.close(); app = undefined; });
+
+  it('200 queued:true, and what lands in the lane is the RESUME sentence', async () => {
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const res = await post(app, ID, RESUME_BODY);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, queued: true });
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due.length).toBe(1);
+    expect(due[0]!.envelope).toContain(programResumeKickoff(BODY.slug, BODY.title, 7, 5));
+    expect(due[0]!.envelope).not.toContain('open the run for wave 1.');
+    expect(due[0]!.envelope).toContain(`subject: ${PROGRAM_KICKOFF_SUBJECT}`);
+  });
+
+  it('the wave-1 path is UNCHANGED — neither field, and the wave-1 sentence is what lands', async () => {
+    // Not a tautology, and not a re-run of `:206-220`: this fixture reds
+    // against a handler that read a missing pair as `{runId: 0, wave: 1}` and
+    // composed the resume sentence from it — the cheap way to write this
+    // widening, and the one that silently rewrites every start-program kickoff
+    // in the fleet.
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    expect((await post(app)).statusCode).toBe(200);
+    const due = w.coord.dueDeliveries(Date.now(), 60_000);
+    expect(due[0]!.envelope).toContain(programKickoff(BODY.slug, BODY.title));
+    expect(due[0]!.envelope).not.toContain('ALREADY OPEN');
+  });
+
+  it.each([
+    ['a lone runId', { ...BODY, runId: 7 }],
+    ['a lone wave', { ...BODY, wave: 5 }],
+    ['a fractional wave', { ...BODY, runId: 7, wave: 1.5 }],
+    ['a string runId', { ...BODY, runId: '7', wave: 5 }],
+    ['an explicit null wave', { ...BODY, runId: 7, wave: null }],
+  ])('400 bad-request for %s, and queues NOTHING', async (_label, payload) => {
+    // BOTH OR NEITHER. Absence-permits is the wire rule for a field an older
+    // peer may not know about; a HALF-PRESENT pair is not an older peer — no
+    // build ever sent one — it is a caller that meant something. Completing it
+    // with a default briefs a coordinator standing at wave 5 to open wave 1,
+    // and the operator reads `queued:true` and believes the revive worked. The
+    // "queues NOTHING" half is the assertion that separates a 400 from a
+    // silent wave-1 kickoff: an answer alone could be honest and write anyway.
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const res = await post(app, ID, payload);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+  });
+
+  it('413 for a resume kickoff over the cap — and it does not occupy the dedupe key', async () => {
+    // The resume arm of `:240-262`. The cap is at the seam, so the route gains
+    // this for free; pinned anyway, because "for free" is a claim about a call
+    // site that could have stopped forwarding the pair.
+    const home = mkTmp('ccrc-kick-');
+    seed(home, ID);
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const over = await post(app, ID, { slug: BODY.slug, title: 'x'.repeat(64 * 1024), ...RESUME });
+    expect(over.statusCode).toBe(413);
+    expect(over.json()).toMatchObject({ ok: false, error: 'oversize', limit: MAIL_BODY_MAX_BYTES });
+    expect(w.coord.dueDeliveries(Date.now(), 60_000)).toEqual([]);
+    const sane = await post(app, ID, RESUME_BODY);
+    expect(sane.json()).toMatchObject({ ok: true, queued: true });
     expect(w.coord.dueDeliveries(Date.now(), 60_000).length).toBe(1);
   });
 });

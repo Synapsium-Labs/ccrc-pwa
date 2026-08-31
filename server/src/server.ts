@@ -1477,9 +1477,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * revived coordinator without a sheet. This handler is a union->status map, as
    * the ring requires of L4.
    *
-   * The body carries `{slug, title}`, never prose: the server composes the
-   * sentence from the L0 constant, which makes this route strictly NARROWER than
-   * the one above — it can queue a program kickoff and nothing else.
+   * The body carries `{slug, title}` and — since wave 5 — an optional
+   * `{runId, wave}` pair, never prose: the server composes the sentence from one
+   * of TWO L0 constants, so the route stays strictly NARROWER than the one above.
+   * It can queue a program kickoff and nothing else; the pair chooses WHICH
+   * kickoff, never what it says. Both fields or neither: see the guard below for
+   * why a half-present pair is a 400 rather than a wave-1 kickoff.
    */
   app.post('/api/sessions/:id/kickoff', async (req, reply) => {
     // 501 `{ok:false,error:'not-configured'}` — `server.ts` has no
@@ -1494,9 +1497,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const coord = deps.coord;
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
-    const body = (req.body ?? {}) as { slug?: unknown; title?: unknown };
+    const body = (req.body ?? {}) as
+      { slug?: unknown; title?: unknown; runId?: unknown; wave?: unknown };
     if (typeof body.slug !== 'string' || body.slug.trim() === ''
       || typeof body.title !== 'string' || body.title.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // ONE reader for the new pair (the wire rule), computed once and handed on as
+    // a value that CANNOT be half-formed — the refusal below is the only place a
+    // half-formed pair can reach. Shape borrowed from `coord/routes.ts`'s own
+    // integer body checks: `typeof === 'number'` AND `Number.isInteger`, because
+    // `NaN` and 1.5 are both numbers and neither is a wave.
+    const resume = typeof body.runId === 'number' && Number.isInteger(body.runId)
+      && typeof body.wave === 'number' && Number.isInteger(body.wave)
+      ? { runId: body.runId, wave: body.wave }
+      : undefined;
+    // BOTH OR NEITHER (D-1126). Absent-both is wave 4's kickoff, byte for byte —
+    // absence permits. Half-present is refused rather than completed: no build
+    // ever sent a lone field, so it is a caller that meant something, and the
+    // default that would complete it (wave 1) is the one instruction a REVIVED
+    // coordinator must not be given. A silent fallback would answer `queued:true`
+    // to an operator whose revive had just been briefed to open a second run.
+    if (resume === undefined && (body.runId !== undefined || body.wave !== undefined)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     // Deliberately NOT `knownId` (above), whose `names !== null &&` folds an
@@ -1512,7 +1534,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session',
       });
     }
-    const out = queueProgramKickoff({ coord }, id, { slug: body.slug.trim(), title: body.title.trim() });
+    const out = queueProgramKickoff({ coord }, id,
+      { slug: body.slug.trim(), title: body.title.trim() }, resume);
     // 413 in the shape every other cap on this server answers in (claims paths,
     // claim intent, ledger title, and `POST /api/mail` itself). The seam
     // MEASURED it and named it; this maps, and decides nothing — `out.kind` is
