@@ -24,7 +24,17 @@ export interface DivergenceInput {
     readonly branch: string | null;
     readonly held: string | null;
     readonly archivedAt: number | null;
-    readonly supervisedAt: number | null;
+    /**
+     * MILLISECONDS, and the name says so (D-1070). The registry's own
+     * `.supervised` is epoch SECONDS; this seam is compared against
+     * `input.nowMs`, so the producer converts. It was spelled `supervisedAt`
+     * and fed raw seconds, which made every age ~1.78e12 ms — past
+     * `SUPERVISED_FRESH_MS` by five orders of magnitude, so the
+     * `archived-but-live` arm below `continue`d for every row ever measured
+     * and the census could not fire. Types could not catch it (both are
+     * `number`); a name at the assignment site can.
+     */
+    readonly supervisedAtMs: number | null;
   }[];
   /**
    * Every linked worktree GIT ITSELF records, per project, read out of
@@ -369,8 +379,8 @@ export function divergences(input: DivergenceInput): Divergence[] {
   // without it a future-dated stamp reads fresh forever, and a skewed clock
   // would flag every archived row on the box.
   for (const r of input.records) {
-    if (r.archivedAt === null || r.supervisedAt === null) continue;
-    const age = input.nowMs - r.supervisedAt;
+    if (r.archivedAt === null || r.supervisedAtMs === null) continue;
+    const age = input.nowMs - r.supervisedAtMs;
     if (age < 0 || age >= SUPERVISED_FRESH_MS) continue;
     out.push({
       kind: 'archived-but-live', id: r.id, path: r.workdir,

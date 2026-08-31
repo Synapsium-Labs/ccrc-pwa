@@ -428,8 +428,22 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // unrelated, real-world graphify install), which would otherwise WARN on
   // every test in this file's suite, non-deterministically, on exactly one
   // machine.
+  //
+  // D-1071 GENERALISED THIS FILTER. It used to drop exactly `/usr/local/bin` —
+  // the one directory the box this comment was written on happened to keep a
+  // stray graphify in. Containment pinned to a path is containment for one
+  // machine: a second box keeps an unrelated `graphify` in `$HOME/.local/bin`
+  // (dated 2026-07-07, nothing to do with ccrc), so `command -v graphify`
+  // resolved THAT, the shadow WARN fired, and `ends with doctor …` failed on a
+  // clean tree — while CI, which carries no stray graphify in any directory,
+  // stayed green and could never have caught it. The filter is now the PROPERTY
+  // the paragraph above always described: no directory but the fixture's own
+  // bin may resolve `graphify`.
+  const fixtureBin = join(home, '.local', 'bin');
   if (env['PATH']) {
-    env['PATH'] = env['PATH'].split(':').filter((p) => p !== '/usr/local/bin').join(':');
+    env['PATH'] = env['PATH'].split(':')
+      .filter((p) => p === fixtureBin || !existsSync(join(p, 'graphify')))
+      .join(':');
   }
   const plant = (name: string, body: string): void => {
     if (omit.includes(name)) { rmSync(join(home, '.local', 'bin', name), { force: true }); return; }

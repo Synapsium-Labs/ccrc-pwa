@@ -1,6 +1,6 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
-import { assembleFleet, lifecycleInputFor } from './fleet.js';
+import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
@@ -1781,7 +1781,11 @@ export class FleetWatcher {
         // already measured `.supervised` for every row (`registry.ts:185`), and
         // a re-read here would be a whole-fleet field sweep a minute for a
         // number sitting in scope.
-        supervisedAt: r.supervisedAt,
+        // D-1070. `r.supervisedAt` is epoch SECONDS and this seam is compared
+        // against `nowMs`; `registrySecondsToMs` is the one place that
+        // conversion lives, and `supervisedAtMs` is what the field is called
+        // so a raw stamp assigned here reads wrong on sight.
+        supervisedAtMs: registrySecondsToMs(r.supervisedAt),
       })),
       worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
