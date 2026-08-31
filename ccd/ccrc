@@ -4140,6 +4140,20 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
     || _ccrc_die "no server build at $src/server/dist — build first: bash install.sh (or npm run build in server/ and pwa/)"
   [ -f "$src/server/dist-pwa/index.html" ] \
     || _ccrc_die "no PWA bundle at $src/server/dist-pwa — build first: bash install.sh (or npm run build in pwa/)"
+  # D-1159 — THE THIRD PREFLIGHT, and it is role-gated because the artifact is.
+  # `_inst_enable` starts `ccrc-agent.service` for every role but `server`, and
+  # that unit's ExecStart is `$HOME/ccrc/agent/dist/agent/src/index.js`. Without
+  # this line a fleet-role install does not fail HERE — it fails LATER, having
+  # already placed the tree and restarted a LIVE fleet's agent onto a directory
+  # with no entry point. Measured on the reference fleet: `install.sh` builds
+  # server and pwa only, so `ccrc install --role fleet` from a source checkout
+  # took `ccrc-agent.service` down with MODULE_NOT_FOUND and the server lost its
+  # only path to the box until the agent was built by hand. Refusing here is
+  # this verb's own stated doctrine — an install that half-ran is worse than one
+  # that did not start — and it is the same shape, and the same third sentence,
+  # the two preflights above already use.
+  [ "$INST_ROLE" = server ] || [ -f "$src/agent/dist/agent/src/index.js" ] \
+    || _ccrc_die "no agent build at $src/agent/dist — build first: bash install.sh (or npm run build in agent/)"
   # THE SELF-COPY GUARD, ON PHYSICAL PATHS. On a box a deploy has already
   # touched — and on every re-run of this verb — `ccrc` IS `~/ccrc/ccd/ccrc`,
   # so source and destination are one directory. `rsync -a --delete X X/` is not

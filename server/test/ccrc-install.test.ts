@@ -198,6 +198,10 @@ const TREE_FILES = [
 const TREE_STUBS: Record<string, string> = {
   'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
   'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
+  // D-1159: the agent entry point `ccrc-agent.service` runs. Present for the
+  // same reason the two above are — a fleet box cannot run an agent it never
+  // built — and deleted by the one test that wants that refusal.
+  'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
 };
 
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
@@ -945,6 +949,47 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(r.stderr).toMatch(
       /^ccrc: no PWA bundle at .*\/checkout\/server\/dist-pwa — build first: bash install\.sh \(or npm run build in pwa\/\)$/m);
     expect(existsSync(placed(home))).toBe(false);
+  });
+
+  it('refuses BY ARTIFACT when the agent build is missing — and only for a role that runs one (D-1159)', () => {
+    // The third artifact, the third sentence. This one is role-gated because
+    // the artifact is: `_inst_enable` starts `ccrc-agent.service` for every
+    // role but `server`.
+    //
+    // WHAT THIS COSTS WHEN IT IS MISSING, measured on the reference fleet
+    // before the preflight existed: `install.sh` builds server and pwa only, so
+    // `ccrc install --role fleet` from a source checkout placed the tree, then
+    // restarted a LIVE fleet's agent onto a directory with no entry point. The
+    // agent died with MODULE_NOT_FOUND and the server lost its only path to the
+    // box. A refusal before the copy is the whole difference.
+    const home = freshBox('ccrc-install-noagent-');
+    rmSync(treeFile(home, 'agent/dist/agent/src/index.js'));
+    // `--role fleet` asks for the agent's URL and bearer token when
+    // `~/.ccrc/agent.env` is absent, and refuses on a non-tty long before the
+    // preflight under test. A box that has already been configured — which is
+    // every box a re-install runs on, and the one this outage happened on —
+    // carries it, so the fixture does too.
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: no agent build at .*\/checkout\/agent\/dist — build first: bash install\.sh \(or npm run build in agent\/\)$/m);
+    // BEFORE anything moved — the same property the two preflights above pin.
+    expect(existsSync(placed(home)), 'the tree was placed before it was checked').toBe(false);
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran anyway').toBe(false);
+  });
+
+  it('does NOT demand an agent build for --role server (D-1159)', () => {
+    // The gate is not decoration: a server-only box runs no agent unit, so an
+    // absent agent build is not a fault there. Without this the preflight would
+    // refuse installs it has no business refusing.
+    const home = freshBox('ccrc-install-noagent-server-');
+    rmSync(treeFile(home, 'agent/dist/agent/src/index.js'));
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.stderr, 'a server-role install must not be refused for a missing agent')
+      .not.toMatch(/no agent build at/);
   });
 
   it('places the five directories a box runs out of, with the builds inside them', () => {
@@ -3477,11 +3522,16 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
     // The build order install.sh's pinned code spells: ci in server, then
-    // ci+build in pwa, then build in server.
+    // ci+build in pwa, then build in server, then ci+build in agent (D-1159 —
+    // the agent joined because `ccrc install` refuses without its dist for
+    // every role but `server`, and until it did, a fleet-role install from
+    // source restarted a live fleet's agent onto a tree with no entry point).
     expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
       'ci --no-audit --no-fund',
       'ci --no-audit --no-fund',
       'run build',
+      'run build',
+      'ci --no-audit --no-fund',
       'run build',
     ]);
     expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
@@ -3489,6 +3539,8 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
       join(root, 'pwa'),
       join(root, 'pwa'),
       join(root, 'server'),
+      join(root, 'agent'),
+      join(root, 'agent'),
     ]);
 
     // The handoff: `install install`'s argv, and — the hermetic proof — the

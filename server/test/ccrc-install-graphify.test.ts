@@ -80,6 +80,9 @@ const TREE_FILES = [
 
 const TREE_STUBS: Record<string, string> = {
   'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
+  // D-1159: `ccrc install` preflights the agent build for every role but
+  // `server`, and every test in this file installs a fleet-capable box.
+  'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
   'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
 };
 
