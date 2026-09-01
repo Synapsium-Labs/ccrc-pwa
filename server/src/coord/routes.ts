@@ -1411,6 +1411,10 @@ export function registerCoordRoutes(
                 `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
         });
         coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
+      } finally {
         // FLUSH, like the only other `record()` caller in the tree
         // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
         // gives: `record()` bumps the in-memory seq, and a seq handed to a
@@ -1418,10 +1422,15 @@ export function registerCoordRoutes(
         // `{epoch, seq}` pair for a different event — the stale-but-valid
         // landing `catchUp` cannot tell from the truth. `void`, never awaited:
         // flush never rejects, and the caps write must not wait on it.
+        //
+        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
+        // inside the try, one line below `recordFeedEvent` — which throws
+        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
+        // the flush was skipped on precisely the path that needed it: the seq
+        // was already spent, the client already had it, and the file still
+        // held the older number. The seq is minted by `record()`, so its
+        // persistence must follow `record()` and nothing else.
         void log.flush();
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
       }
     }
     return reply.code(200).send({ ok: true, ...view });

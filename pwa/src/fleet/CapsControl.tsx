@@ -19,8 +19,13 @@
 //
 // NO TIMERS OF ANY KIND. `runs-screen.test.tsx`'s cadence pin measures
 // `useNow` as the only `setInterval` in this screen's whole tree and names each
-// sibling that runs none; a polling readout here would silently corrupt the
-// dispatch-window cadence assertions.
+// sibling that runs none — this component among them (D-1217: that sentence was
+// written here BEFORE the list over there had been re-measured to include it,
+// which is the shape of claim this wave keeps finding). A polling readout here
+// would silently corrupt the dispatch-window cadence assertions, and note that
+// the instrument would not catch one armed after the caps read resolves: it
+// reads its spy straight after a synchronous mount, when this component still
+// renders `null`.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { CoordCaps, CoordCapsView } from '../../../shared/api';
@@ -43,15 +48,40 @@ type Note =
    *  "failed" here would be a lie the operator acts on by retrying. */
   | { kind: 'unconfirmed' };
 
-const asPartial = (draft: Draft, caps: CoordCaps): Partial<CoordCaps> => {
-  const out: Partial<CoordCaps> = {};
-  if (draft.workers !== null && Number(draft.workers) !== caps.maxConcurrentWorkers) {
-    out.maxConcurrentWorkers = Number(draft.workers);
+/** What a click on `save` turns out to mean. Three OUTCOMES, not a partial plus
+ *  a convention (D-1220/D-1221): "send this", "the operator moved nothing" and
+ *  "one of the boxes does not hold a number" are three different things a caller
+ *  handles three different ways, and an empty `Partial<CoordCaps>` collapsed the
+ *  first two while `Number('')` silently turned the third into a request to
+ *  store 0. That is the overloaded seam this tree bans by name, in a component. */
+type SaveIntent =
+  | { kind: 'send'; body: Partial<CoordCaps> }
+  | { kind: 'nothing' }
+  | { kind: 'unparsed'; text: string };
+
+/** WHERE THE LINE FALLS between this control and the route, because the
+ *  temptation is to move it. The control decides what the operator ASKED FOR;
+ *  the route decides whether the ask is allowed. "Is this box a number at all"
+ *  is the first question — a blank box is not an ask for zero, and reading it as
+ *  one invents a value nobody typed. Bounds and integer-ness are the second, and
+ *  they stay server-side: 99 and 1.5 are SENT, and the refusal that comes back
+ *  names the field and the bounds in the route's own words rather than in a
+ *  second copy of the policy kept here. */
+const readDraft = (draft: Draft, caps: CoordCaps): SaveIntent => {
+  const body: Partial<CoordCaps> = {};
+  const fields: [label: string, typed: string | null, stored: number, key: keyof CoordCaps][] = [
+    ['workers', draft.workers, caps.maxConcurrentWorkers, 'maxConcurrentWorkers'],
+    ['per day', draft.perDay, caps.maxSessionsPerDay, 'maxSessionsPerDay'],
+  ];
+  for (const [label, typed, stored, key] of fields) {
+    if (typed === null) continue;                       // untouched — not an ask
+    const n = Number(typed);
+    if (typed.trim() === '' || !Number.isFinite(n)) {
+      return { kind: 'unparsed', text: `${label} is not a number — nothing was sent` };
+    }
+    if (n !== stored) body[key] = n;
   }
-  if (draft.perDay !== null && Number(draft.perDay) !== caps.maxSessionsPerDay) {
-    out.maxSessionsPerDay = Number(draft.perDay);
-  }
-  return out;
+  return Object.keys(body).length === 0 ? { kind: 'nothing' } : { kind: 'send', body };
 };
 
 /** The route's own `detail` is the message: it names the field and the bounds,
@@ -89,13 +119,22 @@ export function CapsControl({
   if (view === null) return null;
 
   const onSave = (): void => {
-    const next = asPartial(draft, view.caps);
+    const intent = readDraft(draft, view.caps);
+    // A BOX THAT HOLDS NO NUMBER (D-1221). Said here rather than sent, because
+    // the alternative is to send a value the operator never chose.
+    if (intent.kind === 'unparsed') { setNote({ kind: 'refused', text: intent.text }); return; }
     // Nothing moved: the route would refuse an empty body, and spending a round
     // trip to be told so would be the control's bug, not the operator's.
-    if (Object.keys(next).length === 0) return;
+    //
+    // THE NOTE IS CLEARED FIRST (D-1220). This return used to sit ABOVE the
+    // clear, and the draft is deliberately not reset on a refusal — so an
+    // operator correcting a rejected field back to its stored value got no
+    // request (right) and kept the refusal on screen (wrong), told their input
+    // was invalid at the moment it became valid again.
+    if (intent.kind === 'nothing') { setNote({ kind: 'none' }); return; }
     setBusy(true);
     setNote({ kind: 'none' });
-    setCoordCaps(next).then(
+    setCoordCaps(intent.body).then(
       (answer) => {
         setBusy(false);
         if (answer === 'unreadable') { setNote({ kind: 'unconfirmed' }); return; }
@@ -135,10 +174,21 @@ export function CapsControl({
       <button type="button" className="caps-save" disabled={busy} onClick={onSave}>
         {busy ? 'saving…' : 'save'}
       </button>
-      {note.kind === 'refused' && <p className="caps-note">{note.text}</p>}
-      {note.kind === 'unconfirmed' && (
-        <p className="caps-note">unconfirmed — the answer could not be read; reload to see what was stored</p>
-      )}
+      {/* ONE note element, ALWAYS mounted, and it is the live region (D-1222).
+          Always mounted because a `role="status"` inserted at the same moment its
+          text appears is announced unreliably; the region has to exist first and
+          have its contents change. `.caps-note:empty` collapses it to nothing
+          visually WITHOUT `display: none`, which would take it back out of the
+          accessibility tree and undo the point. This is the whole of the
+          control's feedback — no toast, no banner, and a successful write just
+          re-renders numbers — so outside a live region a screen-reader user
+          learns nothing at the one moment they have just committed to a save. */}
+      <p className="caps-note" role="status">
+        {note.kind === 'refused' ? note.text
+          : note.kind === 'unconfirmed'
+            ? 'unconfirmed — the answer could not be read; reload to see what was stored'
+            : ''}
+      </p>
     </div>
   );
 }

@@ -829,12 +829,24 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
    *  second-granular (`formatAge` rounds everything under two minutes to "just
    *  now"), so no readout can report the cadence. `useNow` is the only
    *  `setInterval` in this screen's whole tree — measured across `pwa/src`:
-   *  `CoordBanner`, `AbandonSheet`, `StartProgramSheet` and — re-measured when
-   *  it joined this screen's tree in program-leverage wave 5 — `ResumeSheet`
-   *  run none, and this store never connects (its own roster poll is the one
-   *  `setInterval` under `stores/fleet.ts`, and `connect()` is what arms it)
-   *  — so every recorded call is the tick. Re-measure this list when the tree
-   *  grows a component, rather than inheriting the sentence.
+   *  `CoordBanner`, `AbandonSheet`, `StartProgramSheet`, `ResumeSheet`
+   *  (re-measured when it joined in program-leverage wave 5) and `CapsControl`
+   *  (re-measured when it joined in wave 6 — D-1217) run none, and this store
+   *  never connects (its own roster poll is the one `setInterval` under
+   *  `stores/fleet.ts`, and `connect()` is what arms it) — so every recorded
+   *  call is the tick. Re-measure this list when the tree grows a component,
+   *  rather than inheriting the sentence. `CapsControl` was the case that proved
+   *  that instruction is not decorative: it joined the tree, its own header
+   *  asserted this list had been re-measured for it, and this list had not
+   *  named it.
+   *
+   *  WHAT THE INSTRUMENT ITSELF COVERS, stated because the list above is doing
+   *  work the instrument cannot. `cadenceOf` reads the spy straight after a
+   *  SYNCHRONOUS mount, so it sees every interval armed by that first render.
+   *  `CapsControl` renders `null` until its injected read resolves, and nothing
+   *  here awaits that — so an interval armed in its post-load subtree would be
+   *  invisible here, and is held instead by the grep above and by that
+   *  component's own NO TIMERS OF ANY KIND rule.
    *
    *  `mockRestore()` BEFORE `useRealTimers()`, deliberately: the spy wraps the
    *  FAKE `setInterval`, and unwinding in the other order would hand the

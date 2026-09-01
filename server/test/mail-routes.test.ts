@@ -131,6 +131,19 @@ describe('POST /api/mail — the rejection table', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-kind' });
     expect(res.json().detail).toContain('positive');
+    // …AND THE DURABLE ROW SAYS THE SAME THING (D-1218). The comment above
+    // claims this route "also mislabels the durable rejection record" — a
+    // SECOND consequence, beyond the status code, that nothing on THESE two
+    // rows checked. (`REJECT_CASES` below does read `rejections()`, for its own
+    // seven codes; the two D-1165 rows, the ones whose comment makes the claim,
+    // did not.) The row is the fleet-visible half of a refusal and the half a
+    // later feed will surface, so a shape error recorded as a missing run is a
+    // wrong fact that outlives the response.
+    //
+    // Measured with a mutation that touches the ROW alone — `refuse()` recording
+    // a constant code while the reply still varies — so this assertion is
+    // witnessed independently of the status assertions above it.
+    expect(w.coord.rejections().map((r) => r.code)).toEqual(['bad-kind']);
   });
 
   it('still answers 404 unknown-run for a WELL-FORMED runId that names no run', async () => {
@@ -142,6 +155,10 @@ describe('POST /api/mail — the rejection table', () => {
     const res = await send(app!, { ...GOOD, runId: 4242 });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ ok: false, error: 'unknown-run' });
+    // The other direction for the durable row too: this one really is recorded
+    // as a missing run, so the row above pins a DISTINCTION rather than a
+    // constant.
+    expect(w.coord.rejections().map((r) => r.code)).toEqual(['unknown-run']);
   });
 
   it.each(REJECT_CASES)('refuses %s', async (code, status, override) => {

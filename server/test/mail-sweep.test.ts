@@ -2480,12 +2480,23 @@ describe('sweepMail: the coordinator quiet window', () => {
     coord.advance(r.id, 'dispatched', 'operator');
     coord.advance(r.id, 'closing', 'operator');
     coord.advance(r.id, 'done', 'operator');
-    // The premise, established: this session IS a claimedBy, just not a live one.
+    // The premise, established IN FULL (D-1225). The claimedBy half was checked;
+    // the "just not a live one" half — which is the half the whole case turns on
+    // — was left to the three `advance` calls above, unmeasured. They are not
+    // guaranteed to land: `advance` answers a refusal for a transition the table
+    // forbids, and a refusal here is silent.
     expect(coord.run(r.id)!.claimedBy).toBe(ID);
-    queueTestDelivery(coord, ID, ENVELOPE);
+    expect(coord.run(r.id)!.state, 'the run never reached a terminal state — ' +
+      'this case is no longer about a TERMINAL run').toBe('done');
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
 
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([]);
+    // …and gated for the RIGHT reason. A bare "nothing was sent" is satisfied by
+    // any gate at all — a draft, a pane that never went idle, a cooldown — so the
+    // reason is what says the WORKER window was the one applied. (The sibling
+    // case above states its gate for the same reason.)
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
   });
 
   it('puts a COORDINATOR back on the lane after COORD_COOLDOWN_MS', async () => {

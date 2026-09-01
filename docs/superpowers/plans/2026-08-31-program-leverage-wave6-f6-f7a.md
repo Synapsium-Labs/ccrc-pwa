@@ -2234,11 +2234,15 @@ re-reads the store, that their value was stored. The `dispatch-mutex-gate` targe
 see this: it only requires `setCaps` to SIT inside the lock. Fixed by moving the read and the merge into
 the thunk; the shape refusal stays outside, which is all the reclaim route's rule ever asked for.
 
-**Unwitnessed by any fixture, and recorded as such rather than left looking pinned.** A test firing two
-concurrent partial writes was added and MEASURED against the reverted code: it stays GREEN, because
-`app.inject` does not interleave the two handlers' synchronous prologues. Reproducing the lost update
-needs a third actor holding the mutex across a real await. The test was kept for the end-to-end property
-it does hold, with a comment stating exactly what it does not.
+**~~Unwitnessed by any fixture~~ — CORRECTED by the coordinator's review, see D-1211.** What was
+measured is still true: a test firing two concurrent partial writes stays GREEN against the reverted
+code, because `app.inject` does not interleave the two handlers' synchronous prologues, and reproducing
+the lost update needs a third actor holding the mutex across a real await. What was NOT measured, and
+was written here as though it had been, is the claim that no fixture in this suite could stage that
+actor. One can, in about forty lines: `POST /api/runs` with a `sessionId` awaits `deps.runCcd` inside
+`coordMutex.run`. The witness now exists and reds on the revert (D-1211); this row is left standing with
+its correction rather than rewritten, because the mistake — recording UNMEASURED as UNMEASURABLE — is
+the part worth keeping.
 
 ### D-1171 (self-review MINOR) — the caps route was the one `NotifyLog.record()` caller that never flushed
 
@@ -2246,7 +2250,9 @@ it does hold, with a comment stating exactly what it does not.
 exactly one call site (`watch.ts:1230`, immediately after its own `record`). A seq handed to a client but
 never persisted lets a restart re-mint the same pair for a different event — the stale-but-valid landing
 `NotifyLog.flush`'s own docstring says `catchUp` cannot tell from the truth. Fixed with `void log.flush()`
-beside the record, matching the other caller exactly.
+beside the record, matching the other caller exactly. **The placement was wrong — corrected in D-1213:**
+"beside the record" put it inside the try, one line below the `recordFeedEvent` that throws, so the flush
+was skipped on exactly the failure the try/catch exists for.
 
 ### D-1172 (self-review, nine smaller confirmations) — the rest of the round
 
@@ -2367,3 +2373,250 @@ new commits and a fresh measurement, and this has both.
 
 `tsc --noEmit` clean in all three. One mutation row added (the shared shape), bringing the wave to
 **62 rows**.
+
+---
+
+## Deviations found — the coordinator's wave-6 review round
+
+Mail 138, run 19: **SHIP-WITH-FIXES**, a 44-agent pass over eight lenses with refute-default verifiers.
+17 confirmed (0 MAJOR, 11 minors, 6 notes) plus 2 from a live re-measurement lane, 8 refuted. Two
+verifier agents died on API errors and the scoring counted an absent verdict as a refutation; the
+coordinator adjudicated both by hand rather than let the arithmetic decide, which is why one of them
+appears below as a confirmed minor. The refuted eight are not acted on and are listed at the end.
+
+Numbers D-1211..D-1227 allocated in one block from `ccrc-api ledger allocate` (floor 1211 → 1228).
+D-1157/D-1158 are NOT reused in any form: PR #38 defined them first and this wave renumbered away from
+them in D-1210.
+
+### D-1211 (must-fix A) — the lost-update guard was recorded UNMEASURABLE when it was merely UNMEASURED
+
+The self-review's MAJOR (D-1170) shipped with the one guard in the wave that had no red measurement, and
+`coord-caps-route.test.ts`'s comment said reproducing it "needs the mutex held across a real await by a
+THIRD actor, which no fixture in this suite can stage". The first clause is right; the second was never
+measured. `POST /api/runs` with a `sessionId` awaits `deps.runCcd` for its `ws-hold` INSIDE
+`coordMutex.run`, so an injected runner that signals on entry and then waits on a test gate holds the
+lock across a real await — the third actor, already in this server.
+
+The witness is now the test directly below that one: fire the hold, wait for it to be in flight, fire
+the two disjoint partial saves, wait until BOTH prologues have read `caps()` (spying on the read is the
+instrument, because a fixed number of event-loop turns could pass for one spelling and hang for the
+other), release the gate, assert `{5, 20}`. GREEN on the tip; on the D-1170 revert it reds with the
+lost update itself.
+
+**Why this matters beyond the one row.** It is the same dodge this wave refused one file over: the
+`SESSION_ONLY` blind-spot note says a route that escapes a pin by placement is *unmeasured*, not
+*ungated*. Writing "unmeasurable" for "I did not find a way" is that error in my own favour. The
+corrected comment and the corrected D-1170 row both say so.
+
+### D-1212 (must-fix B) — the coordinator's own ruling shipped without a mechanism
+
+The ruling was "the read must not carry a copy of what the write answers"; the fix was the shared
+`capsView()`; and the mutation row recorded for it changed the VALUES the GET reports, not the sharing.
+Measured by the reviewer and re-measured here: restoring the pre-ruling inline rebuild verbatim is
+tsc-clean and leaves all ten caps-touching suites green. A row that cannot fail on the defect it names
+is worse than no row, because it reads as coverage.
+
+The property is now pinned directly, in two arms: both handler bodies must contain `capsView(`, and
+`.capsUsage(` must appear EXACTLY ONCE in `coord/routes.ts`. `capsUsage` is the discriminator on purpose
+— `caps()` has other legitimate callers in that file (the shape probe and the merge base), while the
+usage reading exists for this answer alone, so any rebuild of the shape has to spell it a second time.
+
+### D-1213 (must-fix C) — `void log.flush()` was skipped on exactly the failure its try/catch exists for
+
+D-1171 added the flush "beside the record", which put it inside the try and one line BELOW
+`coord.recordFeedEvent` — which throws synchronously (`node:sqlite`) and is the only reason that
+try/catch exists. So on the throw path: `record()` had already bumped the in-memory seq and handed it to
+the caller, and the file still held the older number. That is verbatim the hazard `NotifyLog.flush`'s own
+docstring names — "a seq handed to a client but never persisted lets a restart re-mint the same
+`{epoch, seq}` pair for a different event" — and `catchUp` cannot tell that landing from the truth.
+Three independent review lenses arrived at this line.
+
+Fixed by moving the flush into a `finally`: the seq is minted by `record()`, so its persistence follows
+`record()` and nothing else. Both directions are pinned — a flush on the ordinary path (the floor, or the
+throw-path row could be satisfied by a route that had stopped flushing entirely) and a flush on the throw.
+
+### D-1214 (minor D) — the census's numeral pins compared an UNORDERED SET
+
+`numeralsIn` answered a `Set` and every site asserted `toEqual(new Set([...]))`, so only membership was
+checked. Measured by the review: transposing `eighteen` and `nineteen` between the two claims in
+`gate.ts` (`:75` says how many box-token machine lanes there are, `:77` says how many things check the
+token) stayed GREEN across all five suites that read those words. D-1161's original defect was "wrong in
+KIND as well as in number" — a set catches the number half and not the kind half, which is the half that
+defect was named for.
+
+`numeralsIn` now answers the numbers IN TEXT ORDER, repeats kept, and each site states its own sequence:
+README says the total first and breaks it down, `gate.ts` and `auth-gate.test.ts` name the lanes first
+and the total second. Both spellings are correct where they stand, which is exactly why one shared
+expectation could not hold them. The file's own constraint note said more than the mechanism did and now
+says what it does not hold: order is a proxy for attachment, and a rewrite that moves the CLAIMS along
+with their numbers is invisible to it — correctly, because that prose is still true.
+
+### D-1215 (minor E) — an assertion over a derived subset that could not fail
+
+`expect(COORD_LANES, '<key> is named as a box-token lane and is not one').toContain(key)` iterated
+`requireSites`, which is derived by scanning the same slices `lanesIn` walks with a STRICTER pattern —
+so it is a subset of `COORD_LANES` by construction. The line meant something in the draft, where it
+iterated a hand-written list; deriving that list is what quietly emptied it, and it kept a failure
+message promising a check it could not perform. Measured: adding `POST /api/coord/caps` to CLAUDE.md's
+list as a `requireMailToken` lane stayed green, while deleting `GET /api/ledger` reddened correctly.
+
+The over-claim direction now runs over what the BULLET says rather than over what the source says: every
+`VERB /path` the bullet names must be in `ALL_LANES`, unless it is one of the routes the bullet's own
+sentences declare NOT to be lanes — the ungated doors (derived from `UNGATED`) and the kickoff route.
+The caps mutation now reds: `the bullet names POST /api/coord/caps as a box-token lane and it consults
+no box token`.
+
+### D-1216 (minor F) — a hand-kept cardinal, and a widened sentence, in the README
+
+Two faults in one paragraph pair, both introduced or left standing by this wave.
+
+**The cardinal.** README:1455 said "unlike the four operator doors below" — `UNGATED.size`, retyped, in
+the wave built to delete that class, about the one number that has already gone two → three → four and
+left `ccd/ccrc-api` stuck at "two" (D-1168). It survived only because it sat outside both scanned
+passages, while its own neighbour thirty lines up gets it right by naming the doors. Fixed by
+enumerating, and the paragraph is now SCANNED — it must state no count at all, and must name every door
+in `UNGATED`, so a fifth door reds this rather than silently falsifying a sentence.
+
+**The widened sentence.** README:531 said the nineteen machine lanes are what "the fleet host posts to"
+and that "none of them has a cookie jar" — and `gate.ts`'s paragraph, corrected in the same commit,
+says five of them are GETs that take a live session cookie OR the token. Five are also not POSTs. So the
+wave shipped a correction and its contradiction side by side. Fixed by naming the exempt-but-
+authenticated GETs in the README sentence too — enumerated, not counted, because a count there would be
+a third number for the same scanner to police.
+
+### D-1217 (minor G) — the cadence pin's sibling list was not re-measured for `CapsControl`
+
+`runs-screen.test.tsx`'s `cadenceOf` docstring names each component in the screen's tree that runs no
+`setInterval`, and instructs the reader to re-measure the list when the tree grows one. Wave 6 grew it by
+`CapsControl` and did not. `CapsControl`'s own header, meanwhile, asserted that this pin "names each
+sibling that runs none" — a claim about a list it was not on.
+
+Re-measured across `pwa/src`: `CapsControl`'s only mention of `setInterval` is the comment forbidding
+one, so the CLAIM was true and the RECORD was not. Both sites now say so. And the docstring now states
+what the instrument itself covers: `cadenceOf` reads its spy straight after a synchronous mount, and
+`CapsControl` renders `null` until its injected read resolves — so an interval armed in its post-load
+subtree would be invisible to it, and is held by the grep and by that component's own rule instead.
+
+### D-1218 (minor H) — D-1165's durable rejection record was an unpinned clause
+
+`mail-routes.test.ts:117`'s comment says a malformed `runId` answered as `unknown-run` "also mislabels
+the durable rejection record" — a SECOND consequence beyond the status code. The two rows carrying that
+comment asserted status, error and detail, and nothing about the row. (`REJECT_CASES` below them does
+read `rejections()` for its own seven codes; these two did not, which is what made the clause a claim
+about an invisible effect.)
+
+Both rows now assert the row's code, in both directions: a malformed `runId` records `bad-kind`, and a
+well-formed-but-absent one records `unknown-run`, so the pair holds a DISTINCTION rather than a constant.
+Witnessed independently of the status assertions by a mutation that touches the row alone — `refuse()`
+recording a constant code while the reply still varies.
+
+### D-1219 (minor I) — a miscited check, which is worse than an uncited claim
+
+`caps.ts:4-6` said "L1: pure — the DECISION about a caps write, with no clock, no fs and no `reply`
+(`single-definition.test.ts`'s coord-ring scan)". That scan asserts three things and none of them is any
+of these: no `./db.js` import, no `node:sqlite` import, no `coord.db`/`store.db` receiver. Measured by
+the review: an `fs` import and a module-scope `Date.now()` left it 99/99 green. A citation stops the next
+reader from looking, which is why an uncited claim would have been the safer error.
+
+Given a mechanism rather than stood down, because D-1169's own next step is to move the write's MOMENT
+into the decision — precisely the change that would make this module impure. `coord-caps-policy.test.ts`
+now scans the file with comments blanked (its own docstring names `fs` and `reply` while promising not to
+use them, and reddened every arm on the first run) for a clock, a node builtin, a filesystem reach, a
+`reply`/fastify/store reference, and any import that is not `import type`. One file, not a ring-wide
+sweep: this is the property `caps.ts` asserts about itself, and widening it is a different change.
+
+### D-1220 (minor J) — a stale refusal left standing beside a corrected field
+
+`CapsControl`'s no-op early return sat ABOVE `setNote({kind:'none'})`, and the draft is deliberately not
+reset on a refusal. So an operator who typed 99, was refused, and corrected the field back to its stored
+value got no request (right) and kept the refusal on screen (wrong) — told their input was invalid at the
+moment it became valid again.
+
+### D-1221 (PWA (a), confirmed) — a cleared field was sent as an explicit request to store ZERO
+
+`Number('')` is `0`, and `0` differs from the stored value, so `asPartial` put `{maxConcurrentWorkers: 0}`
+on the wire for a box the operator had merely emptied. Zero is the one value `CAP_MIN` exists to forbid,
+for the reason that constant's own docstring gives: a stored `0` refuses every dispatch for ever and has
+no ungated door to undo it. The server refused it, so nothing landed — but the operator got a bounds
+refusal for an ask they never made, and the ask itself was the fleet-wedging one.
+
+Fixed at the seam rather than at the symptom. `asPartial` returned `Partial<CoordCaps>`, which collapsed
+"send this", "nothing moved" and "that box holds no number" into one value; it is now a three-member
+`SaveIntent` union, and the caller handles the three differently. **Where the line falls** is stated in
+the source, because the temptation is to move it: the control decides what was ASKED FOR (a blank box is
+not an ask for zero), and the route decides whether the ask is ALLOWED — so `99` and `1.5` are still sent,
+and the refusal comes back in the route's own words rather than in a second copy of the policy. Pinned in
+both directions.
+
+### D-1222 (PWA (b), confirmed) — the note sat in no live region
+
+The note is the whole of this control's feedback: no toast, no banner, and a successful write simply
+re-renders numbers. Rendered as a bare `<p>`, a screen-reader user learns nothing at the one moment they
+have just committed to a save. `role="status"` is this repo's own precedent for exactly this
+(`AccountsScreen`, `MailScreen`, `FleetScreen`'s ack note).
+
+One note element, ALWAYS mounted, and it is the live region — a `role="status"` inserted at the same
+moment its text appears is announced unreliably. `.caps-note:empty` collapses it with `height: 0;
+overflow: hidden` and deliberately NOT `display: none`, which would take it back out of the accessibility
+tree and undo the reason it is always mounted.
+
+### D-1223 (fold-in) — `auth-gate.test.ts` claimed 55 HTTP routes and 15 exempt ones; the tree derives 68 and 24
+
+Reported in the self-review round as pre-existing and out of scope. The coordinator folded it back in,
+correctly: it is the D-1156 family, and this wave built both the mechanism and the how-to-add-a-site note,
+so it is a one-site extension rather than a new design — and exercising that note is the only way to know
+it is true.
+
+The pin lives in `auth-gate.test.ts` rather than in `box-token-census.test.ts`, and the reason generalises:
+that file already derives the count at runtime from `ROUTES`, and a census scanning it from outside would
+have had to rebuild the route table to have anything to compare against. The rule the two sites share is
+"the number is derived where it is derivable, and the prose beside it is checked against that"; where the
+derivation already lives decides which file holds the pin. That site reads DIGITS, the census reads number
+words, and each says so. Every needle is spelled SPLIT (`'a ' + 'b'`) — the corpus being scanned is the
+file doing the scanning, so an unsplit needle matches its own call site; all three did, first run.
+
+### D-1225 (note → fixed) — a premise the comment named and the fixture did not check
+
+`mail-sweep.test.ts`'s TERMINAL case says "the premise, established: this session IS a claimedBy, just not
+a live one" and checked only the claimedBy half. The "not live" half rested on three `advance` calls whose
+refusals are silent. Both halves are asserted now, and the negative assertion was made positive: the case
+also pins `lastGate === 'not-quiet'`, because "nothing was sent" alone is satisfied by any gate at all — a
+draft, a pane that never idled, a cooldown — and the point of the case is WHICH window applied. Measured
+by dropping one `advance`: `expected 'closing' to be 'done'`.
+
+### D-1226 (note → fixed) — two derived loops with no non-emptiness floor
+
+The census's README run-route test iterates `COORD_LANES.filter(...)` and `UNGATED_DOORS.filter(...)`; a
+filter that stops matching turns each into a pass over nothing. The file's own header names that failure
+mode, and this wave walked into it twice in the same test. Both loops now have floors. Recorded as a note
+by the review and fixed anyway: closing a known vacuity costs three lines, and carrying it forward as a
+record would have been the cheaper half of the job.
+
+### D-1224 (note, recorded — no code) — the narrow window reaches a session that is ALSO a worker
+
+`openCoordinatorIds()` answers "every session that is the `claimedBy` of a non-terminal run", and
+`sweepMail` gives every such recipient the 15s/30s window. A session that coordinates one live run while
+being dispatched as the WORKER of another therefore gets the coordinator window for its worker mail too.
+
+**Recorded as intended, with the reasoning, rather than fixed.** The key is a property of the SESSION, not
+of the message — "is this recipient coordinating something live" — and there is no `runId` on a
+`toId:'coordinator'` nudge to key on instead. A session coordinating a live run is a session whose
+attention a wave boundary is waiting on, whichever hat the individual message fits. The case to watch is a
+single-session program that coordinates and works at once: it would take the narrow window throughout, and
+the 60-second floor exists to protect exactly that session mid-turn. No such program exists today.
+
+### D-1227 (note, recorded — no code) — `req.body ?? {}` and its one dead sub-arm
+
+Filed by a review lens as "a null body slips through", and adjudicated REFUTED: `req.body ?? {}` turns
+`null` into `{}`, which `decideCaps` refuses as a body that asks for nothing. What IS true is smaller —
+the `body === null` sub-arm inside `decideCaps`'s shape check is unreachable from this route, because the
+route never passes it `null`. It is reachable from any other caller and from the policy's own tests, so it
+is not dead code in the module, only on this path. Recorded so the next reader does not re-file it.
+
+## Refuted, and not acted on
+
+Eight, listed so a later wave does not re-open them: `req.body ?? {}` letting a null body through (see
+D-1227); the claims-routes servers; the no-op feed event; `gate.ts`'s NOT-EXEMPT enumeration;
+`CoordCapsUsage`'s producer; the three-unspent-numbers check; and the "reload to see what was stored"
+wording, which the coordinator adjudicated ACCURATE — the control has no other way to re-read after an
+unreadable answer, and softening it would be the lie.

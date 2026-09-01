@@ -2,8 +2,16 @@ import type { CoordCaps } from '../../../shared/api.js';
 
 /**
  * L1: pure — the DECISION about a caps write, with no clock, no fs and no
- * `reply` (`single-definition.test.ts`'s coord-ring scan). The write itself is
- * `CoordStore.setCaps` and the door is `POST /api/coord/caps`.
+ * `reply`, checked by `coord-caps-policy.test.ts`'s purity scan at the bottom of
+ * that file. The write itself is `CoordStore.setCaps` and the door is
+ * `POST /api/coord/caps`.
+ *
+ * That citation used to name `single-definition.test.ts`'s coord-ring scan, and
+ * was wrong (D-1219): that scan holds no `./db.js` import, no `node:sqlite`
+ * import and no `coord.db` receiver — none of the three properties this sentence
+ * claims. Measured: an `fs` import and a module-scope `Date.now()` left it green.
+ * A miscited check is worse than an uncited claim, because it stops the next
+ * reader from looking.
  *
  * This module exists because `setCaps` validates NOTHING and returns `void`
  * (`store.ts:1357`, D-1164): it binds both fields straight into an UPDATE, so

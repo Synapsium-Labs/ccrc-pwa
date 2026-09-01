@@ -527,9 +527,13 @@ step 10 of
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
 liveness gate reads the shipped sha out of it), the nineteen machine lanes the
-fleet host posts to (eighteen box-token-consulting coordination routes plus
+fleet host reaches (eighteen box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
-none of them has a cookie jar), the login and passkey-assertion doors themselves,
+the caller is `curl` inside a Claude Code session, with no cookie jar, though the
+exempt-but-authenticated GETs among them (`GET /api/runs`, `/api/runs/:id/items`,
+`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
+the token, which is how a coordinator reads its own wave ledger from the fleet
+host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
@@ -1452,8 +1456,10 @@ usage and writes either or both, bounds-checked, and the `/runs` board renders
 the dial. (For a stretch of this build's history there was no route at all and
 an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
 caller in the server for as long as it did.) Like every other same-origin PWA
-write the caps route carries **no box token**; unlike the four operator doors
-below it is not a release valve, so nothing may rely on it to open a wedge.
+write the caps route carries **no box token**; unlike the operator doors named
+above (`/api/coord/pause`, `/api/runs/:id/abandon`, `/api/claims/:id/break`,
+`/api/runs/:id/reclaim`) it is not a release valve, so nothing may rely on it to
+open a wedge.
 Pause is a
 **file**, on ccd's own `*-disabled`-marker convention, read from `$REG`
 (the fleet host's session registry, `~/.cc-sessions`) before every dispatch:

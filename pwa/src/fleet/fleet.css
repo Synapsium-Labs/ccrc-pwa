@@ -2142,6 +2142,14 @@ button.sess-held {
   color: var(--status-dead-text);
 }
 
+/* The note is a live region that is always mounted, so it is empty most of the
+   time. Collapse it without `display: none`, which would remove it from the
+   accessibility tree and defeat the reason it is always mounted (D-1222). */
+.caps-control .caps-note:empty {
+  height: 0;
+  overflow: hidden;
+}
+
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;

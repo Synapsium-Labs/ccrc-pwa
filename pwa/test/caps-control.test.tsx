@@ -82,6 +82,78 @@ describe('CapsControl', () => {
     expect(msg.textContent).not.toMatch(/failed|refused/i);
   });
 
+  it('a cleared field is not a request to set the cap to zero', async () => {
+    // D-1221. `Number('')` is 0, and 0 differs from the stored 3, so the cleared
+    // field was sent as an EXPLICIT request to set the cap to zero — the one
+    // value `CAP_MIN` exists to forbid, because a stored 0 refuses every dispatch
+    // for ever and has no ungated door to undo it. The operator gets a bounds
+    // refusal for a field they merely emptied, and the request they never made is
+    // the one that would have wedged the fleet had the server allowed it.
+    //
+    // The control decides what was ASKED FOR; the server decides whether the ask
+    // is allowed. A blank box is not an ask for zero, and reading it as one is a
+    // shape error here, not a policy judgement borrowed from there.
+    const setCoordCaps = vi.fn(async () => VIEW());
+    render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    expect(await screen.findByText(/not a number/i)).toBeInTheDocument();
+    expect(setCoordCaps, 'a cleared field was sent as a value').not.toHaveBeenCalled();
+  });
+
+  it('still sends a number the server will refuse — bounds are not this control to judge', async () => {
+    // The other direction, and the line between the two. 99 is out of bounds and
+    // goes anyway: the refusal that comes back names the field and the bounds in
+    // the route's own words, and re-deriving that sentence here would be a second
+    // copy of the policy. Only the NOT-A-NUMBER case is decided locally.
+    const setCoordCaps = vi.fn(async () => VIEW());
+    render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '99' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(setCoordCaps).toHaveBeenCalledWith({ maxConcurrentWorkers: 99 }));
+  });
+
+  it('announces what it is saying in a live region', async () => {
+    // D-1222. The note is the whole of this control's feedback — there is no
+    // toast, no banner, and a successful write simply re-renders numbers. Outside
+    // a live region a screen-reader user gets nothing at all from a refusal, and
+    // the moment it appears is the moment the operator has just committed to the
+    // save. `role="status"` is this repo's own precedent for exactly this
+    // (`AccountsScreen`, `MailScreen`, `FleetScreen`'s ack note).
+    const setCoordCaps = vi.fn(() => Promise.reject(new ApiError(400,
+      { ok: false, error: 'bad-request',
+        detail: 'maxConcurrentWorkers must be an integer between 1 and 64' })));
+    render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
+    fireEvent.change(await screen.findByLabelText(/workers/i), { target: { value: '99' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await screen.findByText(/between 1 and 64/);
+    expect(screen.getByRole('status').textContent,
+      'the note is rendered outside any live region — a screen reader is told nothing')
+      .toMatch(/between 1 and 64/);
+  });
+
+  it('clears a stale refusal when the correction leaves nothing to send', async () => {
+    // D-1220. The no-op early return sat ABOVE `setNote({kind:'none'})`, and the
+    // draft is deliberately not reset on a refusal — so correcting the field back
+    // to the stored value produced an empty partial, returned before the note was
+    // cleared, and left a refusal on screen beside a state that is now perfectly
+    // valid. The operator is told their input is wrong while it is right.
+    const setCoordCaps = vi.fn(() => Promise.reject(new ApiError(400,
+      { ok: false, error: 'bad-request',
+        detail: 'maxConcurrentWorkers must be an integer between 1 and 64' })));
+    render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
+    const input = await screen.findByLabelText(/workers/i);
+    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await screen.findByText(/between 1 and 64/);
+    fireEvent.change(input, { target: { value: '3' } });      // back to the stored value
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(screen.queryByText(/between 1 and 64/),
+      'the refusal is still on screen beside a valid field').toBeNull());
+    expect(setCoordCaps, 'the second click spent a round trip on nothing')
+      .toHaveBeenCalledTimes(1);
+  });
+
   it('renders nothing on a box with no coordination database', async () => {
     const { container } = render(<CapsControl
       coordCaps={() => Promise.reject(new ApiError(501, { ok: false, error: 'not-configured' }))} />);

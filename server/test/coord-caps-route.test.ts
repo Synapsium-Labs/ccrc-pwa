@@ -18,6 +18,7 @@ import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
+import type { CcdResult } from '../src/lifecycle.js';
 import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -219,6 +220,39 @@ describe('POST /api/coord/caps', () => {
     } finally { warn.mockRestore(); }
   });
 
+  it('persists the seq it minted on the ordinary path', () => {
+    // The floor for the row beneath it. `record()` bumps the in-memory seq and
+    // hands it to a client; `flush()` is what makes that seq survive a restart.
+    // Without this arm, the throw-path assertion below could be satisfied by a
+    // route that had simply stopped flushing at all.
+    return withCoord().then(async ({ app, notifyLog }) => {
+      const flush = vi.spyOn(notifyLog, 'flush');
+      await postCaps(app, { maxConcurrentWorkers: 5 });
+      expect(flush, 'the caps write minted a seq and never persisted it').toHaveBeenCalled();
+    });
+  });
+
+  it('persists that seq even when the feed archive THROWS — the case the try/catch exists for', async () => {
+    // D-1213. `void log.flush()` shipped INSIDE the try, AFTER
+    // `recordFeedEvent`, which throws synchronously (`node:sqlite`) — so on
+    // exactly the failure the catch was written for, the flush was skipped.
+    // `record()` had already spent the seq, and `NotifyLog.flush`'s own
+    // docstring names the consequence: "a seq handed to a client but never
+    // persisted lets a restart re-mint the same {epoch, seq} pair for a
+    // different event", which is the stale-but-valid landing `catchUp` cannot
+    // tell from the truth.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { app, notifyLog, db } = await withCoord();
+      const flush = vi.spyOn(notifyLog, 'flush');
+      db.prepare('DROP TABLE feed_events').run();
+      const res = await postCaps(app, { maxConcurrentWorkers: 5 });
+      expect(res.statusCode).toBe(200);
+      expect(flush, 'the archive throw skipped the flush — the minted seq was never persisted')
+        .toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+
   it('two concurrent partial writes both land', async () => {
     // WHAT THIS PINS, AND WHAT IT DOES NOT — measured, not assumed.
     //
@@ -227,25 +261,82 @@ describe('POST /api/coord/caps', () => {
     //
     // It does NOT witness the self-review's MAJOR (the merge base being read
     // outside `coordMutex.run`). Measured: reverting the fix — capturing
-    // `coord.caps()` before the lock and merging onto that — leaves this test
+    // `coord.caps()` before the lock and merging onto that — leaves THIS test
     // GREEN, because `app.inject` does not interleave the two handlers'
     // synchronous prologues; the second request's read happens after the
-    // first's write. Reproducing the lost update needs the mutex held across a
-    // real await by a THIRD actor (a dispatch doing ccd/tmux I/O), which no
-    // fixture in this suite can stage.
+    // first's write.
     //
-    // So the fix rests on the argument and on conformance, not on this test:
-    // `CoordMutex`'s own docstring names the hazard ("two dispatches can no
-    // longer both read the count before either writes it") and `POST /api/runs`
-    // puts its whole body inside the lock for exactly this reason. Recorded in
-    // the plan's mutation table as reported-not-witnessed rather than left to
-    // look pinned.
+    // WHAT THIS COMMENT USED TO SAY, AND WHY IT WAS WRONG (D-1211): that
+    // reproducing the lost update needed a third actor holding the mutex across
+    // a real await, "which no fixture in this suite can stage". The first half
+    // is right and the second half was never measured — `POST /api/runs` with a
+    // `sessionId` awaits `deps.runCcd` inside `coordMutex.run`, and injecting a
+    // runner that waits is about forty lines. The test that does it is directly
+    // below. Unmeasured is not unmeasurable, and recording the second as the
+    // first is the same dodge this file's own `SESSION_ONLY` note refuses one
+    // suite over.
     const { app, coord } = await withCoord();
     await Promise.all([
       postCaps(app, { maxConcurrentWorkers: 5 }),
       postCaps(app, { maxSessionsPerDay: 20 }),
     ]);
     expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 20 });
+  });
+
+  it('holds the merge base under the lock while a THIRD actor keeps it across a real await', async () => {
+    // THE WITNESS THE SELF-REVIEW SAID COULD NOT BE STAGED (D-1211). The
+    // sibling case above pins the end-to-end property and does NOT see the lost
+    // update, because `app.inject` never interleaves two handlers' synchronous
+    // prologues. That was recorded here as unmeasurable. It was merely
+    // UNMEASURED: `POST /api/runs` with a `sessionId` awaits `deps.runCcd` for
+    // its `ws-hold` INSIDE `coordMutex.run`, so a runner that signals on entry
+    // and then waits holds the lock across a real await — which is exactly the
+    // third actor the hazard needs, and it is already in this server.
+    //
+    // With the merge base read OUTSIDE the lock, both saves read `{3, 12}`
+    // while the hold is in flight and the second writes the first's field back
+    // unchanged. With it read inside, the second reads what the first stored.
+    const TOKEN = 'f'.repeat(64);
+    let signalHeld = (): void => {};
+    const held = new Promise<void>((r) => { signalHeld = () => r(); });
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => { release = () => r(); });
+    const runCcd = async (): Promise<CcdResult> => {
+      signalHeld();
+      await gate;
+      return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    };
+
+    const { app, coord } = await withCoord({ mailToken: TOKEN, runCcd });
+    // The instrument for "both prologues have run". Counting `caps()` reads is
+    // deterministic under BOTH spellings — the shape probe outside the lock is
+    // one per request either way — so this wait cannot pass for one variant and
+    // hang for the other, which a fixed number of event-loop turns could.
+    const reads = vi.spyOn(coord, 'caps');
+    const waitUntil = async (p: () => boolean, what: string): Promise<void> => {
+      for (let i = 0; i < 2000; i++) {
+        if (p()) return;
+        await new Promise((r) => setImmediate(r));
+      }
+      throw new Error(`timed out waiting for ${what}`);
+    };
+
+    const opening = app.inject({ method: 'POST', url: '/api/runs',
+      headers: { 'x-ccrc-mail-token': TOKEN },
+      payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,
+                 claimedBy: 'the-coordinator', sessionId: 'the-worker' } });
+    await held;   // the hold is in flight; the mutex is held across a real await
+    const saves = [postCaps(app, { maxConcurrentWorkers: 5 }),
+                   postCaps(app, { maxSessionsPerDay: 20 })];
+    await waitUntil(() => reads.mock.calls.length >= 2, 'both caps prologues to run');
+    release();
+    const [openRes, ...capRes] = await Promise.all([opening, ...saves]);
+    expect(openRes.statusCode, 'the third actor never took the lock — the premise is gone')
+      .toBe(200);
+    for (const r of capRes) expect(r.statusCode).toBe(200);
+    expect(coord.caps(),
+      'one save read its merge base before the other wrote — a lost update')
+      .toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 20 });
   });
 
   it('accepts the boundary values the policy allows', async () => {
@@ -329,6 +420,62 @@ const sourcesUnder = (dir: string): string[] =>
     if (e.isDirectory()) return sourcesUnder(full);
     return /\.tsx?$/.test(e.name) ? [full] : [];
   });
+
+/** Slice one route handler's body out of `coord/routes.ts`: from its own
+ *  registration to the next one, the same slice `box-token-census.test.ts` and
+ *  `auth-gate.test.ts:405-413` take. Fails LOUDLY on a missing anchor, because
+ *  `''` satisfies every assertion made about it.
+ *
+ *  ADDRESSED IN THE RAW TEXT, READ FROM THE BLANKED COPY — the two are the same
+ *  length by construction (`blankCommentsAndStrings` overwrites in place and
+ *  keeps every newline), so one set of offsets addresses both. It has to work
+ *  that way: the anchor is a route path, which lives INSIDE a string literal and
+ *  is therefore blanked out of the copy being searched. Measured — the first
+ *  draft searched the blanked text and found nothing, and said so. */
+const handlerBody = (raw: string, blanked: string, decl: string): string => {
+  expect(blanked.length, 'the blanked copy no longer aligns with the source')
+    .toBe(raw.length);
+  const at = raw.indexOf(decl);
+  expect(at, `the ${decl} registration is gone — this scan is over nothing`).toBeGreaterThan(-1);
+  const next = /app\.(?:get|post)\('/.exec(raw.slice(at + decl.length));
+  const end = next === null ? raw.length : at + decl.length + next.index;
+  const body = blanked.slice(at, end);
+  expect(body.length, `the ${decl} body is too short to be a handler`).toBeGreaterThan(40);
+  return body;
+};
+
+describe('the caps answer shape is defined ONCE, and both halves send it', () => {
+  // D-1212, and it is the coordinator's own ruling getting the mechanism it
+  // asked for. The ruling was "the read must not carry a copy of what the write
+  // answers"; the fix was `capsView()`; and the row recorded for it measured a
+  // mutation that changed the VALUES the GET reports, not one that undoes the
+  // sharing. A FAITHFUL inline rebuild — `{ ok: true, caps: c.caps(), usage:
+  // c.capsUsage() }` — reds nothing at all, which was measured across all ten
+  // suites that touch caps. This is the property itself.
+  const raw = (): string => readFileSync(path.join(srcRoot, 'coord', 'routes.ts'), 'utf8');
+
+  it('both halves build their answer from the shared builder', () => {
+    const r = raw();
+    const b = blankCommentsAndStrings(r);
+    expect(/const capsView\s*=/.test(b),
+      'the shared builder is gone under this name — the scan below is over nothing').toBe(true);
+    for (const decl of ["app.get('/api/coord/caps'", "app.post('/api/coord/caps'"]) {
+      expect(handlerBody(r, b, decl), `${decl} builds its own answer instead of the shared one`)
+        .toContain('capsView(');
+    }
+  });
+
+  it('…and the usage half is read in exactly one place, so a rebuild cannot be faithful', () => {
+    // `capsUsage` is the discriminator, and deliberately so: `caps()` has other
+    // legitimate callers in this file (the shape probe and the merge base both
+    // read it), while the usage reading exists for this answer alone. Any
+    // rebuild of the shape — faithful or not — has to spell it a second time.
+    const sites = [...blankCommentsAndStrings(raw()).matchAll(/\.capsUsage\(/g)].length;
+    expect(sites,
+      'the usage reading is taken more than once — one half of the answer is being rebuilt')
+      .toBe(1);
+  });
+});
 
 describe('the caps door is the ONE caller of setCaps', () => {
   it('setCaps is called from exactly one file in server/src, and it is the route', () => {

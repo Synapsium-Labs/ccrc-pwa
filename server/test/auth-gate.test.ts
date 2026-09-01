@@ -659,7 +659,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 55 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 68 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -723,8 +723,10 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware. This is the assertion that covers all 55
-          //    rather than the 15 exempt ones.
+          //    is not itself flag-aware — the assertion that covers all 68, not the 24 exempt.
+          //    (Both counts are derived and checked against this very sentence at the
+          //    bottom of this file. They read fifty-five and fifteen for several builds
+          //    after the tree had grown past both — D-1223.)
           if (auth === null) {
             if (dk.statusCode !== 501) drift.push(`${k}: dark → ${dk.statusCode}, want 501 not-configured`);
           } else if (dk.statusCode !== auth.statusCode) {
@@ -739,8 +741,8 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it.each(WS_ROUTES)('the %s socket still upgrades with the gate dark', async (route) => {
-    // All THREE (review R2), not just `/ws/fleet`: "55 routes and 3 websockets
-    // are unaffected when the flag is off" is the claim, and one socket did not
+    // All three sockets, not just `/ws/fleet` (review R2). The flag-off claim is
+    // about 3 websockets and every HTTP route alike, and one socket did not
     // establish it. Safe to open here for the same reason the armed sweep is
     // safe to run: `spawnPty` is stubbed, so `/ws/pty` attaches nothing, and its
     // close path's `tmux resize-window` goes through the whitelist-guarded
@@ -1300,5 +1302,68 @@ describe('device/label never appear in a decision branch — a structural scan, 
     // remain.
     const stripped = body.replace(/deviceActor\(sessionAuth\(req\)\.device\)/g, '');
     expect(stripped, 'pwaDec must not branch on device').not.toMatch(/\bdevice\b/);
+  });
+});
+
+/**
+ * D-1223 — THE SWEEP'S OWN PROSE, CHECKED AGAINST WHAT THIS FILE DERIVES.
+ *
+ * Three comments in this file stated "all 55 HTTP routes" and "the 15 exempt
+ * ones" long after the tree had grown past both. That is the D-1156 family
+ * exactly — a census nothing checks — and the one site of it whose derived
+ * value already lives here at runtime, in `ROUTES`. So the pin lives here too
+ * rather than in `box-token-census.test.ts`: that file scans prose against a
+ * surface it derives BY READING SOURCE, and this count is derived by scanning
+ * the route table, which the census would have to duplicate to check. Same
+ * design, one more site — `box-token-census.test.ts`'s "HOW TO ADD A SITE" note
+ * points here.
+ *
+ * DIGITS, not the census's number words: these claims are written as numerals,
+ * so the two scanners read different alphabets on purpose. The claim lines are
+ * kept free of any OTHER digit (a `review R2` had to move off one of them) —
+ * every numeral on a scanned line is read as one of the counts asserted.
+ *
+ * EVERY NEEDLE IS SPELLED SPLIT (`'a ' + 'b'`), the idiom `deviation-refs.test.ts`
+ * already uses for the same reason: the corpus being scanned is THIS file, so an
+ * unsplit needle matches its own call site and the "exactly one line" guard fires
+ * on a file that is perfectly correct. Measured — all three did, first run.
+ */
+describe('the gate sweep states the route counts it derives', () => {
+  const SELF = readFileSync(path.join(here, 'auth-gate.test.ts'), 'utf8');
+  const httpCount = ROUTES.filter((r) => !isWs(r)).length;
+  const exemptHttp = ROUTES.filter((r) => !isWs(r) && EXEMPT.has(key(r))).length;
+
+  /** One line, named by a needle, failing LOUDLY on none or many — an anchor
+   *  that stopped matching yields `''`, and `''` has no digits, which would
+   *  satisfy every assertion below it vacuously. */
+  const claim = (needle: string): string => {
+    const hit = SELF.split('\n').filter((l) => l.includes(needle));
+    expect(hit.length, `expected exactly one line containing ${needle}`).toBe(1);
+    return hit[0]!;
+  };
+  const digitsIn = (t: string): number[] => [...t.matchAll(/\d+/g)].map((m) => Number(m[0]));
+
+  it('the derived counts are real numbers, not an empty scan', () => {
+    expect(httpCount).toBeGreaterThan(50);
+    expect(exemptHttp).toBeGreaterThan(5);
+    expect(exemptHttp).toBeLessThan(httpCount);
+  });
+
+  it('the property loop names the HTTP-route count', () => {
+    expect(digitsIn(claim('in one loop ' + 'over all')),
+      'the sweep claims to cover a number of routes this file does not derive')
+      .toEqual([httpCount]);
+  });
+
+  it('the third probe names the whole and the exempt part', () => {
+    expect(digitsIn(claim('the assertion ' + 'that covers all')),
+      'the third probe states a whole or an exempt count this file does not derive')
+      .toEqual([httpCount, exemptHttp]);
+  });
+
+  it('the websocket row names the socket count', () => {
+    expect(digitsIn(claim('websockets and ' + 'every HTTP route')),
+      'the flag-off claim states a socket count this file does not derive')
+      .toEqual([WS_ROUTES.length]);
   });
 });
