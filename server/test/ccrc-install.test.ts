@@ -1019,7 +1019,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     // STARTABLE: `_inst_tree`'s rsync excludes `node_modules` in both
     // directions and this step ran npm in `server/` only, so a fleet install
     // placed `agent/dist` beside no `agent/node_modules` — and `agent/src/
-    // server.ts` imports `ws` on its second line. `_inst_enable` then restarts
+    // server.ts` imports `ws` on line 6. `_inst_enable` then restarts
     // `ccrc-agent.service` and node dies with the SAME ERR_MODULE_NOT_FOUND,
     // one import further in. The reference fleet escaped it only because an
     // earlier `deploy.sh agent` had left a node_modules behind, which is why

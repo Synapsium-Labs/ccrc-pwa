@@ -51,6 +51,12 @@ both then broke something adjacent that nobody had measured.
 
   **Seven repos on the reference fleet track such content — and three of them are among the
   five D-1160 was written to unblock.** The fix would have wedged the repos it targeted.
+  Measured per pattern with `git ls-files -c -i -X`, because the aggregate alone would let a
+  reader assume the wrong file: `.claude/` collides in six repos and `.superpowers/` in four
+  (seven distinct); `.remember/` and `CLAUDE.local.md` collide in none. The hits are
+  `.claude/agents/*.md`, `.claude/settings.local.json` and committed `.superpowers/` specs far
+  more often than `.claude/settings.json`, which only two repos track — so that filename, used
+  as this entry's first illustration, was the least representative one available.
 
   The correction makes the contract a mechanism: the sweep asks git which TRACKED files a
   pattern would hide (`git ls-files -c -i -X` — exact gitignore semantics, not a bash
@@ -76,7 +82,7 @@ both then broke something adjacent that nobody had measured.
   **(4) D-1159 stopped one import short.** It made the agent's ENTRY POINT exist; it did not
   make the tree STARTABLE. `_inst_tree`'s rsync excludes `node_modules` in both directions
   and the function ran `npm ci` in `server/` only, so a fleet install placed `agent/dist`
-  beside no `agent/node_modules` — and `agent/src/server.ts` imports `ws` on its second line
+  beside no `agent/node_modules` — and `agent/src/server.ts` imports `ws` on line 6
   (`agent/package.json` declares `ws` and `node-pty` as runtime deps). `_inst_enable` then
   restarts `ccrc-agent.service` and node dies with the **same `ERR_MODULE_NOT_FOUND`**, one
   import further in. The reference fleet escaped it only because an earlier `deploy.sh agent`
@@ -99,8 +105,8 @@ both then broke something adjacent that nobody had measured.
 
   Files: `ccd/ccd-graph-sweep` (`_gs_rm_generated`/`_gs_disarm`, the three rules in
   `_gs_guard`, the caller's refusal branch), `ccd/ccrc` (the preflight's gate, the agent
-  `npm ci`, `_inst_graph_noise`), `ccd/graph-noise.default.list` (header), and five test
-  files.
+  `npm ci`, `_inst_graph_noise`), `ccd/graph-noise.default.list` (header), four test
+  files, and `README.md`.
 
 ## The mutation table
 

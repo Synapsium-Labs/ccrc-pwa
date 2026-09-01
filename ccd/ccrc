@@ -4213,8 +4213,8 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   # That fix made the ENTRY POINT exist; it did not make the tree STARTABLE.
   # The rsync above excludes `node_modules` in both directions and this function
   # ran npm in `server/` only, so a fleet install placed `agent/dist` beside no
-  # `agent/node_modules` — and `agent/src/server.ts` imports `ws` on its second
-  # line (`agent/package.json` declares `ws` and `node-pty` as runtime deps).
+  # `agent/node_modules` — and `agent/src/server.ts` imports `ws` on line 6
+  # (`agent/package.json` declares `ws` and `node-pty` as runtime deps).
   # `_inst_enable` then restarts `ccrc-agent.service` and node dies with the
   # same ERR_MODULE_NOT_FOUND, one import further in. The reference fleet only
   # escaped it because an earlier `deploy.sh agent` had left a `node_modules`
