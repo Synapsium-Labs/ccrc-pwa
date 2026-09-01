@@ -447,3 +447,52 @@ describe('the tick itself', () => {
   });
 });
 
+
+// ── Task 10: the automations FRAME ──────────────────────────────────────────
+// Additive, and `FLEET_PROTO` is NOT bumped: a PWA that does not know this
+// frame type drops it silently, which is the whole reason the wire is
+// additive-only. The byte-equality guard starts at `null`, NEVER at `'[]'` —
+// "no automations" and "never measured" are two different facts, and a first
+// measurement of an empty fleet must still reach the client or the screen
+// cannot tell them apart (which is exactly the three-empty-states rule the
+// PWA is held to).
+describe('the automations frame — additive, byte-diffed, and it survives a bad read', () => {
+  it('emits on the FIRST measurement even when the list is empty', async () => {
+    // A FRESH watcher that has never ticked — `rig()` ticks once, which spends
+    // the first measurement, and this test is about exactly that measurement.
+    const { deps } = await rig();
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 2000);
+    const seen: unknown[][] = [];
+    bus.on('automations', (rows) => seen.push(rows));
+
+    w.emitAutomations();
+    expect(seen.length, 'an empty first measurement did not emit — "none" is indistinguishable from "never measured"').toBe(1);
+    expect(seen[0]).toEqual([]);
+
+    // ...and does NOT emit again for an unchanged list.
+    w.emitAutomations();
+    expect(seen.length).toBe(1);
+  });
+
+  it('re-emits when the list changes', async () => {
+    const { deps, coord } = await rig();
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 2000);
+    const seen: unknown[][] = [];
+    bus.on('automations', (rows) => seen.push(rows));
+    w.emitAutomations();
+    makeArmed(coord, NOW, NOW);
+    w.emitAutomations();
+    expect(seen.length).toBe(2);
+    expect((seen[1] as unknown[]).length).toBe(1);
+  });
+
+  it('a throwing store leaves the tick alive rather than killing the server', async () => {
+    const { deps } = await rig();
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const broken = { automations: () => { throw new Error('disk full'); } };
+    (w as unknown as { deps: { coord: unknown } }).deps.coord = broken;
+    expect(() => w.emitAutomations()).not.toThrow();
+  });
+});

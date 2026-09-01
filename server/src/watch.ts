@@ -15,6 +15,7 @@ import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, FleetSession, LifecycleHealth, MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  AutomationSummary,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -42,7 +43,7 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, toAutomationSummary } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
@@ -571,6 +572,15 @@ export class FleetWatcher {
    *  least once, even into an empty fleet — mirroring `lastJson`'s own
    *  initial value. */
   private lastRunsJson: string | null = null;
+
+  /** `null`, NEVER `'[]'` — and the difference is the whole point. A fleet
+   *  with no automations and a process that has never measured are two
+   *  different facts, and the PWA is required to render them as two different
+   *  empty states. Seeding this with `'[]'` would swallow the FIRST
+   *  measurement of an empty list, so a client connecting to a quiet fleet
+   *  would sit in "no answer yet" for ever. Same reasoning as
+   *  `lastRunsJson`/`lastCoordJson` above. */
+  private lastAutomationsJson: string | null = null;
   /** The `coord` frame's last value and its own byte-equality guard, beside
    *  `lastRunsJson` and for the same reasons. `coord` is `null` until the first
    *  tick measures — see `currentCoord()`. */
@@ -1085,6 +1095,7 @@ export class FleetWatcher {
       // clock from sessions, and an unchanged session snapshot must not
       // suppress a run transition from reaching an already-connected client.
       this.emitRuns();
+    this.emitAutomations();
       const json = JSON.stringify(sessions);
       if (json === this.lastJson) return;
       this.lastJson = json;
@@ -1129,6 +1140,41 @@ export class FleetWatcher {
     if (json === this.lastRunsJson) return;
     this.lastRunsJson = json;
     this.bus.emit('runs', runs);
+  }
+
+  /** The `{type:'automations'}` frame (spec §10). Modelled on `emitRuns`
+   *  above, including its `try`/`catch`: this is a synchronous `node:sqlite`
+   *  read on the tick, and an unguarded throw here kills the poll for every
+   *  socket rather than the one bad read. Skipping a frame is the honest
+   *  degrade — the next changed measurement re-broadcasts to everyone.
+   *
+   *  The list is a FULL snapshot of every automation regardless of state,
+   *  unlike `runs`' active-only frame, so there is no active/finished split
+   *  for a client to reconcile. Run history is deliberately NOT here (spec
+   *  §10) — it is a cold read, because a frame carrying every run of every
+   *  automation would grow without bound on the wire. */
+  emitAutomations(): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    let rows: AutomationSummary[];
+    try { rows = coord.automations({}).map(toAutomationSummary); }
+    catch (err) {
+      console.warn(`ccrc-server: emitAutomations failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
+      return;
+    }
+    const json = JSON.stringify(rows);
+    if (json === this.lastAutomationsJson) return;
+    this.lastAutomationsJson = json;
+    this.bus.emit('automations', rows);
+  }
+
+  /** The most recent automations measurement, for a connecting socket's cold
+   *  start. `null` until this process has measured once — a fabricated empty
+   *  list would claim a measurement nobody took, the rule `currentCoord()`
+   *  already follows. */
+  currentAutomations(): AutomationSummary[] | null {
+    return this.lastAutomationsJson === null
+      ? null : (JSON.parse(this.lastAutomationsJson) as AutomationSummary[]);
   }
 
   /** The `{type:'coord'}` frame (spec §4.2). Derived from the SAME registry

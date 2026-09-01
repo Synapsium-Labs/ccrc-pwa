@@ -1982,3 +1982,24 @@ describe('timezone arithmetic has exactly one home', () => {
     expect(ALL.map(rel)).toContain('shared/schedule.ts');
   });
 });
+
+// Task 10 — ONE producer for the automations frame. The scan does not exist
+// upstream: nothing in this file asserted a `bus.emit` producer before, so
+// running it green proved nothing about the new frame. A second emitter is how
+// two lanes come to disagree about what the client last saw — the byte-equality
+// guard lives on the watcher, so an emit from anywhere else bypasses it and
+// broadcasts a frame the guard then believes it already sent.
+describe('the automations frame has exactly one producer', () => {
+  it("bus.emit('automations') appears in watch.ts and nowhere else", () => {
+    const holders = ALL
+      .filter((f) => readFileSync(f, 'utf8').includes("bus.emit('automations'"))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/src/watch.ts']);
+  });
+
+  it('the scan can see a producer at all — coverage floor, so an empty ALL cannot pass', () => {
+    expect(ALL.length).toBeGreaterThan(50);
+    expect(ALL.map(rel)).toContain('server/src/watch.ts');
+  });
+});

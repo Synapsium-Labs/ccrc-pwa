@@ -2254,6 +2254,13 @@ export function reviveWsAudit(v: unknown, sentence: string): WsAudit {
  *  `mode: 'local'` is always `{connected: true, downSince: null}` — there is
  *  no separate fleet host to lose. */
 export interface FleetHealth {
+  /** Automations retention pressure (spec §9). OPTIONAL and absence-permits:
+   *  a box with no coordination database has none, and an older server omits
+   *  the block entirely — a reader must treat absence as "not measured",
+   *  never as zero. Retention is a CEILING, and a ceiling the operator cannot
+   *  see coming is a surprise; this is how it becomes visible before a
+   *  history starts disappearing. */
+  automations?: AutomationStats;
   mode: 'local' | 'remote';
   connected: boolean;
   downSince: number | null;   // epoch ms since the agent connection dropped
