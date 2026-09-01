@@ -570,6 +570,17 @@ export const INHERITED_GROUNDS = {
 // unregistered.
 
 export const OPACITY_REGISTRY = {
+  // The run row's secondary meta — trigger and timestamp — faded to keep a
+  // hierarchy the ordinary ink scale cannot supply here: the row sits on
+  // `--bg-well`, which is dark in BOTH themes, so `--ink-tertiary` is not
+  // available to it (3.17:1, the trap `chat.css:172` records). The fade
+  // composites `--ink-on-well` over the well and is measured, not assumed.
+  'auto.css .auto-run-row .auto-run-trigger, .auto-run-row .auto-run-when 0.78': {
+    pairs: [[
+      'the run trigger and time on the run row well',
+      'var(--ink-on-well)', ['var(--bg-well)'], 4.5,
+    ]],
+  },
   'fleet.css .bell 0.55': {
     noText: 'an emoji glyph button with an aria-label; it carries its own bitmap palette, no token colour composites here, and the meaningful state (.bell--on) is opacity 1',
   },

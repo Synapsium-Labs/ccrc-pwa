@@ -1,0 +1,150 @@
+/* Task 11 — the automations screen and its editor sheet. Same register as
+   `fleet.css`'s own run board: a row is a record of a lifecycle position,
+   no --glow/animation/box-shadow, two cues (word + glyph) rather than a
+   hue standing in for either. Every rule below is either SELF-GROUNDED
+   (sets its own `background` alongside `color`) or a plain-ink descendant
+   of one — no new token pair, no new GROUNDS entry, following `.run-row`'s
+   own nested idiom throughout. */
+
+.automations-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
+.auto-head { display: flex; align-items: center; gap: var(--sp-2); }
+.auto-back {
+  flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
+  border: none; background: none; border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui); color: var(--ink-secondary); cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.auto-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.auto-title { font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono); color: var(--ink-primary); }
+
+.auto-empty { padding: var(--sp-4); color: var(--ink-secondary); }
+
+.auto-filters { display: flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
+.auto-filter {
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  background: var(--bg-surface); color: var(--ink-secondary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono); cursor: pointer;
+}
+.auto-filter[data-selected='true'] { color: var(--ink-primary); border-color: var(--edge-strong); }
+.auto-filter-project {
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  background: var(--bg-surface); color: var(--ink-secondary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+}
+
+.auto-list { display: grid; gap: var(--sp-1); }
+.auto-row {
+  display: grid; gap: var(--sp-1);
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+  font-family: var(--font-mono); font-size: var(--text-sm);
+}
+.auto-row .auto-open {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-2);
+  background: none; border: 0; cursor: pointer; text-align: left;
+  color: var(--ink-primary); font: inherit;
+}
+.auto-row .auto-glyph { color: var(--ink-tertiary); }
+.auto-row .auto-state { font-size: var(--text-xs); color: var(--ink-secondary); }
+.auto-row .auto-name { font-size: var(--text-sm); }
+.auto-row .auto-cadence, .auto-row .auto-next {
+  font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+}
+.auto-row .auto-last { display: inline-flex; align-items: baseline; gap: var(--sp-1); font-size: var(--text-2xs); color: var(--ink-secondary); }
+.auto-row .auto-last-glyph { color: var(--ink-tertiary); }
+.auto-row .auto-last-refusal { color: var(--status-attention-text); }
+.auto-row .auto-never { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+
+.auto-detail { display: grid; gap: var(--sp-2); padding: 0 var(--sp-2) var(--sp-3); }
+.auto-detail-note { color: var(--status-attention-text); font-size: var(--text-xs); }
+.auto-detail-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.auto-detail-arm, .auto-detail-run, .auto-detail-pause, .auto-detail-retire {
+  min-height: var(--tap-min); padding: 0 var(--sp-3);
+  background: var(--bg-raised); color: var(--ink-primary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono); cursor: pointer;
+}
+.auto-detail-arm:disabled { cursor: default; color: var(--ink-tertiary); }
+.auto-detail-run:disabled { cursor: default; color: var(--ink-tertiary); }
+.auto-detail-pause:disabled { cursor: default; color: var(--ink-tertiary); }
+.auto-detail-retire:disabled { cursor: default; color: var(--ink-tertiary); }
+.auto-detail-error { color: var(--status-dead-text); font-size: var(--text-xs); }
+.auto-detail-loading { padding: var(--sp-2); color: var(--ink-secondary); }
+.auto-detail-prompt {
+  color: var(--ink-secondary); font-size: var(--text-xs); white-space: pre-wrap;
+}
+
+.auto-run-empty { color: var(--ink-tertiary); font-size: var(--text-xs); }
+.auto-run-list { display: grid; gap: var(--sp-1); }
+.auto-run-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  background: var(--bg-well); color: var(--ink-on-well); border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-2); font-size: var(--text-2xs); font-family: var(--font-mono);
+}
+/* ON THE WELL, NOT THE SURFACE. `--bg-well` is deliberately dark in BOTH
+   themes (tokens.css:43, :320), so the ordinary ink scale does not apply to
+   anything sitting on it — `--ink-tertiary` measures 3.17:1 here against a
+   4.5 floor, the exact trap `chat.css:172` already documents by number.
+   `--ink-on-well` is the token for this ground (15.52:1 / 13.98:1). */
+.auto-run-row .auto-run-glyph { color: var(--ink-on-well); }
+.auto-run-row .auto-run-outcome { color: var(--ink-on-well); }
+.auto-run-row .auto-run-trigger, .auto-run-row .auto-run-when { color: var(--ink-on-well); opacity: 0.78; }
+/* The adopted chip (spec §11): an asterisked tick, never a clean one — same
+   `--status-attention-text` register `.auto-last-refusal` above uses, so an
+   `adopted` run reads as "worth a second look", not as an ordinary success. */
+/* The amber attention token cannot carry these: it resolves to a DARK value in
+   the light theme (#B27400) and the well is dark in both, so it would be
+   dark-on-dark (measured 3.05:1). There is no attention-on-well token, and
+   inventing one is a design-system change, not a screen's to make. The
+   emphasis rides WEIGHT instead, and the state keeps its second cue in the
+   glyph beside it — which is a non-text indicator held to 3:1, not 4.5:1. */
+.auto-run-row .auto-run-adopted { color: var(--ink-on-well); font-weight: 600; }
+.auto-run-row .auto-run-refusal { color: var(--ink-on-well); font-weight: 600; }
+.auto-run-gap { color: var(--ink-tertiary); font-size: var(--text-2xs); font-style: italic; }
+
+.auto-door {
+  min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-3);
+  background: var(--bg-raised); color: var(--ink-primary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono); cursor: pointer;
+}
+
+/* — the editor sheet — */
+
+.auto-sheet { display: grid; gap: var(--sp-3); }
+.auto-sheet-field { display: grid; gap: var(--sp-1); color: var(--ink-secondary); font-size: var(--text-xs); }
+/* `>=16px` text inputs, off `--text-input`, never a literal — the third rule
+   with teeth. Self-grounded: background + color both set here. */
+.auto-sheet-input, .auto-cadence-time, .auto-cadence-tz, .auto-cadence-day {
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  font-size: var(--text-input); color: var(--ink-primary);
+  background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: var(--r-sm);
+}
+.auto-sheet-prompt {
+  min-height: calc(var(--tap-min) * 2); padding: var(--sp-2);
+  font-size: var(--text-input); color: var(--ink-primary);
+  background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: var(--r-sm);
+  resize: vertical;
+}
+
+.auto-cadence-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.auto-cadence-chip {
+  min-height: var(--tap-min); padding: 0 var(--sp-3);
+  background: var(--bg-surface); color: var(--ink-secondary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono); cursor: pointer;
+}
+.auto-cadence-chip[data-selected='true'] { color: var(--ink-primary); border-color: var(--edge-strong); }
+
+.auto-sheet-preview { color: var(--ink-secondary); font-size: var(--text-xs); font-family: var(--font-mono); }
+.auto-sheet-note { color: var(--status-attention-text); font-size: var(--text-xs); }
+.auto-sheet-error { color: var(--status-dead-text); font-size: var(--text-xs); }
+.auto-sheet-save {
+  min-height: var(--tap-min); width: 100%;
+  background: var(--bg-raised); color: var(--ink-primary);
+  border: 1px solid var(--edge-strong); border-radius: var(--r-md);
+  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono); cursor: pointer;
+}
+.auto-sheet-save:disabled { cursor: default; color: var(--ink-tertiary); }

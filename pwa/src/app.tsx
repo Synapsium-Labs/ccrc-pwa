@@ -19,6 +19,7 @@ import { navigate, usePath } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
+import { AutomationsScreen } from './screens/AutomationsScreen';
 import { FleetScreen } from './screens/FleetScreen';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
@@ -57,6 +58,7 @@ export function App(): ReactNode {
   const accounts = /^\/accounts\/?$/.test(path);
   const mail = /^\/mail\/?$/.test(path);
   const runs = /^\/runs\/?$/.test(path);
+  const automations = /^\/automations\/?$/.test(path);
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
@@ -103,7 +105,7 @@ export function App(): ReactNode {
     <>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || automations ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             <AccountsStrip />
@@ -128,6 +130,8 @@ export function App(): ReactNode {
             <MailScreen />
           ) : runs ? (
             <RunsScreen />
+          ) : automations ? (
+            <AutomationsScreen />
           ) : (
             <div className="shell-placeholder">
               <p className="shell-placeholder-mark" aria-hidden="true">

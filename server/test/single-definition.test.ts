@@ -1140,8 +1140,20 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // vocabulary — it does not read `$REG/coordinator-paused` itself
     // anywhere; rung 5's actual marker check imports `COORDINATOR_PAUSE_
     // MARKER` from `rundefs.ts` by value, same as `dispatch.ts`/`watch.ts`.
+    //
+    // `pwa/src/auto/autoWords.ts` is the fourth and last NAMED holder: it keys
+    // the SENTENCE an operator reads when that rung refuses. A words table
+    // must spell every member of the union it is total over, or the entry is
+    // `undefined` and JSX renders an empty cell — so this holder is forced by
+    // the same `noUncheckedIndexedAccess` rule that makes the table total in
+    // the first place. Still not a second definition of the marker's name.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel).sort();
-    expect(holders).toEqual(['server/src/auto/fire.ts', 'server/src/coord/rundefs.ts', 'shared/api.ts']);
+    expect(holders).toEqual([
+      'pwa/src/auto/autoWords.ts',      // the refusal SENTENCE
+      'server/src/auto/fire.ts',        // the refusal CODE, returned by a rung
+      'server/src/coord/rundefs.ts',    // the marker literal (the one definition)
+      'shared/api.ts',                  // the refusal-code vocabulary
+    ]);
   });
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
