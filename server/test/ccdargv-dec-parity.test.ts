@@ -290,4 +290,30 @@ describe('ws-add was this file\'s negative control, and D-410\'s remedy turned i
     expect(created, 'ws-add wrote no create line').toHaveLength(1);
     expect(decOf(created[0]!)).toEqual({ surface: 'none' });
   });
+
+  // TASK 5's SECOND ARM. `decAppendingVerbs()` derives ccd VERBS, not builder
+  // keys, and `wsAddAuto` emits the already-member verb `ws-add` — so the
+  // derivation above is byte-identical whether or not this builder exists,
+  // and the parity loop's `PROBES['ws-add']` composes through `wsAddWorker`
+  // only. Without an arm here, `wsAddAuto`'s own token order — the dec lands
+  // immediately after the project, with no `--no-rc` between — is measured by
+  // NOTHING against the real binary; `whitelist-subset.test.ts` proves only
+  // that the tokens cross the agent's prefix grant, not that ccd can parse
+  // them in that position. This composes through `CCD_ARGV.wsAddAuto` itself
+  // (never a hand-typed argv) and asserts the SAME create-row actor
+  // `wsAddWorker`'s positive control landed above — the flags parse
+  // identically whether or not `--no-rc` sits between the project and them.
+  it('wsAddAuto composes the same create-row actor as wsAddWorker, with no --no-rc between the project and the flags', () => {
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddAuto(PROJECT, PROBE_DEC));
+
+    expect(uuidRows(), 'wsAddAuto created no workspace').toHaveLength(1);
+    expect(fs.existsSync(path.join(h.home, 'worktrees', PROJECT)),
+      'no worktree: the verb died before it built one').toBe(true);
+
+    const created = eventsOf(h.home, 'create');
+    expect(created, 'ws-add wrote no create line').toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+    expect(measOf(created[0]!)['project']).toBe(PROJECT);
+  });
 });
