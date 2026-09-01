@@ -35,7 +35,9 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
 import { floorFromScan } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
-import type { ProvenancePair } from './coord/store.js';
+import type {
+  ProvenancePair, AutomationRow as StoreAutomationRow, FiringOccurrence, ScheduleStamp,
+} from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -45,6 +47,16 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
+// Task 8 (`.superpowers/sdd/2026-08-31-automations`), plus the controller's
+// ruling on `POST /:id/run` (2026-09-01): `fireAutomation` — the whole act,
+// spawn through prompt — has exactly ONE caller in the tree after this
+// change, and it is `sweepAutomations` below. `checkPreClaim` (rungs 1-2)
+// is the only ladder half this file calls directly; rungs 3-9
+// (`checkPostClaim`) run exclusively inside `fireAutomation` itself.
+import { checkPreClaim, fireAutomation, type FireDeps } from './auto/fire.js';
+import {
+  decideFire, type AutomationRow as PolicyAutomationRow, type SchedulePlan,
+} from './auto/schedulepolicy.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 
@@ -194,6 +206,16 @@ const PR_SWEEP_STUCK_MS = PR_BACKOFF_MAX_MS;
  *  which is the point: mail lands at a turn boundary, not mid-thought. */
 const MAIL_SWEEP_MS = 10_000;
 
+/** The automations lane's clock (`.superpowers/sdd/2026-08-31-automations`,
+ *  Task 8). Same cadence and the same argument as `MAIL_SWEEP_MS` just
+ *  above: this is not how fast a schedule fires — `AUTOMATION_PUNCTUAL_MS`
+ *  and each automation's own `graceMs` (`schedulepolicy.ts`) decide that —
+ *  it is how often this lane is allowed to ASK whether anything is due, and
+ *  it is also the cadence at which a run this process finds LEASED BUT NOT
+ *  YET STARTED (a fresh claim from `POST /:id/run`, or one a crashed prior
+ *  process left standing) gets picked up and handed to `fireAutomation`. */
+const AUTOMATION_SWEEP_MS = 10_000;
+
 /** How long a session must have been idle before it is interruptible. ccd's
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
@@ -285,6 +307,42 @@ const MAIL_DISABLED_MARKER = 'mail-disabled';
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
 // `shared/api.ts`, which is the only module all three sides can import.
+
+/** `SchedulePlan` (`schedulepolicy.ts`) -> `ScheduleStamp` (`coord/store.ts`)
+ *  — the same two facts (an occurrence's epoch ms, or the `ScheduleError`
+ *  that prevented one), spelled under the two different field names each
+ *  side already committed to (`nextRunAt`/`scheduleError` vs `at`/`error`). */
+function toScheduleStamp(plan: SchedulePlan): ScheduleStamp {
+  return plan.scheduleError === null ? { at: plan.nextRunAt } : { error: plan.scheduleError };
+}
+
+/**
+ * The store's `AutomationRow` (wire summary + lease triple) -> the fire
+ * path's `AutomationRow` (`schedulepolicy.ts`) — TWO DIFFERENT shapes under
+ * one name, by design (L2 ports are declared BY THE CONSUMER; `fire.ts`'s
+ * own docstring on why it does not import the store's type). `cadence` in
+ * particular is a different TYPE on each side (`StoredCadence` vs `Cadence
+ * | null`), which is the seam this closes.
+ *
+ * `auto/routes.ts` already needs this identical conversion (`toPolicyRow`/
+ * `cadenceOf` there) for the identical reason: `fireAutomation` is called
+ * from two different L4 delivery files with no shared L1/L2 home either may
+ * reach into without one importing the other. Flagged in
+ * task-8-report.md as a real, minimal duplication a later task could hoist
+ * into `schedulepolicy.ts` itself.
+ */
+function toPolicyAutomationRow(row: StoreAutomationRow): PolicyAutomationRow {
+  return {
+    id: row.id, name: row.name, state: row.state, project: row.project, prompt: row.prompt,
+    cadence: row.cadence.kind === 'unknown' ? null : row.cadence,
+    graceMs: row.graceMs,
+    provedAt: row.provedAt, nextRunAt: row.nextRunAt, scheduleError: row.scheduleError,
+    lastFireAt: row.lastFireAt, lastOutcome: row.lastOutcome, lastRefusal: row.lastRefusal,
+    leaseUntil: row.leaseUntil, leaseHardUntil: row.leaseHardUntil,
+    consecutiveFailures: row.consecutiveFailures, runsEvicted: row.runsEvicted,
+    createdAt: row.createdAt, updatedAt: row.updatedAt,
+  };
+}
 
 /**
  * Polls the fleet: captures every registered pane to detect menu dialogs
@@ -529,6 +587,48 @@ export class FleetWatcher {
   /** Same watermark discipline as `lastMailNotifyId`, over `run_events.id`
    *  for the `run` NotifyEvent lane. */
   private lastRunNotifyId = 0;
+  /** The automations lane's own clock (Task 8), `sweepLifecycle`'s exact
+   *  `!== 0` idiom. */
+  private lastAutomationSweep = 0;
+  /**
+   * Runs currently handed to `fireAutomation` BY THIS PROCESS — the
+   * cross-sweep single-flight guard `sweepAutomations` needs for the
+   * identical reason `mailInFlight` states above it, sharpened by the
+   * controller's own ruling: `fireAutomation` is never awaited by the loop
+   * that dispatches it (the act must not block the tick — ccd's
+   * `SPAWN_SETTLE_S` is 240 s), so a run can still be mid-spawn when a
+   * LATER sweep tick's leased-run scan runs again and would otherwise see
+   * the identical `leaseRunId` and fire it a second time.
+   *
+   * Claimed the moment a run is handed to `fireAutomation`, before any
+   * `await` (`fireOne`'s own discipline). Removed ONLY on a TERMINAL settle
+   * (`ok`/`refused`/`failed`) — NEVER on a `pending` prompt-ladder outcome
+   * (that ladder is not retried by this lane; the run rides out its hard
+   * lease and settles `lost`) and NEVER when the call throws (the throw may
+   * have landed AFTER a real spawn, and calling `fireAutomation` again on
+   * the same `runId` would manufacture a second session for one
+   * automation — spec §6's orphan-manufacture rule). IN MEMORY BY DESIGN: a
+   * restart forgets it, but a run this process never started still shows up
+   * with `leaseRunId` set on the automation row and nothing here to say
+   * otherwise — which is exactly the "survives a restart mid-run" property
+   * the controller ruling asks for.
+   */
+  private automationsInFlight = new Set<number>();
+  /**
+   * The per-restart catch-up bound (spec §8). An automation id enters this
+   * set the first time THIS PROCESS fires a `catchup` occurrence or records
+   * a late one as `missed` for it, and `decideFire`'s `catchup` arm may be
+   * offered only for an id NOT in it. `primed` cannot serve this role:
+   * `sweepAutomations` returns early while `!primed`, so by the time it
+   * runs at all the priming tick is already past — there is no "first armed
+   * sweep after a restart" flag left to read. IN MEMORY, deliberately: the
+   * bound is per *restart*, so a durable column would suppress a legitimate
+   * catch-up after the next boot. Without it, an `interval` automation
+   * whose period is shorter than `graceMs` would yield one catch-up per
+   * occurrence inside the window as this sweep walks the backlog forward —
+   * the ninety-session wake this rule forbids.
+   */
+  private caughtUp = new Set<number>();
   /** C0.1: `tick()` had NO re-entrancy guard — `start()` fires it every
    *  `intervalMs` off a bare `setInterval`, unconditionally, so a tick still
    *  in flight past the next interval edge (a slow agent-WS registry read, a
@@ -883,6 +983,16 @@ export class FleetWatcher {
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as the two ledger lanes just above:
+      // `fireAutomation` can spawn (ccd's `SPAWN_SETTLE_S` is 240 s), and this
+      // tick must return long before that. NOT beside `sweepMail`'s own
+      // dispatch (Task 8's own instruction, D9/D10's rule restated once more:
+      // a second producer lands BESIDE the most load-bearing loop on the box,
+      // never inside it) — placed here instead, immediately before `primed`
+      // flips, which is also what makes the priming tick fire nothing: the
+      // `!this.primed` gate inside `sweepAutomations` reads `false` at the
+      // instant this line calls it.
+      void this.sweepAutomations().catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -2087,6 +2197,212 @@ export class FleetWatcher {
         'after 7 days: ' + stale.map((s) => `${s.project} D-${s.n}`).join(', ') +
         ' — reported, never reclaimed (D13)');
     }
+  }
+
+  /**
+   * The automations lane (`.superpowers/sdd/2026-08-31-automations`, Task 8),
+   * PLUS the controller's own ruling on `POST /:id/run` (2026-09-01):
+   * `sweepLifecycle`'s exact gate shape — `!this.primed` (restart-quiet),
+   * then the `!== 0` interval gate stamped BEFORE any awaited I/O, then
+   * `deps.coord`. UNLIKE `sweepLifecycle`, every `node:sqlite` read below is
+   * wrapped: a full disk or a second writer holding `coord.db`'s lock throws
+   * SYNCHRONOUSLY, straight into a `void`-dispatched tick with no
+   * `unhandledRejection` handler anywhere in this tree — the same fault
+   * `pushNewMail`/`pushNewRuns`/the claim sweep already earn the guard
+   * against, a few hundred lines up.
+   *
+   * THE ACT NEVER RIDES THIS METHOD'S OWN `await`. `fireAutomation` can
+   * spawn (ccd's `SPAWN_SETTLE_S` is 240 s), and this sweep must return in
+   * time for the next 2 s tick — every call is `void`-dispatched through
+   * `fireOne` below, `sweepPr`'s own reasoning for its slow `gh` calls. This
+   * is also the controller's ruling made mechanical: `POST /:id/run` now
+   * only claims (`claimAndOpenRun`, one fast transaction) and answers `202`
+   * — the spawn, identify, adopt and prompt happen HERE, on the next tick,
+   * for ANY run this process finds leased but not yet started, which is why
+   * `fireAutomation` has exactly ONE caller in the whole tree after this.
+   *
+   * THREE PASSES, in this order, and the order is load-bearing:
+   *
+   *   1. Lapse (`lapseAutomationRuns`) FIRST — a `running` run whose
+   *      `leaseHardUntil` has passed settles `lost` and releases its lease
+   *      before pass 3 below gets a chance to treat it as "leased but not
+   *      started" and fire it.
+   *   2. The schedule (`dueAutomations`): `decideFire` (L1) answers
+   *      fire / record-missed / unschedulable; a `fire` arm still runs the
+   *      pre-claim rungs (`checkPreClaim`, L1) before claiming — an overlap
+   *      or cap-concurrency loser opens an UN-LEASED row and is done. A
+   *      winner's claim (`claimAndOpenRun`) only OPENS the lease; it is
+   *      NEVER itself the act — pass 3 is what performs it, uniformly.
+   *   3. Every non-retired automation with an open lease
+   *      (`automations().leaseRunId !== null`) this process has not already
+   *      handed to `fireAutomation` — pass 2's own fresh claims, a manual
+   *      claim `POST /:id/run` just opened, and a claim a CRASHED prior
+   *      process left standing, all read the identical way, because they
+   *      are the identical fact: a lease with no one working it.
+   *      `automationsInFlight` is what stops pass 2's own fresh claim from
+   *      being picked up a SECOND time by this very pass, in this very
+   *      tick — see its own docstring for why membership is never removed
+   *      except on a terminal settle.
+   *
+   * DECIDES NOTHING (CLAUDE.md's L4 rule): `decideFire`/`checkPreClaim`/
+   * `checkPostClaim` (inside `fireAutomation`) own every rung; this method
+   * only reads their answers and calls the store's already-committed
+   * writers.
+   *
+   * PUBLIC for the reason `sweepNames`/`sweepMail`/`sweepLifecycle` all
+   * state: `tick()` dispatches this with `void`, so a test awaiting `tick()`
+   * has not awaited the sweep.
+   */
+  async sweepAutomations(): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastAutomationSweep !== 0 && now - this.lastAutomationSweep < AUTOMATION_SWEEP_MS) return;
+    this.lastAutomationSweep = now;
+
+    try {
+      store.lapseAutomationRuns(now);
+    } catch (err) {
+      console.warn(`ccrc-server: automations lease-lapse failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      return;
+    }
+
+    let due: readonly StoreAutomationRow[] = [];
+    try {
+      due = store.dueAutomations(now);
+    } catch (err) {
+      console.warn(`ccrc-server: dueAutomations failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    }
+    for (const row of due) {
+      try {
+        this.processDueAutomation(store, row, now);
+      } catch (err) {
+        console.warn(`ccrc-server: automation ${row.id}'s due-processing failed (${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the sweep`);
+      }
+    }
+
+    // Pass 3 — every open lease this process has not already started.
+    let leased: readonly StoreAutomationRow[] = [];
+    try {
+      leased = store.automations({});
+    } catch (err) {
+      console.warn(`ccrc-server: automations() failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    }
+    for (const row of leased) {
+      if (row.leaseRunId === null) continue;
+      if (this.automationsInFlight.has(row.leaseRunId)) continue;
+      this.fireOne(store, row, row.leaseRunId, now);
+    }
+  }
+
+  /**
+   * Pass 2's per-row body (spec §6 steps 1-4, §7 rungs 1-2, §8's catch-up
+   * bound). SYNCHRONOUS — `decideFire` and `checkPreClaim` both read
+   * `coord.db` only, and `claimAndOpenRun`/`openUnleasedRun` are themselves
+   * synchronous store transactions — so this never yields, and nothing else
+   * in this tick can observe a half-decided row.
+   */
+  private processDueAutomation(store: CoordStore, row: StoreAutomationRow, now: number): void {
+    const policy = toPolicyAutomationRow(row);
+    const decision = decideFire(policy, now, this.caughtUp.has(row.id));
+    // Unreachable from `dueAutomations()`'s own output today (its WHERE
+    // clause already excludes every condition `decideFire` would answer
+    // `unschedulable` for), kept because `FireDecision` is a three-arm union
+    // TypeScript requires handled in full — see `schedulepolicy.ts`'s own
+    // docstring on this arm.
+    if (decision.act === 'unschedulable') return;
+
+    // spec §8: an id enters the per-restart catch-up bound the first time
+    // this process FIRES a late occurrence as a catchup, or RECORDS one as
+    // missed — never for an on-time `trigger:'schedule'` fire, which has
+    // not spent any of the restart's catch-up budget.
+    if (decision.act === 'record-missed' || decision.trigger === 'catchup') {
+      this.caughtUp.add(row.id);
+    }
+
+    if (decision.act === 'record-missed') {
+      store.openUnleasedRun({
+        automationId: row.id, now,
+        occurrence: {
+          trigger: 'schedule', scheduledFor: decision.scheduledFor, dstShifted: false,
+          next: toScheduleStamp(decision.advance),
+        },
+        settlement: { outcome: 'missed' },
+      });
+      return;
+    }
+
+    // decision.act === 'fire' — rungs 1-2 BEFORE the claim (spec §6 step 3):
+    // an overlap or cap-concurrency loser opens an UN-LEASED row, outside
+    // the claim, so the row survives the claim it lost.
+    const occurrence: FiringOccurrence = {
+      trigger: decision.trigger, scheduledFor: decision.scheduledFor, dstShifted: decision.dstShifted,
+      next: toScheduleStamp(decision.advance),
+    };
+    const pre = checkPreClaim({ coord: store }, row, now);
+    if ('refused' in pre) {
+      const outcome = pre.refused === 'overlap' ? ('skipped' as const) : ('refused' as const);
+      store.openUnleasedRun({ automationId: row.id, now, occurrence, settlement: { outcome, refusal: pre.refused } });
+      return;
+    }
+
+    // spec §6 step 4 — ONE transaction: the lease CAS, the run's insert, and
+    // the `nextRunAt` advance. This ONLY opens the lease; it is never
+    // itself the act (see `sweepAutomations`'s own docstring, pass 3).
+    const claim = store.claimAndOpenRun({ automationId: row.id, now, occurrence });
+    if ('refused' in claim) return; // the CAS lost a race `checkPreClaim` (synchronous, no I/O
+                                     // between the two) could not have foreseen — nothing to do;
+                                     // `dueAutomations()` re-offers this occurrence next sweep.
+    this.fireOne(store, row, claim.runId, now);
+  }
+
+  /**
+   * Hands ONE leased run to `fireAutomation` — `void`-dispatched, NEVER
+   * awaited by the caller (see `sweepAutomations`'s own docstring for why).
+   * `automationsInFlight.add` happens BEFORE any `await`, synchronously, so
+   * no other pass in this tick — and no LATER tick, until this settles —
+   * can observe this `runId` as "not yet started" and fire it again.
+   */
+  private fireOne(store: CoordStore, row: StoreAutomationRow, runId: number, now: number): void {
+    this.automationsInFlight.add(runId);
+    const policy = toPolicyAutomationRow(row);
+    const fireDeps: FireDeps = {
+      coord: store, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, tmux: this.deps.tmux, queue: this.deps.queue,
+    };
+    void fireAutomation(fireDeps, policy, runId, now)
+      .then((outcome) => {
+        // The prompt ladder is live: nothing terminal was written, and this
+        // lane does not retry attempts 2..N (a later task's scope) — leave
+        // the guard SET so a later tick cannot re-spawn a session this run
+        // already has. It settles `lost` on its own once the hard lease
+        // lapses (pass 1, above).
+        if ('pending' in outcome) return;
+        this.automationsInFlight.delete(runId);
+        // Only a run that produced a session notifies (spec §10 "Notifications"
+        // — `NotifyEvent.sessionId` is non-nullable and gains no seventh kind;
+        // `refused`/`failed` carry no session id to raise one with).
+        if (outcome.settle === 'ok' && outcome.facts.sessionId !== null) {
+          this.pushOne({
+            kind: 'run', sessionId: outcome.facts.sessionId, project: row.project,
+            title: `✓ automation › ${row.name}`,
+            body: `${row.project}`,
+            tag: `automation-${row.id}-${runId}`,
+            recordAlways: true,
+          }, this.activeProjects);
+        }
+      })
+      .catch((err) => {
+        // The guard above is deliberately NOT cleared here — see
+        // `automationsInFlight`'s own docstring: the throw may have landed
+        // after a real spawn, and firing again would manufacture a second
+        // session for one automation.
+        console.warn(
+          `ccrc-server: fireAutomation threw for automation ${row.id} run ${runId} ` +
+          `(${err instanceof Error ? err.message : String(err)}) — one bad automation must not kill the tick; ` +
+          'the run stays leased and settles lost once its hard lease lapses');
+      });
   }
 
   /**
