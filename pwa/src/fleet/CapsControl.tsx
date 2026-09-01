@@ -126,12 +126,23 @@ export function CapsControl({
     // Nothing moved: the route would refuse an empty body, and spending a round
     // trip to be told so would be the control's bug, not the operator's.
     //
-    // THE NOTE IS CLEARED FIRST (D-1220). This return used to sit ABOVE the
-    // clear, and the draft is deliberately not reset on a refusal — so an
+    // THE STALE REFUSAL IS CLEARED FIRST (D-1220). This return used to sit ABOVE
+    // the clear, and the draft is deliberately not reset on a refusal — so an
     // operator correcting a rejected field back to its stored value got no
     // request (right) and kept the refusal on screen (wrong), told their input
     // was invalid at the moment it became valid again.
-    if (intent.kind === 'nothing') { setNote({ kind: 'none' }); return; }
+    //
+    // ONLY the refusal, not every note (D-1235). `unconfirmed` is the one note a
+    // no-op does not supersede: it says the write MAY have landed and the answer
+    // could not be read, so the number on screen is not known to be the stored
+    // one. Clearing it because the operator typed that same number back would
+    // erase the only signal that the screen might be wrong — the same class of
+    // lie as calling an unreadable answer a failure, which the `Note` type's own
+    // D-1150 comment refuses.
+    if (intent.kind === 'nothing') {
+      setNote((n) => (n.kind === 'refused' ? { kind: 'none' } : n));
+      return;
+    }
     setBusy(true);
     setNote({ kind: 'none' });
     setCoordCaps(intent.body).then(
@@ -177,9 +188,12 @@ export function CapsControl({
       {/* ONE note element, ALWAYS mounted, and it is the live region (D-1222).
           Always mounted because a `role="status"` inserted at the same moment its
           text appears is announced unreliably; the region has to exist first and
-          have its contents change. `.caps-note:empty` collapses it to nothing
-          visually WITHOUT `display: none`, which would take it back out of the
-          accessibility tree and undo the point. This is the whole of the
+          have its contents change. `.caps-note:empty` takes it OUT OF FLOW so it
+          costs no layout — absolutely positioned rather than merely zero-height,
+          because a zero-height flex item still forms a line and still pays the
+          container's row gap (D-1236) — and deliberately not `display: none`,
+          which would take it back out of the accessibility tree and undo the
+          point. This is the whole of the
           control's feedback — no toast, no banner, and a successful write just
           re-renders numbers — so outside a live region a screen-reader user
           learns nothing at the one moment they have just committed to a save. */}

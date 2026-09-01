@@ -95,6 +95,13 @@ import type { SessionStore } from './sessions.js';
  *     rest. Session-gating it instead is not the fix, because the caller
  *     genuinely has no cookie; the fix is the removal already scheduled.
  *
+ *     ORDER-PINNED PARAGRAPH. `box-token-census.test.ts` reads the number words
+ *     above IN SEQUENCE — the box-token lane count first, the total second — so
+ *     rewriting this the other way round is a true sentence and a red suite until
+ *     that expectation moves in the same change (D-1233). Any OTHER number here
+ *     is read as a claim about this surface too, so spell an unrelated one as a
+ *     word the scan does not read.
+ *
  *  3. `POST /api/auth/login` and `GET /api/auth/status` — the door, and the sign
  *     on it. A gate that gated its own login route would be a box nobody can
  *     enter; and the login screen has to know, BEFORE anyone types, whether the
@@ -668,6 +675,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighteen box-token machine
  * lanes plus `/api/notify` — nineteen in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
+ * ORDER-PINNED, like reason 2 above and for the same scanner (D-1233): lanes
+ * first, total second.
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. `POST /api/auth/login` and the two passkey assert
  * routes are the doors: a forged login is not a state change an attacker

@@ -2080,6 +2080,8 @@ button.sess-held {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
+  /* Anchors the empty live region's out-of-flow box (see `.caps-note:empty`). */
+  position: relative;
   min-height: var(--tap-min);
   padding: var(--sp-1) var(--sp-3);
   background: var(--bg-surface);
@@ -2143,9 +2145,20 @@ button.sess-held {
 }
 
 /* The note is a live region that is always mounted, so it is empty most of the
-   time. Collapse it without `display: none`, which would remove it from the
-   accessibility tree and defeat the reason it is always mounted (D-1222). */
+   time. It must collapse WITHOUT `display: none`, which would remove it from the
+   accessibility tree and defeat the reason it is always mounted (D-1222).
+
+   OUT OF FLOW, not merely zero-height (D-1236). `height: 0` alone left it a flex
+   item with `flex-basis: 100%`, so it still formed a second flex LINE and the
+   container's 8px `row-gap` was still paid — the strip sat permanently taller
+   than before the note existed, while the rule's own comment claimed it collapsed
+   to nothing. An absolutely-positioned child is taken out of the flex flow
+   entirely, so no line and no gap; it stays in the accessibility tree, and the
+   `:empty` selector stops applying the instant it has something to say, which
+   puts it straight back in flow. */
 .caps-control .caps-note:empty {
+  position: absolute;
+  width: 0;
   height: 0;
   overflow: hidden;
 }

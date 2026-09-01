@@ -223,8 +223,14 @@ describe('POST /api/coord/caps', () => {
   it('persists the seq it minted on the ordinary path', () => {
     // The floor for the row beneath it. `record()` bumps the in-memory seq and
     // hands it to a client; `flush()` is what makes that seq survive a restart.
-    // Without this arm, the throw-path assertion below could be satisfied by a
-    // route that had simply stopped flushing at all.
+    //
+    // WHY THIS ARM EXISTS, corrected (D-1237). It first said the throw-path row
+    // "could be satisfied by a route that had simply stopped flushing at all",
+    // which is backwards — a route that never flushes REDS that row. Measured:
+    // with the flush back inside the try, the throw arm fails and this one
+    // passes. What this arm actually holds is the other direction: that the fix
+    // did not become "flush only when the archive threw". The two together pin
+    // the property — the flush follows `record()`, on both paths.
     return withCoord().then(async ({ app, notifyLog }) => {
       const flush = vi.spyOn(notifyLog, 'flush');
       await postCaps(app, { maxConcurrentWorkers: 5 });
@@ -248,6 +254,18 @@ describe('POST /api/coord/caps', () => {
       db.prepare('DROP TABLE feed_events').run();
       const res = await postCaps(app, { maxConcurrentWorkers: 5 });
       expect(res.statusCode).toBe(200);
+      // THE PREMISE, ASSERTED (D-1229). This test creates the `warn` spy that
+      // would prove the archive threw and then never read it — so the day
+      // `recordFeedEvent` stops throwing (a `try {} catch {}` inside it would do
+      // it), this case degenerates into a duplicate of the ordinary-path arm
+      // above and stays GREEN with the flush back inside the try. Measured
+      // exactly that way: with D-1213 reverted AND the store's throw swallowed,
+      // the pre-existing sibling at the top of this pair fails on its own premise
+      // assertion while this one passed. The sibling had the line; this one was
+      // copied from it down to the spy and stopped short of it.
+      expect(warn.mock.calls.flat().join(' '),
+        'the feed archive never threw — this case is no longer about the throw path')
+        .toContain('recordFeedEvent failed');
       expect(flush, 'the archive throw skipped the flush — the minted seq was never persisted')
         .toHaveBeenCalled();
     } finally { warn.mockRestore(); }
@@ -325,14 +343,50 @@ describe('POST /api/coord/caps', () => {
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,
                  claimedBy: 'the-coordinator', sessionId: 'the-worker' } });
-    await held;   // the hold is in flight; the mutex is held across a real await
+
+    // PREMISE 1 — THE HOLD IS REACHED AT ALL, and it fails FAST if it is not
+    // (D-1228). `POST /api/runs` has three early returns before `runCcd` — a 400
+    // body check, a 409 `openRun` refusal and a 501 `verbSupported` — and every
+    // one of them leaves `held` pending for ever. A bare `await held` then hangs
+    // to the 20s vitest ceiling and reports a timeout, which says nothing about
+    // which premise died. Racing the response against it turns that into one
+    // sentence in milliseconds.
+    const brokenPremise = opening.then((r) => {
+      throw new Error(`POST /api/runs answered ${r.statusCode} without ever reaching ` +
+        'the hold — the third actor never took the lock, and this test witnesses nothing');
+    });
+    // The loser of a race is still a rejection; handled here so it cannot surface
+    // as an unhandled rejection after `held` wins.
+    brokenPremise.catch(() => {});
+    await Promise.race([held, brokenPremise]);
+
+    const settled: number[] = [];
     const saves = [postCaps(app, { maxConcurrentWorkers: 5 }),
-                   postCaps(app, { maxSessionsPerDay: 20 })];
+                   postCaps(app, { maxSessionsPerDay: 20 })]
+      .map((p) => p.then((r) => { settled.push(r.statusCode); return r; }));
     await waitUntil(() => reads.mock.calls.length >= 2, 'both caps prologues to run');
+
+    // PREMISE 2 — THE LOCK IS ACTUALLY HELD, measured rather than assumed, and
+    // this is the assertion the first version of this test did not have
+    // (D-1228). It checked `openRes.statusCode === 200` and called that the
+    // premise; a 200 says the route ANSWERED, not that it held anything.
+    // Measured on an isolated copy: revert D-1170 *and* take `coordMutex.run` off
+    // `POST /api/runs`, and the old test passed — green with the lost update in
+    // the tree, exactly the failure class D-1215 fixed one file over. A caps
+    // write that can finish while the hold is in flight proves there was no lock
+    // to queue behind, so nothing below this line means anything.
+    //
+    // Twenty turns is not a timing guess: an unblocked `coordMutex.run` resolves
+    // in a microtask, and `app.inject` needs a handful of turns end to end, so a
+    // save that has not settled after twenty is queued rather than merely slow.
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(settled,
+      'a caps write completed while the hold was in flight — the mutex is NOT held ' +
+      'across the await, so this test witnesses nothing').toEqual([]);
+
     release();
     const [openRes, ...capRes] = await Promise.all([opening, ...saves]);
-    expect(openRes.statusCode, 'the third actor never took the lock — the premise is gone')
-      .toBe(200);
+    expect(openRes.statusCode).toBe(200);
     for (const r of capRes) expect(r.statusCode).toBe(200);
     expect(coord.caps(),
       'one save read its merge base before the other wrote — a lost update')

@@ -5,6 +5,9 @@
 // `{type:'coord'}` frame exists to settle it, and no frame carries caps, so
 // this control settles on the response body instead (D-1209).
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CapsControl } from '../src/fleet/CapsControl';
 import { ApiError } from '../src/lib/api';
@@ -130,6 +133,66 @@ describe('CapsControl', () => {
     expect(screen.getByRole('status').textContent,
       'the note is rendered outside any live region — a screen reader is told nothing')
       .toMatch(/between 1 and 64/);
+  });
+
+  it('the live region exists BEFORE it has anything to say', async () => {
+    // D-1230. The test above pins that the refusal text lands in *a* live region.
+    // It does NOT pin the property the fix was actually about — that the region
+    // is mounted before it has content, because a `role="status"` inserted at the
+    // same moment its text appears is announced unreliably. Measured: reverting
+    // to the pre-commit conditional mount while KEEPING `role="status"` left the
+    // whole file green, so the always-mounted half shipped with no mechanism and
+    // the `.caps-note:empty` rule beside it became dead code with nothing to
+    // notice. That is the same defect the coordinator raised as MUST-FIX B, in
+    // the fix for one of its own siblings.
+    render(<CapsControl coordCaps={READ} />);
+    await screen.findByText('1 / 3');
+    const region = screen.getByRole('status',
+      { name: undefined }) as HTMLElement;
+    expect(region, 'the region is created together with its text — announced unreliably')
+      .toBeInTheDocument();
+    expect(region.textContent, 'the region is not empty at rest').toBe('');
+  });
+
+  it('the empty-state rule keeps the region in the accessibility tree, and costs no layout', () => {
+    // jsdom does no layout, so the SHAPE of the rule is what can be held here —
+    // and it is the half that matters. `display: none` would collapse the note
+    // correctly and silently undo D-1222 by taking the region out of the
+    // accessibility tree; `height: 0` alone left the flex line and its row-gap
+    // standing, which is what D-1236 was (the rule's own comment claimed it
+    // collapsed to nothing, and the strip was permanently 8px taller).
+    const css = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'fleet', 'fleet.css'),
+      'utf8');
+    const rule = /\.caps-control \.caps-note:empty\s*\{([^}]*)\}/.exec(css);
+    expect(rule, 'the empty-state rule is gone — the live region now costs a row of layout')
+      .not.toBeNull();
+    expect(rule![1], 'display:none takes the live region out of the accessibility tree')
+      .not.toMatch(/display\s*:\s*none/);
+    expect(rule![1], 'a zero-height flex item still forms a line and pays the row gap')
+      .toMatch(/position\s*:\s*absolute/);
+  });
+
+  it('does NOT wipe the unconfirmed warning when the correction leaves nothing to send', async () => {
+    // D-1235. The D-1220 fix cleared EVERY note kind on the no-op path, and
+    // `unconfirmed` is the one note a no-op does not supersede: it says the write
+    // MAY have landed and the answer could not be read, so the rendered number is
+    // not known to be the stored one. An operator who reverts the box to what the
+    // screen shows would erase the only signal that the screen might be wrong —
+    // the same class of lie as calling an unreadable answer a failure, which this
+    // component's own D-1150 note refuses.
+    const setCoordCaps = vi.fn(async () => 'unreadable' as const);
+    render(<CapsControl coordCaps={READ} setCoordCaps={setCoordCaps} />);
+    const input = await screen.findByLabelText(/workers/i);
+    fireEvent.change(input, { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await screen.findByText(/unconfirmed/i);
+    fireEvent.change(input, { target: { value: '3' } });     // back to what is rendered
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(setCoordCaps).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('status').textContent,
+      'the no-op save erased the only warning that the stored value is unknown')
+      .toMatch(/unconfirmed/i);
   });
 
   it('clears a stale refusal when the correction leaves nothing to send', async () => {

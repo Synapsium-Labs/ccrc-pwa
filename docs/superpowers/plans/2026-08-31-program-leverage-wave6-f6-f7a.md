@@ -2615,8 +2615,243 @@ is not dead code in the module, only on this path. Recorded so the next reader d
 
 ## Refuted, and not acted on
 
-Eight, listed so a later wave does not re-open them: `req.body ?? {}` letting a null body through (see
+SEVEN, listed so a later wave does not re-open them: `req.body ?? {}` letting a null body through (see
 D-1227); the claims-routes servers; the no-op feed event; `gate.ts`'s NOT-EXEMPT enumeration;
 `CoordCapsUsage`'s producer; the three-unspent-numbers check; and the "reload to see what was stored"
 wording, which the coordinator adjudicated ACCURATE — the control has no other way to re-read after an
 unreadable answer, and softening it would be the lie.
+
+**Seven, where the review's mail says eight** (D-1238). Its total counts eight refutations and its prose
+itemises these seven, so the eighth is a number without a name here. Recorded that way rather than
+padded to the total or quietly restated as seven-of-seven: a list that claims to be complete and is one
+short is the exact defect this wave spent itself on.
+
+---
+
+## Deviations found — the fix round's own adversarial audit
+
+The review round was itself reviewed before its fingerprint was sent: six lenses over commit
+`ff85c514`, every finding handed to three independent verifiers told to REFUTE and to default to
+`refuted: true`, then a completeness critic asked what all six missed. 88 agents, 27 findings filed,
+14 survived, plus 3 from the critic. **Four majors — and three of them are the same defect the round
+had just been sent back for.**
+
+That is the finding under the findings, and it is worth stating before the individual rows: given a
+review that said "your guard shipped without a mechanism", I fixed the three guards named and wrote
+four new ones with the same fault. A witness whose premise is asserted by a status code; a witness that
+builds the instrument proving its premise and never reads it; a live region whose always-mounted
+property is not pinned; a scan that hard-codes the one member of a set it derives everywhere else.
+The lesson the round recorded — *unmeasured is not unmeasurable* — is not a fact you learn once.
+
+Numbers D-1228..D-1239, allocated in one block (floor 1228 → 1240).
+
+### D-1228 (MAJOR, 3/3) — the D-1211 witness could not detect the premise it named
+
+`expect(openRes.statusCode, 'the third actor never took the lock — the premise is gone').toBe(200)`
+checks that `POST /api/runs` ANSWERED. It says nothing about whether `coordMutex` was held across the
+awaited `runCcd`, which is the entire premise. **Measured on an isolated copy:** revert D-1170 *and*
+take `coordMutex.run` off `POST /api/runs`, and the witness passes — green, with the lost update in the
+tree. A failure message promising a check it cannot perform is D-1215's defect exactly, one file over,
+written by the same hand in the same commit that fixed it.
+
+A second, smaller fault in the same lines: every early return in that route (400 body, 409 `openRun`
+refusal, 501 `verbSupported`) precedes the `runCcd` await that resolves `held`, so a dead premise left
+the test blocked on `await held` until vitest's 20s ceiling — reporting a timeout, which names nothing.
+
+Both halves are now measured rather than assumed. **Premise 1** races the response against `held`, so a
+route that never reaches the hold fails in 270ms saying so (measured, forcing the 501 arm:
+`Error: POST /api/runs answered 501 without ever reaching the hold — the third actor never took the
+lock, and this test witnesses nothing`). **Premise 2** asserts the lock is real: after both prologues
+have run, neither caps write may have SETTLED, because a write that can finish while the hold is in
+flight proves there was nothing to queue behind. Twenty event-loop turns is not a timing guess — an
+unblocked `coordMutex.run` resolves in a microtask. Against the exact mutation that was green before:
+`AssertionError: a caps write completed while the hold was in flight — the mutex is NOT held across the
+await, so this test witnesses nothing: expected [ 200, 200 ] to deeply equal []`.
+
+### D-1229 (MAJOR, critic) — the D-1213 witness never asserted that the archive threw
+
+The throw-path test spies on `console.warn` and never reads it. So the day `recordFeedEvent` stops
+throwing — a `try {} catch {}` inside it would do it — the case silently degenerates into a duplicate of
+the ordinary-path arm above it and stays green with `void log.flush()` back inside the `try`.
+**Measured, both mutations at once:** with D-1213 reverted AND the store's throw swallowed, the
+PRE-EXISTING sibling failed on its own premise assertion and the new one passed. The new test was copied
+from that sibling down to the spy and the `finally`, and stopped one line short of the assertion that
+made it a witness.
+
+One line now, and it fires with its own sentence: `the feed archive never threw — this case is no longer
+about the throw path`.
+
+### D-1230 (MAJOR, 2/3) — D-1222's always-mounted property shipped unpinned
+
+The live-region test pinned that the refusal text lands in *a* `role="status"`. The fix was that the
+region is mounted BEFORE it has anything to say, because a region inserted at the same moment its text
+appears is announced unreliably. **Measured:** reverting to the pre-commit conditional mount while
+KEEPING `role="status"` left the whole file green — and made the `.caps-note:empty` rule beside it dead
+code with nothing to notice. Now pinned by asserting the region exists and is empty at rest; the
+conditional mount reds it (`Unable to find an accessible element with the role "status"`).
+
+### D-1231 (MAJOR, critic) — the over-claim scan hard-coded the one member of a set it derives, and CLAUDE.md was a route short
+
+`NOT_LANES` derived the four ungated doors and then typed `'POST /api/sessions/:id/kickoff'` as the only
+session-only coordination write — one line below a comment calling hand-kept enumeration the thing this
+file exists to delete. Wave 6 had already added the second, `POST /api/coord/caps`, and
+`coord-pause-route.test.ts`'s own `SESSION_ONLY` set records it.
+
+The consequence was not a missed check but an INVERTED one. CLAUDE.md's sentence — framed as the
+complete answer, "the coordination WRITE that carries no box token at all" — named one of two, and
+**correcting it reddened the scan**, with a message asserting the opposite of the truth: *"the bullet
+names POST /api/coord/caps as a box-token lane and it consults no box token"*, about a sentence saying
+precisely that it consults none. Measured before the fix, on the corrected prose.
+
+`SESSION_ONLY` is now harvested from the file that decides it, by the same `harvestSet` helper as
+`UNGATED`; `KICKOFF` remains the ONE recorded literal, because it is absent from that set by
+measurement rather than oversight (that file scans `coord/routes.ts` alone and says so). The under-claim
+direction — every session-only write must be NAMED — is the half that was missing, and CLAUDE.md now
+names both. Dropping caps from the sentence reds: *"the bullet promises to name the coordination writes
+that carry no box token, and does not name /api/coord/caps — the class grew and the sentence did not"*.
+
+### D-1232 (minor, 2/3) — the over-claim scan could only see names that carried a verb
+
+`` /`(GET|POST) (\/api\/[…]+)`/g `` required verb and path inside one backtick span, while the bullet's
+own house style is mixed — it names `/api/mail*` and `/api/runs*` bare, and README's neighbouring
+paragraph names all four doors bare. **Measured:** a non-lane added to the requireMailToken list WITHOUT
+its verb stayed green, and so did one hard-wrapped mid-path (the bullet is flattened first, so
+`` `POST /api/coord/\n  caps` `` becomes a path with a space in it).
+
+Three changes. Paths are matched independently of the verb, and a bare path is checked against the lane
+PATHS rather than skipped. A span the scan cannot parse is now a FAILURE, never a skip — "I did not
+understand it" and "it is fine" are two conditions a scanner must never collapse. And the check is
+SCOPED to the clause that makes the claim: the bullet holds two lists with opposite meanings, and one
+bag of excused names let a route excused by the second escape a false claim in the first (measured — the
+verb-less mutation stayed green even after the regex was widened, until the clause split landed).
+
+### D-1233 (minor, 3/3) — the note added to stop the scanner being overstated stated the opposite
+
+D-1214's "WHAT IT DOES NOT HOLD" paragraph said that rewriting a passage so the CLAIMS swap places
+"leaves the sequence unchanged — and correctly so". Backwards: when the claims move, their numbers move
+with them, the sequence changes, and a perfectly TRUE rewrite reds. **Measured** with a breakdown-first
+rewrite of README's auth paragraph, which is a correct sentence and a red suite.
+
+Corrected, and two things follow from it. The assertion is SPLIT — which numbers first, then in what
+order — because "you state a count this tree does not have" and "the counts are right and attached the
+wrong way round" are different repairs, and one message for both sends the reader hunting for a number
+that is correct. And every scanned passage now carries an ORDER-PINNED marker beside the prose
+(README's as an HTML comment, `gate.ts`'s two in the paragraphs themselves, `auth-gate.test.ts`'s under
+its title line) — because the constraint was documented only inside the test file, where the person
+rewriting README never looks.
+
+### D-1234 (minor, 2/3) — D-1216 replaced a false claim with a hand-kept list nothing checked
+
+The corrected auth paragraph names the five exempt-but-authenticated GETs — a third copy of a set that
+already exists twice — inside a passage this census slices and reads only the number words of.
+**Measured:** deleting two of the five left the paragraph false and the suite green, thirty README lines
+from a caps paragraph that reds when a door name goes missing. The set is now derived from `gate.ts`'s
+own EXEMPT table (the entries whose stated reason is D-149's argument), floored for non-emptiness, and
+each name asserted.
+
+### D-1235 (minor, 2/3) — the D-1220 fix wiped the `unconfirmed` warning too
+
+`if (intent.kind === 'nothing') { setNote({ kind: 'none' }); return; }` cleared EVERY note kind on the
+no-op path. `unconfirmed` is the one a no-op does not supersede: it says the write may have landed and
+the answer could not be read, so the number on screen is not known to be the stored one. An operator who
+typed that number back would erase the only signal that the screen might be wrong — the same class of
+lie as calling an unreadable answer a failure, which this component's own D-1150 comment refuses. Now
+clears only `refused`, with a fixture driving unreadable → revert → save.
+
+### D-1236 (note → fixed) — `:empty` collapsed the note's height and not its flex line
+
+The always-mounted note is a flex item with `flex-basis: 100%`, so `height: 0` still formed a second
+flex LINE and the container's 8px `row-gap` was still paid: the strip sat permanently taller than before
+the note existed, while the rule's own comment claimed it collapsed to nothing. Fixed by taking the
+empty state OUT OF FLOW (`position: absolute`), which is a real collapse and keeps the region in the
+accessibility tree — unlike `display: none`, which would collapse it correctly and silently undo
+D-1222. jsdom does no layout, so the SHAPE of the rule is what is pinned: it must not say
+`display: none`, and it must be out of flow. Both comments that overstated it are corrected.
+
+### D-1237 (note → fixed) — the flush floor gave an inverted reason for its own existence
+
+It said the throw-path row "could be satisfied by a route that had simply stopped flushing at all". A
+route that never flushes REDS that row. Measured: with the flush back inside the try, the throw arm
+fails and this one passes. What the arm holds is the other direction — that the fix did not become
+"flush only when the archive threw".
+
+### D-1238 (note → fixed) — a refuted list that claimed eight and named seven
+
+The review's mail totals eight refutations and itemises seven. The plan repeated the total over the
+enumeration. Corrected to say seven, and to say that the eighth is a number without a name here —
+rather than padded to the total or quietly restated as complete.
+
+### D-1239 (note → fixed, critic) — the round recorded no measurement in the durable artifact
+
+265 lines of deviations and roughly a dozen new guards, and not one `| mutation | first-fail |` row: the
+plan's last word was still §9.12's `247 | 6210 | 56` and §9.4's "62 rows", both describing a tree that
+no longer existed. The critic's point is sharper than bookkeeping — *the one new guard it
+mutation-tested end to end turned out to be unwitnessed, which is exactly what filling in a row forces
+an author to discover.* Three of the four majors above are guards that would not have survived being
+written into a table. §9.13 and §9.14 are that table.
+
+### 9.13 — The mutation table, both rounds
+
+Every row measured: the mutation applied to the tree, the suite run, the FIRST assertion that failed
+quoted verbatim, the mutation reverted. Restoration verified with `git status --porcelain` after each.
+
+**Review round (`ff85c514`)**
+
+| mutation | first-fail assertion |
+|---|---|
+| `void log.flush()` back inside the try, below `recordFeedEvent` | `the archive throw skipped the flush — the minted seq was never persisted: expected "flush" to be called at least once` |
+| a FAITHFUL inline rebuild of the caps GET | `app.get('/api/coord/caps' builds its own answer instead of the shared one: expected 'app.get(\'               \', async (_…' to contain 'capsView('` |
+| …the same mutation, second arm | `the usage reading is taken more than once — one half of the answer is being rebuilt: expected 2 to be 1` |
+| the caps merge base read OUTSIDE `coordMutex.run` (the D-1170 revert) | `one save read its merge base before the other wrote — a lost update: expected { maxConcurrentWorkers: 3, …(1) } to deeply equal { maxConcurrentWorkers: 5, …(1) }` |
+| `eighteen`/`nineteen` transposed between `gate.ts`'s two claims | `gate.ts, EXEMPT reason 2 states a count this tree does not have: expected [ 'nineteen', 'eighteen' ] to deeply equal [ 'eighteen', 'nineteen' ]` |
+| `POST /api/coord/caps` added to CLAUDE.md's requireMailToken list | `the bullet names POST /api/coord/caps as a box-token lane and it consults no box token …: expected [ 'POST /api/mail', …(18) ] to include 'POST /api/coord/caps'` |
+| README's hand-kept "four operator doors" restored | `the caps paragraph grew a hand-kept count: expected [ 'four' ] to deeply equal []` |
+| `refuse()` records a CONSTANT code while the reply still varies | `expected [ 'bad-kind' ] to deeply equal [ 'unknown-run' ]` |
+| an `fs` import + module-scope `Date.now()` in `caps.ts` | `caps.ts reads the clock — the decision is no longer pure` |
+| …second arm | `caps.ts imports a node builtin` |
+| …third arm | `caps.ts takes a VALUE import: import { readFileSync } from 'node:fs';` |
+| the stale `all 55 HTTP routes` prose (as shipped) | `the sweep claims to cover a number of routes this file does not derive: expected [ 55 ] to deeply equal [ 68 ]` |
+| …the third probe's line | `the third probe states a whole or an exempt count this file does not derive: expected [ 55 ] to deeply equal [ 68, 24 ]` |
+| …the websocket line | `expected exactly one line containing websockets and every HTTP route: expected +0 to be 1` |
+| a cleared caps field sent as `Number('') === 0` | `Unable to find an element with the text: /not a number/i` |
+| the note rendered outside any live region | `Unable to find an accessible element with the role "status"` |
+| the no-op return placed above the note clear | `the refusal is still on screen beside a valid field: expected <p class="caps-note"></p> to be null` |
+| one `advance()` dropped from the TERMINAL fixture | `the run never reached a terminal state — this case is no longer about a TERMINAL run: expected 'closing' to be 'done'` |
+
+**Audit round (this commit)**
+
+| mutation | first-fail assertion |
+|---|---|
+| the D-1170 revert AND `coordMutex.run` taken off `POST /api/runs` — the pair that was GREEN before | `a caps write completed while the hold was in flight — the mutex is NOT held across the await, so this test witnesses nothing: expected [ 200, 200 ] to deeply equal []` |
+| `POST /api/runs` 501s before it reaches the hold (was a 20s timeout, now 270ms) | `Error: POST /api/runs answered 501 without ever reaching the hold — the third actor never took the lock, and this test witnesses nothing` |
+| D-1213 reverted AND `recordFeedEvent`'s throw swallowed — the pair that was GREEN before | `the feed archive never threw — this case is no longer about the throw path: expected '' to contain 'recordFeedEvent failed'` |
+| the note back to a conditional mount, `role="status"` KEPT | `Unable to find an accessible element with the role "status"` |
+| `POST /api/coord/caps` dropped from CLAUDE.md's session-only sentence | `the bullet promises to name the coordination writes that carry no box token, and does not name /api/coord/caps — the class grew and the sentence did not` |
+| a VERB-LESS `/api/coord/caps` added to the requireMailToken list | `the bullet names /api/coord/caps among the box-token lanes and it consults no box token …: expected [ '/api/mail', …(14) ] to include '/api/coord/caps'` |
+| a span in the lanes clause the scan cannot parse (`` `POST /api/coord/\n  caps` ``) | `the bullet names \`POST /api/coord/ caps\`, which this scan cannot read as a route — a name it cannot parse is a name it cannot check (hard-wrapped mid-path?): expected null not to be null` |
+| README's auth paragraph rewritten breakdown-first — a TRUE sentence | `README's auth paragraph: the counts are right but attached the wrong way round — if you reordered the sentences, reorder this expectation in the same change (this passage is ORDER-PINNED)` |
+| two exempt-but-authenticated GETs deleted from README's list | `the auth paragraph does not name the exempt-but-authenticated /api/peers — the class grew and the sentence did not` |
+| the no-op path clearing EVERY note kind | `the no-op save erased the only warning that the stored value is unknown: expected '' to match /unconfirmed/i` |
+| `.caps-note:empty` using `display: none` | `display:none takes the live region out of the accessibility tree: expected '\n  display: none;\n' not to match /display\s*:\s*none/` |
+
+**Count.** 18 rows for the review round, 11 for the audit round, on top of §9.4's 62 — **91 rows** for
+the wave. Counted twice: once by reading the two tables above (18 + 11), once by re-deriving from the
+deviation entries that claim a measurement (D-1211..D-1226 contribute 18 arms; D-1228..D-1237 contribute
+11) — the two methods agree.
+
+**One row this wave still does not have**, stated rather than left to be found: the coordinator quiet
+window's own effect on a session that is BOTH a coordinator and a worker (D-1224) is reasoned, not
+measured, because no such program exists to measure against.
+
+### 9.14 — Verification, after the audit round
+
+| suite | files | passed | skipped |
+|---|---|---|---|
+| server | 247 | 6226 | 56 |
+| agent | 18 | 281 | 0 |
+| pwa | 77 | 2106 | 0 |
+
+All three run in the FOREGROUND with `timeout 600000`, cd'd into their own package, tails READ rather
+than grepped for a word. `tsc --noEmit` clean in all three packages.
+`git diff --stat origin/main..HEAD -- ccd/ session-hook.sh deploy/` is empty, so the wave remains NOT
+agent-first — measured, not asserted.

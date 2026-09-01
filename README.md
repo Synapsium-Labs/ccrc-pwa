@@ -525,12 +525,19 @@ procedure and the operator runbooks (lost device, corrupt secret, disarming) are
 step 10 of
 [`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
 
+<!-- ORDER-PINNED PASSAGE. `server/test/box-token-census.test.ts` reads the number
+     words in the paragraph below and asserts them IN SEQUENCE, so this paragraph
+     states the TOTAL first and the breakdown second. Rewriting it the other way
+     round is a correct sentence and a red suite: move the expectation in that file
+     in the same change. It also asserts that every exempt-but-authenticated GET is
+     named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
+
 What is gated, and what is not: **everything except** `/health` (deploy's own
 liveness gate reads the shipped sha out of it), the nineteen machine lanes the
 fleet host reaches (eighteen box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
-exempt-but-authenticated GETs among them (`GET /api/runs`, `/api/runs/:id/items`,
+exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
 the token, which is how a coordinator reads its own wave ledger from the fleet
 host), the login and passkey-assertion doors themselves,

@@ -87,13 +87,35 @@ const lanesIn = (src: string): string[] => {
 const COORD_LANES = lanesIn(COORD_SRC);
 const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC)];
 
-/** The four doors, read from the file that decides them rather than retyped —
- *  the same literal `coordinator-skill.test.ts` already harvests. */
-const UNGATED_DOORS = ((): string[] => {
-  const m = /UNGATED = new Set\(\[([^\]]*)\]\)/.exec(read('server/test/coord-pause-route.test.ts'));
-  expect(m, 'the UNGATED literal moved — this scan is over nothing').not.toBeNull();
+/** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
+ *  file that decides it rather than retyped — the same literal
+ *  `coordinator-skill.test.ts` already harvests. */
+const harvestSet = (name: string): string[] => {
+  const src = read('server/test/coord-pause-route.test.ts');
+  const m = new RegExp(`${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(src);
+  expect(m, `the ${name} literal moved — this scan is over nothing`).not.toBeNull();
   return [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
-})();
+};
+
+/** The four release valves (D-282). */
+const UNGATED_DOORS = harvestSet('UNGATED');
+
+/** The coordination writes that are session-gated ONLY — no box token, and not a
+ *  release valve either. Derived for the same reason as the doors above: this
+ *  wave's own `POST /api/coord/caps` joined the class, and the census hard-coded
+ *  the OTHER member instead of reading the set (D-1231). */
+const SESSION_ONLY_DOORS = harvestSet('SESSION_ONLY');
+
+/** The one session-only write that cannot be harvested, with the reason stated so
+ *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
+ *  a file that scans `coord/routes.ts` alone, and this route is registered in
+ *  `server.ts`, so it is ABSENT there BY MEASUREMENT rather than by oversight —
+ *  that file's own docstring says so. If the scan there widens to `server.ts`,
+ *  this literal comes out and the harvest covers it. */
+const KICKOFF = '/api/sessions/:id/kickoff';
+
+/** Every coordination write the bullet must describe as carrying no box token. */
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -153,9 +175,37 @@ const word = (n: number): string => {
  *  it should. That is exactly enough to red a transposition, which is the
  *  measured hole, and it stays derived — the alternative, anchoring each numeral
  *  to a hand-written neighbouring phrase, re-introduces the hand-kept prose this
- *  whole file exists to delete. */
+ *  whole file exists to delete.
+ *
+ *  THE COST, stated because the first version of this docstring stated the
+ *  opposite and was measured wrong (D-1233). It said a rewrite that moves the
+ *  CLAIMS along with their numbers "leaves the sequence unchanged — and correctly
+ *  so". Backwards: when the claims move, their numbers move with them, the
+ *  sequence changes, and a perfectly true rewrite REDS. Measured — rewriting
+ *  README's auth paragraph breakdown-first ("the eighteen … coordination routes
+ *  … plus `/api/notify` — nineteen machine lanes in all") fails here. So a
+ *  scanned passage's sentence ORDER is pinned until the expectation moves with
+ *  it, and every scanned passage now carries a marker saying so beside the prose,
+ *  where the person rewriting it will actually look. The two assertions are split
+ *  for the same reason: "you state a count this tree does not have" and "the
+ *  counts are right and attached the wrong way round" are different repairs, and
+ *  one message for both sends the second reader hunting for a number that is
+ *  correct. */
 const numeralsIn = (text: string): string[] =>
   [...text.matchAll(SCAN_RE)].map((m) => m[0]!.toLowerCase());
+
+/** Assert a passage's counts, in two steps with two different repairs (D-1233).
+ *  WHICH numbers first, then in WHAT ORDER — a passage that has the right counts
+ *  attached the wrong way round is a different fault from one stating a number
+ *  the tree does not have, and it is fixed differently. */
+const expectNumerals = (name: string, text: string, expected: string[]): void => {
+  const seq = numeralsIn(text);
+  expect([...seq].sort(), `${name} states a count this tree does not have`)
+    .toEqual([...expected].sort());
+  expect(seq, `${name}: the counts are right but attached the wrong way round — if you ` +
+    'reordered the sentences, reorder this expectation in the same change ' +
+    '(this passage is ORDER-PINNED)').toEqual(expected);
+};
 
 /** Slice a named passage between two literal anchors, failing LOUDLY on either
  *  — `coord-pause-route.test.ts:343-357`'s helper, copied for its reason as much
@@ -201,6 +251,39 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const door of UNGATED_DOORS) expect(ALL_LANES).not.toContain(`POST ${door}`);
   });
 
+  /** The EXEMPT entries whose stated reason is D-149's exempt-but-authenticated
+   *  argument, derived from `gate.ts`'s own table (D-1234). Sliced entry by entry
+   *  the same way `lanesIn` slices handlers, so a reason paragraph belongs to the
+   *  key above it. */
+  const EXEMPT_BUT_AUTHENTICATED = ((): string[] => {
+    const starts = [...GATE_SRC.matchAll(/^ {2}\['(GET|POST) ([^']+)',/gm)]
+      .map((m) => ({ path: m[2]!, at: m.index! }));
+    expect(starts.length, "the EXEMPT table's entries are no longer readable")
+      .toBeGreaterThan(10);
+    return starts
+      .filter(({ at }, i) =>
+        GATE_SRC.slice(at, starts[i + 1]?.at ?? GATE_SRC.length)
+          .includes('EXEMPT-BUT-AUTHENTICATED'))
+      .map((e) => e.path);
+  })();
+
+  it('README names every exempt-but-authenticated GET, derived from the EXEMPT table', () => {
+    // D-1234. D-1216's fix replaced a false sentence ("none of them has a cookie
+    // jar") with a hand-typed list of five route names that nothing checked — a
+    // third copy of a set that already exists twice, inside a passage this file
+    // slices and reads only the number words of. Measured: deleting two of the
+    // five left the paragraph false and the suite green, while the caps paragraph
+    // thirty lines away reds when a door name goes missing. Same treatment.
+    expect(EXEMPT_BUT_AUTHENTICATED.length, 'the derived set collapsed — this loop proves nothing')
+      .toBeGreaterThan(3);
+    const p = passage('README, the auth paragraph', README,
+      'What is gated, and what is not:', 'Enrolling a passkey');
+    for (const routePath of EXEMPT_BUT_AUTHENTICATED) {
+      expect(p, `the auth paragraph does not name the exempt-but-authenticated ${routePath} — ` +
+        'the class grew and the sentence did not').toContain(`\`${routePath}\``);
+    }
+  });
+
   it('README states the DERIVED lane counts', () => {
     const p = passage('README, the auth paragraph', README,
       'What is gated, and what is not:', 'Enrolling a passkey');
@@ -210,8 +293,8 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // says the same two facts the other way round, and both spellings are
     // correct where they stand — which is why each site states its own sequence
     // rather than sharing one expectation.
-    expect(numeralsIn(p), 'README\'s auth paragraph states a count this tree does not have')
-      .toEqual([word(ALL_LANES.length), word(COORD_LANES.length)]);
+    expectNumerals("README's auth paragraph", p,
+      [word(ALL_LANES.length), word(COORD_LANES.length)]);
   });
 
   it('README names every gated run route, and the ungated doors AS exceptions', () => {
@@ -276,8 +359,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       ['gate.ts, the CSRF/origin note', ' * EXEMPT ROUTES ARE SKIPPED', 'their real guard is'],
     ] as const) {
       const p = passage(name, GATE_SRC, from, to);
-      expect(numeralsIn(p), `${name} states a count this tree does not have`)
-        .toEqual([word(COORD_LANES.length), word(ALL_LANES.length)]);
+      expectNumerals(name, p, [word(COORD_LANES.length), word(ALL_LANES.length)]);
     }
   });
 
@@ -290,8 +372,8 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // history be falsified. (`coord-pause-route.test.ts` draws the same line
     // with its CAPS convention; this corpus has no CAPS to key on.)
     const t = line("auth-gate.test.ts's census title", AUTH_GATE_TEST, 'box-token lanes in EXEMPT');
-    expect(numeralsIn(t), 'the census test titles a count the tree does not have')
-      .toEqual([word(COORD_LANES.length), word(ALL_LANES.length)]);
+    expectNumerals("auth-gate.test.ts's census title", t,
+      [word(COORD_LANES.length), word(ALL_LANES.length)]);
   });
 
   it("CLAUDE.md's box-token bullet is TRUE, not merely present", () => {
@@ -356,21 +438,86 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // one of the routes the bullet's own sentences declare NOT to be one — the
     // ungated doors (derived) and the kickoff route (named, and pinned as a
     // non-lane directly below).
-    const NOT_LANES = new Set([...UNGATED_DOORS.map((d) => `POST ${d}`),
-      'POST /api/sessions/:id/kickoff']);
-    const named = [...new Set([...bullet.matchAll(/`(GET|POST) (\/api\/[A-Za-z0-9/:_-]+)`/g)]
-      .map((m) => `${m[1]!} ${m[2]!}`))];
-    expect(named.length, 'the bullet names no routes at all — this scan is over nothing')
+    // THE ROUTES THE BULLET DECLARES NOT TO BE LANES, derived rather than typed
+    // (D-1231). The first version hard-coded the kickoff route as the only
+    // session-only write — one line below a comment calling the hand-kept
+    // cardinal the thing this file exists to delete — and wave 6 had already
+    // added a second, `POST /api/coord/caps`. The consequence was not a missed
+    // check but an inverted one: correcting the bullet to name both reddened
+    // this scan, with a message asserting the opposite of the truth.
+    // SCOPED TO THE CLAUSE THAT MAKES THE CLAIM, not to the whole bullet. The
+    // bullet holds TWO lists with opposite meanings — "these call
+    // `requireMailToken`" and "these carry no box token at all" — and a single
+    // bag of excused names lets a route excused by the second escape a false
+    // claim in the first. Measured: with one `NOT_LANE_PATHS` over the whole
+    // bullet, adding a verb-less `/api/coord/caps` to the requireMailToken list
+    // stayed GREEN, because caps is a legitimate member of the other list.
+    //
+    // The four ungated doors ARE excused inside the lanes clause: that clause
+    // names them as its own exceptions ("except FOUR deliberately ungated
+    // operator doors").
+    const split = bullet.indexOf('What does need saying here');
+    expect(split, 'the bullet\'s two clauses can no longer be told apart — the anchor moved')
+      .toBeGreaterThan(0);
+    const lanesClause = bullet.slice(0, split);
+    const NOT_LANE_PATHS = new Set(UNGATED_DOORS);
+
+    // EVERY BACKTICKED ROUTE THE BULLET NAMES, verb or no verb (D-1232). The
+    // first version required `\`VERB /path\`` inside one span, and the bullet's
+    // own house style is mixed — it names `/api/mail*` and `/api/runs*` bare, and
+    // README's neighbouring paragraph names all four doors bare. Measured: a
+    // route added to the requireMailToken list WITHOUT its verb was invisible to
+    // the whole check, and so was one hard-wrapped mid-path (the bullet is
+    // flattened first, so `\`POST /api/coord/\n  caps\`` becomes a path with a
+    // space in it). Both escaped green.
+    //
+    // So the shape is asserted FIRST: every backticked span naming an `/api/`
+    // path must be in a form this scan can read. A span it cannot parse is a
+    // failure, never a skip — "I did not understand it" and "it is fine" are the
+    // two conditions a scanner must never collapse.
+    const spans = [...lanesClause.matchAll(/`([^`]*\/api\/[^`]*)`/g)].map((m) => m[1]!);
+    expect(spans.length, 'the bullet names no routes at all — this scan is over nothing')
       .toBeGreaterThan(6);
-    for (const key of named.filter((k) => !NOT_LANES.has(k))) {
-      expect(ALL_LANES,
-        `the bullet names ${key} as a box-token lane and it consults no box token — ` +
-        `the sentence claims more than the source does`).toContain(key);
+    const ROUTE_SPAN = /^(?:(GET|POST) )?(\/api\/[A-Za-z0-9/:_-]+\*?)$/;
+    const named = spans.map((span) => {
+      const m = ROUTE_SPAN.exec(span);
+      expect(m, `the bullet names \`${span}\`, which this scan cannot read as a route — ` +
+        'a name it cannot parse is a name it cannot check (hard-wrapped mid-path?)')
+        .not.toBeNull();
+      return { verb: m![1] ?? null, path: m![2]! };
+    });
+
+    // The two PREFIX globs are the bullet's own shorthand for the two families,
+    // not routes; they are the one span shape that is deliberately not a route.
+    const lanePaths = new Set(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)));
+    for (const { verb, path: routePath } of named) {
+      if (routePath.endsWith('*')) continue;
+      if (NOT_LANE_PATHS.has(routePath)) continue;
+      if (verb === null) {
+        expect([...lanePaths],
+          `the bullet names ${routePath} among the box-token lanes and it consults no ` +
+          'box token — the sentence claims more than the source does').toContain(routePath);
+      } else {
+        expect(ALL_LANES,
+          `the bullet names ${verb} ${routePath} as a box-token lane and it consults no ` +
+          'box token — the sentence claims more than the source does')
+          .toContain(`${verb} ${routePath}`);
+      }
     }
-    // …and the route it names as carrying NO box token really carries none.
-    expect(bullet).toContain('POST /api/sessions/:id/kickoff');
-    expect(ALL_LANES, 'the kickoff route acquired a box-token gate — the bullet is now false')
-      .not.toContain('POST /api/sessions/:id/kickoff');
+    // …and the routes it names as carrying NO box token really carry none, and it
+    // names EVERY one of them (D-1231, the under-claim direction — the half that
+    // was missing, and the half that made correcting the prose a red).
+    expect(SESSION_ONLY_ALL.length, 'the session-only set collapsed — this loop proves nothing')
+      .toBeGreaterThan(1);
+    for (const routePath of SESSION_ONLY_ALL) {
+      expect(bullet,
+        `the bullet promises to name the coordination writes that carry no box token, ` +
+        `and does not name ${routePath} — the class grew and the sentence did not`)
+        .toContain(routePath);
+      expect([...new Set(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)))],
+        `${routePath} acquired a box-token gate — the bullet is now false`)
+        .not.toContain(routePath);
+    }
     // …and every door it lists as ungated really is one.
     for (const door of UNGATED_DOORS) {
       expect(bullet, `the bullet no longer names the ungated ${door}`).toContain(door);
