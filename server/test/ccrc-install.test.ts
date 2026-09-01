@@ -95,6 +95,10 @@ const TREE_FILES = [
   // `cmd_doctor` and `cmd_wrappers` refuse by name when one is missing, so the
   // doctor tail (Task 8) would fail for a fixture reason.
   'ccd/ccrc',
+  // D-1160: the sweep's shipped default noise list. `_inst_graph_noise`
+  // refuses a tree without it, which is the point — a placed tree missing it
+  // would leave the box refusing builds over ccrc's own artifacts.
+  'ccd/graph-noise.default.list',
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
@@ -198,6 +202,10 @@ const TREE_FILES = [
 const TREE_STUBS: Record<string, string> = {
   'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
   'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
+  // D-1159: the agent entry point `ccrc-agent.service` runs. Present for the
+  // same reason the two above are — a fleet box cannot run an agent it never
+  // built — and deleted by the one test that wants that refusal.
+  'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
 };
 
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
@@ -945,6 +953,106 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(r.stderr).toMatch(
       /^ccrc: no PWA bundle at .*\/checkout\/server\/dist-pwa — build first: bash install\.sh \(or npm run build in pwa\/\)$/m);
     expect(existsSync(placed(home))).toBe(false);
+  });
+
+  it('refuses BY ARTIFACT when the agent build is missing — and only for a role that runs one (D-1159)', () => {
+    // The third artifact, the third sentence. This one is role-gated because
+    // the artifact is: `fleet` is the ONLY role that installs the agent unit
+    // (`_inst_units`) or enables and restarts it (`_inst_enable`) — both test
+    // `[ "$INST_ROLE" = fleet ]`. D-1161 corrected this gate from `!= server`,
+    // which refused the DEFAULT role over a unit that role never installs, and
+    // corrected this comment, which had asserted the opposite.
+    //
+    // WHAT THIS COSTS WHEN IT IS MISSING, measured on the reference fleet
+    // before the preflight existed: `install.sh` builds server and pwa only, so
+    // `ccrc install --role fleet` from a source checkout placed the tree, then
+    // restarted a LIVE fleet's agent onto a directory with no entry point. The
+    // agent died with MODULE_NOT_FOUND and the server lost its only path to the
+    // box. A refusal before the copy is the whole difference.
+    const home = freshBox('ccrc-install-noagent-');
+    rmSync(treeFile(home, 'agent/dist/agent/src/index.js'));
+    // `--role fleet` asks for the agent's URL and bearer token when
+    // `~/.ccrc/agent.env` is absent, and refuses on a non-tty long before the
+    // preflight under test. A box that has already been configured — which is
+    // every box a re-install runs on, and the one this outage happened on —
+    // carries it, so the fixture does too.
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: no agent build at .*\/checkout\/agent\/dist — build first: bash install\.sh \(or npm run build in agent\/\)$/m);
+    // BEFORE anything moved — the same property the two preflights above pin.
+    expect(existsSync(placed(home)), 'the tree was placed before it was checked').toBe(false);
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran anyway').toBe(false);
+  });
+
+  it('does NOT demand an agent build for --role both, the DEFAULT role (D-1161)', () => {
+    // The gate's sharp edge. `both` is a single box that serves AND runs
+    // sessions, and it drives ccd directly in `local` mode — `_inst_units`
+    // gives it `ccrc.service`, never `ccrc-agent.service`, and `_inst_enable`
+    // never starts one. The first draft of the D-1159 preflight gated on
+    // `!= server`, so it refused the default install over an artifact that role
+    // has no use for: a new failure mode introduced by the fix for an old one.
+    const home = freshBox('ccrc-install-noagent-both-');
+    rmSync(treeFile(home, 'agent/dist/agent/src/index.js'));
+    const r = runInstall(home, ['install', '--role', 'both']);
+    expect(r.stderr, 'the default role must not be refused for a unit it never installs')
+      .not.toMatch(/no agent build at/);
+    expect(r.code, r.stderr).toBe(0);
+  });
+
+  it('does NOT demand an agent build for --role server (D-1159)', () => {
+    // The gate is not decoration: a server-only box runs no agent unit, so an
+    // absent agent build is not a fault there. Without this the preflight would
+    // refuse installs it has no business refusing.
+    const home = freshBox('ccrc-install-noagent-server-');
+    rmSync(treeFile(home, 'agent/dist/agent/src/index.js'));
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.stderr, 'a server-role install must not be refused for a missing agent')
+      .not.toMatch(/no agent build at/);
+  });
+
+  it('installs the AGENT runtime deps too, on a fleet box (D-1161)', () => {
+    // D-1159 made the agent's ENTRY POINT exist. It did not make the tree
+    // STARTABLE: `_inst_tree`'s rsync excludes `node_modules` in both
+    // directions and this step ran npm in `server/` only, so a fleet install
+    // placed `agent/dist` beside no `agent/node_modules` — and `agent/src/
+    // server.ts` imports `ws` on line 6. `_inst_enable` then restarts
+    // `ccrc-agent.service` and node dies with the SAME ERR_MODULE_NOT_FOUND,
+    // one import further in. The reference fleet escaped it only because an
+    // earlier `deploy.sh agent` had left a node_modules behind, which is why
+    // the postmortem saw the missing dist and stopped there.
+    const home = freshBox('ccrc-install-npm-agent-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code, r.stderr).toBe(0);
+    // TWO npm ci calls, production-only, in that order — and in the PLACED
+    // tree both times, never in the checkout.
+    expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
+      'ci --omit=dev --no-audit --no-fund',
+      'ci --omit=dev --no-audit --no-fund',
+    ]);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
+      placed(home, 'server'),
+      placed(home, 'agent'),
+    ]);
+    expect(existsSync(placed(home, 'agent', 'node_modules'))).toBe(true);
+    expect(r.stdout).toMatch(/^install: tree: agent runtime deps in place$/m);
+  });
+
+  it('does NOT run npm in the agent on a role that runs no agent (D-1161)', () => {
+    // The other side of the same gate: a `both` box has no agent unit, so an
+    // npm ci there is work for nothing — and would fail on a tree whose agent
+    // lockfile the box never needed.
+    const home = freshBox('ccrc-install-npm-both-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([placed(home, 'server')]);
+    expect(r.stdout).not.toMatch(/agent runtime deps/);
   });
 
   it('places the five directories a box runs out of, with the builds inside them', () => {
@@ -1896,6 +2004,14 @@ describe('ccrc install: the order is stated in one place', () => {
       // `CCRC_SKILL_SRC` to a vendored `~/.cc-sessions` tree, and this
       // skill's source of truth is the installed package instead (spec §B).
       '_inst_graphify_skill',
+      // D-1160. Immediately before the exclude writer, because the two are the
+      // sweep's two preconditions and they read best together: this one keeps
+      // ccrc's OWN artifacts (`.remember/`, `.superpowers/`, `.claude/`,
+      // `CLAUDE.local.md`) out of every corpus, the next keeps `graphify-out/`
+      // out of every `git status`. Neither reads what the other wrote, so the
+      // position is a grouping rather than a dependency — but it must follow
+      // `_inst_tree`, since it copies the list out of the PLACED tree.
+      '_inst_graph_noise',
       // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
       // the task brief: the sweep's `check-ignore` precondition needs a
       // writer that converges every project/worktree's common-dir exclude.
@@ -3477,11 +3593,16 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
     // The build order install.sh's pinned code spells: ci in server, then
-    // ci+build in pwa, then build in server.
+    // ci+build in pwa, then build in server, then ci+build in agent (D-1159 —
+    // the agent joined because `ccrc install` refuses without its dist for
+    // every role but `server`, and until it did, a fleet-role install from
+    // source restarted a live fleet's agent onto a tree with no entry point).
     expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
       'ci --no-audit --no-fund',
       'ci --no-audit --no-fund',
       'run build',
+      'run build',
+      'ci --no-audit --no-fund',
       'run build',
     ]);
     expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
@@ -3489,6 +3610,8 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
       join(root, 'pwa'),
       join(root, 'pwa'),
       join(root, 'server'),
+      join(root, 'agent'),
+      join(root, 'agent'),
     ]);
 
     // The handoff: `install install`'s argv, and — the hermetic proof — the

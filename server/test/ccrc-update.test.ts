@@ -393,7 +393,16 @@ function fullTree(home: string, opts: { version: string; sha: string }): string 
   mkdirSync(join(tree, 'server', 'dist-pwa'), { recursive: true });
   writeFileSync(join(tree, 'server', 'dist-pwa', 'index.html'),
     '<!doctype html><title>fixture PWA</title>\n');
-  mkdirSync(join(tree, 'agent', 'dist'), { recursive: true });
+  // D-1159: the shape `ccrc-agent.service` actually runs, and the one
+  // `_inst_tree` now preflights — `agent/dist/agent/src/index.js`, tsc's
+  // rootDir-preserving output, exactly as `server/dist/server/src/index.js`
+  // above. This fixture used to plant a FLAT `agent/dist/index.js`, a release
+  // shape the unit could never have started; nothing measured the difference
+  // until the preflight refused it. The flat file stays beside it because the
+  // backup/replace assertions below name it.
+  mkdirSync(join(tree, 'agent', 'dist', 'agent', 'src'), { recursive: true });
+  writeFileSync(join(tree, 'agent', 'dist', 'agent', 'src', 'index.js'),
+    '// fixture: stands in for the built agent\n');
   writeFileSync(join(tree, 'agent', 'dist', 'index.js'), '// fixture agent build\n');
   writeFileSync(join(tree, 'build.json'), shippedStamp(opts.version, opts.sha));
   writeManifest(tree);
