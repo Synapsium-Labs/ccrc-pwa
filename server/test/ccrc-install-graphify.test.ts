@@ -40,6 +40,10 @@ const RSYNC = realPath('rsync');
  *  in step with that file's own list. */
 const TREE_FILES = [
   'ccd/ccrc',
+  // D-1160: the sweep's shipped default noise list. `_inst_graph_noise`
+  // refuses a tree without it, which is the point — a placed tree missing it
+  // would leave the box refusing builds over ccrc's own artifacts.
+  'ccd/graph-noise.default.list',
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
@@ -456,6 +460,40 @@ export function makeFixtureRepo(home: string, rel: string): string {
   execFileSync('git', ['-C', d, 'commit', '-qm', 'init'], { env });
   return d;
 }
+
+describe('ccrc install: the default noise list (_inst_graph_noise, D-1160)', () => {
+  it('converges ccrc\'s own footprint into ~/.ccrc/graph-noise/_default.list', () => {
+    // ccrc's tooling writes `.remember/`, `.superpowers/`, `.claude/` and a
+    // `CLAUDE.local.md` into every repo a session touches. The sweep's corpus
+    // guard then held those untracked files against the repo and refused its
+    // build for ever — 186 of the reference fleet's 304 breach paths, and five
+    // repos blocked by nothing but ccrc's own mess. This list is how ccrc stops
+    // poisoning corpora it does not own.
+    const home = freshBox('ccrc-inst-gfx-noise-');
+    plantFakeVenv(home);
+    // The default role, like every other test in this file: `--role fleet`
+    // additionally prompts for the agent token and refuses on a non-tty, which
+    // is a different refusal from the one under test. `both` runs the step.
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const listed = readFileSync(join(home, '.ccrc', 'graph-noise', '_default.list'), 'utf8');
+    for (const name of ['.claude/', '.remember/', '.superpowers/', 'CLAUDE.local.md']) {
+      expect(listed, `${name} must be in the shipped default`).toContain(name);
+    }
+    // A '!' anywhere in this file refuses every build on the box (spec 3.6), so
+    // the shipped list must never carry one — asserted here rather than trusted.
+    expect(listed.split('\n').filter((l) => /^\s*!/.test(l)),
+      "a '!' in the default would refuse every build on this box").toEqual([]);
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-noise-server-');
+    plantFakeVenv(home);
+    runInstall(home, ['install', '--role', 'server']);
+    expect(existsSync(join(home, '.ccrc', 'graph-noise', '_default.list')),
+      'a server box runs no sweep, so it is owed no noise list').toBe(false);
+  });
+});
 
 describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
   it('converges the common-dir exclude for a project AND its worktree, ignored from the worktree', () => {

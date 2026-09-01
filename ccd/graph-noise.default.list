@@ -1,0 +1,26 @@
+# The DEFAULT graph-sweep noise list — ccrc's own footprint, and nothing else.
+#
+# D-1160. `_gs_guard` refuses a build when any path `detect()` picks up is not
+# git-tracked, because an untracked file entering the corpus would silently
+# change a graph nobody can reproduce. That guard is right. What was wrong is
+# that ccrc's OWN tooling writes untracked files into every repo a session
+# touches — `.remember/` transcripts, `.superpowers/` specs, `.claude/`
+# settings, a `CLAUDE.local.md` — and those files were then held against the
+# repo, refusing its build for ever.
+#
+# Measured on the reference fleet before this list existed: 14 of 57 trees
+# refused, 304 breach paths, of which 186 were these four. Five repos were
+# blocked by NOTHING BUT ccrc's own artifacts.
+#
+# THE LINE THIS FILE DRAWS: only what ccrc and its skills create. A repo's own
+# untracked files — build output, scratch scripts, uncommitted work — stay a
+# breach, because there the guard is doing exactly its job and the answer is to
+# track the file or write a per-repo list beside this one.
+#
+# ccrc OWNS this file and rewrites it on install; a '!' line anywhere in it
+# refuses every build on the box, so it carries none. Operator additions belong
+# in `<repo>.list` in this same directory, which is unioned with this one.
+.claude/
+.remember/
+.superpowers/
+CLAUDE.local.md

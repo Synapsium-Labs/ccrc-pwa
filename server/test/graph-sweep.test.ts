@@ -289,6 +289,59 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
     runSweep();
     expect(fs.existsSync(path.join(repo, '.graphifyignore'))).toBe(false);
   });
+  it('D-1160 — the DEFAULT noise list applies with no per-repo list at all', () => {
+    // The whole point: ccrc's own footprint (`.remember/`, `.superpowers/`,
+    // `.claude/`, `CLAUDE.local.md`) leaves every repo, without an operator
+    // writing a file per repo. Before this, those four names were held against
+    // a repo by the corpus guard and refused its build for ever — 5 of the
+    // reference fleet's 14 refused trees were blocked by nothing else.
+    const repo = makeRepo('alpha'); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n.superpowers/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    plantEngine('cp .graphifyignore "$HOME/gfxignore-during" 2>/dev/null || true');
+    runSweep();
+    const written = fs.readFileSync(j('gfxignore-during'), 'utf8');
+    expect(written).toContain('.remember/');
+    expect(written).toContain('.superpowers/');
+  });
+
+  it('D-1160 — default and per-repo lists are UNIONED, not one-or-the-other', () => {
+    // `<repo>.list` is the operator's and must not be silenced by ccrc shipping
+    // a default, nor the other way round.
+    const repo = makeRepo('alpha'); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n');
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    plantEngine('cp .graphifyignore "$HOME/gfxignore-during" 2>/dev/null || true');
+    runSweep();
+    const written = fs.readFileSync(j('gfxignore-during'), 'utf8');
+    expect(written, "ccrc's own default").toContain('.remember/');
+    expect(written, "the operator's per-repo list").toContain('fixtures/');
+    // …and no filename prefix leaked in from grepping two files at once, which
+    // would be a pattern matching nothing.
+    expect(written).not.toMatch(/_default\.list:|alpha\.list:/);
+  });
+
+  it('D-1160 — a "!" line in the DEFAULT refuses too, not just in the per-repo list', () => {
+    // The negation check runs over EVERY source. A default that could smuggle a
+    // re-include past a per-repo check would be worse than shipping no default.
+    // BOTH lists are present, and the '!' is in the DEFAULT — the one that is
+    // NOT last in the union order. With only the default planted this test
+    // would be vacuous: "check the last source" and "check every source" agree
+    // when there is one source, and a mutation to last-only stayed green until
+    // this fixture grew its second list.
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n!secrets.md\n');
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repo).reason).toContain('!');
+  });
+
   it('a worktree of alpha also resolves graph-noise/alpha.list (repo-basename shared across worktrees)', () => {
     const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
     const wtDir = j('worktrees', 'alpha', 'wt1');

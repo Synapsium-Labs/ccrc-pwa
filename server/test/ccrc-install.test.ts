@@ -95,6 +95,10 @@ const TREE_FILES = [
   // `cmd_doctor` and `cmd_wrappers` refuse by name when one is missing, so the
   // doctor tail (Task 8) would fail for a fixture reason.
   'ccd/ccrc',
+  // D-1160: the sweep's shipped default noise list. `_inst_graph_noise`
+  // refuses a tree without it, which is the point — a placed tree missing it
+  // would leave the box refusing builds over ccrc's own artifacts.
+  'ccd/graph-noise.default.list',
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
@@ -1941,6 +1945,14 @@ describe('ccrc install: the order is stated in one place', () => {
       // `CCRC_SKILL_SRC` to a vendored `~/.cc-sessions` tree, and this
       // skill's source of truth is the installed package instead (spec §B).
       '_inst_graphify_skill',
+      // D-1160. Immediately before the exclude writer, because the two are the
+      // sweep's two preconditions and they read best together: this one keeps
+      // ccrc's OWN artifacts (`.remember/`, `.superpowers/`, `.claude/`,
+      // `CLAUDE.local.md`) out of every corpus, the next keeps `graphify-out/`
+      // out of every `git status`. Neither reads what the other wrote, so the
+      // position is a grouping rather than a dependency — but it must follow
+      // `_inst_tree`, since it copies the list out of the PLACED tree.
+      '_inst_graph_noise',
       // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
       // the task brief: the sweep's `check-ignore` precondition needs a
       // writer that converges every project/worktree's common-dir exclude.

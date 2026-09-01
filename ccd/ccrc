@@ -3815,6 +3815,7 @@ cmd_install() {
   _inst_hooks
   _inst_skills
   _inst_graphify_skill
+  _inst_graph_noise
   _inst_graph_excludes
   _inst_graph_hooks_off
   _inst_wrappers
@@ -5082,6 +5083,29 @@ _inst_graphify_skill() {
 
 # D' (spec §4): the exclude precondition needs a WRITER, or the sweep refuses
 # every un-excluded repo forever (ccrc-pwa fails the gate today — D-996).
+# ── _inst_graph_noise — ccrc's own footprint, out of every corpus ─────────
+# D-1160. `ccd-graph-sweep`'s corpus guard refuses a build when any path
+# `detect()` picks up is not git-tracked. That guard is right and stays. What
+# was wrong is that ccrc's OWN tooling writes untracked files into every repo a
+# session touches — `.remember/` transcripts, `.superpowers/` specs, `.claude/`
+# settings, a `CLAUDE.local.md` — so ccrc poisoned the corpus and then refused
+# the build over its own mess. Measured on the reference fleet: 14 of 57 trees
+# refused, 186 of 304 breach paths being those four names, five repos blocked
+# by nothing else at all.
+#
+# CONVERGED, NOT KEPT, and the asymmetry is the point: this file is ccrc's
+# (regenerated every install, so a name added to the shipped list reaches every
+# box) while `<repo>.list` beside it is the operator's and is never written
+# here. The sweep unions the two.
+_inst_graph_noise() {
+  [ "$INST_ROLE" = server ] && return 0
+  local src="$BOX_TREE_DIR/ccd/graph-noise.default.list" dest="$HOME/.ccrc/graph-noise"
+  [ -f "$src" ] || _ccrc_die "no default noise list at $src — the placed tree is incomplete"
+  mkdir -p "$dest"
+  cp "$src" "$dest/_default.list"
+  echo "install: graphify: default noise list converged ($dest/_default.list)"
+}
+
 _inst_graph_excludes() {
   [ "$INST_ROLE" = server ] && return 0
   local roots=("$HOME/projects" "$HOME/worktrees") root d common n=0
