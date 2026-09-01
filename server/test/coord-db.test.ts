@@ -689,11 +689,17 @@ describe('coord.db: migration 6 — automations, their runs and their steps', ()
   it('gives `automations` exactly the columns spec:320-370 names, in order', () => {
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     const names = tableInfo(db, 'automations').map((c) => c.name);
+    // `leaseRunId` (Task 4, task-4-decisions.md C1.6): the third lease column,
+    // appended after `leaseHardUntil` — additive to this same migration, not a
+    // new one. Without it, a settle racing a superseding claim (the soft-bound
+    // lease lapsing while the loser is still mid-spawn) could release the
+    // SUCCESSOR's lease instead of its own — `claims.heldBy`'s identical shape.
     expect(names).toEqual([
       'id', 'name', 'state', 'project', 'prompt', 'cadenceKind', 'cadenceDays',
       'cadenceMinute', 'cadenceEvery', 'tz', 'graceMs', 'createdAt', 'updatedAt',
       'provedAt', 'nextRunAt', 'scheduleError', 'lastFireAt', 'lastOutcome',
-      'lastRefusal', 'leaseUntil', 'leaseHardUntil', 'consecutiveFailures', 'runsEvicted',
+      'lastRefusal', 'leaseUntil', 'leaseHardUntil', 'leaseRunId',
+      'consecutiveFailures', 'runsEvicted',
     ]);
     db.close();
   });

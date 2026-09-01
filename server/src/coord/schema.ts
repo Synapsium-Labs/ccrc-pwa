@@ -774,6 +774,12 @@ export const MIGRATIONS: readonly string[] = [
     -- nothing ever resolves.
     leaseUntil     INTEGER,
     leaseHardUntil INTEGER,
+    leaseRunId     INTEGER,           -- which automation_runs row the current lease belongs to
+                                       -- (added by Task 4, additive to this same migration — see
+                                       -- that task's report): without an owner, a settle racing a
+                                       -- superseding claim could release the SUCCESSOR's lease.
+                                       -- claims' heldBy is the identical idea; no REFERENCES clause
+                                       -- (automation_runs has a retention ring and FK is ON).
 
     consecutiveFailures INTEGER NOT NULL DEFAULT 0,
     runsEvicted         INTEGER NOT NULL DEFAULT 0,  -- §9: retention is a ceiling, and the

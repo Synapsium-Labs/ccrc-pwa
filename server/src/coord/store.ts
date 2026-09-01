@@ -6,11 +6,18 @@ import type { LedgerLog } from './ledgerlog.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
+  AUTOMATION_DETAIL_MAX_BYTES, AUTOMATION_FAILURE_CEILING, AUTOMATION_RUN_RETENTION,
+  AUTOMATION_STATES, CADENCE_KINDS,
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
-  isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
-  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  isAutomationOutcome, isAutomationRefusal, isAutomationState, isAutomationStep, isAutomationTrigger,
+  isCadenceKind, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
+  isLifecycleOutcome, isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState,
+  isRunState, isScheduleError, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   RUN_TRANSITIONS,
+  type AutomationOutcome, type AutomationRefusal, type AutomationState, type AutomationStats,
+  type AutomationStep, type AutomationRunSummary, type AutomationStepWire, type AutomationSummary,
+  type AutomationTrigger, type CadenceKind, type ScheduleError,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleGap, type LifecycleGapReason,
@@ -20,6 +27,7 @@ import {
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
+import { cadenceFromColumns, cadenceToColumns, type Cadence, type StoredCadence } from '../../../shared/schedule.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
@@ -335,6 +343,188 @@ const jsonOrNull = (s: string | null): unknown => {
   if (s === null) return null;
   try { return JSON.parse(s); } catch { return null; }
 };
+
+/* ── automations (Task 4, task-4-decisions.md C1) ────────────────────────── */
+
+/** An `automations` row as the STORE reads it: the wire summary plus the
+ *  cadence hydrated ONCE (`hydrateAutomation`) and the lease triple, which is
+ *  scheduling machinery no client renders — `RunRow extends RunSummary`'s
+ *  exact shape and reason. `cadence` is DERIVED from the four flat members it
+ *  sits beside; holding it here is what makes the four columns unreadable to
+ *  L1 without going through the one door. */
+export interface AutomationRow extends AutomationSummary {
+  readonly cadence: StoredCadence;
+  readonly leaseUntil: number | null;
+  readonly leaseHardUntil: number | null;
+  readonly leaseRunId: number | null;
+}
+
+/** `AutomationRow` -> `AutomationSummary`: strips the four server-internal
+ *  members. Shared by every route/frame that renders the wire shape rather
+ *  than each holding its own copy of the strip (`toRunSummary`'s pattern). */
+export const toAutomationSummary = (row: AutomationRow): AutomationSummary => {
+  const { cadence: _c, leaseUntil: _l, leaseHardUntil: _h, leaseRunId: _r, ...summary } = row;
+  return summary;
+};
+
+/** `GET /api/automations`' narrowing, done in SQL. `state` ABSENT means every
+ *  state but `retired`; `last: 'never-ran'` is `lastFireAt IS NULL`, its own
+ *  fact — not an `AutomationOutcome` member. */
+export interface AutomationFilter {
+  readonly state?: AutomationState;
+  readonly project?: string;
+  readonly last?: AutomationOutcome | 'never-ran';
+}
+
+export interface NewAutomation {
+  readonly name: string; readonly project: string; readonly prompt: string;
+  readonly cadence: Cadence; readonly graceMs: number;
+}
+
+/** A TOTAL record, not a partial patch — `prompt: undefined` and "prompt
+ *  absent" must not collapse at this seam. `nextRunAt` is the occurrence the
+ *  EDITED cadence next produces, computed by the CALLER (the store owns no
+ *  recurrence math) and applied IFF the row is armed. */
+export interface AutomationEdit extends NewAutomation { readonly nextRunAt: number }
+
+/** What `nextOccurrence` answered, in the shape the two columns store. A
+ *  UNION, so no caller can hand the store both-null or both-set. */
+export type ScheduleStamp = { readonly at: number } | { readonly error: ScheduleError };
+
+/** The occurrence a firing is FOR, and what it does to the parent's
+ *  `nextRunAt`. A manual firing cannot advance the schedule, a scheduled
+ *  firing cannot forget the advance, and a manual firing cannot invent a
+ *  `scheduledFor` it does not have. */
+export type FiringOccurrence =
+  | { readonly trigger: 'schedule' | 'catchup'; readonly scheduledFor: number;
+      readonly dstShifted: boolean; readonly next: ScheduleStamp }
+  | { readonly trigger: 'manual' };
+
+/** A run BORN settled: the pre-claim rungs' refusal (spec §7 rungs 1-2) and
+ *  the past-grace occurrence (§8). Never `ok`/`failed`/`lost` — those need a
+ *  lease and an act. */
+export type UnleasedSettlement =
+  | { readonly outcome: 'skipped' | 'refused'; readonly refusal: AutomationRefusal }
+  | { readonly outcome: 'missed' };
+
+/** A leased run's close. `refusal` rides ONLY on the arms whose column
+ *  comment allows it; `lost` and `ok` cannot carry one. */
+export type RunSettlement =
+  | { readonly outcome: 'ok' }
+  | { readonly outcome: 'lost' }
+  | { readonly outcome: 'refused' | 'failed'; readonly refusal: AutomationRefusal };
+
+/** The four `automation_runs` identity columns move TOGETHER or not at all —
+ *  spec §5's "all four NULL = none was created". `wrapper` is non-null when
+ *  bound and comes off the registry row — never recomputed. */
+export type SpawnIdentity =
+  | { readonly bound: false }
+  | { readonly bound: true; readonly sessionId: string; readonly workspace: string | null;
+      readonly branch: string | null; readonly wrapper: string; readonly adopted: boolean };
+
+export interface SpawnRecord {
+  readonly runId: number;
+  /** ccd's rc. `null` = NEVER MEASURED (a cut-short exec), which is not 0. */
+  readonly spawnRc: number | null;
+  readonly identity: SpawnIdentity;
+}
+
+export type ClaimRunResult =
+  | { readonly runId: number; readonly nextRunAt: number | null; readonly leaseUntil: number }
+  | { readonly refused: 'overlap'; readonly leaseUntil: number; readonly leaseRunId: number }
+  | { readonly refused: 'unknown-automation' };
+
+/** What a settle (or a born-settled open) actually did. Every field is a
+ *  fact the caller cannot re-derive without a second read. */
+export interface SettledRun {
+  readonly runId: number;
+  readonly automationId: number;
+  readonly outcome: AutomationOutcome;
+  readonly consecutiveFailures: number;
+  readonly autoPaused: boolean;   // spec §8's ceiling fired in THIS transaction
+  readonly proved: boolean;       // spec §7's arm gate was stamped in THIS transaction
+}
+
+export type ArmResult =
+  | { ok: true; nextRunAt: number }
+  | { ok: false; why: 'unknown-automation' }
+  | { ok: false; why: 'never-run-by-hand' }
+  | { ok: false; why: 'bad-transition'; from: AutomationState };
+
+export type AutomationTransitionResult =
+  | { ok: true; state: AutomationState }
+  | { ok: false; why: 'unknown-automation' }
+  | { ok: false; why: 'bad-transition'; from: AutomationState };
+
+export type AutomationEditResult =
+  | { ok: true; row: AutomationRow }
+  | { ok: false; why: 'unknown-automation' }
+  | { ok: false; why: 'bad-transition'; from: AutomationState };   // retired is terminal
+
+/** The raw row, the column list, the hydrator — `hydrateRun`'s shape. */
+interface AutomationRowDb {
+  id: number; name: string; state: string; project: string; prompt: string;
+  cadenceKind: string; cadenceDays: number | null; cadenceMinute: number | null;
+  cadenceEvery: number | null; tz: string | null;
+  graceMs: number; createdAt: number; updatedAt: number; provedAt: number | null;
+  nextRunAt: number | null; scheduleError: string | null;
+  lastFireAt: number | null; lastOutcome: string | null; lastRefusal: string | null;
+  leaseUntil: number | null; leaseHardUntil: number | null; leaseRunId: number | null;
+  consecutiveFailures: number; runsEvicted: number;
+}
+
+interface AutomationRunRowDb {
+  id: number; automationId: number; scheduledFor: number; startedAt: number; endedAt: number | null;
+  lateMs: number; outcome: string; refusal: string | null; trigger: string;
+  dstShifted: number; adopted: number;
+  sessionId: string | null; workspace: string | null; branch: string | null; wrapper: string | null;
+  homeScore: number | null; spawnRc: number | null;
+}
+
+/** The state machine, a derived total table — `RUN_TRANSITIONS`'s idiom.
+ *  `retired` is terminal by having no outgoing edge; `unknown` (a row this
+ *  build cannot read) has none either. */
+const AUTOMATION_TRANSITIONS: Readonly<Record<AutomationState, readonly AutomationState[]>> =
+  Object.freeze({ armed: ['paused', 'retired'], paused: ['armed', 'retired'], retired: [], unknown: [] });
+
+/** Whether an outcome moves `consecutiveFailures`, and how — a TOTAL map
+ *  over the outcome union (spec §8): `ok` resets it, `skipped`/`missed` are
+ *  the lease/grace machinery working and never count against the automation,
+ *  and every other settled outcome increments it. */
+type FailureLedger = 'increment' | 'reset' | 'ignore';
+const AUTOMATION_LEDGER_MAP: Record<AutomationOutcome, FailureLedger> = {
+  running: 'ignore', ok: 'reset', failed: 'increment', refused: 'increment',
+  lost: 'increment', skipped: 'ignore', missed: 'ignore', unknown: 'ignore',
+};
+const automationLedger = (o: AutomationOutcome): FailureLedger => AUTOMATION_LEDGER_MAP[o];
+
+/** Applied INSIDE the store, never a parameter — two callers passing their
+ *  own bounds is two places for the hard bound to be widened, and *not being
+ *  wideable* is the hard bound's entire job (`claimAttempt`'s
+ *  `CLAIM_LEASE_MS`/`CLAIM_HARD_CAP_MS` precedent). Twelve sweep ticks of
+ *  renewal tolerance, and the agent's 300s exec clamp plus the prompt ladder
+ *  plus slack, respectively. */
+const AUTOMATION_LEASE_MS = 120_000;
+const AUTOMATION_LEASE_HARD_MS = 600_000;
+
+/** UTF-8 byte cap for MACHINE output — the opposite policy to the operator's
+ *  prompt, which is REFUSED over its cap and never shortened. Walks back off
+ *  a continuation byte so the stored text is never a broken codepoint, and
+ *  reports the bytes DROPPED, which stays truthful when the back-walk drops
+ *  two more than the arithmetic. */
+const capUtf8 = (s: string, max: number): { text: string; truncatedBytes: number } => {
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= max) return { text: s, truncatedBytes: 0 };
+  let end = max;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
+  const text = buf.subarray(0, end).toString('utf8');
+  return { text, truncatedBytes: buf.length - Buffer.byteLength(text, 'utf8') };
+};
+
+/** `clampMailLimit`'s verbatim shape, over `AUTOMATION_RUN_RETENTION`. */
+const clampRunLimit = (limit: number): number =>
+  Number.isFinite(limit) && limit > 0
+    ? Math.min(Math.floor(limit), AUTOMATION_RUN_RETENTION) : AUTOMATION_RUN_RETENTION;
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -2703,5 +2893,655 @@ export class CoordStore {
       "WHERE state = 'allocated' AND allocatedAt <= ? ORDER BY project, n",
     ).all(cutoff) as Parameters<CoordStore['hydrateLedger']>[0][];
     return rows.map((r) => this.hydrateLedger(r));
+  }
+
+  /* ── automations (Task 4, task-4-decisions.md C1) ────────────────────────
+   * A schedule that spawns a session — leased like `claims`, ringed like
+   * `feed_events`, and stamped onto its own parent row like nothing else in
+   * this file, because "armed at all" and "due right now" and "how did the
+   * last one go" are three different questions the 44px list row answers
+   * without a join.
+   */
+
+  private static readonly AUTOMATION_COLS =
+    'id, name, state, project, prompt, cadenceKind, cadenceDays, cadenceMinute, cadenceEvery, ' +
+    'tz, graceMs, createdAt, updatedAt, provedAt, nextRunAt, scheduleError, ' +
+    'lastFireAt, lastOutcome, lastRefusal, leaseUntil, leaseHardUntil, leaseRunId, ' +
+    'consecutiveFailures, runsEvicted';
+
+  private static readonly AUTOMATION_RUN_COLS =
+    'id, automationId, scheduledFor, startedAt, endedAt, lateMs, outcome, refusal, trigger, ' +
+    'dstShifted, adopted, sessionId, workspace, branch, wrapper, homeScore, spawnRc';
+
+  /** Every `AutomationState` but the reader degrade — `TERMINAL_SQL`'s idiom,
+   *  applied to a vocabulary instead of a transition table. Used by
+   *  `automations({state:'unknown'})`, the filter chip the PWA builds from
+   *  `Object.keys(AUTOMATION_STATE_MAP)`. */
+  private static readonly READABLE_STATE_SQL =
+    `('${AUTOMATION_STATES.filter((s) => s !== 'unknown').join("','")}')`;
+
+  /** Every `CadenceKind` but `'unknown'`. A row whose cadence this build
+   *  cannot read carries a `nextRunAt` a NEWER build computed; firing it
+   *  would re-fire the same occurrence every tick this build can never
+   *  advance past — so `dueAutomations` excludes it as a STORE invariant,
+   *  on the same footing as `provedAt IS NOT NULL`. */
+  private static readonly READABLE_CADENCE_SQL =
+    `('${CADENCE_KINDS.filter((k) => k !== 'unknown').join("','")}')`;
+
+  /** The one reader of the four flattened cadence columns
+   *  (`shared/schedule.ts`'s `cadenceFromColumns` does the actual mapping —
+   *  the PWA calls the identical function on the identical wire fields).
+   *  Every enum column reads through its `is*` guard, never a cast; `null`
+   *  and `'unknown'` stay distinct on `scheduleError`/`lastOutcome`/
+   *  `lastRefusal` — `null` is *never happened*, `'unknown'` is *a token
+   *  this build cannot read*. The row is never dropped on an unreadable
+   *  cadence, unlike `hydrateClaim` — an automation nobody can model is
+   *  still a thing the operator installed. */
+  private hydrateAutomation(r: AutomationRowDb): AutomationRow {
+    return {
+      id: r.id, name: r.name,
+      state: isAutomationState(r.state) ? r.state : 'unknown',
+      project: r.project, prompt: r.prompt,
+      cadenceKind: isCadenceKind(r.cadenceKind) ? r.cadenceKind : 'unknown',
+      cadenceDays: r.cadenceDays, cadenceMinute: r.cadenceMinute, cadenceEvery: r.cadenceEvery,
+      tz: r.tz,
+      graceMs: r.graceMs, createdAt: r.createdAt, updatedAt: r.updatedAt, provedAt: r.provedAt,
+      nextRunAt: r.nextRunAt,
+      scheduleError: r.scheduleError === null
+        ? null : (isScheduleError(r.scheduleError) ? r.scheduleError : 'unknown'),
+      lastFireAt: r.lastFireAt,
+      lastOutcome: r.lastOutcome === null
+        ? null : (isAutomationOutcome(r.lastOutcome) ? r.lastOutcome : 'unknown'),
+      lastRefusal: r.lastRefusal === null
+        ? null : (isAutomationRefusal(r.lastRefusal) ? r.lastRefusal : 'unknown'),
+      consecutiveFailures: r.consecutiveFailures, runsEvicted: r.runsEvicted,
+      cadence: cadenceFromColumns(r),
+      leaseUntil: r.leaseUntil, leaseHardUntil: r.leaseHardUntil, leaseRunId: r.leaseRunId,
+    };
+  }
+
+  /** `dstShifted`/`adopted` narrow SQLite's 0/1 to a boolean exactly once —
+   *  `JournalGeneration.retired`'s rule. */
+  private hydrateAutomationRun(r: AutomationRunRowDb): AutomationRunSummary {
+    return {
+      id: r.id, automationId: r.automationId, scheduledFor: r.scheduledFor, startedAt: r.startedAt,
+      endedAt: r.endedAt, lateMs: r.lateMs,
+      outcome: isAutomationOutcome(r.outcome) ? r.outcome : 'unknown',
+      refusal: r.refusal === null ? null : (isAutomationRefusal(r.refusal) ? r.refusal : 'unknown'),
+      trigger: isAutomationTrigger(r.trigger) ? r.trigger : 'unknown',
+      dstShifted: r.dstShifted !== 0, adopted: r.adopted !== 0,
+      sessionId: r.sessionId, workspace: r.workspace, branch: r.branch, wrapper: r.wrapper,
+      homeScore: r.homeScore, spawnRc: r.spawnRc,
+    };
+  }
+
+  /** The per-parent ring (spec §9): pruned in the SAME transaction as the
+   *  run's own INSERT — `recordFeedEvent`'s idiom — never at settle, and
+   *  children first (`automation_run_events.runId` has no `ON DELETE
+   *  CASCADE`, and `PRAGMA foreign_keys = ON`). Scoped per `automationId` in
+   *  every clause, so a five-minute automation cannot evict a weekly one's
+   *  history. Returns the count evicted, which the caller accumulates onto
+   *  `automations.runsEvicted` — eviction is a ceiling, not a silence. */
+  private pruneRingInner(automationId: number): number {
+    this.db.prepare(
+      'DELETE FROM automation_run_events WHERE runId IN (' +
+      'SELECT id FROM automation_runs WHERE automationId = ? AND id NOT IN (' +
+      'SELECT id FROM automation_runs WHERE automationId = ? ORDER BY id DESC LIMIT ?))',
+    ).run(automationId, automationId, AUTOMATION_RUN_RETENTION);
+    const res = this.db.prepare(
+      'DELETE FROM automation_runs WHERE automationId = ? AND id NOT IN (' +
+      'SELECT id FROM automation_runs WHERE automationId = ? ORDER BY id DESC LIMIT ?)',
+    ).run(automationId, automationId, AUTOMATION_RUN_RETENTION);
+    const evicted = Number(res.changes);
+    if (evicted > 0) {
+      this.db.prepare('UPDATE automations SET runsEvicted = runsEvicted + ? WHERE id = ?')
+        .run(evicted, automationId);
+    }
+    return evicted;
+  }
+
+  /** The §5 trio (`lastFireAt`/`lastOutcome`/`lastRefusal`) plus the §8
+   *  ledger and its auto-pause ceiling — ONE writer, called from exactly
+   *  three places (the claim's open, `openUnleasedRun`, and the settle)
+   *  inside each caller's own transaction, so the trio always moves
+   *  together. `stampFireAt: false` on the settle leaves `lastFireAt` alone
+   *  — it was already stamped at open. All three ceiling columns
+   *  (`state`/`scheduleError`/`nextRunAt`) move in ONE `UPDATE` so §5's
+   *  invariant is never observable broken mid-write. */
+  private stampParentInner(input: {
+    readonly automationId: number; readonly at: number;
+    readonly outcome: AutomationOutcome; readonly refusal: AutomationRefusal | null;
+    readonly stampFireAt: boolean;
+  }): { consecutiveFailures: number; autoPaused: boolean } {
+    const cur = this.db.prepare('SELECT state, consecutiveFailures FROM automations WHERE id = ?')
+      .get(input.automationId) as { state: string; consecutiveFailures: number } | undefined;
+    if (!cur) return { consecutiveFailures: 0, autoPaused: false };
+    const action = automationLedger(input.outcome);
+    const consecutiveFailures =
+      action === 'increment' ? cur.consecutiveFailures + 1
+      : action === 'reset' ? 0
+      : cur.consecutiveFailures;
+    const autoPaused = action === 'increment'
+      && consecutiveFailures >= AUTOMATION_FAILURE_CEILING
+      && cur.state === 'armed';
+    const stampAt = input.stampFireAt ? 1 : 0;
+    if (autoPaused) {
+      this.db.prepare(
+        'UPDATE automations SET lastOutcome = ?, lastRefusal = ?, ' +
+        'lastFireAt = CASE WHEN ? THEN ? ELSE lastFireAt END, consecutiveFailures = ?, ' +
+        "state = 'paused', scheduleError = 'failure-ceiling', nextRunAt = NULL, updatedAt = ? " +
+        'WHERE id = ?',
+      ).run(input.outcome, input.refusal, stampAt, input.at, consecutiveFailures, input.at,
+            input.automationId);
+    } else {
+      this.db.prepare(
+        'UPDATE automations SET lastOutcome = ?, lastRefusal = ?, ' +
+        'lastFireAt = CASE WHEN ? THEN ? ELSE lastFireAt END, consecutiveFailures = ?, ' +
+        'updatedAt = ? WHERE id = ?',
+      ).run(input.outcome, input.refusal, stampAt, input.at, consecutiveFailures, input.at,
+            input.automationId);
+    }
+    return { consecutiveFailures, autoPaused };
+  }
+
+  /** `advance`'s split (`advanceInner`'s reason): the body every public
+   *  settle path needs INSIDE someone else's transaction, `tx()`-free. The
+   *  guard is in the `WHERE`, not in the read above it — `setWorkItemState`'s
+   *  shape: `changes === 0` past a successful lookup means exactly one
+   *  thing, already settled. Releases the lease ONLY `WHERE leaseRunId = ?`
+   *  — a superseded run's late settle must not clear its successor's lease
+   *  (C1.6). Stamps `provedAt` (first proof wins, `COALESCE`'s idiom) when
+   *  this run is the FIRST manual run to have bound a session — the §7 arm
+   *  gate, a store invariant rather than a route arm. */
+  private settleRunInner(runId: number, settlement: RunSettlement, now: number):
+    SettledRun | { refused: 'unknown-run' } | { refused: 'already-settled'; outcome: AutomationOutcome } {
+    const run = this.db.prepare(
+      'SELECT automationId, endedAt, outcome, trigger, sessionId FROM automation_runs WHERE id = ?',
+    ).get(runId) as {
+      automationId: number; endedAt: number | null; outcome: string;
+      trigger: string; sessionId: string | null;
+    } | undefined;
+    if (!run) return { refused: 'unknown-run' as const };
+    if (run.endedAt !== null) {
+      return {
+        refused: 'already-settled' as const,
+        outcome: isAutomationOutcome(run.outcome) ? run.outcome : 'unknown',
+      };
+    }
+
+    const refusal = settlement.outcome === 'ok' || settlement.outcome === 'lost'
+      ? null : settlement.refusal;
+
+    const upd = this.db.prepare(
+      'UPDATE automation_runs SET outcome = ?, refusal = ?, endedAt = ? WHERE id = ? AND endedAt IS NULL',
+    ).run(settlement.outcome, refusal, now, runId);
+    if (Number(upd.changes) === 0) {
+      // The mechanical backstop `endClaim` states for the identical shape:
+      // impossible inside one synchronous transaction, kept as the loud
+      // failure a future refactor that loses the transaction would hit.
+      const cur = this.db.prepare('SELECT outcome FROM automation_runs WHERE id = ?').get(runId) as
+        { outcome: string };
+      return {
+        refused: 'already-settled' as const,
+        outcome: isAutomationOutcome(cur.outcome) ? cur.outcome : 'unknown',
+      };
+    }
+
+    this.db.prepare(
+      'UPDATE automations SET leaseUntil = NULL, leaseHardUntil = NULL, leaseRunId = NULL ' +
+      'WHERE id = ? AND leaseRunId = ?',
+    ).run(run.automationId, runId);
+
+    let proved = false;
+    if (run.trigger === 'manual' && run.sessionId !== null) {
+      const pr = this.db.prepare(
+        'UPDATE automations SET provedAt = ? WHERE id = ? AND provedAt IS NULL',
+      ).run(now, run.automationId);
+      proved = Number(pr.changes) > 0;
+    }
+
+    const parent = this.stampParentInner({
+      automationId: run.automationId, at: now,
+      outcome: settlement.outcome, refusal, stampFireAt: false,
+    });
+
+    return {
+      runId, automationId: run.automationId, outcome: settlement.outcome,
+      consecutiveFailures: parent.consecutiveFailures, autoPaused: parent.autoPaused, proved,
+    };
+  }
+
+  /** Every automation, newest-runs-agnostic, `ORDER BY id` like every list
+   *  read in this file. `filter.state` absent excludes only `'retired'`
+   *  (spec §9 "a retired automation leaves the default list"); `'unknown'`
+   *  widens to every unreadable token via `READABLE_STATE_SQL`, never a
+   *  dead filter chip. `last: 'never-ran'` is `lastFireAt IS NULL`, its own
+   *  fact — not a member of `AutomationOutcome`. */
+  automations(filter: AutomationFilter = {}): AutomationRow[] {
+    const clauses: string[] = [];
+    const params: (string | number)[] = [];
+    if (filter.state === undefined) {
+      clauses.push("state != 'retired'");
+    } else if (filter.state === 'unknown') {
+      clauses.push(`state NOT IN ${CoordStore.READABLE_STATE_SQL}`);
+    } else {
+      clauses.push('state = ?');
+      params.push(filter.state);
+    }
+    if (filter.project !== undefined) { clauses.push('project = ?'); params.push(filter.project); }
+    if (filter.last === 'never-ran') {
+      clauses.push('lastFireAt IS NULL');
+    } else if (filter.last !== undefined) {
+      clauses.push('lastOutcome = ?');
+      params.push(filter.last);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations ${where} ORDER BY id`,
+    ).all(...params) as unknown as AutomationRowDb[];
+    return rows.map((r) => this.hydrateAutomation(r));
+  }
+
+  automation(id: number): AutomationRow | null {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations WHERE id = ?`,
+    ).get(id) as AutomationRowDb | undefined;
+    return row ? this.hydrateAutomation(row) : null;
+  }
+
+  /** The fire path's own read (spec §6 step 2): `now` passed IN, the store
+   *  owns no clock. Every conjunct spelled even where the invariant makes
+   *  one redundant — the read must be true of the DATA, not only of the
+   *  invariant. `provedAt IS NOT NULL` is here, not only in a route arm: the
+   *  §7 arm gate is a STORE invariant. The `cadenceKind` conjunct is a store
+   *  invariant on the same footing: a row this build cannot schedule must
+   *  never be selected for firing even by a caller that bypassed a route. */
+  dueAutomations(now: number): AutomationRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations ` +
+      "WHERE state = 'armed' AND provedAt IS NOT NULL AND scheduleError IS NULL " +
+      'AND nextRunAt IS NOT NULL AND nextRunAt <= ? ' +
+      `AND cadenceKind IN ${CoordStore.READABLE_CADENCE_SQL} ORDER BY id`,
+    ).all(now) as unknown as AutomationRowDb[];
+    return rows.map((r) => this.hydrateAutomation(r));
+  }
+
+  /** A new automation is created `paused`, a LITERAL never a parameter — the
+   *  §7 arm gate: nothing may fire it until an operator proves it by hand. */
+  insertAutomation(input: NewAutomation, now: number): { id: number } {
+    const cc = cadenceToColumns(input.cadence);
+    const res = this.db.prepare(
+      'INSERT INTO automations (name, state, project, prompt, cadenceKind, cadenceDays, ' +
+      "cadenceMinute, cadenceEvery, tz, graceMs, createdAt, updatedAt) VALUES (?, 'paused', " +
+      '?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(input.name, input.project, input.prompt, cc.cadenceKind, cc.cadenceDays,
+          cc.cadenceMinute, cc.cadenceEvery, cc.tz, input.graceMs, now, now);
+    return { id: Number(res.lastInsertRowid) };
+  }
+
+  /** `nextRunAt` moves IFF the row is armed — an edit that moved 09:00 to
+   *  07:00 on a paused row must not leave a stale due time waiting for the
+   *  next arm. `retired` is terminal: editing it is refused, not silently
+   *  applied. Returns the row rather than `void` — `updateAutomation`
+   *  deliberately ignores `nextRunAt` on a non-armed row, and an ignored
+   *  input the caller cannot observe is `markDelivered`'s defect. */
+  updateAutomation(id: number, edit: AutomationEdit, now: number): AutomationEditResult {
+    return tx(this.db, () => {
+      const cur = this.db.prepare('SELECT state FROM automations WHERE id = ?').get(id) as
+        { state: string } | undefined;
+      if (!cur) return { ok: false as const, why: 'unknown-automation' as const };
+      if (cur.state === 'retired') {
+        return { ok: false as const, why: 'bad-transition' as const, from: 'retired' as const };
+      }
+      const cc = cadenceToColumns(edit.cadence);
+      const nextRunAt = cur.state === 'armed' ? edit.nextRunAt : null;
+      this.db.prepare(
+        'UPDATE automations SET name = ?, project = ?, prompt = ?, cadenceKind = ?, ' +
+        'cadenceDays = ?, cadenceMinute = ?, cadenceEvery = ?, tz = ?, graceMs = ?, ' +
+        'updatedAt = ?, nextRunAt = ?, scheduleError = NULL WHERE id = ?',
+      ).run(edit.name, edit.project, edit.prompt, cc.cadenceKind, cc.cadenceDays, cc.cadenceMinute,
+            cc.cadenceEvery, cc.tz, edit.graceMs, now, nextRunAt, id);
+      return { ok: true as const, row: this.automation(id)! };
+    });
+  }
+
+  /** The method that first establishes `nextRunAt`. Refuses `retired`
+   *  (terminal, via `AUTOMATION_TRANSITIONS`) and an unproved row
+   *  (`never-run-by-hand`, the §7 arm gate). Re-arming an already-armed row
+   *  (an armed row that acquired a `scheduleError` from its own advance) is
+   *  always permitted — it is not a state TRANSITION. Clears
+   *  `consecutiveFailures` and `scheduleError`: a ceiling that survives the
+   *  operator's explicit re-arm is a wedge with no door. */
+  armAutomation(id: number, nextRunAt: number, now: number): ArmResult {
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state, provedAt FROM automations WHERE id = ?').get(id) as
+        { state: string; provedAt: number | null } | undefined;
+      if (!row) return { ok: false as const, why: 'unknown-automation' as const };
+      const from = isAutomationState(row.state) ? row.state : 'unknown';
+      if (from !== 'armed' && !(AUTOMATION_TRANSITIONS[from] as readonly string[]).includes('armed')) {
+        return { ok: false as const, why: 'bad-transition' as const, from };
+      }
+      if (row.provedAt === null) return { ok: false as const, why: 'never-run-by-hand' as const };
+      this.db.prepare(
+        "UPDATE automations SET state = 'armed', nextRunAt = ?, scheduleError = NULL, " +
+        'consecutiveFailures = 0, updatedAt = ? WHERE id = ?',
+      ).run(nextRunAt, now, id);
+      return { ok: true as const, nextRunAt };
+    });
+  }
+
+  /** `paused`/`retired` always clear `nextRunAt` — the invariant's non-armed
+   *  branch. `scheduleError` is PRESERVED: it is a fact about the cadence,
+   *  not about the state. */
+  setAutomationState(id: number, state: 'paused' | 'retired', now: number): AutomationTransitionResult {
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state FROM automations WHERE id = ?').get(id) as
+        { state: string } | undefined;
+      if (!row) return { ok: false as const, why: 'unknown-automation' as const };
+      const from = isAutomationState(row.state) ? row.state : 'unknown';
+      if (!(AUTOMATION_TRANSITIONS[from] as readonly string[]).includes(state)) {
+        return { ok: false as const, why: 'bad-transition' as const, from };
+      }
+      this.db.prepare(
+        'UPDATE automations SET state = ?, nextRunAt = NULL, updatedAt = ? WHERE id = ?',
+      ).run(state, now, id);
+      return { ok: true as const, state };
+    });
+  }
+
+  /** Every `automation_runs` row still `running` whose parent's
+   *  `leaseHardUntil` has passed settles `outcome='lost'` and releases the
+   *  lease — a record written, nothing on the fleet touched (spec §8).
+   *  `*Inner`, `tx()`-free: called from `lapseAutomationRuns` AND as
+   *  `claimAndOpenRun`'s own step 1 (`claimAttempt`'s D12 prune-on-write
+   *  idiom) — a wedged watcher must never let a stale lease refuse a
+   *  legitimate firing. */
+  private lapseInner(now: number): SettledRun[] {
+    const rows = this.db.prepare(
+      "SELECT r.id AS runId FROM automation_runs r JOIN automations a ON a.id = r.automationId " +
+      "WHERE r.outcome = 'running' AND a.leaseHardUntil IS NOT NULL AND a.leaseHardUntil <= ?",
+    ).all(now) as { runId: number }[];
+    const settled: SettledRun[] = [];
+    for (const row of rows) {
+      const res = this.settleRunInner(row.runId, { outcome: 'lost' }, now);
+      if (!('refused' in res)) settled.push(res);
+    }
+    return settled;
+  }
+
+  lapseAutomationRuns(now: number): readonly SettledRun[] {
+    return tx(this.db, () => this.lapseInner(now));
+  }
+
+  /** `renewClaimRow`'s verbatim shape: moves ONLY `leaseUntil`, never
+   *  `leaseHardUntil` — the hard bound is what makes a crashed runner's lock
+   *  lapse on its own. Returns `false` once the lease is gone (already
+   *  settled, or never held by this automation) — a `void` return would be
+   *  `markDelivered`'s defect: the caller must stop renewing, not believe it
+   *  still holds one. */
+  renewAutomationLease(automationId: number, now: number): boolean {
+    const res = this.db.prepare(
+      'UPDATE automations SET leaseUntil = MIN(?, leaseHardUntil) ' +
+      'WHERE id = ? AND leaseRunId IS NOT NULL AND leaseHardUntil > ?',
+    ).run(now + AUTOMATION_LEASE_MS, automationId, now);
+    return Number(res.changes) > 0;
+  }
+
+  /**
+   * ONE `tx()`: the lease CAS, the run's INSERT, the ring prune, and the
+   * lease/`nextRunAt` write, in that order — splitting the CAS from the open
+   * leaves a gap where a crash between them takes the lease but never
+   * advances `nextRunAt`, so the SAME occurrence fires again once
+   * `leaseHardUntil` lapses (spec §6 step 4's whole argument).
+   *
+   * `this.lapseInner(now)` runs FIRST, `claimAttempt`'s step 1 verbatim: a
+   * wedged watcher must never let a stale lease refuse a legitimate firing.
+   * THE IN-TRANSACTION READ IS THE CAS (sound only because `DatabaseSync`
+   * never yields): `leaseUntil > now` (the SOFT bound, never the hard one —
+   * the hard bound is what a dead runner's lock lapses on, not the live
+   * test for a fresh claim) refuses `overlap`, naming the current holder.
+   *
+   * A `manual` occurrence never touches `nextRunAt`/`scheduleError` — *Run
+   * now* at 08:55 must not cancel the 09:00 occurrence — and its
+   * `scheduledFor` is `now` itself, so its `lateMs` is honestly `0`.
+   */
+  claimAndOpenRun(input: {
+    readonly automationId: number; readonly now: number; readonly occurrence: FiringOccurrence;
+  }): ClaimRunResult {
+    return tx(this.db, () => {
+      this.lapseInner(input.now);
+      const row = this.db.prepare(
+        'SELECT leaseUntil, leaseRunId FROM automations WHERE id = ?',
+      ).get(input.automationId) as { leaseUntil: number | null; leaseRunId: number | null } | undefined;
+      if (!row) return { refused: 'unknown-automation' as const };
+      if (row.leaseUntil !== null && row.leaseUntil > input.now) {
+        return {
+          refused: 'overlap' as const,
+          leaseUntil: row.leaseUntil,
+          leaseRunId: row.leaseRunId as number,
+        };
+      }
+
+      const occ = input.occurrence;
+      const scheduledFor = occ.trigger === 'manual' ? input.now : occ.scheduledFor;
+      const dstShifted = occ.trigger === 'manual' ? false : occ.dstShifted;
+      const lateMs = input.now - scheduledFor;
+      const insertRes = this.db.prepare(
+        'INSERT INTO automation_runs (automationId, scheduledFor, startedAt, lateMs, outcome, ' +
+        "trigger, dstShifted) VALUES (?, ?, ?, ?, 'running', ?, ?)",
+      ).run(input.automationId, scheduledFor, input.now, lateMs, occ.trigger, dstShifted ? 1 : 0);
+      const runId = Number(insertRes.lastInsertRowid);
+      this.pruneRingInner(input.automationId);
+
+      const leaseUntil = input.now + AUTOMATION_LEASE_MS;
+      const leaseHardUntil = input.now + AUTOMATION_LEASE_HARD_MS;
+      const nextRunAt = occ.trigger === 'manual' ? null : ('at' in occ.next ? occ.next.at : null);
+      const scheduleError = occ.trigger === 'manual'
+        ? null : ('error' in occ.next ? occ.next.error : null);
+
+      if (occ.trigger === 'manual') {
+        this.db.prepare(
+          'UPDATE automations SET leaseUntil = ?, leaseHardUntil = ?, leaseRunId = ? WHERE id = ?',
+        ).run(leaseUntil, leaseHardUntil, runId, input.automationId);
+      } else {
+        this.db.prepare(
+          'UPDATE automations SET leaseUntil = ?, leaseHardUntil = ?, leaseRunId = ?, ' +
+          'nextRunAt = ?, scheduleError = ? WHERE id = ?',
+        ).run(leaseUntil, leaseHardUntil, runId, nextRunAt, scheduleError, input.automationId);
+      }
+
+      this.stampParentInner({
+        automationId: input.automationId, at: input.now,
+        outcome: 'running', refusal: null, stampFireAt: true,
+      });
+
+      return {
+        runId,
+        nextRunAt: occ.trigger === 'manual' ? null : nextRunAt,
+        leaseUntil,
+      };
+    });
+  }
+
+  /**
+   * The pre-claim rungs' own row (spec §7 rungs 1-2): a sweep that loses the
+   * `overlap`/`cap-concurrency` race, or a past-grace occurrence, still
+   * needs somewhere to write its refusal — un-leased, outside the claim
+   * transaction, precisely so the row survives the claim it lost (or never
+   * attempted).
+   *
+   * The un-leased open still ADVANCES the occurrence on a `schedule`/
+   * `catchup` arm — a skip that does not consume its occurrence re-skips on
+   * every tick for the whole life of the lease that beat it, evicting the
+   * ring it exists to protect. Never creates a session, so `proved` is
+   * always `false`.
+   */
+  openUnleasedRun(input: {
+    readonly automationId: number; readonly now: number; readonly occurrence: FiringOccurrence;
+    readonly settlement: UnleasedSettlement;
+  }): SettledRun | { refused: 'unknown-automation' } {
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT id FROM automations WHERE id = ?').get(input.automationId) as
+        { id: number } | undefined;
+      if (!row) return { refused: 'unknown-automation' as const };
+
+      const occ = input.occurrence;
+      const scheduledFor = occ.trigger === 'manual' ? input.now : occ.scheduledFor;
+      const dstShifted = occ.trigger === 'manual' ? false : occ.dstShifted;
+      const lateMs = input.now - scheduledFor;
+      const outcome = input.settlement.outcome;
+      const refusal = outcome === 'missed' ? null : input.settlement.refusal;
+
+      const insertRes = this.db.prepare(
+        'INSERT INTO automation_runs (automationId, scheduledFor, startedAt, endedAt, lateMs, ' +
+        'outcome, refusal, trigger, dstShifted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(input.automationId, scheduledFor, input.now, input.now, lateMs, outcome, refusal,
+            occ.trigger, dstShifted ? 1 : 0);
+      const runId = Number(insertRes.lastInsertRowid);
+      this.pruneRingInner(input.automationId);
+
+      if (occ.trigger !== 'manual') {
+        const nextRunAt = 'at' in occ.next ? occ.next.at : null;
+        const scheduleError = 'error' in occ.next ? occ.next.error : null;
+        this.db.prepare(
+          'UPDATE automations SET nextRunAt = ?, scheduleError = ? WHERE id = ?',
+        ).run(nextRunAt, scheduleError, input.automationId);
+      }
+
+      const parent = this.stampParentInner({
+        automationId: input.automationId, at: input.now,
+        outcome, refusal, stampFireAt: true,
+      });
+
+      return {
+        runId, automationId: input.automationId, outcome,
+        consecutiveFailures: parent.consecutiveFailures, autoPaused: parent.autoPaused,
+        proved: false,
+      };
+    });
+  }
+
+  /** Written the MOMENT it is measured, before the spawn (rung 8's
+   *  forecast) — never 0 for UNMEASURED (`limits.ts:40-47`). */
+  markRunHomeScore(runId: number, homeScore: number | null): void {
+    this.db.prepare('UPDATE automation_runs SET homeScore = ? WHERE id = ?').run(homeScore, runId);
+  }
+
+  /** The spawn's whole result, written the MOMENT identification succeeds —
+   *  not at settle, or a process that dies during the prompt ladder would
+   *  leave a `lost` run with no session id, destroying the record of a
+   *  session that WAS created (spec §6's orphan-manufacture rule). The four
+   *  identity columns move TOGETHER via `SpawnIdentity`'s bound arm. */
+  markAutomationSpawn(input: SpawnRecord): void {
+    if (!input.identity.bound) {
+      this.db.prepare('UPDATE automation_runs SET spawnRc = ? WHERE id = ?')
+        .run(input.spawnRc, input.runId);
+      return;
+    }
+    const idn = input.identity;
+    this.db.prepare(
+      'UPDATE automation_runs SET spawnRc = ?, sessionId = ?, workspace = ?, branch = ?, ' +
+      'wrapper = ?, adopted = ? WHERE id = ?',
+    ).run(input.spawnRc, idn.sessionId, idn.workspace, idn.branch, idn.wrapper,
+          idn.adopted ? 1 : 0, input.runId);
+  }
+
+  settleAutomationRun(input: {
+    readonly runId: number; readonly settlement: RunSettlement; readonly now: number;
+  }): SettledRun | { refused: 'unknown-run' } | { refused: 'already-settled'; outcome: AutomationOutcome } {
+    return tx(this.db, () => this.settleRunInner(input.runId, input.settlement, input.now));
+  }
+
+  /** `capUtf8` applies `AUTOMATION_DETAIL_MAX_BYTES` once, in the store —
+   *  `truncatedBytes` is written on EVERY row including `0`, so *nothing was
+   *  cut* differs from *an older server did not report*. */
+  appendRunEvent(runId: number, step: AutomationStep, ok: boolean, detail: string, now: number): void {
+    const { text, truncatedBytes } = capUtf8(detail, AUTOMATION_DETAIL_MAX_BYTES);
+    this.db.prepare(
+      'INSERT INTO automation_run_events (runId, at, step, ok, detail, truncatedBytes) ' +
+      'VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, now, step, ok ? 1 : 0, text, truncatedBytes);
+  }
+
+  /** `clampRunLimit`'s ceiling, `id DESC` to match `automation_runs_by_
+   *  automation(automationId, id DESC)`. */
+  automationRuns(automationId: number, limit?: number): AutomationRunSummary[] {
+    const n = clampRunLimit(limit ?? AUTOMATION_RUN_RETENTION);
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_RUN_COLS} FROM automation_runs ` +
+      'WHERE automationId = ? ORDER BY id DESC LIMIT ?',
+    ).all(automationId, n) as unknown as AutomationRunRowDb[];
+    return rows.map((r) => this.hydrateAutomationRun(r));
+  }
+
+  automationRun(runId: number): AutomationRunSummary | null {
+    const row = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_RUN_COLS} FROM automation_runs WHERE id = ?`,
+    ).get(runId) as AutomationRunRowDb | undefined;
+    return row ? this.hydrateAutomationRun(row) : null;
+  }
+
+  /** Ordered by THIS TABLE'S OWN `id`, never `at` — `at` is a clock and
+   *  clocks move. */
+  automationRunEvents(runId: number): AutomationStepWire[] {
+    const rows = this.db.prepare(
+      'SELECT id, runId, at, step, ok, detail, truncatedBytes FROM automation_run_events ' +
+      'WHERE runId = ? ORDER BY id',
+    ).all(runId) as {
+      id: number; runId: number; at: number; step: string; ok: number;
+      detail: string; truncatedBytes: number;
+    }[];
+    return rows.map((r) => ({
+      id: r.id, runId: r.runId, at: r.at,
+      step: isAutomationStep(r.step) ? r.step : 'unknown',
+      ok: r.ok !== 0, detail: r.detail, truncatedBytes: r.truncatedBytes,
+    }));
+  }
+
+  /** JOINS the parent and counts only LIVE leases — without the join, two
+   *  crashed runs leave two immortal `running` rows and, at
+   *  `AUTOMATION_MAX_CONCURRENT = 2`, every automation on the box refuses
+   *  `cap-concurrency` forever. That is why this takes `now`. */
+  inFlightAutomationRunCount(now: number): number {
+    const row = this.db.prepare(
+      'SELECT count(*) AS n FROM automation_runs r JOIN automations a ON a.id = r.automationId ' +
+      "WHERE r.outcome = 'running' AND COALESCE(a.leaseHardUntil, 0) > ?",
+    ).get(now) as { n: number };
+    return row.n;
+  }
+
+  automationsPaused(): { paused: boolean; updatedAt: number } {
+    const row = this.db.prepare('SELECT paused, updatedAt FROM automations_state WHERE id = 1')
+      .get() as { paused: number; updatedAt: number };
+    return { paused: row.paused !== 0, updatedAt: row.updatedAt };
+  }
+
+  setAutomationsPaused(paused: boolean, now: number): void {
+    this.db.prepare('UPDATE automations_state SET paused = ?, updatedAt = ? WHERE id = 1')
+      .run(paused ? 1 : 0, now);
+  }
+
+  /** `lifecycleStats()`'s model — including its `AS n` and not `AS rows`,
+   *  since `ROWS` is a SQLite window-frame keyword. `evicted` is why this
+   *  joins `/api/fleet/health` at all: retention is a ceiling, and a
+   *  ceiling the operator cannot see coming is a surprise. */
+  automationStats(): AutomationStats {
+    const a = this.db.prepare(
+      "SELECT count(*) AS n, " +
+      "SUM(CASE WHEN state = 'armed' THEN 1 ELSE 0 END) AS armedN, " +
+      "SUM(CASE WHEN state = 'paused' THEN 1 ELSE 0 END) AS pausedN, " +
+      "SUM(CASE WHEN state = 'retired' THEN 1 ELSE 0 END) AS retiredN, " +
+      'COALESCE(SUM(runsEvicted), 0) AS evictedN FROM automations',
+    ).get() as { n: number; armedN: number | null; pausedN: number | null; retiredN: number | null;
+                 evictedN: number };
+    const r = this.db.prepare(
+      'SELECT count(*) AS n, MIN(startedAt) AS oldestRunAt, MAX(startedAt) AS newestRunAt ' +
+      'FROM automation_runs',
+    ).get() as { n: number; oldestRunAt: number | null; newestRunAt: number | null };
+    return {
+      total: a.n, armed: a.armedN ?? 0, paused: a.pausedN ?? 0, retired: a.retiredN ?? 0,
+      runsTotal: r.n, runsEvictedTotal: a.evictedN,
+      oldestRunAt: r.oldestRunAt, newestRunAt: r.newestRunAt,
+    };
   }
 }
