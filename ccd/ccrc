@@ -3815,6 +3815,7 @@ cmd_install() {
   _inst_hooks
   _inst_skills
   _inst_graphify_skill
+  _inst_graph_always_on
   _inst_graph_noise
   _inst_graph_excludes
   _inst_graph_hooks_off
@@ -5133,6 +5134,105 @@ _inst_graphify_skill() {
 # here more than most: the sweep timer reads this file every 15 minutes, so a
 # non-atomic write has a live reader, and a plain `cp` follows a symlink at the
 # destination instead of replacing it.
+# ── _inst_graph_always_on — the READ side, which had no mechanism ─────────
+# D-1243. Everything graphify ships on the fleet until now serves the WRITE
+# path: the engine, the skill, the excludes, the noise list, the 15-minute
+# sweep. All of it keeps graphs FRESH. Nothing made a session READ one.
+#
+# Measured before this step existed: the only always-on instruction any rostered
+# home carried said "when the user types `/graphify`…" — an explicit slash
+# command, i.e. the OPPOSITE of always-on. The query-first rule appeared in
+# exactly zero of the five homes. So a graph could be rebuilt every 15 minutes,
+# perfectly current, and never once be consulted.
+#
+# graphify ships the remedy and we had never installed it: `always_on/
+# claude-md.md` in the package, whose first rule is "for codebase questions,
+# first run `graphify query`". ASSEMBLED FROM THE PACKAGE, NEVER VENDORED —
+# `install-graphify-skill.sh`'s header states that rule for the skill (spec §B)
+# and the same reasoning binds here: a vendored copy is a second writer, and two
+# writers drift. Reading it from the pinned venv keeps the wording in lockstep
+# with the engine version the box actually runs.
+#
+# INTO THE HOMES, NOT INTO THE REPOS, and that is the same asymmetry D-1161
+# settled for the noise list: ccrc owns its wrapper homes and may converge them;
+# it does not own the repos sessions work in, and writing this block into each
+# project's `CLAUDE.md` would be ccrc editing files it has no claim on — the
+# exact objection that killed O6(a). One block per home covers every session, in
+# every repo, touching nothing that is not ours.
+#
+# NEVER CLOBBERS. The block is delimited by ccrc's own markers, so convergence
+# is unambiguous; content outside them is never read or rewritten. A home whose
+# `CLAUDE.md` carries an UNMARKED `## graphify` section — what `graphify
+# install` itself writes — is REPORTED AND SKIPPED, not merged into: this
+# installer is not the author of that text and has no way to tell an operator's
+# edit of it from a stale copy of it.
+_inst_graph_always_on() {
+  [ "$INST_ROLE" = server ] && return 0
+  local pkg src n=0 kept=0 same=0 ts backups
+  pkg="$("$HOME/.ccrc/graphify-venv/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent)' 2>/dev/null)" || pkg=""
+  if [ -z "$pkg" ]; then
+    # DEGRADES, NEVER DIES — `_inst_enable`'s own idiom for the sweep timer:
+    # "a systemd that will not take this one timer must not turn an otherwise-
+    # converged install into a failed one … the sweep is convenience, not the
+    # guardrail". A read RULE is the same class. The first draft used `_ccrc_die`
+    # on all three gates below, and a box with no resolvable package took the
+    # WHOLE install down with it — a fix for a missing nicety, worse than the
+    # nicety being missing.
+    echo "install: graphify: cannot resolve the graphify package from the venv — always-on read rule SKIPPED"
+    return 0
+  fi
+  src="$pkg/always_on/claude-md.md"
+  if [ ! -f "$src" ]; then
+    echo "install: graphify: this graphify build ships no always-on block ($src) — read rule SKIPPED, nothing invented"
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  if ! source "$HOME/.ccrc/accounts.sh" 2>/dev/null || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
+    echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule SKIPPED"
+    return 0
+  fi
+  ts=$(date +%Y%m%d-%H%M%S); backups="$HOME/ccrc-backups/$ts"
+  local a dir f start end body want cur
+  start='<!-- ccrc:graphify-always-on:start -->'
+  end='<!-- ccrc:graphify-always-on:end -->'
+  body="$(cat "$src")"
+  want="$start
+$body
+$end"
+  for a in "${CCRC_ACCOUNTS[@]}"; do
+    dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" || continue
+    [ -n "$dir" ] || continue
+    f="$dir/CLAUDE.md"
+    if [ -f "$f" ] && ! grep -qF "$start" "$f" && grep -qE '^## graphify[[:space:]]*$' "$f"; then
+      echo "install: graphify: $f carries an unmarked '## graphify' section — left in place; remove it by hand to let ccrc converge this block" >&2
+      kept=$((kept+1)); continue
+    fi
+    cur=""
+    [ -f "$f" ] && cur="$(cat "$f")"
+    # already converged, byte for byte -> no write, no backup
+    if [ -f "$f" ] && grep -qF "$start" "$f"        && [ "$(awk -v s="$start" -v e="$end" 'index($0,s){p=1} p{print} index($0,e){p=0}' "$f")" = "$want" ]; then
+      same=$((same+1)); continue
+    fi
+    mkdir -p "$dir" || _ccrc_die "cannot create $dir"
+    if [ -f "$f" ]; then
+      mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"         || _ccrc_die "could not back up $f before rewriting it"
+    fi
+    if [ -n "$cur" ] && grep -qF "$start" "$f" 2>/dev/null; then
+      # REPLACE between the markers, leaving every other line untouched
+      awk -v s="$start" -v e="$end" -v repl="$want" '
+        index($0,s){print repl; skip=1; next}
+        skip && index($0,e){skip=0; next}
+        skip{next}
+        {print}' "$f" > "$f.tmp.$$"         || _ccrc_die "could not rewrite $f"
+    else
+      { [ -n "$cur" ] && printf '%s\n\n' "$cur"; printf '%s\n' "$want"; } > "$f.tmp.$$"         || _ccrc_die "could not write $f"
+    fi
+    chmod 644 "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"       || { rm -f "$f.tmp.$$"; _ccrc_die "could not install $f"; }
+    n=$((n+1))
+  done
+  echo "install: graphify: always-on read rule — $n home(s) converged, $same already current, $kept skipped (unmarked section)"
+}
+
 _inst_graph_noise() {
   [ "$INST_ROLE" = server ] && return 0
   local src="$BOX_TREE_DIR/ccd/graph-noise.default.list" dest="$HOME/.ccrc/graph-noise"

@@ -404,11 +404,35 @@ function runInstall(home: string, args: string[] = ['install'],
  *  step always execs `$venv/bin/python -m pip install …`) and `graphify` is a
  *  fake that answers `--version` with whatever version this test wants the
  *  venv to already be converged to. */
+// D-1243: the always-on block the read rule is assembled FROM. It is read out
+// of the pinned venv's package rather than vendored (the rule
+// `install-graphify-skill.sh`'s header states for the skill), so the fixture
+// has to carry a package for the resolver to find — and the fixture's `python`
+// has to answer the one probe that resolves it.
+const ALWAYS_ON_FIXTURE = [
+  '## graphify',
+  '',
+  'This project has a knowledge graph at graphify-out/.',
+  '',
+  'Rules:',
+  '- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists.',
+  '- After modifying code, run `graphify update .` to keep the graph current.',
+  '',
+].join('\n');
+
+function fakePkgDir(home: string): string {
+  return path.join(home, '.ccrc', 'graphify-venv', 'pkg', 'graphify');
+}
+
 function plantFakeVenv(home: string, version = '0.9.9'): string {
   const bin = path.join(home, '.ccrc', 'graphify-venv', 'bin');
   mkdirSync(bin, { recursive: true });
+  const pkg = fakePkgDir(home);
+  mkdirSync(path.join(pkg, 'always_on'), { recursive: true });
+  writeFileSync(path.join(pkg, 'always_on', 'claude-md.md'), ALWAYS_ON_FIXTURE);
   writeFileSync(path.join(bin, 'python'),
-    `#!/bin/sh\necho "$@" >> "$HOME/venv-python-calls"\nexit 0\n`, { mode: 0o755 });
+    `#!/bin/sh\necho "$@" >> "$HOME/venv-python-calls"\n`
+    + `case "$*" in *"import graphify"*) echo "${pkg}" ;; esac\nexit 0\n`, { mode: 0o755 });
   writeFileSync(path.join(bin, 'graphify'),
     `#!/bin/sh\n[ "$1" = --version ] && { echo "graphify ${version}"; exit 0; }\nexit 0\n`,
     { mode: 0o755 });
@@ -516,6 +540,125 @@ describe('ccrc install: the default noise list (_inst_graph_noise, D-1160)', () 
       'the symlink was written through, not replaced').toBe(false);
     expect(readFileSync(decoy, 'utf8'), 'the write followed the link off-target').toBe('ORIGINAL\n');
     expect(statSync(join(dir, '_default.list')).mode & 0o777).toBe(0o644);
+  });
+});
+
+describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)', () => {
+  // Everything else graphify ships on this box serves the WRITE path — engine,
+  // skill, excludes, noise list, the 15-minute sweep — and all of it keeps
+  // graphs fresh. Nothing made a session READ one. Measured before this step:
+  // the only always-on instruction any rostered home carried said "when the
+  // user types `/graphify`", an explicit slash command; the query-first rule
+  // was in zero of five homes.
+  const START = '<!-- ccrc:graphify-always-on:start -->';
+  const END = '<!-- ccrc:graphify-always-on:end -->';
+
+  it('converges the block into every rostered home, carrying the query-first rule', () => {
+    const home = freshBox('ccrc-inst-gfx-alwayson-');
+    plantFakeVenv(home);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    let seen = 0;
+    for (const dir of readdirSync(home).filter((d) => d.startsWith('.claude'))) {
+      const f = join(home, dir, 'CLAUDE.md');
+      if (!existsSync(f)) continue;
+      const txt = readFileSync(f, 'utf8');
+      if (!txt.includes(START)) continue;
+      seen++;
+      expect(txt, 'the block landed without its end marker — convergence would be ambiguous').toContain(END);
+      expect(txt, 'the READ rule is the whole point of this step').toMatch(/first run `graphify query/);
+    }
+    expect(seen, 'no rostered home received the always-on block').toBeGreaterThan(0);
+    expect(r.stdout).toMatch(/^install: graphify: always-on read rule — \d+ home\(s\) converged/m);
+  });
+
+  it('appends without disturbing a line of what was already there', () => {
+    const home = freshBox('ccrc-inst-gfx-alwayson-keep-');
+    plantFakeVenv(home);
+    const dir = join(home, '.claude');
+    mkdirSync(dir, { recursive: true });
+    const prior = '# User instructions\n\nSomething the operator wrote.\n';
+    writeFileSync(join(dir, 'CLAUDE.md'), prior);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const txt = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
+    expect(txt.startsWith(prior), "the operator's own text was rewritten or reordered").toBe(true);
+    expect(txt).toContain(START);
+  });
+
+  it('is idempotent — a second install neither duplicates the block nor rewrites the file', () => {
+    const home = freshBox('ccrc-inst-gfx-alwayson-idem-');
+    plantFakeVenv(home);
+    runInstall(home, ['install']);
+    const f = join(home, '.claude', 'CLAUDE.md');
+    const after1 = readFileSync(f, 'utf8');
+    const mtime1 = statSync(f).mtimeMs;
+    const r2 = runInstall(home, ['install']);
+    expect(r2.code, r2.stderr).toBe(0);
+    const after2 = readFileSync(f, 'utf8');
+    expect(after2).toBe(after1);
+    expect(after2.split(START).length - 1, 'the block was appended a second time').toBe(1);
+    expect(statSync(f).mtimeMs, 'an already-current file was rewritten anyway').toBe(mtime1);
+    expect(r2.stdout).toMatch(/already current/);
+  });
+
+  it('REPLACES between its markers when the shipped block changes, never appending a rival copy', () => {
+    const home = freshBox('ccrc-inst-gfx-alwayson-repl-');
+    plantFakeVenv(home);
+    runInstall(home, ['install']);
+    const f = join(home, '.claude', 'CLAUDE.md');
+    writeFileSync(join(fakePkgDir(home), 'always_on', 'claude-md.md'),
+      '## graphify\n\nRules:\n- For codebase questions, first run `graphify query "<q>"` — REVISED.\n');
+    const r2 = runInstall(home, ['install']);
+    expect(r2.code, r2.stderr).toBe(0);
+    const txt = readFileSync(f, 'utf8');
+    expect(txt.split(START).length - 1, 'a second copy was appended instead of converging').toBe(1);
+    expect(txt).toContain('REVISED');
+    expect(txt, 'the superseded wording survived the replace').not.toMatch(/graph\.json exists/);
+  });
+
+  it("SKIPS and reports a home carrying an unmarked '## graphify' section — that text is not ours", () => {
+    const home = freshBox('ccrc-inst-gfx-alwayson-foreign-');
+    plantFakeVenv(home);
+    const dir = join(home, '.claude');
+    mkdirSync(dir, { recursive: true });
+    const foreign = '## graphify\n\nHand-written or written by `graphify install`.\n';
+    writeFileSync(join(dir, 'CLAUDE.md'), foreign);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), 'a section ccrc did not write was rewritten')
+      .toBe(foreign);
+    expect(r.stderr).toMatch(/carries an unmarked '## graphify' section/);
+    expect(r.stdout).toMatch(/\d+ skipped \(unmarked section\)/);
+  });
+
+  it('DEGRADES, never dies: a graphify build shipping no always-on block still installs clean', () => {
+    // The first draft of this step used `_ccrc_die` on all three availability
+    // gates. A fixture with no package then took the WHOLE install down — a fix
+    // for a missing nicety that was worse than the nicety being missing.
+    // `_inst_enable` already states the rule for the sweep timer: a convenience
+    // "must not turn an otherwise-converged install into a failed one".
+    const home = freshBox('ccrc-inst-gfx-alwayson-none-');
+    plantFakeVenv(home);
+    rmSync(join(fakePkgDir(home), 'always_on', 'claude-md.md'));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/ships no always-on block .* read rule SKIPPED, nothing invented/);
+    // and it invents nothing in its place
+    for (const dir of readdirSync(home).filter((d) => d.startsWith('.claude'))) {
+      const f = join(home, dir, 'CLAUDE.md');
+      if (existsSync(f)) {
+        expect(readFileSync(f, 'utf8'), 'a block was written from nowhere')
+          .not.toContain('<!-- ccrc:graphify-always-on:start -->');
+      }
+    }
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-alwayson-server-');
+    plantFakeVenv(home);
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.stdout).not.toMatch(/always-on read rule/);
   });
 });
 

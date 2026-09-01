@@ -2011,6 +2011,10 @@ describe('ccrc install: the order is stated in one place', () => {
       // out of every `git status`. Neither reads what the other wrote, so the
       // position is a grouping rather than a dependency — but it must follow
       // `_inst_tree`, since it copies the list out of the PLACED tree.
+      // D-1243. The READ side, and it sits right after the skill because it is
+      // assembled from the same pinned package the skill is — before the noise
+      // list, which serves the write path this one deliberately does not.
+      '_inst_graph_always_on',
       '_inst_graph_noise',
       // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
       // the task brief: the sweep's `check-ignore` precondition needs a
