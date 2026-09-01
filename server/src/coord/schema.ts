@@ -678,6 +678,158 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE mail_deliveries ADD COLUMN gateSince INTEGER;
   ALTER TABLE mail_deliveries ADD COLUMN gateAt INTEGER;
   `,
+
+  // ── 7: user_version 6 -> 7 ────────────────────────────────────────────────
+  // Automations: a Runner that spawns a session at a time the operator
+  // chooses, plus its full run history (design spec §5,
+  // docs/superpowers/specs/2026-08-31-automations-design.md:305-419). FOUR
+  // NEW TABLES, four indexes and one seeded row — CREATE TABLE / CREATE INDEX
+  // / INSERT only, nothing rebuilt, renamed or repurposed.
+  //
+  // FIVE COLUMNS CARRY THEIR OWN REASON, because each is the shape a later
+  // reader would otherwise "simplify" into something that overloads a null:
+  //
+  //   nextRunAt + scheduleError — *paused*, *cannot be scheduled* and *due at
+  //   T* are three facts, not one nullable integer. INVARIANT:
+  //     state='armed' AND scheduleError IS NULL  <=>  nextRunAt IS NOT NULL
+  //   Stated here as a CHECK constraint, not only a comment — a comment is a
+  //   request, a CHECK is a mechanism, and `automation_runs.spawnRc`/
+  //   `homeScore` below are exactly the same doctrine applied to a
+  //   nullability instead of an invariant across two columns.
+  //
+  //   automation_runs.spawnRc — ccd's rc, nullable with NO DEFAULT. A
+  //   `DEFAULT 0` would collapse "the exec was cut short and no rc was ever
+  //   measured" into "it exited cleanly" — the same defect
+  //   `runs.dispatchStartedAt`'s comment argues at schema.ts:635 (migration 5
+  //   above), now on this lane's own spawn.
+  //
+  //   automation_runs.homeScore — the account pressure forecast at fire time,
+  //   nullable with NO DEFAULT. NULL is UNMEASURED, and `limits.ts:40-47`
+  //   rules that unknown is not zero; a defaulted 0 would read as "measured,
+  //   and zero pressure".
+  //
+  //   automations.tz — the IANA zone, nullable and NULL *iff*
+  //   cadenceKind is interval: an interval has no timezone, and a stored
+  //   `'UTC'` would be a lie about a cadence that was never zoned at all.
+  //
+  //   automation_run_events.truncatedBytes — NOT NULL DEFAULT 0, and ALWAYS
+  //   emitted (never left absent), so "nothing was cut" differs on the wire
+  //   from "an older server did not report this field" — the wire-discipline
+  //   absence-permits rule (CLAUDE.md) applied to a byte count instead of a
+  //   frame field.
+  //
+  // `provedAt` is IN `automations_due`'s index, not bolted on beside it: it is
+  // a conjunct of the due predicate (§6 step 2), so the arm gate — a row the
+  // operator has never watched run once cannot be selected for firing — is a
+  // STORE invariant enforceable by the index itself, not only a route-level
+  // check a caller could bypass.
+  //
+  // `automations_state` is a ROW (§7 argues why, not a file): one PRIMARY KEY
+  // CHECKed to `1` so a second row is refused by the schema, seeded here so
+  // the pause read never has to special-case "no row yet".
+  `
+  CREATE TABLE automations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL,
+    state          TEXT NOT NULL,     -- armed|paused|retired. Read through isAutomationState;
+                                       -- 'unknown' is a READER degrade, never written.
+    project        TEXT NOT NULL,
+    prompt         TEXT NOT NULL,     -- <= AUTOMATION_PROMPT_MAX_BYTES, REFUSED not truncated
+
+    -- The cadence, flattened. FOUR columns with ONE reader (hydrateAutomation),
+    -- so a future 'cron' member is a member plus an arm and needs no migration.
+    cadenceKind    TEXT NOT NULL,     -- wall-clock|interval
+    cadenceDays    INTEGER,           -- 7-bit day mask; NULL iff cadenceKind is interval
+    cadenceMinute  INTEGER,           -- minutes past local midnight; NULL iff cadenceKind is interval
+    cadenceEvery   INTEGER,           -- epoch minutes; NULL iff cadenceKind is wall-clock
+    tz             TEXT,              -- IANA zone; NULL iff cadenceKind is interval — an interval has
+                                       -- no timezone, and a stored 'UTC' would be a lie
+
+    graceMs        INTEGER NOT NULL,  -- how late a missed occurrence may still fire
+    createdAt      INTEGER NOT NULL,
+    updatedAt      INTEGER NOT NULL,
+
+    -- §7's arm gate. NULL = never proved by a manual run, so the clock may not have it.
+    provedAt       INTEGER,
+
+    -- The three-way split that keeps 'not armed', 'cannot be scheduled' and 'due at T' from
+    -- collapsing into one nullable integer. INVARIANT, enforced below by CHECK:
+    --   state='armed' AND scheduleError IS NULL  <=>  nextRunAt IS NOT NULL
+    nextRunAt      INTEGER,
+    scheduleError  TEXT,              -- unknown-timezone|bad-cadence|no-future-occurrence
+                                       -- |failure-ceiling. NULL when the schedule is fine.
+
+    lastFireAt     INTEGER,           -- NULL = has NEVER fired. Distinct from 'fired and failed'
+                                       -- (lastFireAt set + lastOutcome='failed').
+    lastOutcome    TEXT,              -- NULL only while lastFireAt IS NULL
+    lastRefusal    TEXT,              -- NULL unless lastOutcome IN ('refused','skipped','failed').
+                                       -- Denormalised beside lastOutcome for one reason: the 44px
+                                       -- list row renders the refusal SENTENCE inline (§11) and the
+                                       -- list read must not join to automation_runs.
+
+    -- The lease, in claims' shape (schema.ts:483-545): a soft bound renewed by measurement
+    -- and a hard bound that is NEVER extended, so a runner that dies mid-spawn releases the
+    -- schedule on its own instead of wedging it forever. DURABLE, not an in-memory Set: a
+    -- spawn can outlive the process, and an in-memory claim would leave a 'firing' row that
+    -- nothing ever resolves.
+    leaseUntil     INTEGER,
+    leaseHardUntil INTEGER,
+
+    consecutiveFailures INTEGER NOT NULL DEFAULT 0,
+    runsEvicted         INTEGER NOT NULL DEFAULT 0,  -- §9: retention is a ceiling, and the
+                                                      -- rows it dropped are a NUMBER, not a silence
+
+    CHECK ((state = 'armed' AND scheduleError IS NULL) = (nextRunAt IS NOT NULL))
+  );
+  -- provedAt is IN the index because it is a conjunct of the due predicate (§6 step 2): the
+  -- arm gate is a STORE invariant, not only a route arm, so a row the operator has never
+  -- watched run cannot be selected for firing even by a caller that bypassed the route.
+  CREATE INDEX automations_due        ON automations(state, provedAt, nextRunAt);
+  CREATE INDEX automations_by_project ON automations(project);
+
+  CREATE TABLE automation_runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    automationId INTEGER NOT NULL REFERENCES automations(id),
+    scheduledFor INTEGER NOT NULL,    -- the OCCURRENCE this run is for, not when it started
+    startedAt    INTEGER NOT NULL,
+    endedAt      INTEGER,             -- NULL = still in flight
+    lateMs       INTEGER NOT NULL,    -- startedAt - scheduledFor
+    outcome      TEXT NOT NULL,       -- running|ok|refused|failed|skipped|missed|lost
+    refusal      TEXT,                -- NULL unless outcome IN ('refused','skipped','failed')
+    trigger      TEXT NOT NULL,       -- schedule|manual|catchup
+    dstShifted   INTEGER NOT NULL DEFAULT 0,
+    adopted      INTEGER NOT NULL DEFAULT 0,   -- §6: this session was bound from a CUT-SHORT
+                                                -- spawn. A tick with an asterisk, never a clean one.
+
+    sessionId    TEXT,   -- the session this run created; all four NULL = none was created
+    workspace    TEXT,
+    branch       TEXT,
+    wrapper      TEXT,
+    homeScore    INTEGER, -- the account pressure forecast at fire time. NULL = UNMEASURED,
+                          -- which is not 0 (limits.ts:40-47's ruling).
+    spawnRc      INTEGER  -- ccd's rc. NULL = never measured (a cut-short exec), NOT 0.
+  );
+  CREATE INDEX automation_runs_by_automation ON automation_runs(automationId, id DESC);
+
+  CREATE TABLE automation_run_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    runId          INTEGER NOT NULL REFERENCES automation_runs(id),
+    at             INTEGER NOT NULL,
+    step           TEXT NOT NULL,    -- precheck|lease|spawn|identify|prompt|close
+    ok             INTEGER NOT NULL,
+    detail         TEXT NOT NULL DEFAULT '',
+    truncatedBytes INTEGER NOT NULL DEFAULT 0   -- ALWAYS emitted, including 0, so 'nothing was
+                                                 -- cut' differs from 'an older server did not report'
+  );
+  CREATE INDEX automation_run_events_by_run ON automation_run_events(runId, id);
+
+  CREATE TABLE automations_state (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    paused    INTEGER NOT NULL,     -- the global kill switch. §7 argues why it is a ROW, not a FILE.
+    updatedAt INTEGER NOT NULL
+  );
+  INSERT INTO automations_state (id, paused, updatedAt) VALUES (1, 0, 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
