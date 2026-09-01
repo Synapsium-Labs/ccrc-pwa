@@ -393,7 +393,14 @@ export async function assembleFleet(
       held: r.held,
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs, liveWaitingFor),
-      subagents: hs?.subagents ?? null,
+      // MAPPED, not spread. `HookState.subagents` carries `id` — the server's
+      // join key — and spreading it put that id on the wire, contradicting the
+      // rule stated at its two call sites (a field nobody reads is a field
+      // that rots) and silently widening the frame. Found by review; the shape
+      // is now exactly what `SubagentEntry` declares.
+      subagents: hs?.subagents.map((sa) => ({
+        name: sa.name, startedAt: sa.startedAt, description: sa.description,
+      })) ?? null,
       // Carried straight off the record — this IS the evidence `tick()`'s own
       // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
       // field of these very rows (one derivation of one fact — blocking

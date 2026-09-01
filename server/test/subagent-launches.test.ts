@@ -92,3 +92,155 @@ describe('readLaunchRecord', () => {
     expect(r.found && r.record.description).toBe('Map the auth seam');
   });
 });
+
+// ── THE WATCHER JOIN ────────────────────────────────────────────────────────
+// The pure functions above are the easy half. `describeSubagents` is where the
+// cache, the miss budget and retain-don't-erase actually live, and adversarial
+// review of this branch found them entirely uncovered — the commit message
+// claimed properties nothing tested. These close that gap end to end:
+// registry -> sweepHookStates -> the join -> the emitted fleet frame.
+import { Bus } from '../src/bus.js';
+import { KeyedQueue } from '../src/inject/queue.js';
+import { FleetWatcher } from '../src/watch.js';
+import { loadConfig } from '../src/config.js';
+import { seedRoster } from './helpers.js';
+import { Tmux, type Runner } from '../src/exec.js';
+import type { FleetSession } from '../../shared/api.js';
+
+const UUID = '1'.repeat(36);
+const ID = 'claude-a-MekWarLive';
+
+/** A registry row plus the transcript the resolver will land on, plus the
+ *  sidecar beside it — the real on-disk layout, not a stub. */
+const seedFleet = (home: string, agentId: string, meta: string | null) => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const workdir = `/data/projects/${ID}`;
+  for (const [k, v] of Object.entries({
+    wrapper: 'claude-a', project: ID, workdir, uuid: UUID, started: '1',
+  })) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+
+  writeFileSync(path.join(reg, `${ID}.hookstate.json`), JSON.stringify({
+    v: 1, state: 'working', event: 'PostToolUse', sessionId: UUID, pid: 40613,
+    updatedAt: Date.now(), ask: null,
+    subagents: [{ name: 'workflow-subagent', startedAt: Date.now() - 5000, id: agentId }],
+  }));
+
+  // `<cfgDir>/projects/<munge(workdir)>/<uuid>.jsonl`, and the sidecar dir
+  // beside it — the exact shape `sidecarDirFor` derives.
+  const munged = workdir.replace(/[/._]/g, '-');
+  const projDir = path.join(home, '.claude-a', 'projects', munged);
+  mkdirSync(path.join(projDir, UUID, 'subagents'), { recursive: true });
+  writeFileSync(path.join(projDir, `${UUID}.jsonl`), '{}\n');
+  if (meta !== null) {
+    writeFileSync(path.join(projDir, UUID, 'subagents', `agent-${agentId}.meta.json`), meta);
+  }
+  return { workdir };
+};
+
+const runner: Runner = async (_cmd, args) => {
+  if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+  if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+  if (args[0] === 'capture-pane') return { code: 0, stdout: 'done\n> \n', stderr: '' };
+  return { code: 0, stdout: '', stderr: '' };
+};
+
+const watcherFor = (home: string, io = localIO) => {
+  const cfg = loadConfig({ CCRC_HOME: home });
+  const bus = new Bus();
+  const frames: FleetSession[][] = [];
+  bus.on('fleet', (s) => frames.push(s));
+  const deps = { cfg, runCcd: async () => ({ ok: true as const, stdout: '', stderr: '' }),
+    tmux: new Tmux(runner), io, queue: new KeyedQueue() };
+  return { w: new FleetWatcher(deps as never, bus), frames };
+};
+
+const subsOf = (frames: FleetSession[][]) =>
+  frames.at(-1)?.find((x) => x.id === ID)?.subagents ?? null;
+
+describe('describeSubagents (the watcher join)', () => {
+  it('puts the launch record’s description on the wire', async () => {
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    seedFleet(home, 'abc123', JSON.stringify({
+      agentType: 'general-purpose', description: 'Inventory the provider',
+    }));
+    const { w, frames } = watcherFor(home);
+    await w.tick();
+    expect(subsOf(frames)).toEqual([
+      { name: 'workflow-subagent', startedAt: expect.any(Number), description: 'Inventory the provider' },
+    ]);
+  });
+
+  it('reads each agentId ONCE — the cache is the whole cost story', async () => {
+    // A launch record describes an event that already happened and cannot
+    // change, so steady state must be zero io. Collapse the cache into a
+    // per-sweep map and this is two reads, then three, then N.
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    seedFleet(home, 'cache1', JSON.stringify({ description: 'Read once' }));
+    const reads: string[] = [];
+    const io: FleetIO = { ...localIO, readFile: async (p) => { reads.push(p); return localIO.readFile(p); } };
+    const { w } = watcherFor(home, io);
+    await w.tick();
+    await w.tick();
+    await w.tick();
+    const metaReads = reads.filter((p) => p.endsWith('agent-cache1.meta.json'));
+    expect(metaReads, 'three sweeps must cost one read').toHaveLength(1);
+  });
+
+  it('RETAINS a description when a later read fails — never blanks what is on screen', async () => {
+    // The rule `sweepTasks` already follows. A dropped agent round trip must
+    // not erase a fact the operator is looking at.
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    seedFleet(home, 'keep1', JSON.stringify({ description: 'Still here' }));
+    let broken = false;
+    const io: FleetIO = {
+      ...localIO,
+      readFile: async (p) => (broken && p.includes('subagents') ? null : localIO.readFile(p)),
+    };
+    const { w, frames } = watcherFor(home, io);
+    await w.tick();
+    expect(subsOf(frames)?.[0]?.description).toBe('Still here');
+    broken = true;
+    await w.tick();
+    expect(subsOf(frames)?.[0]?.description, 'a failed read must not blank it').toBe('Still here');
+  });
+
+  it('gives up after a bounded number of misses, rather than reading forever', async () => {
+    // A record that will never exist (an older Claude Code, a different
+    // harness) must not cost one read per session per tick indefinitely.
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    seedFleet(home, 'missing1', null);
+    const reads: string[] = [];
+    const io: FleetIO = { ...localIO, readFile: async (p) => { reads.push(p); return localIO.readFile(p); } };
+    const { w, frames } = watcherFor(home, io);
+    for (let i = 0; i < 6; i++) await w.tick();
+    const metaReads = reads.filter((p) => p.endsWith('agent-missing1.meta.json'));
+    expect(metaReads.length, 'the miss budget must stop the reads').toBeLessThanOrEqual(3);
+    // And the row still ships, described by its type.
+    expect(subsOf(frames)?.[0]?.description).toBeNull();
+  });
+
+  it('a row with no id is never looked up at all', async () => {
+    // `id` is null for every row an older hook wrote — there is nothing to
+    // join on and no read to make.
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    const reg = path.join(home, '.cc-sessions');
+    seedFleet(home, 'unused', JSON.stringify({ description: 'Never read' }));
+    writeFileSync(path.join(reg, `${ID}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'working', event: 'PostToolUse', sessionId: UUID, pid: 40613,
+      updatedAt: Date.now(), ask: null,
+      subagents: [{ name: 'reviewer', startedAt: Date.now() - 5000 }],
+    }));
+    const reads: string[] = [];
+    const io: FleetIO = { ...localIO, readFile: async (p) => { reads.push(p); return localIO.readFile(p); } };
+    const { w, frames } = watcherFor(home, io);
+    await w.tick();
+    expect(reads.some((p) => p.includes('subagents'))).toBe(false);
+    expect(subsOf(frames)?.[0]?.description).toBeNull();
+  });
+});

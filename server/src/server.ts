@@ -23,7 +23,7 @@ import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { ACTOR_FLAGS_CAP, CCD_ARGV, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
          type ActorFlags, type CcdArgv } from './ccdargv.js';
-import { deriveWorkspaceSlug } from '../../shared/slug.js';
+import { deriveWorkspaceSlug, isWsProject, titleFits } from '../../shared/slug.js';
 import { lookupLinearIssue, ticketTitle } from './linear.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -1546,6 +1546,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // builder below is the untouched one. That is the additivity proof, and
     // `workspaces-route.test.ts`'s original bodyless cases stay green
     // unchanged to say so.
+    // THE PROJECT SEGMENT IS AN ARGV POSITIONAL and `cmd_ws_add`'s strip loop
+    // eats flags from ANY position, so a flag-shaped project rebinds the
+    // positionals: `/api/projects/--no-rc/workspaces` with a name built
+    // `['ws-add','--no-rc','eng-1',…]` and ccd bound `project` to the
+    // operator's SLUG, creating a workspace in the wrong project at exit 0.
+    // Refused before any argv exists. (Bodyless, this was always safe — ccd
+    // refused for want of positionals — which is why it only became reachable
+    // when the slug token arrived.)
+    if (!isWsProject(project)) {
+      return reply.code(400).send({ ok: false, error: 'bad-project' });
+    }
+
     const ask = deriveWorkspaceSlug(typed);
     if (ask.kind === 'auto') return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
 
@@ -1565,15 +1577,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const look = await lookupLinearIssue(ask.ticket, deps.cfg.linearToken);
       title = look.ok
         ? ticketTitle(look.identifier, look.title)
-        // No key, no ticket, no network: the identifier the operator pasted is
-        // still the best name we have, and it beats the slug.
-        : `${ask.ticket.key.toUpperCase()}-${ask.ticket.num}`;
+        // The lookup gave nothing — no key, no such ticket, no network. Prefer
+        // the operator's OWN WORDS when they typed something rather than
+        // pasting a link: `deriveWorkspaceSlug`'s identifier bound is
+        // deliberately generous, so an ordinary name like `demo-2` parses as a
+        // ticket, and uppercasing it to `DEMO-2` would rewrite what they typed
+        // for a ticket that does not exist. A pasted URL has no words worth
+        // keeping, so that falls back to the identifier.
+        : (typed.includes('://')
+          ? `${ask.ticket.key.toUpperCase()}-${ask.ticket.num}`
+          : typed.trim());
     }
 
     // Composed from `deps.runCcd` directly rather than `runCcdOr502`, which
     // that helper's own docstring invites: a slug COLLISION is ordinary user
     // input and must not read as a Bad Gateway. ccd's sentence names the exact
     // files holding the slug, so it is carried verbatim rather than reworded.
+    // ccd refuses a `--title` past `_LC_DEC_MAX` bytes, and that refusal would
+    // arrive as a 502 reading like the fleet is broken. It is ordinary input,
+    // so it is a 400 the sheet can explain — and checked in BYTES, because
+    // `_lc_dec_ok` measures under `LC_ALL=C` and an emoji spends four.
+    if (title !== null && !titleFits(title)) {
+      return reply.code(400).send({ ok: false, error: 'title-too-long' });
+    }
+
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, ask.slug, title));
     if (res.ok) return { ok: true, id: `${project}-${ask.slug}`, slug: ask.slug, title };
     if (res.stderr.includes('slug in use: ')) {

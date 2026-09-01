@@ -175,3 +175,102 @@ describe('POST /api/projects/:project/workspaces — naming', () => {
     await app.close();
   });
 });
+
+// ── argv smuggling through the PROJECT segment ──────────────────────────────
+// Found by adversarial review of this branch, and it was REAL: the project is
+// an argv positional, `cmd_ws_add`'s strip loop eats flags from any position,
+// and the slug token arriving is what made it reachable.
+describe('POST /api/projects/:project/workspaces — the project segment', () => {
+  it('refuses a flag-shaped project BEFORE any argv exists', async () => {
+    // MEASURED before the guard: this built
+    // `['ws-add','--no-rc','eng-1','--title','ENG-1']`, ccd stripped the flag,
+    // bound `project` to `eng-1` — the operator's SLUG — drew a random slug of
+    // its own, and exited 0. A workspace in the wrong project, reported as
+    // success.
+    const { app, calls } = await appWithCcdSpy();
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/--no-rc/workspaces', payload: { name: 'ENG-1' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-project' });
+    expect(calls, 'no argv may be built for a project we already know is illegal').toEqual([]);
+    await app.close();
+  });
+
+  it('refuses every shape ccd’s own _ws_project_valid refuses', async () => {
+    const { app, calls } = await appWithCcdSpy();
+    for (const p of ['--title', '-x', '.hidden', 'has space', 'semi;colon', 'sla/sh']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/projects/${encodeURIComponent(p)}/workspaces`, payload: { name: 'ENG-1' },
+      });
+      expect(res.statusCode, p).toBe(400);
+    }
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+
+  it('still accepts an ordinary project name', async () => {
+    // The guard must not be a wall: dots, dashes and underscores are legal to
+    // ccd and real projects use them.
+    const { app, calls } = await appWithCcdSpy();
+    for (const p of ['demo', 'demo-app.ts', 'my_project', 'a.b-c_d']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/projects/${encodeURIComponent(p)}/workspaces`, payload: { name: 'ENG-1' },
+      });
+      expect(res.statusCode, p).toBe(200);
+    }
+    expect(calls).toHaveLength(4);
+    await app.close();
+  });
+
+  it('a title past ccd’s byte budget is a 400, not a 502', async () => {
+    // ccd refuses `--title` past `_LC_DEC_MAX` (512 BYTES). Left to ccd that
+    // refusal arrives as a Bad Gateway, which reads like the fleet is broken
+    // for what is ordinary input.
+    const { app, calls } = await appWithCcdSpy();
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/demo/workspaces', payload: { name: 'x'.repeat(600) },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'title-too-long' });
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+
+  it('measures the title budget in BYTES, as ccd does', async () => {
+    // `_lc_dec_ok` measures under LC_ALL=C, so an emoji spends four bytes per
+    // glyph. A `.length` check would accept 512 emoji — 2048 bytes — and ccd
+    // would refuse them.
+    const { app } = await appWithCcdSpy();
+    const res = await app.inject({
+      method: 'POST', url: '/api/projects/demo/workspaces', payload: { name: 'ENG-1 ' + '🙂'.repeat(200) },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('POST /api/projects/:project/workspaces — the title fallback', () => {
+  it('keeps the operator’s own words when a "ticket" turns out not to be one', async () => {
+    // `deriveWorkspaceSlug`'s identifier bound is deliberately generous, so an
+    // ordinary name like `demo-2` parses as a ticket. With no Linear key the
+    // lookup gives nothing, and uppercasing to `DEMO-2` would rewrite what the
+    // operator typed for a ticket that does not exist. Found by review.
+    const { app, calls } = await appWithCcdSpy();
+    await app.inject({
+      method: 'POST', url: '/api/projects/demo/workspaces', payload: { name: 'demo-2' },
+    });
+    expect(calls).toContainEqual(['ws-add', 'demo', 'demo-2', '--title', 'demo-2']);
+    await app.close();
+  });
+
+  it('falls back to the identifier for a pasted URL, which has no words worth keeping', async () => {
+    const { app, calls } = await appWithCcdSpy();
+    await app.inject({
+      method: 'POST', url: '/api/projects/demo/workspaces',
+      payload: { name: 'https://linear.app/acme/issue/ENG-9/fix-it' },
+    });
+    expect(calls).toContainEqual(['ws-add', 'demo', 'eng-9-fix-it', '--title', 'ENG-9']);
+    await app.close();
+  });
+});

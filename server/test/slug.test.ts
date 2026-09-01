@@ -72,6 +72,20 @@ describe('parseLinearRef', () => {
       .toEqual({ key: 'ENG', num: '1234', titleSlug: null });
   });
 
+  it('reads Linear’s own copy-git-branch-name form, title slug and all', () => {
+    // `<user>/<KEY-N>-<title>` is ONE CLICK in Linear's UI, so it is the shape
+    // an operator pastes most often. Before this it fell through to "a plain
+    // name": the slug came out right and the TITLE LOOKUP never fired, so the
+    // headline feature silently did nothing for the commonest input.
+    expect(parseLinearRef('maciek/eng-1234-fix-login'))
+      .toEqual({ key: 'eng', num: '1234', titleSlug: 'fix-login' });
+    expect(parseLinearRef('eng-1234-fix-login'))
+      .toEqual({ key: 'eng', num: '1234', titleSlug: 'fix-login' });
+    // No title segment is still a reference.
+    expect(parseLinearRef('maciek/eng-1234'))
+      .toEqual({ key: 'eng', num: '1234', titleSlug: null });
+  });
+
   it('is null for anything that is not a Linear reference', () => {
     expect(parseLinearRef('fix the login flow')).toBeNull();
     expect(parseLinearRef('https://github.com/x/y/issues/3')).toBeNull();
@@ -102,6 +116,13 @@ describe('deriveWorkspaceSlug', () => {
   it('a pasted URL keeps the title Linear already put in it', () => {
     expect(deriveWorkspaceSlug('https://linear.app/acme/issue/ENG-1234/fix-the-login-flow'))
       .toMatchObject({ kind: 'named', slug: 'eng-1234-fix-the-login-flow', shortened: false });
+  });
+
+  it('a branch-form paste keeps its ticket, so the title lookup can fire', () => {
+    expect(deriveWorkspaceSlug('maciek/eng-1234-fix-login')).toMatchObject({
+      kind: 'named', slug: 'eng-1234-fix-login',
+      ticket: { key: 'eng', num: '1234', titleSlug: 'fix-login' },
+    });
   });
 
   it('takes the tail of Linear’s git-branch form rather than spending 7 characters on a username', () => {

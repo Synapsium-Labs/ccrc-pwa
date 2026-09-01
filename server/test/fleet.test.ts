@@ -546,7 +546,10 @@ describe('hook state on the wire', () => {
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.hookState).toBe('waiting');
     expect(s.askSummary).toBe('Choose');
-    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000, id: null, description: null }]);
+    // The HookState INPUT above carries `id` (the server's join key); the wire
+    // must not. Asserted exactly, so a future spread of the whole entry
+    // re-widens the frame visibly rather than silently.
+    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000, description: null }]);
   });
 
   it('a hookless session carries all three fields as null', async () => {

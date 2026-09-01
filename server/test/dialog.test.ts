@@ -311,7 +311,12 @@ describe('FleetWatcher hookstate wiring', () => {
     const s = fleets.at(-1)!.find((x) => x.id === 'claude-a-MekWarLive')!;
     expect(s.hookState).toBe('waiting');
     expect(s.askSummary).toBe('Pick one');
-    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: expect.any(Number) }]);
+    // EXACT, not a subset: this is the only watcher->wire subagent assertion in
+    // the tree, so it is what keeps `id` (the server's join key) OFF the frame.
+    // It caught exactly that leak on this branch.
+    expect(s.subagents).toEqual([
+      { name: 'reviewer', startedAt: expect.any(Number), description: null },
+    ]);
     // Earned purely by the hook — the pane above never painted a menu.
     expect(s.dialogPending).toBe(true);
   }, 30000);

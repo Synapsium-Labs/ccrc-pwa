@@ -138,8 +138,27 @@ export function parseLinearRef(input: string): LinearRef | null {
     };
   }
 
-  const m = IDENTIFIER.exec(trimmed);
-  return m === null ? null : { key: m[1] ?? '', num: m[2] ?? '', titleSlug: null };
+  const direct = IDENTIFIER.exec(trimmed);
+  if (direct !== null) return { key: direct[1] ?? '', num: direct[2] ?? '', titleSlug: null };
+
+  // Linear's "copy git branch name" form: `<user>/<KEY-N>-<title-slug>`. This
+  // is the shape an operator pastes most often — it is one click in Linear's
+  // own UI — and without this arm it fell through to "a plain name", so the
+  // slug came out right and the TITLE LOOKUP never happened. Found by review.
+  //
+  // The tail after the last `/` is split at the first `<KEY>-<N>-` boundary:
+  // everything before is the identifier, everything after is Linear's own
+  // title slug, which is exactly what the URL form already yields.
+  const tail = trimmed.slice(trimmed.lastIndexOf('/') + 1);
+  const branchy = /^([A-Za-z][A-Za-z0-9]{0,9})-([0-9]{1,7})(?:-(.+))?$/.exec(tail);
+  if (branchy !== null) {
+    const rest = branchy[3];
+    return {
+      key: branchy[1] ?? '', num: branchy[2] ?? '',
+      titleSlug: rest === undefined || slugifyWords(rest) === '' ? null : rest,
+    };
+  }
+  return null;
 }
 
 /**
@@ -216,4 +235,41 @@ export function deriveWorkspaceSlug(input: string): SlugAsk {
   if (fitted.slug.length < WS_SLUG_MIN) return { kind: 'refused', reason: 'too-short' };
 
   return { kind: 'named', slug: fitted.slug, shortened: fitted.shortened, ticket };
+}
+
+/**
+ * ccd's `_ws_project_valid` (`ccd/ccd`), as a SUBSET the caller can check
+ * before building argv. Not a second authority — the box re-proves it — but
+ * the argv seam needs it BEFORE the tokens exist, and for one specific reason.
+ *
+ * THE PROJECT SEGMENT IS AN ARGV POSITIONAL, AND `cmd_ws_add`'S STRIP LOOP EATS
+ * FLAGS FROM ANY POSITION. Measured: a request for project `--no-rc` carrying a
+ * name built `['ws-add','--no-rc','eng-1','--title','ENG-1']`, and ccd stripped
+ * the flag, bound `project` to `eng-1` — the operator's SLUG — and drew a
+ * random slug of its own. A workspace in the wrong project, exit 0. Before a
+ * slug was ever sent the same URL built `['ws-add','--no-rc']`, which ccd
+ * refused for want of positionals, so this became reachable only when the
+ * second token arrived.
+ *
+ * A leading `-` is what makes a token flag-shaped, and this rule forbids it —
+ * the same property that already makes an accepted SLUG un-smuggleable
+ * (`^[a-z0-9]` first character, by construction).
+ */
+export function isWsProject(s: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(s) && !s.startsWith('.') && !s.startsWith('-');
+}
+
+/**
+ * ccd's `_LC_DEC_MAX`, the byte bound `--title` is refused past. Checked here
+ * so an over-long name is a 400 the sheet can explain, rather than a ccd
+ * refusal arriving as a 502 that reads like the fleet is broken.
+ *
+ * BYTES, not characters — `_lc_dec_ok` measures under `LC_ALL=C`, so an emoji
+ * title spends four of these per glyph and a length check would disagree with
+ * the box.
+ */
+export const WS_TITLE_MAX_BYTES = 512;
+
+export function titleFits(s: string): boolean {
+  return new TextEncoder().encode(s).length <= WS_TITLE_MAX_BYTES;
 }
