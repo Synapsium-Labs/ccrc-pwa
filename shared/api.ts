@@ -2602,7 +2602,13 @@ export type FleetMsg =
    *  disagreement BETWEEN sources, so it cannot ride on a `FleetSession` — and
    *  keeping it off `FleetSession` is what keeps `reviveFleetSession` from
    *  becoming a second producer. */
-  | { type: 'divergence'; divergences: Divergence[] };
+  | { type: 'divergence'; divergences: Divergence[] }
+  /** Task 2 (automations vocabulary, spec §10 "The frame"). Additive on the
+   *  same terms as `runs`/`coord`/`divergence` above — an already-deployed
+   *  PWA drops an unknown frame type silently, so NO `FLEET_PROTO` bump.
+   *  `automations` mirrors `sessions`'s own row-list shape; emitting it from
+   *  `tick()` beside `emitRuns()` is a later task's wiring, not this one's. */
+  | { type: 'automations'; automations: AutomationSummary[] };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
@@ -5360,3 +5366,385 @@ export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
  *  Policy is REFUSE, never truncate: a trimmed title is a different sentence
  *  in the durable record. */
 export const LEDGER_TITLE_MAX_BYTES = 200;
+
+/* --- Automations (Task 2 wire vocabulary) ----------------------------------
+ *
+ * `docs/superpowers/specs/2026-08-31-automations-design.md` is BINDING; §5, §8,
+ * §10 and §11 carry the exact vocabulary members, the caps and the wire
+ * shapes below. `.superpowers/sdd/2026-08-31-automations/task-2-brief.md`
+ * calls this "seven closed vocabularies" and then enumerates EIGHT
+ * (`AutomationState`, `AutomationOutcome`, `AutomationRefusal`,
+ * `AutomationStep`, `AutomationTrigger`, `CadenceKind`, `ScheduleError`,
+ * `AutomationRouteRefusal`) — it is eight, and this comment is the
+ * correction.
+ *
+ * Each is the `PR_REASON_MAP` idiom (:344-371 above): a closed union, a
+ * private `Record<Union, true>` total map (a member added to the union and
+ * not to the map is TS2739, a member in the map but not the union is
+ * TS2353), a list DERIVED via `Object.keys` rather than restated, and an
+ * exported `is<Enum>` guard that answers `unknown` input rather than
+ * narrowing it. Every one carries its own `'unknown'` member — a READER
+ * degrade a producer never writes, load-bearing because the producer here is
+ * an unattended sweep: a rollback that puts an OLDER server against a NEWER
+ * `coord.db` must render `? <token>` for a member it does not recognise,
+ * never an empty cell.
+ *
+ * `CadenceKind` and `ScheduleError` live HERE, not in `shared/schedule.ts` —
+ * that module declares its own narrower `CadenceUnschedulable` under a
+ * distinct name for exactly this reason (`shared/schedule.ts:8-11`). Two
+ * exported types of one name across two bundled `shared/` files is the
+ * second-copy shape `single-definition.test.ts` exists to fail on.
+ *
+ * `shared/api.ts`'s import block is UNCHANGED by this task (still the one
+ * `import type { Hue } from './roster.js'` at the top) — a cadence therefore
+ * rides the wire as FLAT PRIMITIVE FIELDS on `AutomationSummary` mirroring
+ * the `automations` table's own columns (`cadenceKind`/`cadenceDays`/
+ * `cadenceMinute`/`cadenceEvery`/`tz`), not as a `shared/schedule.ts`
+ * `Cadence` object — importing that module from here is exactly the
+ * ambiguity the paragraph above forbids.
+ * --------------------------------------------------------------------------- */
+
+/** `armed | paused | retired`, plus the reader degrade. Read through
+ *  `isAutomationState` (spec §5's `automations.state` column comment):
+ *  `'unknown'` is a value NOTHING writes. */
+export type AutomationState = 'armed' | 'paused' | 'retired' | 'unknown';
+
+const AUTOMATION_STATE_MAP: Record<AutomationState, true> = {
+  armed: true, paused: true, retired: true, unknown: true,
+};
+export const AUTOMATION_STATES: readonly AutomationState[] =
+  Object.keys(AUTOMATION_STATE_MAP) as AutomationState[];
+
+export function isAutomationState(v: unknown): v is AutomationState {
+  return typeof v === 'string' && (AUTOMATION_STATES as readonly string[]).includes(v);
+}
+
+/** `automation_runs.outcome` (spec §5). `running` is the in-flight value a
+ *  row is opened with; `lost` is a lease that lapsed while still `running`
+ *  (§8) — a record written, nothing on the fleet touched. */
+export type AutomationOutcome =
+  | 'running' | 'ok' | 'refused' | 'failed' | 'skipped' | 'missed' | 'lost' | 'unknown';
+
+const AUTOMATION_OUTCOME_MAP: Record<AutomationOutcome, true> = {
+  running: true, ok: true, refused: true, failed: true, skipped: true,
+  missed: true, lost: true, unknown: true,
+};
+export const AUTOMATION_OUTCOMES: readonly AutomationOutcome[] =
+  Object.keys(AUTOMATION_OUTCOME_MAP) as AutomationOutcome[];
+
+export function isAutomationOutcome(v: unknown): v is AutomationOutcome {
+  return typeof v === 'string' && (AUTOMATION_OUTCOMES as readonly string[]).includes(v);
+}
+
+/** `automation_runs.refusal` (spec §5, §7's precondition ladder, §6 steps
+ *  6-9). Exactly the reasons a run that WAS OPENED did not produce a
+ *  session — `never-run-by-hand` is deliberately NOT here (see
+ *  `AutomationRouteRefusal` below): a route-level refusal is decided before
+ *  any run row exists, so it can never be written to this column. */
+export type AutomationRefusal =
+  | 'registry-unmeasurable' | 'coordinator-paused' | 'automations-paused'
+  | 'unknown-project' | 'no-placeable-account' | 'account-pressed'
+  | 'cap-concurrency' | 'overlap' | 'failure-ceiling'
+  | 'spawn-refused' | 'spawn-cut-short' | 'spawn-unmeasured' | 'spawn-ambiguous'
+  | 'prompt-refused' | 'unknown';
+
+const AUTOMATION_REFUSAL_MAP: Record<AutomationRefusal, true> = {
+  'registry-unmeasurable': true, 'coordinator-paused': true, 'automations-paused': true,
+  'unknown-project': true, 'no-placeable-account': true, 'account-pressed': true,
+  'cap-concurrency': true, overlap: true, 'failure-ceiling': true,
+  'spawn-refused': true, 'spawn-cut-short': true, 'spawn-unmeasured': true, 'spawn-ambiguous': true,
+  'prompt-refused': true, unknown: true,
+};
+export const AUTOMATION_REFUSALS: readonly AutomationRefusal[] =
+  Object.keys(AUTOMATION_REFUSAL_MAP) as AutomationRefusal[];
+
+export function isAutomationRefusal(v: unknown): v is AutomationRefusal {
+  return typeof v === 'string' && (AUTOMATION_REFUSALS as readonly string[]).includes(v);
+}
+
+/** `automation_run_events.step` (spec §5, §6). Every numbered step in §6
+ *  writes one of these rows; that trail IS the log. */
+export type AutomationStep =
+  | 'precheck' | 'lease' | 'spawn' | 'identify' | 'prompt' | 'close' | 'unknown';
+
+const AUTOMATION_STEP_MAP: Record<AutomationStep, true> = {
+  precheck: true, lease: true, spawn: true, identify: true, prompt: true, close: true, unknown: true,
+};
+export const AUTOMATION_STEPS: readonly AutomationStep[] =
+  Object.keys(AUTOMATION_STEP_MAP) as AutomationStep[];
+
+export function isAutomationStep(v: unknown): v is AutomationStep {
+  return typeof v === 'string' && (AUTOMATION_STEPS as readonly string[]).includes(v);
+}
+
+/** `automation_runs.trigger` (spec §5, §8). `catchup` is the one late firing
+ *  a restart is allowed per automation (§8's in-memory bound). */
+export type AutomationTrigger = 'schedule' | 'manual' | 'catchup' | 'unknown';
+
+const AUTOMATION_TRIGGER_MAP: Record<AutomationTrigger, true> = {
+  schedule: true, manual: true, catchup: true, unknown: true,
+};
+export const AUTOMATION_TRIGGERS: readonly AutomationTrigger[] =
+  Object.keys(AUTOMATION_TRIGGER_MAP) as AutomationTrigger[];
+
+export function isAutomationTrigger(v: unknown): v is AutomationTrigger {
+  return typeof v === 'string' && (AUTOMATION_TRIGGERS as readonly string[]).includes(v);
+}
+
+/** `automations.cadenceKind` on the wire. `shared/schedule.ts`'s `Cadence`
+ *  union carries the same two live members under its own `kind` field
+ *  (`'wall-clock' | 'interval'`, no `'unknown'` — that module never receives
+ *  an unhydrated row); this is the WIRE/DB copy, with the reader degrade a
+ *  stored row can actually need. Declared here, not there — see the file
+ *  banner above. */
+export type CadenceKind = 'wall-clock' | 'interval' | 'unknown';
+
+const CADENCE_KIND_MAP: Record<CadenceKind, true> = {
+  'wall-clock': true, interval: true, unknown: true,
+};
+export const CADENCE_KINDS: readonly CadenceKind[] = Object.keys(CADENCE_KIND_MAP) as CadenceKind[];
+
+export function isCadenceKind(v: unknown): v is CadenceKind {
+  return typeof v === 'string' && (CADENCE_KINDS as readonly string[]).includes(v);
+}
+
+/** `automations.scheduleError` (spec §5). Five members, `'unknown'`
+ *  included. A superset of `shared/schedule.ts`'s `CadenceUnschedulable`
+ *  (`'unknown-timezone' | 'bad-cadence' | 'no-future-occurrence'`) plus
+ *  `'failure-ceiling'` — §8's repeated-failure rule writes that member, not
+ *  the recurrence arithmetic, which is why `CadenceUnschedulable`
+ *  deliberately excludes it. */
+export type ScheduleError =
+  | 'unknown-timezone' | 'bad-cadence' | 'no-future-occurrence' | 'failure-ceiling' | 'unknown';
+
+const SCHEDULE_ERROR_MAP: Record<ScheduleError, true> = {
+  'unknown-timezone': true, 'bad-cadence': true, 'no-future-occurrence': true,
+  'failure-ceiling': true, unknown: true,
+};
+export const SCHEDULE_ERRORS: readonly ScheduleError[] =
+  Object.keys(SCHEDULE_ERROR_MAP) as ScheduleError[];
+
+export function isScheduleError(v: unknown): v is ScheduleError {
+  return typeof v === 'string' && (SCHEDULE_ERRORS as readonly string[]).includes(v);
+}
+
+/** The ROUTE-level refusal (spec §10 "two vocabulary boundaries"; §6/§10
+ *  routes table), separate from `AutomationRefusal` on purpose:
+ *  `never-run-by-hand` (§7's arm gate) is decided before any run row exists,
+ *  so it can never be written to `automation_runs.refusal`, and folding it
+ *  into `AutomationRefusal` would break "every declared member of that union
+ *  is emitted by some run" in both directions. `bad-schedule` is the
+ *  create/edit route's 409 for a cadence `shared/schedule.ts` cannot compute
+ *  a next occurrence for; `bad-transition` is `POST .../state`'s refusal for
+ *  an illegal state move; `oversize` is the 413 shared by a prompt over
+ *  `AUTOMATION_PROMPT_MAX_BYTES` and a step detail over
+ *  `AUTOMATION_DETAIL_MAX_BYTES`. */
+export type AutomationRouteRefusal =
+  'never-run-by-hand' | 'bad-schedule' | 'bad-transition' | 'oversize' | 'unknown';
+
+const AUTOMATION_ROUTE_REFUSAL_MAP: Record<AutomationRouteRefusal, true> = {
+  'never-run-by-hand': true, 'bad-schedule': true, 'bad-transition': true, oversize: true, unknown: true,
+};
+export const AUTOMATION_ROUTE_REFUSALS: readonly AutomationRouteRefusal[] =
+  Object.keys(AUTOMATION_ROUTE_REFUSAL_MAP) as AutomationRouteRefusal[];
+
+export function isAutomationRouteRefusal(v: unknown): v is AutomationRouteRefusal {
+  return typeof v === 'string' && (AUTOMATION_ROUTE_REFUSALS as readonly string[]).includes(v);
+}
+
+/* --- Automations: the caps (spec §5, §7, §9, §15). -------------------------
+ * `AUTOMATION_DETAIL_MAX_BYTES` and `AUTOMATION_RUN_RETENTION` carry the
+ * exact values spec §9 states. `AUTOMATION_MAX_CONCURRENT`,
+ * `AUTOMATION_FAILURE_CEILING` and `AUTOMATION_PRESSURE_CEILING` are §15's
+ * proposals, given a value here (task-2 operator decision, 2026-09-01):
+ * 2 / 3 / 90. `AUTOMATION_GRACE_MS_DEFAULT` (30 minutes),
+ * `AUTOMATION_PROMPT_MAX_BYTES` (4096) and `AUTOMATION_MIN_INTERVAL_MINUTES`
+ * (60) are NOT in the spec at all and are this task's own choice, recorded
+ * here rather than left for a later task to invent silently. */
+
+/** How late a missed occurrence may still fire with `trigger='catchup'`
+ *  before it is recorded `outcome='missed'` instead (§8), for an automation
+ *  that has not set its own `graceMs` yet — every stored row still carries
+ *  its OWN `graceMs` column; this is only the value a new automation starts
+ *  with. */
+export const AUTOMATION_GRACE_MS_DEFAULT = 30 * 60_000;
+
+/** The operator's `prompt`, REFUSED over this many UTF-8 bytes, never
+ *  truncated (§9) — the `LC_REASON_MAX_BYTES` policy applied to
+ *  automations' own text. */
+export const AUTOMATION_PROMPT_MAX_BYTES = 4096;
+
+/** `automation_run_events.detail`, capped and TRUNCATED (not refused — this
+ *  is machine output, ccd's stderr on a failed spawn being the largest text
+ *  stored), with `truncatedBytes` always emitted so "nothing was cut"
+ *  differs from "an older server did not report" (§9). */
+export const AUTOMATION_DETAIL_MAX_BYTES = 2048;
+
+/** The per-automation `automation_runs` ring (§9) — pruned in the same
+ *  `tx()` as its own insert, with the read clamp equal to this ceiling. */
+export const AUTOMATION_RUN_RETENTION = 200;
+
+/** Precondition rung 2 (§7): in-flight `automation_runs` rows, counted
+ *  EXCLUDING the row this sweep is about to open. */
+export const AUTOMATION_MAX_CONCURRENT = 2;
+
+/** Precondition rung 9 (§7, §8): this many CONSECUTIVE non-`ok` outcomes
+ *  moves the automation to `state='paused'`,
+ *  `scheduleError='failure-ceiling'`. `skipped` does not count toward it —
+ *  the lease working is not a failure. */
+export const AUTOMATION_FAILURE_CEILING = 3;
+
+/** Precondition rung 8 (§7): the placed account's measured pressure
+ *  ceiling, a PERCENT (`max(5h%, 7d%)`, `ProjectedHome.score`'s own scale) —
+ *  an UNMEASURED lane proceeds regardless (rung 8 does not fail shut). */
+export const AUTOMATION_PRESSURE_CEILING = 90;
+
+/** The interval cadence's own floor, in MINUTES — what stops `every 1
+ *  minute` being spellable through the closed union without a cron parser's
+ *  own rate policing (§4's "and a cron string makes `* * * * *` spellable"
+ *  paragraph). Enforced wherever a `Cadence` is validated (a later task);
+ *  declared here because it is a wire-level constant like the caps above. */
+export const AUTOMATION_MIN_INTERVAL_MINUTES = 60;
+
+/* --- Automations: the wire shapes (spec §10, §11). -------------------------- */
+
+/**
+ * One row of `GET /api/automations` / the `{type:'automations'}` frame — the
+ * `automations` table (spec §5), HYDRATED but not joined to its runs (run
+ * history is a cold read per automation, never on the live frame — §10 "Run
+ * history is NOT on the frame").
+ *
+ * The cadence rides as FOUR flat columns plus `tz`, mirroring the table
+ * exactly rather than as a `shared/schedule.ts` `Cadence` object (file
+ * banner above): `cadenceDays`/`cadenceMinute` are `null` iff `cadenceKind
+ * === 'interval'`; `cadenceEvery` is `null` iff `cadenceKind ===
+ * 'wall-clock'`; `tz` is `null` iff `cadenceKind === 'interval'` (an
+ * interval has no timezone, and a stored `'UTC'` would be a lie — spec §5's
+ * own column comment).
+ *
+ * Every nullable field here names a DELIBERATE distinct condition (global
+ * constraint 9 / CLAUDE.md's "no overloaded null at a seam"):
+ * - `provedAt: null` — never proved by a manual run (§7's arm gate); the
+ *   clock may not fire this automation while it is null.
+ * - `nextRunAt: null` / `scheduleError: null` — the three-way split spec §5
+ *   states as an invariant: `state==='armed' && scheduleError===null <=>
+ *   nextRunAt!==null`. A `null` `scheduleError` means the schedule is fine;
+ *   a non-null one names WHY it is not, and `nextRunAt` is then null too.
+ * - `lastFireAt: null` — has NEVER fired, distinct from "fired and failed"
+ *   (`lastFireAt` set, `lastOutcome:'failed'`).
+ * - `lastOutcome` / `lastRefusal` — `null` only while `lastFireAt` is null;
+ *   `lastRefusal` is additionally `null` whenever `lastOutcome` is not one
+ *   of `'refused' | 'skipped' | 'failed'`.
+ */
+export interface AutomationSummary {
+  id: number;
+  name: string;
+  state: AutomationState;
+  project: string;
+  prompt: string;
+
+  cadenceKind: CadenceKind;
+  cadenceDays: number | null;    // 7-bit day mask (shared/schedule.ts's DayMask bit layout)
+  cadenceMinute: number | null;  // minutes past local midnight
+  cadenceEvery: number | null;   // epoch minutes
+  tz: string | null;             // IANA zone
+
+  graceMs: number;
+  createdAt: number;
+  updatedAt: number;
+
+  provedAt: number | null;
+  nextRunAt: number | null;
+  scheduleError: ScheduleError | null;
+
+  lastFireAt: number | null;
+  lastOutcome: AutomationOutcome | null;
+  lastRefusal: AutomationRefusal | null;
+
+  consecutiveFailures: number;
+  /** §9: eviction is not a silence — this is the NUMBER the runs list's gap
+   *  row is built from, not an inferred count. */
+  runsEvicted: number;
+}
+
+/**
+ * One `automation_runs` row (spec §5, §6, §8) — `GET
+ * /api/automations/:id/runs` and embedded per-row in `GET
+ * /api/automations/runs/:runId`.
+ *
+ * `homeScore` and `spawnRc` are the two fields global constraint 9 names by
+ * name: `null` means UNMEASURED, and is NOT `0` — `limits.ts`'s
+ * `measured()` rule (§7 rung 8) and `cutShort`'s tri-state (§6's "three
+ * spawn words") each collapse to a real `0`/non-zero only once a
+ * measurement actually happened. `endedAt: null` means still in flight
+ * (`outcome==='running'`); all four of
+ * `sessionId`/`workspace`/`branch`/`wrapper` are `null` together iff no
+ * session was ever created for this run.
+ */
+export interface AutomationRunSummary {
+  id: number;
+  automationId: number;
+  scheduledFor: number;   // the OCCURRENCE this run is for, not when it started
+  startedAt: number;
+  endedAt: number | null;
+  lateMs: number;
+  outcome: AutomationOutcome;
+  refusal: AutomationRefusal | null;
+  trigger: AutomationTrigger;
+  dstShifted: boolean;
+  /** This session was bound from a CUT-SHORT spawn (§6 step 8's adoption
+   *  gate) — a tick with an asterisk, never a clean one. */
+  adopted: boolean;
+
+  sessionId: string | null;
+  workspace: string | null;
+  branch: string | null;
+  wrapper: Wrapper | null;
+  /** The placed account's pressure forecast at fire time. `null` =
+   *  UNMEASURED — `limits.ts:40-47`'s ruling, NOT a measured `0`. */
+  homeScore: number | null;
+  /** ccd's rc for the `ws-add`. `null` = never measured (a cut-short exec),
+   *  NOT `0`. */
+  spawnRc: number | null;
+}
+
+/**
+ * One `automation_run_events` row (spec §5, §6) — the step trail that IS the
+ * run's log, embedded in `GET /api/automations/runs/:runId`.
+ *
+ * `truncatedBytes` is ALWAYS emitted, including `0` — the `ChatEvent`
+ * precedent above (:2644-2657): `0` means nothing was cut, and an absent
+ * field would have meant an older server did not report, which cannot arise
+ * here because this interface has no optional fields for it to distinguish
+ * from. It stays a required `number` rather than optional deliberately:
+ * this is a NEW wire shape with no older producer to tolerate.
+ */
+export interface AutomationStepWire {
+  id: number;
+  runId: number;
+  at: number;
+  step: AutomationStep;
+  ok: boolean;
+  detail: string;
+  truncatedBytes: number;
+}
+
+/**
+ * The automations half of `GET /api/fleet/health` (spec §9:
+ * "`automationStats()` joins `/api/fleet/health`, so the growth is reported
+ * the way `lifecycleStats` already is" — `coord/store.ts:2211`'s
+ * `lifecycleStats()` return shape is the model this mirrors).
+ * `runsEvictedTotal` is the sum of every automation's own `runsEvicted` —
+ * the ring's growth reported rather than left silent, the same reasoning as
+ * `runsEvicted` on `AutomationSummary` itself.
+ */
+export interface AutomationStats {
+  total: number;
+  armed: number;
+  paused: number;
+  retired: number;
+  runsTotal: number;
+  runsEvictedTotal: number;
+  oldestRunAt: number | null;
+  newestRunAt: number | null;
+}

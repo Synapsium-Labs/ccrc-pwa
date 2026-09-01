@@ -1084,14 +1084,23 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     expect(holders).toEqual(['shared/api.ts']);
   });
 
-  it("'coordinator-paused' is a literal in exactly one source file", () => {
+  it("'coordinator-paused' is a MARKER literal in exactly one source file, plus one named VOCABULARY holder", () => {
     // `COORDINATOR_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
-    // definition; `dispatch.ts` and `watch.ts` both import it. A second literal
-    // is how the pause banner and the dispatch gate would come to disagree
-    // about what "paused" means — one of them reading a name the other never
-    // writes.
-    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel);
-    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+    // definition; `dispatch.ts` and `watch.ts` both import it. A second
+    // MARKER literal is how the pause banner and the dispatch gate would come
+    // to disagree about what "paused" means — one of them reading a name the
+    // other never writes.
+    //
+    // `shared/api.ts` is admitted as a second, NAMED holder for the
+    // `'mail-disabled'` test's own reason directly below: Task 2's
+    // `AutomationRefusal` (spec §7 rung 5, §10) spells the same characters
+    // for a DIFFERENT purpose — the wire refusal CODE a run row records when
+    // that rung trips — not a second definition of the marker's own name.
+    // Nothing in `auto/` reaches around `rundefs.ts` for the marker string;
+    // this is the refusal-code vocabulary, exactly the shape `'mail-disabled'`
+    // already established.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/rundefs.ts', 'shared/api.ts']);
   });
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
@@ -1800,4 +1809,79 @@ describe('graphify — one pin, one census path', () => {
     const holders = holdersOf('graph-sweep.json');
     expect(holders).toEqual(['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']);
   });
+});
+
+// Task 2 — the automations vocabulary (docs/superpowers/specs/2026-08-31-
+// automations-design.md §10 "Vocabularies"). EIGHT closed unions, each the
+// `PR_REASON_MAP` idiom: a private `Record<Union, true>` total map, a runtime
+// list DERIVED via `Object.keys` rather than restated, and an `is<Enum>`
+// guard. The task-2 brief's own suggested regex, `/Object\.keys\(AUTOMATION_
+// \w+_MAP\)/`, structurally cannot match `CADENCE_KIND_MAP` or
+// `SCHEDULE_ERROR_MAP` — those two vocabularies deliberately have NO
+// `AUTOMATION_` prefix (spec §10: "`ScheduleError` and `CadenceKind` have
+// exactly ONE home: `shared/api.ts`", named after the DB columns they mirror,
+// not after the feature). This scan's regex is widened to reach all eight,
+// checked by name below.
+describe('Task 2 — the automations vocabularies are derived, never restated', () => {
+  const VOCABS: { list: string; map: string; union: string }[] = [
+    { list: 'AUTOMATION_STATES', map: 'AUTOMATION_STATE_MAP', union: 'AutomationState' },
+    { list: 'AUTOMATION_OUTCOMES', map: 'AUTOMATION_OUTCOME_MAP', union: 'AutomationOutcome' },
+    { list: 'AUTOMATION_REFUSALS', map: 'AUTOMATION_REFUSAL_MAP', union: 'AutomationRefusal' },
+    { list: 'AUTOMATION_STEPS', map: 'AUTOMATION_STEP_MAP', union: 'AutomationStep' },
+    { list: 'AUTOMATION_TRIGGERS', map: 'AUTOMATION_TRIGGER_MAP', union: 'AutomationTrigger' },
+    { list: 'CADENCE_KINDS', map: 'CADENCE_KIND_MAP', union: 'CadenceKind' },
+    { list: 'SCHEDULE_ERRORS', map: 'SCHEDULE_ERROR_MAP', union: 'ScheduleError' },
+    { list: 'AUTOMATION_ROUTE_REFUSALS', map: 'AUTOMATION_ROUTE_REFUSAL_MAP', union: 'AutomationRouteRefusal' },
+  ];
+
+  // The widened regex, verified below to actually match all eight map names
+  // character by character — not just asserted to by comment.
+  const OBJECT_KEYS_AUTOMATION_MAP = /Object\.keys\((?:AUTOMATION_\w+_MAP|CADENCE_KIND_MAP|SCHEDULE_ERROR_MAP)\)/g;
+
+  it('is really eight vocabularies, not the brief’s miscounted seven', () => {
+    expect(VOCABS).toHaveLength(8);
+    expect(new Set(VOCABS.map((v) => v.union)).size).toBe(8);
+  });
+
+  it('the widened regex matches every one of the eight map names, individually', () => {
+    for (const v of VOCABS) {
+      const re = new RegExp(`Object\\.keys\\(${v.map}\\)`);
+      expect(re.test(`Object.keys(${v.map})`), v.map).toBe(true);
+      // And the SAME widened pattern the source scan below uses:
+      expect(new RegExp(OBJECT_KEYS_AUTOMATION_MAP.source).test(`Object.keys(${v.map})`), v.map).toBe(true);
+    }
+  });
+
+  it('shared/api.ts derives each of the eight lists via Object.keys over its own map', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+    const found = [...api.matchAll(OBJECT_KEYS_AUTOMATION_MAP)].map((m) => m[0]).sort();
+    const expected = VOCABS.map((v) => `Object.keys(${v.map})`).sort();
+    expect(found).toEqual(expected);
+  });
+
+  it('none of the eight lists is a hand-written array literal beside its type', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+    for (const v of VOCABS) {
+      const handWritten = new RegExp(`${v.list}\\s*:\\s*readonly ${v.union}\\[\\]\\s*=\\s*\\[`);
+      expect(api, `${v.list} must not be a literal array`).not.toMatch(handWritten);
+      // And every declaration form actually derives from THIS vocabulary's map,
+      // not some other map by coincidence of name.
+      const derives = new RegExp(
+        `${v.list}\\s*:\\s*readonly ${v.union}\\[\\]\\s*=\\s*Object\\.keys\\(${v.map}\\)`,
+      );
+      expect(api, `${v.list} must derive from ${v.map}`).toMatch(derives);
+    }
+  });
+
+  // A stricter "enumerated only where the compiler enforces exhaustiveness"
+  // scan (the PrReason/AuthVerdict shape above) was tried here and dropped:
+  // `server/src/coord/schema.ts`'s migration 7 DDL — Task 3's, already
+  // landed uncommitted in this tree — legitimately spells `'wall-clock'`,
+  // `'interval'` and `'unknown'` in SQL column comments describing the exact
+  // columns this vocabulary hydrates. That is documentation quoting the
+  // vocabulary it serves, not a second TypeScript definition, and a
+  // text-only scan cannot tell the two apart without over-fitting to
+  // schema.ts's comment style. `shared/api.ts` remains the one place a
+  // `Record<Union, …>` makes a missing member a compile error, which is the
+  // guarantee that actually matters (Task 2 report has the measurement).
 });
