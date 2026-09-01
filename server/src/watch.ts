@@ -206,6 +206,29 @@ const MAIL_QUIET_MS = 60_000;
  *  seconds is a denial of service dressed as coordination. */
 const MAIL_COOLDOWN_MS = 120_000;
 
+/** The same two questions the pair above asks, asked of a COORDINATOR — a
+ *  session whose id is the `claimedBy` of a non-terminal run.
+ *
+ *  The pair above is sized for a worker mid-thought: a minute of measured idle
+ *  before the lane may interrupt, and no second injection inside two. A
+ *  coordinator at a wave boundary is not mid-anything. Its own contract
+ *  (clause 7, `ccd/coordinator-skill/SKILL.md`) MANDATES that it end its turn
+ *  and wait, so the state the worker floor exists to protect is the state the
+ *  coordinator is required to be in, and the floor becomes a delay with nothing
+ *  behind it — on the one session every other session in a program is waiting
+ *  for.
+ *
+ *  Fifteen seconds is still an idle floor and not the absence of one: it is read
+ *  off the same `statusUpdatedAt` and answers the same question, so a
+ *  coordinator genuinely mid-turn is still not interrupted. Thirty seconds keeps
+ *  `MAIL_COOLDOWN_MS`'s own promise — no fan-out arriving as a burst of prompts
+ *  — at a boundary where two messages are a handoff rather than a denial of
+ *  service.
+ *
+ *  Workers and every other session read the pair above, untouched. */
+const COORD_QUIET_MS = 15_000;
+const COORD_COOLDOWN_MS = 30_000;
+
 /** How long an UNACKED delivery waits before it is replayed. Dated from the
  *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
  *  the edge proves the turn started, so the recipient is thinking, not
@@ -2299,6 +2322,16 @@ export class FleetWatcher {
     // identical query would only cost, never correct, anything.
     const due = unacked.length === 0 ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (due.length === 0) return;
+    // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
+    // every row in it. The same bargain `hsCache` strikes one field over
+    // (`:2246`), legitimate for the same reason: a second read would carry this
+    // same `now`, so a cached answer is exactly as fresh as a fresh one.
+    //
+    // Placed AFTER the `due.length === 0` return, so an idle box pays nothing:
+    // no mail, no query. And shaped into a `Set` HERE rather than in the store,
+    // matching how `uuidByToId` and `sessionProjects` are built from `records`
+    // — the store returns rows, the sweep shapes them into what it will ask.
+    const coordinators = new Set(store.openCoordinatorIds());
     // D-792's ONE WRITER. Every ordinary gate below calls this and then
     // `continue`s; nothing reads it back. It records WHAT refused the row and
     // for how long, and changes nothing about whether, when or how often the
@@ -2325,8 +2358,13 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
+        // THE ONE FACT THIS RUNG ADDS, read once per row from the per-sweep set
+        // above and consumed by exactly two gates: this one and `not-quiet`
+        // below. Neither condition changes — only the threshold each is measured
+        // against.
+        const isCoordinator = coordinators.has(d.toId);
         const last = this.mailCooldown.get(d.toId) ?? 0;
-        if (now - last < MAIL_COOLDOWN_MS) { gated(d, 'cooldown'); continue; }
+        if (now - last < (isCoordinator ? COORD_COOLDOWN_MS : MAIL_COOLDOWN_MS)) { gated(d, 'cooldown'); continue; }
         const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
@@ -2598,7 +2636,18 @@ export class FleetWatcher {
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
         if (!live || liveSessionStatus(live.status) !== 'idle') { gated(d, 'not-idle'); continue; }
-        if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) { gated(d, 'not-quiet'); continue; }
+        // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
+        // docstring sets the rule — one member per CONDITION, not per `continue`
+        // — and `no-pane`/`no-config-dir` were split because an operator acts on
+        // them differently. Here the condition is the same one ("this session has
+        // not been quiet long enough") and so is the act (wait). The union is
+        // also explicitly NOT a scheduling input: it exists so a human can tell
+        // waiting from wedged, and both thresholds are waiting. A
+        // `coord-not-quiet` member would cost a union entry, a total-map entry in
+        // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
+        // nobody acts on.
+        if (live.statusUpdatedAt === null ||
+            now - live.statusUpdatedAt < (isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS)) { gated(d, 'not-quiet'); continue; }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per

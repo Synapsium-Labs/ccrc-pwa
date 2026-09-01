@@ -2824,8 +2824,16 @@ export interface NotifyEvent {
    *  this union was closed and unvalidated — a bare `getJson<CatchUp>`
    *  (`pwa/src/lib/api.ts`) hands a browser's JSON straight to a renderer that
    *  switches on three members, so a fourth arrived typed as one of the three
-   *  it is not. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'unknown';
+   *  it is not.
+   *
+   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or
+   *  lowered — and it is a seventh member rather than a reuse of `run` because
+   *  there is no run: `recordRunEvent` writes `fromState === toState` and
+   *  `pushNewRuns` skips exactly those rows, so an attribution row would land
+   *  in `run_events` and be seen by nobody (D-1163). Additive: an older client
+   *  degrades it to `unknown` through `reviveNotifyEvent`, which is the
+   *  degradation this union was given `unknown` for. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
   sessionId: string; title: string; body: string;
 }
 
@@ -2838,7 +2846,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -3894,6 +3902,22 @@ export interface MailSummary {
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
  *  `runs`, never stored beside these — see `CoordStore.capsUsage`. */
 export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: number }
+
+/** The two counts `CoordStore.capsUsage` DERIVES from `runs` — never stored
+ *  beside the limits, for the reason that method's own docstring gives (a
+ *  stored counter is a second copy of what `runs` already knows, and the copy
+ *  is always the one that drifts).
+ *
+ *  Named here only since the operator dial shipped (D-1209): before that the
+ *  shape existed solely as an inline structural type on one method, because
+ *  `dispatchRun` was its only reader and never had to name it. */
+export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
+
+/** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
+ *  TOGETHER, in one shape and one round trip: a cap without its usage is a
+ *  number an operator cannot act on, and a usage without its cap is a number
+ *  they cannot read. */
+export interface CoordCapsView { caps: CoordCaps; usage: CoordCapsUsage }
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */

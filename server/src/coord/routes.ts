@@ -8,6 +8,7 @@ import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
@@ -26,7 +27,7 @@ import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
   isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type ClaimConflict, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
+  type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
   type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
 
@@ -461,11 +462,26 @@ export function registerCoordRoutes(
     let runId: number | null;
     if (runIdRaw === undefined || runIdRaw === null) {
       runId = null;
-    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+    // THE LOWER BOUND, and the convention is now the same across all three
+    // `runId` body readers (D-1165). Wave 5 restored it on the kickoff route
+    // (D-1151, `server.ts:1540`) and left this reader and the claims one
+    // accepting `0` and negatives.
+    //
+    // This is NOT the free win that one was. There, nothing downstream caught
+    // the bad pair and a nonsense brief was actually composed; here the value
+    // IS caught, as a 404 `unknown-run` from the existence check below. So the
+    // change is a change: a malformed `runId` now answers 400 rather than 404,
+    // and on THIS route the durable rejection row records the shape code
+    // instead of the unknown-run one. That is the accurate pair — a shape error
+    // is a 400, a missing row is a 404 — and collapsing them is the overloaded
+    // seam this tree bans by name. Both directions are pinned in
+    // `mail-routes.test.ts`: a negative refuses 400, and a well-formed 4242
+    // still reaches the existence check and refuses 404.
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
       return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
-        'runId must be an integer when given');
+        'runId must be a positive integer when given');
     }
 
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
@@ -1280,6 +1296,146 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.paused });
   });
 
+  /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
+   *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
+   *  `server/src`: the only way to change `maxConcurrentWorkers` or
+   *  `maxSessionsPerDay` was to hand-edit `coord.db` (D-1164).
+   *
+   *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
+   *  the first route in the tree that needs them apart (D-1240). The box token
+   *  gates MACHINE lanes: callers on the fleet host with no cookie jar, which is
+   *  why every one of them is `requireMailToken`. An operator turning a dial in
+   *  the PWA is not one, and gating a phone control on the fleet's shared secret
+   *  would put it behind a secret the phone does not hold. Nor is this a release
+   *  valve: `UNGATED`'s whole argument (D-282) is that the party locked out is
+   *  the party holding the key, so a wedge's valve must not sit behind it — and
+   *  raising a cap releases no wedge. It is an ordinary same-origin PWA write:
+   *  session-gated when armed (deliberately absent from `auth/gate.ts`'s EXEMPT
+   *  table), open dark, like every other write the console makes.
+   *  `coord-pause-route.test.ts`'s `SESSION_ONLY` holds both halves against the
+   *  source, in both directions.
+   *
+   *  THE `notConfigured` ARM THE PAUSE ROUTE ABOVE DELIBERATELY OMITS (D-1166).
+   *  A pause is a marker file on the fleet host, so a box with no coordination
+   *  database can still be paused and answering 501 there would be a lie about
+   *  what the act needs. Caps are rows in `coord.db`, and `caps()` casts an
+   *  undefined row rather than returning null — copying that handler's opening
+   *  verbatim, the natural move since it is the only other `/api/coord/*` route,
+   *  ships a route that throws on such a box.
+   *
+   *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
+   *  `capsUsage` is computed server-side and reaches the PWA nowhere;
+   *  `CoordStatus` carries `pause` and `mail` and no numbers at all. Caps are
+   *  deliberately NOT added to that frame: `emitCoord` states it needs no
+   *  try/catch precisely because it touches no `node:sqlite`, and
+   *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard
+   *  would let it re-emit on nearly every two-second tick.
+   *
+   *  THE REPLY IS THE CONFIRMATION, unlike the pause toggle one door up. That
+   *  toggle refuses to be optimistic because a `{type:'coord'}` frame exists to
+   *  settle it. No frame carries caps, so the honest answer is the stored value
+   *  RE-READ after the write — never the value the caller sent, which is what
+   *  they asked for and not what is now true. */
+  /** The answer shape, defined ONCE and shared by both halves (coordinator
+   *  ruling on wave 6, item 1): the read must not carry a copy of what the
+   *  write answers. Typed as `CoordCapsView` so the two cannot drift silently —
+   *  an inline object literal in either half would satisfy the compiler while
+   *  saying something the other does not. */
+  const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
+    ({ caps: store.caps(), usage: store.capsUsage() });
+
+  app.get('/api/coord/caps', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...capsView(deps.coord) });
+  });
+
+  app.post('/api/coord/caps', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    // SHAPE FIRST, AND OUTSIDE THE MUTEX: a malformed body is decided by this
+    // request alone, and queueing it behind a live dispatch would make the
+    // answer depend on the fleet's weather (the reclaim route's own rule).
+    // This is a shape probe only — the merge that is actually written is
+    // recomputed under the lock below, so the caps it reads here do not matter.
+    const shape = decideCaps(coord.caps(), req.body ?? {});
+    if (!shape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
+    }
+    // THE READ-MODIFY-WRITE IS ONE CRITICAL SECTION, and that is the whole
+    // reason the mutex is here (self-review MAJOR). A partial body means the
+    // value written is `{...before, ...asked}`, so a merge base read OUTSIDE
+    // the lock is a lost update rather than a style point: with a dispatch
+    // holding the mutex across seconds of real ccd/tmux I/O, two operator saves
+    // of DISJOINT dials both read `{3, 12}`, and the second thunk writes back
+    // the first's field unchanged. `CoordMutex`'s own docstring names exactly
+    // this hazard — "two dispatches can no longer both read the count before
+    // either writes it" — and `POST /api/runs` puts its whole body inside for
+    // the same reason.
+    //
+    // `before` is therefore read HERE, under the lock, and is what the feed
+    // event reports: the "3 → 5" it prints is the transition that actually
+    // happened rather than one composed from a reading taken before the wait.
+    //
+    // The thunk is `async` because `CoordMutex.run` takes `() => Promise<T>`;
+    // the work inside it is synchronous, because `node:sqlite` is and this
+    // store's synchrony is a stated concurrency invariant, not an accident to
+    // be wrapped away.
+    const { before, view } = await coordMutex.run(async () => {
+      const current = coord.caps();
+      const merged = decideCaps(current, req.body ?? {});
+      // Unreachable: the same body passed the identical shape check above, and
+      // `decideCaps`'s verdict depends on the BODY alone — `current` only
+      // supplies the untouched fields. Thrown rather than swallowed, so if that
+      // ever stops being true it is a 500 that says so and not a silent 200.
+      if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
+      coord.setCaps(merged.next);
+      return { before: current, view: capsView(coord) };
+    });
+    // A `run_events` row would be WRONG here: there is no run, and
+    // `recordRunEvent` writes `fromState === toState`, which `pushNewRuns`
+    // skips outright — the row would land and be seen by nobody. The durable
+    // feed is where a coordination change with no run belongs.
+    //
+    // A missing `NotifyLog` degrades the RECORD and never the write; and
+    // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
+    // here exactly the way `watch.ts:1225-1228` catches it. Refusing an
+    // operator's write because the feed archive is unavailable would be the
+    // collapse, not the safety.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'coord', sessionId: '',
+          title: 'caps changed',
+          body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
+                `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
+      } finally {
+        // FLUSH, like the only other `record()` caller in the tree
+        // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
+        // gives: `record()` bumps the in-memory seq, and a seq handed to a
+        // client but never persisted lets a restart re-mint the same
+        // `{epoch, seq}` pair for a different event — the stale-but-valid
+        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
+        // flush never rejects, and the caps write must not wait on it.
+        //
+        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
+        // inside the try, one line below `recordFeedEvent` — which throws
+        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
+        // the flush was skipped on precisely the path that needed it: the seq
+        // was already spent, the client already had it, and the file still
+        // held the older number. The seq is minted by `record()`, so its
+        // persistence must follow `record()` and nothing else.
+        void log.flush();
+      }
+    }
+    return reply.code(200).send({ ok: true, ...view });
+  });
+
   /**
    * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
    * (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`).
@@ -1694,11 +1850,13 @@ export function registerCoordRoutes(
     let runId: number | null;
     if (runIdRaw === undefined || runIdRaw === null) {
       runId = null;
-    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+    // The same lower bound as the mail reader above and the kickoff route's
+    // (D-1165) — byte-identical logic, differing only in the refusal shape.
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
       return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'runId must be an integer when given' });
+        detail: 'runId must be a positive integer when given' });
     }
 
     if (paths.length > CLAIM_PATHS_MAX) {

@@ -114,6 +114,54 @@ describe('POST /api/mail — the rejection table', () => {
     ['oversize', 413, { body: 'x'.repeat(8 * 1024 + 1) }],
   ];
 
+  // D-1165: the lower bound the third `runId` reader already had. Wave 5 put
+  // `>= 1` on the kickoff route (D-1151) and left this one and the claims one
+  // accepting 0 and negatives, relying on a downstream `coord.run(runId) ===
+  // null` to answer 404 `unknown-run`. That is a shape error answering as a
+  // missing row, which is the overloaded seam this tree bans by name — and on
+  // THIS route it also mislabels the durable rejection record.
+  //
+  // The behaviour CHANGE is pinned in both directions on purpose: a malformed
+  // runId becomes 400, and a well-formed-but-absent one stays 404.
+  it.each([[0], [-1], [-4242], [1.5], [4242.5]])('refuses runId %s as a shape error, not as a missing run', async (runId) => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app!, { ...GOOD, runId });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-kind' });
+    expect(res.json().detail).toContain('positive');
+    // …AND THE DURABLE ROW SAYS THE SAME THING (D-1218). The comment above
+    // claims this route "also mislabels the durable rejection record" — a
+    // SECOND consequence, beyond the status code, that nothing on THESE two
+    // rows checked. The record itself is well read: `store.rejections()` has
+    // sixteen call sites across three test files (fourteen before this wave
+    // added two), so the gap was never "nothing reads it" — it was that the two
+    // rows whose comment makes the claim did not. The row is the fleet-visible
+    // half of a refusal and the half a later feed will surface, so a shape error
+    // recorded as a missing run is a wrong fact that outlives the response.
+    //
+    // Measured with a mutation that touches the ROW alone — `refuse()` recording
+    // a constant code while the reply still varies — so this assertion is
+    // witnessed independently of the status assertions above it.
+    expect(w.coord.rejections().map((r) => r.code)).toEqual(['bad-kind']);
+  });
+
+  it('still answers 404 unknown-run for a WELL-FORMED runId that names no run', async () => {
+    // The fixture that keeps the row above from being a widening: 4242 is a
+    // perfectly good run id, and it must still reach the existence check.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app!, { ...GOOD, runId: 4242 });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-run' });
+    // The other direction for the durable row too: this one really is recorded
+    // as a missing run, so the row above pins a DISTINCTION rather than a
+    // constant.
+    expect(w.coord.rejections().map((r) => r.code)).toEqual(['unknown-run']);
+  });
+
   it.each(REJECT_CASES)('refuses %s', async (code, status, override) => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa');

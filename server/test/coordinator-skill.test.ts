@@ -245,6 +245,17 @@ describe('the coordinator skill: linkage', () => {
       // corpus-wide forbid-mention pin (the `/api/claims/:id/break` shape) is
       // what turns this permission-to-omit into a prohibition.
       'POST /api/runs/:id/reclaim',
+      // WAVE 6 (D-1240) — the OPERATOR-dial shape, and the `POST
+      // /api/coord/pause` argument one turn sharper. The caps bound how much a
+      // coordinator may dispatch; a coordinator told about this route would be
+      // told how to raise its own limit, which is not a door it is the one to
+      // walk through — it is the cap's own defeat, the way unpausing itself
+      // would be the pause marker's. Neither half is named: the READ is exempt
+      // too, because a coordinator that can read the dial has no use for the
+      // number it is not allowed to change, and naming it would only be the
+      // first half of an invitation.
+      'GET /api/coord/caps',
+      'POST /api/coord/caps',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -998,6 +1009,13 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
         `${code} should be a declared MailRejectCode since wave 1`).toBe(true);
       expect(pp()).toContain(code);
     }
+  });
+
+  it('never names the caps dial — a door that would tell a coordinator how to lift its own cap', () => {
+    // Wave 6's accounting, the same shape: EXEMPT above only PERMITS the
+    // omission, and this is what forbids the mention. Both halves, because the
+    // read is the first half of the invitation.
+    expect(allSkillText).not.toContain('/api/coord/caps');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

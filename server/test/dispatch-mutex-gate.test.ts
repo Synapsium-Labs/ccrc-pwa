@@ -62,7 +62,15 @@ function blankCommentsAndStrings(text: string): string {
 
 interface Site { file: string; line: number; name: string; guarded: boolean }
 
-const TARGETS = new Set(['dispatchRun', 'closeRun']);
+// `coord.setCaps` joins the two bare functions, and the scanner needs no change
+// to take it: `head` is the whole identifier chain including its dots, which is
+// what already makes `coord.closeRun` a non-match for the bare `closeRun`
+// target. The reason it belongs here is the same D-46 reason: `dispatchRun`
+// reads `caps()` and `capsUsage()` across await boundaries
+// (`coord/dispatch.ts:236-237`), so a caps write landing between those two
+// reads is the identical un-serialised-decision hazard, and `POST
+// /api/coord/caps` is the first and only writer (D-1240/D-1164).
+const TARGETS = new Set(['dispatchRun', 'closeRun', 'coord.setCaps']);
 const GUARD = 'coordMutex.run';
 
 /** Index of the `)` matching the `(` at `open`, by plain depth counting —
@@ -208,8 +216,14 @@ describe('D-46: dispatchRun/closeRun are never invoked outside CoordMutex', () =
     // A scan that found nothing would pass the assertion below vacuously —
     // require it to have actually found the two real call sites first.
     expect(ALL_SITES.length).toBeGreaterThan(0);
-    expect(ALL_SITES.some((s) => s.name === 'dispatchRun')).toBe(true);
-    expect(ALL_SITES.some((s) => s.name === 'closeRun')).toBe(true);
+    // EVERY target, not a hand-named two: an entry added to `TARGETS` whose
+    // call site the scanner never finds is decoration, and it satisfies the
+    // all-guarded assertion below vacuously. Derived from the set itself, so a
+    // future target inherits the floor without anyone remembering to add it
+    // (self-review: `coord.setCaps` shipped with no such floor).
+    for (const t of TARGETS) {
+      expect(ALL_SITES.some((s) => s.name === t), `no call site found for target ${t}`).toBe(true);
+    }
     expect(ALL_SITES.filter((s) => !s.guarded).map(show)).toEqual([]);
   });
 });

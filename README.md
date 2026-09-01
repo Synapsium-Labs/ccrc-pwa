@@ -525,11 +525,22 @@ procedure and the operator runbooks (lost device, corrupt secret, disarming) are
 step 10 of
 [`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
 
+<!-- ORDER-PINNED PASSAGE. `server/test/box-token-census.test.ts` reads the number
+     words in the paragraph below and asserts them IN SEQUENCE, so this paragraph
+     states the TOTAL first and the breakdown second. Rewriting it the other way
+     round is a correct sentence and a red suite: move the expectation in that file
+     in the same change. It also asserts that every exempt-but-authenticated GET is
+     named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
+
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the ten machine lanes the fleet
-host posts to (nine box-token-gated coordination routes plus `/api/notify`,
-which still tolerates an absent token for one deploy generation — none of them
-has a cookie jar), the login and passkey-assertion doors themselves,
+liveness gate reads the shipped sha out of it), the nineteen machine lanes the
+fleet host reaches (eighteen box-token-consulting coordination routes plus
+`/api/notify`, which still tolerates an absent token for one deploy generation —
+the caller is `curl` inside a Claude Code session, with no cookie jar, though the
+exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
+`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
+the token, which is how a coordinator reads its own wave ledger from the fleet
+host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
@@ -1396,14 +1407,21 @@ question | answer | status | artifact` — through `POST /api/mail`, attributed
 forgery-proofness) and capped (an 8 KiB body, typed rejection codes, every
 rejection itself recorded, win or lose). A watcher lane (`MAIL_SWEEP_MS`,
 10 s) walks queued deliveries and, once a recipient has been idle-quiet for
-`MAIL_QUIET_MS` (60 s) with no dialog or ask pending, injects the fenced
+`MAIL_QUIET_MS` (60 s) with no dialog or ask pending — or `COORD_QUIET_MS`
+(15 s) when the recipient is a COORDINATOR, i.e. the `claimedBy` of a
+non-terminal run, which its own contract requires to be sitting idle at a wave
+boundary — injects the fenced
 envelope through `sendPrompt`'s full proof discipline — never re-rendered,
-replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`,
-and again every `MAIL_REPLAY_MS`) until the recipient POSTs
+replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`, or
+`COORD_COOLDOWN_MS` for a coordinator, and again every `MAIL_REPLAY_MS`) until
+the recipient POSTs
 `/api/mail/:id/ack`.
 
-`/api/mail` (and its ack route), the run routes (`POST /api/runs`,
-`/:id/dispatch`, `/:id/close`, `/:id/advance`), `GET /api/mail?to=<id>` and
+`/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
+`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`) — but **not** the
+operator doors `/api/runs/:id/abandon` and `/api/runs/:id/reclaim`, which carry
+no box token by design (D-282), any more than `/api/coord/pause` or
+`/api/claims/:id/break` do — `GET /api/mail?to=<id>` and
 `/api/notify` (ccd's swap hook) all require the same **box token** — one
 shared secret per box, read from a file, deliberately never an env var
 (`deploy/ccrc.service` ships no `EnvironmentFile=`, and this build does not
@@ -1420,9 +1438,12 @@ design note argued they were no worse than the pre-existing, also-open
 inverted the intent (`ccd ws-add`, an injected `/clear` and
 `ws-release`/`ws-archive` are strictly more dangerous than inserting a mail
 row, which required the token all along) and closed it: every coordinator
-write route now fails the same way the mail pair always has. None of these
-six routes tolerates a missing token — a request with none is `401
-unauthenticated`, full stop. `/api/notify` alone accepts a request with
+write route that is a MACHINE lane now fails the same way the mail pair always
+has. None of the lanes enumerated above tolerates a missing token — a request
+with none is `401 unauthenticated`, full stop. (The operator doors excepted just
+above are the other half of that sentence, and they are not an oversight in it:
+they are reachable from a phone precisely because the party a wedge locks out is
+the party holding the box token.) `/api/notify` alone accepts a request with
 **no** token header for one deploy generation, logged as `legacy` so the
 swap hook cannot go dark mid-rollout; that tolerance comes out in the deploy
 *after* the one that ships `notify.sh`'s token read — it is a rollout
@@ -1436,10 +1457,17 @@ because that exact placeholder is committed to this public repo.
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
 terminal) and `maxSessionsPerDay` (default 12 — dispatches inside a rolling
 24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. No route in
-this PR changes them; until PR J adds one, an operator edits the row
-directly: `sqlite3 ~/.ccrc/coord.db "UPDATE coordinator_state SET
-maxConcurrentWorkers=…, maxSessionsPerDay=… WHERE id=1"`. Pause is a
+`POST /api/runs/:id/dispatch` before anything else is touched. Both are an
+operator control: `GET`/`POST /api/coord/caps` reads them beside their current
+usage and writes either or both, bounds-checked, and the `/runs` board renders
+the dial. (For a stretch of this build's history there was no route at all and
+an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
+caller in the server for as long as it did.) Like every other same-origin PWA
+write the caps route carries **no box token**; unlike the operator doors named
+above (`/api/coord/pause`, `/api/runs/:id/abandon`, `/api/claims/:id/break`,
+`/api/runs/:id/reclaim`) it is not a release valve, so nothing may rely on it to
+open a wedge.
+Pause is a
 **file**, on ccd's own `*-disabled`-marker convention, read from `$REG`
 (the fleet host's session registry, `~/.cc-sessions`) before every dispatch:
 `touch $REG/coordinator-paused` refuses every dispatch with `409

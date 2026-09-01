@@ -72,14 +72,19 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The SEVENTEEN box-token machine lanes plus `/api/notify` — the fleet
+ *  2. The eighteen box-token machine lanes plus `/api/notify` — the fleet
  *     host's ingress. These callers are `curl` inside a Claude Code session and
- *     ccd's `notify.sh`; they have no cookie jar and never will. All eighteen
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All nineteen
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
- *     refusal — but "checks" is not "requires" for one of them, and the
- *     difference is worth stating rather than rounding off: the seventeen
- *     coordination lanes refuse every
- *     verdict but `'ok'`, while `/api/notify` still passes `'legacy'` (no token
+ *     refusal — but "checks" is not "requires", and the difference is worth
+ *     stating rather than rounding off, in BOTH directions rather than only
+ *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
+ *     as well as in number). Most of the coordination lanes refuse every
+ *     verdict but `'ok'`. The exempt-but-authenticated GETs
+ *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/lifecycle`, `/api/peers`,
+ *     `/api/claims`) do NOT: they take a live session cookie OR the token
+ *     (D-149), which is why the coordinator can read its own wave ledger
+ *     cookieless from the fleet host. And `/api/notify` still passes `'legacy'` (no token
  *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
  *     the operator's one-deploy-generation rollout ruling. So `/api/notify` is
  *     the one exempt route that a caller with no credential at all can still
@@ -87,8 +92,15 @@ import type { SessionStore } from './sessions.js';
  *     `coord/token.ts:207`, "REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE
  *     DEPLOY AFTER THIS SHIPS" — and this exemption inherits its lifetime: the
  *     day the tolerance goes, this entry is a plain box-token lane like the
- *     other seventeen. Session-gating it instead is not the fix, because the caller
+ *     rest. Session-gating it instead is not the fix, because the caller
  *     genuinely has no cookie; the fix is the removal already scheduled.
+ *
+ *     ORDER-PINNED PARAGRAPH. `box-token-census.test.ts` reads the number words
+ *     above IN SEQUENCE — the box-token lane count first, the total second — so
+ *     rewriting this the other way round is a true sentence and a red suite until
+ *     that expectation moves in the same change (D-1233). Any OTHER number here
+ *     is read as a claim about this surface too, so spell an unrelated one as a
+ *     word the scan does not read.
  *
  *  3. `POST /api/auth/login` and `GET /api/auth/status` — the door, and the sign
  *     on it. A gate that gated its own login route would be a box nobody can
@@ -660,12 +672,16 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the seventeen box-token machine
- * lanes plus `/api/notify` are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighteen box-token machine
+ * lanes plus `/api/notify` — nineteen in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
- * preflight it will fail. `POST /api/auth/login` and the two passkey assert
- * routes are the doors: a forged login is not a state change an attacker
+ * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same
+ * scanner — D-1233: lanes first, total second. The marker sits AFTER the
+ * sentence it annotates; its first placement was spliced into the middle of one,
+ * and nothing caught it because the scanner reads numerals.)
+ *
+ * `POST /api/auth/login` and the two passkey assert routes are the doors: a forged login is not a state change an attacker
  * benefits from, and the assert pair verifies an origin of its own, from inside
  * `clientDataJSON`, against the value RECORDED ON THE CREDENTIAL — a stronger
  * check than this one.

@@ -33,11 +33,12 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
+import { type CoordCapsView, type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
 import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
+import { CapsControl } from '../fleet/CapsControl';
 import { coordPresence } from '../fleet/coordWords';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
@@ -67,6 +68,12 @@ import '../fleet/fleet.css';
  *  board's own "Finished" group could never receive real data on a cold
  *  deep link — only ever from a test poking the store directly. */
 const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
+
+/** The caps dial's default reader, module-scope beside `loadRunsDefault` and
+ *  for the same reason: a stable identity rather than a fresh closure per
+ *  render, so the control's own effect does not re-fire on every parent
+ *  re-render. */
+const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 
 function RunRow({
   run,
@@ -325,9 +332,18 @@ function RunRow({
 export function RunsScreen({
   store = useFleetStore,
   loadRuns = loadRunsDefault,
+  loadCaps = loadCapsDefault,
 }: {
   store?: FleetStore;
   loadRuns?: () => Promise<{ runs: RunSummary[] }>;
+  /** The caps dial's own read, injected HERE rather than left to
+   *  `CapsControl`'s default, for the reason `loadRuns` is: every loader this
+   *  screen sets going on mount is one a test must be able to hold, and a
+   *  component that reaches for the global `fetch` from inside the tree puts a
+   *  request into every test that renders the board. Measured — it broke the
+   *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
+   *  guard worth keeping exactly as strict as it was. */
+  loadCaps?: () => Promise<CoordCapsView>;
 }): ReactNode {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -592,6 +608,12 @@ export function RunsScreen({
           nothing until the first `{type:'coord'}` frame has arrived
           (`CoordBanner`'s own `coordFrameSeen` gate). */}
       <CoordBanner store={store} />
+
+      {/* Wave 6, spec §8: the operator's dial on the two coordination caps,
+          beside the pause control and on `/runs` alone. Renders nothing until
+          its own read lands — and nothing at all on a box with no coordination
+          database, where the caps do not exist to be shown. */}
+      <CapsControl coordCaps={loadCaps} />
 
       {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
           board's own state below — a program starts before any run exists

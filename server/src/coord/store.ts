@@ -1232,6 +1232,39 @@ export class CoordStore {
     ).all(sessionId, excludeRunId ?? -1) as unknown as OpenSibling[];
   }
 
+  /** The sessions COORDINATING something live: every distinct `claimedBy` of a
+   *  run this build calls non-terminal. NOT `openRunsForSession`'s question one
+   *  method up — that one keys on `sessionId`, the WORKER column, which is the
+   *  opposite fact about the same row (D-1241).
+   *
+   *  Two columns, no JOIN and no `hydrateRun`, for `OpenSibling`'s own stated
+   *  reason (`:53-57`): dragging `prLineage` JSON and a `programs` join through
+   *  a question that turns on one column is a cost this file does not pay.
+   *  `runs({includeClosed:false})` would answer and would pay it, per row, on
+   *  the box's busiest loop.
+   *
+   *  The predicate is `programOpenRunCount`'s (`:1284`), COPIED rather than
+   *  re-derived. `RUN_TRANSITIONS` would answer differently — it gives
+   *  `'unknown'` an empty target list, so a table-derived predicate would call
+   *  an `'unknown'` row terminal while every shipped query here counts it open.
+   *  That divergence is latent (this build never writes `'unknown'`; it is what
+   *  a newer build's row degrades to on read), and it stays latent only while
+   *  new predicates copy the SQL spelling instead of re-deriving one.
+   *
+   *  A row whose `claimedBy` was rewritten onto a TERMINAL run by
+   *  `reclaimProgram` (`:620-660`) does not appear here, and must not: that
+   *  rewrite deliberately covers every run of a programme, so appearing in some
+   *  `claimedBy` is not evidence of coordinating anything live.
+   *
+   *  Synchronous, like every other read on this store — its synchrony is a
+   *  stated concurrency invariant, not an oversight to be wrapped. */
+  openCoordinatorIds(): string[] {
+    return (this.db.prepare(
+      'SELECT DISTINCT claimedBy FROM runs ' +
+      "WHERE claimedBy IS NOT NULL AND state NOT IN ('done','failed')",
+    ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
+  }
+
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
    *  has always taken a `detail` parameter, but until the dispatch route's
    *  refused-`/clear` fix started passing one, nothing in this file ever

@@ -70,6 +70,19 @@ const list = (app: FastifyInstance, qs = '?project=demo') =>
   app.inject({ method: 'GET', url: `/api/claims${qs}`, headers: tok });
 
 describe('POST /api/claims', () => {
+  // D-1165, the claims half — byte-identical logic to the mail route's reader,
+  // differing only in the refusal shape.
+  it.each([[0], [-1], [1.5]])('refuses runId %s as a shape error', async (runId) => {
+    const home = mkTmp('ccrc-claims-');
+    seed(home, A.byId, UUID_A);
+    const { app } = await openApp(home);
+    const res = await claim(app, { ...A, project: 'demo',
+      paths: ['a/b.ts'], intent: 'work', runId });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(res.json().detail).toContain('positive');
+  });
+
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 

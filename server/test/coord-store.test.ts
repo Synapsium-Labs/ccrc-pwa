@@ -1795,3 +1795,102 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(del(s, k).state).toBe('queued');
   });
 });
+
+// The sweep asks one question of this store and nothing else asked it before:
+// which sessions are COORDINATING something live. Three of the four tests below
+// exist for a direction the obvious implementation gets wrong — the worker
+// column, a terminal row, a repeated coordinator (D-1241).
+describe('CoordStore: the coord feed kind', () => {
+  it('round-trips a coord feed event through the durable table', () => {
+    // The absence half is what makes this worth a test: `feedEvents` reads
+    // `kind` back through `isNotifyKind`, so before the union grew a seventh
+    // member a 'coord' row came back as 'unknown' — a fixture asserting only
+    // that the row lands would have passed against exactly that defect.
+    const s = store();
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'coord', sessionId: '',
+      title: 'caps', body: 'workers 3 to 5' });
+    expect(s.feedEvents(10)).toEqual([
+      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5' },
+    ]);
+  });
+});
+
+describe('CoordStore: openCoordinatorIds', () => {
+  it('names a session that is the claimedBy of a non-terminal run', () => {
+    const s = store();
+    openRun(s, { claimedBy: 'the-coordinator' });
+    expect(s.openCoordinatorIds()).toEqual(['the-coordinator']);
+  });
+
+  it('does NOT name a session whose only claimed run is terminal', () => {
+    // The reclaim trap. `reclaimProgram` rewrites `claimedBy` across EVERY run
+    // of a programme, terminal rows included, so "appears in some claimedBy" is
+    // not the fact this method answers.
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-corpse' }) as { id: number };
+    expect(s.advance(r.id, 'dispatched', 'operator')).toMatchObject({ ok: true });
+    expect(s.advance(r.id, 'closing', 'operator')).toMatchObject({ ok: true });
+    expect(s.advance(r.id, 'done', 'operator')).toMatchObject({ ok: true });
+    expect(s.openCoordinatorIds()).toEqual([]);
+  });
+
+  it('does NOT name a session whose only claimed run FAILED', () => {
+    // The other terminal state, which the shipped predicate names explicitly
+    // and a predicate derived from RUN_TRANSITIONS would too — but a predicate
+    // that only excluded 'done' would not.
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-corpse' }) as { id: number };
+    expect(s.advance(r.id, 'failed', 'operator')).toMatchObject({ ok: true });
+    expect(s.openCoordinatorIds()).toEqual([]);
+  });
+
+  it('names the COORDINATOR and not the WORKER — sessionId is not claimedBy', () => {
+    // The direction `openRunsForSession` would have got exactly backwards.
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.markDispatched(r.id, 'the-worker', 'ws-1', 'ws/ws-1', false);
+    expect(s.openCoordinatorIds()).toEqual(['the-coordinator']);
+  });
+
+  it('names one coordinator once, however many open runs it holds', () => {
+    const s = store();
+    openRun(s, { claimedBy: 'the-coordinator' });
+    openRun(s, { claimedBy: 'the-coordinator', wave: 2 });
+    expect(s.openCoordinatorIds()).toEqual(['the-coordinator']);
+  });
+
+  it('names two different coordinators when two programs are live', () => {
+    // The fixture that could witness a scan collapsing to a single row.
+    const s = store();
+    openRun(s, { claimedBy: 'coordinator-a' });
+    openRun(s, { program: 'other', title: 'Other', claimedBy: 'coordinator-b' });
+    expect(s.openCoordinatorIds().sort()).toEqual(['coordinator-a', 'coordinator-b']);
+  });
+
+  it('skips a RECONSTRUCTED run, whose claimedBy is null — and does not answer [null]', () => {
+    // The `claimedBy IS NOT NULL` half, and it needs this fixture because
+    // `openRun` cannot produce the row: `reconstruct`'s disaster-recovery
+    // INSERT is the one writer in the tree that binds `claimedBy` to null
+    // (`store.ts:2406`), and it rebuilds a live, NON-terminal wave. Without the
+    // guard the method answers `[null]` typed `string[]` — a null wearing a
+    // session id's type, straight into a `Set` the mail lane then asks about.
+    const s = store();
+    const rebuilt = s.reconstruct({
+      ledger: { slug: 'build4', title: 'Transcript surface',
+                waves: [{ wave: 1, of: 5, handoffCommit: null }] },
+      registry: { sessionId: 'ccrc-pwa-quiet-mesa', project: 'ccrc-pwa',
+                  workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+                  held: 'program:build4 wave:1/5' },
+      prHistory: [],
+    });
+    // The premise, established rather than assumed: a NON-terminal row exists,
+    // and its claimedBy really is null.
+    expect(rebuilt.map((r) => r.state)).toEqual(['working']);
+    expect(s.run(rebuilt[0]!.id)!.claimedBy).toBeNull();
+    expect(s.openCoordinatorIds()).toEqual([]);
+  });
+
+  it('is empty on a store with no runs at all', () => {
+    expect(store().openCoordinatorIds()).toEqual([]);
+  });
+});

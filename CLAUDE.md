@@ -152,12 +152,14 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
   /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
   `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
-  argument — are the census, not this bullet. What does need saying here is the coordination WRITE that
-  carries no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) is session-gated only — armed, it
-  sits behind the auth gate like every other PWA-surface write. It needs prose because no scanner can see it:
-  `coord-pause-route.test.ts` reads `server/src/coord/routes.ts` alone, and that route is registered in
-  `server.ts`, so a door opened outside that one file is invisible to the set that pins the doors. Don't
-  assume — read the guards.
+  argument — are the census, not this bullet. What does need saying here are the coordination WRITES that
+  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST /api/coord/caps` (wave 6)
+  are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The
+  first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
+  `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
+  that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
+  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
+  Don't assume — read the guards.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).

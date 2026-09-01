@@ -214,6 +214,28 @@ describe('the mail feed', () => {
   // producer says. The bytes are `watch.ts`'s own as of this commit
   // (`✉ blocked › ${d.toId}` and `${origin.subject}: ${why}`), kept faithful so
   // the fixture reads like the thing it stands in for.
+  // The SEVENTH kind. A coordination-config change is none of the six: 'run'
+  // would be the nearest and would be a lie, because there is no run. The maps
+  // are TOTAL, so a missing entry is a TS2739 at the table — but at RUNTIME a
+  // missing entry renders as NOTHING, not as the string "undefined", so this
+  // asserts the rendered word and glyph are actually there. (Measured: a first
+  // draft asserting `not.toContain('undefined')` passed against the defect.)
+  // The fixture's title deliberately carries no glyph of its own, so the glyph
+  // assertion cannot be satisfied by the title.
+  it('renders a coord-kind feed record with its own word and glyph', async () => {
+    const store = makeStore();
+    const ev = e({ seq: 9, kind: 'coord', sessionId: '', title: 'caps changed',
+                   body: 'workers 3 → 5, per day 12 → 12' });
+    act(() => { store.setState({ feed: [ev] }); });
+    const { container } = render(
+      <MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText('caps changed')).toBeInTheDocument();
+    const kind = container.querySelector('.mail-kind');
+    expect(kind, 'the coord row rendered no kind cell at all').not.toBeNull();
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for coord').toBe('⚙');
+    expect(kind!.textContent, 'no word for coord').toContain('config');
+  });
+
   const BLOCKED_TITLE = '✉ blocked › w1';
   const BLOCKED_BODY = "wave-brief: the recipient's input box has unsent text in it";
 

@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -647,6 +647,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Ungated (no box token): the route is deliberately open, the same way
      *  every other same-origin PWA write is. */
     coordPause: (paused: boolean) => post('/api/coord/pause', { paused }),
+    /** `GET /api/coord/caps` — the two limits AND the two derived counts, in one
+     *  shape and one round trip. They travel together because a cap without its
+     *  usage is a number an operator cannot act on. 501 `not-configured` on a
+     *  box with no coordination database, which `CapsControl` renders as
+     *  nothing at all rather than as zeroes. */
+    coordCaps: () => getJson<CoordCapsView>('/api/coord/caps'),
+    /** `POST /api/coord/caps` — a PARTIAL; an omitted field keeps its stored
+     *  value, so moving one dial cannot clobber the other with a stale reading.
+     *  Session-gated when armed, open dark; NOT box-token (an operator dial is
+     *  not a machine lane) and NOT one of the D-282 release valves — see the
+     *  route's own docstring for both arguments (D-1240).
+     *
+     *  `postJsonOr`, not `postJson` (D-1150): after a caps WRITE, "the answer
+     *  could not be read" and "the request never happened" are different states
+     *  — the first may well have stored the value — and the control says
+     *  "unconfirmed" for the one rather than reporting the other. The safe
+     *  reading of "no answer" is stated here, at the call, as that helper's own
+     *  docstring requires. */
+    setCoordCaps: (next: Partial<CoordCaps>) =>
+      postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

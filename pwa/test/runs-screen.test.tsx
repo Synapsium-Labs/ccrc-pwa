@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import { RUN_STATES, SPAWN_STALL_MS, type FleetSession, type RunSummary } from '../../shared/api';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runItems } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
@@ -50,6 +50,13 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
 
+/** The caps dial's reader, held for every board render in this file. The screen
+ *  injects it for the reason its own prop docstring gives: a loader left to the
+ *  global `fetch` puts a request into every test that renders the board, and one
+ *  of them asserts that none is sent. `never` (a promise that does not settle)
+ *  keeps the control unrendered unless a test says otherwise. */
+const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
+
 describe('the run vocabulary tracks RUN_STATES, not a hand-copied list', () => {
   it('RUN_ORDER names every RunState exactly once — the same drift guard RUN_STATES itself exists for', () => {
     // shared/api.ts's own docstring on RUN_STATES: a second, module-private
@@ -83,7 +90,7 @@ describe('the run board', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     const load = vi.fn().mockResolvedValue({ runs: [] });
-    render(<RunsScreen store={store} loadRuns={load} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
     // The cold read is now UNCONDITIONAL (finding 1) — it is the only
     // possible source of the Finished half — but the active row born from
     // the live frame renders synchronously, before that promise has any
@@ -109,7 +116,7 @@ describe('the run board', () => {
       const store = makeStore();
       act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
       const load = vi.fn().mockResolvedValue({ runs: [] });
-      render(<RunsScreen store={store} loadRuns={load} />);
+      render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
       expect(load).toHaveBeenCalledTimes(1);
     } finally {
@@ -121,7 +128,7 @@ describe('the run board', () => {
     // The deep-link case, and the older-server case: /ws/fleet may never send
     // a runs frame at all, and a blank board would be a lie about the program.
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r()] })} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
   });
 
@@ -139,7 +146,7 @@ describe('the run board', () => {
     const finishedRun = r({ id: 9, wave: 1, state: 'done', closedAt: Date.now() });
     render(
       <StrictMode>
-        <RunsScreen store={store} loadRuns={async () => ({ runs: [finishedRun] })} />
+        <RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [finishedRun] })} />
       </StrictMode>,
     );
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -155,7 +162,7 @@ describe('the run board', () => {
         runsFrameSeen: true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const group = screen.getByRole('group', { name: /build4-transcript-surface/i });
     expect(group.tagName).toBe('DIV');
     expect(document.querySelectorAll('section[aria-label]')).toHaveLength(0);
@@ -164,7 +171,7 @@ describe('the run board', () => {
   it('says the wave and the work-item tally, in tabular mono', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('wave 3/4')).toBeInTheDocument();
     expect(screen.getByText('3/7')).toBeInTheDocument();
     // No blocked/failed cell: RunItemTally shipped as {done,total} only —
@@ -177,7 +184,7 @@ describe('the run board', () => {
     // clauses rather than print `0 X`") applied to the one place it was not.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('—');
     expect(screen.queryByText('0/0')).toBeNull();
   });
@@ -185,14 +192,14 @@ describe('the run board', () => {
   it('renders 3/7 for a run that declared seven', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('3/7');
   });
 
   it('renders 0/7 for a declared ledger nothing has settled yet — only total 0 is the dash', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 7 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('0/7');
   });
 
@@ -201,7 +208,7 @@ describe('the run board', () => {
     // second cue invented for it (spec §3.3).
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const tally = document.querySelector('.run-tally');
     expect(tally?.querySelector('[aria-hidden="true"]')).toBeNull();
     expect(tally?.getAttribute('title')).toBeNull();
@@ -221,7 +228,7 @@ describe('the run board', () => {
     // dot alone". A run board that colour-coded alone would fail the same rule.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ state: 'awaiting-review' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText(RUN_WORD['awaiting-review'])).toBeInTheDocument();
     expect(document.querySelector('.run-glyph')).not.toBeNull();
   });
@@ -236,7 +243,7 @@ describe('the run board', () => {
     const store = makeStore();
     const fromNewerBuild = { ...r(), state: 'quarantined' } as unknown as RunSummary;
     act(() => { store.setState({ runs: [fromNewerBuild], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText(RUN_WORD.unknown)).toBeInTheDocument();
   });
 
@@ -246,7 +253,7 @@ describe('the run board', () => {
     delete noItems.items;
     const bad = noItems as unknown as RunSummary;
     act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
-    expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />)).not.toThrow();
+    expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />)).not.toThrow();
     // `runItems`' `{done:0,total:0}` default, rendered through
     // `itemTallyLabel`: a row that reached this renderer without a tally
     // reads as "no declared ledger" (spec §3.3's em dash), never as `0/0` —
@@ -261,7 +268,7 @@ describe('the run board', () => {
     delete noClosedAt.closedAt;
     const bad = noClosedAt as unknown as RunSummary;
     act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('clear-cove')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
   });
@@ -273,7 +280,7 @@ describe('the run board', () => {
     // halves (finding 1: driven through the real seam, not `setState`).
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ id: 2 })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
       runs: [r({ id: 1, wave: 1, state: 'done', closedAt: Date.now() - 1 }), r({ id: 2 })],
     })} />);
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -288,7 +295,7 @@ describe('the run board', () => {
     // itself uses) finds it correctly.
     const store = makeStore();
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
       runs: [r({ id: 1, wave: 1, state: 'done', closedAt: null })],
     })} />);
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -297,7 +304,7 @@ describe('the run board', () => {
 
   it('a run that closes stops being active the instant the live frame says so — never resurrected by a stale cold snapshot (finding 3, failure A)', async () => {
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
     // The cold read lands: run 7, active.
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     // The live frame then lands, agreeing run 7 is active…
@@ -326,7 +333,7 @@ describe('the run board', () => {
         ? { runs: [r({ id: 7 })] }
         : { runs: [r({ id: 7, state: 'done', closedAt: Date.now() })] };
     });
-    render(<RunsScreen store={store} loadRuns={loadRuns} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={loadRuns} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
     expect(screen.getByText('clear-cove')).toBeInTheDocument();
@@ -340,7 +347,7 @@ describe('the run board', () => {
 
   it('the Finished group survives a new active run landing — it never re-reads from `live` (finding 3, failure B)', async () => {
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
       runs: [r({ id: 1, wave: 1, state: 'done', closedAt: Date.now() - 1 })],
     })} />);
     expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
@@ -360,7 +367,7 @@ describe('the run board', () => {
   it('renders no Finished group at all when the archive genuinely has none — an empty role=group is a dead end, not an honest state', async () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r()] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r()] })} />);
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
   });
@@ -378,7 +385,7 @@ describe('the run board', () => {
         runsFrameSeen: true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('wave 2/4')).toBeInTheDocument();
     expect(screen.queryByText('wave 1/4')).toBeNull();
   });
@@ -386,12 +393,12 @@ describe('the run board', () => {
   it('opens the run’s session — and renders an INERT row when there is no session to open', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    const { rerender } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { rerender } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     fireEvent.click(screen.getByRole('button', { name: /clear-cove/i }));
     expect(location.pathname).toBe('/s/ccrc-pwa-clear-cove');
 
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    rerender(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    rerender(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // A dead button that navigates to a session that does not exist is worse
     // than a row you cannot tap.
     expect(screen.queryByRole('button', { name: /clear-cove/i })).toBeNull();
@@ -408,7 +415,7 @@ describe('the run board', () => {
     act(() => {
       store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess({ unmeasured: ['workdir'] })] });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const note = screen.getByText('unreadable');
     expect(note).toHaveClass('sess-unmeasured');
     expect(note).toHaveAttribute('title', 'registry workdir temporarily unreadable — retrying');
@@ -419,7 +426,7 @@ describe('the run board', () => {
     // the loading render (finding 19: "loading" and "confirmed empty" are no
     // longer the same state) — `findByText` waits for the real answer, which
     // is what a live app would show.
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
   });
@@ -428,7 +435,7 @@ describe('the run board', () => {
     // Review finding 19's own failure scenario: phone offline, or the server
     // mid-restart, with a program in flight — this must not assert the
     // program never existed.
-    render(<RunsScreen store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
     expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
     expect(screen.queryByText(/^no runs\./i)).toBeNull();
   });
@@ -442,7 +449,7 @@ describe('the run board', () => {
     // a positive claim about the WHOLE program history a failed archive
     // read has no standing to make.
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => { throw new Error('offline'); }} />);
     // The live frame lands separately, honestly reporting no active runs —
     // it says nothing at all about the archive.
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
@@ -457,7 +464,7 @@ describe('the run board', () => {
     // genuinely empty" from "the archive could not be read".
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => { throw new Error('offline'); }} />);
     // The active group renders as normal — this is not the whole-board
     // failure state, only the Finished half's own.
     expect(await screen.findByText('clear-cove')).toBeInTheDocument();
@@ -484,7 +491,7 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
         coordFrameSeen: true,
       });
     });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     const banner = container.querySelector('.coord-banner');
     const offline = container.querySelector('.offline-banner');
@@ -496,6 +503,23 @@ describe('the coord banner mounts on /runs (Task 11, spec §4.2)', () => {
     // for, so this checks order, not just membership.
     const order = [...container.querySelectorAll('.offline-banner, .coord-banner')];
     expect(order).toEqual([offline, banner]);
+  });
+
+  // Wave 6: the caps dial ships by ONE mounted line too, and for exactly the
+  // reason the paragraph above this describe gives — `caps-control.test.tsx`
+  // pins its behaviour and would stay green if the line were dropped.
+  it('renders .caps-control after .coord-banner once its own read lands', async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: { pause: 'clear', mail: 'clear' }, coordFrameSeen: true }); });
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })}
+      loadCaps={async () => ({ caps: { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 },
+                               usage: { running: 1, dispatchedIn24h: 4 } })} />);
+    // The control's read is its own, not the store's — so this waits for it
+    // rather than asserting into a tree that has not resolved.
+    await waitFor(() => expect(container.querySelector('.caps-control')).not.toBeNull());
+    const order = [...container.querySelectorAll('.coord-banner, .caps-control')];
+    expect(order).toEqual([container.querySelector('.coord-banner'),
+                           container.querySelector('.caps-control')]);
   });
 });
 
@@ -510,7 +534,7 @@ describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-28
   it('renders .run-abandon as a sibling of .run-open, not nested inside it', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     const abandon = screen.getByRole('button', { name: /abandon run 3/i });
     expect(abandon).toHaveClass('run-abandon');
@@ -532,13 +556,13 @@ describe('the abandon control mounts on every run row (Task 12, spec §4.3, D-28
 // (spec §4.4: "one door, rendered at zero runs too").
 describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
   it('renders even at zero runs — one door, always there', async () => {
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
   });
 
   it('opens the sheet on tap', async () => {
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
   });
@@ -574,7 +598,7 @@ describe('the run board tells the start sheet which projects already have a run 
     // landed — `noSignalYet` (`RunsScreen.tsx`'s own name for it), the
     // cold-deep-link window and the too-old-server window before its cold read
     // returns.
-    render(<RunsScreen store={makeStore()} loadRuns={() => new Promise<{ runs: RunSummary[] }>(() => {})} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={() => new Promise<{ runs: RunSummary[] }>(() => {})} />);
 
     await openAndPick();
 
@@ -584,7 +608,7 @@ describe('the run board tells the start sheet which projects already have a run 
 
   it('names a project whose ACTIVE run only the COLD read found — the no-frame fallback path', async () => {
     mockDoors();
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'working' })] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'working' })] })} />);
 
     await openAndPick();
 
@@ -594,7 +618,7 @@ describe('the run board tells the start sheet which projects already have a run 
 
   it('does NOT name a project whose only run is CLOSED — the list is `active`, already filtered', async () => {
     mockDoors();
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'done' })] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [r({ state: 'done' })] })} />);
 
     await openAndPick();
 
@@ -709,7 +733,7 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
   const board = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   /** A run in the shape a `planned` one actually reaches the wire in: no
    *  session id (the server learns it by registry diff, AFTER `ws-add`
@@ -805,12 +829,24 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
    *  second-granular (`formatAge` rounds everything under two minutes to "just
    *  now"), so no readout can report the cadence. `useNow` is the only
    *  `setInterval` in this screen's whole tree — measured across `pwa/src`:
-   *  `CoordBanner`, `AbandonSheet`, `StartProgramSheet` and — re-measured when
-   *  it joined this screen's tree in program-leverage wave 5 — `ResumeSheet`
-   *  run none, and this store never connects (its own roster poll is the one
-   *  `setInterval` under `stores/fleet.ts`, and `connect()` is what arms it)
-   *  — so every recorded call is the tick. Re-measure this list when the tree
-   *  grows a component, rather than inheriting the sentence.
+   *  `CoordBanner`, `AbandonSheet`, `StartProgramSheet`, `ResumeSheet`
+   *  (re-measured when it joined in program-leverage wave 5) and `CapsControl`
+   *  (re-measured when it joined in wave 6 — D-1217) run none, and this store
+   *  never connects (its own roster poll is the one `setInterval` under
+   *  `stores/fleet.ts`, and `connect()` is what arms it) — so every recorded
+   *  call is the tick. Re-measure this list when the tree grows a component,
+   *  rather than inheriting the sentence. `CapsControl` was the case that proved
+   *  that instruction is not decorative: it joined the tree, its own header
+   *  asserted this list had been re-measured for it, and this list had not
+   *  named it.
+   *
+   *  WHAT THE INSTRUMENT ITSELF COVERS, stated because the list above is doing
+   *  work the instrument cannot. `cadenceOf` reads the spy straight after a
+   *  SYNCHRONOUS mount, so it sees every interval armed by that first render.
+   *  `CapsControl` renders `null` until its injected read resolves, and nothing
+   *  here awaits that — so an interval armed in its post-load subtree would be
+   *  invisible here, and is held instead by the grep above and by that
+   *  component's own NO TIMERS OF ANY KIND rule.
    *
    *  `mockRestore()` BEFORE `useRealTimers()`, deliberately: the spy wraps the
    *  FAKE `setInterval`, and unwinding in the other order would hand the
@@ -900,7 +936,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
   const withSession = (over: Partial<FleetSession>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   const chip = (): HTMLElement | null => document.querySelector('.sess-spawn');
 
@@ -945,7 +981,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     // not exist.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(chip()).toBeNull();
   });
 
@@ -1023,7 +1059,7 @@ describe('the run row renders the resume it has always carried (D-1, Task 5)', (
   const board2 = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   const cellR = (): HTMLElement | null => document.querySelector('.run-resumed');
 
@@ -1111,7 +1147,7 @@ describe('the resume door on the run board', () => {
         sessions: opts.sessions, fleetFrameSeen: opts.fleetFrameSeen,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
 
   it('offers the door when the claimant is measured dead', () => {
@@ -1155,7 +1191,7 @@ describe('the resume door on the run board', () => {
         fleetFrameSeen: opts.fleetFrameSeen ?? true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: opts.cold })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: opts.cold })} />);
   };
 
   /** The `<li>` a control actually sits on. Every assertion below reads the ROW
@@ -1246,7 +1282,7 @@ describe('the resume door on the run board', () => {
         sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true,
       });
     });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }
