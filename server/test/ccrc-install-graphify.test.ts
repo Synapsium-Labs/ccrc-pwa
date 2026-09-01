@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, lstatSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -492,6 +492,30 @@ describe('ccrc install: the default noise list (_inst_graph_noise, D-1160)', () 
     runInstall(home, ['install', '--role', 'server']);
     expect(existsSync(join(home, '.ccrc', 'graph-noise', '_default.list')),
       'a server box runs no sweep, so it is owed no noise list').toBe(false);
+  });
+
+  it('lands ATOMICALLY at 644, replacing a symlink rather than writing through it (D-1161)', () => {
+    // The first draft used a bare `cp` after an unchecked `mkdir -p` and printed
+    // "converged" whatever happened — the one install-time converger in this
+    // file that bypassed `_inst_atomic`, while its own sibling on the deploy
+    // lane used `install_atomic`. Two measurable differences, and both matter
+    // here: the sweep timer reads this file every 15 minutes, so a non-atomic
+    // write has a live reader; and `cp` writes THROUGH a symlink at the
+    // destination instead of replacing it, which turns a planted link into a
+    // write to wherever it points.
+    const home = freshBox('ccrc-inst-gfx-noise-atomic-');
+    plantFakeVenv(home);
+    const dir = join(home, '.ccrc', 'graph-noise');
+    mkdirSync(dir, { recursive: true });
+    const decoy = join(home, 'decoy.list');
+    writeFileSync(decoy, 'ORIGINAL\n');
+    symlinkSync(decoy, join(dir, '_default.list'));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(join(dir, '_default.list')).isSymbolicLink(),
+      'the symlink was written through, not replaced').toBe(false);
+    expect(readFileSync(decoy, 'utf8'), 'the write followed the link off-target').toBe('ORIGINAL\n');
+    expect(statSync(join(dir, '_default.list')).mode & 0o777).toBe(0o644);
   });
 });
 

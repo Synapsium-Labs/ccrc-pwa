@@ -4142,18 +4142,28 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   [ -f "$src/server/dist-pwa/index.html" ] \
     || _ccrc_die "no PWA bundle at $src/server/dist-pwa — build first: bash install.sh (or npm run build in pwa/)"
   # D-1159 — THE THIRD PREFLIGHT, and it is role-gated because the artifact is.
-  # `_inst_enable` starts `ccrc-agent.service` for every role but `server`, and
-  # that unit's ExecStart is `$HOME/ccrc/agent/dist/agent/src/index.js`. Without
-  # this line a fleet-role install does not fail HERE — it fails LATER, having
+  # `ccrc-agent.service`'s ExecStart is `$HOME/ccrc/agent/dist/agent/src/index.js`.
+  # Without this line a fleet install does not fail HERE — it fails LATER, having
   # already placed the tree and restarted a LIVE fleet's agent onto a directory
-  # with no entry point. Measured on the reference fleet: `install.sh` builds
+  # with no entry point. Measured on the reference fleet: `install.sh` built
   # server and pwa only, so `ccrc install --role fleet` from a source checkout
   # took `ccrc-agent.service` down with MODULE_NOT_FOUND and the server lost its
   # only path to the box until the agent was built by hand. Refusing here is
   # this verb's own stated doctrine — an install that half-ran is worse than one
   # that did not start — and it is the same shape, and the same third sentence,
   # the two preflights above already use.
-  [ "$INST_ROLE" = server ] || [ -f "$src/agent/dist/agent/src/index.js" ] \
+  #
+  # D-1161 — THE GATE IS `fleet`, NOT `!= server`, and the first draft of this
+  # line had it wrong in a way its own comment then asserted was right. Only
+  # `fleet` installs the unit (`_inst_units`: `role_unit=ccrc-agent.service`
+  # under `[ "$INST_ROLE" = fleet ]`) and only `fleet` enables or restarts it
+  # (`_inst_enable`: same test). `both` — the DEFAULT role, a single box that
+  # serves and runs sessions — gets no agent unit at all, because a single box
+  # drives ccd directly in `local` mode and never speaks to an agent. So
+  # `!= server` refused the default install over an artifact that role never
+  # installs, never enables and never starts: a new failure mode, introduced by
+  # the fix for an old one.
+  [ "$INST_ROLE" != fleet ] || [ -f "$src/agent/dist/agent/src/index.js" ] \
     || _ccrc_die "no agent build at $src/agent/dist — build first: bash install.sh (or npm run build in agent/)"
   # THE SELF-COPY GUARD, ON PHYSICAL PATHS. On a box a deploy has already
   # touched — and on every re-run of this verb — `ccrc` IS `~/ccrc/ccd/ccrc`,
@@ -4199,6 +4209,24 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
     || _ccrc_die "npm ci in \$HOME/ccrc/server failed — the service cannot start without runtime deps"
   echo "install: tree: server runtime deps in place"
+  # D-1161 — THE AGENT NEEDS ITS DEPS TOO, and D-1159 stopped one import short.
+  # That fix made the ENTRY POINT exist; it did not make the tree STARTABLE.
+  # The rsync above excludes `node_modules` in both directions and this function
+  # ran npm in `server/` only, so a fleet install placed `agent/dist` beside no
+  # `agent/node_modules` — and `agent/src/server.ts` imports `ws` on its second
+  # line (`agent/package.json` declares `ws` and `node-pty` as runtime deps).
+  # `_inst_enable` then restarts `ccrc-agent.service` and node dies with the
+  # same ERR_MODULE_NOT_FOUND, one import further in. The reference fleet only
+  # escaped it because an earlier `deploy.sh agent` had left a `node_modules`
+  # behind — which is why the postmortem saw the missing dist and stopped there.
+  # `deploy/build-release.sh` has shipped `agent/package{,-lock}.json` "for
+  # `npm ci --omit=dev` on the box" since it was written; this is the call that
+  # was always meant to make.
+  if [ "$INST_ROLE" = fleet ]; then
+    ( cd "$dest/agent" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
+      || _ccrc_die "npm ci in \$HOME/ccrc/agent failed — ccrc-agent.service cannot start without runtime deps"
+    echo "install: tree: agent runtime deps in place"
+  fi
 }
 
 # ── _inst_atomic — the local `install_atomic` ─────────────────────────────
@@ -5097,12 +5125,20 @@ _inst_graphify_skill() {
 # (regenerated every install, so a name added to the shipped list reaches every
 # box) while `<repo>.list` beside it is the operator's and is never written
 # here. The sweep unions the two.
+#
+# D-1161: `_inst_atomic`, not `cp`. The first draft used a bare unchecked `cp`
+# after an unchecked `mkdir -p` and then printed "converged" whatever happened —
+# the one install-time converger in this file that bypassed `_inst_atomic`,
+# while its own sibling on the deploy lane used `install_atomic`. It matters
+# here more than most: the sweep timer reads this file every 15 minutes, so a
+# non-atomic write has a live reader, and a plain `cp` follows a symlink at the
+# destination instead of replacing it.
 _inst_graph_noise() {
   [ "$INST_ROLE" = server ] && return 0
   local src="$BOX_TREE_DIR/ccd/graph-noise.default.list" dest="$HOME/.ccrc/graph-noise"
   [ -f "$src" ] || _ccrc_die "no default noise list at $src — the placed tree is incomplete"
-  mkdir -p "$dest"
-  cp "$src" "$dest/_default.list"
+  mkdir -p "$dest" || _ccrc_die "cannot create $dest"
+  _inst_atomic "$src" "$dest/_default.list" 644
   echo "install: graphify: default noise list converged ($dest/_default.list)"
 }
 

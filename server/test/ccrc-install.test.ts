@@ -957,8 +957,11 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
 
   it('refuses BY ARTIFACT when the agent build is missing — and only for a role that runs one (D-1159)', () => {
     // The third artifact, the third sentence. This one is role-gated because
-    // the artifact is: `_inst_enable` starts `ccrc-agent.service` for every
-    // role but `server`.
+    // the artifact is: `fleet` is the ONLY role that installs the agent unit
+    // (`_inst_units`) or enables and restarts it (`_inst_enable`) — both test
+    // `[ "$INST_ROLE" = fleet ]`. D-1161 corrected this gate from `!= server`,
+    // which refused the DEFAULT role over a unit that role never installs, and
+    // corrected this comment, which had asserted the opposite.
     //
     // WHAT THIS COSTS WHEN IT IS MISSING, measured on the reference fleet
     // before the preflight existed: `install.sh` builds server and pwa only, so
@@ -985,6 +988,21 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(existsSync(join(home, 'rsync-argv')), 'rsync ran anyway').toBe(false);
   });
 
+  it('does NOT demand an agent build for --role both, the DEFAULT role (D-1161)', () => {
+    // The gate's sharp edge. `both` is a single box that serves AND runs
+    // sessions, and it drives ccd directly in `local` mode — `_inst_units`
+    // gives it `ccrc.service`, never `ccrc-agent.service`, and `_inst_enable`
+    // never starts one. The first draft of the D-1159 preflight gated on
+    // `!= server`, so it refused the default install over an artifact that role
+    // has no use for: a new failure mode introduced by the fix for an old one.
+    const home = freshBox('ccrc-install-noagent-both-');
+    rmSync(treeFile(home, 'agent/dist/agent/src/index.js'));
+    const r = runInstall(home, ['install', '--role', 'both']);
+    expect(r.stderr, 'the default role must not be refused for a unit it never installs')
+      .not.toMatch(/no agent build at/);
+    expect(r.code, r.stderr).toBe(0);
+  });
+
   it('does NOT demand an agent build for --role server (D-1159)', () => {
     // The gate is not decoration: a server-only box runs no agent unit, so an
     // absent agent build is not a fault there. Without this the preflight would
@@ -994,6 +1012,47 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     const r = runInstall(home, ['install', '--role', 'server']);
     expect(r.stderr, 'a server-role install must not be refused for a missing agent')
       .not.toMatch(/no agent build at/);
+  });
+
+  it('installs the AGENT runtime deps too, on a fleet box (D-1161)', () => {
+    // D-1159 made the agent's ENTRY POINT exist. It did not make the tree
+    // STARTABLE: `_inst_tree`'s rsync excludes `node_modules` in both
+    // directions and this step ran npm in `server/` only, so a fleet install
+    // placed `agent/dist` beside no `agent/node_modules` — and `agent/src/
+    // server.ts` imports `ws` on its second line. `_inst_enable` then restarts
+    // `ccrc-agent.service` and node dies with the SAME ERR_MODULE_NOT_FOUND,
+    // one import further in. The reference fleet escaped it only because an
+    // earlier `deploy.sh agent` had left a node_modules behind, which is why
+    // the postmortem saw the missing dist and stopped there.
+    const home = freshBox('ccrc-install-npm-agent-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code, r.stderr).toBe(0);
+    // TWO npm ci calls, production-only, in that order — and in the PLACED
+    // tree both times, never in the checkout.
+    expect(read(join(home, 'npm-argv')).trim().split('\n')).toEqual([
+      'ci --omit=dev --no-audit --no-fund',
+      'ci --omit=dev --no-audit --no-fund',
+    ]);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
+      placed(home, 'server'),
+      placed(home, 'agent'),
+    ]);
+    expect(existsSync(placed(home, 'agent', 'node_modules'))).toBe(true);
+    expect(r.stdout).toMatch(/^install: tree: agent runtime deps in place$/m);
+  });
+
+  it('does NOT run npm in the agent on a role that runs no agent (D-1161)', () => {
+    // The other side of the same gate: a `both` box has no agent unit, so an
+    // npm ci there is work for nothing — and would fail on a tree whose agent
+    // lockfile the box never needed.
+    const home = freshBox('ccrc-install-npm-both-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([placed(home, 'server')]);
+    expect(r.stdout).not.toMatch(/agent runtime deps/);
   });
 
   it('places the five directories a box runs out of, with the builds inside them', () => {
