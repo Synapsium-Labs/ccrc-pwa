@@ -100,6 +100,32 @@ collided, exactly as `CLAUDE.md` warns it has twice before — which is why the 
 grep `origin/main` across **both** `docs/` and source, and why it has to be re-run at commit
 time rather than at cut time. Renumbered to D-1243 before the first push.
 
+## A second defect of mine, found by self-review after the PR was opened
+
+`~/.claude-gpt/CLAUDE.md` on the reference fleet **is a symlink** to
+`~/.claude/CLAUDE.md` — two homes deliberately sharing one file. This step stages a temp file
+and `mv`s it into place, which **replaces a symlink rather than writing through it**, so the
+first draft would have severed that link silently. It happened not to, on this box, purely
+because `.claude` sorts before `.claude-gpt` in the roster and the shared file already carried
+the block by the time the link was reached: correctness by roster order, which is luck.
+
+The destination is now resolved with `readlink -f` before any write, so the link survives, the
+real file is converged once, and the loop no longer depends on the order homes appear in.
+
+## The seventh vacuous test, and it was the one for this very fix
+
+The first symlink test pointed a LATER home at an EARLIER home's file — and stayed **green
+with the fix removed**, because the already-converged branch skipped the write and no `mv`
+ever ran. It pinned the roster order, not the fix. It now puts the link on the home converged
+FIRST, pointing outside the homes entirely (the dotfiles case), which puts it squarely on the
+write path; the mutation then reddens.
+
+Seventh instance in this repo of *tests pin shape, not effect*, and the third caught by the
+mutation table rather than by review. The pattern across all three: the test was written from
+the same mental model as the code, so it reproduced the code's blind spot instead of probing
+it. Only running the mutation exposes that, which is why the table is measured and not
+asserted.
+
 ## Mutation table
 
 | mutation | result |
@@ -109,6 +135,7 @@ time rather than at cut time. Renumbered to D-1243 before the first push.
 | drop the unmarked-`## graphify` skip | the foreign-section test red |
 | rewrite a file that is already current | the idempotence test red |
 | `_ccrc_die` instead of degrading on a missing block | the degradation test red |
+| drop the symlink resolution | the symlink test red (only after it was de-vacuumed) |
 
 ## What this does NOT claim
 

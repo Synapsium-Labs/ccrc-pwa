@@ -5203,6 +5203,19 @@ $end"
     dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" || continue
     [ -n "$dir" ] || continue
     f="$dir/CLAUDE.md"
+    # RESOLVE A SYMLINK BEFORE WRITING. A home's CLAUDE.md is exactly the kind
+    # of file an operator symlinks — on the reference fleet
+    # `.claude-gpt/CLAUDE.md` IS a symlink to `.claude/CLAUDE.md`, so two homes
+    # deliberately share one file. The staged `mv` below would replace that link
+    # with a regular file and sever the sharing silently. Writing through to the
+    # physical path keeps the link, and makes the second home's pass find the
+    # block already converged instead of writing a rival copy — which also
+    # removes this loop's dependence on ROSTER ORDER, the only reason the live
+    # box survived the first draft.
+    if [ -L "$f" ]; then
+      f="$(readlink -f "$f" 2>/dev/null)" || f="$dir/CLAUDE.md"
+      [ -n "$f" ] || f="$dir/CLAUDE.md"
+    fi
     if [ -f "$f" ] && ! grep -qF "$start" "$f" && grep -qE '^## graphify[[:space:]]*$' "$f"; then
       echo "install: graphify: $f carries an unmarked '## graphify' section — left in place; remove it by hand to let ccrc converge this block" >&2
       kept=$((kept+1)); continue

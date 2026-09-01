@@ -632,6 +632,41 @@ describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'
     expect(r.stdout).toMatch(/\d+ skipped \(unmarked section\)/);
   });
 
+  it('writes THROUGH a symlinked CLAUDE.md, never replacing the link (D-1243)', () => {
+    // Two homes deliberately sharing one file is a real configuration, not a
+    // hypothetical: on the reference fleet `.claude-gpt/CLAUDE.md` IS a symlink
+    // to `.claude/CLAUDE.md`. The staged `mv` would replace that link with a
+    // regular file and sever the sharing silently — and the first draft only
+    // survived it by ROSTER ORDER, which is luck rather than design.
+    //
+    // THE LINK MUST BE ON THE HOME THAT IS CONVERGED FIRST. The first draft of
+    // this test symlinked a LATER home at an earlier one's file and stayed
+    // GREEN with the fix removed: by the time the link was reached the shared
+    // file already carried the block, so the already-converged branch skipped
+    // the write and no `mv` ever ran. It pinned the roster order, not the fix.
+    // Pointing the FIRST home's CLAUDE.md at a file outside the homes — the
+    // dotfiles case — puts the link squarely on the write path.
+    const home = freshBox('ccrc-inst-gfx-alwayson-link-');
+    plantFakeVenv(home);
+    const dots = join(home, 'dotfiles');
+    mkdirSync(dots, { recursive: true });
+    const target = join(dots, 'CLAUDE.md');
+    writeFileSync(target, '# lives in a dotfiles repo\n');
+    const first = join(home, '.claude');
+    mkdirSync(first, { recursive: true });
+    symlinkSync(target, join(first, 'CLAUDE.md'));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(join(first, 'CLAUDE.md')).isSymbolicLink(),
+      'the link an operator made deliberately was replaced by a regular file').toBe(true);
+    const txt = readFileSync(target, 'utf8');
+    expect(txt, 'the block went to the link, not through it to the real file')
+      .toContain('<!-- ccrc:graphify-always-on:start -->');
+    expect(txt).toContain('# lives in a dotfiles repo');
+    expect(txt.split('<!-- ccrc:graphify-always-on:start -->').length - 1,
+      'the shared file received the block more than once').toBe(1);
+  });
+
   it('DEGRADES, never dies: a graphify build shipping no always-on block still installs clean', () => {
     // The first draft of this step used `_ccrc_die` on all three availability
     // gates. A fixture with no package then took the WHOLE install down — a fix
