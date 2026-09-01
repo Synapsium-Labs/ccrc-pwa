@@ -1517,10 +1517,31 @@ the session registry and its status file) unless it is ≥20 commits or ≥6h st
 hatch. `touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
 operator who needs the fleet host quiet.
 
-**Noise lists.** `~/.ccrc/graph-noise/<repo>.list`, one path-glob per line, become that tree's
-`.graphifyignore` for the sweep's own builds. A `!` (negation) line is refused outright — it would
-re-include something the real `.gitignore` excludes — and the sweep skips the tree rather than
-silently building past it.
+**Noise lists.** Two sources, unioned, and they are not the same kind of thing.
+`~/.ccrc/graph-noise/_default.list` is **ccrc's own**, converged by `ccrc install` and shipped on
+the agent deploy lane; it carries only ccrc's own footprint (`.claude/`, `.remember/`,
+`.superpowers/`, `CLAUDE.local.md`), because the artifacts ccrc's skills write into every repo a
+session touches were otherwise held against that repo by the corpus guard and refused its build for
+ever. `~/.ccrc/graph-noise/<repo>.list` beside it is the **operator's**, and ccrc never writes it.
+One path-glob per line; together they become that tree's `.graphifyignore` for the sweep's own
+builds.
+
+The distinction between them decides every case where they would act differently: **a `<repo>.list`
+is an instruction about one repo; the default is hygiene applied to repos that never asked.** So —
+
+- A `!` (negation) line in **either** refuses the build outright. It would re-include something the
+  real `.gitignore` excludes, and the sweep skips the tree rather than silently building past it.
+  This one rule is symmetric: a negation is not an instruction anyone is entitled to.
+- A tree that **commits its own `.graphifyignore`** refuses only when a `<repo>.list` exists (an
+  instruction that cannot be honoured). With just the default in play the sweep stands down and
+  measures anyway — otherwise shipping a default to every box would make that refusal universal.
+- A **default** pattern is **withheld** when git says it would hide tracked content
+  (`git ls-files -c -i -X`), and what was withheld is logged with the remedy named. `.graphifyignore`
+  is a pure path filter that knows nothing about git, so without this a repo that commits `.claude/`
+  or `.superpowers/` content would lose tracked nodes from its corpus — invisibly to the corpus
+  guard, which measures corpus *minus* tracked — and graphify's shrink guard would then refuse the
+  write, wedging the tree at `refused-shrink` on every pass. An **operator** pattern is honoured as
+  written, tracked content included: that is the escape hatch, and the only one.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
 PATH shadows, per-home skill drift, per-tree excludes, the census's last pass, and free space on the
