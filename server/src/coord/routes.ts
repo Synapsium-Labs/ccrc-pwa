@@ -1302,7 +1302,7 @@ export function registerCoordRoutes(
    *  `maxSessionsPerDay` was to hand-edit `coord.db` (D-1164).
    *
    *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
-   *  the first route in the tree that needs them apart (D-1159). The box token
+   *  the first route in the tree that needs them apart (D-1240). The box token
    *  gates MACHINE lanes: callers on the fleet host with no cookie jar, which is
    *  why every one of them is `requireMailToken`. An operator turning a dial in
    *  the PWA is not one, and gating a phone control on the fleet's shared secret

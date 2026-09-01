@@ -182,7 +182,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
   /** Write routes that carry NO box token and are NOT release valves — the
    *  distinction `UNGATED` alone cannot express, and which stayed invisible for
    *  as long as the D-282 doors were the only ungated POSTs in this file
-   *  (D-1159).
+   *  (D-1240).
    *
    *  `UNGATED` is an argument about a WEDGE: the locked-out party holds the box
    *  token, so the valve must not sit behind it. A name in the set below makes
@@ -242,7 +242,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     const missing: string[] = [];
     for (const { route, body } of handlers()) {
       // TWO exemptions, not one, and they are different arguments — see
-      // `SESSION_ONLY`'s own docstring (D-1159). Both are checked back the other
+      // `SESSION_ONLY`'s own docstring (D-1240). Both are checked back the other
       // way below, so neither list can document an exemption the code does not
       // actually take.
       if (UNGATED.has(route) || SESSION_ONLY.has(route)) continue;

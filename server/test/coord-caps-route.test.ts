@@ -7,7 +7,7 @@
 // operator turning a dial in the PWA is not one. NOT `UNGATED` either —
 // `UNGATED` is the D-282 family, whose whole argument is that the party locked
 // out is the party holding the key, and raising a cap releases no wedge
-// (D-1159). Session-gated when armed, open dark, like every other same-origin
+// (D-1240). Session-gated when armed, open dark, like every other same-origin
 // PWA write. `coord-pause-route.test.ts` holds both halves of that.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
@@ -505,7 +505,15 @@ describe('the caps answer shape is defined ONCE, and both halves send it', () =>
   // mutation that changed the VALUES the GET reports, not one that undoes the
   // sharing. A FAITHFUL inline rebuild — `{ ok: true, caps: c.caps(), usage:
   // c.capsUsage() }` — reds nothing at all, which was measured across all ten
-  // suites that touch caps. This is the property itself.
+  // suites that touch caps.
+  //
+  // AND IT IS A TEXT SCAN, NOT A PROPERTY — said plainly, because the wave that
+  // produced it is about claims that outrun their mechanism. It catches the
+  // mutation the ruling named and every careless respelling of it; an adversarial
+  // rewrite that rebuilds the GET inline while keeping the token `capsView(` in
+  // the handler's text, and reads the usage through some other spelling, defeats
+  // both arms. A real property check would need the two responses compared at
+  // runtime. This is the cheap guard that reds on the realistic edit.
   const raw = (): string => readFileSync(path.join(srcRoot, 'coord', 'routes.ts'), 'utf8');
 
   it('both halves build their answer from the shared builder', () => {

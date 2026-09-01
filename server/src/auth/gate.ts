@@ -78,7 +78,7 @@ import type { SessionStore } from './sessions.js';
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
  *     refusal — but "checks" is not "requires", and the difference is worth
  *     stating rather than rounding off, in BOTH directions rather than only
- *     one (D-1161: this paragraph used to say it in one, and was wrong in kind
+ *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
  *     as well as in number). Most of the coordination lanes refuse every
  *     verdict but `'ok'`. The exempt-but-authenticated GETs
  *     (`GET /api/runs`, `/api/runs/:id/items`, `/api/lifecycle`, `/api/peers`,
@@ -675,11 +675,13 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighteen box-token machine
  * lanes plus `/api/notify` — nineteen in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
- * ORDER-PINNED, like reason 2 above and for the same scanner (D-1233): lanes
- * first, total second.
  * their real guard is a header a cross-site page cannot add without triggering a
- * preflight it will fail. `POST /api/auth/login` and the two passkey assert
- * routes are the doors: a forged login is not a state change an attacker
+ * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same
+ * scanner — D-1233: lanes first, total second. The marker sits AFTER the
+ * sentence it annotates; its first placement was spliced into the middle of one,
+ * and nothing caught it because the scanner reads numerals.)
+ *
+ * `POST /api/auth/login` and the two passkey assert routes are the doors: a forged login is not a state change an attacker
  * benefits from, and the assert pair verifies an origin of its own, from inside
  * `clientDataJSON`, against the value RECORDED ON THE CREDENTIAL — a stronger
  * check than this one.

@@ -167,7 +167,7 @@ const word = (n: number): string => {
  *  measured what that lets through: transposing `eighteen` and `nineteen`
  *  between the two claims in `gate.ts` (":75" says how many box-token machine
  *  lanes there are, ":77" says how many things check the token) was GREEN across
- *  all five suites that read those words. D-1161's original defect was "wrong in
+ *  all five suites that read those words. D-1242's original defect was "wrong in
  *  KIND as well as in number", and a set catches the number half only.
  *
  *  A sequence is not full attachment-checking, and this file does not claim it

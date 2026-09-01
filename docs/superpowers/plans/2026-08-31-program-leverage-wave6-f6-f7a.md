@@ -49,12 +49,12 @@ wave's brief, and its wave-5 close record carries the two rulings folded in as i
   assertion whose fixture cannot produce the presence is this program's recurring defect class; so is a
   pin whose premise (a hydrated store, a populated set) is never established. Wave 5 shipped one of each,
   and a third that was pinned by a green test whose title described a different situation.
-- **Deviations.** This wave's numbers are `D-1159..1172` plus `D-1208`, `D-1209` and `D-1210`, allocated from `POST /api/ledger/deviations` at
+- **Deviations.** This wave's numbers are `D-1162..1172` plus `D-1208`, `D-1209`, `D-1210`, `D-1211..1227`, `D-1228..1239` and `D-1240`, `D-1241`, `D-1242`, allocated from `POST /api/ledger/deviations` at
   planning time (floor was 1157, is now 1173). Never invent, predict or reuse a number. Every number
   cited in the diff must be DEFINED in this plan's `## Deviations found` section in the same commit as
   (or before) the source comment citing it — `server/test/deviation-refs.test.ts:137-152` reds otherwise,
   and its `DEFINED` regex is `/^(?:#{2,4} |- \*\*)D-(\d+)\b/`, so an entry must be an H3/H4 heading or a
-  `- **D-N**` bullet. Spell an unconsumed range with ONE prefix and a bare upper bound (`D-1159..1172`), never with a second `D-` on the upper bound: `floorFromScan` reads every tracked `D-<n>` as a REF, so writing the top of an unspent range as a ref seeds the fleet's floor there for ever.
+  `- **D-N**` bullet. Spell an unconsumed range with ONE prefix and a bare upper bound (`D-1162..1172`), never with a second `D-` on the upper bound: `floorFromScan` reads every tracked `D-<n>` as a REF, so writing the top of an unspent range as a ref seeds the fleet's floor there for ever.
 - **Suites run in the FOREGROUND, `timeout 600000`, cd'd into the package**, tails READ not grepped.
   `./node_modules/.bin/vitest run` — NEVER bare `npx vitest` (it resolves a global copy with no jsdom and
   falsely reports "no tests"). All three packages are already installed; do not `npm ci`.
@@ -154,7 +154,7 @@ each task re-confirms the ones it depends on and STOPS if one has moved.
 | The derived truth: 18 token-consulting handlers in `coord/routes.ts` + `POST /api/notify` = 19 lanes | `coord/routes.ts` 11 × `requireMailToken` + 7 × inline `checkMailToken`; `server.ts:1280` |
 | `POST /api/sessions/:id/kickoff` is a coordination WRITE with ZERO token checks, registered in `server.ts` | `server.ts:1487`, no `requireMailToken`/`checkMailToken` in `:1487-1600` |
 | README's two stale sites | `README.md:529-531` ("the ten machine lanes … nine box-token-gated"), `README.md:1405-1425` ("the run routes", "None of these six routes") |
-| A FOURTH stale site the ticket never named | `auth/gate.ts:75`, `:77`, `:80`, `:90`, `:663` — "SEVENTEEN"/"All eighteen" (D-1161) |
+| A FOURTH stale site the ticket never named | `auth/gate.ts:75`, `:77`, `:80`, `:90`, `:663` — "SEVENTEEN"/"All eighteen" (D-1242) |
 | `oss-metadata.test.ts` pins `CLAUDE.md:10`'s stated README size within 10% of the real count | `oss-metadata.test.ts:89-100`; README is 2033 lines, CLAUDE.md claims ~1931, upper edge ~2124 |
 | README is already text-scanned by section slice; so is CLAUDE.md, by three suites | `readme-holds.test.ts:22-34`; `oss-metadata.test.ts`; `topology-clean.test.ts:459-469` |
 | Only the kickoff `runId` reader carries `>= 1`; the two in `coord/routes.ts` accept 0 and negatives | `server.ts:1540-1543` (D-1151) vs `coord/routes.ts:461-469`, `:1694-1702` |
@@ -183,7 +183,7 @@ each task re-confirms the ones it depends on and STOPS if one has moved.
 (`store.ts:1232`). The coordinator lives in `claimedBy`. `runs()` would work but hydrates every open run
 — a `programs` JOIN and a `prLineage` JSON parse per row — which is exactly the cost `OpenSibling`'s own
 docstring (`store.ts:53-57`) says this tree does not pay to answer a question that turns on a few
-columns. One statement, no hydration (D-1160).
+columns. One statement, no hydration (D-1241).
 
 Two traps this method must not fall into, both measured: `reclaimProgram` rewrites `claimedBy` across
 EVERY run of a programme including terminal ones (`store.ts:620-660`), so "this id appears in some
@@ -266,7 +266,7 @@ this task's mutation table.
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
    *  run this build calls non-terminal. Not `openRunsForSession`'s question —
    *  that one keys on `sessionId`, the WORKER column, which is the opposite
-   *  fact (D-1160).
+   *  fact (D-1241).
    *
    *  Two columns, no JOIN and no `hydrateRun`, for `OpenSibling`'s stated
    *  reason (`:53-57`): dragging `prLineage` JSON and a `programs` join through
@@ -319,7 +319,7 @@ record the **first failing assertion verbatim**, then revert from a working-tree
 
 ```bash
 git add server/src/coord/store.ts server/test/coord-store.test.ts
-git commit -m "feat(coord): the store can name the sessions coordinating something live (D-1160)"
+git commit -m "feat(coord): the store can name the sessions coordinating something live (D-1241)"
 ```
 
 ---
@@ -975,7 +975,7 @@ whole argument is that the party locked out is the party holding the key, so a w
 not sit behind it. Raising a cap releases no wedge. Session-gated when armed (so NOT in `EXEMPT`), open
 dark — the same posture as every other same-origin PWA write.
 
-Those two facts cannot both be asserted with the vocabulary the tree has (D-1159): direction-one equates
+Those two facts cannot both be asserted with the vocabulary the tree has (D-1240): direction-one equates
 "no box-token gate" with "member of `UNGATED`", which held only because the four D-282 doors were the
 only ungated POSTs in the file. The fix is a SECOND named set with its own argument, asserted disjoint
 from `UNGATED` in both directions. `UNGATED.size` stays 4, so no prose cardinal anywhere moves.
@@ -1127,7 +1127,7 @@ it carries the posture argument, and a reviewer reads it before the code:
    *  `maxSessionsPerDay` was to edit `coord.db` by hand.
    *
    *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — the two are different facts and
-   *  this route is the first in the tree to need them apart (D-1159). The box
+   *  this route is the first in the tree to need them apart (D-1240). The box
    *  token gates MACHINE lanes: callers on the fleet host with no cookie jar.
    *  An operator turning a dial in the PWA is not one, and gating this on the
    *  fleet's shared secret would put a phone control behind a secret the phone
@@ -1220,7 +1220,7 @@ each, in the file's own style, naming WHICH route moved it and why — `:196-199
 ```ts
   /** Write routes that carry NO box token and are NOT release valves — the
    *  distinction `UNGATED` alone could not express, and that stayed invisible
-   *  while the D-282 doors were the only ungated POSTs in this file (D-1159).
+   *  while the D-282 doors were the only ungated POSTs in this file (D-1240).
    *
    *  `UNGATED` is an argument about a WEDGE: the locked-out party holds the box
    *  token, so the valve must not sit behind it. A name here makes no such
@@ -1313,7 +1313,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 ```bash
 git add server/src/coord/routes.ts server/test/coord-caps-route.test.ts \
         server/test/coord-pause-route.test.ts server/test/auth-gate.test.ts
-git commit -m "feat(coord): caps become an operator dial, and the ungated set learns a second argument (D-1209, D-1159, D-1166)"
+git commit -m "feat(coord): caps become an operator dial, and the ungated set learns a second argument (D-1209, D-1240, D-1166)"
 ```
 
 ---
@@ -1513,7 +1513,7 @@ handler that CONSULTS the box token, by either mechanism, across both files that
 and the prose is rewritten to speak that set. `auth-gate.test.ts:401` already derives exactly this set,
 from `coord/routes.ts` alone; this scanner widens it to `server.ts` and then checks prose against it.
 
-**The fourth site (D-1161).** `auth/gate.ts:75,77,80,90` and `:663` say "the SEVENTEEN box-token machine
+**The fourth site (D-1242).** `auth/gate.ts:75,77,80,90` and `:663` say "the SEVENTEEN box-token machine
 lanes … All eighteen". Measured: `coord/routes.ts` holds eighteen and `/api/notify` makes nineteen —
 exactly one generation stale (`auth-gate.test.ts:414-418` records the set going 17 → 18 when `GET
 /api/runs/:id/items` joined; this prose was never updated). `:80` is also wrong in KIND, not only number:
@@ -1721,7 +1721,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 ```bash
 git add server/test/box-token-census.test.ts server/test/auth-gate.test.ts \
         server/src/auth/gate.ts README.md CLAUDE.md
-git commit -m "fix: derive the box-token surface from its call sites, and correct all five prose sites that under-claimed it (D-1156, D-1161, D-1162)"
+git commit -m "fix: derive the box-token surface from its call sites, and correct all five prose sites that under-claimed it (D-1156, D-1242, D-1162)"
 ```
 
 ---
@@ -1871,7 +1871,7 @@ claimed sha and the coordinator gets `stale-tip` for a wave that was finished.
 
 - [ ] **9.9 — Report what the coordinator must act on**, in the wave-done mail: the two corrected brief
 premises (D-1208, D-1209), the out-of-scope `ccd/` finding (D-1168), the new `SESSION_ONLY` vocabulary
-(D-1159), and every deviation defined below.
+(D-1240), and every deviation defined below.
 
 - [ ] **9.10 — Release the claim.**
 
@@ -1885,7 +1885,7 @@ JSON
 
 ## Deviations found
 
-This wave's numbers are `D-1159..1172` plus `D-1208`, `D-1209` and `D-1210`, allocated from `POST /api/ledger/deviations` at planning time (floor
+This wave's numbers are `D-1162..1172` plus `D-1208`, `D-1209`, `D-1210` and `D-1240`, `D-1241`, `D-1242`, allocated from `POST /api/ledger/deviations` at planning time (floor
 1157 → 1173, then 1208/1209 and 1210 after the collision recorded in D-1210 below). The program block
 `D-999..1046` and `D-1119..D-1156` are all spent. Every number cited anywhere in this plan or in the diff
 is defined below; `deviation-refs.test.ts` reds on a source ref to an allocated-but-unentered number, so
@@ -1896,7 +1896,7 @@ Every number is now SPENT. The three that were allocated-and-unspent at planning
 execution, never silently dropped). The two originally at the head of the block, 1157 and 1158, were
 surrendered to PR #38 and replaced by 1208 and 1209.
 
-### D-1210 (ledger collision, resolved by renumbering — process) — PR #38 took two of this wave's allocated numbers
+### D-1210 (ledger collision, resolved by renumbering — process) — PR #38 took two of this wave's allocated numbers, and PR #41 later took three more
 
 **What happened.** This wave allocated `D-1157..1172` from `POST /api/ledger/deviations` at planning
 time; the allocator recorded the block against this session and moved the floor to 1173. While the wave
@@ -1923,6 +1923,37 @@ ref sits ABOVE the high-water, and both colliding numbers were below it, so the 
 branches simultaneously. A check that every DEFINED number is one the definer actually holds would have
 caught this at the source. That belongs to whichever wave owns the ledger surface next, not to this one.
 
+**IT HAPPENED AGAIN, TWICE MORE, AND THIS ENTRY WAS STALE UNTIL NOW.** The paragraphs above say two
+numbers, closed. It is FIVE, and three of them fired after this entry was written. **PR #41 merged at
+21:54 UTC on 2026-09-01 DEFINING `D-1159`, `D-1160` and `D-1161`** — this wave's, allocated at planning
+time — with entirely different subjects, and with the numbers in three plan FILENAMES. Same fault as
+#38, third instance in two days, and the coordinator measured it rather than argued it: cloning this
+tip, merging `origin/main` (`47ac50da`, clean) and running the one test gives
+`no NEW D-<n> carries two different subjects in two different plans` — three entries, one number each.
+
+Resolved the same way and by the same precedent, which again went against this branch: **the branch that
+can still move cheaply moves.** #41 is merged and its numbers are in filenames; these were on an unmerged
+branch. `D-1159` → **D-1240**, `D-1160` → **D-1241**, `D-1161` → **D-1242**, allocated fresh BEFORE any
+editing (floor 1240 → 1243) — allocating and defining in one act, because the window between them is
+exactly the hazard that has now fired three times.
+
+**Measured, not taken on trust.** The coordinator's count was "18 refs in the plan and 11 across twelve
+source and test files"; the tree says 15 plan refs plus three range sentences that had to be rewritten by
+hand (a bulk replace would have produced `D-1240..1172`), and **13 refs across 11 files** in source and
+tests. Two of the files carrying these numbers are #41's and were deliberately left alone
+(`server/test/install-sh.test.ts`, `server/test/ccrc-update.test.ts`), as is every ref under its graph
+and install lane. `graphify-out/` is untracked and was not touched.
+
+**What this run adds to the mechanism gap above.** The allocator is **not a claim on a number, only a
+record that you asked** — this branch held the allocation rows for all five and lost all five to merge
+order. The hole `deviation-refs.test.ts` cannot see is now precisely stated, for the wave that owns the
+ledger surface: it fires only once BOTH definitions are in ONE tree, i.e. one merge too late, and it
+never checks that a DEFINED number was allocated to the definer. Three incidents now sit behind that.
+
+**What was NOT done, again.** The commits already pushed — `ff85c514`, `eee5fa1a` and every wave-6 commit
+before them — cite `D-1159`/`D-1160`/`D-1161` in their messages, and history was not rewritten. This
+entry is how those messages are read.
+
 ### D-1208 (brief premise corrected by measurement — record-only) — the derived door count shipped in a different commit
 
 The brief and the ledger both attribute the `UNGATED.size` derivation to `5ff7c33c`. That commit does not
@@ -1944,7 +1975,7 @@ are deliberately NOT added to the `{type:'coord'}` frame: `emitCoord`'s docstrin
 try/catch because it touches no `node:sqlite`, and `dispatchedIn24h` moves with the clock, so the frame's
 byte-equality guard would let it re-emit on nearly every 2 s tick.
 
-### D-1159 (mechanism gap the wave exposes — MAJOR) — "no box token" and "D-282 release valve" were one fact
+### D-1240 (mechanism gap the wave exposes — MAJOR) — "no box token" and "D-282 release valve" were one fact
 
 `coord-pause-route.test.ts` direction-one asserts that every `app.post` with no box-token gate ahead of
 its first `await` is a member of `UNGATED`. That held only because the four D-282 doors were the only
@@ -1954,7 +1985,7 @@ PWA writes that no machine lane calls — asserted disjoint from `UNGATED` in bo
 argument at the call site, plus a pin that no member is in `EXEMPT` (which is what "session-gated when
 armed" MEANS). `UNGATED.size` stays four, so no prose cardinal at any of the five scanned sites moves.
 
-### D-1160 (measured gap) — no store method could answer the coordinator question
+### D-1241 (measured gap) — no store method could answer the coordinator question
 
 `CoordStore` has no method answering "is session X the `claimedBy` of a non-terminal run".
 `openRunsForSession` looks like it and keys on `sessionId`, the WORKER column — the opposite fact.
@@ -1964,7 +1995,7 @@ question. Added `openCoordinatorIds()`, one statement, mirroring `programOpenRun
 predicate rather than re-deriving one from `RUN_TRANSITIONS` — which would disagree, because the table
 gives `'unknown'` an empty target list while every shipped query counts an `'unknown'` row as open.
 
-### D-1161 (measured gap the ticket never named — widens D-1156) — a fourth and fifth stale census site
+### D-1242 (measured gap the ticket never named — widens D-1156) — a fourth and fifth stale census site
 
 `server/src/auth/gate.ts:75,77,80,90` and `:663` state "the SEVENTEEN box-token machine lanes plus
 `/api/notify` … All eighteen". Measured: `coord/routes.ts` holds eighteen token-consulting handlers, so
@@ -2440,7 +2471,7 @@ throw-path row could be satisfied by a route that had stopped flushing entirely)
 `numeralsIn` answered a `Set` and every site asserted `toEqual(new Set([...]))`, so only membership was
 checked. Measured by the review: transposing `eighteen` and `nineteen` between the two claims in
 `gate.ts` (`:75` says how many box-token machine lanes there are, `:77` says how many things check the
-token) stayed GREEN across all five suites that read those words. D-1161's original defect was "wrong in
+token) stayed GREEN across all five suites that read those words. D-1242's original defect was "wrong in
 KIND as well as in number" — a set catches the number half and not the kind half, which is the half that
 defect was named for.
 
@@ -2501,9 +2532,12 @@ subtree would be invisible to it, and is held by the grep and by that component'
 
 `mail-routes.test.ts:117`'s comment says a malformed `runId` answered as `unknown-run` "also mislabels
 the durable rejection record" — a SECOND consequence beyond the status code. The two rows carrying that
-comment asserted status, error and detail, and nothing about the row. (`REJECT_CASES` below them does
-read `rejections()` for its own seven codes; these two did not, which is what made the clause a claim
-about an invisible effect.)
+comment asserted status, error and detail, and nothing about the row.
+
+**The review's own wording of this finding was wrong, and the coordinator has accepted the correction:**
+its clause "nothing reads that record" is false. Measured — `store.rejections()` has sixteen call sites
+across three test files, fourteen of them before this wave. The gap was never that the record is unread;
+it was that the two rows whose comment makes the claim did not read it.
 
 Both rows now assert the row's code, in both directions: a malformed `runId` records `bad-kind`, and a
 well-formed-but-absent one records `unknown-run`, so the pair holds a DISTINCTION rather than a constant.
@@ -2621,10 +2655,13 @@ D-1227); the claims-routes servers; the no-op feed event; `gate.ts`'s NOT-EXEMPT
 wording, which the coordinator adjudicated ACCURATE — the control has no other way to re-read after an
 unreadable answer, and softening it would be the lie.
 
-**Seven, where the review's mail says eight** (D-1238). Its total counts eight refutations and its prose
-itemises these seven, so the eighth is a number without a name here. Recorded that way rather than
-padded to the total or quietly restated as seven-of-seven: a list that claims to be complete and is one
-short is the exact defect this wave spent itself on.
+**Seven, where the review's mail says eight** (D-1238) — and the coordinator has since named the gap,
+which is better than the answer this entry first gave. Its prose itemises SIX refutations, not seven;
+the seventh here is the "reload" wording, adjudicated separately in the same mail. The eighth is
+**minor H itself**, counted as both refuted and confirmed after two dead verifiers were adjudicated by
+hand. So the number does have a name: it is a double-count, disclosed by the reviewer against
+themselves. This entry's first version said "a number without a name here", which was generous to the
+review and less useful than the truth.
 
 ---
 
@@ -2644,6 +2681,13 @@ property is not pinned; a scan that hard-codes the one member of a set it derive
 The lesson the round recorded — *unmeasured is not unmeasurable* — is not a fact you learn once.
 
 Numbers D-1228..D-1239, allocated in one block (floor 1228 → 1240).
+
+**The coordinator's verification pass of this round (13 lenses, seven of them running mutations in
+isolated full checkouts) confirmed 3/3 must-fixes and 4/4 of these majors, and disclosed its own
+coverage gap:** fifteen of the thirty-two changed files had no lens in THAT pass, `watch.ts` and
+`caps.ts` among them — covered by the 44-agent wave review instead. Recorded here because a ship
+decision resting on an unstated gap is the thing this wave keeps finding, and the disclosure belongs
+where the next wave will read it.
 
 ### D-1228 (MAJOR, 3/3) — the D-1211 witness could not detect the premise it named
 
@@ -2794,62 +2838,76 @@ written into a table. §9.13 and §9.14 are that table.
 
 Every row measured: the mutation applied to the tree, the suite run, the FIRST assertion that failed
 quoted verbatim, the mutation reverted. Restoration verified with `git status --porcelain` after each.
+Suites are `cd <pkg> && ./node_modules/.bin/vitest run test/<file>`; the third column names the file, so
+a reader can re-run a row instead of grepping the tree for the quoted sentence (the shape of this table's
+first version promised "the suite run" and named none — the coordinator had to grep five of six
+spot-checks).
 
-**Review round (`ff85c514`)**
+**Review round (`ff85c514`)** — 19 rows
 
-| mutation | first-fail assertion |
-|---|---|
-| `void log.flush()` back inside the try, below `recordFeedEvent` | `the archive throw skipped the flush — the minted seq was never persisted: expected "flush" to be called at least once` |
-| a FAITHFUL inline rebuild of the caps GET | `app.get('/api/coord/caps' builds its own answer instead of the shared one: expected 'app.get(\'               \', async (_…' to contain 'capsView('` |
-| …the same mutation, second arm | `the usage reading is taken more than once — one half of the answer is being rebuilt: expected 2 to be 1` |
-| the caps merge base read OUTSIDE `coordMutex.run` (the D-1170 revert) | `one save read its merge base before the other wrote — a lost update: expected { maxConcurrentWorkers: 3, …(1) } to deeply equal { maxConcurrentWorkers: 5, …(1) }` |
-| `eighteen`/`nineteen` transposed between `gate.ts`'s two claims | `gate.ts, EXEMPT reason 2 states a count this tree does not have: expected [ 'nineteen', 'eighteen' ] to deeply equal [ 'eighteen', 'nineteen' ]` |
-| `POST /api/coord/caps` added to CLAUDE.md's requireMailToken list | `the bullet names POST /api/coord/caps as a box-token lane and it consults no box token …: expected [ 'POST /api/mail', …(18) ] to include 'POST /api/coord/caps'` |
-| README's hand-kept "four operator doors" restored | `the caps paragraph grew a hand-kept count: expected [ 'four' ] to deeply equal []` |
-| `refuse()` records a CONSTANT code while the reply still varies | `expected [ 'bad-kind' ] to deeply equal [ 'unknown-run' ]` |
-| an `fs` import + module-scope `Date.now()` in `caps.ts` | `caps.ts reads the clock — the decision is no longer pure` |
-| …second arm | `caps.ts imports a node builtin` |
-| …third arm | `caps.ts takes a VALUE import: import { readFileSync } from 'node:fs';` |
-| the stale `all 55 HTTP routes` prose (as shipped) | `the sweep claims to cover a number of routes this file does not derive: expected [ 55 ] to deeply equal [ 68 ]` |
-| …the third probe's line | `the third probe states a whole or an exempt count this file does not derive: expected [ 55 ] to deeply equal [ 68, 24 ]` |
-| …the websocket line | `expected exactly one line containing websockets and every HTTP route: expected +0 to be 1` |
-| a cleared caps field sent as `Number('') === 0` | `Unable to find an element with the text: /not a number/i` |
-| the note rendered outside any live region | `Unable to find an accessible element with the role "status"` |
-| the no-op return placed above the note clear | `the refusal is still on screen beside a valid field: expected <p class="caps-note"></p> to be null` |
-| one `advance()` dropped from the TERMINAL fixture | `the run never reached a terminal state — this case is no longer about a TERMINAL run: expected 'closing' to be 'done'` |
+| mutation | first-fail assertion | suite |
+|---|---|---|
+| `void log.flush()` back inside the try, below `recordFeedEvent` | `the archive throw skipped the flush — the minted seq was never persisted: expected "flush" to be called at least once` | server `coord-caps-route` |
+| a FAITHFUL inline rebuild of the caps GET | `app.get('/api/coord/caps' builds its own answer instead of the shared one: expected 'app.get(\'               \', async (_…' to contain 'capsView('` | server `coord-caps-route` |
+| …the same mutation, second arm | `the usage reading is taken more than once — one half of the answer is being rebuilt: expected 2 to be 1` | server `coord-caps-route` |
+| the caps merge base read OUTSIDE `coordMutex.run` (the D-1170 revert) | `one save read its merge base before the other wrote — a lost update: expected { maxConcurrentWorkers: 3, …(1) } to deeply equal { maxConcurrentWorkers: 5, …(1) }` | server `coord-caps-route` |
+| `eighteen`/`nineteen` transposed between `gate.ts`'s two claims | `gate.ts, EXEMPT reason 2 states a count this tree does not have: expected [ 'nineteen', 'eighteen' ] to deeply equal [ 'eighteen', 'nineteen' ]` | server `box-token-census` |
+| `POST /api/coord/caps` added to CLAUDE.md's requireMailToken list | `the bullet names POST /api/coord/caps as a box-token lane and it consults no box token …: expected [ 'POST /api/mail', …(18) ] to include 'POST /api/coord/caps'` | server `box-token-census` |
+| README's hand-kept "four operator doors" restored | `the caps paragraph grew a hand-kept count: expected [ 'four' ] to deeply equal []` | server `box-token-census` |
+| the run-lane filter stopped matching (`POST /api/rvns`) — D-1226's floor | `no gated run routes found — this loop is over nothing: expected 0 to be greater than 3` | server `box-token-census` |
+| `refuse()` records a CONSTANT code while the reply still varies | `expected [ 'bad-kind' ] to deeply equal [ 'unknown-run' ]` | server `mail-routes` |
+| an `fs` import + module-scope `Date.now()` in `caps.ts` | `caps.ts reads the clock — the decision is no longer pure` | server `coord-caps-policy` |
+| …second arm | `caps.ts imports a node builtin` | server `coord-caps-policy` |
+| …third arm | `caps.ts takes a VALUE import: import { readFileSync } from 'node:fs';` | server `coord-caps-policy` |
+| the stale `all 55 HTTP routes` prose (as shipped) | `the sweep claims to cover a number of routes this file does not derive: expected [ 55 ] to deeply equal [ 68 ]` | server `auth-gate` |
+| …the third probe's line | `the third probe states a whole or an exempt count this file does not derive: expected [ 55 ] to deeply equal [ 68, 24 ]` | server `auth-gate` |
+| …the websocket line | `expected exactly one line containing websockets and every HTTP route: expected +0 to be 1` | server `auth-gate` |
+| a cleared caps field sent as `Number('') === 0` | `Unable to find an element with the text: /not a number/i` | pwa `caps-control` |
+| the note rendered outside any live region | `Unable to find an accessible element with the role "status"` | pwa `caps-control` |
+| the no-op return placed above the note clear | `the refusal is still on screen beside a valid field: expected <p class="caps-note"></p> to be null` | pwa `caps-control` |
+| one `advance()` dropped from the TERMINAL fixture | `the run never reached a terminal state — this case is no longer about a TERMINAL run: expected 'closing' to be 'done'` | server `mail-sweep` |
 
-**Audit round (this commit)**
+**Audit round (`eee5fa1a`)** — 11 rows
 
-| mutation | first-fail assertion |
-|---|---|
-| the D-1170 revert AND `coordMutex.run` taken off `POST /api/runs` — the pair that was GREEN before | `a caps write completed while the hold was in flight — the mutex is NOT held across the await, so this test witnesses nothing: expected [ 200, 200 ] to deeply equal []` |
-| `POST /api/runs` 501s before it reaches the hold (was a 20s timeout, now 270ms) | `Error: POST /api/runs answered 501 without ever reaching the hold — the third actor never took the lock, and this test witnesses nothing` |
-| D-1213 reverted AND `recordFeedEvent`'s throw swallowed — the pair that was GREEN before | `the feed archive never threw — this case is no longer about the throw path: expected '' to contain 'recordFeedEvent failed'` |
-| the note back to a conditional mount, `role="status"` KEPT | `Unable to find an accessible element with the role "status"` |
-| `POST /api/coord/caps` dropped from CLAUDE.md's session-only sentence | `the bullet promises to name the coordination writes that carry no box token, and does not name /api/coord/caps — the class grew and the sentence did not` |
-| a VERB-LESS `/api/coord/caps` added to the requireMailToken list | `the bullet names /api/coord/caps among the box-token lanes and it consults no box token …: expected [ '/api/mail', …(14) ] to include '/api/coord/caps'` |
-| a span in the lanes clause the scan cannot parse (`` `POST /api/coord/\n  caps` ``) | `the bullet names \`POST /api/coord/ caps\`, which this scan cannot read as a route — a name it cannot parse is a name it cannot check (hard-wrapped mid-path?): expected null not to be null` |
-| README's auth paragraph rewritten breakdown-first — a TRUE sentence | `README's auth paragraph: the counts are right but attached the wrong way round — if you reordered the sentences, reorder this expectation in the same change (this passage is ORDER-PINNED)` |
-| two exempt-but-authenticated GETs deleted from README's list | `the auth paragraph does not name the exempt-but-authenticated /api/peers — the class grew and the sentence did not` |
-| the no-op path clearing EVERY note kind | `the no-op save erased the only warning that the stored value is unknown: expected '' to match /unconfirmed/i` |
-| `.caps-note:empty` using `display: none` | `display:none takes the live region out of the accessibility tree: expected '\n  display: none;\n' not to match /display\s*:\s*none/` |
+| mutation | first-fail assertion | suite |
+|---|---|---|
+| the D-1170 revert AND `coordMutex.run` taken off `POST /api/runs` — the pair that was GREEN before | `a caps write completed while the hold was in flight — the mutex is NOT held across the await, so this test witnesses nothing: expected [ 200, 200 ] to deeply equal []` | server `coord-caps-route` |
+| `POST /api/runs` 501s before it reaches the hold (was a 20s timeout, now 270ms) | `Error: POST /api/runs answered 501 without ever reaching the hold — the third actor never took the lock, and this test witnesses nothing` | server `coord-caps-route` |
+| D-1213 reverted AND `recordFeedEvent`'s throw swallowed — the pair that was GREEN before | `the feed archive never threw — this case is no longer about the throw path: expected '' to contain 'recordFeedEvent failed'` | server `coord-caps-route` |
+| the note back to a conditional mount, `role="status"` KEPT | `Unable to find an accessible element with the role "status"` | pwa `caps-control` |
+| `POST /api/coord/caps` dropped from CLAUDE.md's session-only sentence | `the bullet promises to name the coordination writes that carry no box token, and does not name /api/coord/caps — the class grew and the sentence did not` | server `box-token-census` |
+| a VERB-LESS `/api/coord/caps` added to the requireMailToken list | `the bullet names /api/coord/caps among the box-token lanes and it consults no box token …: expected [ '/api/mail', …(14) ] to include '/api/coord/caps'` | server `box-token-census` |
+| a span in the lanes clause the scan cannot parse (`` `POST /api/coord/\n  caps` ``) | `the bullet names \`POST /api/coord/ caps\`, which this scan cannot read as a route — a name it cannot parse is a name it cannot check (hard-wrapped mid-path?): expected null not to be null` | server `box-token-census` |
+| README's auth paragraph rewritten breakdown-first — a TRUE sentence | `README's auth paragraph: the counts are right but attached the wrong way round — if you reordered the sentences, reorder this expectation in the same change (this passage is ORDER-PINNED)` | server `box-token-census` |
+| two exempt-but-authenticated GETs deleted from README's list | `the auth paragraph does not name the exempt-but-authenticated /api/peers — the class grew and the sentence did not` | server `box-token-census` |
+| the no-op path clearing EVERY note kind | `the no-op save erased the only warning that the stored value is unknown: expected '' to match /unconfirmed/i` | pwa `caps-control` |
+| `.caps-note:empty` using `display: none` | `display:none takes the live region out of the accessibility tree: expected '\n  display: none;\n' not to match /display\s*:\s*none/` | pwa `caps-control` |
 
-**Count.** 18 rows for the review round, 11 for the audit round, on top of §9.4's 62 — **91 rows** for
-the wave. Counted twice: once by reading the two tables above (18 + 11), once by re-deriving from the
-deviation entries that claim a measurement (D-1211..D-1226 contribute 18 arms; D-1228..D-1237 contribute
-11) — the two methods agree.
+**Count, with the label corrected.** §9.13's first version said "on top of §9.4's 62", and §9.4's own
+arithmetic stops at **59** (56 laid-out rows plus its own three). The running total reached 62 through
+§9.9 and §9.12, which added three as PROSE sentences rather than table rows — a small instance of the
+same fault, and worth naming rather than inheriting. So: **62 carried in, 19 for the review round, 11 for
+the audit round = 92 rows.** Counted twice: once by reading the two tables above (19 + 11 = 30), once by
+re-deriving from the deviation entries that claim a measurement (D-1211..D-1226 contribute 19 arms,
+D-1228..D-1237 contribute 11) — the two methods agree at 30.
 
-**One row this wave still does not have**, stated rather than left to be found: the coordinator quiet
-window's own effect on a session that is BOTH a coordinator and a worker (D-1224) is reasoned, not
-measured, because no such program exists to measure against.
+**Three things this table still does not hold**, stated rather than left to be found. The coordinator
+quiet window's effect on a session that is BOTH coordinator and worker (D-1224) is reasoned, not
+measured, because no such program exists to measure against. The `:empty` rule's LAYOUT effect is
+unmeasured — jsdom does no layout, so its row holds the rule's shape, which is the half carrying the
+accessibility decision. And must-fix B's pin is a text SCAN, not a property: it reds on the realistic
+respelling and an adversarial rewrite that keeps the token while rebuilding the answer would defeat it.
 
 ### 9.14 — Verification, after the audit round
 
 | suite | files | passed | skipped |
 |---|---|---|---|
-| server | 247 | 6226 | 56 |
+| server | 248 | 6248 | 56 |
 | agent | 18 | 281 | 0 |
 | pwa | 77 | 2106 | 0 |
+
+Measured after merging `origin/main` (`47ac50da`) and the D-1240/1241/1242 renumber; the server file
+count rises by one and the pass count by twenty-two because that merge brought PR #41's own suites in.
 
 All three run in the FOREGROUND with `timeout 600000`, cd'd into their own package, tails READ rather
 than grepped for a word. `tsc --noEmit` clean in all three packages.

@@ -1235,7 +1235,7 @@ export class CoordStore {
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
    *  run this build calls non-terminal. NOT `openRunsForSession`'s question one
    *  method up — that one keys on `sessionId`, the WORKER column, which is the
-   *  opposite fact about the same row (D-1160).
+   *  opposite fact about the same row (D-1241).
    *
    *  Two columns, no JOIN and no `hydrateRun`, for `OpenSibling`'s own stated
    *  reason (`:53-57`): dragging `prLineage` JSON and a `programs` join through

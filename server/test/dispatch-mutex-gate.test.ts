@@ -69,7 +69,7 @@ interface Site { file: string; line: number; name: string; guarded: boolean }
 // reads `caps()` and `capsUsage()` across await boundaries
 // (`coord/dispatch.ts:236-237`), so a caps write landing between those two
 // reads is the identical un-serialised-decision hazard, and `POST
-// /api/coord/caps` is the first and only writer (D-1159/D-1164).
+// /api/coord/caps` is the first and only writer (D-1240/D-1164).
 const TARGETS = new Set(['dispatchRun', 'closeRun', 'coord.setCaps']);
 const GUARD = 'coordMutex.run';
 

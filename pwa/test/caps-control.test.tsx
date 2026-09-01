@@ -155,8 +155,11 @@ describe('CapsControl', () => {
   });
 
   it('the empty-state rule keeps the region in the accessibility tree, and costs no layout', () => {
-    // jsdom does no layout, so the SHAPE of the rule is what can be held here —
-    // and it is the half that matters. `display: none` would collapse the note
+    // THE LAYOUT EFFECT IS UNMEASURED, and this test does not pretend otherwise:
+    // jsdom does no layout, so nothing here can observe that the empty region
+    // costs no row. What is held is the SHAPE of the rule — which is the half
+    // that carries the accessibility decision, and the half a later edit would
+    // silently reverse. `display: none` would collapse the note
     // correctly and silently undo D-1222 by taking the region out of the
     // accessibility tree; `height: 0` alone left the flex line and its row-gap
     // standing, which is what D-1236 was (the rule's own comment claimed it

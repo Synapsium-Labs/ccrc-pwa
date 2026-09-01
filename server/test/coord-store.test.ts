@@ -1799,7 +1799,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 // The sweep asks one question of this store and nothing else asked it before:
 // which sessions are COORDINATING something live. Three of the four tests below
 // exist for a direction the obvious implementation gets wrong — the worker
-// column, a terminal row, a repeated coordinator (D-1160).
+// column, a terminal row, a repeated coordinator (D-1241).
 describe('CoordStore: the coord feed kind', () => {
   it('round-trips a coord feed event through the durable table', () => {
     // The absence half is what makes this worth a test: `feedEvents` reads

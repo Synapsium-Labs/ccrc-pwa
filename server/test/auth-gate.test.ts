@@ -199,7 +199,7 @@ describe('the scanner is looking at something', () => {
     // and the first route in this file whose whole job is to rewrite `claimedBy`.
     // 25 since `GET`/`POST /api/coord/caps` — the operator dial on the two
     // coordination caps, and the first pair in this file that is neither
-    // box-token gated nor one of the D-282 ungated doors (D-1159).
+    // box-token gated nor one of the D-282 ungated doors (D-1240).
     expect(scanRoutes('coord/routes.ts').length).toBe(25);
     expect(ROUTES.length).toBe(71);
     // …and the three partitions add up: 3 websockets + 68 HTTP.
@@ -234,7 +234,13 @@ describe('the scanner is looking at something', () => {
   it('sweeps all three websockets, and finds them registered', () => {
     const keys = ROUTES.map(key);
     for (const w of WS_ROUTES) expect(keys).toContain(`GET ${w}`);
-    expect(ROUTES.filter(isWs)).toHaveLength(3);
+    // DERIVED, not the literal 3 (D-1242's family): `WS_ROUTES` is declared three
+    // lines from here with exactly these members, and this file already writes
+    // `WS_ROUTES.length` elsewhere. Paired with the loop above — which proves
+    // every member was actually FOUND in the scan — the equality says the scan
+    // sees those sockets and no others, which is what the literal was standing in
+    // for. It was the one avoidable member of this file's six hand-kept cardinals.
+    expect(ROUTES.filter(isWs)).toHaveLength(WS_ROUTES.length);
   });
 });
 
@@ -443,7 +449,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the nineteenth lane, which lives in server.ts (D-1161:
+    // …and `/api/notify`, the nineteenth lane, which lives in server.ts (D-1242:
     // this comment used to call it the eighteenth, double-counting the coord
     // routes' own eighteen).
     expect(server).toContain('checkMailToken(deps.mailToken');

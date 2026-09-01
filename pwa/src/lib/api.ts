@@ -657,7 +657,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  value, so moving one dial cannot clobber the other with a stale reading.
      *  Session-gated when armed, open dark; NOT box-token (an operator dial is
      *  not a machine lane) and NOT one of the D-282 release valves — see the
-     *  route's own docstring for both arguments (D-1159).
+     *  route's own docstring for both arguments (D-1240).
      *
      *  `postJsonOr`, not `postJson` (D-1150): after a caps WRITE, "the answer
      *  could not be read" and "the request never happened" are different states

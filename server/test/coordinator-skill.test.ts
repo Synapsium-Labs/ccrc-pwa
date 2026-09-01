@@ -245,7 +245,7 @@ describe('the coordinator skill: linkage', () => {
       // corpus-wide forbid-mention pin (the `/api/claims/:id/break` shape) is
       // what turns this permission-to-omit into a prohibition.
       'POST /api/runs/:id/reclaim',
-      // WAVE 6 (D-1159) — the OPERATOR-dial shape, and the `POST
+      // WAVE 6 (D-1240) — the OPERATOR-dial shape, and the `POST
       // /api/coord/pause` argument one turn sharper. The caps bound how much a
       // coordinator may dispatch; a coordinator told about this route would be
       // told how to raise its own limit, which is not a door it is the one to

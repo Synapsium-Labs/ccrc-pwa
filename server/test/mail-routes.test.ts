@@ -134,11 +134,12 @@ describe('POST /api/mail — the rejection table', () => {
     // …AND THE DURABLE ROW SAYS THE SAME THING (D-1218). The comment above
     // claims this route "also mislabels the durable rejection record" — a
     // SECOND consequence, beyond the status code, that nothing on THESE two
-    // rows checked. (`REJECT_CASES` below does read `rejections()`, for its own
-    // seven codes; the two D-1165 rows, the ones whose comment makes the claim,
-    // did not.) The row is the fleet-visible half of a refusal and the half a
-    // later feed will surface, so a shape error recorded as a missing run is a
-    // wrong fact that outlives the response.
+    // rows checked. The record itself is well read: `store.rejections()` has
+    // sixteen call sites across three test files (fourteen before this wave
+    // added two), so the gap was never "nothing reads it" — it was that the two
+    // rows whose comment makes the claim did not. The row is the fleet-visible
+    // half of a refusal and the half a later feed will surface, so a shape error
+    // recorded as a missing run is a wrong fact that outlives the response.
     //
     // Measured with a mutation that touches the ROW alone — `refuse()` recording
     // a constant code while the reply still varies — so this assertion is
