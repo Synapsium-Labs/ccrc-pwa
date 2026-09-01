@@ -439,6 +439,38 @@ describe('Build 7 nouns', () => {
   });
 });
 
+// Task 9 (spec §10 "Where the routes live" / task-9-brief.md): the coord-ring
+// scan just above (`Build 7 nouns` > `the coord ring`) is directory-scoped to
+// `server/src/coord`, so a `node:sqlite` handle — or a `./db.js` import — in
+// `server/src/auto/` would pass it silently even though the SAME ring rule
+// (L1 holds no database handle) applies there: `fire.ts` and
+// `schedulepolicy.ts` are L1 (`docs/…-architecture-ddd-clean-solid.md`'s ring
+// table), and `routes.ts` is L4 but reaches the handle only THROUGH the
+// store, never by importing `coord/db.js` itself (its own file banner: "the
+// store type, and FireDeps", never a database handle).
+describe('the auto ring — server/src/auto holds no coord-db handle', () => {
+  const autoDir = path.join(ccrcRoot, 'server/src/auto');
+  const autoFiles = sources(autoDir);
+
+  it('visits the whole directory — a moved/emptied directory must turn this red, not disarm it', () => {
+    // Scanner-coverage pin, `the coord ring`'s own idiom just above: a scan
+    // over an empty or truncated list passes everything.
+    expect(autoFiles.length).toBeGreaterThanOrEqual(3);
+    for (const f of ['fire.ts', 'schedulepolicy.ts', 'routes.ts']) {
+      expect(autoFiles.map((p) => path.basename(p))).toContain(f);
+    }
+  });
+
+  it('imports neither ./db.js/../coord/db.js nor node:sqlite anywhere under server/src/auto', () => {
+    for (const f of autoFiles) {
+      const src = readFileSync(f, 'utf8');
+      expect(/from\s+'\.\/db\.js'/.test(src), `${rel(f)} imports ./db.js`).toBe(false);
+      expect(/from\s+'\.\.\/coord\/db\.js'/.test(src), `${rel(f)} imports ../coord/db.js`).toBe(false);
+      expect(/from\s+'node:sqlite'/.test(src), `${rel(f)} imports node:sqlite`).toBe(false);
+    }
+  });
+});
+
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
 // "an account" / "a wrapper" was the one domain concept in this system with no
 // type and no home, enumerated by hand in eight places across three languages.

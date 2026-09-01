@@ -77,7 +77,14 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-const ROUTES: ScannedRoute[] = [...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts')];
+// Task 9: `auto/routes.ts` is a THIRD route file (spec §10 "Where the routes
+// live" — deliberately not `coord/routes.ts`, so it stays out of the
+// coordinator-skill parity scan). Left out of this array, its ten routes
+// would be invisible to the 401 sweep below — the exact hole spec:806-824
+// names and closes here, before a single one of those routes is registered.
+const ROUTES: ScannedRoute[] = [
+  ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('auto/routes.ts'),
+];
 
 /** The three websocket upgrades — the same registrations, told apart by their
  *  `{ websocket: true }` option. They are swept through `injectWS`, not
@@ -196,10 +203,13 @@ describe('the scanner is looking at something', () => {
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     expect(scanRoutes('coord/routes.ts').length).toBe(22);
-    expect(ROUTES.length).toBe(68);
-    // …and the three partitions add up: 3 websockets + 65 HTTP.
+    // Task 9's ten (spec §10's table) — `get`/`post` only, none exempt, none
+    // websocket, so every count below moves by exactly ten.
+    expect(scanRoutes('auto/routes.ts').length).toBe(10);
+    expect(ROUTES.length).toBe(78);
+    // …and the three partitions add up: 3 websockets + 75 HTTP.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(65);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(75);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -451,8 +461,8 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 68 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 41; the gated non-exempt
+    // 78 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 51; the gated non-exempt
     // routes this file reasons about by name are `POST /api/claims/:id/break`,
     // which meets the session gate on an armed box exactly as abandon and pause
     // do, and — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`.
@@ -461,12 +471,17 @@ describe('with the gate ARMED and no cookie', () => {
     // write, the browser has one, and nothing on a fleet host posts it
     // cookieless. Being gated is the whole posture, not a cost.
     //
+    // MOVED BY EXACTLY TEN by Task 9's ten automations routes — every one of
+    // them is session-gated and none is EXEMPT (spec §10 "Gating": no fourth
+    // ungated door, no `EXEMPT` entry), so the difference (`ROUTES.length -
+    // ws - gated`) still equals `EXEMPT.size - 1` below.
+    //
     // UNCHANGED at its then-value by `GET /api/runs/:id/items`, and that was the
     // arithmetic working rather than a coincidence: that route is EXEMPT, so it
     // raised the scanned count and the exempt count by one each and left the
     // difference alone. A new route that is NOT exempt moves this number, which
     // is exactly what the kickoff route just did.
-    expect(gated.length).toBe(41);
+    expect(gated.length).toBe(51);
     expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
   });
 

@@ -44,6 +44,7 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { registerAutoRoutes } from './auto/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
@@ -1317,6 +1318,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // cookieless from the fleet host with the box token. The session half of that
   // decision can only be made here, where `authStore` lives.
   registerCoordRoutes(app, deps, bus, sessionAuth);
+
+  // Automations (Task 9, spec §10) — its own file, deliberately NOT
+  // `coord/routes.ts`: `/api/automations` is not one of the eight
+  // coordination prefixes (`coord-routes-single-file.test.ts`). SESSION GATE
+  // ONLY — no `sessionAuth`/`bus` argument, because nothing here is EXEMPT
+  // and nothing here reads the box token; the global `installGate` hook
+  // above already covers every route in every file. See `auto/routes.ts`'s
+  // own file banner for why a fourth ungated door is never added here.
+  registerAutoRoutes(app, deps);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
