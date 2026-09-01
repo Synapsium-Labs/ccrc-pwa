@@ -259,11 +259,21 @@ An automation set for `02:30` has **no occurrence at all** that day.
 > (an epoch comparison) is the wrong one, and it fails silently — the second firing looks
 > exactly like a correct one in the history.
 
-**The algorithm is a local→epoch inversion, not a minute walk.** For each candidate local
-tuple the cadence names, probe the zone's offset a day either side of the nominal instant
-and invert: **two candidate epochs** result; a fold yields two valid ones (take the
-earlier), a gap yields **zero** (advance to the first valid instant after it). This is
-bounded work per candidate, unlike walking 1440 minutes × N days.
+**The algorithm is a local→epoch inversion over candidate local DAYS, not a minute walk.**
+For each day the mask allows, form the nominal local tuple, probe the zone's offset a day
+either side, and invert. Round-trip each candidate epoch back through `formatToParts` and
+keep only those that render as the tuple asked for: a normal day yields one, **a fold yields
+two — take the earlier**, and **a gap yields zero**.
+
+**The gap answer is the transition instant, found by bisection — and this is the one part
+that was measured wrong first.** A prototype run against the fixtures below returned *01:31*
+for Warsaw's missing 02:30 because it scanned forward a minute at a time from the nominal
+value, evaluating the offset at a **naive** number rather than a real instant, which near a
+transition selects the pre-transition offset and lands *before* the gap. The correct answer
+is structural: local time jumps straight over the requested wall clock, so the first valid
+instant after the gap **is the transition itself**. Bisect the offset change across the local
+day to the minute and return it. Verified: Warsaw 02:30 → **03:00**, Lord Howe 02:00 →
+**02:30**, both with `dstShifted: true`.
 
 **Two zones prove why the offset must be probed rather than assumed, and both were
 measured, not asserted:**

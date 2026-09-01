@@ -22,7 +22,7 @@ Preact + zustand, vitest. No new package in any of the four roots.
 
 ## What was measured (2026-08-31, this machine, Node v24.18.0)
 
-Seven measurement blocks this plan is built on. Re-run each before trusting it on another box.
+Eight measurement blocks this plan is built on. Re-run each before trusting it on another box.
 
 > **Base: `origin/main` at `592ec425`.** Every line number, migration index and route count
 > below was measured there. An earlier draft of this plan measured the *worktree*, which was
@@ -91,6 +91,31 @@ And Lord Howe's spring-forward gap is **half an hour** — measured 2026-10-04, 
 So local 02:00 and 02:15 do not exist that day. An implementation that handles a gap by
 *"add one hour"* is right in Warsaw and **wrong here**, and the failure is invisible until
 someone schedules in that zone. Both zones are Task 1 fixtures for exactly that reason.
+
+**4c. The algorithm was PROTOTYPED and run green — 13/13 — before this plan was finalised.**
+
+An import-free prototype of `shared/schedule.ts` using only the `Intl` global was written and
+exercised against every fixture in Task 1, on this box:
+
+```
+PASS  (a) weekdays 09:00 from Sat -> Mon 09:00 Warsaw
+PASS  (b) Warsaw spring gap 02:30 -> 28/03/2027, 03:00   dstShifted=true
+PASS  (c) Warsaw fold fires ONCE (next is 26 Oct, not the 2nd 02:25)
+PASS  (d) Pacific/Chatham :45 offset resolves 09:00
+PASS  (d) Lord Howe HALF-HOUR gap 02:00 -> 04/10/2026, 02:30   dstShifted=true
+PASS  (e) unknown zone -> {"unschedulable":"unknown-timezone"}
+PASS  (f) empty day mask -> {"unschedulable":"no-future-occurrence"}
+PASS  (g) bad interval -> {"unschedulable":"bad-cadence"}
+PASS  (h) interval +240min across the fold is exactly 240 minutes elapsed
+PASS  (i) icuHasZones() -> true
+13 passed, 0 failed
+```
+
+**The first run was 10/13**, and the three failures are why this block is here: the gap cases
+returned 01:31 instead of 03:00 (fixed by bisecting to the transition instant — see Task 1),
+and one "control" assertion was mis-designed rather than the code being wrong. **The
+prototype is not committed** — Task 1 rebuilds it TDD-first — but the design it validates is
+the one this plan specifies.
 
 **5. `CCD_ARGV.wsAddWorker` cannot be reused — it hardcodes `--no-rc`.**
 
@@ -221,13 +246,20 @@ export function icuHasZones(): boolean;
 
 A **typed union, never a nullable number** — the spec's §4 decision.
 
-**The algorithm is a local→epoch inversion, not a minute walk.** For each candidate local
-day the mask allows, form the nominal local instant, probe the zone's offset a day either
-side via `formatToParts`, and invert. Two candidate epochs result: a **fold** yields two
-valid ones (take the earlier), a **gap** yields **zero** (advance to the first valid instant
-after it and set `dstShifted`). Bounded work per candidate — unlike walking 1440 minutes × N
-days — and it is the only shape that handles a 30-minute DST step
-(`Australia/Lord_Howe`) and a `:45` offset (`Pacific/Chatham`) without special cases.
+**The algorithm is a local→epoch inversion over candidate local DAYS, not a minute walk.**
+For each day the mask allows, form the nominal local tuple, probe the zone's offset a day
+either side via `formatToParts`, invert, and round-trip each candidate back through
+`formatToParts`, keeping only those that render as the tuple asked for. A normal day yields
+one; a **fold** yields two — take the earlier; a **gap** yields **zero**.
+
+**For a gap, return the TRANSITION INSTANT, found by bisecting the offset change across the
+local day — and set `dstShifted`.** This was measured wrong first and is worth the warning: a
+forward minute-scan from the nominal value evaluates the offset at a **naive** number rather
+than a real instant, which near a transition picks the pre-transition offset and lands
+*before* the gap. A prototype of this module returned **01:31** for Warsaw's missing 02:30
+that way. Local time jumps straight over the requested wall clock, so the first valid instant
+after the gap **is** the transition. Working in MINUTES throughout is what makes Chatham's
+`:45` and Lord Howe's 30-minute step non-cases rather than special cases.
 
 Accept only a candidate strictly greater than `afterLocal` **as a tuple**. That is what makes
 the autumn fold fire once; write the reason in the docstring and cite measurement 4.
@@ -250,6 +282,9 @@ the operator's morning (measurement 2's asymmetry).
       exactly `everyMinutes`, not by a wall-clock hour; (i) `icuHasZones()` is `true` here;
       (j) a source scan asserting `shared/schedule.ts` contains **no `import` statement**.
 - [ ] Step 2: run it — expect FAIL (the module does not exist; every case errors on import).
+      **A prototype of this module with all thirteen fixtures was built and run GREEN on this
+      box before the plan was finalised** — it is where the gap-bisection correction above came
+      from. Rebuild it here TDD-first rather than pasting it: the point of Step 2 is the red.
 - [ ] Step 3: implement `shared/schedule.ts`.
 - [ ] Step 4: run green, plus `single-definition`, `typecheck-tests`, `source-bytes`, and
       `cd pwa && ./node_modules/.bin/vitest run` (it must survive the browser bundle).
