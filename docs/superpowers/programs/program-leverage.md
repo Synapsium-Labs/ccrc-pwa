@@ -18,7 +18,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 3 | F3 — per-project program-ready badge (server measurement; seam re-ruled to `GET /api/projects` + StartProgramSheet, D-1023) | run 14, PR #33 (merged `1f6ed803`) | done 2026-08-30 ~14:35 UTC — fix round `60bb451e` verified (all ten rulings landed, D-1034..D-1038), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `1f6ed803` (NOT agent-first — server+PWA only) |
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18, PR #37 (merged `6458a14d`) | done 2026-08-31 ~18:57 UTC — fix round `8262d2b3` verified hunk-by-hunk (all 11 rulings landed with measured reds), CI 5/5, merged, deployed **AGENT-FIRST** (fleet host then server; `ccd` and `/health` both report `6458a14d`, all live sessions verified active through it). Review was SHIP-WITH-FIXES: 3 majors + 1 raised to must-fix, 7 minors, 2 refuted. D-1123..D-1156 spent, floor 1157 |
-| 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial + D-1156's derived box-token census | run 19 | dispatched 2026-08-31 ~19:00 UTC (resumed quiet-meadow, brief queued, `skillState:present`) |
+| 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial + D-1156's derived box-token census | run 19, PR #39 (merged `6ee36ca5`) | done 2026-09-01 ~22:48 UTC — TWO fix rounds plus a renumber. Round 1 (`ff85c514`) answered 3 must-fixes; the worker then AUDITED ITS OWN FIX ROUND (88 agents) and found **4 majors, 3 of them the same guard-with-no-mechanism fault** (`eee5fa1a`). Coordinator verification: 13 lenses, 7 running real mutations in isolated checkouts — **3/3 must-fixes and 4/4 self-audit majors hold**, zero code majors. Then BLOCKED: PR #41 merged at 21:54 taking D-1159/1160/1161, so `deviation-refs` red on the merged tree; renumbered to D-1240..D-1242 (`1c7ccb06`). CI 5/5, merged, deployed **server lane** from the merge sha; `/health` reports `6ee36ca5` (NOT agent-first). D-1163..D-1172 + D-1208..D-1242 spent, floor 1243 |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) | — | planned |
 | 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm (re-queue a parked role-addressed delivery after a reclaim), and `ccd/ccrc-api:32-38`'s stale two-door census | — | planned |
 
@@ -591,6 +591,21 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   changed files carried no lens in it (including `watch.ts` and `caps.ts`, the wave's own F6 feature
   and F7a policy module). They were covered by the 44-agent wave review, not skipped. The critic
   flagged it and the ship decision is recorded as resting on that split, not on an unstated gap.
+- **Wave 6 CLOSES (2026-09-01 22:48 UTC).** Merged `6ee36ca5`, deployed server lane from the merge
+  sha, `/health` reports it, `ccrc.service` MainPID stable across the verify window. The renumber
+  round was verified independently before the button: `deviation-refs.test.ts` **9/9 green on the
+  merged tree** (it was red with exactly three collisions before), D-1159/1160/1161 gone from the
+  wave's plan, D-1240/1241/1242 defined and allocated to `ccrc-pwa-quiet-meadow` under the title
+  "wave-6 renumber after PR #41 took D-1159/1160/1161 (run 19)" — the definer holds the allocation,
+  which is the property wave 7's guard has to enforce. The renumber commit is 14 files, 77 lines of
+  code: mechanical ref updates plus the seven free minors, each with a stated reason. Scope re-measured
+  AFTER the main merge: `ccd/`, `session-hook.sh`, `deploy/` empty against `origin/main`.
+- **The PR body was stale at merge time and was rewritten before the button.** It still claimed
+  "D-1157..D-1169 defined in the plan", a 59-row table and the pre-review suite counts — all three
+  false by then. **A PR body becomes the durable record on merge**, so refreshing it is part of the
+  merge, not housekeeping after it. (`gh pr edit` fails on this repo with a Projects-classic GraphQL
+  deprecation error and leaves the body UNCHANGED while looking like a failed command; the working
+  path is `gh api -X PATCH repos/<o>/<r>/pulls/<n> --input <json>`.)
 
 ## Carried constraints
 
@@ -624,109 +639,69 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 
 ## Next-wave brief
 
-**Wave 6 — F6+F7a: the coordinator quiet window and the caps route.** Spec:
-`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §8 (fetch `ws/brisk-meadow` from
-origin; the ledger on that ref carries this brief and wave 5's close record). Same workspace as
-waves 1–5 (`quiet-meadow`, resumed). Two independent pieces plus a census obligation.
+**Wave 7 — F7: program health on the board.** Spec:
+`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §9 (fetch `ws/brisk-meadow` from
+origin; the ledger on that ref carries this brief and wave 6's close record). Same workspace
+(`quiet-meadow`, resumed). Wave 6 is merged as `6ee36ca5` and DEPLOYED — diff against `origin/main`,
+never a stale local ref.
 
-(1) **`COORD_QUIET_MS` / `COORD_COOLDOWN_MS` for coordinator recipients.** The mail lane's composed
-wake floor is ~60–74s per event and at most one machine wake per ~2 minutes (`MAIL_QUIET_MS=60_000`,
-`MAIL_COOLDOWN_MS=120_000`, `watch.ts:176-188`) — right for a worker mid-thought, wrong for a
-coordinator idling AT a wave boundary BY DESIGN, because clause 7 mandates it end its turn and wait.
-In `sweepMail`, a recipient that is the `claimedBy` of a NON-TERMINAL run uses `COORD_QUIET_MS`
-(proposed 15s) and `COORD_COOLDOWN_MS` (proposed 30s); one read per sweep, cached for the sweep.
-Workers (run `sessionId`s) and every other session are untouched. Both constants defined ONCE beside
-the existing pair, single reader each. Tests: a coordinator recipient delivers inside `MAIL_QUIET_MS`
-while respecting `COORD_QUIET_MS`, AND a worker does NOT get the narrow window — that second one is
-the guard's mutation direction and the half a careless fixture omits.
+**(1) THE HEALTH FACTS, additive on the /runs board's existing reads.** Per run: outstanding vs
+parked delivery counts (excluding the benign `run closed` parks); max `replayCount` high-water;
+count + last code of done-claim rejections (`mail_rejections`/`run_events`); `briefQueued`/`clearError`
+from the dispatch response made durable and re-readable. Per program: un-briefed-coordinator detection
+(open run, `dispatchedAt` null, kickoff delivery unacked past a threshold). PWA renders a compact warn
+row per run. No polling changes — the data rides frames and reads the board already makes.
 
-(2) **Caps become an operator control.** `POST /api/coord/caps` — an ordinary PWA-surface write:
-session-gated when armed, open dark, **NOT box-token** (an operator dial, not a machine lane) and
-**NOT ungated** (raising a cap is not a release valve — the D-282 family is for wedges only, and
-this door must NOT join `UNGATED`). Body partial `{maxConcurrentWorkers?, maxSessionsPerDay?}`,
-bounds-checked; wires `CoordStore.setCaps`, which today has NO caller in `server/src` (caps change
-only by hand-editing sqlite). A `run_events` row is wrong here — there is no run — so a feed event
-records the change. PWA control beside the /runs board's pause control, showing current usage vs cap
-(`capsUsage` is already computed). Tests: gate posture pinned dark-vs-armed with exact status
-equality, bounds, and a `setCaps`-has-exactly-one-caller pin.
+**(2) THE ONE THE PROGRAM HAS PAID FOR TWICE — a worker cannot learn that steering mail is waiting.**
+Mail 120 sat gated `not-idle` for **722** attempts and mail 129 for **911**, each arriving after the
+work it was meant to steer. The gate is working as designed; the blocked party was the WORKER
+mid-wave, exactly the session the 60s floor protects, so `COORD_QUIET_MS` does NOT address it (wave 6
+established this and refused the credit). What the board must surface is the replay count approaching
+the ceiling and the parked/outstanding split — including the visible half of the ~15.5-minute repoint
+window. Surfacing it is this wave; changing the gate is NOT.
 
-(3) **THE PROSE-CENSUS DEFECT IS YOURS, mechanism and corrections in ONE change (D-1156, ruled by
-the coordinator at wave-5 close).** Three sites state a box-token surface nothing checks: the
-`CLAUDE.md` sentence wave 5 corrected is UNPINNED (wave 5 measured it — restoring the false sentence
-left the suite green); `README.md:528-531` says "nine box-token-gated coordination routes" where
-`requireMailToken` guards ELEVEN; `README.md:1403-1407` calls "the run routes" gated as a class,
-false since Build 4 for `/:id/abandon` and now `/:id/reclaim`. Wave 5 was RIGHT not to write the
-scanner alone — it reds the build until every site is corrected, so mechanism and corrections must
-land together, which is exactly why this belongs to the wave that changes the count anyway: you are
-adding an eleventh-plus route. **DERIVE the surface from the `requireMailToken`/`checkMailToken`
-call sites and assert no prose site under-claims it** — the shape wave 5 used for the door count
-(`UNGATED.size`), not a hand-corrected sentence that rots again. Fold in the small one: `coord/routes.ts`'s
-two other `runId` body readers still carry no lower bound, so the convention is inconsistent across
-three readers (wave 5 fixed only the third).
+**(3) THE LEDGER-ALLOCATION GUARD — three incidents now, and it is the wave's sharpest item.**
+D-1157/1158 went to PR #38, D-1159/1160/1161 to PR #41, both DEFINING numbers the allocator had issued
+to this program, both merging first, and wave 6 renumbered twice. Two holes, and the guard must close
+both: (a) **nothing checks that a DEFINED number was allocated to its definer** — every `D-N` defined
+in a plan needs an allocation row whose holder matches; (b) `deviation-refs.test.ts`'s collision scan
+reads ONE tree, so it fires only once both definitions coexist — **one merge too late**. The
+pre-merge measurement that DOES see it is merging `origin/main` locally and running that one file;
+make that cheap and make it a documented step, or find something better. Its floor assertion is a MAX
+compared for equality, so it rejects refs only ABOVE the high-water — that half is fine and is not the
+gap. **An allocation is a record that you asked, not a claim on a number** — the guard cannot pretend
+otherwise; it can only make the mismatch visible before the merge that decides it.
 
-Wire: additive-only, single reader per field, older-peer omission tolerated, no `FLEET_PROTO` bump,
-no new ccd verbs, no overloaded null at any new seam. Mutation-table discipline: every guard ships
-WITH a test measured red on its deletion, TDD red-first, **verbatim first-fail rows written AS YOU
-GO** — wave 5 shipped its record only after a review caught its absence, and the cause was a
-compaction between measuring and writing back. Count the table twice. Every "behaviour unchanged"
-claim gets a fixture that could witness the change, and watch for wave 5's own recurring class: an
-absence assertion whose fixture cannot produce the presence, and a pin whose premise (a hydrated
-store, a populated set) is never established. **Deviations: allocate every number from
-`~/.local/bin/ccrc-api ledger allocate` (floor 1157) — the program block and D-1119..D-1156 are all
-spent.** NOT agent-first (server + PWA + root docs only — no `ccd/`, no `session-hook.sh`, no skill
-corpus; if a finding pushes you into `ccd/coordinator-skill/`, mail me BEFORE implementing, because
-it changes my deploy lane). Commit on the workspace's own branch (`ws/quiet-meadow`), never a feature
-branch. All coordinator mail names runId <the new run's id, in the dispatch>. Plan first
-(superpowers:writing-plans), execute with superpowers:executing-plans. Deploy is not the worker's act.
+**(4) FOLD IN, all inherited and all small.** D-1169: `coordinator_state.updatedAt` is write-only and
+`setCaps` reads its own clock — its fix is what would make `caps.ts` impure, which is why that file now
+carries a purity scan; decide and record either way. `auth-gate.test.ts` still hand-pins FIVE exact
+cardinals (46/25/71/68/44) after wave 6 derived the sixth — the census machinery exists now, so this is
+an extension, not a design. D-1224 is a live behaviour change recorded with reasoning and no mechanism
+(the narrow window reaches a session that is simultaneously a run's WORKER — intended, keyed on the
+session not the message); the case to watch is a single-session program, which does not exist today —
+if the board makes that observable, say so.
 
----
+**Tests.** Each health fact: a fixture that MANUFACTURES the wedge and asserts the fact appears; the
+delete-the-measurement mutation direction; wire-revive tolerance (older server omits → PWA renders
+nothing, never a lie). Every guard ships WITH a test measured red on its deletion, TDD red-first, and
+**verbatim first-fail rows written AS YOU GO** — wave 6 shipped its review round with 265 lines of
+deviations and not one table row, and the single guard it did mutation-test end to end turned out to
+be unwitnessed. Three of that round's four majors were guards that would not have survived being
+written into a table. Rows carry the suite, the mutation and the quoted first-fail; count the table
+twice. Watch this program's recurring classes: an absence assertion whose fixture cannot produce the
+presence, and a pin whose premise is never established.
 
-Prior wave's brief (wave 5, retired — kept for the record):
+**Wire:** additive-only, single reader per field, older-peer omission tolerated, no `FLEET_PROTO` bump,
+no new ccd verbs, no overloaded null at any new seam.
 
-**Wave 5 — F5: coordinator resume — the reclaim door and the PWA affordance.** *(This is the
-brief AS SENT on 2026-08-31 ~06:08 UTC, kept as the record. **Two sentences in it are SUPERSEDED**
-by the operator rulings of ~12:18 UTC — see the Decisions entry above: the rewrite covers ALL the
-program's runs, not only the non-terminal ones; and the wave is **AGENT-FIRST**, not "NOT
-agent-first", because the corpus correction puts `ccd/coordinator-skill/` in the diff. A third
-line is corrected by measurement: "REUSE wave 4's mail-lane kickoff" reuses the LANE, not
-`programKickoff()`, whose text hardcodes wave 1.)* Spec:
-`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §7, operator ruling §11 (fetch
-`ws/brisk-meadow` from origin). Same workspace as waves 1–4 (`quiet-meadow`, reclaimed). The
-wedge: `claimedBy` is written once by `openRun`'s INSERT and nothing rewrites it — a dead
-coordinator whose id cannot be re-landed wedges the program `claimed-by-another` permanently.
-Build `POST /api/runs/:id/reclaim`, the FOURTH ungated operator door (same D-282 logic as
-abandon: the release valve must not sit behind the wedged party's key), **dead-proof by operator
-ruling**: the guard is a RE-MEASUREMENT, not a credential — refuse `claimant-alive` unless the
-current `claimedBy` session is measured dead/absent (registry row proven absent from a LISTED
-directory, or present with a gone/dead tmux verdict); an unmeasurable registry refuses
-`registry-unmeasurable`, NEVER proceeds (no overloaded arms — unmeasurable ≠ alive ≠ dead). Body
-`{claimedBy: <new id>}`, shape-checked, new claimant must exist in the registry; rewrite
-`claimedBy` on the program's non-terminal runs in ONE transaction with a `run_events` attribution
-row each (`causedBy:'operator'` hardcoded, like abandon's). Ungated-set obligations:
-`coord-pause-route.test.ts`'s `UNGATED` grows to four (two-direction pin); NOT in the auth gate's
-EXEMPT table (armed → session-gated, strengthening D-282 like the existing three); the skill
-corpus must NOT name it (parity-EXEMPT + forbid-mention pin, like `/api/claims/:id/break`).
-**Root CLAUDE.md is corrected BY this wave, once:** door count → four, AND fold in the box-token
-sentence's now-unnamed exception (wave 4's `POST /api/sessions/:id/kickoff` is a coordination
-WRITE that is session-gated only — recorded in wave 4's plan notes). PWA resume affordance: the
-/runs board detects an open run whose `claimedBy` session is dead and offers in order
-revive-same-id (`ensure`), wave-aware re-kickoff (REUSE wave 4's mail-lane kickoff —
-`queueProgramKickoff` is importable without the route, and the composed-body cap D-1119 is
-inherited by calling it; the text template comes from wave 1's runbook), and reclaim onto a named
-live session only when the id cannot be revived. StartProgramSheet refuses to start a NEW program
-for a project with an open run (today it refuses only on a live main checkout). Known fold you
-inherit (wave 4 plan, notes): `queueProgramKickoff`'s `queued:false` folds "this program's
-kickoff already waiting" with "a DIFFERENT program's kickoff waiting" — the re-kickoff lane is
-the first consumer that may need them apart; open the fold only if you actually consume the
-distinction, and record the decision either way. Tests: dead-proof mutation table (alive →
-`claimant-alive`; unmeasurable → `registry-unmeasurable`; dead → rewritten + event rows; terminal
-runs untouched); gate-posture pinned dark-vs-armed with exact status equality; every guard ships
-WITH a test measured red on its deletion, TDD red-first, verbatim first-fail rows in the plan's
-mutation table; every "behaviour unchanged" claim gets a fixture that could witness the change.
-Wire: additive-only, single reader per field, older-peer omission tolerated, no `FLEET_PROTO`
-bump, no new ccd verbs, no overloaded null. **Deviations: the program block (`D-999..D-1046`) is
-EXHAUSTED and D-1119..D-1122 are consumed — allocate from `POST /api/ledger/deviations` (floor
-1123); if the allocator is unreachable write `D-TBD-program-leverage` and it reconciles at
-review.** NOT agent-first (server+PWA+root docs only). Commit on the workspace's own branch; all
-coordinator mail names the new run's `runId`. Plan first (superpowers:writing-plans), execute
-with superpowers:executing-plans. Deploy is not the worker's act.
+**Deviations:** allocate from `~/.local/bin/ccrc-api ledger allocate`, floor **1243**, and read the
+floor from the allocator rather than from any document — and **allocate and define in the same act**,
+because the gap between them is what fired three times. Never predict or reuse a number.
+
+**NOT agent-first** (server + PWA + root docs only). If a finding pushes you into `ccd/`,
+`session-hook.sh` or the skill corpus, MAIL ME BEFORE IMPLEMENTING — it changes the deploy lane, and a
+mid-wave mail can arrive after the commit it was meant to shape. Deploy is not the worker's act. Commit
+on `ws/quiet-meadow`, never a feature branch. All coordinator mail names this wave's `runId`. Plan
+first (superpowers:writing-plans), execute with superpowers:executing-plans. Suites:
+`./node_modules/.bin/vitest run` from inside the package, foreground, tails READ not grepped; all three
+packages installed or `typecheck-tests` reports spurious failures.
