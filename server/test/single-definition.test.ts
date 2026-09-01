@@ -1099,8 +1099,17 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // Nothing in `auto/` reaches around `rundefs.ts` for the marker string;
     // this is the refusal-code vocabulary, exactly the shape `'mail-disabled'`
     // already established.
+    //
+    // `server/src/auto/fire.ts` (Task 6) is admitted as a THIRD, NAMED
+    // holder for the exact same reason `shared/api.ts` was: it spells
+    // `PostClaimRefusal`'s member (`Extract<AutomationRefusal, …
+    // 'coordinator-paused' …>` and the derived `POST_CLAIM_REFUSAL_MAP`),
+    // TypeScript's own string-literal-type spelling of the SAME wire
+    // vocabulary — it does not read `$REG/coordinator-paused` itself
+    // anywhere; rung 5's actual marker check imports `COORDINATOR_PAUSE_
+    // MARKER` from `rundefs.ts` by value, same as `dispatch.ts`/`watch.ts`.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel).sort();
-    expect(holders).toEqual(['server/src/coord/rundefs.ts', 'shared/api.ts']);
+    expect(holders).toEqual(['server/src/auto/fire.ts', 'server/src/coord/rundefs.ts', 'shared/api.ts']);
   });
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
@@ -1884,4 +1893,33 @@ describe('Task 2 — the automations vocabularies are derived, never restated', 
   // schema.ts's comment style. `shared/api.ts` remains the one place a
   // `Record<Union, …>` makes a missing member a compile error, which is the
   // guarantee that actually matters (Task 2 report has the measurement).
+});
+
+// Timezone arithmetic is the one calculation the server and the PWA MUST agree
+// on to the minute, and the only way they can disagree is by holding two copies
+// of it. This scan exists because a second copy really was written: Task 6's
+// L1 policy needed the local-tuple and gap-shift arithmetic while
+// `shared/schedule.ts` was under concurrent edit, and reproduced the
+// `Intl.DateTimeFormat` block locally as a flagged shim rather than block. The
+// shim is gone and `shared/schedule.ts` exports `localTupleAt` and
+// `occurrenceShifted` instead — this keeps it gone.
+//
+// `shared/` is the right and only home: the PWA bundles it, so one
+// implementation reaches both sides. A second `Intl.DateTimeFormat` in
+// `server/src` would be a copy the browser never runs and therefore never
+// checks.
+describe('timezone arithmetic has exactly one home', () => {
+  it('constructs an Intl.DateTimeFormat in shared/schedule.ts and nowhere else under the scanned roots', () => {
+    const holders = ALL
+      .filter((f) => readFileSync(f, 'utf8').includes('Intl.DateTimeFormat'))
+      .map(rel)
+      .sort();
+    expect(holders, 'a second copy of the zone math — the server and the PWA can now disagree')
+      .toEqual(['shared/schedule.ts']);
+  });
+
+  it('the scan can actually see a second copy — coverage floor, so an empty ALL cannot pass', () => {
+    expect(ALL.length).toBeGreaterThan(50);
+    expect(ALL.map(rel)).toContain('shared/schedule.ts');
+  });
 });

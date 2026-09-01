@@ -37,7 +37,7 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  a MAXIMUM, so `{five: 3, seven: null}` bounds the truth only from below and
  *  could really be 99. The swap picker learned this first; placement is the
  *  other half of the same lesson. */
-const measured = (l: AccountLimits | undefined): number | null =>
+export const measured = (l: AccountLimits | undefined): number | null =>
   !l || l.five === null || l.seven === null ? null : Math.max(l.five, l.seven);
 
 /**

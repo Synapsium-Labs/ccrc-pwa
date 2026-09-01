@@ -47,6 +47,29 @@ function partsIn(tz: string, t: number): LocalTuple {
   return { y: o['year']!, mo: o['month']!, d: o['day']!, h: o['hour']! % 24, mi: o['minute']! };
 }
 
+/** The wall clock `atMs` renders at in `tz`.
+ *
+ *  Exported because L1 policy needs the same arithmetic to decide whether an
+ *  occurrence was moved by a DST gap, and a second `Intl.DateTimeFormat` block
+ *  elsewhere in the tree is the second-copy defect `single-definition` exists
+ *  to fail on — two copies of timezone arithmetic is exactly how the server and
+ *  the PWA come to disagree about what time it is. One implementation, one
+ *  door. Throws `RangeError` on a zone ICU does not know, like `partsIn`. */
+export function localTupleAt(tz: string, atMs: number): LocalTuple {
+  return partsIn(tz, atMs);
+}
+
+/** Whether `atMs` fires at a wall clock OTHER than the one `c` names — i.e.
+ *  this occurrence was moved by a spring-forward gap, and a surface rendering
+ *  "03:00" for an "02:30" schedule owes the operator that explanation.
+ *
+ *  Always `false` for an interval: it has no wall clock to be shifted from. */
+export function occurrenceShifted(c: Cadence, atMs: number): boolean {
+  if (c.kind !== 'wall-clock') return false;
+  const t = localTupleAt(c.tz, atMs);
+  return t.h * 60 + t.mi !== c.minuteOfDay;
+}
+
 /** The offset in MINUTES (east positive) that `tz` is at instant `t`. Minutes,
  *  not hours: Pacific/Chatham is +12:45 / +13:45 and Australia/Lord_Howe steps
  *  by 30. Everything downstream works in minutes, which is what makes both
@@ -186,6 +209,56 @@ export function describeCadence(c: Cadence): string {
     : days.length === 0 ? 'never'
     : days.join(' ');
   return `${when} at ${hh}:${mm} ${c.tz}`;
+}
+
+/** The four flattened cadence columns as ONE record (Task 4's `automations`
+ *  row and `AutomationSummary` both satisfy this STRUCTURALLY, which is what
+ *  lets the mapping have one home without either file importing the other —
+ *  `shared/api.ts` may not import this module, spec §10 "`ScheduleError` and
+ *  `CadenceKind` have exactly ONE home"). */
+export interface CadenceColumns {
+  readonly cadenceKind: string;
+  readonly cadenceDays: number | null;
+  readonly cadenceMinute: number | null;
+  readonly cadenceEvery: number | null;
+  readonly tz: string | null;
+}
+
+/** A stored cadence WIDENED by the degrade arm — never narrowed to a
+ *  `Cadence`, so `nextOccurrence(c: Cadence, …)` cannot be handed one this
+ *  build could not read. `token` is the raw `cadenceKind` column text, so a
+ *  caller renders `? <token>` rather than an empty cell. A known kind whose
+ *  companion column is unexpectedly NULL degrades the same way as an
+ *  unrecognised kind word — both are "cannot compute a next instant for
+ *  this row", the one case global constraint 9 permits collapsing. */
+export type StoredCadence = Cadence | { readonly kind: 'unknown'; readonly token: string };
+
+/** The one reader of the four columns (spec §5's flatten-rather-than-JSON
+ *  decision rests on this being singular) — `server/src/coord/store.ts`'s
+ *  `hydrateAutomation` and the PWA's list row both call this rather than
+ *  each re-deriving the mapping. */
+export function cadenceFromColumns(c: CadenceColumns): StoredCadence {
+  if (c.cadenceKind === 'wall-clock') {
+    if (c.cadenceDays === null || c.cadenceMinute === null || c.tz === null) {
+      return { kind: 'unknown', token: c.cadenceKind };
+    }
+    return { kind: 'wall-clock', days: c.cadenceDays, minuteOfDay: c.cadenceMinute, tz: c.tz };
+  }
+  if (c.cadenceKind === 'interval') {
+    if (c.cadenceEvery === null) return { kind: 'unknown', token: c.cadenceKind };
+    return { kind: 'interval', everyMinutes: c.cadenceEvery };
+  }
+  return { kind: 'unknown', token: c.cadenceKind };
+}
+
+/** The inverse of `cadenceFromColumns`, for a WRITER (`insertAutomation`/
+ *  `updateAutomation`) that only ever holds a real `Cadence` — never the
+ *  degrade arm, since nothing writes `'unknown'` (spec §5's column comment). */
+export function cadenceToColumns(c: Cadence): CadenceColumns {
+  if (c.kind === 'wall-clock') {
+    return { cadenceKind: 'wall-clock', cadenceDays: c.days, cadenceMinute: c.minuteOfDay, cadenceEvery: null, tz: c.tz };
+  }
+  return { cadenceKind: 'interval', cadenceDays: null, cadenceMinute: null, cadenceEvery: c.everyMinutes, tz: null };
 }
 
 /** Whether this build's ICU actually carries the timezone database.
