@@ -18,6 +18,7 @@ import {
   type AutomationOutcome, type AutomationRefusal, type AutomationState, type AutomationStats,
   type AutomationStep, type AutomationRunSummary, type AutomationStepWire, type AutomationSummary,
   type AutomationTrigger, type CadenceKind, type ScheduleError,
+  type AutomationLastFilter,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleGap, type LifecycleGapReason,
@@ -373,7 +374,7 @@ export const toAutomationSummary = (row: AutomationRow): AutomationSummary => {
 export interface AutomationFilter {
   readonly state?: AutomationState;
   readonly project?: string;
-  readonly last?: AutomationOutcome | 'never-ran';
+  readonly last?: AutomationLastFilter;
 }
 
 export interface NewAutomation {

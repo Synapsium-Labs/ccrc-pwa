@@ -95,7 +95,7 @@ const CASES: VocabCase<string>[] = [
   {
     name: 'AutomationRouteRefusal', mapName: 'AUTOMATION_ROUTE_REFUSAL_MAP',
     members: AUTOMATION_ROUTE_REFUSALS, isGuard: isAutomationRouteRefusal,
-    expectSorted: ['bad-schedule', 'bad-transition', 'never-run-by-hand', 'oversize', 'unknown'],
+    expectSorted: ['bad-schedule', 'bad-transition', 'never-run-by-hand', 'oversize', 'unknown', 'unknown-automation'],
   },
 ];
 

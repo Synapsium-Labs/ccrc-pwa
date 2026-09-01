@@ -73,7 +73,7 @@ export type FireDecision =
  * an automation's once-per-boot catch-up budget on an ordinary firing
  * (task-6-decisions.md C2.4).
  *
- * DEVIATION (see task-6-report.md, D-TBD-automation-punctual-ms): the
+ * DEVIATION (see task-6-report.md, ledger number pending Task 12): the
  * contract imports this from `shared/api.js` alongside
  * `AUTOMATION_FAILURE_CEILING`/`AUTOMATION_MIN_INTERVAL_MINUTES`, on the
  * theory it belongs in that file's Task-2 cap block. It is not there yet —
@@ -87,9 +87,9 @@ export const AUTOMATION_PUNCTUAL_MS = 60_000;
 // as a flagged shim while that file was under concurrent edit; the duplicate
 // is gone. Two copies of the zone arithmetic is precisely how the server and
 // the PWA come to disagree about what time it is, so `single-definition` now
-// scans for a second formatter construction by name. This comment deliberately
-// does NOT spell that constructor: the scan is textual, and naming the thing
-// it forbids would trip it from a comment explaining why it exists.
+// scans for a second wall-clock decomposition by name. This comment
+// deliberately does NOT spell that method: the scan is textual, and naming the
+// thing it forbids would trip it from a comment explaining why it exists.
 
 /**
  * The two schedule columns, decided in one place (task-6-decisions.md C2.5).

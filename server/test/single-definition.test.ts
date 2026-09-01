@@ -1873,15 +1873,20 @@ describe('Task 2 — the automations vocabularies are derived, never restated', 
     { list: 'CADENCE_KINDS', map: 'CADENCE_KIND_MAP', union: 'CadenceKind' },
     { list: 'SCHEDULE_ERRORS', map: 'SCHEDULE_ERROR_MAP', union: 'ScheduleError' },
     { list: 'AUTOMATION_ROUTE_REFUSALS', map: 'AUTOMATION_ROUTE_REFUSAL_MAP', union: 'AutomationRouteRefusal' },
+    // NINTH, added when `mail-routes.test.ts`'s totality scan found `'never-ran'`
+    // loose in `server/src/coord`. It is a FILTER vocabulary, not an outcome:
+    // no run row can carry `'never-ran'`, so it must never join
+    // `AutomationOutcome`. Declared and derived like the other eight.
+    { list: 'AUTOMATION_LAST_FILTERS', map: 'AUTOMATION_LAST_FILTER_MAP', union: 'AutomationLastFilter' },
   ];
 
   // The widened regex, verified below to actually match all eight map names
   // character by character — not just asserted to by comment.
   const OBJECT_KEYS_AUTOMATION_MAP = /Object\.keys\((?:AUTOMATION_\w+_MAP|CADENCE_KIND_MAP|SCHEDULE_ERROR_MAP)\)/g;
 
-  it('is really eight vocabularies, not the brief’s miscounted seven', () => {
-    expect(VOCABS).toHaveLength(8);
-    expect(new Set(VOCABS.map((v) => v.union)).size).toBe(8);
+  it('is nine vocabularies — eight from Task 2, plus the filter union', () => {
+    expect(VOCABS).toHaveLength(9);
+    expect(new Set(VOCABS.map((v) => v.union)).size).toBe(9);
   });
 
   it('the widened regex matches every one of the eight map names, individually', () => {
@@ -1941,9 +1946,19 @@ describe('Task 2 — the automations vocabularies are derived, never restated', 
 // `server/src` would be a copy the browser never runs and therefore never
 // checks.
 describe('timezone arithmetic has exactly one home', () => {
-  it('constructs an Intl.DateTimeFormat in shared/schedule.ts and nowhere else under the scanned roots', () => {
+  // The predicate is `formatToParts`, NOT the formatter constructor, and the
+  // difference is the whole correctness of this scan. Constructing an
+  // `Intl.DateTimeFormat` to read `.resolvedOptions().timeZone` — which the
+  // cadence picker legitimately does, to default the zone to the one the
+  // operator's own browser is in — reads a NAME and computes nothing. The
+  // arithmetic is `formatToParts`: decomposing an instant into wall-clock
+  // fields is how the offset, the fold and the gap are derived, and THAT is
+  // what must not exist twice. An earlier version of this scan matched the
+  // constructor and would have failed the picker for asking what timezone it
+  // is in.
+  it('calls formatToParts in shared/schedule.ts and nowhere else under the scanned roots', () => {
     const holders = ALL
-      .filter((f) => readFileSync(f, 'utf8').includes('Intl.DateTimeFormat'))
+      .filter((f) => readFileSync(f, 'utf8').includes('formatToParts'))
       .map(rel)
       .sort();
     expect(holders, 'a second copy of the zone math — the server and the PWA can now disagree')

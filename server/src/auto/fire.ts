@@ -30,7 +30,7 @@ import {
  * `CoordStore`... `auto/` must hold no store handle"): these three are plain
  * type aliases the store already declares as the ground truth for what
  * `markAutomationSpawn`/`settleAutomationRun` accept and answer.
- * DEVIATION (task-7-report.md, D-TBD-fire-store-types): Task 6's own
+ * DEVIATION (task-7-report.md, ledger number pending Task 12): Task 6's own
  * `AutomationCoordPort` deviation note claimed this file "imports nothing
  * from coord/store.js at all, typed or otherwise" as a STRICTER reading of
  * the ring note. That reading is not load-bearing (the ring note's own
@@ -73,7 +73,7 @@ export interface AutomationCoordPort {
    *  (spec §7: "counted after the claim it would include this run's own
    *  running row, so a ceiling of 2 would admit 1").
    *
-   *  DEVIATION (task-7-report.md, D-TBD-fire-store-types): named and shaped
+   *  DEVIATION (task-7-report.md, ledger number pending Task 12): named and shaped
    *  `inFlightAutomationRunCount(now)`, not the contract snippet's
    *  `inFlightAutomationRuns()` — `server/src/coord/store.ts:3505`'s real,
    *  already-committed method JOINS the parent and counts only LIVE leases
@@ -84,7 +84,7 @@ export interface AutomationCoordPort {
   /** Rung 4: `automations_state.paused` — a ROW, not a file (spec §7 argues
    *  why: the server cannot write to `$REG`).
    *
-   *  DEVIATION (task-7-report.md, D-TBD-fire-store-types): the real
+   *  DEVIATION (task-7-report.md, ledger number pending Task 12): the real
    *  `automationsPaused()` (`store.ts:3513`) answers `{paused, updatedAt}`,
    *  not a bare `boolean` — the contract snippet guessed at a shape Task 4
    *  had not landed yet. Every caller here reads `.paused`. */
@@ -295,7 +295,7 @@ export async function checkPostClaim(
  * ==========================================================================*/
 
 /**
- * DEVIATION (task-7-report.md, D-TBD-automation-prompt-caps):
+ * DEVIATION (task-7-report.md, ledger number pending Task 12):
  * task-6-decisions.md C2.7 places these three in `shared/api.ts`'s Task-2 cap
  * block, alongside `AUTOMATION_FAILURE_CEILING` etc. They are not there —
  * `shared/api.ts` is not on this task's file list (only `server/src/auto/

@@ -5436,6 +5436,33 @@ export function isAutomationOutcome(v: unknown): v is AutomationOutcome {
   return typeof v === 'string' && (AUTOMATION_OUTCOMES as readonly string[]).includes(v);
 }
 
+/** What `GET /api/automations`' `last=` chip may narrow by: any outcome a run
+ *  row can carry, plus `'never-ran'`.
+ *
+ *  `'never-ran'` is NOT an `AutomationOutcome` and must never become one — it
+ *  is `lastFireAt IS NULL`, a fact about an automation that has no run rows at
+ *  all, and no run row can ever carry it. Putting it in the outcome union
+ *  would put a word there that nothing can write.
+ *
+ *  It is declared HERE, as a derived vocabulary with a guard, rather than
+ *  spelled inline in the store's filter type, for the reason
+ *  `mail-routes.test.ts`'s totality scan states about its own admissions:
+ *  a kebab token loose in `server/src/coord` is indistinguishable from an
+ *  undeclared refusal code, and the remedy is "the exported guard, never an
+ *  allowlist pin per member, so a member added later is accepted and a typo
+ *  is not". */
+export type AutomationLastFilter = AutomationOutcome | 'never-ran';
+
+const AUTOMATION_LAST_FILTER_MAP: Record<AutomationLastFilter, true> = {
+  ...AUTOMATION_OUTCOME_MAP, 'never-ran': true,
+};
+export const AUTOMATION_LAST_FILTERS: readonly AutomationLastFilter[] =
+  Object.keys(AUTOMATION_LAST_FILTER_MAP) as AutomationLastFilter[];
+
+export function isAutomationLastFilter(v: unknown): v is AutomationLastFilter {
+  return typeof v === 'string' && (AUTOMATION_LAST_FILTERS as readonly string[]).includes(v);
+}
+
 /** `automation_runs.refusal` (spec §5, §7's precondition ladder, §6 steps
  *  6-9). Exactly the reasons a run that WAS OPENED did not produce a
  *  session — `never-run-by-hand` is deliberately NOT here (see
@@ -5539,11 +5566,21 @@ export function isScheduleError(v: unknown): v is ScheduleError {
  *  an illegal state move; `oversize` is the 413 shared by a prompt over
  *  `AUTOMATION_PROMPT_MAX_BYTES` and a step detail over
  *  `AUTOMATION_DETAIL_MAX_BYTES`. */
+/*  `unknown-automation` is a member because `auto/routes.ts` SENDS it —
+ *  `reply.code(404).send({ ok: false, error: 'unknown-automation' })`, in the
+ *  same switch that sends `never-run-by-hand` and `bad-transition`. The spec
+ *  lists five members; the route emits six. A token the route sends and this
+ *  union does not carry is a token `autoWords.ts` cannot hold a sentence for,
+ *  and under `noUncheckedIndexedAccess` that renders as an EMPTY CELL rather
+ *  than an error: the operator taps an automation that no longer exists and
+ *  is told nothing at all. Found by `mail-routes.test.ts`'s totality scan. */
 export type AutomationRouteRefusal =
-  'never-run-by-hand' | 'bad-schedule' | 'bad-transition' | 'oversize' | 'unknown';
+  'never-run-by-hand' | 'bad-schedule' | 'bad-transition' | 'oversize'
+  | 'unknown-automation' | 'unknown';
 
 const AUTOMATION_ROUTE_REFUSAL_MAP: Record<AutomationRouteRefusal, true> = {
-  'never-run-by-hand': true, 'bad-schedule': true, 'bad-transition': true, oversize: true, unknown: true,
+  'never-run-by-hand': true, 'bad-schedule': true, 'bad-transition': true, oversize: true,
+  'unknown-automation': true, unknown: true,
 };
 export const AUTOMATION_ROUTE_REFUSALS: readonly AutomationRouteRefusal[] =
   Object.keys(AUTOMATION_ROUTE_REFUSAL_MAP) as AutomationRouteRefusal[];

@@ -6,7 +6,12 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle } from '../../shared/api.js';
+import {
+  MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason,
+  isClaimRefuseCode, isSessionLifecycle,
+  isAutomationLastFilter, isAutomationOutcome, isAutomationRefusal,
+  isAutomationRouteRefusal,
+} from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -388,6 +393,15 @@ describe('the rejection table is total, in both directions', () => {
     // never merged into one, because a run refusal and a mail refusal are
     // different vocabularies that happen to share this one scanner.
     const NOT_CODES = new Set([
+      // AUTOMATIONS, store-internal discriminants. Both are `settleAutomationRun`'s
+      // answers to ONE in-process caller (`watch.ts`'s sweep). Verified before
+      // listing: neither appears anywhere in `auto/routes.ts`, no route maps
+      // either to a status, and nothing switches on them over the wire — the
+      // exact carve-out `refused-project` below is written for. Their wire-facing
+      // siblings took the opposite route and were ADDED to a union rather than
+      // listed here: `'unknown-automation'` is an `AutomationRouteRefusal`
+      // member because the route really does send it in a 404 body.
+      'already-settled',
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
@@ -490,7 +504,17 @@ describe('the rejection table is total, in both directions', () => {
         // `'never-started'` as a `SessionLifecycle` record key, the exact way
         // `mirrorplan.ts` brought `'rotated-away'` here. Same remedy, same
         // reason: the exported guard, never an allowlist pin per member.
-        || isSessionLifecycle(tok),
+        || isSessionLifecycle(tok)
+        // AUTOMATIONS — `store.ts`'s `AutomationFilter.last` narrows the list
+        // by an outcome OR by `'never-ran'` (`lastFireAt IS NULL`), which is
+        // deliberately NOT an `AutomationOutcome`: no run row can carry it, so
+        // putting it in that union would put a word there nothing can write.
+        // Admitted the way every admission above is — through the exported
+        // guard, never an allowlist pin per member.
+        || isAutomationLastFilter(tok)
+        || isAutomationOutcome(tok)
+        || isAutomationRefusal(tok)
+        || isAutomationRouteRefusal(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode or SessionLifecycle`).toBe(true);
     }
   });
