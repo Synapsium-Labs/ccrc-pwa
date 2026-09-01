@@ -544,6 +544,53 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   911 attempts on one delivery argues for is a way for a worker to LEARN that steering mail is
   waiting — **wave 7's board**, whose §9 already names replay counts approaching the ceiling as a
   signal that surfaces nowhere. Recorded as wave 7 scope, not as a thing wave 6 fixed.
+- **Wave-6 fix round VERIFIED, and blocked on a ledger collision that is not its own (2026-09-01,
+  ruling mail 184, run 19 → `working`).** The worker answered the ruling in `ff85c514`, then AUDITED
+  ITS OWN FIX ROUND before sending (88 agents) and found **four majors, three of them the same fault
+  it had just been sent back for** — a guard shipped with no mechanism. Sharpest: **D-1228 — the new
+  lost-update witness asserted that `POST /api/runs` ANSWERED 200, not that the mutex was HELD**, so
+  reverting D-1170 *and* stripping `coordMutex` off that route left the witness green with the lost
+  update present. That is the D-1215 defect, in the commit that fixed D-1215. All four were re-fixed
+  in `eee5fa1a`.
+- **Independent verification: 13 lenses, seven working in isolated full checkouts at the tip so they
+  could RUN the mutations rather than read about them. 3/3 must-fixes and 4/4 self-audit majors HOLD**,
+  each with a verbatim first-fail. Must-fix A reds on the D-1170 revert with the lost update itself
+  (`maxConcurrentWorkers: 3` where 5 was expected) while its sibling stays green — confirming by
+  measurement the sibling's own claim that it cannot see the hazard; under the two-part mutation the
+  witness reds EARLIER, on premise 2 (`settled` = `[200,200]` vs `[]`), i.e. it **self-invalidates
+  rather than passing vacuously**. Must-fix B reds under a faithful inline rebuild. Must-fix C's flush
+  is in a `finally` and its throw arm now reads its own `warn` spy. `auth/gate.ts`'s +9 is
+  COMMENT-ONLY — the exempt set is byte-identical, checked because a wave that edits the
+  authentication gate's docstring in its last commit deserves that check. **Zero code majors.**
+- **BLOCKER — the ledger collision fired a THIRD time, and this one lands on wave 6.** PR #41
+  (`fix/d1159-install-agent-build`) merged at **21:54 UTC**, ten minutes before the verification
+  finished, taking **D-1159, D-1160 and D-1161** with entirely different subjects and with the numbers
+  in three FILENAMES. Measured, not argued: cloning the wave-6 tip, merging `origin/main` (47ac50da,
+  clean) and running the one test reds —
+  `AssertionError: one number, two deviations — allocate through POST /api/ledger/deviations: expected [ …(3) ] to deeply equal []`
+  with exactly D-1159/1160/1161. PR #39 therefore **cannot merge as it stands**, and its green CI is
+  stale by nine hours (it ran at 12:42, before the base moved). One mechanical round: allocate three
+  fresh numbers FIRST (floor 1240 — the allocate→define window IS the hazard), merge `origin/main`,
+  renumber, re-measure. No code, no new guards.
+- **Precedent applied, and it went against the party holding the allocation.** *The branch that can
+  still move cheaply moves.* #41 is merged with its numbers in filenames; wave 6 is unmerged. Wave 6
+  holds the allocator rows for all three and #41 holds none — **and that did not decide it. That is
+  the second time merge state has beaten the allocator**, which means an allocation is not a claim on
+  a number, only a record that you asked. The hole `deviation-refs.test.ts` cannot close: its
+  collision scan fires only once BOTH definitions sit in ONE tree — one merge too late — and nothing
+  checks that a DEFINED number was allocated to its definer. **Wave 7's ledger guard now has three
+  incidents behind it (D-1157/1158 via #38, D-1159/1160/1161 via #41).**
+- **Two corrections to this coordinator, both accepted, one worse than the worker stated.** (1) The
+  review's minor-H clause "nothing reads that record" is **FALSE** — eight sites read it; the worker
+  was right. (2) The ruling's REFUTED paragraph claims eight and itemises **six**, not seven — and the
+  eighth IS nameable: it is minor H, counted as both refuted and confirmed after the two dead
+  verifiers were adjudicated by hand. The worker's "a number without a name" was generous. **A review
+  that miscounts its own findings has no standing to fault a table that miscounts its rows** — which
+  is why this is recorded above the minors it raised, not below them.
+- **Coverage stated rather than assumed:** the verification pass targeted the FIX ROUND; 15 of the 32
+  changed files carried no lens in it (including `watch.ts` and `caps.ts`, the wave's own F6 feature
+  and F7a policy module). They were covered by the 44-agent wave review, not skipped. The critic
+  flagged it and the ship decision is recorded as resting on that split, not on an unstated gap.
 
 ## Carried constraints
 
