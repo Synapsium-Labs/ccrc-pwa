@@ -505,6 +505,46 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   to correct them** — `ccrc-api ledger` exposes only `allocate` and `list`, though the rows carry a
   `stale` boolean something evidently expects to set.
 
+- **Wave 6 verdict (2026-09-01 ~00:55 UTC, mail 138):** wave-done superseded once — the worker took a
+  ruling round AFTER claiming done, because mail 129 reached it 1h42m late (911 gated attempts), and
+  named that as its own clause-9 breach rather than letting the review find it. Fingerprint
+  re-measured at the NEW tip `44851b0a` (tip = PR #39 head, CLEAN, CI 5/5); the delta is one commit,
+  +81/−4. Review: 8 lenses + refute-default verifiers, **44 agents; 17 confirmed (0 MAJOR, 11 minors,
+  6 notes) + 2 from the re-measurement lane, 8 refuted** → fix round, run returned to `working`.
+  **No majors, and that is earned:** the worker's own adversarial round caught the one that mattered
+  (a caps read-modify-write straddling the mutex) before handoff. **The three must-fixes are this
+  wave's own theme turned on itself — a claim with no mechanism.** (A) The lost-update guard was
+  recorded as UNMEASURABLE ("no fixture in this suite can stage a third actor"); a reviewer built the
+  witness in ~45 lines from helpers that file already imports — `POST /api/runs` awaits `runCcd` for
+  `ws-hold` INSIDE `coordMutex.run` — and measured it GREEN on the tip, RED on the revert. Unmeasured,
+  not unmeasurable: the very distinction the worker itself insisted on for SESSION_ONLY. (B) **My own
+  ruling's fix ships with no mechanism** — restoring the pre-ruling inline GET body is tsc-clean and
+  leaves all ten caps-touching suites green, and the mutation row recorded for it measures a
+  value-change, not the shared shape. I asked for the fix and did not ask for its witness. (C)
+  `void log.flush()` sits inside the try AFTER `recordFeedEvent`, which throws synchronously — so on
+  exactly the failure the try/catch exists for, a seq already handed to the client is never persisted,
+  verbatim the hazard `flush`'s own docstring names. Three independent lenses landed on that line.
+  Minors include two mechanism holes in the new census (its numeral pins compare an unordered SET, so
+  transposing eighteen/nineteen between claims stays green — the KIND half of D-1161's own defect; and
+  its CLAUDE.md over-claim assertion is a tautology by construction whose failure message promises a
+  check it cannot do) and, sharpest for irony, **README:1455 reintroduces a hand-kept cardinal about
+  `UNGATED.size` in the one paragraph the new census does not scan** — in the wave built to delete
+  that class, about the very count already stuck at "two" in `ccd/ccrc-api`.
+- **Review-integrity note, recorded because it changed two dispositions:** two verifier agents died on
+  API errors and this coordinator's scoring counted an absent verdict as a refutation. Both were
+  adjudicated by hand instead: the `req.body ?? {}` claim is REFUTED in substance (a null body routes
+  to the "asks for nothing" refusal; only the `body === null` sub-arm is dead code), and D-1165's
+  durable rejection record IS unpinned (the tests assert status/error/detail while the comment claims
+  the mislabelled record is part of the fix). **A verifier that does not answer is not a refutation** —
+  the scoring should distinguish them, and until it does the coordinator reads the empty ones by hand.
+- **Wave 6's own correction to this coordinator's carried constraint:** the 911-attempt delay is NOT
+  what `COORD_QUIET_MS` addresses, and the worker refused the credit. That constant narrows the window
+  for the `claimedBy` of a non-terminal run — the COORDINATOR. The party blocked here was the WORKER
+  mid-wave, which is precisely the session the 60s floor exists to protect; the gate did its job. What
+  911 attempts on one delivery argues for is a way for a worker to LEARN that steering mail is
+  waiting — **wave 7's board**, whose §9 already names replay counts approaching the ceiling as a
+  signal that surfaces nowhere. Recorded as wave 7 scope, not as a thing wave 6 fixed.
+
 ## Carried constraints
 
 - **A steering mail sent mid-wave may arrive AFTER the work it was meant to steer** (measured
