@@ -11,11 +11,13 @@
 // this file was written against instead of the plan's literal text.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   checkPreClaim, checkPostClaim, PRE_CLAIM_REFUSALS, POST_CLAIM_REFUSALS,
-  type FireDeps, type AutomationCoordPort,
+  fireAutomation, deliverPrompt, promptAttempts, promptBackoffMs, promptLadder,
+  AUTOMATION_PROMPT_MAX_ATTEMPTS, AUTOMATION_PROMPT_BACKOFF_BASE_MS, AUTOMATION_PROMPT_BACKOFF_MAX_MS,
+  type FireDeps, type AutomationCoordPort, type FireOutcome,
 } from '../src/auto/fire.js';
 import {
   decideFire, planSchedule, failureLadder, type AutomationRow,
@@ -24,10 +26,14 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { FleetIO } from '../src/io.js';
 import type { CcrcConfig } from '../src/config.js';
+import { Tmux, UNMEASURED, type Runner } from '../src/exec.js';
+import { KeyedQueue } from '../src/inject/queue.js';
+import type { CcdArgv } from '../src/ccdargv.js';
+import type { CcdResult } from '../src/lifecycle.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
   AUTOMATION_FAILURE_CEILING, AUTOMATION_MAX_CONCURRENT, AUTOMATION_PRESSURE_CEILING,
-  AUTOMATION_REFUSALS, type AutomationRefusal,
+  AUTOMATION_REFUSALS, type AutomationRefusal, type AutomationStep,
 } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -61,12 +67,20 @@ function makeIo(spec: {
   };
 }
 
-/** Same idea for rung 2 and rung 4: unset means "must not be consulted". */
+/** Same idea for rung 2 and rung 4: unset means "must not be consulted". The
+ *  five Task 7 methods (the act's own writes) throw unconditionally here —
+ *  `checkPreClaim`/`checkPostClaim` never call them, by construction, and a
+ *  rung test that somehow reached one would be exercising the wrong ladder
+ *  half. `makeAutoCoord` below (Task 7) is the spy that implements them for
+ *  real. */
 function makeCoord(spec: { inFlight?: number; paused?: boolean }): AutomationCoordPort {
+  const boom = (op: string): never => {
+    throw new Error(`unexpected ${op} — this is a rung-1/2/3-9 fixture, not a fireAutomation one`);
+  };
   return {
-    inFlightAutomationRuns: () => {
+    inFlightAutomationRunCount: () => {
       if (spec.inFlight === undefined) {
-        throw new Error('unexpected inFlightAutomationRuns() — rung 1 should have refused first');
+        throw new Error('unexpected inFlightAutomationRunCount() — rung 1 should have refused first');
       }
       return spec.inFlight;
     },
@@ -74,8 +88,13 @@ function makeCoord(spec: { inFlight?: number; paused?: boolean }): AutomationCoo
       if (spec.paused === undefined) {
         throw new Error('unexpected automationsPaused() — an earlier rung should have refused first');
       }
-      return spec.paused;
+      return { paused: spec.paused, updatedAt: 0 };
     },
+    markRunHomeScore: () => boom('markRunHomeScore'),
+    markAutomationSpawn: () => boom('markAutomationSpawn'),
+    settleAutomationRun: () => boom('settleAutomationRun'),
+    appendRunEvent: () => boom('appendRunEvent'),
+    renewAutomationLease: () => boom('renewAutomationLease'),
   };
 }
 
@@ -290,13 +309,16 @@ describe('the ladder is total over AUTOMATION_REFUSALS, minus what Task 7 owns',
 
 describe('the ring: neither auto/ L1 file imports fastify, node:fs or node:sqlite', () => {
   const autoDir = path.join(serverRoot, 'src', 'auto');
-  const files = readdirSync(autoDir)
-    .filter((f) => f.endsWith('.ts'))
-    .map((f) => path.join(autoDir, f));
+  // Named explicitly, not "every .ts under auto/": a sibling task (owned by
+  // a parallel agent, per this task's dispatch) lands `auto/routes.ts` —
+  // L4, fastify by design — in this same directory. This scan polices the
+  // two L1 files Tasks 6-7 ship; `routes.ts`'s own ring properties are that
+  // task's suite to pin, not this one's to assume out of existence.
+  const files = ['fire.ts', 'schedulepolicy.ts'].map((f) => path.join(autoDir, f));
 
-  it('found the two files this task ships', () => {
-    expect(files.length).toBeGreaterThanOrEqual(2);
-    expect(files.map((f) => path.basename(f)).sort()).toEqual(['fire.ts', 'schedulepolicy.ts']);
+  it('found the two L1 files this task ships, still present on disk', () => {
+    expect(files.length).toBe(2);
+    for (const f of files) expect(statSync(f).isFile(), `${f} should exist`).toBe(true);
   });
 
   it('imports none of fastify / node:fs / node:sqlite, and holds no `reply`', () => {
@@ -422,5 +444,327 @@ describe('failureLadder — spec §8: missed counts, skipped does not', () => {
 
   it('refused increments without auto-pausing below the ceiling', () => {
     expect(failureLadder(0, 'refused')).toEqual({ consecutiveFailures: 1, autoPause: false });
+  });
+});
+
+// =============================================================================
+// Task 7 — the act: spawn, identify by diff, adopt honestly, prompt.
+// (docs: .superpowers/sdd/2026-08-31-automations/task-7-{brief,decisions}.md,
+// spec §6 steps 6-10, task-6-decisions.md C2.6/C2.7). `fireAutomation` calls
+// `checkPostClaim` itself, so these fixtures build a REAL registry/limits
+// fixture on disk (the `dispatch-adopt.test.ts` pattern) so rungs 3-9 pass
+// and the test is only exercising steps 6-10.
+// =============================================================================
+
+const AUTO_PROJECT = 'demo';
+
+/** One registry row on disk — `dispatch-adopt.test.ts`'s `seedRow`, renamed. */
+function seedSession(
+  home: string, id: string,
+  opts: { held?: string | null; spawnRc?: number | null; project?: string } = {},
+): void {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const fields: Record<string, string> = {
+    wrapper: 'claude', project: opts.project ?? AUTO_PROJECT, workdir: `/w/${id}`, uuid: `u-${id}`, started: '1',
+    workspace: id, branch: `ws/${id}`, base: 'origin/main',
+  };
+  for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+  if (opts.held != null) writeFileSync(path.join(reg, `${id}.hold`), opts.held);
+  if (opts.spawnRc != null) {
+    writeFileSync(path.join(reg, `${id}.spawn`), `${Math.floor(Date.now() / 1000)} ${opts.spawnRc}`);
+  }
+}
+
+/** Records every write `fireAutomation` makes through the port, and answers
+ *  `settleAutomationRun` with a plausible `SettledRun` — this is Task 7's own
+ *  spy, distinct from `makeCoord` above (which throws on all five of these,
+ *  the correct behaviour for a rung-only fixture). */
+function makeAutoCoord(opts: { paused?: boolean; inFlight?: number } = {}) {
+  const calls = {
+    markRunHomeScore: [] as Parameters<AutomationCoordPort['markRunHomeScore']>[],
+    markAutomationSpawn: [] as Parameters<AutomationCoordPort['markAutomationSpawn']>[],
+    appendRunEvent: [] as Parameters<AutomationCoordPort['appendRunEvent']>[],
+    settleAutomationRun: [] as Parameters<AutomationCoordPort['settleAutomationRun']>[],
+    renewAutomationLease: [] as Parameters<AutomationCoordPort['renewAutomationLease']>[],
+  };
+  const coord: AutomationCoordPort = {
+    inFlightAutomationRunCount: () => opts.inFlight ?? 0,
+    automationsPaused: () => ({ paused: opts.paused ?? false, updatedAt: 0 }),
+    markRunHomeScore: (...args) => { calls.markRunHomeScore.push(args); },
+    markAutomationSpawn: (...args) => { calls.markAutomationSpawn.push(args); },
+    appendRunEvent: (...args) => { calls.appendRunEvent.push(args); },
+    settleAutomationRun: (...args) => {
+      calls.settleAutomationRun.push(args);
+      const [input] = args;
+      return {
+        runId: input.runId, automationId: 1, outcome: input.settlement.outcome,
+        consecutiveFailures: 0, autoPaused: false, proved: false,
+      };
+    },
+    renewAutomationLease: (...args) => { calls.renewAutomationLease.push(args); return true; },
+  };
+  return { coord, calls };
+}
+
+/** A real fixture HOME with a listable registry, a known project directory
+ *  and a home-able account under the pressure ceiling — so rungs 3-9 pass —
+ *  plus a scripted `ws-add` (seeding AFTER rows exactly like a real spawn
+ *  would) and a scripted tmux pane sequence for `sendPrompt`. */
+function fireHarness(opts: {
+  ccd: Pick<CcdResult, 'ok' | 'stderr'> & Partial<Pick<CcdResult, 'killed' | 'signal'>>;
+  before?: readonly { id: string; held?: string | null }[];
+  after?: readonly { id: string; held?: string | null; spawnRc?: number | null; project?: string }[];
+  afterListed?: boolean;
+  panes?: (string | null)[];
+}) {
+  const home = mkTmp('ccrc-auto-fire-act-');
+  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  mkdirSync(path.join(home, 'projects', AUTO_PROJECT), { recursive: true });
+  for (const r of opts.before ?? []) seedSession(home, r.id, { held: r.held ?? null });
+
+  let capIdx = 0;
+  const panes = opts.panes ?? ['scrollback\n❯ \n', 'scrollback\n❯ go\n', 'scrollback\n❯ \n'];
+  const tmuxRunner: Runner = async (cmd, args) => {
+    if (cmd === 'tmux' && args[0] === 'capture-pane') {
+      const pane = panes[Math.min(capIdx, panes.length - 1)] ?? null;
+      capIdx++;
+      return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const base = testDeps(home, tmuxRunner);
+  const cfg = base.cfg;
+  const homeAble = cfg.roster.accounts.find((acc) => acc.homeAble)!;
+  mkdirSync(cfg.limitsDir, { recursive: true });
+  writeFileSync(path.join(cfg.limitsDir, `${homeAble.id}.json`), JSON.stringify({ five: 1, seven: 2 }));
+
+  let sawWsAdd = false;
+  const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
+    if (argv[0] === 'ws-add') {
+      sawWsAdd = true;
+      for (const r of opts.after ?? []) {
+        seedSession(home, r.id, { held: r.held ?? null, spawnRc: r.spawnRc ?? null, project: r.project });
+      }
+      return {
+        ok: opts.ccd.ok, stdout: '', stderr: opts.ccd.stderr,
+        killed: opts.ccd.killed ?? UNMEASURED,
+        signal: opts.ccd.signal === undefined ? UNMEASURED : opts.ccd.signal,
+      };
+    }
+    return { ok: true, stdout: '', stderr: '', killed: false, signal: null };
+  };
+
+  const io: FleetIO = opts.afterListed === false
+    ? { ...base.io, readdir: async (p: string) => (sawWsAdd ? null : base.io.readdir(p)) }
+    : base.io;
+
+  const buildDeps = (coord: AutomationCoordPort): FireDeps =>
+    ({ coord, io, cfg, runCcd, tmux: base.tmux, queue: base.queue });
+
+  return { home, cfg, io, runCcd, tmux: base.tmux, queue: base.queue, buildDeps };
+}
+
+describe('fireAutomation — spawn, identify by registry diff, adopt honestly, prompt (spec §6 steps 6-10)', () => {
+  it('a successful ws-add adding exactly one row binds it and records sessionId/workspace/branch/wrapper', async () => {
+    const h = fireHarness({ ccd: { ok: true, stderr: '' }, after: [{ id: 'demo-quiet-basin' }] });
+    const { coord, calls } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 42, 5_000);
+    expect(outcome).toMatchObject({ settle: 'ok' });
+    if ('settle' in outcome && outcome.settle === 'ok') {
+      expect(outcome.facts).toMatchObject({
+        sessionId: 'demo-quiet-basin', workspace: 'demo-quiet-basin', branch: 'ws/demo-quiet-basin',
+        wrapper: 'claude', adopted: false, spawnRc: null, homeScore: 2,
+      });
+    }
+    expect(calls.markAutomationSpawn[0]?.[0]).toMatchObject({
+      runId: 42, spawnRc: null, identity: { bound: true, sessionId: 'demo-quiet-basin', adopted: false },
+    });
+    expect(calls.settleAutomationRun[0]?.[0]).toMatchObject({ runId: 42, settlement: { outcome: 'ok' } });
+    expect(calls.appendRunEvent.map((c) => c[1])).toEqual(['precheck', 'spawn', 'identify', 'prompt', 'close']);
+  });
+
+  it('two new same-project rows refuse spawn-ambiguous', async () => {
+    const h = fireHarness({ ccd: { ok: true, stderr: '' }, after: [{ id: 'a1' }, { id: 'a2' }] });
+    const { coord, calls } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 1, 1_000);
+    expect(outcome).toMatchObject({ settle: 'refused', refusal: 'spawn-ambiguous' });
+    expect(calls.settleAutomationRun[0]?.[0]).toMatchObject({ settlement: { refusal: 'spawn-ambiguous' } });
+  });
+
+  it('killed:true with an unheld candidate ADOPTS and sets adopted = true', async () => {
+    const h = fireHarness({
+      ccd: { ok: false, killed: true, stderr: '' },
+      after: [{ id: 'adopted-one', held: null, spawnRc: 4 }],
+    });
+    const { coord, calls } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 2, 1_000);
+    expect(outcome).toMatchObject({ settle: 'ok' });
+    if ('settle' in outcome && outcome.settle === 'ok') {
+      expect(outcome.facts).toMatchObject({ sessionId: 'adopted-one', adopted: true, spawnRc: 4 });
+    }
+    expect(calls.markAutomationSpawn[0]?.[0]).toMatchObject({ identity: { bound: true, adopted: true } });
+  });
+
+  it('killed: UNMEASURED does not adopt and refuses spawn-unmeasured', async () => {
+    const h = fireHarness({ ccd: { ok: false, stderr: '' }, after: [{ id: 'unmeasured-one' }] });
+    const { coord, calls } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 3, 1_000);
+    expect(outcome).toMatchObject({ settle: 'refused', refusal: 'spawn-unmeasured' });
+    expect(calls.markAutomationSpawn[0]?.[0]).toMatchObject({ identity: { bound: false } });
+  });
+
+  it('a clean non-zero rc refuses spawn-refused — nothing to clean up', async () => {
+    const h = fireHarness({ ccd: { ok: false, killed: false, signal: null, stderr: 'disk floor' } });
+    const { coord } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 4, 1_000);
+    expect(outcome).toMatchObject({ settle: 'refused', refusal: 'spawn-refused' });
+  });
+
+  it('a kill with a HELD candidate refuses spawn-cut-short, with the candidate id in the detail', async () => {
+    const h = fireHarness({
+      ccd: { ok: false, killed: true, stderr: '' },
+      after: [{ id: 'held-candidate', held: 'program:x wave:1/3' }],
+    });
+    const { coord } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 5, 1_000);
+    expect(outcome).toMatchObject({ settle: 'refused', refusal: 'spawn-cut-short' });
+    if ('settle' in outcome && outcome.settle === 'refused') expect(outcome.detail).toContain('held-candidate');
+  });
+
+  it('an unlistable readRegistryMeasured refuses registry-unmeasurable, even though ccd exited 0', async () => {
+    const h = fireHarness({
+      ccd: { ok: true, stderr: '' }, after: [{ id: 'x' }], afterListed: false,
+    });
+    const { coord } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 6, 1_000);
+    expect(outcome).toMatchObject({ settle: 'refused', refusal: 'registry-unmeasurable' });
+  });
+
+  it('sendPrompt returning draft-present is a RETRY, not a terminal failure — the ladder is live (C2.7)', async () => {
+    const h = fireHarness({
+      ccd: { ok: true, stderr: '' }, after: [{ id: 'pending-one' }], panes: ['❯ half-typed thought\n'],
+    });
+    const { coord, calls } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 7, 1_000);
+    expect(outcome).toMatchObject({ pending: 'prompt', attempts: 1 });
+    if ('pending' in outcome) {
+      expect(outcome.facts.sessionId).toBe('pending-one');
+      expect(outcome.nextAttemptAt).toBe(1_000 + promptBackoffMs(1));
+    }
+    // Nothing terminal: no settle, but the SOFT lease is renewed for the next sweep.
+    expect(calls.settleAutomationRun.length).toBe(0);
+    expect(calls.renewAutomationLease).toEqual([[1, 1_000]]);
+    expect(calls.appendRunEvent.map((c) => c[1])).toEqual(['precheck', 'spawn', 'identify', 'prompt']);
+    expect(calls.appendRunEvent.find((c) => c[1] === 'prompt')?.[2]).toBe(false);
+  });
+
+  it('the ladder never sends replaceDraft — even a stuck draft only ever retries', async () => {
+    const h = fireHarness({
+      ccd: { ok: true, stderr: '' }, after: [{ id: 'stuck-one' }], panes: ['❯ half-typed thought\n'],
+    });
+    const { coord } = makeAutoCoord();
+    const outcome = await fireAutomation(h.buildDeps(coord), baseRow({ project: AUTO_PROJECT }), 8, 1_000);
+    expect(outcome).toMatchObject({ pending: 'prompt' });
+    if ('pending' in outcome) expect(outcome.detail).toContain('draft-present');
+  });
+});
+
+describe('deliverPrompt — ONE attempt, the exhausted arm at the ceiling', () => {
+  function fakeTmuxRunner(panes: (string | null)[]): Runner {
+    let idx = 0;
+    return async (cmd, args) => {
+      if (cmd === 'tmux' && args[0] === 'capture-pane') {
+        const pane = panes[Math.min(idx, panes.length - 1)] ?? null;
+        idx++;
+        return pane === null ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: pane, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+  }
+
+  it('attempt 1 landing: ok, attempts=1', async () => {
+    const tmux = new Tmux(fakeTmuxRunner(['scrollback\n❯ \n', 'scrollback\n❯ go\n', 'scrollback\n❯ \n']));
+    const res = await deliverPrompt({ tmux, queue: new KeyedQueue() }, 'sid', 'go', 0, 1_000);
+    expect(res).toEqual({ landed: true, attempts: 1 });
+  });
+
+  it('a retry below the ceiling carries the backoff and the six-member error', async () => {
+    const tmux = new Tmux(fakeTmuxRunner(['❯ half-typed thought\n']));
+    const res = await deliverPrompt({ tmux, queue: new KeyedQueue() }, 'sid', 'go', 1, 2_000);
+    expect(res).toMatchObject({ retry: true, attempts: 2, error: 'draft-present', nextAttemptAt: 2_000 + promptBackoffMs(2) });
+  });
+
+  it('the ceiling makes attempt 6 terminal — exhausted, not another retry', async () => {
+    const tmux = new Tmux(fakeTmuxRunner(['❯ half-typed thought\n']));
+    const res = await deliverPrompt(
+      { tmux, queue: new KeyedQueue() }, 'sid', 'go', AUTOMATION_PROMPT_MAX_ATTEMPTS - 1, 3_000,
+    );
+    expect(res).toMatchObject({ exhausted: true, attempts: AUTOMATION_PROMPT_MAX_ATTEMPTS, error: 'draft-present' });
+  });
+});
+
+describe('promptBackoffMs / promptAttempts / promptLadder — pure (task-6-decisions.md C2.7)', () => {
+  it('doubles from the base per attempt, capped at the max', () => {
+    expect(promptBackoffMs(1)).toBe(AUTOMATION_PROMPT_BACKOFF_BASE_MS);
+    expect(promptBackoffMs(2)).toBe(AUTOMATION_PROMPT_BACKOFF_BASE_MS * 2);
+    expect(promptBackoffMs(3)).toBe(AUTOMATION_PROMPT_BACKOFF_BASE_MS * 4);
+    expect(promptBackoffMs(5)).toBe(AUTOMATION_PROMPT_BACKOFF_MAX_MS);
+    expect(AUTOMATION_PROMPT_BACKOFF_BASE_MS * 2 ** 4).toBeGreaterThan(AUTOMATION_PROMPT_BACKOFF_MAX_MS);
+  });
+
+  it('promptAttempts counts only failed prompt steps — an ok prompt or a failed non-prompt step do not count', () => {
+    const events = [
+      { step: 'prompt' as AutomationStep, ok: false }, { step: 'prompt' as AutomationStep, ok: true },
+      { step: 'precheck' as AutomationStep, ok: false },
+    ];
+    expect(promptAttempts(events)).toBe(1);
+  });
+
+  it('promptLadder: due on a fresh run with no prompt steps yet', () => {
+    expect(promptLadder([], 1_000)).toEqual({ due: true, attempts: 0 });
+  });
+
+  it('promptLadder: waiting before the backoff window elapses, due once it does', () => {
+    const events = [{ step: 'prompt' as AutomationStep, ok: false, at: 1_000 }];
+    const backoff = promptBackoffMs(1);
+    expect(promptLadder(events, 1_000 + backoff - 1)).toEqual({ waiting: true, attempts: 1, nextAttemptAt: 1_000 + backoff });
+    expect(promptLadder(events, 1_000 + backoff)).toEqual({ due: true, attempts: 1 });
+  });
+
+  it('promptLadder: exhausted at the ceiling', () => {
+    const events = Array.from(
+      { length: AUTOMATION_PROMPT_MAX_ATTEMPTS },
+      (_, i) => ({ step: 'prompt' as AutomationStep, ok: false, at: i * 1_000 }),
+    );
+    expect(promptLadder(events, 999_999_999)).toEqual({ exhausted: true, attempts: AUTOMATION_PROMPT_MAX_ATTEMPTS });
+  });
+});
+
+// --- Source scans: the argv vocabulary and replaceDraft ----------------------
+
+describe('the act stays inside its own vocabulary — mechanism, not a comment', () => {
+  const autoDir = path.join(serverRoot, 'src', 'auto');
+  const files = readdirSync(autoDir).filter((f) => f.endsWith('.ts')).map((f) => path.join(autoDir, f));
+
+  it('found files to scan — a coverage floor so this cannot pass on an empty scan', () => {
+    expect(files.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('replaceDraft appears nowhere under server/src/auto/ (GC 10)', () => {
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      expect(src.includes('replaceDraft'), `${f} mentions replaceDraft`).toBe(false);
+    }
+  });
+
+  it('the only CCD_ARGV. reference under server/src/auto/ is wsAddAuto (GC 3 — no ensure/start/enable/…)', () => {
+    const refs: string[] = [];
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/CCD_ARGV\.(\w+)/g)) refs.push(m[1]!);
+    }
+    expect(refs.length).toBeGreaterThan(0);
+    expect(new Set(refs)).toEqual(new Set(['wsAddAuto']));
   });
 });
