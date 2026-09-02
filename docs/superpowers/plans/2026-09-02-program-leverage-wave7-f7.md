@@ -801,10 +801,11 @@ Three properties fix it, and each was measured (D-1294, D-1295):
    purpose, so two DEFINING files is a defect regardless of wording. Today's scan requires two distinct
    SUBJECTS as well, which is what the pre-allocator grandfathering needs — so the new arm is scoped to
    `n >= 211` and `GRANDFATHERED` is untouched, its "may only shrink" invariant intact.
-3. **Prefix-only recognition.** `ENTRY`'s `[^—\n]*—\s*(.+)$` requires the subject on the SAME line, and
-   **29 real definitions in today's plans are invisible to it**, including allocator-era D-1026 and
-   **D-1158 — one of the five numbers this program lost.** The new arm uses the looser `DEFINED` shape
-   the floor assertion already trusts.
+3. **Wider recognition.** `ENTRY`'s `[^—\n]*—\s*(.+)$` requires the subject on the SAME line, so real
+   definitions in today's plans are invisible to it — **D-1158 among them, one of the five numbers this
+   program lost.** The new arm uses a looser prefix than `ENTRY` with a TIGHTER lookahead than the floor
+   scan's `DEFINED`. **No cardinal here (D-1320):** the count moves with every plan, so this step's
+   first draft carried a number that was stale within the wave that wrote it.
 
 - [x] **Step 1: Write the failing unit tests**
 
@@ -867,12 +868,12 @@ Expected: FAIL — `SyntaxError: The requested module '../src/coord/ledger.js' d
  *  keeps that invariant intact. */
 export const LEDGER_ALLOCATOR_ERA = 211;
 
-/** Definition-SHAPED, prefix only — deliberately looser than deviation-refs'
- *  ENTRY, which demands the subject on the same line and is therefore blind to
- *  the colon form (`- **D-211** (Task 3): …`) and to a subject wrapped onto the
- *  next line. 29 real definitions in today's plans sit in that blind spot,
- *  D-1158 among them (D-1294). A dotted sub-entry cites its parent and is
- *  excluded by the lookahead, exactly as ENTRY excludes it. */
+/** SUPERSEDED SNIPPET — this is the step's first draft, kept for the record.
+ *  What shipped is wider on the prefix (the bare-bold `**D-297 — …**` entry form,
+ *  D-1322) and much tighter on the lookahead (a prefix alone reads citations as
+ *  definitions, D-1310, and the individually-bolded citation survived the first
+ *  tightening, D-1322). Read `server/src/coord/ledger.ts` for the shipped shape;
+ *  it carries no cardinals, deliberately (D-1320). */
 const DEFINITION = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)/;
 
 export interface Definition { readonly file: string; readonly n: number }
@@ -1107,11 +1108,17 @@ wave changes the coordinator's deploy lane.
 
 **Suites, foreground, full runs:**
 
-| package | before (2026-09-02 05:07 UTC) | after |
-|---|---|---|
-| server | 248 files, 6248 passed, 56 skipped | **250 files, 6304 passed, 56 skipped** |
-| agent | (unchanged lane) | **18 files, 281 passed** |
-| pwa | 2106 passed (78 files; derived — 2120 less this wave's 14 new cases) | **2120 passed** + `npm run build` produces `server/dist-pwa/index.html` |
+| package | before (2026-09-02 05:07 UTC) | after the wave | after the fix round |
+|---|---|---|---|
+| server | 248 files, 6248 passed, 56 skipped | 250 files, **6313** passed, 56 skipped | **250 files, 6332 passed, 56 skipped** |
+| agent | (unchanged lane) | 18 files, 281 passed | **18 files, 281 passed** |
+| pwa | 2106 passed (78 files; derived — 2120 less this wave's 14 new cases) | 2120 passed | **78 files, 2120 passed** + `npm run build` produces `server/dist-pwa/index.html` |
+
+The wave's server figure was written here as **6304** and reported to the coordinator as **6313**; the
+review caught the disagreement (D-1324). 6313 is the true one, and it is now derived rather than
+recalled: the fix round measured 6332 and added exactly nineteen cases (`single-definition` 100→101,
+`coord-health` 20→23, `ledger-crosstree` 19→25, `deviation-refs` 17→26), each count taken from that
+suite's own run in this round.
 
 `tsc --noEmit` clean in all three packages. Two new server suites (`coord-health`, `ledger-crosstree`)
 and one new PWA suite (`runs-health`). No test was deleted or skipped.
@@ -1126,24 +1133,40 @@ No new `ccd` verb; `EXEC_COMMANDS` untouched. No new route — `GET /api/runs` a
 carry the new data on their existing shapes, so the box-token census and the ungated-door count are
 both unmoved.
 
-**Deviations:** D-1293..D-1316 — twenty-four numbers, allocated from `POST /api/ledger/deviations` with
-`byId` set, in six acts (12 + 1 + 1 + 1 + 8 + 1), each immediately before the entry defining it, so the
-allocate→define window that fired three times in this program is never open here. Verified at close, in
-both directions: **24 allocated, 24 defined, zero allocated-but-undefined, zero defined-but-not-allocated
-to this session.**
+**Deviations:** D-1293..D-1317 — twenty-five numbers, allocated from `POST /api/ledger/deviations` with
+`byId` set, in seven acts (12 + 1 + 1 + 1 + 8 + 1 + 1), each immediately before the entry defining it, so
+the allocate→define window that fired three times in this program is never open here. Verified at close,
+in both directions: **25 allocated, 25 defined, zero allocated-but-undefined, zero
+defined-but-not-allocated to this session.** (The fix round adds D-1318..D-1324; its own count is at the
+bottom of this record.)
 
 **The review round.** Nine adversarial lenses over the branch diff, then a refute-default verification
 pass — eighteen agents, every mutation run in a throwaway worktree and never in this one. It found four
 guards that did not work (D-1308, D-1309, D-1312's pair) and one vacuous fixture inside the fix for one
 of them (D-1316); three of those five were measured GREEN, which is the only way that class is ever
 found. One review finding was REFUTED in verification and the refutation upheld (D-1315's D-1169 half),
-and that reversal is recorded rather than quietly dropped. Fifteen of the wave's twenty-four deviations
-are review-round findings, which is the honest ratio for a wave whose headline feature shipped dead.
+and that reversal is recorded rather than quietly dropped. **Ten** of the wave's twenty-five deviations
+are review-round findings — the `Deviations found — the wave's own review round` section below,
+D-1308..D-1317 — which is the honest ratio for a wave whose headline feature shipped dead. The three
+numbers this paragraph first gave (twenty-four allocated, twenty-four defined, fifteen from the review)
+were all wrong against the document they sat in, in a wave that corrected five stale cardinals
+elsewhere (D-1324).
+
+**The coordinator's fix round.** Mail 194 returned SHIP WITH FIXES — five must-fix, one major, one
+minor, from ten adversarial lenses and 25 agents. No code defect in the health read, the migration, the
+wire or the batching; **four of the five must-fixes are false claims in shipped prose**, and the fifth
+is a live false positive in this wave's own headline guard. One code fix (D-1318, the parked kickoff),
+one guard written to make a comment true (D-1319), one regex widened and tightened in both directions
+(D-1322), one latent hole closed rather than noted (D-1323), and three prose corrections (D-1320,
+D-1321, D-1324). Nine new mutation rows, each measured. The reviewer's own escalation inside D-1318 was
+REFUTED by them and recorded as a reversal rather than dropped — the same discipline this wave applied
+to D-1315, arriving from the other direction.
+
 
 ## Deviations found
 
-This wave's numbers are **D-1293..D-1305**, allocated from `POST /api/ledger/deviations` with `byId`
-set, in two acts (12 + 1), each immediately before the entry that defines it. **The floor was read from
+This section holds **D-1293..D-1307**, allocated from `POST /api/ledger/deviations` with `byId`
+set, in four acts (12 + 1 + 1 + 1), each immediately before the entry that defines it. **The floor was read from
 the allocator, not from a document, and the two disagreed** — see D-1293. Every number cited anywhere
 in this plan or in the diff is defined below.
 
@@ -1164,10 +1187,13 @@ in this plan or in the diff is defined below.
   `- **D-1158** (2026-08-31, found by running the full suite for D-1157) —` with the subject wrapped to
   the next line, so `collisions()` never saw it. Measured across the scanned plans, and stated as the DELTA
   rather than as two totals, because the totals move every time any plan gains an entry — including
-  this one, whose own thirteen entries moved them from 386/350 to 400/364 between the measurement and
-  the commit: the looser prefix shape sees **36 definition-shaped lines `ENTRY` cannot**, 7 of them
-  deliberate `D-N.M` sub-entries and **29 real definitions**, carrying
-  73, 139–144, 149, 172, 189–195, 200–207, **1026** and **1158**. So even in a fully merged tree, half
+  this one, whose own entries moved them between the measurement and the commit: the floor scan's looser
+  `DEFINED` shape sees definition-shaped lines `ENTRY` cannot, some of them deliberate `D-N.M`
+  sub-entries and the rest real definitions, carrying
+  73, 139–144, 149, 172, 189–195, 200–207, **1026** and **1158**. **The two counts this
+  sentence originally gave (36 and 29) were true when measured and false by the next commit, and the 29
+  was then copied into `DEFINITION`'s own docstring, where it had never been true of that regex at all
+  (D-1320).** So even in a fully merged tree, half
   of the first incident was undetectable. Fixed for allocator-era numbers only, by Task 7's
   prefix-only `DEFINITION`; the pre-allocator half is left to `GRANDFATHERED`, whose "may only SHRINK"
   rule a widened subject scan would have forced us to break (measured: widening the subject extraction
@@ -1475,6 +1501,145 @@ the review found two more of it.
   `origin/main = 551a6cb6`, reports **zero** collisions — correctly, because the allocator kept the
   branches apart. The guard's value is precisely that it would have said otherwise had it not.
 
+## Deviations found — the coordinator's fix round
+
+Mail 194 (`ccrc-pwa-brisk-meadow` → this session, run 28) returned **SHIP WITH FIXES**: five must-fix,
+one major, one minor. It found no code defect in the health read, the migration, the wire or the
+batching; four of the five must-fixes are **false claims in shipped prose**, which this project counts
+as defects, and the fifth is a live false positive in the wave's own headline guard.
+
+Numbers **D-1318..D-1324**, allocated from `POST /api/ledger/deviations` with `byId` set, in one act of
+seven, and defined here in the same act. The floor was read from the allocator (1318), never from this
+document — the wave's own D-1317 is why.
+
+- **D-1318** (2026-09-02, MAJOR from the review — the second half of a sentence the first fix only half
+  answered) — **the un-briefed-coordinator facet stopped firing the moment its kickoff parked.**
+  D-1308 fixed WHEN the warning starts (`MIN(m.at)`, never a re-stamped `deliveredAt`); it did nothing
+  about the warning STOPPING. Statement (4) filtered on `OUTSTANDING_STATES_SQL`, so a kickoff nobody
+  ever acked left the predicate the moment the replay lane gave up on it — at the ceiling, or on a
+  recipient the registry no longer lists — and `coordKickoffPendingSince` went `null`. Null on that
+  field already means *acked* and *no coordinator*, so the wedge became indistinguishable from health
+  on the one surface built to show it: **the overloaded null this wave's own D-1300 forbids, shipped in
+  the wave that wrote it.** Nothing else could compensate — a `program-kickoff` carries
+  `m.runId IS NULL` by construction, so statement (1) never sees it and `mailParked` stays 0; the whole
+  eight-field `RunHealth` came back byte-identical to a run nobody had ever mailed.
+  **What the review got right that I would have got wrong:** its own escalation — *"a five-day-old
+  kickoff has necessarily parked, so the run-11 sentence in the title text cannot be drawn"* — is
+  REFUTED and the reviewer recorded the refutation rather than dropping it. Only two gates ever park a
+  kickoff; `not-idle`, `not-quiet`, `pending-ask`, `no-pane` and `no-config-dir` all continue forever,
+  so the busy and paneless coordinators keep firing indefinitely and the sentence stands.
+  Fixed by swapping the predicate for `OUTSTANDING_OR_ABANDONED_SQL` — which this file already owns,
+  and whose docstring states the general principle exactly: *"A message that was never acked and never
+  acted on does not stop being a fact worth surfacing just because the lane stopped trying to hand it
+  over."* It brings a `LEFT JOIN runs rr` whose `rr.state` arm is **provably** inert here rather than
+  incidentally so (`m.runId IS NULL` is in this query's own WHERE clause), and it brings the
+  deliberate-cancel exclusion, which is live and wanted: `reclaimProgram` parks the dead coordinator's
+  kickoff with `MAIL_RECLAIM_CANCELLED_ERROR` and mails a fresh one to the new chair, so a reclaimed
+  program must stop drawing the corpse's wedge. Three cases, each manufacturing its own state: the
+  ceiling park, the registry-absent park, and the reclaim park that must stay silent — the last with
+  its own could-have-gone-either-way half, re-parking the same row with an abandonment reason and
+  watching it report again.
+
+- **D-1319** (2026-09-02, MUST-FIX — the wave's own doctrine, broken in the wave's own new code) —
+  **`runHealth` claimed a guard that did not exist.** Statement (1)'s comment read *"the
+  deliberate-cancel exclusion reuses `DELIBERATE_CANCEL_ERRORS_SQL` rather than respelling the two
+  literals: `single-definition.test.ts` forbids the second copy"*. That file had never mentioned this
+  pair. The review measured it: a hand-respelled `NOT IN ('run closed','coordinator reclaimed')` in
+  that very query ships **green** — `single-definition` 100/100, `coord-health` 20/20. *A comment is a
+  request; a red suite is a mechanism* is this repo's sentence, and it was cited as cover for its own
+  absence. Closed by writing the guard, in both directions: a hand-written SQL list of the pair
+  anywhere in the four source roots, AND a reader that drops the exclusion instead of copying it. The
+  pattern is deliberately not a bare scan for `'run closed'` — two files quote that string in prose,
+  and a guard that fires on a comment explaining the constant is a guard someone deletes. The test
+  establishes its own premise inline (the pattern matches the copy it forbids, in both orders) rather
+  than assuming a regex that could match nothing.
+
+- **D-1320** (2026-09-02, MUST-FIX — a stale cardinal inside the docstring whose subject is stale
+  cardinals) — **`ledger.ts` shipped two, one of them belonging to a different regex entirely.** The
+  paragraph said *"394 prefix matches, 388 entry-shaped"* (measured over the corpus at HEAD: 405 and
+  399) and *"this shape sees 29 definition lines `ENTRY` cannot"* — where 29 is the **`DEFINED`**
+  figure, the floor scan's lookahead-less pattern, i.e. the looser shape that paragraph exists to
+  distinguish itself from; the true `DEFINITION`-not-`ENTRY` delta was 27. D-1310's knock-on correction
+  applied to the other argument in the same docstring (six sub-211 collisions became four) and never to
+  the 29. The same number is repeated in `ledger-crosstree.test.ts`'s header and at three places in
+  this plan. **Independently re-measured before fixing** — the reviewer's HEAD figures reproduce
+  exactly (405/399/375, delta 27); their `origin/main` figures are one lower than mine because main
+  gained PR #44 in between. Fixed by removing every cardinal from that docstring and stating the delta
+  as SHAPES with named exemplars, which is D-1294's own argument for a delta carried one step further:
+  a delta still moves, a shape does not.
+
+- **D-1321** (2026-09-02, MUST-FIX — a deleted premise, re-asserted forty-four lines below its own
+  deletion) — **`runWords.ts` said "the board renders warnings on its `active` slice only"** in the
+  paragraph next to the kickoff arm, while the paragraph above `isRunClosed(run)` explained at length
+  that the board does no such thing and that this renderer owns the decision. Both halves false:
+  `RunsScreen` has ONE `rowFor`, applied to `list` AND `finished`. Four review lenses found it
+  independently. It survived D-1309's whole fix because **a claim about a caller is the one kind of
+  comment a reader cannot check locally** — the mechanism for the behaviour was already correct and
+  already red-on-deletion (re-measured this round: `a done run drew a warning: expected <span
+  class="run-warn">…(3)</span> to be null`); it was only the sentence that was wrong, in the file whose
+  fix it described.
+
+- **D-1322** (2026-09-02, MUST-FIX — the guard fires on the prose that RECORDS a collision, which is
+  the exact fault D-1310 says it fixed) — **the first tightening caught the spelling the corpus
+  happened to contain and missed the one this program actually writes.** `DEFINITION`'s lookahead
+  accepted a bare `**` after the number, so `- **D-1231** and **D-1232** were re-used by this branch` —
+  individually bolded, the form every collision record here uses, including the one D-1310's own entry
+  quotes — read as a DEFINITION of D-1231, while the whole-phrase-bold form was correctly rejected.
+  Wave 8 will narrate *"D-1243 was taken by PR #42"* about a number main really defines, so this trips
+  next wave with the printed remedy *"renumber NOW"* aimed at a number the branch only cited.
+  **The other direction was open too:** entries opened with a bare `**D-297 — subject**` and no list
+  bullet — how build 8, stage 2e, the worker-skill plan and upstream-launcher-locks write every entry —
+  were invisible to `DEFINITION` and to `ENTRY` alike, so a re-definition of any of them was silently
+  missed by a guard whose whole subject is not missing one. The review supplied a candidate regex as a
+  **starting point, not a mandate**, and it was verified rather than adopted: twenty-one real shapes
+  classified by hand, the shipped pattern getting six wrong and the candidate none; then the corpus
+  measured at HEAD and at `origin/main`. Eighteen prefix-shaped lines are dropped by the lookahead and
+  every one is a citation; twenty-four bare-bold entries are gained; **no line the previous shape
+  called a definition stops being one.** The review's own warning — *widening may surface PRE-ALLOCATOR
+  collisions, and `GRANDFATHERED` may only shrink* — was checked and did not fire: zero allocator-era
+  cross-tree collisions before and after, and the sub-211 set is identical at 19 either way, so nothing
+  had to join a set whose rule forbids growth. Pinned by fixtures for both directions AND by a
+  corpus-level table that classifies **lines really present in today's plans**, each row failing if its
+  shape has left the corpus — so it can never become an assertion about prose nobody writes.
+
+- **D-1323** (2026-09-02, MINOR from the review, fixed rather than noted) — **`definitionsIn` had no
+  fence state, so a plan quoting another plan's ledger entry inside a code block defined that number.**
+  Same family as D-1322 from the other side, and the same consequence: a guard whose printed remedy is
+  "renumber NOW" firing on a quotation. Measured first — **zero lines in the corpus are affected
+  today**, so this is a shape plans are about to write rather than one they already have, which is
+  exactly why a fixture and not a corpus count is the right pin. Fixed with a fence toggle over both
+  delimiters. The interesting half is the failure mode of the fix: an unbalanced fence would put
+  everything after the last delimiter "inside" a block and silently drop real definitions, so **an odd
+  fence count disables the skip for that file** and it is scanned whole. A guard going quiet is worse
+  than a guard being noisy; the ambiguous file gets the loud answer. All 66 plans are balanced today,
+  so that arm exists for the file that is not, and it has its own case.
+
+- **D-1324** (2026-09-02, MUST-FIX — the Execution record contradicted the document it sits in) —
+  **three counts, all wrong, in a wave that corrected five stale cardinals elsewhere.** It said
+  "D-1293..D-1316 — twenty-four numbers … 24 allocated, 24 defined" while the same plan defined
+  twenty-five and the allocator held twenty-five; "6304 passed" against the 6313 reported to the
+  coordinator; and "Fifteen of the wave's twenty-four deviations are review-round findings", inverting
+  the ratio — that section holds ten. A fourth, in the `Deviations found` header, named
+  "D-1293..D-1305" for a section that runs to D-1307. Every one of them was written from memory at
+  close rather than measured, which is the same failure the mutation table's own header warns about one
+  page below. The acts are now stated from the allocator's timestamps (12 + 1 + 1 + 1 + 8 + 1 + 1,
+  seven acts, 25 numbers) rather than recalled, and the suite figure is re-measured at the end of this
+  round rather than carried forward.
+
+### The escalated question, ruled — recorded here because the answer is better than the ask
+
+The wave escalated one item: `byId` at `POST /api/ledger/deviations` is optional, 101 of 243
+allocator-era rows carry `allocatedTo: ''`, and hole (a) — *was this number allocated to its definer* —
+cannot be closed while that is true. The ruling: **do not require it at the route; fix it in the
+client.** `ccd/ccrc-api`'s `cmd_whoami` already derives `{id, uuid}` from tmux and the registry, so the
+client can fill `byId` with no new input, and the 101 empty holders trace to `peer-protocol.md`'s
+documented body omitting it — a documentation default, not a route defect. Requiring it server-side
+would 400 every session still carrying the old skill text, and *a skill reaches a home only once its
+installer has run there*: a wave about ledger discipline must not make allocation refusable on a
+technicality. It goes to wave 8, which is already AGENT-FIRST. The part flagged to design rather than
+discover: **a caller whose lookup fails, and a caller that is not a session at all, must not silently
+send an empty `byId`** — that recreates the hole quietly, which is precisely what D-1301 measured.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
@@ -1482,11 +1647,12 @@ the FIRST failing assertion verbatim, reverting, and confirming `git status --po
 Written as each guard lands, never at the end. A row that comes back GREEN is a hole, not a pass — four
 did, and each one is named in the deviation it produced (D-1306, D-1312 twice, D-1316).
 
-The rows are in landing order: Tasks 1–10 first, then the review round from
-`restore MIN(COALESCE(...))` onward. **Counted twice by independent methods, and they agree at 33** —
-structurally (data rows under the header) and by outcome-classification (rows whose second cell quotes a
-verbatim failure). A section-marker row made those two disagree at 34/33 on the first count, which is
-what counting twice is for.
+The rows are in landing order: Tasks 1–10 first, then the wave's own review round from
+`restore MIN(COALESCE(...))` onward, then the coordinator's fix round from `narrow statement (4)`
+onward. **Counted twice by independent methods, and they agree at 42** — structurally (data rows under
+the header) and by outcome-classification (rows whose second cell quotes a verbatim failure). A
+section-marker row made those two disagree at 34/33 on the first count, so the fix round's rows carry
+no marker either: the count is the thing that has to survive, not the sub-heading.
 
 | mutation | first-fail assertion | suite |
 | --- | --- | --- |
@@ -1523,3 +1689,12 @@ what counting twice is for.
 | drop `input.briefQueued !== undefined` from `dispatchRun`, so an omitting caller binds `0` — **measured GREEN in review** | `AssertionError: an omitted decision was written as false: expected false to be null` | server `coord-health` |
 | drop the `x.id DESC` half of the rejection tiebreak | `AssertionError: the newest row did not win the tie: expected 'stale-tip' to be 'pr-regressed'` | server `coord-health` |
 | run statement (3) per-row instead of over an `IN (…)` — the batching claim itself | `AssertionError: the read scales with the number of runs: expected 11 to be 4` | server `coord-health` |
+| narrow statement (4) back to `OUTSTANDING_STATES_SQL`, so a parked kickoff leaves the predicate (D-1318) | `AssertionError: the park erased the wedge — a message nobody ever acked is still unacked: expected null to be 1000` | server `coord-health` |
+| widen statement (4) WITHOUT the deliberate-cancel exclusion (`state IN (…) OR state = 'rejected'`) — the over-correction direction (D-1318) | `AssertionError: a reclaimed program keeps drawing the dead coordinator's wedge: expected 3000 to be null` | server `coord-health` |
+| hand-respell the pair as `NOT IN ('run closed','coordinator reclaimed')` in statement (1) — **the exact mutation the review measured GREEN before this guard existed** (D-1319) | `AssertionError: a hand-written SQL list of the deliberate-cancel pair: expected [ 'server/src/coord/store.ts' ] to deeply equal []` | server `single-definition` |
+| delete the exclusion from statement (1) instead of copying it — the other direction, which "no literal anywhere" alone would tolerate (D-1319) | `AssertionError: expected 1 to be greater than or equal to 2` | server `single-definition` |
+| loosen `DEFINITION`'s `**` arm back to a bare `**` — the individually-bolded citation reads as a definition again (D-1322) | `AssertionError: expected [ { file: 'a.md', n: 1231 } ] to deeply equal []` | server `ledger-crosstree` |
+| delete the bare-bold prefix arm, restoring the blindness to `**D-297 — …**` entries (D-1322) | `AssertionError: expected [] to deeply equal [ 297 ]`, and the corpus rows: `definition expected, got 0 definition(s) from: **D-297 — the \`_spawn\` split demoted a process-fatal error to a success line.** Task 3 gav` | server `ledger-crosstree`, `deviation-refs` |
+| delete the fence skip from `definitionsIn` (D-1323) | `AssertionError: expected [ 1231, 1232, 1300 ] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
+| drop the odd-fence fail-loud rule, so an unbalanced file goes quiet after its stray delimiter (D-1323) | `AssertionError: expected [] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
+| drop `isRunClosed(run)` from `runWarnings` — **re-measured this round**, because D-1321 is a false claim ABOUT this guard and the guard itself had to be shown still real | `AssertionError: a done run drew a warning: expected <span class="run-warn">…(3)</span> to be null` | pwa `runs-health` |

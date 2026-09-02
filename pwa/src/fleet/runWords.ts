@@ -451,8 +451,17 @@ export function runWarnings(
   // threshold"). Without `dispatchedAt === null` this fires on a run that HAS
   // dispatched — a coordinator that got the wave moving without ever acking its
   // kickoff, which is odd but is not the wedge, and drawing it as one is how a
-  // warning surface becomes ignorable. `closedAt`/state is the caller's filter:
-  // the board renders warnings on its `active` slice only.
+  // warning surface becomes ignorable.
+  //
+  // The closed-run filter is FORTY-FOUR LINES ABOVE, in this same function, and it
+  // is not the caller's. The sentence that stood here said the opposite —
+  // "`closedAt`/state is the caller's filter: the board renders warnings on its
+  // `active` slice only" — which is the exact premise D-1309 was raised to delete,
+  // re-asserted verbatim in the paragraph next door (D-1321). Both halves were
+  // false when written: `RunsScreen` has ONE `rowFor`, applied to `list` AND to
+  // `finished`, and this function's parameter type declared `state` without ever
+  // reading it. A claim about a caller is the one kind of comment a reader cannot
+  // check locally, which is why it survived a whole wave.
   const since = h.coordKickoffPendingSince;
   const undispatched = (run.dispatchedAt ?? null) === null;
   if (since !== null && undispatched && nowMs - since >= KICKOFF_UNACKED_MS) {
