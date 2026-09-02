@@ -284,7 +284,11 @@ subs=""; prev_state=""; gq=""
 # `compact` never reaches this line at all — the SessionStart arm exits at its
 # compact guard (D-306) — so its carry is STRUCTURAL, protected by that exit
 # and not by this condition. `resume` is the source this condition protects.
-if [[ "$event" == SessionStart && ( "$src" == startup || "$src" == clear ) ]]; then gq=0; fi
+#
+# D-1248 (review): written as "everything except resume", NOT the allow-list
+# `( "$src" == startup || "$src" == clear )` this plan first specified — see
+# the deviation entry.
+if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; fi
 if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 ```
 
@@ -646,8 +650,11 @@ Measure each mutation and record the result in the commit body. For each: apply,
 |---|---|---|
 | drop `graphQueries:$graphQueries` from the hook's `jq -cn` object | `ccd/session-hook.sh` | `session-hook` — every `graphQueries` assertion |
 | change `(query\|path\|explain)` to `(query\|path\|explain\|update)` | `ccd/session-hook.sh` | `session-hook` — "does NOT count graphify update…" |
-| delete the `SessionStart && (startup\|clear)` reset line | `ccd/session-hook.sh` | `session-hook` — "resets to 0 on SessionStart(startup)…" |
-| change that reset condition's `"$src" == clear` to `"$src" == resume` | `ccd/session-hook.sh` | `session-hook` — "is KEPT across resume and across compact…" AND "resets to 0 on SessionStart(startup) and SessionStart(clear)" |
+| delete the `SessionStart && "$src" != resume` reset line | `ccd/session-hook.sh` | `session-hook` — "resets to 0 on SessionStart(startup)…", "…with NO source… (D-1248)", "…a source this build has never heard of" |
+| narrow that reset condition to the allow-list `( "$src" == startup \|\| "$src" == clear )` | `ccd/session-hook.sh` | `session-hook` — "resets to 0 on a SessionStart with NO source… (D-1248)" AND "…a source this build has never heard of" |
+| change that reset condition's `"$src" != resume` to `"$src" != startup` | `ccd/session-hook.sh` | `session-hook` — "is KEPT across resume and across compact…" AND "resets to 0 on SessionStart(startup) and SessionStart(clear)" |
+| change `graphQueries: optNum(o, 'graphQueries')` to a literal `null` in `reviveFleetSession` | `shared/api.ts` | `fleetstate` — "revives a PRESENT graphQueries as the number the snapshot carried" AND "…a persisted graphQueries of 0 as 0" |
+| drop the chip's `!dead &&` conjunct | `pwa/src/fleet/SessionLine.tsx` | `session-line` — "renders NO chip on a dead session, however many reads it made" |
 | delete the `[[ "$src" == compact ]] && exit 0` guard in the `SessionStart` arm | `ccd/session-hook.sh` | `session-hook` — the existing D-306 "writes nothing on compact" tests |
 | make `reviveGraphQueries` return `0` for `undefined` | `server/src/hookstate.ts` | `hookstate` — "ABSENT is null…" |
 | change `graphQueries: hs?.graphQueries ?? null` to `?? 0` | `server/src/fleet.ts` | `fleet` — "a hookless session carries all four fields as null" (Step 10c); `fleet-health`/`fleetstate` red too if the cached-snapshot path is mutated the same way |
@@ -2132,8 +2139,8 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   build's.
 - **The number.** The hook increments `graphQueries` in the hookstate it already writes, on a
   `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`. Builds do not count — this
-  measures reads. It is carried the way `subagents` is, reset on a `startup`/`clear` `SessionStart` and
-  kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader and keeps **`null`
+  measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
+  `resume` (D-1248) and kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader and keeps **`null`
   (no field — an older hook) apart from `0` (measured none)**; it rides `FleetSession.graphQueries`
   additively (no `FLEET_PROTO` bump) and renders as a `graph N` chip on the fleet card and on the run
   board's worker row. The server never reads `~/.cache/graphify-queries.log`: it is not under the agent
@@ -2238,6 +2245,26 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   `/left in place; remove by hand/`. Recorded because the mismatch was live for one review cycle in
   the opposite direction — the plan's test regex carried the spec's em dash against messages that
   never had one, which no message in the function could ever have satisfied.
+
+- **D-1248** (2026-09-02, Task 1 review) — the plan spelled the counter's reset as the ALLOW-LIST
+  `SessionStart && ( "$src" == startup || "$src" == clear )`, which makes one file give two different
+  answers to one payload. Ten lines above it, the `SessionStart` arm reads an ABSENT `source` by
+  absence-permits — "startup, resume, clear, or ABSENT on an older harness — is a real idle boundary
+  … the pre-`source` payload was the F1 startup" (`ccd/session-hook.sh:146-147`), pinned by
+  `session-hook.test.ts`'s "SessionStart(startup) is done — and so is a payload with no source at
+  all". Under the allow-list, that same source-less payload was a NEW session for `state` and the SAME
+  session for `graphQueries`. MEASURED against a fixture HOME (never the live `$HOME`): two counted
+  `graphify` reads then `{"hook_event_name":"SessionStart"}` with no `source` left
+  `{"graphQueries":2,"state":"done","event":"SessionStart"}` — state re-stamped as a new session, the
+  count kept. Because the hookstate file is keyed `cc-<id>`, which survives a restart of the same tmux
+  session name, the count would accumulate across sessions forever on a harness that sends no
+  `source`, and the card would report previous sessions' reads as this one's — the exact way this
+  counter can lie about the number the whole plan exists to produce. **Shipped as
+  `SessionStart && "$src" != resume`**: `resume` is the only source that is genuinely the same session
+  still going (`compact` never reaches the line — the arm exits at the D-306 guard, so its carry is
+  structural), and everything else, absent or unknown to this build, resets. The degrade points the
+  safe way: an unrecognised boundary costs a count rather than inventing one. Two new tests pin both
+  polarities and the allow-list spelling is now a measured RED row in Step 15's mutation table.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

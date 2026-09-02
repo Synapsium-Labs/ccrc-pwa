@@ -900,4 +900,15 @@ describe('the graph chip', () => {
     render(<SessionLine session={s({ graphQueries: null })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText(/^graph /)).toBeNull();
   });
+
+  it('renders NO chip on a dead session, however many reads it made', () => {
+    // The `!dead &&` conjunct, pinned like every sibling cell in this file
+    // (the task tally at the top, the pr chip below): a dead row's meta line
+    // is about what to DO with the corpse, and a live-session read count is
+    // not that. The count is non-null and non-zero here so that only the
+    // `!dead` guard can be what hides it.
+    render(<SessionLine session={s({ graphQueries: 4, status: 'dead', bucket: 'dead' })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/^graph /)).toBeNull();
+  });
 });

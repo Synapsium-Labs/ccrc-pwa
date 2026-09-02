@@ -185,7 +185,20 @@ subs=""; prev_state=""; gq=""
 # `compact` never reaches this line at all — the SessionStart arm exits at its
 # compact guard (D-306) — so its carry is STRUCTURAL, protected by that exit
 # and not by this condition. `resume` is the source this condition protects.
-if [[ "$event" == SessionStart && ( "$src" == startup || "$src" == clear ) ]]; then gq=0; fi
+#
+# D-1248: written as "everything except resume", NOT "startup or clear", so a
+# SessionStart carrying NO `source` reads the same way here as it does in the
+# arm above — where absence-permits makes it the F1 startup (:146-147) and
+# `session-hook.test.ts` pins it as `done`. Spelled as an allow-list, a
+# source-less SessionStart would be a NEW session for `state` and the SAME
+# session for `graphQueries`, one file collapsing a distinction it drew two
+# lines earlier: the counter would never reset on an older harness and would
+# accumulate forever across restarts of one tmux session name (the hookstate
+# file is keyed `cc-<id>`, which survives them), so the card would report
+# previous sessions' reads as this one's. A future `source` this build has
+# never heard of lands on the same side as absence — a new boundary resets,
+# which is the degrade that costs a count rather than inventing one.
+if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; fi
 if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then

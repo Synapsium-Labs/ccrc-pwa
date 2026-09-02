@@ -300,6 +300,33 @@ describe('graphQueries — the read counter the console can see', () => {
     expect(readState().graphQueries).toBe(0);
   });
 
+  it('resets to 0 on a SessionStart with NO source — the same absence-permits the state arm uses (D-1248)', () => {
+    // The polarity this file must not get two different answers to. The
+    // SessionStart arm reads an absent `source` as the F1 startup and stamps
+    // `done` (pinned by "SessionStart(startup) is done — and so is a payload
+    // with no source at all"); if the counter's reset were spelled as an
+    // allow-list of `startup|clear`, the SAME payload would be a new session
+    // for `state` and a continuing one for `graphQueries`, and on a harness
+    // that never sends `source` the count would accumulate across every
+    // restart of one tmux session name — reporting previous sessions' reads
+    // as this session's.
+    run(bash('graphify query "x"'));
+    expect(readState().graphQueries).toBe(1);
+    run({ hook_event_name: 'SessionStart' });
+    expect(readState().graphQueries).toBe(0);
+    // …and the state arm's own answer for that payload, re-asserted here so
+    // the two readings are pinned side by side, not a file apart.
+    expect(readState().state).toBe('done');
+  });
+
+  it('resets to 0 on a SessionStart source this build has never heard of', () => {
+    // Everything-but-resume, not an allow-list: an unknown boundary resets,
+    // which loses a count rather than inventing one.
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'SessionStart', source: 'teleported' });
+    expect(readState().graphQueries).toBe(0);
+  });
+
   it('is KEPT across resume and across compact — a compaction is not a new session', () => {
     run(bash('graphify query "x"'));
     run(bash('graphify path "a" "b"'));

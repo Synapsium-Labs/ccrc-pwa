@@ -121,6 +121,31 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.limits).toEqual({ five: 10, seven: 40 });
   });
 
+  it('revives a PRESENT graphQueries as the number the snapshot carried', async () => {
+    // The absent→null half is pinned above; this is the other half, and it is
+    // the half the feature lives on. `reviveFleetSessions` has exactly two
+    // callers — this loadSnapshot (the server's degraded-mode read of
+    // `~/.ccrc/state-cache.json` after a restart) and the PWA's offline cache
+    // — so a `graphQueries: optNum(o, 'graphQueries')` that regressed to a
+    // literal `null` would drop the count on every restored session and
+    // render no chip, on precisely the surface the counter exists for, with a
+    // fully green suite. Pinned here, in the consumer, not in api.ts.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphQueries: 4 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.graphQueries).toBe(4);
+  });
+
+  it('revives a persisted graphQueries of 0 as 0 — a measured zero is not an absence', async () => {
+    // The one value a truthiness-flavoured revive (`optNum(…) || null`) would
+    // silently turn back into "nothing was measured". Same distinction the
+    // chip itself draws with `!== null`.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphQueries: 0 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.graphQueries).toBe(0);
+  });
+
   it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', async () => {
     // DEVIATION from the brief's given test text — added while closing a
     // mutation-sweep gap; see task-19-report.md. Same shape as the pwa-side
