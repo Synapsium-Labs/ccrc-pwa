@@ -2708,6 +2708,92 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   cgroups and `ccd-graph-sweep` on a systemd timer, while `_inst_graphify_engine` is gated only on the
   server role. The assertion stays an exact set — it is not loosened to "contains".
 
+- **D-1347** (2026-09-02, Task 5 fix round) — **R3 grew a fifth name in `~/.local/bin` and the
+  uninstall's census of that directory is HAND-KEPT, so it still knew four.** `_inst_graphify_engine`
+  converges `$HOME/.local/bin/graphify` onto the pinned venv; `_uninst_tree_bins` removes `ccd`,
+  `ccrc`, `ccd-cap-scopes` and `ccd-graph-sweep` and named the four in its own closing sentence.
+  `ccrc uninstall` therefore STRANDED the link, and `--purge` — which removes `~/.ccrc` whole a few
+  lines later — turned it into a **dangling `graphify` first on every session's PATH**: strictly worse
+  than the box was before ccrc, because the pip shim that used to answer there was copied aside by the
+  install (D-1349) and never put back. This is the same defect class as D-1346 one verb over: a census
+  that is a sentence rather than a derivation. Removed ONLY WHEN IT IS OURS, which is `_uninst_wrappers`'
+  rule in its own words ("everything ccrc could not prove it wrote was left in place") — proof is the
+  link's own target, read with a ONE-HOP `readlink` (no `-f`, so no box is asked for a tool it may not
+  have — D-1348's lesson on the install side) against the exact literal the install writes. A regular
+  file (the hand-written launcher the install REFUSES to touch) and a symlink pointing anywhere else
+  are both reported and kept, because an uninstall that removed one would be destroying an operator's
+  launcher on the strength of a judgement the install had already declined to make.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `if [ -L "$glink" ]` → `if false` in `_uninst_tree_bins` (the whole census deleted) | `ccrc-uninstall` — "the tree and the executables go…" AND "graphify: a launcher ccrc did not write SURVIVES uninstall…" | `Tests  2 failed \| 19 passed \| 4 skipped (25)` |
+  | `[ "$gtgt" = "$HOME/.ccrc/graphify-venv/bin/graphify" ]` → `[ -n "$gtgt" ]` (remove ANY symlink) | `ccrc-uninstall` — "graphify: a launcher ccrc did not write SURVIVES uninstall…" | `Tests  1 failed \| 20 passed \| 4 skipped (25)` |
+  | add `rm -f -- "$glink"` to the regular-file arm that only reports | same test | `Tests  1 failed \| 20 passed \| 4 skipped (25)` |
+
+- **D-1348** (2026-09-02, Task 5 fix round) — **the converge's no-op arm compared two `readlink -f`
+  substitutions inline, and EMPTY = EMPTY is TRUE.** The arm shipped as
+  `elif [ -L "$gpath" ] && [ "$(readlink -f "$gpath")" = "$(readlink -f "$gvenv")" ]`. On a box whose
+  `readlink` has no `-f` — macOS below 12.3, a floor this repo ACCEPTS rather than enforces
+  (`macos-platform.test.ts`) — both substitutions answer empty, the test passes, and **any** symlink,
+  including one pointing at a completely different engine, was declared "already points at the pinned
+  venv" and left alone. That is the overloaded null this codebase bans at a seam, in exactly the shape
+  D-1244 named one step below. Fixed the way `_inst_graph_always_on_off` fixed it: both sides resolved
+  ONCE into locals, both required non-empty before any equality is claimed, and an unresolvable link
+  LEFT IN PLACE, said out loud with a remedy, and counted `INST_DEGRADED+=(graphify-path)` — degraded,
+  never acted on unmeasured. Also recorded here: this step resolves with `readlink -f` while
+  `_check_graphify-path` resolves with `realpath`; both are allowed by `macos-platform.test.ts` and
+  neither is preferred, but the two halves must agree that EMPTY means "unmeasured" and never
+  "unequal" — the install degrades, the doctor SKIPs (D-1350), and both files now say so in a comment.
+  The review that found this named the measurement nobody had taken: **no fixture in the suite ever
+  planted a link pointing OUTSIDE the venv**, so the whole resolution comparison could be deleted with
+  all six R3 tests still green. Two new cases plant it — one resolvable, one with a `readlink` stub
+  whose `-f` fails the way that userland's does.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | reduce the no-op arm to `elif [ -L "$gpath" ]; then` — the mutation nobody had measured | `ccrc-install-graphify` — "REFUSES a symlink that resolves OUTSIDE the venv…" | `Tests  1 failed \| 36 passed (37)` |
+  | `elif [ -L "$gpath" ] && { [ -z "$gnow" ] \|\| [ -z "$gwant" ]; }` → `elif false` (the unresolvable arm deleted) | `ccrc-install-graphify` — "LEAVES a link this box cannot resolve in place, degraded — empty is not \"equal\"" | `Tests  1 failed \| 36 passed (37)` |
+
+- **D-1349** (2026-09-02, Task 5 fix round) — **the pip-shim arm destroyed a file ccrc did not write,
+  with no backup and no atomic swap, while its own header claimed `cmd_wrappers`' discipline.** The
+  arm was one `ln -sfn "$gvenv" "$gpath"`. `cmd_wrappers`' discipline is a `cp -p` copy to
+  `<name>.pre-ccrc-<UTC>` BEFORE the overwrite, and `ln -sfn` over a live path is unlink+symlink — a
+  session that types `graphify` in that window gets ENOENT. A pip console-script shim is replaceable
+  because its CONTENT proves what it is, not because it is ccrc's, so it earns the keep-aside rather
+  than losing it. Shipped: `cp -p` first, a failed backup **degrades instead of replacing unbacked**
+  (`_inst_graph_always_on_off`'s own "left in place rather than rewritten unbacked"), and the swap is
+  `ln` to a dot-prefixed temp name then one `mv -f`. The "." in both names is load-bearing for the
+  reason `cmd_wrappers` gives — no legal wrapper id carries one, so neither copy nor leftover is
+  visible to `ccrc adopt`'s scan, to `_check_wrappers`, or to the `*` glob `_uninst_wrappers` walks.
+  `_uninst_keep_asides` gains the THIRD glob, `$HOME/.local/bin/graphify.pre-ccrc-*`: it runs after
+  `_uninst_tree_bins` has freed that path (D-1347), so the `mv` it prints is the difference between
+  "off ccrc" and "off ccrc with a hole where your graphify used to be".
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `if ! cp -p -- "$gpath" "$gbak"` → `if false` (the backup deleted, the swap kept) | `ccrc-install-graphify` — "REPLACES a pip console-script shim…" (its D-1349 backup assertions) | `Tests  1 failed \| 36 passed (37)` |
+  | drop `"$HOME/.local/bin/graphify.pre-ccrc-"*` from `_uninst_keep_asides`' glob list | `ccrc-uninstall` — "keep-asides: the restore commands are PRINTED and the files untouched" | `Tests  1 failed \| 20 passed \| 4 skipped (25)` |
+
+- **D-1350** (2026-09-02, Task 5 fix round) — **the doctor check folded "could not resolve either
+  side" into "the wrong engine is on PATH".** Step 7(d) shipped `[ -n "$resolved" ] || resolved="$found"`
+  and `[ -n "$want" ] || want="$engine"`, and a link path is never equal to an engine path — so a
+  fully CONVERGED box that simply has no `realpath` was told `FAIL graphify-path: … which is not the
+  pinned engine …`: a mismatch verdict on a comparison nobody made, carrying a remedy (`ccrc install`)
+  that cannot put coreutils on the box. An adapter may not narrow a distinction it received, and
+  unmeasurable is this file's stated FOURTH OUTCOME. Now a SKIP naming the missing tool, in
+  `_check_scopes`' own shape (no remedy line, by contract — the fact goes in the detail). The
+  genuinely-missing ENGINE is a different condition and keeps its FAIL: it is measured directly with
+  `-e` and answered before the resolution question is asked, so it is never folded into the skip. The
+  plan's own Step 7(d) comment ("that fallback is honest but blunt") described the defect and shipped
+  it anyway; the shipped comment now says what the arm must not do instead. Both new arms have a
+  fixture: one removes `realpath` from the contained PATH of an otherwise-converged box, one plants a
+  foreign `graphify` with the venv deleted.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | replace the `[ -z "$resolved" ] \|\| [ -z "$want" ]` SKIP arm with the old `\|\| resolved="$found"` / `\|\| want="$engine"` fallback | `ccrc-doctor-graphify` — "SKIPs — never FAILs — when the box has no usable realpath…" | `Tests  1 failed \| 23 passed (24)` |
+  | delete the `[ ! -e "$engine" ]` FAIL arm, letting a missing engine fall into the skip | `ccrc-doctor-graphify` — "FAILs when something answers graphify but there is NO pinned engine…" | `Tests  1 failed \| 23 passed (24)` |
+
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
