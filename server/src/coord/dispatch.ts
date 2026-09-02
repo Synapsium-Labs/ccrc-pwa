@@ -568,8 +568,16 @@ export async function dispatchRun(
   // carries the typed `sendPrompt` error code (`dialog-open`/`draft-present`/
   // `verify-failed`/`enter-ignored`/…) an operator (or Task 11's own record)
   // can otherwise only guess at.
+  // COMPUTED HERE, ABOVE THE COMMIT, and used twice: once as a column the commit
+  // writes and once at step 7 to gate the brief. Both inputs are final by the end
+  // of the resume arm — `resumed` is set on both arms and `clearedAt` is the last
+  // thing either writes — so hoisting the expression changes no decision, only
+  // where it is available. The reasoning for the RULE itself stays at its call
+  // site in step 7 (D-47), which is where a reader looking for "why is the brief
+  // gated" will go.
+  const briefQueued = !resumed || clearedAt !== null;
   const adv = coord.dispatchRun({ runId: id, sessionId, workspace, branch, resumed, clearedAt,
-    items: itemTitles,
+    items: itemTitles, briefQueued, clearError,
     // The SUFFIX is a `SpawnVerdict`, never a raw rc — and never the word
     // `spawnstate`, which is not a field and must never become one. Recorded only
     // on the adoption path, so its PRESENCE is the record that this workspace came
@@ -639,7 +647,6 @@ export async function dispatchRun(
   // `clearError` (this outcome's own field) is the signal a
   // coordinator needs to decide what to do next; `POST /api/mail` stays
   // open to send the brief directly once the context is actually fresh.
-  const briefQueued = !resumed || clearedAt !== null;
   if (briefQueued) {
     // `body`, not `brief`: what lands in the worker is its standing protocol
     // followed by the wave's specifics, as ONE mail — the kickoff is never a

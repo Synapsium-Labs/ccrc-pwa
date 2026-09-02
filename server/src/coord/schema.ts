@@ -687,6 +687,37 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE mail_deliveries ADD COLUMN gateSince INTEGER;
   ALTER TABLE mail_deliveries ADD COLUMN gateAt INTEGER;
   `,
+
+  // ── 7: user_version 6 -> 7 ────────────────────────────────────────────────
+  // Two columns recording what a dispatch DECIDED, as opposed to what it did
+  // (D-1298). MIGRATIONS[0..5] ARE FROZEN, for the reason every entry above
+  // states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`,
+  // so an amendment to an applied entry never runs again.
+  //
+  // `briefQueued` is `!resumed || clearedAt !== null` (coord/dispatch.ts) — the
+  // answer to "did this dispatch actually queue a wave-brief". Its TRUE branch
+  // already leaves a durable artefact, the brief mail row itself. Its FALSE branch
+  // — a resume whose `/clear` was refused — left NOTHING, and absence there is
+  // indistinguishable from "no dispatch ever happened", which is the one state an
+  // operator most needs told apart from it. A reader could re-derive the formula
+  // from `resumed`/`clearedAt`, but that is a re-derivation of a RULE, not a
+  // record of a DECISION, and it silently changes meaning the day anything else
+  // writes `clearedAt`.
+  //
+  // `clearError` is the `sendPrompt` refusal code that made it false. Today it
+  // survives only as `run_events.detail`'s `clear-refused:<code>` — a table no
+  // HTTP route serves — written through a MUTUALLY EXCLUSIVE ternary
+  // (coord/dispatch.ts) that already drops it whenever `adopted` wins.
+  //
+  // NULLABLE, NO DEFAULT, both. NULL means "an older build wrote this row, or no
+  // dispatch has committed for it". `briefQueued = 0` means "this dispatch queued
+  // no brief". A `DEFAULT 0` would make those one value — the overloaded null this
+  // file's own additive-only rule forbids at a new seam, and the exact defect the
+  // dispatchStartedAt and gate-column entries above each argued through.
+  `
+  ALTER TABLE runs ADD COLUMN briefQueued INTEGER;
+  ALTER TABLE runs ADD COLUMN clearError  TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

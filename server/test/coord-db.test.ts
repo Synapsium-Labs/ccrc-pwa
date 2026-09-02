@@ -327,8 +327,8 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
-    expect(COORD_SCHEMA_VERSION).toBe(6);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect(COORD_SCHEMA_VERSION).toBe(7);
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
       { name: string }[]).map((r) => r.name);
     expect(names).toContain('runs_by_session');
@@ -373,7 +373,7 @@ describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(tables).toEqual(expect.arrayContaining([
@@ -441,7 +441,7 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name);
     expect(tables).toEqual(expect.arrayContaining([
@@ -548,7 +548,7 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
     expect(runsColumn(db, 'dispatchStartedAt')).toBeDefined();
     db.close();
   });
@@ -570,7 +570,7 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(6);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
     const cols = (db.prepare('PRAGMA table_info(mail_deliveries)').all() as unknown as ColumnInfo[])
       .map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(['lastGate', 'gateCount', 'gateSince', 'gateAt']));
@@ -611,9 +611,50 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 6 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(6);
-    expect(MIGRATIONS.length).toBe(6);
+  it('migration 7 gives runs briefQueued and clearError, nullable and defaultless', () => {
+    // D-1298. NULLABLE WITH NO DEFAULT, and both halves are load-bearing here for
+    // the same reason they were for dispatchStartedAt: NULL means "an older build
+    // wrote this row, or no dispatch has committed", while `briefQueued = 0` means
+    // "this dispatch queued no brief". A DEFAULT 0 would make those one value —
+    // the overloaded null at exactly the seam the columns exist to keep honest,
+    // because the FALSE branch is the one that previously left no trace at all.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const bq = runsColumn(db, 'briefQueued');
+    const ce = runsColumn(db, 'clearError');
+    expect(bq, 'runs.briefQueued is absent').toBeDefined();
+    expect(ce, 'runs.clearError is absent').toBeDefined();
+    expect(bq!.type).toBe('INTEGER');
+    expect(ce!.type).toBe('TEXT');
+    expect(bq!.notnull, 'briefQueued is NOT NULL — absence would read as false').toBe(0);
+    expect(bq!.dflt_value, 'briefQueued carries a default — null and false collapse').toBeNull();
+    expect(ce!.notnull, 'clearError is NOT NULL').toBe(0);
+    expect(ce!.dflt_value, 'clearError carries a default').toBeNull();
+    db.close();
+  });
+
+  it('reaches a database ALREADY at user_version 6 — it cannot be an amendment to any earlier migration', () => {
+    // The guard migrations 2..6 each earned, for migration 7. A file left by a
+    // wave-6 server is at 6; db.ts's loop starts at `current`, so anything amended
+    // INTO entries 0..5 can never run against it again.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let i = 0; i <= 5; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 6');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect(runsColumn(db, 'briefQueued')).toBeDefined();
+    expect(runsColumn(db, 'clearError')).toBeDefined();
+    db.close();
+  });
+
+  it('COORD_SCHEMA_VERSION derives to 7 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(7);
+    expect(MIGRATIONS.length).toBe(7);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {

@@ -7,7 +7,7 @@ import { readPrHistory } from './prhistory.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { type AdvanceResult, type CoordStore, type OpenSibling } from './store.js';
 import { HANDOFF_SHA, holdReason, queueSystemMail, releaseIsSafe } from './rundefs.js';
-import { RUN_TRANSITIONS, type MailRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
+import { RUN_TRANSITIONS, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4). Same model as
@@ -51,10 +51,7 @@ export type CloseOutcome =
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
   | { ok: false; kind: 'refused'; code: Extract<RunRefuseCode, 'not-dispatched' | 'prhistory-unreadable'> }
-  | { ok: false; kind: 'doneVerdict';
-      code: Extract<MailRejectCode, 'stale-tip' | 'tip-unmeasurable' | 'branch-unmeasurable' |
-        'pr-regressed' | 'pr-unmeasurable' | 'no-handoff-commit'>;
-      detail: string }
+  | { ok: false; kind: 'doneVerdict'; code: DoneRejectCode; detail: string }
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
   | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };

@@ -6,7 +6,8 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { SPAWN_STALL_MS, isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
+  type RunHealth, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -355,3 +356,126 @@ export function programWave(list: readonly RunSummary[]): { wave: number; waveOf
   for (const run of list) if (run.wave > best.wave) best = run;
   return { wave: best.wave, waveOf: best.waveOf };
 }
+
+/* ── F7: the compact warn row ──────────────────────────────────────────────── */
+
+/** One thing worth saying about a run, as the board says everything: a WORD and
+ *  a GLYPH, so the state is never read out of colour alone, plus the long form
+ *  for `title=`. */
+export interface RunWarning {
+  readonly glyph: string;
+  readonly word: string;
+  readonly title: string;
+}
+
+/**
+ * The warn row's whole decision. Lives here rather than in JSX for the reason
+ * `resumeNote` and `dispatchWindow` do: a condition spelled inside a component
+ * is a condition with no home and no test of its own.
+ *
+ * TOLERANT BY CONSTRUCTION. `health` is declared optional here even though
+ * `RunSummary.health` is not, the `runItems`/`unmeasuredFields` idiom and for the
+ * identical reason: a row reaches this renderer through an unvalidated boundary
+ * (`asFleetMsg` shape-checks the ARRAY only, `api.runs()` is a bare cast), so an
+ * older SERVER omits the key at runtime whatever the type promises. `undefined`
+ * yields NO warnings — never "no wedge here", which is a claim this build would
+ * be making on that server's behalf.
+ *
+ * Each threshold comparison is written so an ABSENT value fails it rather than
+ * passing it (`MailStrip.tsx`'s negated-comparison rule): `coordKickoffPendingSince`
+ * is null-checked before any arithmetic, because `null` coerces to 0 and would
+ * read as an infinitely old kickoff on every healthy row.
+ */
+export function runWarnings(
+  run: { state: RunState; dispatchedAt?: number | null; health?: RunHealth },
+  nowMs: number,
+): readonly RunWarning[] {
+  const h = run.health;
+  if (h === undefined) return [];
+  // A CLOSED run draws nothing, and this is the filter itself rather than a claim
+  // about a caller. The first draft asserted "the board renders warnings on its
+  // active slice only" and the board does no such thing: `RunsScreen` has ONE
+  // `rowFor`, applied to `list` AND to `finished`. So a wave whose first done-claim
+  // was refused `stale-tip` and then closed cleanly carried an amber "1 rejected"
+  // in the archive forever, and an ABANDONED run — `failed`, never dispatched,
+  // which is exactly what the Abandon control produces on a wedged row — drew
+  // "never briefed … an open run whose chair nobody sat in", a flatly false
+  // sentence about a closed run.
+  //
+  // Health facts stay MEASURED for a closed run on the server side, deliberately:
+  // they are that run's history, and an adapter may not narrow a distinction it
+  // received. Whether history deserves ATTENTION is this renderer's decision, and
+  // the answer is no — a warning nobody can act on is how a warning surface
+  // becomes ignorable, which is the thing this whole wave exists to prevent.
+  if (isRunClosed(run)) return [];
+  const out: RunWarning[] = [];
+  if (h.mailParked > 0) {
+    // The spec's ask is "outstanding VS parked", so the title carries both — which
+    // is also what gives `mailOutstanding` a reader. Without it the field was
+    // measured, shipped on every run in every frame, and rendered by nothing.
+    out.push({ glyph: '⛒', word: `${h.mailParked} parked`,
+      title: `${h.mailParked} mail deliver${h.mailParked === 1 ? 'y' : 'ies'} to this run gave up ` +
+        `and parked unread (${h.mailOutstanding} still outstanding) — a run-closed or reclaimed ` +
+        'cancel is not counted here, so these are messages nobody received' });
+  }
+  if (h.mailReplayMax >= MAIL_REPLAY_WARN_COUNT) {
+    out.push({ glyph: '↻', word: `replayed ${h.mailReplayMax}×`,
+      title: `a delivery to this run has been replayed ${h.mailReplayMax} times without an ack. ` +
+        'The lane parks it at 20 and the message is then lost to whoever it was steering — ' +
+        'mail 120 reached 722 attempts and mail 129 reached 911, both arriving after the work ' +
+        'they were meant to shape' });
+  }
+  // `=== false`, never `!h.briefQueued`: null is a THIRD condition (no dispatch
+  // has committed, or the row predates migration 7) and must stay silent.
+  if (h.briefQueued === false) {
+    out.push({ glyph: '⌦',
+      // The CODE rides the word, not only the title: this is a mobile-first board
+      // with no hover, and a `title` on a span flattened inside `.run-open` is not
+      // announced either — so a title-only fact is a fact the operator cannot
+      // reach, which is the state F7 exists to end.
+      word: h.clearError === null ? 'no brief' : `no brief (${h.clearError})`,
+      title: "this run's dispatch queued NO wave-brief" +
+        (h.clearError === null ? '' : ` — the injected /clear was refused: ${h.clearError}`) +
+        '. The worker was resumed into a context nothing was written to' });
+  }
+  if (h.doneRejects > 0) {
+    out.push({ glyph: '⊘',
+      word: h.lastRejectCode === null
+        ? `${h.doneRejects} rejected`
+        : `${h.doneRejects} rejected (${h.lastRejectCode})`,
+      title: `${h.doneRejects} done-claim${h.doneRejects === 1 ? '' : 's'} refused by the server's ` +
+        're-measurement' + (h.lastRejectCode === null ? '' : `, most recently ${h.lastRejectCode}`) });
+  }
+  // THREE conditions, all of them, and the middle one is the spec's own
+  // (design §9: "open run, `dispatchedAt` null, kickoff delivery unacked past a
+  // threshold"). Without `dispatchedAt === null` this fires on a run that HAS
+  // dispatched — a coordinator that got the wave moving without ever acking its
+  // kickoff, which is odd but is not the wedge, and drawing it as one is how a
+  // warning surface becomes ignorable.
+  //
+  // The closed-run filter is EARLIER IN THIS SAME FUNCTION, at the `isRunClosed`
+  // guard, and it is not the caller's. The sentence that stood here said the
+  // opposite — "`closedAt`/state is the caller's filter: the board renders
+  // warnings on its `active` slice only" — the exact premise D-1309 was raised to
+  // delete,
+  // re-asserted verbatim in the paragraph next door (D-1321). Both halves were
+  // false when written: `RunsScreen` has ONE `rowFor`, applied to `list` AND to
+  // `finished`, and this function's parameter type declared `state` without ever
+  // reading it. A claim about a caller is the one kind of comment a reader cannot
+  // check locally, which is why it survived a whole wave.
+  //
+  // The replacement then said the filter was "forty-four lines above" and it was
+  // forty-six by the time anyone counted (D-1331). A line distance is a cardinal
+  // nothing derives, so it is named by its guard now rather than measured in a
+  // comment nobody re-runs.
+  const since = h.coordKickoffPendingSince;
+  const undispatched = (run.dispatchedAt ?? null) === null;
+  if (since !== null && undispatched && nowMs - since >= KICKOFF_UNACKED_MS) {
+    out.push({ glyph: '☡', word: 'never briefed',
+      title: "the program-kickoff addressed to this run's coordinator has never been acked, and this " +
+        'run has never dispatched. An open run whose chair nobody sat in cannot dispatch, close or ' +
+        'answer mail — it is the shape run 11 has been wedged in since 2026-08-28' });
+  }
+  return out;
+}
+

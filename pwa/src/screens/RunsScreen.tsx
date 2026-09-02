@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runWarnings, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -163,6 +163,10 @@ function RunRow({
   // picks no words.
   const verdict = session === null ? null : spawnVerdictChip(session);
   const resume = resumeNote(run, nowSec);
+  // F7. The DECISION is `runWarnings`' — five conditions, one place, tolerant of
+  // a server that has never heard of `health`. This component picks no words and
+  // compares no thresholds; it lays out what it was handed.
+  const warnings = runWarnings(run, nowMs);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -224,6 +228,22 @@ function RunRow({
           title={`registry ${degradedFields.join('/')} temporarily unreadable — retrying`}
         >
           unreadable
+        </span>
+      )}
+      {warnings.length > 0 && (
+        // Its own wrapped LINE, not another inline cell: `.run-row` is
+        // `flex-wrap: wrap`, so a `flex-basis: 100%` child becomes a sub-row
+        // inside the existing <li> without a second list element and without a
+        // fourth `flex: none` control competing for phone width. Not tappable, so
+        // it may live inside `body` (and therefore inside `.run-open`) — D-287's
+        // sibling rule binds controls, and this is prose.
+        <span className="run-warn">
+          {warnings.map((w) => (
+            <span key={w.word} className="run-warn-item" title={w.title}>
+              <span className="run-warn-glyph" aria-hidden="true">{w.glyph}</span>
+              {' '}{w.word}
+            </span>
+          ))}
         </span>
       )}
     </>

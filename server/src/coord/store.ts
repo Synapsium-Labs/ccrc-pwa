@@ -6,7 +6,7 @@ import type { LedgerLog } from './ledgerlog.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
@@ -22,7 +22,8 @@ import {
   type LifecycleGap, type LifecycleGapReason,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
-  type NotifyEvent, type PeerDeliverable, type ProgramState, type RunItemTally, type RunState,
+  type NotifyEvent, type PeerDeliverable, type ProgramState,
+  type RunHealth, type RunItemTally, type RunState,
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -179,6 +180,8 @@ interface RunRowDb {
   dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
   handoffCommit: string | null;
   prLineage: string | null;
+  briefQueued: number | null;
+  clearError: string | null;
 }
 
 const RUN_ROW_COLUMNS =
@@ -186,7 +189,7 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError';
 
 /**
  * Coordination's own terminal-state rule, spelled ONCE (bounded context 5:
@@ -880,10 +883,24 @@ export class CoordStore {
   dispatchRun(input: {
     runId: number; sessionId: string; workspace: string | null; branch: string | null;
     resumed: boolean; clearedAt: number | null; items: readonly string[]; detail?: string;
+    /** F7 (D-1298): what this dispatch DECIDED about the brief, and the
+     *  `sendPrompt` refusal that made it false. OPTIONAL on the input so the
+     *  disaster-recovery and test callers that know neither may omit both — an
+     *  omitted pair leaves the columns NULL, which is exactly the "no dispatch
+     *  decided anything here" reading migration 7 reserves for null. */
+    briefQueued?: boolean; clearError?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
+      // Written UNCONDITIONALLY once `briefQueued` is given, both columns
+      // together: recording only the interesting branch would make an older row
+      // and a dispatch that queued its brief cleanly indistinguishable, which is
+      // the same overloaded null the column's nullability exists to prevent.
+      if (input.briefQueued !== undefined) {
+        this.db.prepare('UPDATE runs SET briefQueued = ?, clearError = ? WHERE id = ?')
+          .run(input.briefQueued ? 1 : 0, input.clearError ?? null, input.runId);
+      }
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
@@ -1155,7 +1172,8 @@ export class CoordStore {
     const row = this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program WHERE r.id = ?`,
     ).get(id) as RunRowDb | undefined;
-    return row ? this.hydrateRun(row) : null;
+    if (!row) return null;
+    return this.hydrateRun(row, this.healthFor([row]).get(row.id)!);
   }
 
   /**
@@ -1186,7 +1204,8 @@ export class CoordStore {
         `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
         "WHERE r.state NOT IN ('done','failed') ORDER BY r.id",
       ).all() as unknown as RunRowDb[];
-      return rows.map((row) => this.hydrateRun(row));
+      const health = this.healthFor(rows);
+      return rows.map((row) => this.hydrateRun(row, health.get(row.id)!));
     }
     const n = clampMailLimit(opts.closedLimit ?? 500);
     const rows = this.db.prepare(
@@ -1195,7 +1214,8 @@ export class CoordStore {
       "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[];
-    return rows.map((row) => this.hydrateRun(row));
+    const health = this.healthFor(rows);
+    return rows.map((row) => this.hydrateRun(row, health.get(row.id)!));
   }
 
   /**
@@ -1330,7 +1350,7 @@ export class CoordStore {
    *  shape everything else in this class and its callers use — every enum
    *  column goes through its guard here, never a cast, so this is also the
    *  one place that rule could be forgotten for a future column. */
-  private hydrateRun(row: RunRowDb): RunRow {
+  private hydrateRun(row: RunRowDb, health: RunHealth): RunRow {
     return {
       id: row.id, program: row.program, programTitle: row.programTitle,
       wave: row.wave, waveOf: row.waveOf, project: row.project,
@@ -1365,6 +1385,12 @@ export class CoordStore {
       handoffCommit: row.handoffCommit,
       items: this.itemTally(row.id),
       unreadMail: this.unreadMailCount(row.id, row.sessionId),
+      // F7. Passed IN rather than measured here, and that is the whole design:
+      // `hydrateRun` runs once per row, and four more per-row reads would cost
+      // the board 2,000 more statements on a `?closed=1` load. `runHealth` answers
+      // for the whole batch in four (D-1299). A REQUIRED parameter, so a caller
+      // cannot forget it and quietly ship a zeroed health object.
+      health,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
     };
   }
@@ -1378,6 +1404,191 @@ export class CoordStore {
     ).get(runId, sessionId) as { c: number }).c;
   }
 
+  /** `runHealth` for a batch of rows already read — the shape `runs()`/`run()`
+   *  hold. Keeps the id/coordinator extraction in one place so the two call
+   *  sites cannot disagree about which sessions count as coordinators. */
+  private healthFor(rows: readonly RunRowDb[]): Map<number, RunHealth> {
+    const coords = [...new Set(rows.map((r) => r.claimedBy).filter((c): c is string => c !== null))];
+    return this.runHealth(rows.map((r) => r.id), coords);
+  }
+
+  /**
+   * F7: every health fact for a set of runs, in FOUR statements TOTAL — not four
+   * per row.
+   *
+   * The cost is the design (D-1299). `hydrateRun` already spends two statements per
+   * row (`itemTally`, `unreadMailCount`), and `runs({includeClosed:true})` returns
+   * every open run — deliberately uncapped — plus up to 500 closed ones. Four naive
+   * per-row health reads would make six statements per row: ~3,000 for one board
+   * load. This spends AT MOST FOUR in total, whatever the row count.
+   *
+   * At most, not exactly: statement (4) runs only when some run names a
+   * coordinator, so the real count is three or four. The first version of this
+   * sentence said "FOUR TOTAL" and issued FIVE whenever a kickoff was actually
+   * outstanding — the one case the facet exists for — because it re-read `runs` a
+   * second time for `claimedBy`. That read now rides statement (3), which was
+   * already selecting from the same table by the same key.
+   *
+   * EVERY id in `runIds` gets a row, including a run with no mail at all. A caller
+   * forced to supply a default for a missing key is where an overloaded null is
+   * born, and this method exists to remove those, not to add one.
+   *
+   * SYNCHRONOUS, like the rest of this class. Reads only; writes nothing.
+   */
+  runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth> {
+    const out = new Map<number, RunHealth>();
+    for (const id of runIds) {
+      out.set(id, { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+                    lastRejectCode: null, briefQueued: null, clearError: null,
+                    coordKickoffPendingSince: null });
+    }
+    // `placeholders` refuses nothing, but an empty `IN ()` is a SQLite syntax
+    // error and the guard is the caller's — this method's own, here.
+    if (runIds.length === 0) return out;
+    const ph = placeholders(runIds.length);
+
+    // (1) outstanding vs parked, and the replay high-water. The deliberate-cancel
+    //     exclusion reuses DELIBERATE_CANCEL_ERRORS_SQL rather than respelling the
+    //     two literals, because a second copy is how the two lists would come to
+    //     disagree — and `single-definition.test.ts`'s "spells the deliberate-cancel
+    //     pair ONCE" is what stops one, in both directions: a hand-written SQL list
+    //     of the pair anywhere in the four source roots, and a reader that drops the
+    //     exclusion instead of copying it.
+    //
+    //     THAT SENTENCE NAMED A GUARD THAT DID NOT EXIST (D-1319). It shipped one
+    //     wave earlier reading "`single-definition.test.ts` forbids the second copy"
+    //     while that file had never mentioned this pair; the review measured a
+    //     respelled list in this very query passing the whole suite green. The
+    //     doctrine is the wave's own — a comment is a request, a red suite is a
+    //     mechanism — and it was broken in the wave that restated it.
+    for (const row of this.db.prepare(
+      'SELECT m.runId AS runId, ' +
+      `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} THEN 1 ELSE 0 END) AS outstanding, ` +
+      "SUM(CASE WHEN d.state = 'rejected' AND " +
+      `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
+      'THEN 1 ELSE 0 END) AS parked, ' +
+      'MAX(d.replayCount) AS replayMax ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      `WHERE m.runId IN (${ph}) GROUP BY m.runId`,
+    ).all(...runIds) as unknown as
+      { runId: number; outstanding: number; parked: number; replayMax: number | null }[]) {
+      const h = out.get(row.runId);
+      if (h === undefined) continue;
+      out.set(row.runId, { ...h, mailOutstanding: row.outstanding, mailParked: row.parked,
+                           mailReplayMax: row.replayMax ?? 0 });
+    }
+
+    // (2) done-claim refusals: how many, and the newest one's code. The
+    //     correlated subquery orders by `at` and then `id`, because
+    //     `recordRejection` stamps its own `Date.now()` and a retried close can
+    //     write two rows inside one millisecond.
+    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    for (const row of this.db.prepare(
+      'SELECT r.runId AS runId, count(*) AS c, ' +
+      '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
+      `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
+      `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
+    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
+      { runId: number; c: number; lastCode: string | null }[]) {
+      const h = out.get(row.runId);
+      if (h === undefined) continue;
+      out.set(row.runId, { ...h, doneRejects: row.c, lastRejectCode: row.lastCode });
+    }
+
+    // (3) what the last committed dispatch decided, straight off the run row.
+    //     `briefQueued === null` is carried through as null, never coerced: the
+    //     column is nullable precisely so "no dispatch committed" and "queued no
+    //     brief" stay two facts (migration 7, D-1298).
+    const claimedBy = new Map<number, string>();
+    for (const row of this.db.prepare(
+      `SELECT id, briefQueued, clearError, claimedBy FROM runs WHERE id IN (${ph})`,
+    ).all(...runIds) as unknown as
+      { id: number; briefQueued: number | null; clearError: string | null;
+        claimedBy: string | null }[]) {
+      const h = out.get(row.id);
+      if (h === undefined) continue;
+      // `claimedBy` rides this pass rather than earning a fifth statement of its
+      // own: the first draft re-read it below, which made this method's own
+      // "four statements" sentence false exactly when the kickoff facet was
+      // doing its job (review finding).
+      if (row.claimedBy !== null) claimedBy.set(row.id, row.claimedBy);
+      out.set(row.id, { ...h,
+        briefQueued: row.briefQueued === null ? null : row.briefQueued !== 0,
+        clearError: row.clearError });
+    }
+
+    // (4) the un-briefed coordinator: an OUTSTANDING operator kickoff addressed to
+    //     a run's `claimedBy`.
+    //
+    //     `MIN(m.at)` — WHEN IT WAS FIRST SENT, which is what the wire field
+    //     promises and the only one of the three available instants that is never
+    //     rewritten. The first draft wrote
+    //     `MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at))`, borrowing
+    //     `dueDeliveries`' shape, and that made the whole facet DEAD — measured,
+    //     not argued. `ingestedAt` is stamped only on an observed
+    //     `UserPromptSubmit` edge, so it stays NULL for exactly the population this
+    //     fact exists to name (a chair nobody ever sat in); the COALESCE then fell
+    //     through to `deliveredAt`, which `markDelivered` re-stamps on EVERY
+    //     replay, every `MAIL_REPLAY_MS` (600 000 ms). Against a
+    //     `KICKOFF_UNACKED_MS` of 900 000 the reported age topped out at 599 999
+    //     and the warning fired ZERO times across 25 replays — then the row parked
+    //     at the replay ceiling, left `OUTSTANDING_STATES_SQL`, and the fact went
+    //     null forever, indistinguishable from "acked, healthy".
+    //
+    //     The borrowed idiom was also the wrong precedent: `dueDeliveries` answers
+    //     "when may this be sent again", and its own docstring records
+    //     `COALESCE(ingestedAt, deliveredAt)` as a review-found defect it was fixed
+    //     AWAY from, for freezing the very clock this one needs to keep moving.
+    //
+    //     "THEN THE ROW PARKED … AND THE FACT WENT NULL FOREVER" — the clause two
+    //     paragraphs up, written as part of a DEFEATED first draft — WAS STILL TRUE
+    //     OF THE FIX, and the review is what said so (D-1318).
+    //     `MIN(m.at)` corrected WHEN the warning starts; it did nothing about the
+    //     warning STOPPING. A kickoff nobody ever acked parks at the replay ceiling
+    //     (or on a registry-absent recipient), leaves `OUTSTANDING_STATES_SQL`, and
+    //     the fact goes null — and null on this field already means "acked" and
+    //     "no coordinator", so the one caller renders identical silence for the
+    //     wedge, which is the overloaded null this wave forbids. Statement (1)
+    //     cannot compensate: a `program-kickoff` carries `m.runId IS NULL` by
+    //     construction, so it is not in any run's mail at all and `mailParked`
+    //     stays 0. The whole `RunHealth` came back byte-identical to a run nobody
+    //     ever mailed.
+    //
+    //     So the predicate is `OUTSTANDING_OR_ABANDONED_SQL`, which this file
+    //     already owns and whose docstring states the principle in the general
+    //     case: "A message that was never acked and never acted on does not stop
+    //     being a fact worth surfacing just because the lane stopped trying to hand
+    //     it over." It brings the `LEFT JOIN runs rr` its `rr.state` arm needs —
+    //     INERT here, and provably so rather than incidentally: `m.runId IS NULL`
+    //     is in this WHERE clause, so the join matches nothing, `rr.state` is NULL
+    //     and `COALESCE(rr.state,'')` is `''`. What the predicate DOES bring is the
+    //     deliberate-cancel exclusion, and that arm is live and wanted:
+    //     `reclaimProgram` parks the dead coordinator's kickoff with
+    //     `MAIL_RECLAIM_CANCELLED_ERROR` and sends a fresh one to the new chair
+    //     (D-1143's own worked example), so a reclaimed program must NOT keep
+    //     drawing the corpse's wedge.
+    if (coordIds.length > 0) {
+      const since = new Map<string, number>();
+      for (const row of this.db.prepare(
+        'SELECT d.toId AS toId, MIN(m.at) AS since ' +
+        'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+        'LEFT JOIN runs rr ON rr.id = m.runId ' +
+        "WHERE m.fromId = 'operator' AND m.runId IS NULL AND m.subject = ? " +
+        `AND d.toId IN (${placeholders(coordIds.length)}) ` +
+        `AND ${OUTSTANDING_OR_ABANDONED_SQL} GROUP BY d.toId`,
+      ).all(PROGRAM_KICKOFF_SUBJECT, ...coordIds) as unknown as
+        { toId: string; since: number }[]) {
+        since.set(row.toId, row.since);
+      }
+      for (const [id, h] of out) {
+        const owner = claimedBy.get(id);
+        const at = owner === undefined ? undefined : since.get(owner);
+        if (at !== undefined) out.set(id, { ...h, coordKickoffPendingSince: at });
+      }
+    }
+    return out;
+  }
+
   // ── caps ───────────────────────────────────────────────────────────────────
 
   caps(): CoordCaps {
@@ -1387,10 +1598,36 @@ export class CoordStore {
     return { maxConcurrentWorkers: row.maxConcurrentWorkers, maxSessionsPerDay: row.maxSessionsPerDay };
   }
 
-  setCaps(next: CoordCaps): void {
+  /** D-1169. `at` IS THE CALLER'S NOW, the rule `recordRunEvent` states in full
+   *  and `markDispatched`/`capsUsage` — the method directly below this one —
+   *  already follow: the caller owns the moment being recorded. `setCaps` was the
+   *  lone exception in its own neighbourhood, and the cost was concrete rather
+   *  than aesthetic: a fixture that needed to pin a caps timestamp could not.
+   *
+   *  The clock stays where it already was, in L4 — `routes.ts` reads it INSIDE
+   *  `coordMutex.run`, which `dispatch-mutex-gate.test.ts` requires of every
+   *  `coord.setCaps` call site. Nothing moves into `caps.ts`, so its purity scan
+   *  is untouched; the red that scan warns about is for a DEFAULTED clock
+   *  parameter inside `decideCaps`, which this is not. */
+  setCaps(next: CoordCaps, at: number = Date.now()): void {
     this.db.prepare(
       'UPDATE coordinator_state SET maxConcurrentWorkers = ?, maxSessionsPerDay = ?, updatedAt = ? WHERE id = 1',
-    ).run(next.maxConcurrentWorkers, next.maxSessionsPerDay, Date.now());
+    ).run(next.maxConcurrentWorkers, next.maxSessionsPerDay, at);
+  }
+
+  /** D-1169's read half. `coordinator_state.updatedAt` has been written since
+   *  migration 1 and read by NOTHING — `caps()`'s SELECT does not even list the
+   *  column. It rides `CoordCapsView`, the read-side shape, rather than
+   *  `CoordCaps`, which is the stored value and which wave 6 declined to widen
+   *  for good reason: a timestamp is not a cap.
+   *
+   *  `0` is the seed migration 1 writes, and it is returned as `null` here —
+   *  "nobody has ever moved these caps" is a different fact from "they were moved
+   *  at the epoch", and the column has no way to say the second. */
+  capsUpdatedAt(): number | null {
+    const row = this.db.prepare('SELECT updatedAt FROM coordinator_state WHERE id = 1')
+      .get() as { updatedAt: number } | undefined;
+    return row === undefined || row.updatedAt === 0 ? null : row.updatedAt;
   }
 
   /**
@@ -3085,6 +3322,23 @@ export class CoordStore {
 
   /** allocated -> landed, once — `landed` genuinely means "in a merged plan"
    *  (D13), so the guard keeps a re-scan from re-stamping the date. */
+  /** Every project the allocator has ever issued a number for. The reconcile
+   *  sweep's own project list used to be derived from OPEN allocations alone,
+   *  which is the right corpus for "did this number land" and the wrong one for
+   *  "was this number ever asked for" — a fully-landed project has no open rows
+   *  and would never be audited. */
+  ledgerProjects(): string[] {
+    return (this.db.prepare('SELECT DISTINCT project FROM ledger_alloc ORDER BY project')
+      .all() as unknown as { project: string }[]).map((r) => r.project);
+  }
+
+  /** Every number ever ISSUED for a project, in any state — the set
+   *  `unallocatedDefinitions` measures a plan's definitions against. */
+  ledgerIssued(project: string): Set<number> {
+    return new Set((this.db.prepare('SELECT n FROM ledger_alloc WHERE project = ?')
+      .all(project) as unknown as { n: number }[]).map((r) => r.n));
+  }
+
   markLanded(project: string, n: number, landedIn: string, at: number): void {
     this.db.prepare(
       "UPDATE ledger_alloc SET state = 'landed', landedAt = ?, landedIn = ? " +
