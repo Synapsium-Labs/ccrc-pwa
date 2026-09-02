@@ -1540,7 +1540,9 @@ export class CoordStore {
     //     `COALESCE(ingestedAt, deliveredAt)` as a review-found defect it was fixed
     //     AWAY from, for freezing the very clock this one needs to keep moving.
     //
-    //     THE SECOND HALF OF THAT SENTENCE WAS STILL TRUE OF THE FIX (D-1318).
+    //     "THEN THE ROW PARKED … AND THE FACT WENT NULL FOREVER" — the clause two
+    //     paragraphs up, written as part of a DEFEATED first draft — WAS STILL TRUE
+    //     OF THE FIX, and the review is what said so (D-1318).
     //     `MIN(m.at)` corrected WHEN the warning starts; it did nothing about the
     //     warning STOPPING. A kickoff nobody ever acked parks at the replay ceiling
     //     (or on a registry-absent recipient), leaves `OUTSTANDING_STATES_SQL`, and
