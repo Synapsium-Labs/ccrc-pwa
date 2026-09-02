@@ -1447,6 +1447,34 @@ the review found two more of it.
   row from the code. Two of the three were in fixes written to close the previous one. The table is
   not a record of the guards; it is the only thing that establishes they exist.
 
+- **D-1317** (2026-09-02, the fourth incident, prevented — measured, not argued) — **PR #42 took
+  D-1243 while this wave was running: the exact number the brief told the worker to start from.**
+
+  Timeline, all from git and the allocator:
+  - `2026-09-01 ~22:52 UTC` — the wave-7 brief arrives saying *"allocate from
+    `ccrc-api ledger allocate`, floor **1243** — and READ the floor from the allocator, never from a
+    document"*.
+  - `2026-09-02 00:37 UTC` — PR #42 merges as `551a6cb6`, carrying
+    `docs/superpowers/plans/2026-09-01-d1243-the-read-side-had-no-mechanism.md:38`:
+    `- **D-1243** (2026-09-01) — the graphify integration had no read-side mechanism at all`.
+  - `2026-09-02 ~06:05 UTC` — this worker reads `GET /api/ledger?project=ccrc-pwa`, gets **1292**, and
+    allocates D-1293 onward.
+
+  Had the brief's number been used — and it is the number a worker naturally reaches for, sitting in
+  bold in the same sentence — this wave would have defined D-1243 against `main`'s D-1243 and become
+  **the fourth collision in this program**, with the same renumber-under-merge-pressure the previous
+  three cost. What prevented it was the other half of that same sentence: read the floor from the
+  allocator, never from a document. **The instruction saved the wave from the number printed beside it**,
+  which is D-1293 restated by events rather than by argument.
+
+  Two things follow, and they are the reason this is a deviation and not an anecdote. (1) A brief's
+  floor is a SNAPSHOT with the shelf life of the next merge — roughly two hours, here — so it should be
+  written as provenance ("the floor was 1243 when this was written") rather than as an instruction, or
+  not written at all. (2) This is also the first live exercise of this wave's own guard on a base that
+  really moved: `deviation-refs.test.ts`'s cross-tree arm, run against the freshly-fetched
+  `origin/main = 551a6cb6`, reports **zero** collisions — correctly, because the allocator kept the
+  branches apart. The guard's value is precisely that it would have said otherwise had it not.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
