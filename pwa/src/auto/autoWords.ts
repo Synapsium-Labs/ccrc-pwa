@@ -85,7 +85,12 @@ export const AUTOMATION_REFUSAL_SENTENCE: Record<AutomationRefusal, string> = {
   'no-placeable-account': 'no account had room to place this run',
   'account-pressed': "the account this would have used is under too much pressure to place another",
   'cap-concurrency': 'too many runs from this automation were already in flight',
-  overlap: 'the previous occurrence was still running when this one came due',
+  // Trigger-agnostic on purpose. `overlap` is the ONE refusal the manual
+  // door still answers itself, and a *Run now* double-tap reaches it — a
+  // path the ~4-minute await used to make unreachable by keeping the button
+  // disabled. "the previous OCCURRENCE ... came DUE" describes a schedule,
+  // so on that tap it stated something that had not happened.
+  overlap: 'a run for this automation was already in flight',
   'failure-ceiling': 'this automation failed too many times in a row and was paused',
   'spawn-refused': 'the fleet refused to start a session for this run',
   'spawn-cut-short': 'starting the session was cut short before it could be confirmed',

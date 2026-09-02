@@ -26,8 +26,8 @@
 //    against a newer server would show the operator blank space where a state
 //    should be. `? <token>` is the honest degrade.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import type { AutomationSummary } from '../../shared/api';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { AutomationRunSummary, AutomationSummary } from '../../shared/api';
 import {
   AUTOMATION_REFUSALS, AUTOMATION_ROUTE_REFUSALS, AUTOMATION_STATES,
   AUTOMATION_OUTCOMES, SCHEDULE_ERRORS,
@@ -240,5 +240,83 @@ describe('the list says what an operator needs before it fires', () => {
     act(() => { view.container.querySelector<HTMLButtonElement>('.auto-open')!.click(); });
     await waitFor(() => expect(view.container.querySelector('[data-gap="true"]')).not.toBeNull());
     expect(view.container.querySelector('[data-gap="true"]')!.textContent).toMatch(/42/);
+  });
+});
+
+// ── *Run now* after the claim-only cut-over ────────────────────────────────
+//
+// The route answers `202` the moment the run is CLAIMED; the spawn happens on
+// the box's next sweep pass. Two things about the phone follow, and neither
+// was covered before — `runAutomation` appeared nowhere in this suite, so the
+// whole manual door was untested on the client.
+const runRow = (over: Partial<AutomationRunSummary> = {}): AutomationRunSummary => ({
+  id: 7, automationId: 1, scheduledFor: 0, startedAt: 0, endedAt: null, lateMs: 0,
+  outcome: 'running', refusal: null, trigger: 'manual', dstShifted: false, adopted: false,
+  sessionId: null, workspace: null, branch: null, wrapper: null, homeScore: null, spawnRc: null,
+  ...over,
+} as AutomationRunSummary);
+
+const openRow = async (): Promise<void> => {
+  const toggle = await screen.findByRole('button', { name: /nightly/ });
+  fireEvent.click(toggle);
+};
+
+describe('Run now says what it queued, without claiming what has not happened', () => {
+  it('renders a status note on the 202, and states no duration', async () => {
+    // `Starting…` lives on the button and is gone in a millisecond once the
+    // answer is immediate; the run row then reads `running`, which after the
+    // cut-over means CLAIMED, not "a session exists". Without a note the
+    // operator is told a session started when none has.
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()] })}
+        getAutomation={async () => ({ automation: auto(), runs: [] })}
+        runAutomation={async () => ({ ok: true, runId: 7 } as never)}
+      />,
+    );
+    await openRow();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }));
+
+    const note = await screen.findByRole('status');
+    expect(note.textContent ?? '').toMatch(/queued/i);
+    // No number, ever. The lag is one AUTOMATION_SWEEP_MS gate plus a tick,
+    // both server-side and neither on the wire, so a duration rendered here
+    // would be the same drift `single-definition.test.ts` polices — asserted
+    // to the operator as a fact about their box.
+    expect(note.textContent ?? '').not.toMatch(/[0-9]/);
+  });
+
+  it('re-reads the expanded panel when the frame moves, so the row cannot contradict its own header', async () => {
+    // The list row is frame-fed and updates itself; the panel's runs come from
+    // a one-shot cold read. With an immediate 202 that read lands while the
+    // run is still `running`, so without this the panel says `running` for
+    // ever while the header of the SAME <li> flips to `ok` — one row, two
+    // contradictory claims.
+    let calls = 0;
+    const getAutomation = async (): Promise<{ automation: AutomationSummary; runs: AutomationRunSummary[] }> => {
+      calls++;
+      return calls <= 1
+        ? { automation: auto(), runs: [runRow()] }
+        : { automation: auto({ lastOutcome: 'ok' }), runs: [runRow({ endedAt: 5_000, outcome: 'ok' })] };
+    };
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()] })}
+        getAutomation={getAutomation}
+        runAutomation={async () => ({ ok: true, runId: 7 } as never)}
+      />,
+    );
+    await openRow();
+    await waitFor(() => { expect(calls).toBeGreaterThanOrEqual(1); });
+
+    // The settle reaches the phone as a new frame — `emitAutomations` emits on
+    // any change to the row — and that is the signal the panel listens to.
+    seedStore({
+      automations: [auto({ lastOutcome: 'ok', lastFireAt: 5_000 })],
+      automationsFrameSeen: true,
+    });
+    await waitFor(() => { expect(calls).toBeGreaterThanOrEqual(2); });
   });
 });

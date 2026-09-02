@@ -84,6 +84,7 @@ function AutomationDetail({
   onRetire,
   busy,
   actionError,
+  actionNote,
 }: {
   automation: AutomationSummary;
   runs: AutomationRunSummary[];
@@ -95,6 +96,7 @@ function AutomationDetail({
   onRetire: () => void;
   busy: 'arm' | 'run' | 'pause' | 'retire' | null;
   actionError: string | null;
+  actionNote: string | null;
 }): ReactNode {
   const needsProof = automation.state === 'paused' && automation.provedAt === null;
   return (
@@ -127,6 +129,7 @@ function AutomationDetail({
         )}
       </div>
       {actionError !== null && <p className="auto-detail-error" role="alert">{actionError}</p>}
+      {actionNote !== null && <p className="auto-detail-note" role="status">{actionNote}</p>}
       <p className="auto-detail-prompt">{automation.prompt}</p>
       {runs.length === 0 ? (
         <p className="auto-run-empty">No runs yet.</p>
@@ -169,6 +172,7 @@ function AutomationRow({
   onRetire: () => void;
   busy: 'arm' | 'run' | 'pause' | 'retire' | null;
   actionError: string | null;
+  actionNote: string | null;
 }): ReactNode {
   const state = automationStateChip(automation.state);
   const cadence = cadenceFromColumns(automation);
@@ -248,6 +252,13 @@ export function AutomationsScreen({
   const [detailState, setDetailState] = useState<'loading' | 'ok' | 'error'>('loading');
   const [busy, setBusy] = useState<'arm' | 'run' | 'pause' | 'retire' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // *Run now* answers the moment the run is CLAIMED; the spawn happens on the
+  // box's next pass. Without a word for that, the button's `Starting…` flashes
+  // for a millisecond and the operator is left with a run row reading
+  // `running` — which after the claim-only cut-over means "claimed", not "a
+  // session exists". `ResumeSheet`'s re-kickoff note is the shipped precedent
+  // for saying what was QUEUED without claiming what has not happened.
+  const [actionNote, setActionNote] = useState<string | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -291,12 +302,36 @@ export function AutomationsScreen({
     return true;
   });
 
+  // THE PANEL AND ITS OWN HEADER MUST NOT DISAGREE. The list row is fed by the
+  // `{type:'automations'}` frame and updates itself; the expanded panel's runs
+  // come from a one-shot cold read fired at open and after an action. Once
+  // *Run now* answers BEFORE the act, that read lands while the run is still
+  // `running`, so the panel would say `running` for ever while the header of
+  // the same <li> flipped to `ok` or `refused <sentence>` — one row making two
+  // contradictory claims.
+  //
+  // The FRAME is the signal, not a timer: `emitAutomations` broadcasts on any
+  // change to the row, and a settle changes `lastOutcome`/`lastRefusal`, so
+  // this re-reads exactly when there is something new to read — and only while
+  // the panel is actually showing a run that has not ended.
+  const liveRow = expandedId === null ? null : list.find((a) => a.id === expandedId) ?? null;
+  const liveStamp = liveRow === null
+    ? null
+    : `${String(liveRow.lastFireAt)}:${String(liveRow.lastOutcome)}:${String(liveRow.lastRefusal)}`;
+  const showsUnsettledRun = detail !== null && detail.runs.some((r) => r.endedAt === null);
+  useEffect(() => {
+    if (expandedId === null || !showsUnsettledRun) return;
+    refreshDetail(expandedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStamp]);
+
   const openDetail = (id: number): void => {
     if (expandedId === id) { setExpandedId(null); return; }
     setExpandedId(id);
     setDetail(null);
     setDetailState('loading');
     setActionError(null);
+    setActionNote(null);
     getAutomation(id)
       .then((r) => { setDetail(r); setDetailState('ok'); })
       .catch(() => setDetailState('error'));
@@ -313,9 +348,16 @@ export function AutomationsScreen({
   ): void => {
     setBusy(kind);
     setActionError(null);
+    setActionNote(null);
     fn()
       .then(() => {
         setBusy(null);
+        // NEVER a duration. The lag is the automations lane's own sweep gate
+        // plus a tick; both are server-side (`AUTOMATION_SWEEP_MS`) and
+        // neither is on the wire, so a number here would be exactly the drift
+        // `single-definition.test.ts` polices — stated to the operator as if
+        // it were a fact about their box.
+        if (kind === 'run') setActionNote('Run queued — the session starts on the box’s next pass.');
         refreshDetail(id);
         void loadCold();
       })
@@ -396,6 +438,7 @@ export function AutomationsScreen({
               onRetire={() => runAction('retire', a.id, () => setAutomationState(a.id, 'retired'))}
               busy={expandedId === a.id ? busy : null}
               actionError={expandedId === a.id ? actionError : null}
+              actionNote={expandedId === a.id ? actionNote : null}
             />
           ))}
         </ul>
