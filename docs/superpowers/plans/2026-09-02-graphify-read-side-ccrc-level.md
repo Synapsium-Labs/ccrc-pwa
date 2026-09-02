@@ -3082,6 +3082,42 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | unmutated | `Tests  52 passed (52)` (whole file) |
 
 
+- **D-1360** (2026-09-02, whole-branch review) — **the row titled "leaves no `CLAUDE.md.tmp.<pid>`
+  behind, on the write path or the refusal path" never exercised the refusal path, so BOTH
+  `rm -f "$tmp"` lines were deletable with the suite green.** The fixture seeded a well-formed block
+  and ran one successful install, and on THAT path the temp file is consumed by
+  `mv -f "$tmp" "$f"` (`ccd/ccrc`, `_inst_graph_always_on_off`) — never by either cleanup line. Every
+  other refusal fixture in that describe (the marker census, the two/half-marker rows, the chained
+  file, the unresolvable symlink, the failed backup) takes its `continue` BEFORE
+  `tmp="$f.tmp.$$"` is ever assigned, so nothing in the branch could leak a tmp, let alone clean one.
+  The title asserted a guard the file did not hold — the same "tests pin shape, not effect" shape
+  D-1358 records one entry up, and the deviation from this plan is that the plan prescribes that row
+  verbatim (`docs/…-graphify-read-side-ccrc-level.md:1385`) with the two-path title.
+
+  Behaviour today is correct — nothing leaks on a live box — so this is an unpinned guard, not a
+  live defect, and the cost of it being unpinned is a stray temp file beside the operator's own
+  `CLAUDE.md`, not lost bytes (the file is untouched on both refusal arms and a backup was already
+  cut). **Fix is test-only; `ccd/ccrc` is untouched.** The old row is retitled to name the WRITE path
+  it actually walks, and a second row drives the splice arm: a `sed` shim planted through
+  `runInstall`'s existing `opts.stubs` door refuses the ONE two-address read
+  (`sed -n "1,Np" <CLAUDE.md>`) that runs inside `> "$tmp"` and delegates every other call to the
+  real `sed`. `> "$tmp"` is opened before the group runs, so the temp file exists when the splice
+  fails — which is the honest, reachable shape of this arm (the home filesystem filling between the
+  redirection and the last byte of the block's tail), and `ccd/ccrc` has exactly one two-address
+  `sed` in the whole file, so the shim changes no other step.
+
+  **The `chmod`/`mv` arm's `rm -f` (`ccd/ccrc:5422`) stays unbound, deliberately.** `$tmp` sits in the
+  directory the process just created it in, so chmod-on-our-own-file and a same-directory rename do
+  not fail without something exotic (an immutable directory), and a fixture for it would be a
+  contrivance that teaches the next reader the wrong lesson. Recorded here so it is not re-derived.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/ccrc`: delete BOTH `      rm -f "$tmp"` lines in `_inst_graph_always_on_off` (`:5417`, `:5422`; `bash -n` clean) | `Tests  1 failed \| 42 passed (43)` — `a half-written temp file was left in the operator's config directory: expected [ 'CLAUDE.md.tmp.2549620' ] to deeply equal []` |
+  | `ccd/ccrc`: delete the splice arm's line ALONE (`:5417`; `bash -n` clean) | `Tests  1 failed \| 42 passed (43)` — same assertion, so the new row binds THAT line and not the other |
+  | unmutated | `Tests  43 passed (43)` (whole file) |
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

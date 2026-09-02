@@ -34,6 +34,11 @@ function realPath(name: string): string {
 
 const BASH = realPath('bash');
 const RSYNC = realPath('rsync');
+// D-1360: the remover's refusal arms are only reachable when a step INSIDE
+// `> "$tmp"` fails, and the only such step is `sed`. A shim needs the real one
+// to delegate to — resolved once here, beside the other two, so the shim can
+// `exec` an absolute path and never re-enter itself through `<home>/.local/bin`.
+const SED = realPath('sed');
 
 /** Same list `ccrc-install.test.ts` builds its fixture tree from — copied
  *  rather than imported for the reason at the top of this file. Grows only
@@ -914,13 +919,70 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     expect(statSync(f).mode & 0o777, 'a 0600 CLAUDE.md was silently widened').toBe(0o600);
   });
 
-  it('leaves no CLAUDE.md.tmp.<pid> behind, on the write path or the refusal path', () => {
+  it('leaves no CLAUDE.md.tmp.<pid> behind on the WRITE path', () => {
+    // THE SUCCESS ARM ONLY, and the title now says so (D-1360). On this path
+    // the tmp is consumed by `mv -f "$tmp" "$f"`, never by either `rm -f
+    // "$tmp"`, so both cleanup lines can be deleted with this row green
+    // (measured). The refusal arm's own tmp is bound by the row below.
     const home = freshBox('ccrc-inst-gfx-off-notmp-');
     plantFakeVenv(home);
     seed(home, `# head\n\n${BLOCK}\n`);
     runInstall(home, ['install']);
     expect(readdirSync(join(home, '.claude')).filter((n) => n.includes('CLAUDE.md.tmp')),
       'a temp file was left in the operator\'s config directory').toEqual([]);
+  });
+
+  it('leaves no CLAUDE.md.tmp.<pid> behind when the SPLICE fails after the tmp exists (D-1360)', () => {
+    // THE REFUSAL ARM THE ROW ABOVE CANNOT REACH. `> "$tmp"` is set up before
+    // the group runs, so the temp file EXISTS the moment the redirection is
+    // opened; if a piece of the splice then fails, the only thing that takes
+    // it back off the operator's disk is `rm -f "$tmp"`. Every other refusal
+    // fixture in this describe (the marker census, the chained file, the
+    // unresolvable symlink, the failed backup) `continue`s BEFORE
+    // `tmp="$f.tmp.$$"` is ever assigned, so none of them can leak a tmp and
+    // none of them binds that line — deleting BOTH `rm -f "$tmp"` lines left
+    // this file green before this row existed (measured).
+    //
+    // A `sed` SHIM IS THE FIXTURE, planted through `runInstall`'s existing
+    // `opts.stubs` door into the same `<home>/.local/bin` every other stub in
+    // this file uses, because a splice failure is environmental — a write that
+    // fails mid-read — and this is the honest, reachable shape of it: the
+    // fleet host's home filesystem filling between the redirection and the
+    // last byte of the block's tail. It delegates to the real `sed` for
+    // everything else, so no other step of the install changes behaviour: the
+    // ONE call it refuses is the two-address read of this fixture's own
+    // `CLAUDE.md`, and `ccd/ccrc` has exactly one two-address `sed` in the
+    // whole file (`grep -n 'sed -n "[^"]*,'` → the two splice lines).
+    //
+    // NOT the `chmod`/`mv` arm: `$tmp` sits in the directory the process just
+    // created it in, so chmod-on-our-own-file and a same-directory rename do
+    // not fail without something exotic (an immutable directory). That arm's
+    // `rm -f` stays unbound deliberately rather than bound by a contrivance —
+    // recorded in D-1360 rather than left for the next reviewer to re-derive.
+    const home = freshBox('ccrc-inst-gfx-off-notmp-refuse-');
+    plantFakeVenv(home);
+    const text = `# head\n\n- operator line\n\n${BLOCK}\n\n## OPERATOR TAIL\n- keep me\n`;
+    const f = seed(home, text);
+    const sedShim = [
+      '#!/bin/sh',
+      'last=; for a in "$@"; do last="$a"; done',
+      `if [ "$last" = ${JSON.stringify(f)} ]; then`,
+      // `-n` + `1,4p` / `5,$p`: the comma is what separates the splice reads
+      // from the single-address `sed -n "Np"` the blank-line probe runs on
+      // this same file, which must keep working for `lb` to be computed.
+      '  case "$1$2" in *,*) echo "fixture sed: refusing the splice read" >&2; exit 4 ;; esac',
+      'fi',
+      `exec ${SED} "$@"`,
+    ].join('\n') + '\n';
+    const r = runInstall(home, ['install'], {}, { stubs: { sed: sedShim } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8'), 'a failed splice was moved over the operator\'s file')
+      .toBe(text);
+    expect(r.stderr).toMatch(/could not rewrite .*CLAUDE\.md — left in place/);
+    expect(r.stdout).toMatch(/always-on read rule — 0 home\(s\) cleared, 1 left in place/);
+    expect(r.stdout).toMatch(/degraded step/);
+    expect(readdirSync(join(home, '.claude')).filter((n) => n.includes('CLAUDE.md.tmp')),
+      'a half-written temp file was left in the operator\'s config directory').toEqual([]);
   });
 
   it('REFUSES to rewrite a file it could not back up, and degrades the install', () => {
