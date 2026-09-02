@@ -1219,3 +1219,5 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | --- | --- | --- |
 | delete `DONE_AUTHORITY_CODES` from `shared/api.ts` (the guard-deletion direction, measured while writing it) | `AssertionError: expected [] to deeply equal [ 'shared/api.ts' ]` | server `single-definition` |
 | restore `fingerprint.ts`'s `Extract<MailRejectCode, 'stale-tip' \| …>` in place of `DoneRejectCode` | `AssertionError: expected [ 'server/src/coord/fingerprint.ts' ] to deeply equal []` | server `single-definition` |
+| rename migration 7's `briefQueued` column (the guard-deletion direction) | `AssertionError: runs.briefQueued is absent: expected undefined to be defined` | server `coord-db` |
+| give `briefQueued` `NOT NULL DEFAULT 0` — the tempting spelling that collapses null into false | `AssertionError: briefQueued is NOT NULL — absence would read as false: expected 1 to be +0` | server `coord-db` |
