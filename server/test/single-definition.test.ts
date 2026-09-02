@@ -343,6 +343,22 @@ describe('Build 7 nouns', () => {
     expect(hits.map(rel)).toEqual(['shared/api.ts']);
   });
 
+  // D-1296: the done-authority six were spelled THREE times — inside
+  // MAIL_REJECT_CODES, and as an identical `Extract<MailRejectCode, ...>` in both
+  // close.ts and fingerprint.ts. Wave 7's health read needs them at RUNTIME for a
+  // SQL `IN (...)`, which would have been a fourth. One array, and the two Extract
+  // copies deleted.
+  it('enumerates the done-authority family exactly once, and the Extract copies are gone', () => {
+    const DEF = /^\s*export const DONE_AUTHORITY_CODES\b/m;
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel))
+      .toEqual(['shared/api.ts']);
+    // Not "no Extract anywhere" — an Extract over a different union is ordinary.
+    // This is the one hand-typed copy of THIS list, anchored on its first member
+    // so a reorder cannot slip past.
+    const COPY = /Extract<\s*MailRejectCode\s*,[^>]*'stale-tip'/;
+    expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
   // D-7: `tasks` is Claude Code's TodoWrite vocabulary and belongs to it. A
   // coordination type that spells itself Task is the collision spec:40-44
   // exists to prevent, and it would land in the same union, the same store and

@@ -3469,6 +3469,32 @@ export const MAIL_REJECT_CODES = [
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
+ * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
+ * a forward advance can be refused with, as distinct from the ingress, peer-bound
+ * and delivery families above.
+ *
+ * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
+ * one: the ARRAY is the single definition and the type follows it, because wave
+ * 7's per-run health read needs the members at RUNTIME for a SQL `IN (...)` and a
+ * hand-kept fourth copy is exactly what this replaces. It was spelled three times
+ * — here, and as an identical `Extract<MailRejectCode, ...>` in both
+ * `coord/close.ts` and `coord/fingerprint.ts` (D-1296).
+ *
+ * `satisfies readonly MailRejectCode[]` is the load-bearing clause: a typo, or a
+ * member that leaves the parent union, is a compile error here — which a bare
+ * `as const` could not catch.
+ */
+export const DONE_AUTHORITY_CODES = [
+  'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
+  'pr-unmeasurable', 'no-handoff-commit',
+] as const satisfies readonly MailRejectCode[];
+export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+export function isDoneRejectCode(v: unknown): v is DoneRejectCode {
+  return typeof v === 'string' && (DONE_AUTHORITY_CODES as readonly string[]).includes(v);
+}
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT

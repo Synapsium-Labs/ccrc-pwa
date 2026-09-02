@@ -1217,4 +1217,5 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 
 | mutation | first-fail assertion | suite |
 | --- | --- | --- |
-| _(filled in as each task lands)_ | | |
+| delete `DONE_AUTHORITY_CODES` from `shared/api.ts` (the guard-deletion direction, measured while writing it) | `AssertionError: expected [] to deeply equal [ 'shared/api.ts' ]` | server `single-definition` |
+| restore `fingerprint.ts`'s `Extract<MailRejectCode, 'stale-tip' \| …>` in place of `DoneRejectCode` | `AssertionError: expected [ 'server/src/coord/fingerprint.ts' ] to deeply equal []` | server `single-definition` |
