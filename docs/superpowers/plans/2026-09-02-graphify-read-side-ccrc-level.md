@@ -2882,6 +2882,43 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   describes are still available, one branch over.
 
 
+- **D-1354** (2026-09-02, whole-branch review) — **a `Measured:` sentence outlived the code it
+  measured: the fixture comment that justifies `healthy()`'s `realpath` link went on describing the
+  arm D-1350 deleted.** R3 (`464c2a65`) added `linkReal(home, 'realpath')` to
+  `server/test/ccrc-doctor.test.ts`'s `healthy()` and wrote the reason above it: `_check_graphify-path`
+  "resolves both sides with `realpath` and falls back to the UNRESOLVED path when it is unavailable",
+  so without the link the check "FAILs on a box whose whole contract is that nothing fails —
+  *Measured:* … `FAIL graphify-path` and rc=1, which reds `runDoctor(healthy(...)).code === 0`, the
+  `fail === 0` assertion and the `"… 1 warned, 1 failed"` summary pin". One commit later `119dec11`
+  (D-1350) removed exactly that fallback — `resolved=""` / `want=""` and a `_dr_skip` — and touched
+  neither this file nor its paragraph (`git show --name-only 119dec11` lists `ccd/ccrc`,
+  `ccd/ccrc-doctor-checks` and three other suites). So the branch shipped its own refutation: the arm's
+  header says verbatim "WHAT THIS ARM MUST NOT DO is fall back to the UNRESOLVED paths when it cannot
+  answer (D-1350)", `ccrc-doctor-graphify.test.ts` pins `/^SKIP graphify-path:/` for that condition,
+  and the biggest doctor suite's fixture still taught the guessing arm as current. No shipped
+  behaviour is wrong here; what is wrong is the recorded history, which this repo's own rule says to
+  read as authoritative — and it is the WHOLE recorded justification for a line that is still needed,
+  so the next reader either trusts a defect or deletes a load-bearing link.
+  **Shipped:** the paragraph now states the mechanism that actually holds — an unreachable `realpath`
+  is a SKIP, so the missing link is a COUNTING defect (`HEALTHY_SKIPS`, and every summary pin that
+  reads it), never a failing one — with the re-measurement below quoted in it. And because a comment
+  cannot be enforced by being careful, `ccrc-doctor-graphify.test.ts` gained a test that binds its two
+  ends: the shipped arm must emit the SKIP and carry no unresolved-path fallback, and the sibling
+  fixture's paragraph (read between its opening claim and the `linkReal` line it justifies) must not
+  say `falls back to the UNRESOLVED` / `rc=1` / `FAIL graphify-path`, and must name both `SKIP` and
+  `HEALTHY_SKIPS`.
+
+  Re-measured 2026-09-02 on top of `e1b0d782`, since the old sentence's numbers were the thing in
+  doubt (baselines: `ccrc-doctor` `Tests  314 passed | 3 skipped (317)`; `ccrc-doctor-graphify`
+  `Tests  25 passed (25)` with the new test, 24 before it):
+
+  | mutation | red |
+  | --- | --- |
+  | delete `linkReal(home, 'realpath');` from `healthy()` (the line the paragraph justifies) | `ccrc-doctor` — `Tests  7 failed \| 307 passed \| 3 skipped (317)`, doctor printing `SKIP graphify-path: this box has no usable realpath …`. All seven are skip/verdict COUNTS: three `(N skipped)` summary pins (tmux_skew, config fleet-role, fleet local), both `expect(skipped).toBe(HEALTHY_SKIPS)`, the `1 warned, 1 failed` pin (red on `(0 skipped)`, its verdict half unchanged) and `expect(verdicts).toBe(total - HEALTHY_SKIPS)` (27 vs 28). **rc stayed 0 and `fail === 0` never red** — the three consequences R3's sentence claimed to have measured are all false |
+  | restore R3's stale paragraph verbatim (`git checkout --` the fixture) | `ccrc-doctor-graphify` — `Tests  1 failed \| 24 passed (25)`, the D-1354 test on "it still describes the pre-D-1350 arm, which guessed from the unresolved paths" |
+  | re-add the fallback to the shipped arm (`[ -n "$resolved" ] \|\| resolved="$found"`, `[ -n "$want" ] \|\| want="$engine"`) | `ccrc-doctor-graphify` — `Tests  2 failed \| 23 passed (25)`: the new D-1354 test **and** D-1350's own `SKIPs — never FAILs …` case, i.e. the binding reds from either end |
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

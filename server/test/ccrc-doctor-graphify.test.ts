@@ -52,6 +52,7 @@ const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CHECKS_SRC = join(REPO, 'ccd', 'ccrc-doctor-checks');
 const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
+const DOCTOR_TEST_SRC = join(REPO, 'server', 'test', 'ccrc-doctor.test.ts');
 
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -480,5 +481,44 @@ describe('ccrc doctor: graphify-path', () => {
       `set -uo pipefail; . ${JSON.stringify(CHECKS_SRC)}; printf '%s\\n' "\${CCRC_DOCTOR_CHECKS[@]}"`],
     { encoding: 'utf8' }).trim().split('\n');
     expect(names).toContain('graphify-path');
+  });
+
+  // D-1354: the sibling suite's recorded reason for its `realpath` link is
+  // HISTORY, and history goes stale in silence. `server/test/ccrc-doctor.test.ts`'s
+  // `healthy()` links a real `realpath` in, and the paragraph above that line is
+  // the whole written reason for it. D-1350 turned the unmeasurable box from a
+  // mismatch verdict into a SKIP without touching that paragraph, so the fixture
+  // that seeds the biggest doctor suite went on describing the GUESSING arm --
+  // the exact defect D-1350 removed -- as if it were still shipped, and the next
+  // reader of `healthy()` would have learned it from there. This binds the two
+  // ends together so they cannot drift apart again: the shipped arm must skip
+  // rather than guess, and the paragraph must describe THAT.
+  it("the sibling fixture's reason for linking `realpath` describes the SHIPPED arm (D-1354)", () => {
+    // End 1 - the arm itself: "unmeasurable" is a SKIP, and neither side falls
+    // back to the path it could not resolve.
+    const checks = readFileSync(CHECKS_SRC, 'utf8');
+    expect(checks).toContain('_dr_skip graphify-path "this box has no usable realpath');
+    expect(checks, 'the unresolved-path fallback D-1350 removed is back')
+      .not.toMatch(/resolved="\$found"/);
+    expect(checks, 'the unresolved-path fallback D-1350 removed is back')
+      .not.toMatch(/want="\$engine"/);
+
+    // End 2 - the paragraph, read between its opening claim and the line it
+    // justifies.
+    const src = readFileSync(DOCTOR_TEST_SRC, 'utf8');
+    const from = src.indexOf("`linkReal(home, 'realpath')` IS LOAD-BEARING");
+    expect(from, 'the justification paragraph is gone -- say why the link is there')
+      .toBeGreaterThan(-1);
+    const to = src.indexOf("linkReal(home, 'realpath');", from);
+    expect(to).toBeGreaterThan(from);
+    const why = src.slice(from, to);
+    expect(why, 'it still describes the pre-D-1350 arm, which guessed from the unresolved paths')
+      .not.toMatch(/falls back to the UNRESOLVED/i);
+    expect(why, 'it still claims the missing tool ends the run with rc=1').not.toContain('rc=1');
+    expect(why, 'it still claims the missing tool FAILs this check')
+      .not.toContain('FAIL graphify-path');
+    expect(why, 'it does not name the verdict the shipped arm actually gives').toContain('SKIP');
+    expect(why, 'it does not name the count a stray skip actually moves')
+      .toContain('HEALTHY_SKIPS');
   });
 });

@@ -1000,18 +1000,33 @@ function healthy(prefix: string): string {
   // PATH (`ghContainedEnv` -> `harnessBin`, which also creates the directory),
   // so the link is what `command -v graphify` finds.
   //
-  // `linkReal(home, 'realpath')` IS LOAD-BEARING, not tidiness. This file's
-  // contained PATH is `<home>/.local/bin:<home>/stub-bin` and NO system
-  // directory — it links in only jq, timeout, stat and date. `_check_graphify-path`
-  // resolves both sides with `realpath` and falls back to the UNRESOLVED path
-  // when it is unavailable; without a real one on PATH the two sides are the
-  // link path and the engine path, they differ, and the check FAILs on a box
-  // whose whole contract is that nothing fails. Measured: with `realpath` on
-  // PATH the check PASSes; without it, `FAIL graphify-path` and rc=1, which
-  // reds `runDoctor(healthy(...)).code === 0`, the `fail === 0` assertion and
-  // the `"… 1 warned, 1 failed"` summary pin. (`ccrc-doctor-graphify.test.ts`
-  // already links a real `realpath` in its own `healthy()`, which is why the
-  // new check is green there and would not have been here.)
+  // `linkReal(home, 'realpath')` IS LOAD-BEARING, not tidiness — but for the
+  // SKIP it prevents, not for a failing verdict (D-1354 corrects the R3
+  // sentence that stood here, which described the check as D-1350 found it
+  // rather than as D-1350 left it). This file's contained PATH is
+  // `<home>/.local/bin:<home>/stub-bin` and NO system directory — it links in
+  // only jq, timeout, stat and date. `_check_graphify-path` resolves both
+  // sides with `realpath`, and since D-1350 it answers an unreachable
+  // `realpath` with a SKIP: it does not guess from the unresolved paths, so a
+  // converged-but-realpath-less box is never handed the mismatch verdict. That
+  // makes a missing `realpath` a COUNTING defect here, not a failing one —
+  // `HEALTHY_SKIPS` is how many skips a healthy box is allowed, and one more
+  // moves every summary pin that reads it.
+  //
+  // Measured 2026-09-02, by deleting this one line and re-running this file:
+  // baseline `Tests  314 passed | 3 skipped (317)`; without it `Tests  7
+  // failed | 307 passed | 3 skipped (317)`, with doctor printing `SKIP
+  // graphify-path: this box has no usable realpath …`. All seven reds are
+  // skip/verdict COUNTS: the three `(N skipped)` summary pins (tmux_skew,
+  // config fleet-role, fleet local), both `expect(skipped).toBe(HEALTHY_SKIPS)`
+  // assertions, the `"… 1 warned, 1 failed"` pin (which red on `(0 skipped)`
+  // while its verdict half still read `1 warned, 1 failed`), and
+  // `expect(verdicts).toBe(total - HEALTHY_SKIPS)` (27 vs 28). The run's rc
+  // stays 0 and the `fail` assertion never red — no line said the check
+  // failed. (`ccrc-doctor-graphify.test.ts` links a real `realpath` in its own
+  // `healthy()` for the same reason, and pins the SKIP itself as its D-1350
+  // case; `ccrc-doctor-graphify.test.ts` also pins THIS paragraph against the
+  // shipped arm, so the two cannot drift apart again.)
   linkReal(home, 'realpath');
   symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     join(home, '.local', 'bin', 'graphify'));
