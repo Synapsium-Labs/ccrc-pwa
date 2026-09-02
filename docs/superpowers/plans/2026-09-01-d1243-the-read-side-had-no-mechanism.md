@@ -150,7 +150,7 @@ and it is the only thing in the pipeline that could have caught this.
 
 | mutation | result |
 | --- | --- |
-| never write the block | 4 tests red |
+| never write the block | 4 tests red **at the time of writing — see D-1244** |
 | always append; never replace between the markers | the replace test red |
 | drop the unmarked-`## graphify` skip | the foreign-section test red |
 | rewrite a file that is already current | the idempotence test red |
