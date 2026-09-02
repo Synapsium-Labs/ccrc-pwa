@@ -672,10 +672,10 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
-describe("README: the retirement's evidence sentence names the window its numbers came from (D-1357)", () => {
-  // THE DEFECT THIS EXISTS FOR. The README's justification for retiring D-1243
-  // is one measurement, and the design spec that measured it reports TWO
-  // windows over the same query log:
+describe("the retirement's evidence sentence names the window its numbers came from (D-1357, D-1362)", () => {
+  // THE DEFECT THIS EXISTS FOR. The justification for retiring D-1243 is one
+  // measurement, and the design spec that measured it reports TWO windows over
+  // the same query log:
   //
   //   | last 7 days                        | 265 | 11 | 0 |
   //   | since D-1243 deployed (2026-09-01) | 109 |  4 | 0 |
@@ -688,15 +688,35 @@ describe("README: the retirement's evidence sentence names the window its number
   // is that a measurement is stated with its window, and this is the single
   // sentence carrying the evidence for the whole retirement.
   //
+  // THE CORPUS IS WHY THIS REDDENED TWICE (D-1362). D-1357 fixed the README
+  // and bound the README — `readFileSync(… 'README.md')`, one file — while the
+  // SHIPPED copy of the same sentence, `_inst_graph_always_on_off`'s header
+  // comment in `ccd/ccrc`, still read "over the week after D-1243 deployed
+  // showed 109 … across 4 corpora" and cost nothing: 43/43 green on the
+  // unmutated tree. This repo reads a source comment as authoritative history,
+  // so the copy that mattered most was the unguarded one. Both files are the
+  // corpus now, and the loop is written so a third is one row.
+  //
   // DERIVED, not a spelling test. Nothing here hard-codes 109, 4 or "one day":
-  // the spec's §0 table is parsed, the README's figures are looked up IN it,
-  // and the sentence is then held to the row it actually quotes. Re-measure
-  // the block over a different window, update both files, and this stays
-  // green; quote one row's numbers under another row's window word and it
-  // goes red whichever pair you swap.
-  const readme = readFileSync(path.resolve(REPO, 'README.md'), 'utf8');
+  // the spec's §0 table is parsed, each file's figures are looked up IN it, and
+  // the sentence is then held to the row it actually quotes. Re-measure the
+  // block over a different window, update the files, and this stays green;
+  // quote one row's numbers under another row's window word and it goes red
+  // whichever pair you swap, in whichever file you swap it.
   const spec = readFileSync(path.resolve(
     REPO, 'docs/superpowers/specs/2026-09-02-graphify-read-side-ccrc-level-design.md'), 'utf8');
+  const readme = readFileSync(path.resolve(REPO, 'README.md'), 'utf8');
+  const ccrcSrc = readFileSync(path.resolve(REPO, 'ccd/ccrc'), 'utf8');
+
+  /** Every file that restates the retirement's evidence. `comment: true` means
+   *  its copy lives in `#` comments, whose leaders would otherwise land
+   *  mid-sentence the moment whitespace collapses. */
+  const CORPORA: { label: string; text: string; comment: boolean }[] = [
+    { label: 'README.md', text: readme, comment: false },
+    { label: 'ccd/ccrc', text: ccrcSrc, comment: true },
+  ];
+  const flatten = (c: { text: string; comment: boolean }): string =>
+    (c.comment ? c.text.replace(/^[ \t]*#[ \t]?/gm, '') : c.text).replace(/\s+/g, ' ');
 
   /** Rows of §0's measured-effect table: `| window | queries | corpora | ccrc-pwa |`. */
   const specRows = (): { window: string; queries: number; corpora: number }[] => {
@@ -709,16 +729,13 @@ describe("README: the retirement's evidence sentence names the window its number
       .map((m) => ({ window: m[1]!, queries: Number(m[2]), corpora: Number(m[3]) }));
   };
 
-  /** The README's one measurement sentence, split into window phrase and figures. */
-  const readmeClaim = (): { window: string; queries: number; corpora: number } => {
-    const flat = readme.replace(/\s+/g, ' ');
-    const m = flat.match(
-      /Measured over ([^:]{1,160}): (\d+) `query`\/`path`\/`explain` calls across (\d+) corpora/);
-    expect(m, "the README's measured-effect sentence moved or was reworded — re-derive this guard")
-      .not.toBeNull();
-    return { window: m![1]!, queries: Number(m![2]), corpora: Number(m![3]) };
-  };
-
+  // The figures, and the figures WITH a window phrase in front of them. Both
+  // spellings of the call list are accepted, because the README backticks each
+  // verb and a shell comment does not. The two counts must agree: a copy that
+  // states the numbers and names no window is the defect one step earlier.
+  const FIGS = '(\\d+) `?query`?/`?path`?/`?explain`? calls across (\\d+) corpora';
+  const FIGURES = new RegExp(FIGS, 'g');
+  const WINDOWED = new RegExp('\\bover ([^.:]{1,160}?)[:\\s]+(?:showed )?' + FIGS, 'g');
   const WEEKISH = /\bweeks?\b|\b7\s*days\b|\bseven\s*days\b/i;
 
   it('the spec still reports more than one window, which is what makes this confusable', () => {
@@ -729,28 +746,79 @@ describe("README: the retirement's evidence sentence names the window its number
       'no week-shaped row left in the spec — re-derive this guard').toBe(true);
   });
 
-  it("the README's figures are one spec row's, and its window word is THAT row's", () => {
-    const claim = readmeClaim();
-    const rows = specRows();
-    const hit = rows.filter((r) => r.queries === claim.queries && r.corpora === claim.corpora);
-    expect(hit.length,
-      `the README quotes ${claim.queries} calls across ${claim.corpora} corpora, which matches ` +
-      `no single row of the spec's table (${rows.map((r) => `${r.window}=${r.queries}/${r.corpora}`).join('; ')})`)
-      .toBe(1);
-    const row = hit[0]!;
-    expect(WEEKISH.test(claim.window),
-      `the README states the window as "${claim.window}" but quotes the "${row.window}" row's ` +
-      'figures — one row\'s numbers under another row\'s window')
-      .toBe(WEEKISH.test(row.window));
-    // A row whose window is anchored to a date must be quoted with that date:
-    // "since it was deployed" is only a window once the reader knows when.
-    const day = row.window.match(/\d{4}-\d{2}-\d{2}/);
-    if (day) {
-      expect(claim.window,
-        `the "${row.window}" row is anchored to ${day[0]}; the README's window phrase ` +
-        `("${claim.window}") does not say when, so the reader cannot size it`)
-        .toContain(day[0]);
-    }
+  for (const corpus of CORPORA) {
+    it(`${corpus.label}: its figures are one spec row's, and its window word is THAT row's`, () => {
+      const flat = flatten(corpus);
+      const bare = [...flat.matchAll(FIGURES)];
+      const windowed = [...flat.matchAll(WINDOWED)];
+      expect(bare.length,
+        `${corpus.label} no longer states the retirement's evidence figures at all — ` +
+        're-derive this guard or drop the file from CORPORA')
+        .toBeGreaterThan(0);
+      expect(windowed.length,
+        `${corpus.label} states the evidence figures ${bare.length}× but names a window only ` +
+        `${windowed.length}× — a measurement without its window is the defect this guard exists for`)
+        .toBe(bare.length);
+      const rows = specRows();
+      for (const m of windowed) {
+        const claim = { window: m[1]!, queries: Number(m[2]), corpora: Number(m[3]) };
+        const hit = rows.filter((r) => r.queries === claim.queries && r.corpora === claim.corpora);
+        expect(hit.length,
+          `${corpus.label} quotes ${claim.queries} calls across ${claim.corpora} corpora, which ` +
+          `matches no single row of the spec's table (${rows.map((r) => `${r.window}=${r.queries}/${r.corpora}`).join('; ')})`)
+          .toBe(1);
+        const row = hit[0]!;
+        expect(WEEKISH.test(claim.window),
+          `${corpus.label} states the window as "${claim.window}" but quotes the "${row.window}" ` +
+          "row's figures — one row's numbers under another row's window")
+          .toBe(WEEKISH.test(row.window));
+        // A row whose window is anchored to a date must be quoted with that
+        // date: "since it was deployed" is only a window once the reader knows
+        // when.
+        const day = row.window.match(/\d{4}-\d{2}-\d{2}/);
+        if (day) {
+          expect(claim.window,
+            `the "${row.window}" row is anchored to ${day[0]}; ${corpus.label}'s window phrase ` +
+            `("${claim.window}") does not say when, so the reader cannot size it`)
+            .toContain(day[0]);
+        }
+      }
+    });
+  }
+
+  it("the shipped census names every artifact that replaced the block (D-1362)", () => {
+    // THE SECOND HALF OF THE SAME DEFECT. `_inst_graph_always_on_off`'s header
+    // closes by saying where the read side went, and it listed THREE artifacts
+    // — the card, worker clause 12, the PATH converge — while §1 of the spec
+    // and the permanent D-1245 ledger entry both name FOUR: the `graphQueries`
+    // counter (R4) is the one that makes adoption measurable, and it was the
+    // one missing. A census that silently drops its last item reads as
+    // complete, which is precisely how it survived.
+    //
+    // DERIVED: the R-numbers come from the README's own replacement bullets,
+    // so adding an R5 mechanism to the README and not to the shipped comment
+    // reddens this, and neither list is hard-coded here.
+    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+    const wanted = [...readme.matchAll(/^- \*\*[^\n*]*\(R(\d)\)\.\*\*/gm)].map((m) => m[1]!);
+    expect(wanted.length, "the README's replacement bullets lost their R-tags — re-derive this guard")
+      .toBeGreaterThan(1);
+    const said = readme.replace(/\s+/g, ' ').match(/What replaced it: (\w+) mechanisms/);
+    expect(said, "the README's replacement heading moved or was reworded — re-derive this guard")
+      .not.toBeNull();
+    expect(said![1],
+      `the README lists ${wanted.length} replacement bullets and calls them "${said![1]}"`)
+      .toBe(WORDS[wanted.length]);
+
+    const flat = flatten({ text: ccrcSrc, comment: true });
+    const at = flat.indexOf('The read side now lives');
+    expect(at, "`ccd/ccrc` no longer says where the read side went — re-derive this guard")
+      .toBeGreaterThan(-1);
+    const sentence = flat.slice(at, at + 400).split(/\.\s/)[0]!;
+    const got = [...sentence.matchAll(/\(R(\d)\)/g)].map((m) => m[1]!);
+    expect(got.sort(),
+      `_inst_graph_always_on_off's census names R[${got.join(',')}] but the README's replacement ` +
+      `bullets are R[${wanted.join(',')}] — the shipped comment is missing one`)
+      .toEqual([...wanted].sort());
   });
 });
 

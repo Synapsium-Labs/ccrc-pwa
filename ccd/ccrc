@@ -5303,13 +5303,18 @@ _inst_graphify_skill() {
 #      ONLY because ccrc was rewriting a file it does not own.
 #
 # MEASURED EFFECT, which is what settled it: graphify's own query log over the
-# week after D-1243 deployed showed 109 query/path/explain calls across 4
-# corpora, 103 of them in the one repository whose PROJECT CLAUDE.md had carried
-# graphify's block, committed, since July. Zero in ccrc-pwa, the busiest project
-# on the fleet, with five fresh graphs. "5/5 homes converged" was shape; that is
-# effect. The read side now lives in `ccd/session-hook.sh`'s SessionStart card,
-# worker clause 12, and `_inst_graphify_engine`'s PATH converge — artifacts ccrc
-# installs and owns outright.
+# one day since it was deployed (2026-09-01, measured 2026-09-02) showed 109
+# query/path/explain calls across 4 corpora, 103 of them in the one repository
+# whose PROJECT CLAUDE.md had carried graphify's block, committed, since July.
+# Zero in ccrc-pwa, the busiest project on the fleet, with five fresh graphs.
+# The design's other row is the WEEK one — 265 calls across 11 corpora over the
+# last 7 days, ccrc-pwa zero in both — and the two are named apart here because
+# this comment once paired that row's window word with this row's figures
+# (D-1357/D-1362). "5/5 homes converged" was shape; that is effect.
+# The read side now lives in `ccd/session-hook.sh`'s SessionStart card (R1),
+# worker clause 12 (R2), `_inst_graphify_engine`'s PATH converge (R3), and the
+# `graphQueries` counter in the hookstate the hook already writes (R4) —
+# artifacts ccrc installs and owns outright.
 #
 # THIS IS D-1244'S CENSUS DOING ITS LAST JOB, not a second implementation of it:
 # the same whole-line marker count, the same exactly-one-well-ordered-pair rule,

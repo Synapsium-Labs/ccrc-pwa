@@ -1425,7 +1425,8 @@ In `server/test/ccrc-install.test.ts`, change the pinned sequence entry and its 
 ```typescript
       // D-1245. The READ side moved OUT of the operator's account-wide
       // CLAUDE.md and into the artifacts ccrc owns outright (the session
-      // hook's SessionStart card, worker clause 12, the PATH converge). What
+      // hook's SessionStart card, worker clause 12, the PATH converge, and
+      // the `graphQueries` counter the hook already writes). What
       // is left here is the REMOVER, in `_inst_graph_hooks_off`'s own shape:
       // a step whose whole job is taking back what an earlier layer planted.
       '_inst_graph_always_on_off',
@@ -1460,13 +1461,18 @@ Delete the whole `# ── _inst_graph_always_on — the READ side, which had no
 #      ONLY because ccrc was rewriting a file it does not own.
 #
 # MEASURED EFFECT, which is what settled it: graphify's own query log over the
-# week after D-1243 deployed showed 109 query/path/explain calls across 4
-# corpora, 103 of them in the one repository whose PROJECT CLAUDE.md had carried
-# graphify's block, committed, since July. Zero in ccrc-pwa, the busiest project
-# on the fleet, with five fresh graphs. "5/5 homes converged" was shape; that is
-# effect. The read side now lives in `ccd/session-hook.sh`'s SessionStart card,
-# worker clause 12, and `_inst_graphify_engine`'s PATH converge — artifacts ccrc
-# installs and owns outright.
+# one day since it was deployed (2026-09-01, measured 2026-09-02) showed 109
+# query/path/explain calls across 4 corpora, 103 of them in the one repository
+# whose PROJECT CLAUDE.md had carried graphify's block, committed, since July.
+# Zero in ccrc-pwa, the busiest project on the fleet, with five fresh graphs.
+# The design's other row is the WEEK one — 265 calls across 11 corpora over the
+# last 7 days, ccrc-pwa zero in both — and the two are named apart here because
+# this comment once paired that row's window word with this row's figures
+# (D-1357/D-1362). "5/5 homes converged" was shape; that is effect.
+# The read side now lives in `ccd/session-hook.sh`'s SessionStart card (R1),
+# worker clause 12 (R2), `_inst_graphify_engine`'s PATH converge (R3), and the
+# `graphQueries` counter in the hookstate the hook already writes (R4) —
+# artifacts ccrc installs and owns outright.
 #
 # THIS IS D-1244'S CENSUS DOING ITS LAST JOB, not a second implementation of it:
 # the same whole-line marker count, the same exactly-one-well-ordered-pair rule,
@@ -3222,6 +3228,48 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | `ccd/session-hook.sh`: the same deletion, with `#*:` shipped (`bash -n` clean) | `Tests  1 failed \| 52 passed (53)` — `the card named no sha at all …: expected 'graphify: this tree has a knowledge g…' to contain 'ebc1d529'` |
   | `ccd/session-hook.sh`: `tail -c 4096` -> `head -c 4096` in the `built` read (`bash -n` clean) | `Tests  8 failed \| 45 passed (53)`, the byte bound's own row among them — `the head decoy was read instead of the real last key` — so the pair now has one row each |
   | unmutated | `Tests  53 passed (53)` (whole file) |
+
+- **D-1362** (2026-09-02, whole-branch review) — **D-1357 fixed the sentence and bound the file, and
+  the copy that mattered most was in neither.** The evidence for retiring D-1243 lives in three
+  places: `README.md`, this plan's Task 4 draft, and — the one this repo's own conventions call
+  authoritative history — `_inst_graph_always_on_off`'s header comment in `ccd/ccrc`. D-1357
+  enumerated the README and the ledger entry; the shipped comment still read *"graphify's own query
+  log over the **week** after D-1243 deployed showed 109 query/path/explain calls across 4 corpora"*,
+  the exact week-word/one-day-figures pairing D-1357 names as the defect, and it cost nothing:
+  D-1357's guard is `readFileSync(path.resolve(REPO, 'README.md'))` and both its `it()`s parse that
+  one file, MEASURED on the shipped unmutated tree as `Tests  43 passed (43)`. A guard whose corpus
+  is one copy of a duplicated sentence is a guard for the copy, not for the claim.
+
+  The same comment's closing census had the second half of it: *"the read side now lives in
+  `ccd/session-hook.sh`'s SessionStart card, worker clause 12, and `_inst_graphify_engine`'s PATH
+  converge"* — THREE artifacts where spec §1 and the permanent D-1245 entry above both name FOUR. The
+  missing one is R4, the `graphQueries` counter, which is the mechanism that makes adoption
+  *measurable*: the census dropped precisely the item that answers "did any of this work?". A short
+  census reads as complete, which is how it survived a whole-branch review.
+
+  Fixed in the shipped comment and in the Task 4 step text that prescribes it (both now state *"the
+  one day since it was deployed (2026-09-01, measured 2026-09-02)"* and name the week row explicitly
+  so the two rows cannot be confused again, and both list all four artifacts, R-tagged). The
+  identical three-item parenthetical in `server/test/ccrc-install.test.ts`'s sequence-pin comment —
+  and its copy in this plan's Task 4 — got the counter too.
+
+  The guard is now DERIVED IN BOTH DIMENSIONS (`ccrc-install-graphify.test.ts`, "the retirement's
+  evidence sentence names the window its numbers came from (D-1357, D-1362)"). Its corpus is a
+  `CORPORA` list — `README.md` and `ccd/ccrc`, comment leaders stripped before the whitespace
+  collapse — and each file gets the same spec-row lookup: parse §0's table, look that file's quoted
+  figures up IN it, hold its window phrase to the row it actually quotes (week-shaped word iff
+  week-shaped row, plus the row's anchor date), and require the count of windowed statements to equal
+  the count of bare ones, so a copy that states the figures and names no window reddens too. A third
+  file is one row. The census check derives its R-numbers from the README's own replacement bullets
+  rather than a hard-coded list, so adding an R5 mechanism to the README and not to the shipped
+  comment reddens it.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/ccrc`: restore "over the week after D-1243 deployed showed 109 … across 4 corpora" (`bash -n` clean) | `Tests  1 failed \| 1 passed \| 43 skipped (45)` — `ccd/ccrc states the window as "the week after D-1243 deployed" but quotes the "since D-1243 deployed (2026-09-01)" row's figures … expected true to be false` |
+  | `ccd/ccrc`: drop the `graphQueries` counter (R4) from the census, leaving the three-item list (`bash -n` clean) | `Tests  1 failed \| 44 skipped (45)` — census names `R[1,2,3]`, README's bullets are `R[1,2,3,4]`; `- "4"` in the diff |
+  | `README.md`: restore "Measured over the week it was deployed: 109 …" (D-1357's own row, re-measured against the new corpus loop) | `Tests  1 failed \| 1 passed \| 43 skipped (45)` — same assertion, `README.md` row |
+  | unmutated | `Tests  45 passed (45)` (whole file) |
 
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them

@@ -2021,7 +2021,8 @@ describe('ccrc install: the order is stated in one place', () => {
       // `_inst_tree`, since it copies the list out of the PLACED tree.
       // D-1245. The READ side moved OUT of the operator's account-wide
       // CLAUDE.md and into the artifacts ccrc owns outright (the session
-      // hook's SessionStart card, worker clause 12, the PATH converge). What
+      // hook's SessionStart card, worker clause 12, the PATH converge, and
+      // the `graphQueries` counter the hook already writes). What
       // is left here is the REMOVER, in `_inst_graph_hooks_off`'s own shape:
       // a step whose whole job is taking back what an earlier layer planted.
       '_inst_graph_always_on_off',
