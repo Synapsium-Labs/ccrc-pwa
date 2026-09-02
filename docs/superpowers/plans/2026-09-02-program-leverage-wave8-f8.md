@@ -703,11 +703,16 @@ export function absentStatIO(predicate: (path: string) => boolean): FleetIO {
 - [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
       then the suites that own the 17 existing `io.stat` callers:
       `cd server && ./node_modules/.bin/vitest run test/transcript-ladder.test.ts test/sessionws.test.ts test/coord-fingerprint.test.ts`,
-      then the suites that actually own `src/watch.ts`'s `io.stat` call site — **there is no
-      `test/watch.test.ts`; sixteen suites import `../src/watch.js`** — a representative four being
-      `cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/hold-gate.test.ts test/dialog.test.ts test/mail-sweep.test.ts`.
-      For a derivation that is meant to be byte-identical at every call site, the full server suite
-      is the real evidence and a named subset is only the fast signal.
+      then the suite that actually owns `src/watch.ts`'s single `io.stat` call site (`watch.ts:1586`,
+      `this.claimTitleRead(r.id, file, await this.deps.io.stat(file))`):
+      `cd server && ./node_modules/.bin/vitest run test/name-sweep.test.ts`.
+      **There is no `test/watch.test.ts`.** Sixteen suites import `../src/watch.js`, but the owner is
+      DERIVED, not picked: `grep -ln claimTitleRead server/test` returns `name-sweep.test.ts` and
+      nothing else, and it is the suite that feeds `claimTitleRead` a stubbed stat. An earlier
+      correction to this line named four other watch importers as "representative" — none of them
+      mentions `claimTitleRead`, so it repeated, one edit later, the guessing it was fixing.
+      For a derivation meant to be byte-identical at every call site the full server suite is the
+      real evidence; the named suite is the fast signal.
       All must stay green — the derivation makes this a no-op for them.
 
 - [ ] **Step 5: MUTATION CHECK** — two, each reverted:
