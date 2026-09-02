@@ -2667,6 +2667,48 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   the operator's file was rewritten with nothing kept.
 
 
+- **D-1344** (2026-09-02, Task 5) — **Task 5 Step 3's own comment block violated the guard it was
+  citing.** The step prescribes a `_inst_graphify_engine` body comment that explains the guard by
+  quoting its test name in full — `` `it('never touches /usr/local/bin/graphify')` `` — while that
+  guard slices the function from `_inst_graphify_engine() {` to its closing brace and refuses the
+  literal `/usr/local/bin` *anywhere inside*, comments included. The comment is inside the slice, so
+  the paragraph asserting "it is not spelled out anywhere inside this body" spelled it. MEASURED, with
+  the converge implemented exactly as Step 3 writes it: `Tests  1 failed | 34 passed (35)` —
+  'never touches /usr/local/bin/graphify': `the converge names a path outside $HOME`, the offending
+  text being the citation itself. Per the standing rule the TREE (here, the guard) wins over the plan:
+  the comment now cites the guard by FILE and by the words its name *begins* with, never the path, and
+  says out loud that citing it in full is itself a violation. Nothing about the guard or the converge
+  changed — this is the plan's prose, not its mechanism.
+
+- **D-1345** (2026-09-02, Task 5) — **the doctor's output-contract test pinned an alphabet nobody had
+  chosen, and R3's check id is outside it.** `ccrc-doctor.test.ts`'s "every line is exactly
+  PASS|WARN|FAIL|SKIP <name>: <detail>" asserted `/^(PASS|WARN|FAIL|SKIP) [a-z0-9_]+: \S/`. The
+  charset was never a stated rule — it is simply the alphabet the 26 pre-existing check ids happened
+  to use — but `graphify-path`, whose hyphen the spec (§R3), the plan's own Interfaces block and
+  `_check_graphify-path`'s header all choose deliberately (bash permits it in a function name defined
+  as `name() {`, and `cmd_doctor` matches the printed id against the table entry byte-for-byte), made
+  it report a SHAPE violation for a line that has exactly the shape the test is named for. MEASURED
+  before the fix: `Tests  1 failed | 313 passed | 3 skipped (317)` — `expected 'PASS graphify-path:
+  graphify resolves…' to match /^(PASS|WARN|FAIL|SKIP) [a-z0-9_]+: \S/`. Neither renaming the check
+  (the spec names the id) nor widening the class to `[a-z0-9_-]+` (a second guess at an alphabet) is
+  right: the name half is now DERIVED from `CCRC_DOCTOR_CHECKS` via the file's existing
+  `tableNames()`, this project's "enumerate once, derive" rule, and the result is STRICTER than the
+  old regex — a verdict line printed under a name the table does not carry used to pass the shape
+  assertion and is now red. The plan listed this file as "fixture only" for Task 5; it is not.
+
+- **D-1346** (2026-09-02, Task 5) — **R3 adds a fifth entry to `~/.local/bin` and a standing census
+  said there were four.** `ccrc-install.test.ts`'s "runs the wrapper converger with no flags…" ends
+  with an exact-set assertion over everything in `$HOME/.local/bin` that the FIXTURE did not plant —
+  the four executables `_inst_bins` installs — as its proof that the default roster generates no
+  wrapper and the verb leaves no temp file or staged leftover behind. The R3 converge writes a fifth
+  name there deliberately, so the census had to learn it. MEASURED before the fix: `Tests  1 failed |
+  102 passed | 18 skipped (121)` — `expected [ 'ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc',
+  'graphify' ] to deeply equal [ 'ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc' ]`. `graphify` is
+  added to BOTH platform arms, unlike the two entries above it: `_inst_bins` gates `ccd-cap-scopes` on
+  cgroups and `ccd-graph-sweep` on a systemd timer, while `_inst_graphify_engine` is gated only on the
+  server role. The assertion stays an exact set — it is not loosened to "contains".
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

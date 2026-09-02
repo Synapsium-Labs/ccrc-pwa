@@ -39,7 +39,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
-  writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync } from 'node:fs';
+  writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync, readFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -228,6 +228,12 @@ function graphifyHealthy(home: string): void {
   writeFileSync(join(venvBin, 'graphify'),
     '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  // R3: a converged box has `graphify` on PATH resolving into the pinned venv.
+  // `<home>/.local/bin` is the head of every contained PATH in this fixture, so
+  // this is what `command -v graphify` answers.
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+  symlinkSync(join(venvBin, 'graphify'), join(home, '.local', 'bin', 'graphify'));
   for (const d of ['.claude', '.claude-personal']) {
     const s = join(home, d, 'skills', 'graphify');
     mkdirSync(s, { recursive: true });
@@ -349,15 +355,6 @@ describe('ccrc doctor: graphify', () => {
     expect(line).toMatch(/^WARN graphify:/);
   });
 
-  it('WARNs when PATH resolves graphify outside the pinned venv', () => {
-    const home = healthy('ccrc-doctor-gfx-shadow-'); graphifyHealthy(home);
-    // stub-bin sits on the contained PATH, second after <home>/.local/bin —
-    // command -v must find this one, and it is not the venv path.
-    stub(home, 'graphify', 'echo "shadow graphify"; exit 0');
-    const line = lineFor(runDoctor(home).stdout, 'graphify');
-    expect(line).toMatch(/^WARN graphify:/);
-  });
-
   it('WARNs when a tracked tree has not been given the graphify-out/ exclude', () => {
     const home = healthy('ccrc-doctor-gfx-excl-'); graphifyHealthy(home);
     const repo = join(home, 'projects', 'demo');
@@ -403,5 +400,52 @@ describe('ccrc doctor: graphify', () => {
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^WARN graphify:/);
     expect(line).toContain('worktrees');
+  });
+});
+
+describe('ccrc doctor: graphify-path', () => {
+  it('PASSes when bare graphify resolves into the pinned venv', () => {
+    const home = healthy('ccrc-doctor-gfxpath-ok-'); graphifyHealthy(home);
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^PASS graphify-path:/);
+  });
+
+  it('FAILs when PATH resolves graphify outside the venv — a WARN understates it', () => {
+    // The session runs the wrong build silently, and every answer it gets from
+    // it looks exactly like an answer from the right one.
+    const home = healthy('ccrc-doctor-gfxpath-shadow-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    stub(home, 'graphify', 'echo "shadow graphify"; exit 0');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
+  });
+
+  it('FAILs when there is no graphify on PATH at all', () => {
+    const home = healthy('ccrc-doctor-gfxpath-none-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
+  });
+
+  it('SKIPs on a server-role box, like every other graphify condition', () => {
+    const home = healthy('ccrc-doctor-gfxpath-srv-'); graphifyHealthy(home);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^SKIP graphify-path:/);
+  });
+
+  it('the graphify check no longer answers the PATH question, and its wrong remedy is gone', () => {
+    // Two checks answering one question is two vocabularies over one field, and
+    // the old remedy was FACTUALLY WRONG: "only the operator can clear a
+    // root-owned link outside $HOME" describes neither a user-owned file inside
+    // $HOME (the measured case) nor anything a session can act on.
+    const checks = readFileSync(CHECKS_SRC, 'utf8');
+    expect(checks, 'the old, factually wrong remedy is still in the tree')
+      .not.toContain('root-owned link outside');
+    expect(checks).not.toContain('gfx_shadow_warn');
+  });
+
+  it('the table and the functions agree about graphify-path', () => {
+    const names = execFileSync(BASH, ['-c',
+      `set -uo pipefail; . ${JSON.stringify(CHECKS_SRC)}; printf '%s\\n' "\${CCRC_DOCTOR_CHECKS[@]}"`],
+    { encoding: 'utf8' }).trim().split('\n');
+    expect(names).toContain('graphify-path');
   });
 });

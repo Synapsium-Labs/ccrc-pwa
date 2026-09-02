@@ -5032,6 +5032,57 @@ _inst_graphify_engine() {
   [ "$got" = "$GRAPHIFY_PIN" ] \
     || _ccrc_die "graphify --version reports '${got:-nothing}' but the pin is $GRAPHIFY_PIN — the venv at $venv did not converge"
   printf '%s\n' "$GRAPHIFY_PIN" > "$HOME/.ccrc/graphify.pin"
+  # ── R3: the engine SESSIONS run is the engine ccrc pins ────────────────
+  # The write side resolves this engine by ABSOLUTE PATH everywhere. The read
+  # side was never given a path at all: a session types `graphify`, PATH answers
+  # `~/.local/bin/graphify`, and on this fleet that was a pip console-script
+  # shim importing a July copy of the package with no dist-info and no
+  # `__version__`, while every graph on the box was built by the 0.9.9 venv.
+  # The drift is invisible until a query fails strangely.
+  #
+  # `cmd_wrappers`' DISCIPLINE, and no flags: write when absent; replace when
+  # the file is already a link into the venv, or is a pip/pipx console-script
+  # shim (matched BY CONTENT — a `#!` first line and a `from graphify.__main__
+  # import main` line, the shape measured on this fleet, never assumed);
+  # REFUSE anything else, because a hand-written launcher is the operator's and
+  # this step has no `--force` for anyone to type.
+  #
+  # ONE PATH ONLY: `$HOME/.local/bin`. The root-owned copy a shared box may
+  # carry higher up the system tree is an unprivileged install's business
+  # nowhere — the header above this function already says why — and it is not
+  # spelled out anywhere inside this body, because the guard in
+  # `server/test/ccrc-install-graphify.test.ts` whose name begins `never
+  # touches ` slices this function from `_inst_graphify_engine() {` to its
+  # closing brace and refuses that literal. The slice starts AT the signature,
+  # so the header comment is outside it; a sentence like this one is inside.
+  # CITING THE GUARD BY ITS FULL NAME IS ITSELF A VIOLATION — the name ends in
+  # the path — which is how the wording originally drafted for this paragraph
+  # went red against the guard it was describing (D-1344). Name the path in the
+  # header, never here, not even in quotation.
+  local gpath="$HOME/.local/bin/graphify" gvenv="$venv/bin/graphify" gcur=""
+  if ! mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+    echo "install: graphify: cannot create \$HOME/.local/bin — bare 'graphify' still resolves to whatever is on PATH" >&2
+    INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && [ "$(readlink -f "$gpath" 2>/dev/null)" = "$(readlink -f "$gvenv" 2>/dev/null)" ]; then
+    echo "install: graphify: graphify on \$PATH already points at the pinned venv"
+  elif [ ! -e "$gpath" ] && [ ! -L "$gpath" ]; then
+    ln -sfn "$gvenv" "$gpath" \
+      && echo "install: graphify: \$HOME/.local/bin/graphify -> the pinned venv engine (written)" \
+      || { echo "install: graphify: cannot write $gpath" >&2; INST_DEGRADED+=(graphify-path); }
+  else
+    gcur=""
+    [ -f "$gpath" ] && [ -r "$gpath" ] && gcur="$(head -c 4096 "$gpath" 2>/dev/null)"
+    if [ -n "$gcur" ] \
+       && printf '%s' "$gcur" | head -n1 | grep -q '^#!' \
+       && printf '%s' "$gcur" | grep -qxF 'from graphify.__main__ import main'; then
+      ln -sfn "$gvenv" "$gpath" \
+        && echo "install: graphify: \$HOME/.local/bin/graphify was a pip console-script shim -> repointed at the pinned venv" \
+        || { echo "install: graphify: cannot replace $gpath" >&2; INST_DEGRADED+=(graphify-path); }
+    else
+      echo "install: graphify: $gpath is not a pip shim and ccrc did not write it — left in place. Remedy: inspect it (ls -l \"$gpath\"), and if you want ccrc's pinned engine on PATH, move it aside and re-run; nothing here overrides that." >&2
+      INST_DEGRADED+=(graphify-path)
+    fi
+  fi
   echo "install: graphify: engine graphifyy==$GRAPHIFY_PIN in \$HOME/.ccrc/graphify-venv (pin stamped)"
 }
 

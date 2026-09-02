@@ -189,6 +189,7 @@ CCRC_DOCTOR_CHECKS=(
   disk
   wrappers
   graphify
+  graphify-path
   build
   fleet
 )
@@ -2646,7 +2647,10 @@ _check_wrappers() {
 #
 #   1. role         — a server box runs no wrapper homes and grows no graphs.
 #   2. engine       — the venv's `graphify --version` against the pin stamp.
-#   3. PATH shadow  — a root-owned `graphify` ahead of the pinned venv.
+#   3. PATH         — MOVED OUT to its own check, `graphify-path`: what a
+#                     session runs when it types `graphify` is a FAIL, not a
+#                     warning, and its remedy is a different verb from this
+#                     check's (this file's own "grouped by remedy" rule).
 #   4. skills       — every rostered home's `.graphify_version` against the pin.
 #   5. excludes     — every tree the sweep would walk ignores its own output.
 #   6. census       — what the sweep itself last reported about itself.
@@ -2692,7 +2696,7 @@ _check_graphify() {
   if [ -r "$pin_file" ]; then IFS= read -r pin < "$pin_file" || true; fi
   pin="$(_dr_trim "$pin")"
 
-  local -a gfx_install_fail=() gfx_shadow_warn=() gfx_excludes_warn=()
+  local -a gfx_install_fail=() gfx_excludes_warn=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
 
   # ── (2) engine: the venv's own `graphify --version` against the pin ──────
@@ -2710,18 +2714,6 @@ _check_graphify() {
     elif [ "$got" != "$pin" ]; then
       gfx_install_fail+=("the engine reports $got but the pin at \$HOME/.ccrc/graphify.pin says $pin")
     fi
-  fi
-
-  # ── (3) PATH shadow: a root-owned graphify ahead of the pinned venv ──────
-  # `_inst_graphify_engine`'s own header states why this matters:
-  # `/usr/local/bin/graphify` on the reference fleet is a root-owned symlink
-  # an unprivileged install can neither update nor remove, so a session that
-  # trusts bare `graphify` on PATH silently runs the wrong build. Absence is
-  # not a finding — the venv IS the resolution when nothing else answers.
-  local shadow
-  shadow="$(command -v graphify 2>/dev/null)"
-  if [ -n "$shadow" ] && [ "$shadow" != "$engine" ]; then
-    gfx_shadow_warn+=("\$PATH resolves graphify to $shadow ahead of the pinned venv at $engine")
   fi
 
   # ── (4) skills: every rostered home's stamp against the pin ──────────────
@@ -2930,11 +2922,6 @@ _check_graphify() {
       "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
     rc=1
   fi
-  if [ "${#gfx_shadow_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_shadow_warn[@]}")" \
-      "only the operator can clear a root-owned link outside \$HOME — until then every bare 'graphify' invocation risks running the wrong build"
-    [ "$rc" -eq 1 ] || rc=2
-  fi
   if [ "${#gfx_excludes_warn[@]}" -gt 0 ]; then
     _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")" \
       "run: ccrc install — it writes the graphify-out/ exclude into every tree the sweep walks"
@@ -2962,6 +2949,60 @@ _check_graphify() {
     return "$rc"
   fi
   _dr_pass graphify "engine $pin, skills converged, census ok"
+}
+
+# ── graphify-path: what a session runs when it types `graphify` (R3) ──────
+# ITS OWN CHECK, not a bucket inside `graphify`, for this file's own stated
+# reason: a condition whose fix is a DIFFERENT verb gets its own bucket and its
+# own line, and this one's remedy is neither `ccrc install` alone nor anything
+# the sweep can do. A FAIL rather than a WARN, because the failure mode is
+# silent: the wrong build answers, and its answers look exactly like the right
+# build's. Measured on the reference fleet — `~/.local/bin/graphify` was a pip
+# console-script shim importing a July copy with no dist-info and no
+# `__version__`, while every graph on the box was built by the pinned 0.9.9 venv.
+#
+# The hyphen in the name is deliberate and legal: `cmd_doctor` calls
+# `"_check_$name"` and counts verdict lines matching `"PASS $name: "`, so the
+# printed id and the table entry must be the same string, and bash permits a
+# hyphen in a function name defined this way.
+_check_graphify-path() {
+  # The server-role SKIP, in `_check_graphify`'s own shape and for its own
+  # reason: a server box runs no sessions that would type `graphify`.
+  local role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  if [ "$role" = server ]; then
+    _dr_skip graphify-path "this box's role is server — no fleet session runs here, so nothing types graphify"
+    return 3
+  fi
+
+  local engine="$HOME/.ccrc/graphify-venv/bin/graphify"
+  local found="" resolved="" want=""
+  found="$(command -v graphify 2>/dev/null)"
+  if [ -z "$found" ]; then
+    _dr_fail graphify-path "nothing on \$PATH answers 'graphify' — the pinned engine at $engine is reachable only by absolute path, so every bare invocation a session makes fails" \
+      "run: ccrc install — it links \$HOME/.local/bin/graphify at the pinned venv"
+    return 1
+  fi
+  # `realpath` is explicitly ALLOWED by `macos-platform.test.ts` (so is
+  # `readlink -f`), and both sides are resolved with the SAME tool so a box
+  # without it degrades symmetrically: each side falls back to its own
+  # unresolved path. That fallback is honest but blunt — the link path and the
+  # engine path are never equal — so any FIXTURE that expects a PASS here must
+  # carry a real `realpath` on its contained PATH. Both doctor suites do; see
+  # the `linkReal(home, 'realpath')` note in `ccrc-doctor.test.ts`'s `healthy()`.
+  resolved="$(realpath "$found" 2>/dev/null)" || resolved=""
+  [ -n "$resolved" ] || resolved="$found"
+  want="$(realpath "$engine" 2>/dev/null)" || want=""
+  [ -n "$want" ] || want="$engine"
+  if [ "$resolved" = "$want" ]; then
+    _dr_pass graphify-path "graphify resolves to $found -> the pinned venv engine"
+    return 0
+  fi
+  _dr_fail graphify-path "\$PATH resolves graphify to $found (-> $resolved), which is not the pinned engine at $engine — a session that types graphify runs a build this box does not pin, and its answers are indistinguishable from the right one's" \
+    "run: ccrc install — it links \$HOME/.local/bin/graphify at the venv and refuses rather than replacing a launcher it did not write; if $found is one ccrc will not touch, move it aside, or put \$HOME/.local/bin ahead of it on \$PATH"
+  return 1
 }
 
 # ── the running build against the stamp (stage 4, Task 9 — spec §8) ───────

@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync, lstatSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, lstatSync, realpathSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -995,5 +995,93 @@ describe('ccrc install: legacy graphify hook removal (_inst_graph_hooks_off, O6b
     const r = runInstall(home, ['install', '--role', 'server']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(hooks, 'post-commit'))).toBe(true);
+  });
+});
+
+// ── R3: what a session runs when it types `graphify` ──────────────────────
+// MEASURED on the reference fleet: `command -v graphify` resolved to
+// `~/.local/bin/graphify`, a pip console-script shim importing a July copy of
+// the package with no dist-info and no `__version__`, while the venv the sweep
+// builds every graph with is pinned at 0.9.9. The WRITE side resolves the
+// engine by absolute path everywhere; the READ side was never given a path at
+// all, so it ran whatever was on PATH.
+describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3)', () => {
+  const link = (home: string) => join(home, '.local', 'bin', 'graphify');
+  const venv = (home: string) => join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify');
+  const SHIM = '#!/usr/bin/python3\n# -*- coding: utf-8 -*-\nimport sys\n'
+    + 'from graphify.__main__ import main\nsys.exit(main())\n';
+
+  it('WRITES the link when nothing is there', () => {
+    const home = freshBox('ccrc-inst-gfx-path-new-');
+    plantFakeVenv(home);
+    rmSync(link(home), { force: true });
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(link(home)).isSymbolicLink()).toBe(true);
+    expect(realpathSync(link(home))).toBe(realpathSync(venv(home)));
+  });
+
+  it('REPLACES a pip console-script shim — detected by content, not assumed', () => {
+    const home = freshBox('ccrc-inst-gfx-path-shim-');
+    plantFakeVenv(home);
+    writeFileSync(link(home), SHIM, { mode: 0o755 });
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(link(home)).isSymbolicLink(), 'the stale pip shim survived').toBe(true);
+    expect(realpathSync(link(home))).toBe(realpathSync(venv(home)));
+  });
+
+  it('is a NO-OP on a link that already points into the venv, and cuts no backup', () => {
+    const home = freshBox('ccrc-inst-gfx-path-noop-');
+    plantFakeVenv(home);
+    rmSync(link(home), { force: true });
+    symlinkSync(venv(home), link(home));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/graphify on \$PATH already points at the pinned venv/);
+  });
+
+  it('REFUSES a hand-written launcher with a remedy, and does not fail the install', () => {
+    // A launcher ccrc did not write is the operator's, and this verb has no
+    // --force: the `cmd_wrappers` rule, which refuses rather than destroying
+    // something on the strength of a judgement it never made.
+    const home = freshBox('ccrc-inst-gfx-path-hand-');
+    plantFakeVenv(home);
+    const hand = '#!/bin/bash\n# my own launcher\nexec /opt/graphify/bin/graphify "$@"\n';
+    writeFileSync(link(home), hand, { mode: 0o755 });
+    const r = runInstall(home, ['install']);
+    expect(readFileSync(link(home), 'utf8'), 'a hand-written launcher was overwritten').toBe(hand);
+    expect(r.stderr).toMatch(/ccrc did not write it/);
+    expect(r.stderr).toMatch(/move it aside/);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
+  it('never touches /usr/local/bin/graphify', () => {
+    // THE SLICE STARTS AT THE SIGNATURE, so the function's HEADER comment —
+    // which does name that path, and should, since it is the reason the write
+    // side resolves the engine absolutely — is outside it. Everything from
+    // `_inst_graphify_engine() {` to the closing brace is in, comments
+    // included, so no sentence inside the body may spell the path either.
+    // `ccd/ccrc` carries three other mentions of `_inst_graphify_engine`
+    // (the pin's single-definition comment, `cmd_install`'s sequence, and the
+    // hooks-off header), none of them followed by `() {`, so the anchor is
+    // unambiguous.
+    const home = freshBox('ccrc-inst-gfx-path-root-');
+    plantFakeVenv(home);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const src = readFileSync(join(treeRoot(home), 'ccd', 'ccrc'), 'utf8');
+    const at = src.indexOf('_inst_graphify_engine() {');
+    expect(at, 'the function scan went vacuous').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    expect(body, 'the converge names a path outside $HOME').not.toMatch(/\/usr\/local\/bin/);
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-path-server-');
+    plantFakeVenv(home);
+    rmSync(link(home), { force: true });
+    runInstall(home, ['install', '--role', 'server']);
+    expect(existsSync(link(home)), 'a server box runs no graphify').toBe(false);
   });
 });

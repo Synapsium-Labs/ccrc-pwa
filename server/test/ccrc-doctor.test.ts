@@ -995,6 +995,26 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  // R3: `graphify-path` is a check, and healthy()'s contract is that every
+  // check PASSES. `<home>/.local/bin` is already the head of the contained
+  // PATH (`ghContainedEnv` -> `harnessBin`, which also creates the directory),
+  // so the link is what `command -v graphify` finds.
+  //
+  // `linkReal(home, 'realpath')` IS LOAD-BEARING, not tidiness. This file's
+  // contained PATH is `<home>/.local/bin:<home>/stub-bin` and NO system
+  // directory — it links in only jq, timeout, stat and date. `_check_graphify-path`
+  // resolves both sides with `realpath` and falls back to the UNRESOLVED path
+  // when it is unavailable; without a real one on PATH the two sides are the
+  // link path and the engine path, they differ, and the check FAILs on a box
+  // whose whole contract is that nothing fails. Measured: with `realpath` on
+  // PATH the check PASSes; without it, `FAIL graphify-path` and rc=1, which
+  // reds `runDoctor(healthy(...)).code === 0`, the `fail === 0` assertion and
+  // the `"… 1 warned, 1 failed"` summary pin. (`ccrc-doctor-graphify.test.ts`
+  // already links a real `realpath` in its own `healthy()`, which is why the
+  // new check is green there and would not have been here.)
+  linkReal(home, 'realpath');
+  symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
+    join(home, '.local', 'bin', 'graphify'));
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
     pin: '0.9.9', status: 'ok', trees: [] }] }));
@@ -4530,13 +4550,26 @@ describe('ccrc doctor: the output contract', () => {
     ghStub(home, ['github.com', '  - Logged in to github.com account fixture-bot (oauth_token)'], 0);
     const skipBox = healthy('ccrc-doctor-shape-skip-');
     rmSync(join(skipBox, '.ccrc', 'ccrc.env'), { force: true });
+    // THE NAME HALF IS DERIVED FROM THE TABLE, not spelled as a charset
+    // (D-1345). It used to read `[a-z0-9_]+`, which was never a rule anybody
+    // stated — it was the alphabet every check id happened to use — and R3's
+    // `graphify-path`, whose hyphen the spec and `_check_graphify-path`'s own
+    // header both choose deliberately, made it a false verdict about the SHAPE
+    // this test is named for: `PASS graphify-path: …` is exactly
+    // `<VERDICT> <name>: <detail>`. Deriving the alternation from
+    // `CCRC_DOCTOR_CHECKS` is this project's own "enumerate once, derive" rule
+    // and it is STRICTER than any charset — a verdict printed under a name the
+    // table does not carry is now red here, where the old regex accepted it.
+    const nameAlt = tableNames()
+      .map((n) => n.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')).join('|');
+    const shape = new RegExp(`^(PASS|WARN|FAIL|SKIP) (${nameAlt}): \\S`);
     for (const [h, wantSkips] of [
       [home, HEALTHY_SKIPS], [skipBox, 2 + HEALTHY_SKIPS],
     ] as const) {
       let verdicts = 0; let skips = 0;
       for (const l of runDoctor(h).stdout.split('\n')) {
         if (!l || l.startsWith('  remedy: ') || l.startsWith('summary: ')) continue;
-        expect(l).toMatch(/^(PASS|WARN|FAIL|SKIP) [a-z0-9_]+: \S/);
+        expect(l).toMatch(shape);
         if (l.startsWith('SKIP ')) skips++; else verdicts++;
       }
       // Without this the loop above is a scan over an empty list, which passes
