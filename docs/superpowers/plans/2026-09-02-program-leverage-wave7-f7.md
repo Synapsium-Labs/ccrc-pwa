@@ -89,7 +89,7 @@ The done-authority six are spelled THREE times today: once inside `MAIL_REJECT_C
 identical `Extract<MailRejectCode, …>` in `close.ts` and `fingerprint.ts`. Task 3 needs the list at
 runtime (a SQL `IN (…)`), which would be a fourth. Derive it once instead.
 
-- [ ] **Step 1: Write the failing guard**
+- [x] **Step 1: Write the failing guard**
 
 In `server/test/single-definition.test.ts`, beside the `MAIL_REJECT_CODES` guard at `:341`:
 
@@ -108,12 +108,12 @@ In `server/test/single-definition.test.ts`, beside the `MAIL_REJECT_CODES` guard
   });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'done-authority'`
 Expected: FAIL — first assertion reds, `expected [] to deeply equal [ 'shared/api.ts' ]`.
 
-- [ ] **Step 3: Add the single definition**
+- [x] **Step 3: Add the single definition**
 
 In `shared/api.ts`, immediately after `MAIL_REJECT_CODES`/`MailRejectCode`:
 
@@ -140,18 +140,18 @@ export function isDoneRejectCode(v: unknown): v is DoneRejectCode {
 `satisfies readonly MailRejectCode[]` is the load-bearing clause: a typo here is a compile error
 against the parent union, which a bare `as const` would not catch.
 
-- [ ] **Step 4: Delete the two copies**
+- [x] **Step 4: Delete the two copies**
 
 `server/src/coord/close.ts:55-56` and `server/src/coord/fingerprint.ts:32-33` — replace each
 `Extract<MailRejectCode, 'stale-tip' | …>` with `DoneRejectCode`, importing it from
 `../../../shared/api.js`.
 
-- [ ] **Step 5: Run the guard and the two consumers**
+- [x] **Step 5: Run the guard and the two consumers**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/coord-fingerprint.test.ts test/coord-decide.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add shared/api.ts server/src/coord/close.ts server/src/coord/fingerprint.ts server/test/single-definition.test.ts
@@ -175,7 +175,7 @@ durable trace is a `run_events.detail` string on a route nothing serves. The FAL
 `briefQueued` — a resume whose `/clear` was refused, so no brief was ever queued — leaves **nothing at
 all**, indistinguishable from "no dispatch happened" (D-1298).
 
-- [ ] **Step 1: Write the failing migration tests**
+- [x] **Step 1: Write the failing migration tests**
 
 In `server/test/coord-db.test.ts`, following the `:556-578` pattern exactly:
 
@@ -217,12 +217,12 @@ In `server/test/coord-db.test.ts`, following the `:556-578` pattern exactly:
 and update the five existing `user_version` expectations (`:330`, `:376`, `:444`, `:551`, `:573`) plus
 `:614-617`'s `expect(COORD_SCHEMA_VERSION).toBe(7); expect(MIGRATIONS.length).toBe(7);`.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts`
 Expected: FAIL — `runs.briefQueued is absent: expected undefined not to be undefined`.
 
-- [ ] **Step 3: Append the migration**
+- [x] **Step 3: Append the migration**
 
 `server/src/coord/schema.ts`, after `MIGRATIONS[5]`:
 
@@ -254,12 +254,12 @@ Expected: FAIL — `runs.briefQueued is absent: expected undefined not to be und
   `,
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts`
 Expected: PASS, 30+ tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/coord/schema.ts server/test/coord-db.test.ts
@@ -291,7 +291,7 @@ therefore **four `GROUP BY` queries per `runs()` call, total, regardless of row 
 a broadcast storm. Every field below is therefore a COUNT, a CODE or a STORED TIMESTAMP; the
 thresholds live in the renderer, exactly as `SPAWN_STALL_MS` does (D-1300).
 
-- [ ] **Step 1: Write the failing fixtures**
+- [x] **Step 1: Write the failing fixtures**
 
 Create `server/test/coord-health.test.ts`. Each case MANUFACTURES the wedge:
 
@@ -401,12 +401,12 @@ describe('the run health read (F7)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-health.test.ts`
 Expected: FAIL — `TypeError: s.runHealth is not a function`.
 
-- [ ] **Step 3: Add the wire type**
+- [x] **Step 3: Add the wire type**
 
 `shared/api.ts`, beside `RunItemTally`:
 
@@ -478,7 +478,7 @@ export const MAIL_REPLAY_WARN_COUNT = 10;
 export const KICKOFF_UNACKED_MS = 900_000;
 ```
 
-- [ ] **Step 4: Add the batched store read**
+- [x] **Step 4: Add the batched store read**
 
 `server/src/coord/store.ts`. Add `briefQueued`, `clearError` to `RUN_ROW_COLUMNS` (`:184-189`), and:
 
@@ -570,12 +570,12 @@ Then thread it: `hydrateRun(row: RunRowDb, health: RunHealth): RunRow` gains the
 `health` in its literal; `runs()` calls `this.runHealth(rows.map(r => r.id), [...new Set(rows.map(r => r.claimedBy).filter(...))])` once and maps; `run(id)` calls it for the single id;
 `reconstruct` passes a zeroed literal.
 
-- [ ] **Step 5: Run to verify they pass**
+- [x] **Step 5: Run to verify they pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-health.test.ts test/coord-store.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add shared/api.ts server/src/coord/store.ts server/test/coord-health.test.ts
@@ -598,7 +598,7 @@ The ordering problem is real and must not be papered over: `briefQueued` is comp
 the commit at `:571-594`. Moving the commit later would change the transaction's contents; moving the
 computation earlier is safe because both its inputs (`resumed`, `clearedAt`) are final by `:544`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
   it('a resume whose /clear was refused records that it queued NO brief, and why', async () => {
@@ -612,24 +612,24 @@ computation earlier is safe because both its inputs (`resumed`, `clearedAt`) are
   });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts -t 'queued NO brief'`
 Expected: FAIL — `expected { briefQueued: null, clearError: null } to match object { briefQueued: 0, … }`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Hoist `const briefQueued = !resumed || clearedAt !== null;` above the commit (it currently sits at
 `:642`), pass `briefQueued` and `clearError` into `coord.dispatchRun({...})`, and have
 `CoordStore.dispatchRun` write both columns inside its existing transaction. Leave the
 `run_events.detail` ternary exactly as it is — this wave does not widen it; see D-1298's note.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts test/dispatch-adopt.test.ts test/dispatch-skillstate.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/coord/dispatch.ts server/src/coord/store.ts server/test/run-routes.test.ts
@@ -649,13 +649,13 @@ No production change: `GET /api/runs` is `runs.map(toRunSummary)` and `toRunSumm
 field rides both surfaces the moment `hydrateRun` computes it. What this task does is make the census
 and the frame's stability EXPLICIT.
 
-- [ ] **Step 1: Update the exhaustive census**
+- [x] **Step 1: Update the exhaustive census**
 
 `RUN_SUMMARY_KEYS` gains `health: true` and the count moves `20 → 21`. Decide and record `health` in
 `UNRECOVERABLE` (`:252-271`): it IS unrecoverable from ledger + registry + `.prhistory`, so the count
 moves `14 → 15` with a stated reason.
 
-- [ ] **Step 2: Pin the frame's stability — the constraint D-1300 names**
+- [x] **Step 2: Pin the frame's stability — the constraint D-1300 names**
 
 ```ts
   it('the runs frame is byte-identical across two ticks when nothing changed', async () => {
@@ -669,12 +669,12 @@ moves `14 → 15` with a stated reason.
   });
 ```
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/reconstruction-drill.test.ts test/fleetws.test.ts test/run-routes.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/test/reconstruction-drill.test.ts server/test/fleetws.test.ts server/test/run-routes.test.ts
@@ -691,7 +691,7 @@ git commit -m "test(coord): the RunSummary census counts health, and the frame s
 - Modify: `pwa/src/fleet/fleet.css` — `.run-row .run-warn`
 - Test: `pwa/test/runs-health.test.tsx` (create); update `pwa/test/fleet-css.test.ts:567-579`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `pwa/test/runs-health.test.tsx`, copying `runs-screen.test.tsx`'s `board`/`atFrozenClock`
 helpers. The cases: a parked delivery renders a warn with a word AND a glyph; a replay high-water at
@@ -712,12 +712,12 @@ past `KICKOFF_UNACKED_MS` renders; **and the older-server case**:
   it('a healthy run renders no warn row at all', () => { … expect(document.querySelector('.run-warn')).toBeNull(); });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd pwa && ./node_modules/.bin/vitest run test/runs-health.test.tsx`
 Expected: FAIL — `expected null not to be null` on the first positive case.
 
-- [ ] **Step 3: The decision, in `runWords.ts`, never in JSX**
+- [x] **Step 3: The decision, in `runWords.ts`, never in JSX**
 
 ```ts
 export interface RunWarning { readonly glyph: string; readonly word: string; readonly title: string }
@@ -744,7 +744,7 @@ export const runWarnings = (
 nothing. `h.coordKickoffPendingSince !== null` before the arithmetic, the `MailStrip.tsx:176`
 negated-comparison idiom, so an absent numeric fails the test rather than passing it.
 
-- [ ] **Step 4: The markup, and the CSS**
+- [x] **Step 4: The markup, and the CSS**
 
 Inside `body` in `RunsScreen.tsx`, after the `degradedFields` block, one wrapped line:
 
@@ -765,12 +765,12 @@ owns its own wrapped line inside the existing `flex-wrap: wrap` row, an already-
 `--glow`, no `animation`, no `box-shadow`** — add `.run-row .run-warn` to `fleet-css.test.ts:572`'s
 "runs are not living panes" list.
 
-- [ ] **Step 5: Run**
+- [x] **Step 5: Run**
 
 Run: `cd pwa && ./node_modules/.bin/vitest run test/runs-health.test.tsx test/fleet-css.test.ts test/contrast.test.ts test/tap-targets.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pwa/src/fleet/runWords.ts pwa/src/screens/RunsScreen.tsx pwa/src/fleet/fleet.css pwa/test/
@@ -804,7 +804,7 @@ Three properties fix it, and each was measured (D-1294, D-1295):
    **D-1158 — one of the five numbers this program lost.** The new arm uses the looser `DEFINED` shape
    the floor assertion already trusts.
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 Create `server/test/ledger-crosstree.test.ts` with FIXTURES, not the real tree:
 
@@ -851,12 +851,12 @@ describe('crossTreeCollisions (F7 — one merge earlier)', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts`
 Expected: FAIL — `SyntaxError: The requested module '../src/coord/ledger.js' does not provide an export named 'crossTreeCollisions'`.
 
-- [ ] **Step 3: Implement, in `ledger.ts` (L1, still pure)**
+- [x] **Step 3: Implement, in `ledger.ts` (L1, still pure)**
 
 ```ts
 /** The first allocator-era number. Below it the pre-allocator era legitimately
@@ -894,12 +894,12 @@ export function crossTreeCollisions(
 ): CrossTreeCollision[] { … }
 ```
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts test/ledger.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/coord/ledger.ts server/test/ledger-crosstree.test.ts
@@ -929,7 +929,7 @@ git commit -m "feat(ledger): a cross-tree, subject-free collision decision for a
 Both incidents, from the branch alone, without merging, in ~380 ms. The existing scan finds neither
 until after the merge, and can never find D-1158 at all.
 
-- [ ] **Step 1: Write the failing arm**
+- [x] **Step 1: Write the failing arm**
 
 ```ts
 describe('the cross-tree collision scan (F7 — before the merge, not after)', () => {
@@ -957,7 +957,7 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
 });
 ```
 
-- [ ] **Step 2: Run to verify the anti-vacuity guards bite**
+- [x] **Step 2: Run to verify the anti-vacuity guards bite**
 
 Run with a deliberately absent base: `cd server && CCRC_LEDGER_BASE=nope git -C .. update-ref -d refs/remotes/origin/main` is
 NOT the way — instead assert the arm by pointing it at a known-colliding pair:
@@ -965,7 +965,7 @@ NOT the way — instead assert the arm by pointing it at a known-colliding pair:
 against a checkout at `eee5fa1a`. Expected: FAIL, naming D-1159/1160/1161. **Record the verbatim
 first-fail in the mutation table.**
 
-- [ ] **Step 3: Document the step it replaces**
+- [x] **Step 3: Document the step it replaces**
 
 `CONTRIBUTING.md:66-69` today says *"check `main` first — two branches allocating in parallel has
 caused a renumber before"* with no mechanism. Replace the parenthetical with the command that now
@@ -973,12 +973,12 @@ performs it, and add the same one line to `CLAUDE.md`'s deviation-ledger bullet.
 does and does not see: it compares against whatever `origin/main` your checkout has fetched, so a stale
 remote-tracking ref measures a stale base — `git fetch origin main` first.
 
-- [ ] **Step 4: Run the whole file**
+- [x] **Step 4: Run the whole file**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`
 Expected: PASS, 12 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/test/deviation-refs.test.ts CONTRIBUTING.md CLAUDE.md
@@ -1003,7 +1003,7 @@ landed in (`watch.ts:2102-2104`). **The allocator recorded the theft and said no
 This cannot become an enforcement — an allocation is a record that you asked, not a claim on a number,
 and this wave does not pretend otherwise. What it can do is make the mismatch READABLE.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 ```ts
   it('reports an allocation whose landedIn is not where its block landed', async () => { … });
@@ -1012,10 +1012,10 @@ and this wave does not pretend otherwise. What it can do is make the mismatch RE
   it('says nothing about a block that landed in one file', async () => { … });
 ```
 
-- [ ] **Step 2–4:** implement `auditAllocations` as a pure L1 function over
+- [x] **Step 2–4:** implement `auditAllocations` as a pure L1 function over
 `(definitions, allocations)`, wire it into the route beside `stale`, run the file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/src/coord/ledger.ts server/src/coord/routes.ts server/test/ledger-routes.test.ts
@@ -1029,7 +1029,7 @@ git commit -m "feat(ledger): GET /api/ledger reports the mismatches landedIn alr
 **Files:** `server/src/coord/store.ts`, `server/src/coord/routes.ts`, `shared/api.ts`,
 `server/src/auth/gate.ts`, `server/test/auth-gate.test.ts`, `server/test/coord-caps-route.test.ts`
 
-- [ ] **Step 1: D-1169 — the clock leaves the store, and the dial can show it**
+- [x] **Step 1: D-1169 — the clock leaves the store, and the dial can show it**
 
 `setCaps(next: CoordCaps, at: number = Date.now())` — the `markDispatched`/`recordRunEvent`/`capsUsage`
 convention it is the odd one out against. The clock read must stay INSIDE `coordMutex.run(...)`
@@ -1038,7 +1038,7 @@ and carry `updatedAt` on **`CoordCapsView`**, not on `CoordCaps` — the view is
 widening it is not a change to the shipped caps type. That answers BOTH halves of D-1169 rather than
 half of it. **`caps.ts` is not edited, so no purity assertion moves** — record that measurement.
 
-- [ ] **Step 2: Two of the five cardinals become derivations**
+- [x] **Step 2: Two of the five cardinals become derivations**
 
 `auth-gate.test.ts:207` — `expect(ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length - WS_ROUTES.length);`
 keeping the `> 50` floor, because the identity survives `ROUTES` collapsing.
@@ -1049,7 +1049,7 @@ Leave **46 and 25 alone**: nothing in the tree attributes a live route to the fi
 (`registerCoordRoutes` is called on the root instance with no prefix), so every in-file "derivation" is
 circular. Record that as the reason, not as an omission.
 
-- [ ] **Step 3: Three stale cardinals no scanner reads (D-1302)**
+- [x] **Step 3: Three stale cardinals no scanner reads (D-1302)**
 
 `gate.ts:8` says *"all 55 routes"*; the tree derives **68**. `auth-gate.test.ts:365-369`'s breakdown
 enumerates 24 while `EXEMPT.size` is 25. `auth-gate.test.ts:472-473` says *"69 − 3 − 24 = 42"* nine
@@ -1057,14 +1057,14 @@ lines above the assertion that says 44. Correct all three, and extend D-1223's d
 `gate.ts`'s numeral — the census reads number WORDS and D-1223's digit scan reads `auth-gate.test.ts`
 only, which is exactly why all three survived.
 
-- [ ] **Step 4: D-1224, recorded not mechanised**
+- [x] **Step 4: D-1224, recorded not mechanised**
 
 The case to watch is a single-session program — a run whose `claimedBy` is also its `sessionId`. It does
 not exist today. Task 3's board makes it OBSERVABLE for the first time: such a run shows
 `coordKickoffPendingSince` against itself. Record that, and say plainly that no fixture manufactures it
 because no such program exists to measure.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/coord-caps-route.test.ts test/coord-caps-policy.test.ts test/dispatch-mutex-gate.test.ts`
 
@@ -1073,6 +1073,41 @@ git commit -m "fix(fold-ins): D-1169's clock, two derived cardinals, three stale
 ```
 
 ---
+
+---
+
+## Execution record
+
+**Branch:** `ws/quiet-meadow` (this workspace's own — never a feature branch, clause 2).
+**Base:** `origin/main` at `6ee36ca5` (wave 6's merge), merged in before the first commit.
+**Scope, re-measured against `origin/main` after every task:** `ccd/`, `session-hook.sh`, `deploy/` and
+`agent/` are EMPTY in the diff. Server + PWA + root docs only, as the brief requires — nothing in this
+wave changes the coordinator's deploy lane.
+
+**Suites, foreground, full runs:**
+
+| package | before (2026-09-02 05:07 UTC) | after |
+|---|---|---|
+| server | 248 files, 6248 passed, 56 skipped | **250 files, 6295 passed, 56 skipped** |
+| agent | (unchanged lane) | **18 files, 281 passed** |
+| pwa | 2119 passed | **2119 passed** + `npm run build` produces `server/dist-pwa/index.html` |
+
+`tsc --noEmit` clean in all three packages. Two new server suites (`coord-health`, `ledger-crosstree`)
+and one new PWA suite (`runs-health`). No test was deleted or skipped.
+
+**Migration:** `COORD_SCHEMA_VERSION` 6 → 7, derived from `MIGRATIONS.length` as always. Additive-only:
+two nullable, defaultless columns on `runs`. The five reached-version pins and the frozen-ladder guards
+moved with it.
+
+**Wire:** `FLEET_PROTO` unchanged at 1. Three additive fields (`RunSummary.health`,
+`CoordCapsView.updatedAt`, and the two new `RunHealth`-adjacent constants), each with a single reader.
+No new `ccd` verb; `EXEC_COMMANDS` untouched. No new route — `GET /api/runs` and `GET /api/coord/caps`
+carry the new data on their existing shapes, so the box-token census and the ungated-door count are
+both unmoved.
+
+**Deviations:** D-1293..D-1307, allocated from `POST /api/ledger/deviations` with `byId` set, in four
+acts (12 + 1 + 1 + 1), each immediately before the entry defining it. Verified at close: every allocated
+number is defined, and no number is defined that was not allocated to this session.
 
 ## Deviations found
 
