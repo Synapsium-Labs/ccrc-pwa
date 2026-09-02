@@ -1606,9 +1606,12 @@ document — the wave's own D-1317 is why.
   missed by a guard whose whole subject is not missing one. The review supplied a candidate regex as a
   **starting point, not a mandate**, and it was verified rather than adopted: twenty-one real shapes
   classified by hand, the shipped pattern getting six wrong and the candidate none; then the corpus
-  measured at HEAD and at `origin/main`. Eighteen prefix-shaped lines are dropped by the lookahead and
-  every one is a citation; twenty-four bare-bold entries are gained; **no line the previous shape
-  called a definition stops being one.** The review's own warning — *widening may surface PRE-ALLOCATOR
+  measured at HEAD and at `origin/main`. **Measured 2026-09-02 against HEAD `ed81ad85` and
+  `origin/main` `651f40c5`, and true of that pair only** — eighteen prefix-shaped lines are dropped by
+  the lookahead and every one is a citation; twenty-four bare-bold entries are gained; **no line the
+  previous shape called a definition stops being one.** The last of those three is the PROPERTY and it
+  is what the docstring now carries; the two counts are a snapshot and stay here, which is D-1328's
+  ruling applied to the paragraph that produced them. The review's own warning — *widening may surface PRE-ALLOCATOR
   collisions, and `GRANDFATHERED` may only shrink* — was checked and did not fire: zero allocator-era
   cross-tree collisions before and after, and the sub-211 set is identical at 19 either way, so nothing
   had to join a set whose rule forbids growth. Pinned by fixtures for both directions AND by a
