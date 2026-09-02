@@ -1226,6 +1226,20 @@ in this plan or in the diff is defined below.
   green row describing a guard that did not exist, which is exactly what wave 6's review round was
   sent back for.
 
+- **D-1307** (2026-09-02, a spec clause dropped between two paragraphs of this plan) — spec §9 states
+  the un-briefed-coordinator condition as **three** clauses: *"open run, `dispatchedAt` null, kickoff
+  delivery unacked past a threshold"*. This plan's Architecture paragraph copied all three; Task 3's
+  field description — the one an implementer actually works from — described only the kickoff, and the
+  first implementation of `runWarnings` matched the field description. The result fired "never briefed"
+  on a run that had **already dispatched**, i.e. on a coordinator that demonstrably got the wave moving,
+  which is odd rather than wedged. That is the false-positive direction, and on a warning surface it is
+  the worse one: a row that cries wolf is a row an operator stops reading, which would have undone the
+  whole point of the wave. Caught by re-reading §9 against the shipped code rather than against the
+  plan, closed by requiring `dispatchedAt === null`, and pinned in both directions (a dispatched run
+  draws nothing; the mutation that drops the clause reds). **The lesson is about plans, not about this
+  bug**: a condition restated in two places in one document will be implemented from the nearer one, so
+  the clause belongs in the field's own docstring — where it now is.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
@@ -1256,3 +1270,4 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | `setCaps` reads its own `Date.now()` again — the D-1169 revert | `AssertionError: expected { ok: true, caps: { …(2) }, …(2) } to deeply equal { ok: true, caps: { …(2) }, …(2) }` (the pinned `updatedAt: 1_700_000_000_000`) | server `coord-caps-route` |
 | `capsUpdatedAt` returns migration 1's seeded `0` instead of null | `AssertionError: expected +0 to be null` | server `coord-caps-route` |
 | `gate.ts`'s docstring goes back to "all 55 routes" | `AssertionError: gate.ts claims a route count this tree does not derive: expected [ 55 ] to deeply equal [ 68 ]` | server `auth-gate` |
+| drop `undispatched` from the un-briefed condition — spec §9's middle clause (D-1307) | `AssertionError: a dispatched run was called never-briefed: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |

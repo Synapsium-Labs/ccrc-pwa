@@ -387,7 +387,7 @@ export interface RunWarning {
  * read as an infinitely old kickoff on every healthy row.
  */
 export function runWarnings(
-  run: { state: RunState; health?: RunHealth },
+  run: { state: RunState; dispatchedAt?: number | null; health?: RunHealth },
   nowMs: number,
 ): readonly RunWarning[] {
   const h = run.health;
@@ -419,11 +419,20 @@ export function runWarnings(
       title: `${h.doneRejects} done-claim${h.doneRejects === 1 ? '' : 's'} refused by the server's ` +
         're-measurement' + (h.lastRejectCode === null ? '' : `, most recently ${h.lastRejectCode}`) });
   }
+  // THREE conditions, all of them, and the middle one is the spec's own
+  // (design §9: "open run, `dispatchedAt` null, kickoff delivery unacked past a
+  // threshold"). Without `dispatchedAt === null` this fires on a run that HAS
+  // dispatched — a coordinator that got the wave moving without ever acking its
+  // kickoff, which is odd but is not the wedge, and drawing it as one is how a
+  // warning surface becomes ignorable. `closedAt`/state is the caller's filter:
+  // the board renders warnings on its `active` slice only.
   const since = h.coordKickoffPendingSince;
-  if (since !== null && nowMs - since >= KICKOFF_UNACKED_MS) {
+  const undispatched = (run.dispatchedAt ?? null) === null;
+  if (since !== null && undispatched && nowMs - since >= KICKOFF_UNACKED_MS) {
     out.push({ glyph: '☡', word: 'never briefed',
-      title: "the program-kickoff addressed to this run's coordinator has never been acked. " +
-        'An open run whose chair nobody sat in cannot dispatch, close or answer mail' });
+      title: "the program-kickoff addressed to this run's coordinator has never been acked, and this " +
+        'run has never dispatched. An open run whose chair nobody sat in cannot dispatch, close or ' +
+        'answer mail — it is the shape run 11 has been wedged in since 2026-08-28' });
   }
   return out;
 }

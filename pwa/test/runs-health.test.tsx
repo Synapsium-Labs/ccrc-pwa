@@ -106,12 +106,23 @@ describe('the warn row draws each wedge, with two cues', () => {
     expect(warn()?.querySelector('[title]')?.getAttribute('title')).toContain('stale-tip');
   });
 
-  it('names an un-briefed coordinator only past the threshold', () => {
-    board(health({ coordKickoffPendingSince: FROZEN - KICKOFF_UNACKED_MS }));
+  it('names an un-briefed coordinator only past the threshold, and only before dispatch', () => {
+    // Spec design §9's condition is all THREE: open run, dispatchedAt null,
+    // kickoff unacked past a threshold. This is run 11's live shape — planned
+    // since 2026-08-28, dispatch begun and never completed.
+    board({ ...health({ coordKickoffPendingSince: FROZEN - KICKOFF_UNACKED_MS }),
+            state: 'planned', dispatchedAt: null });
     expect(warn()?.textContent).toContain('never briefed');
     cleanup();
-    board(health({ coordKickoffPendingSince: FROZEN - KICKOFF_UNACKED_MS + 1_000 }));
+    board({ ...health({ coordKickoffPendingSince: FROZEN - KICKOFF_UNACKED_MS + 1_000 }),
+            state: 'planned', dispatchedAt: null });
     expect(warn(), 'a kickoff inside the threshold drew a warning').toBeNull();
+    cleanup();
+    // The middle condition, which the first draft of this omitted: a run that HAS
+    // dispatched is not un-briefed, whatever its coordinator's mailbox says.
+    board({ ...health({ coordKickoffPendingSince: FROZEN - KICKOFF_UNACKED_MS }),
+            dispatchedAt: FROZEN - 10_000 });
+    expect(warn(), 'a dispatched run was called never-briefed').toBeNull();
   });
 
   it('draws several at once, each its own item', () => {
@@ -144,7 +155,7 @@ describe('runWarnings — the decision, not the markup', () => {
   });
 
   it('gives every warning both a word and a glyph', () => {
-    const all = runWarnings({ state: 'working', health: h({
+    const all = runWarnings({ state: 'working', dispatchedAt: null, health: h({
       mailParked: 1, mailReplayMax: 20, briefQueued: false, doneRejects: 1,
       coordKickoffPendingSince: 0 }) }, FROZEN);
     expect(all.length).toBe(5);
