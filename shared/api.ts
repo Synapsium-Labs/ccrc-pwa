@@ -3747,8 +3747,17 @@ export interface RunHealth {
    *  text, on `lastError`'s terms. */
   readonly clearError: string | null;
   /** When the OLDEST unacked `program-kickoff` addressed to this run's
-   *  `claimedBy` was first sent, or null when there is none outstanding. A
-   *  timestamp, never a verdict — the renderer owns the threshold. */
+   *  `claimedBy` was first sent, or null when there is none. A timestamp, never a
+   *  verdict — the renderer owns the threshold.
+   *
+   *  "UNACKED" AND NOT "STILL BEING RETRIED" (D-1318). A kickoff that parked —
+   *  the replay ceiling, a recipient the registry no longer lists — is still a
+   *  kickoff nobody ever acked, and the first version of this field went null the
+   *  moment the lane gave up, which is the one moment the wedge became permanent.
+   *  Null here means acked, or no coordinator, or a park the store treats as a
+   *  DECISION (a reclaim cancelling the dead chair's kickoff before mailing the
+   *  new one) — three conditions a caller renders identically, and deliberately:
+   *  none of them is "somebody is stuck". */
   readonly coordKickoffPendingSince: number | null;
 }
 

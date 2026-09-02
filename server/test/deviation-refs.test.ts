@@ -257,7 +257,19 @@ const LEDGER_BASE = resolveLedgerBase(ROOT);
  *  out and without merging it. One `ls-tree` plus one `cat-file` per plan;
  *  measured at ~0.4 s for 67 files, against the 163 ms this file's floor scan
  *  already spends walking the whole tracked tree. */
+const plansCache = new Map<string, { path: string; text: string }[]>();
 const plansAt = (ref: string): { path: string; text: string }[] => {
+  // Memoised per ref. A ref does not move during a run, and the corpus
+  // classification table below asks for HEAD once per row — nine `ls-tree` walks
+  // for one answer, on a suite that already sits next to the known load flakes.
+  const hit = plansCache.get(ref);
+  if (hit !== undefined) return hit;
+  const out = readPlansAt(ref);
+  plansCache.set(ref, out);
+  return out;
+};
+
+const readPlansAt = (ref: string): { path: string; text: string }[] => {
   const listing = execFileSync('git',
     ['ls-tree', '-r', '--format=%(objectname) %(path)', ref, 'docs/superpowers/plans/'],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 22 });
