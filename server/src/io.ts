@@ -46,6 +46,26 @@ export type MeasuredStat =
   | { ok: true; mtimeMs: number; size: number }
   | { ok: false; reason: ReadFailure };
 
+/** A binary read that distinguishes its THREE failure modes. `too-large` is
+ *  not a fault and not an absence: the file is there and this transport
+ *  cannot carry it (the agent's `MAX_READ_B64_BYTES`, a property of the WS
+ *  frame). `localIO` has no cap and therefore never answers it — the
+ *  divergence is REPORTED at the seam rather than equalised, because capping
+ *  `localIO` would start refusing clips this server serves today. `size` is
+ *  `number | null`: null when the marker arrived without one, never a
+ *  manufactured 0. */
+export type MeasuredB64Read =
+  | { ok: true; dataB64: string }
+  | { ok: false; reason: ReadFailure }
+  | { ok: false; reason: 'too-large'; size: number | null };
+
+/** A range read that distinguishes its two failure modes. The EOF answer —
+ *  `{ok: true, data: '', size}` — is a MEASUREMENT (the cursor is at the end)
+ *  and never joins them. */
+export type MeasuredRangeRead =
+  | { ok: true; data: string; size: number }
+  | { ok: false; reason: ReadFailure };
+
 /**
  * Fs-facade seam every fleet-fs access goes through. `local` (this module)
  * hits node:fs against this box's disk; a `remote` implementation (T3) proxies
@@ -57,8 +77,14 @@ export interface FleetIO {
    *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this. */
   readFileMeasured(path: string): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
-  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
-  readFileB64(path: string): Promise<string | null>;      // null on missing or unreadable; the agent's implementation folds in a THIRD condition, over-cap (D-114, agent/src/fileops.ts's MAX_READ_B64_BYTES) — localIO has no cap — binary-safe
+  /** Distinguishes absence from unreadability for a range read; the EOF arm
+   *  is a positive answer. `readFileFrom` derives from this. */
+  readFileFromMeasured(path: string, offset: number): Promise<MeasuredRangeRead>;
+  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;   // null on ANY failure; use readFileFromMeasured to tell absent from unreadable
+  /** Distinguishes absence, unreadability and over-cap. `readFileB64` derives
+   *  from this. */
+  readFileB64Measured(path: string): Promise<MeasuredB64Read>;
+  readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
   readdir(path: string): Promise<string[] | null>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
@@ -115,20 +141,31 @@ export const localIO: FleetIO = {
     return r.ok ? r.content : null;
   },
 
-  async readFileFrom(p, offset) {
+  async readFileFromMeasured(p, offset) {
     // Stream only [offset, size) — never load the whole file. Transcripts reach
     // tens of MB; the old read-whole-then-slice bloated the agent's RSS and
     // blocked its event loop (base64 + JSON.stringify of the full buffer).
     let size: number;
-    try { size = (await stat(p)).size; } catch { return null; }
+    try { size = (await stat(p)).size; } catch (err) { return { ok: false, reason: failureFor(err) }; }
     const from = Math.max(0, Math.min(offset, size));
-    if (from >= size) return { data: '', size };
-    try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
-    catch { return null; }
+    if (from >= size) return { ok: true, data: '', size };
+    try { return { ok: true, data: (await readRange(p, from, size)).toString('utf8'), size }; }
+    catch (err) { return { ok: false, reason: failureFor(err) }; }
+  },
+
+  async readFileFrom(p, offset) {
+    const r = await this.readFileFromMeasured(p, offset);
+    return r.ok ? { data: r.data, size: r.size } : null;
+  },
+
+  async readFileB64Measured(p) {
+    try { return { ok: true, dataB64: (await readFile(p)).toString('base64') }; }
+    catch (err) { return { ok: false, reason: failureFor(err) }; }
   },
 
   async readFileB64(p) {
-    try { return (await readFile(p)).toString('base64'); } catch { return null; }
+    const r = await this.readFileB64Measured(p);
+    return r.ok ? r.dataB64 : null;
   },
 
   async readdir(p) {
