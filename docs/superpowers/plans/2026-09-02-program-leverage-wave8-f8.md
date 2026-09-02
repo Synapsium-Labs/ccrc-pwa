@@ -8312,7 +8312,56 @@ independent methods at the end.
 
 | # | Task | Suite | Mutation | Verbatim first failure |
 |---|---|---|---|---|
-| | | | | |
+| 1 | Task 1 | `agent/test/fileops.test.ts` | `agent/src/server.ts`'s `statPayload`: delete the `...(r.absent ? {absent:true as const} : {})` spread (→ always bare `{missing:true}`) | `AssertionError: expected { t: 'res', id: 19, ok: true, …(1) } to match object { ok: true, missing: true, …(1) }` (diff shows `- "absent": true,` missing from received) on *stat marks a genuinely missing whitelisted path with absent:true* |
+| 2 | Task 1 | `agent/test/fileops.test.ts` | `agent/src/fileops.ts`'s `statMeasured`: `absent: (e as NodeJS.ErrnoException).code === 'ENOENT'` → `absent: true` (unconditional) | `AssertionError: expected { t: 'res', id: 20, ok: true, …(2) } to not have property "absent"` on *stat THROUGH a file (ENOTDIR) answers missing:true with NO absent key — unmeasured is not absent* |
+| 3 | Task 1 | `agent/test/fileops.test.ts` | `agent/src/fileops.ts`'s `statMeasured`: same ternary → `absent: false` (unconditional) | `AssertionError: expected { t: 'res', id: 19, ok: true, …(1) } to match object { ok: true, missing: true, …(1) }` (same as mutation 1's line — `- "absent": true,` missing) on *stat marks a genuinely missing whitelisted path with absent:true* |
+| 4 | Task 2 | `server/test/remote-io.test.ts` | `server/src/remote/io.ts`'s `statMeasured`: `r.absent === true ? 'absent' : 'unreadable'` → `r.missing === true ? 'absent' : 'unreadable'` | `FAIL  test/remote-io.test.ts > remote FleetIO — file ops over the agent WS > statMeasured > a path THROUGH a file (ENOTDIR) reads as "unreadable", NEVER "absent" — the D-114 case, end to end`<br>`AssertionError: expected { ok: false, reason: 'absent' } to deeply equal { ok: false, reason: 'unreadable' }` |
+| 5 | Task 2 | `server/test/io.test.ts` | `server/src/io.ts`'s `failureFor`: body changed to unconditional `() => 'absent'` | `FAIL  test/io.test.ts > localIO.readFileMeasured > a DIRECTORY path (EISDIR, not ENOENT) reads as {ok:false, reason:"unreadable"}`<br>`AssertionError: expected { ok: false, reason: 'absent' } to deeply equal { ok: false, reason: 'unreadable' }` |
+| 6 | Task 3 | `server/test/transcript-tail.test.ts`, `server/test/sessionws.test.ts` | `server/src/transcript/tail.ts`'s `readBacklog`: `measured: st.reason === 'absent'` → `measured: true` (the `!st.ok` branch always claims a measurement) | `AssertionError: expected true to be false` on `sessionws.test.ts:1056:36` (`backlog.fileMeasured`); and on `transcript-tail.test.ts:60:45`: `expected { events: [], offset: +0, …(2) } to deeply equal { events: [], offset: +0, …(2) }` with diff `- "measured": false, + "measured": true` |
+| 7 | Task 3 | `server/test/sessionws.test.ts` | `server/src/sessionws.ts`'s `sendBacklogAndTail`: drop `fileMeasured: measured,` from the `send({...})` call | `AssertionError: expected undefined to be false` at `sessionws.test.ts:1056:36` (`backlog.fileMeasured`) |
+| 8 | Task 4 | `pwa/test/session-lifecycle.test.tsx` | `pwa/src/stores/session.ts` `backlog` reducer: `fileMeasured: msg.fileMeasured ?? true,` → `?? false` | `TestingLibraryElementError: Unable to find an element with the text: Can't find this session's transcript.` on *an older server that sends no fileMeasured has MEASURED the file* |
+| 9 | Task 4 | `pwa/test/session-lifecycle.test.tsx` | `pwa/src/screens/SessionScreen.tsx` banner sentence: `searchComplete && fileMeasured ? … : …` → `searchComplete ? … : …` | `TestingLibraryElementError: Unable to find an element with the text: Can't read the fleet host right now.` on *an UNMEASURABLE transcript says the fleet host is unreadable, not "can't find it"* |
+| 10 | Task 4 | `pwa/test/stores.test.ts` | `pwa/src/stores/session.ts` `rotated` arm: deleted `fileMeasured: true,` | `AssertionError: expected false to be true` at `stores.test.ts:216:28` (`expect(s.fileMeasured).toBe(true)`) |
+| 11 | Task 5 | `server/test/coord-fingerprint.test.ts` | `server/src/coord/gitref.ts`'s `readBranchTip` unreadable arm: delete `if (st.reason !== 'absent') return null;`, leaving only `if (st.ok) return null;` | `AssertionError: expected 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb…' to be null` on *refuses when the loose ref can be NEITHER read NOR measured...* |
+| 12 | Task 5 | `server/test/coord-fingerprint.test.ts` | same line changed to unconditional `return null;` (brief's literal Step-5 instruction) | `**GREEN — hole**` — 48/48 passed; report: the mutated inner line sits inside the `unreadable`-only gate, and the "ordinary packed branch" test's `rmSync(loosePath)` produces a real ENOENT that resolves via the OUTER `absent` fast path, never entering the `unreadable` block, so the mutated line never executes — the literal mutation doesn't reach the code it was meant to guard. |
+| 13 | Task 5 | `server/test/coord-fingerprint.test.ts` | (follow-up, not in original brief) widened the outer gate to `if (loose.reason === 'unreadable' \|\| loose.reason === 'absent')` while keeping the unconditional inner `return null;`, to confirm mutation 2's guard is real | `AssertionError: expected null to be 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb…'` on *a PROVEN-absent loose ref still falls through to packed-refs* (also broke the pre-existing Task-6.1 no-stat-call test) |
+| 14 | Task 5 | `server/test/coord-fingerprint.test.ts` | (added after review) re-measured mutation 1 (delete `if (st.reason !== 'absent') return null;`) against the augmented suite (49 tests, incl. the new TOCTOU isolating case) | `AssertionError: expected 'bbbb...' to be null` on *refuses when the loose ref can be NEITHER read NOR measured...* (the new isolating test itself stayed GREEN under this mutation — correctly, since falling through unconditionally happens to be the right answer for the TOCTOU case too) |
+| 15 | Task 5 | `server/test/coord-fingerprint.test.ts` | (added after review) re-measured mutation 2 literal (unconditional `return null;` inside the `unreadable` gate), now exercised by the new isolating test | `FAIL  test/coord-fingerprint.test.ts > readBranchTip > inside the unreadable arm, a stat that PROVES absence still falls through to packed-refs (the arm's own other pole)`<br>`AssertionError: expected null to be 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb…' // Object.is equality` |
+| 16 | Task 6 | `agent/test/fileops.test.ts` | `agent/src/server.ts`'s `readB64Payload`: `too-large` branch → `return { dataB64: null };` | `expected { ok: true, dataB64: null } to match object { ok: true, dataB64: null, tooLarge: true, size: 12582913 }` on *readB64 REPORTS an over-cap clip as tooLarge …* |
+| 17 | Task 6 | `agent/test/fileops.test.ts` | `agent/src/fileops.ts`'s `readFromMeasured`: moved the `if (from >= size)` early return to after the `readRange` call (EOF now falls through the read call and its catch) | `expected { ok: true, data: null } to match object { ok: true, data: '', size: 4 }` on *readFrom at EOF is a POSITIVE answer …* |
+| 18 | Task 6 | `agent/test/fileops.test.ts` | `agent/src/fileops.ts`'s `readB64Measured`: the post-stat catch (guarding `readFile`, not the initial `stat`) — ternary replaced with unconditional `'absent'` | `expected { …, absent: true } not to have property "absent"` on *readB64 of a DIRECTORY (EISDIR) …* |
+| 19 | Task 6 | `agent/test/fileops.test.ts` | (first attempt, misidentified) `readB64Measured`'s catch immediately after the initial `stat(p)` call mutated instead of the post-`readFile` catch | `**GREEN — hole**` — 27/27 passed; report: "That mutation came back GREEN (27/27, a hole), because `stat()` on a directory succeeds (a directory has a valid size); EISDIR is only thrown by the subsequent `readFile(p)` call, so only the second catch... is reachable by that scenario." Reverted; the correct (second) catch was mutated instead, reproducing the predicted line exactly (row 18). |
+| 20 | Task 6 | `agent/test/fileops.test.ts` | (added after review) `readFromMeasured`'s post-stat catch (guarding the range read `readRange`, not the initial `stat`) → unconditional `reason: 'absent'` | `FAIL  test/fileops.test.ts > ccrc-agent file ops > readFrom of a DIRECTORY (stat ok, range read EISDIR) answers null with no absent key`<br>`AssertionError: expected { t: 'res', id: 19, ok: true, …(2) } to not have property "absent"`<br><br>`- Expected:`<br>`undefined`<br><br>`+ Received:`<br>`true` |
+
+### Counted twice
+
+Total mutations: **20**
+
+Per-task breakdown:
+- Task 1: 3
+- Task 2: 2
+- Task 3: 2
+- Task 4: 3
+- Task 5: 5
+- Task 6: 5
+
+Independent second-pass recount (counting each report's own tables/subsections separately, not by summing the table above):
+- Task 1: one "Mutation table (Step 5)" with 3 numbered rows → 3
+- Task 2: "MUTATION CHECK (Step 5)" with "Mutation 1" and "Mutation 2" subsections → 2
+- Task 3: one "Mutation table" with 2 numbered rows → 2
+- Task 4: one "Mutation table" with 3 numbered rows → 3
+- Task 5: original "Mutation table" (2 rows) + the "Finding on mutation 2" follow-up combination mutation (1) + FIX REPORT's "Three-way mutation measurement" table (3 rows, of which 1 is the unmutated "Shipped code" baseline, not a mutation, leaving 2) → 2 + 1 + 2 = 5
+- Task 6: original "Mutation table" (3 rows) + the wrong-catch first attempt at mutation 3, described in prose (1) + FIX REPORT's mutation 4 (1) → 3 + 1 + 1 = 5
+
+Second-pass total: 3 + 2 + 2 + 3 + 5 + 5 = **20**
+
+The two counts **agree** (20 = 20).
+
+### Rows that were not simple passes
+
+- Row 12 (Task 5) — GREEN, a hole: the brief's literal "mutation 2" (unconditional `return null;` inside the `unreadable` gate) left all 48 tests green because the only test that could have caught it resolves through a different code path entirely.
+- Row 19 (Task 6) — GREEN, a hole: the first attempt at mutating the "post-stat catch" in `readB64Measured` targeted the wrong catch block (the one after the initial `stat(p)` call) and stayed green at 27/27, because a directory's `stat()` succeeds — only the second catch (after `readFile`) is reachable by the EISDIR scenario.
+- Row 20 (Task 6) — flagged as an unexpected-outcome check: the coordinator predicted this mutation would "likely" come back GREEN (asserting only absence of the `absent` key on an already-null value); it instead reproduced the guard's predicted RED exactly, contradicting that prediction and confirming there was no hole here.
 
 **A row that comes back GREEN is a hole, not a pass.** So is a row that reds for the wrong reason —
 an inert regex edit, or one that breaks compilation rather than the guard. Where a mutation cannot be
