@@ -162,8 +162,19 @@ f="$REG/$id.hookstate.json"
 # and `subs`/`prev_state` were already two forks over one file. Three values on
 # three LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
 # name as a backslash sequence, which would hand `--argjson subagents` a string
-# that is no longer JSON. `tostring` of a compact array contains no newline, so
+# that is no longer JSON. `tostring` of a compact ARRAY contains no newline, so
 # line-splitting is safe where tab-splitting is not.
+#
+# D-1249: order matters, because line-splitting is POSITIONAL. `tostring` keeps
+# the escape only for an array — on a JSON *string* it returns the text RAW, so
+# an externally-corrupted `.subagents` that is a string with a newline in it
+# emits four lines and shifts every field after it onto the wrong one. So the
+# one field that can carry unbounded text goes LAST: a shift can then only
+# corrupt `subs` itself, which the `\[*` guard below already catches. `state`
+# leads (bounded set, and the shifted-into value it would otherwise take has no
+# guard — an out-of-set `state` reaches `hookstate.ts:233` and degrades to
+# NO_STATE, but it should never be reachable from another field's overflow),
+# and `gq` sits in the middle behind its own `^[0-9]+$` guard.
 #
 # The read counter survives state transitions exactly as `subs` does, and a
 # file that never carried the field reads as 0 — this is the WRITER, where 0
@@ -173,9 +184,10 @@ f="$REG/$id.hookstate.json"
 # degrade it already had. This file runs under `set -uo pipefail` and NOT
 # `set -e`, so a `read` hitting EOF is inert.
 subs=""; prev_state=""; gq=""
-{ read -r subs; read -r prev_state; read -r gq; } < <(jq -r \
-  '(.subagents // [] | tostring), (.state // ""),
-   (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end)' \
+{ read -r prev_state; read -r gq; read -r subs; } < <(jq -r \
+  '(.state // ""),
+   (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
+   (.subagents // [] | tostring)' \
   "$f" 2>/dev/null)
 [[ "$subs" == \[* ]] || subs="[]"
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0

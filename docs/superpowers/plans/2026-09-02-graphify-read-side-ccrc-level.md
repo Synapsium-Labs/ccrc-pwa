@@ -500,11 +500,28 @@ grep -rl 'subagents: \[\], interrupted: false' server/test \
   | xargs sed -i 's/subagents: \[\], interrupted: false/subagents: [], graphQueries: 0, interrupted: false/'
 ```
 
-**(c) Pin the null degrade — three one-line assertions, without which Step 15's `?? 0` mutation row is a comment.** The seds above only touch *inputs*; nothing yet asserts what an assembled or revived session reports. The analogous field is pinned in all three places already, so put `graphQueries` beside `subagents` in each:
+**(c) Pin the null degrade — three one-line assertions, without which Step 15's `?? 0` mutation row is a comment.** (D-1249: three `toBeNull()`s are only HALF the pin — see the extra bullet at the end of this step for the POSITIVE carry, without which the whole assembly seam is deletable.) The seds above only touch *inputs*; nothing yet asserts what an assembled or revived session reports. The analogous field is pinned in all three places already, so put `graphQueries` beside `subagents` in each:
 
 - `server/test/fleet.test.ts` — in `it('a hookless session carries all three fields as null')` (the `expect(s.subagents).toBeNull()` at ~:564), add `expect(s.graphQueries).toBeNull();` and rename the test to **`'a hookless session carries all four fields as null'`**.
 - `server/test/fleetstate.test.ts` — beside `expect(s?.subagents).toBeNull()` (~:112) add `expect(s?.graphQueries).toBeNull();`, and add `'graphQueries'` to the `Object.keys(...)` `arrayContaining` list on the next line. (That list is hand-kept: a field revived as `undefined` instead of `null` would be silently omitted from `Object.keys`, which is the whole point of the assertion.)
 - `server/test/fleet-health.test.ts` — beside `expect(body.sessions[0]?.subagents).toBeNull()` (~:167) add `expect(body.sessions[0]?.graphQueries).toBeNull();`.
+
+**(c2) Pin the POSITIVE carry too — the seam's other half (D-1249).** Every assertion in (c) is
+`toBeNull()`, so all three stay green when `graphQueries: hs?.graphQueries ?? null` (`server/src/fleet.ts`)
+is replaced by a literal `null` — the guard deleted outright, the count silently dropped for every LIVE
+session, which is the one direction the deliverable actually cares about. `assembleFleet` is the only
+seam that puts the counter on the live `/api/fleet` wire (the `reviveFleetSession` path is the
+degraded-mode read), so it needs a test that a hookstate count of N arrives as N:
+
+- `server/test/fleet.test.ts` — in the sibling positive test `it('a fresh hookstate carries hookState,
+  askSummary and subagents onto the session')` (~:531), add `graphQueries: 7` to the `mkHookState({…})`
+  override and `expect(s.graphQueries).toBe(7);` to the assertions, renaming the test to name the
+  fourth field the way its hookless sibling was renamed: **`'a fresh hookstate carries all four fields —
+  hookState, askSummary, subagents and graphQueries — onto the session'`**.
+- …and a second test for the MEASURED ZERO, which `toBe(7)` alone does not cover in the one direction
+  that matters: seed `mkHookState({ state: 'working', graphQueries: 0 })` and assert
+  `expect(s.graphQueries).toBe(0);`. Together the three points (N, 0, hookless-null) leave no collapse
+  at this seam unpinned — `?? 0`, a literal `null`, and `hs ? 0 : null` each redden at least one.
 
 **(d)** Then prove the compiler agrees:
 
@@ -658,6 +675,9 @@ Measure each mutation and record the result in the commit body. For each: apply,
 | delete the `[[ "$src" == compact ]] && exit 0` guard in the `SessionStart` arm | `ccd/session-hook.sh` | `session-hook` — the existing D-306 "writes nothing on compact" tests |
 | make `reviveGraphQueries` return `0` for `undefined` | `server/src/hookstate.ts` | `hookstate` — "ABSENT is null…" |
 | change `graphQueries: hs?.graphQueries ?? null` to `?? 0` | `server/src/fleet.ts` | `fleet` — "a hookless session carries all four fields as null" (Step 10c); `fleet-health`/`fleetstate` red too if the cached-snapshot path is mutated the same way |
+| replace `hs?.graphQueries ?? null` with a literal `null` — the guard DELETED, the direction `?? 0` cannot see (D-1249) | `server/src/fleet.ts` | `fleet` — "a fresh hookstate carries all four fields…" AND "carries a hookstate graphQueries of 0…as 0" (Step 10c2) |
+| change `hs?.graphQueries ?? null` to `hs ? 0 : null` — the seam keeps the hookless distinction and throws the NUMBER away | `server/src/fleet.ts` | `fleet` — "a fresh hookstate carries all four fields…" |
+| reorder the hook's one jq back to `subagents, state, graphQueries` — the unbounded-text field FIRST (D-1249) | `ccd/session-hook.sh` | `session-hook` — "a corrupted multi-line .subagents cannot shift state or the count onto the wrong line (D-1249)" |
 | change the chip's `!== null` to a truthiness test | `pwa/src/fleet/SessionLine.tsx` | `session-line` — "renders graph 0…" |
 
 **Why "add `compact` to the reset condition" is NOT in this table:** it cannot go red in either
@@ -2265,6 +2285,41 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   structural), and everything else, absent or unknown to this build, resets. The degrade points the
   safe way: an unrecognised boundary costs a count rather than inventing one. Two new tests pin both
   polarities and the allow-list spelling is now a measured RED row in Step 15's mutation table.
+
+- **D-1249 — the plan pinned only the NULL half of the assembly seam, and read the hook's three fields
+  in an order that let one of them shift the other two.** Two findings, one commit, both from the
+  second review round.
+
+  **(a) The positive carry was unpinned.** Step 10(c) asked for three `toBeNull()` assertions and
+  Step 15's table named one mutation on `server/src/fleet.ts` (`?? 0`). Both look at the ABSENCE half.
+  Nothing anywhere asserted that a hookstate count of N reaches `FleetSession.graphQueries` as N —
+  `grep -rn graphQueries server/test pwa/test` found no non-null assertion downstream of
+  `assembleFleet` — so the seam `graphQueries: hs?.graphQueries ?? null` could be replaced by a literal
+  `null`, deleting the guard and dropping the count for every live session, with the full server suite
+  still green (MEASURED by the reviewer: 248 files / 6286 tests, zero failures). That is lens-(d)
+  exactly, and the identical class the first review round blocked on for `shared/api.ts`'s `optNum` —
+  fixed there, left open here, because `assembleFleet` is the LIVE `/api/fleet` path and
+  `reviveFleetSession` is only the degraded-mode read. Fixed by extending the sibling positive test in
+  `server/test/fleet.test.ts` (seed `graphQueries: 7`, assert `7`, rename to "all four fields") and
+  adding a measured-zero test beside it (`graphQueries: 0` → `0`), which also closes `hs ? 0 : null`.
+  Three rows added to Step 15's table, all measured RED.
+
+  **(b) The hook's one-fork three-field read was positionally fragile.** The fork-merge that put
+  `graphQueries` into `subs`/`prev_state`'s existing jq kept the original field order, so the filter
+  read `(.subagents | tostring), (.state), (.graphQueries)` over a LINE-delimited channel with the one
+  field that can carry arbitrary text FIRST. The comment was right that `tostring` escapes a newline
+  inside an ARRAY, but on a JSON *string* `tostring` returns the text raw: an externally-corrupted
+  `.subagents` that is a string containing a newline emits four lines and shifts `prev_state` and `gq`
+  onto the wrong ones. `subs` self-heals through its `\[*` guard and `gq` through `^[0-9]+$`, but
+  `prev_state` has NO guard and is written into the file as `state` on the SubagentStart/Stop path — a
+  robustness regression against the pre-merge code, which read `.state` with its own jq and could not
+  be shifted at all. It degrades rather than lies (an out-of-set `state` reaches
+  `server/src/hookstate.ts:233` and returns `NO_STATE`) and it needs an externally-corrupted file, but
+  the fix is free: the order is now `(.state), (.graphQueries), (.subagents | tostring)` with the three
+  `read -r` names swapped to match, so a shift can only corrupt `subs`, which was already caught. Same
+  one fork, same hot-path budget. Pinned by a new `session-hook` test that seeds
+  `subagents: "evil\nline"` and asserts `state` and the count survive; measured RED against the old
+  order.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

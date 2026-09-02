@@ -528,7 +528,7 @@ describe('archived size on the wire', () => {
 });
 
 describe('hook state on the wire', () => {
-  it('a fresh hookstate carries hookState, askSummary and subagents onto the session', async () => {
+  it('a fresh hookstate carries all four fields — hookState, askSummary, subagents and graphQueries — onto the session', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -537,6 +537,7 @@ describe('hook state on the wire', () => {
         state: 'waiting',
         ask: { questions: [{ question: 'Pick one', header: 'Choose', options: [{ label: 'A' }, { label: 'B' }] }] },
         subagents: [{ name: 'reviewer', startedAt: 1000 }],
+        graphQueries: 7,
       })],
     ]);
     const fleet = await assembleFleet(
@@ -547,6 +548,33 @@ describe('hook state on the wire', () => {
     expect(s.hookState).toBe('waiting');
     expect(s.askSummary).toBe('Choose');
     expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000 }]);
+    // The POSITIVE carry, and the only test anywhere that proves a hookstate
+    // count of N reaches `FleetSession.graphQueries` as N. Its hookless
+    // sibling below is `toBeNull()` in every field, so WITHOUT this line the
+    // whole seam (`graphQueries: hs?.graphQueries ?? null`, fleet.ts) could be
+    // replaced by a literal `null` — the count silently dropped for every live
+    // session — and the entire server suite would stay green (D-1249).
+    expect(s.graphQueries).toBe(7);
+  });
+
+  it('carries a hookstate graphQueries of 0 onto the session as 0 — a measured zero is not an absence', async () => {
+    // The other half of the field, and the half a `hs ? 0 : null` would still
+    // survive: the seam must distinguish "hook says zero reads" from "no hook
+    // data at all", which is exactly the distinction `hookstate.ts` drew one
+    // layer in. The sibling above pins N, this pins 0, the hookless one pins
+    // null — three points, no collapse left unpinned (D-1249).
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([
+      ['claude-demo', mkHookState({ state: 'working', graphQueries: 0 })],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.graphQueries).toBe(0);
   });
 
   it('a hookless session carries all four fields as null', async () => {

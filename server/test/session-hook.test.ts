@@ -341,4 +341,29 @@ describe('graphQueries — the read counter the console can see', () => {
     run({ hook_event_name: 'UserPromptSubmit' });
     expect(readState().graphQueries).toBe(0);
   });
+
+  it('a corrupted multi-line .subagents cannot shift state or the count onto the wrong line (D-1249)', () => {
+    // The three fields come back from ONE jq on THREE LINES, so the read is
+    // POSITIONAL. `tostring` keeps a newline escaped only for an ARRAY; on a
+    // JSON *string* it hands back the text raw, so an externally-corrupted
+    // `.subagents` that is a string with a newline in it emits an extra line
+    // and everything read after it lands one line late. `subs` self-heals via
+    // its `[*` guard and `gq` via `^[0-9]+$`, but `state` has NO guard here —
+    // it would be written straight into the file on this path. So the
+    // unbounded-text field is read LAST: a shift can only corrupt `subs`,
+    // which is already caught.
+    fs.writeFileSync(stateFile(), JSON.stringify({
+      v: 1, state: 'waiting', event: 'PreToolUse', sessionId: 'uuid-1', pid: 4242,
+      updatedAt: 1784600000000, ask: null, subagents: 'evil\nline', graphQueries: 3,
+    }));
+    run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
+    const s = readState();
+    // Read in the wrong order these become state:'line' and graphQueries:0 —
+    // the state arm's own answer overwritten by another field's overflow.
+    expect(s.state).toBe('waiting');
+    expect(s.graphQueries).toBe(3);
+    // …and the corrupted field itself still degrades to the empty set it
+    // always did, the subagent appended onto it.
+    expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: expect.any(Number) }]);
+  });
 });
