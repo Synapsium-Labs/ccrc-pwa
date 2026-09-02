@@ -1264,7 +1264,7 @@ one.)*
 - Modify `agent/src/server.ts`: import **:32**, two payload helpers after `statPayload`, `case 'readFrom'` (**:257-263**)
   and `case 'readB64'` (**:264-269**).
 - Modify `shared/agent-protocol.ts:105-106` — the response schema comment for both ops.
-- Test `agent/test/fileops.test.ts` — five cases beside the existing readB64/readFrom pairs (**:95-129**).
+- Test `agent/test/fileops.test.ts` — **six** cases beside the existing readB64/readFrom pairs (**:95-129**). (This line said five; Step 1 lists six, and six is what the task adds.)
 
 **Interfaces:**
 - Produces (agent-local):
@@ -1486,9 +1486,16 @@ and the two cases (**:257-269**):
      Expect RED on *readFrom at EOF is a POSITIVE answer* with
      `expected { ok: true, data: null } to match object { ok: true, data: '', size: 4 }`.
      Right reason: a measurement was reclassified as a failure — the precise thing the EOF arm exists to prevent.
-  3. In `readB64Measured`, change the post-stat catch's ternary to `'absent'` unconditionally.
+  3. In `readB64Measured`, change the catch guarding the READ after `stat` has already succeeded — NOT the catch around the initial `stat` call; both textually follow a `stat`, and that ambiguity cost a wrong-catch detour when this was executed's ternary to `'absent'` unconditionally.
      Expect RED on *readB64 of a DIRECTORY (EISDIR)* with
      `expected { …, absent: true } not to have property "absent"`. Right reason: an EISDIR claimed proof of absence.
+  4. In `readFromMeasured`, the SAME mutation on its own post-stat catch — the symmetric twin of (3).
+     Added after the fact: the review found this guard was proven only by symmetry with (3), never by
+     measurement. Its test (`readFrom` of a DIRECTORY answers null with no `absent` key) passed BOTH
+     before and after implementation, because the old code never set `absent` at all — so nothing had
+     ever shown the test can see this guard. A guard with a test but no measurement that the test
+     detects its absence is the "pin whose premise is never established", which is the class this
+     wave exists to remove.
 
 - [ ] **Step 6: Commit**
       `git commit -am "fix(agent): readB64 reports over-cap and absence, readFrom reports absence, EOF stays positive (D-1401)"`
