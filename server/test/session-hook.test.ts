@@ -394,15 +394,25 @@ describe('the SessionStart graph card', () => {
   /** A tree with a graph in it. `built` is the sha the graph claims; the DECOY
    *  at the head of graph.json is the mutation this fixture exists to catch —
    *  `built_at_commit` is the file's LAST key on a real 8 MB graph, and a
-   *  reader that parses from the head answers the decoy. */
+   *  reader that parses from the head answers the decoy.
+   *
+   *  `pad` IS THE DISTANCE BETWEEN THE DECOY AND THE END OF THE FILE, and the
+   *  hook's `built` read defends that distance with TWO clauses that each cover
+   *  the other at 9000 (D-1361): `tail -c 4096` puts the decoy outside the
+   *  bytes read at all, and `| tail -n1` takes the last match of however many
+   *  were read. Pass `pad: 0` for a graph.json small enough that the whole file
+   *  is inside the byte window — the only shape in which the second clause is
+   *  the one deciding, and so the only shape that measures it. */
   const plantGraph = (dir: string, opts: {
     built?: string; nodes?: number; engine?: string | null; report?: boolean;
+    pad?: number;
   } = {}): void => {
     const out = path.join(dir, 'graphify-out');
     fs.mkdirSync(out, { recursive: true });
     const built = opts.built ?? 'a'.repeat(40);
+    const pad = opts.pad ?? 9000;
     const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
-    const filler = `  "pad": "${'x'.repeat(9000)}",\n`;
+    const filler = pad > 0 ? `  "pad": "${'x'.repeat(pad)}",\n` : '';
     fs.writeFileSync(path.join(out, 'graph.json'),
       `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
     if (opts.report !== false) {
@@ -514,6 +524,35 @@ describe('the SessionStart graph card', () => {
     expect(text, 'the head decoy was read instead of the real last key')
       .not.toContain('00000000');
     expect(text).toContain(first.slice(0, 8));
+  });
+
+  // D-1361: the row above binds `tail -c 4096` — swap it for `head -c 4096`
+  // and the decoy is the only match there is. It cannot bind `| tail -n1`: its
+  // 9000-byte pad puts the decoy outside the byte window, so deleting that
+  // clause leaves grep with a single match and the row green. A graph.json
+  // SMALLER than the window is an ordinary graph of an ordinary small tree, and
+  // there the byte bound reads the whole file and the pipeline's last-match
+  // clause is the only thing between the card and an earlier
+  // `"built_at_commit"` in the JSON — so this is the shape that measures it.
+  // The measurement only exists because the field split next to it now takes
+  // the FIRST colon (`${built#*:}`); while it took the last, it answered the
+  // right sha off a two-match read all by itself and `| tail -n1` was
+  // undeletable-by-nothing.
+  it('takes the LAST built_at_commit when the decoy is INSIDE the byte window', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, pad: 0 });
+    // The fixture asserts its own premise: a pad that grew back past the
+    // window would silently stop measuring the clause this test exists for.
+    const size = fs.statSync(path.join(tree, 'graphify-out', 'graph.json')).size;
+    expect(size, 'the fixture no longer fits inside the hook\'s 4096-byte read')
+      .toBeLessThan(4096);
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'the head decoy won inside the byte window')
+      .not.toContain('00000000');
+    expect(text, 'the card named no sha at all — the built read resolved more '
+      + 'than one match, so `| tail -n1` is doing nothing')
+      .toContain(first.slice(0, 8));
   });
 
   it('says how far behind HEAD the graph is, in commits', () => {

@@ -1053,6 +1053,7 @@ Expected: all PASS. If `session-hook`'s p95 budget test is the only red, re-run 
 |---|---|
 | move `_hook_graph_card \|\| true` out of the `SessionStart` arm to just before `f="$REG/$id.hookstate.json"` | "prints NOTHING on every other event, even with a graph right there" |
 | change `tail -c 4096` to `head -c 4096` in the `built` read | "reads built_at_commit from the TAIL — a decoy at the head must not win" |
+| delete `| tail -n1` from the `built` read (D-1361) | "takes the LAST built_at_commit when the decoy is INSIDE the byte window" — and only once the field split takes the FIRST colon; while it took the last, this mutation was green |
 | delete the `[ ! -f "$cwd/graphify-out/graph.json" ]` early return and emit unconditionally | "prints NOTHING when the tree has no graph and the sweep never mentioned it" |
 | move the card call below `[[ "$src" == compact ]] && exit 0` | "is printed for compact too…" |
 | replace `fresh="freshness unmeasured"` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "says the graph is undatable when rev-list will not answer for the built sha (D-1252, D-1336)" — **not** "…not a git repo", which cannot reach that `case` at all (no `tip`, so the whole block is skipped) and stayed green under the mutation |
@@ -3116,6 +3117,39 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | `ccd/ccrc`: delete BOTH `      rm -f "$tmp"` lines in `_inst_graph_always_on_off` (`:5417`, `:5422`; `bash -n` clean) | `Tests  1 failed \| 42 passed (43)` — `a half-written temp file was left in the operator's config directory: expected [ 'CLAUDE.md.tmp.2549620' ] to deeply equal []` |
   | `ccd/ccrc`: delete the splice arm's line ALONE (`:5417`; `bash -n` clean) | `Tests  1 failed \| 42 passed (43)` — same assertion, so the new row binds THAT line and not the other |
   | unmutated | `Tests  43 passed (43)` (whole file) |
+
+
+- **D-1361** (2026-09-02, whole-branch review) — **the card's decoy defence answered the right sha
+  through TWO mechanisms for one decision, and so one of them was deletable with the suite green.**
+  The `built` read (`ccd/session-hook.sh`) is `tail -c 4096 … | grep -oE … | tail -n1`, and the line
+  under it was `built="${built##*:}"`. The whole-branch review's counter-evidence finding credited
+  the card with a "combined decoy defence"; measured, the combination was the problem. `plantGraph`'s
+  9000-byte pad puts the head decoy OUTSIDE the byte window, so "reads built_at_commit from the TAIL"
+  binds `tail -c 4096` (swap it for `head -c` and 8 of the file's tests go red) and can say nothing
+  about `| tail -n1`: one match reaches the pipe either way. And a fixture small enough to put both
+  matches inside the window still could not bind it, because `##*:` strips through the LAST colon of
+  a two-line grep result and therefore re-implemented last-wins by itself — `| tail -n1` deleted,
+  `bash -n` clean, `Tests  53 passed (53)`.
+
+  Behaviour today is correct — every live read has one match in the window — so this is a redundant
+  mechanism, not a wrong sha, and the reason it is worth a change rather than a note is which word it
+  guards: the sha the card names is what `fresh` is computed from, and `fresh` is the word clause 12
+  of the worker skill says licenses taking a query answer as read (D-1353's entry above). **The
+  deviation from the plan is a shipped line**: Task 2 prescribes `built="${built##*:}"` verbatim
+  (`docs/…-graphify-read-side-ccrc-level.md:980`) and the tree now spells it `built="${built#*:}"`.
+  The key being stripped carries no colon, so on the single match `| tail -n1` always yields, the two
+  spellings are byte-identical; what changes is that a two-match read no longer resolves to a sha at
+  all, which is what makes the pipeline clause a mechanism a test can redden. The new case, "takes the LAST
+  built_at_commit when the decoy is INSIDE the byte window", plants a `pad: 0` graph.json and asserts
+  its own premise (`size < 4096`) so a pad that grows back stops the test rather than silently
+  stopping the measurement.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/session-hook.sh`: delete `\| tail -n1` from the `built` read, with `##*:` still in place (`bash -n` clean) | `Tests  53 passed (53)` — the gap this entry records |
+  | `ccd/session-hook.sh`: the same deletion, with `#*:` shipped (`bash -n` clean) | `Tests  1 failed \| 52 passed (53)` — `the card named no sha at all …: expected 'graphify: this tree has a knowledge g…' to contain 'ebc1d529'` |
+  | `ccd/session-hook.sh`: `tail -c 4096` -> `head -c 4096` in the `built` read (`bash -n` clean) | `Tests  8 failed \| 45 passed (53)`, the byte bound's own row among them — `the head decoy was read instead of the real last key` — so the pair now has one row each |
+  | unmutated | `Tests  53 passed (53)` (whole file) |
 
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them

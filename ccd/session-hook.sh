@@ -105,7 +105,16 @@ _hook_graph_card() {
 
   built=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
     | grep -oE '"built_at_commit"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' | tail -n1) || built=""
-  built="${built##*:}"; built="${built//\"/}"; built="${built// /}"
+  # ONE CLAUSE DECIDES WHICH MATCH WINS, and it is `| tail -n1` above (D-1361).
+  # `${built#*:}` takes the FIRST colon because the key it strips carries none;
+  # the older `##*:` took the last, which silently re-implemented the pipeline's
+  # last-wins decision inside the field split — two mechanisms for one decision,
+  # and the effect was that `| tail -n1` could be deleted with the whole suite
+  # green (measured), because on a two-match read the parameter expansion went
+  # on quietly answering the right sha. Behaviour is unchanged for every single
+  # match, which is every read `tail -n1` survives; what changes is that the
+  # clause is now a mechanism a test can redden.
+  built="${built#*:}"; built="${built//\"/}"; built="${built// /}"
   [[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""
 
   nodes=$(head -c 4096 "$cwd/graphify-out/GRAPH_REPORT.md" 2>/dev/null \
