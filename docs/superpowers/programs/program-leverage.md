@@ -19,7 +19,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18, PR #37 (merged `6458a14d`) | done 2026-08-31 ~18:57 UTC — fix round `8262d2b3` verified hunk-by-hunk (all 11 rulings landed with measured reds), CI 5/5, merged, deployed **AGENT-FIRST** (fleet host then server; `ccd` and `/health` both report `6458a14d`, all live sessions verified active through it). Review was SHIP-WITH-FIXES: 3 majors + 1 raised to must-fix, 7 minors, 2 refuted. D-1123..D-1156 spent, floor 1157 |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial + D-1156's derived box-token census | run 19, PR #39 (merged `6ee36ca5`) | done 2026-09-01 ~22:48 UTC — TWO fix rounds plus a renumber. Round 1 (`ff85c514`) answered 3 must-fixes; the worker then AUDITED ITS OWN FIX ROUND (88 agents) and found **4 majors, 3 of them the same guard-with-no-mechanism fault** (`eee5fa1a`). Coordinator verification: 13 lenses, 7 running real mutations in isolated checkouts — **3/3 must-fixes and 4/4 self-audit majors hold**, zero code majors. Then BLOCKED: PR #41 merged at 21:54 taking D-1159/1160/1161, so `deviation-refs` red on the merged tree; renumbered to D-1240..D-1242 (`1c7ccb06`). CI 5/5, merged, deployed **server lane** from the merge sha; `/health` reports `6ee36ca5` (NOT agent-first). D-1163..D-1172 + D-1208..D-1242 spent, floor 1243 |
-| 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) **+ the ledger-allocation guard, three incidents behind it** | run 28 | dispatched 2026-09-01 ~22:52 UTC (resumed quiet-meadow, `briefQueued:true`, `clearError:null`, `skillState:present`) |
+| 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) **+ the ledger-allocation guard, three incidents behind it** | run 28, PR #43 | wave-done 2026-09-02 08:23 UTC, CI 5/5 on `ed81ad85` (incl. test-macos). **REVIEWED 08:56 UTC — SHIP-WITH-FIXES: 5 must-fix, 1 major, 1 minor** (10 lenses, refute-default verification, 25 agents; mail 194). Fix round pending. D-1293..D-1317 allocated and defined, **zero collisions against main** — the fourth incident avoided |
 | 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm (re-queue a parked role-addressed delivery after a reclaim), and `ccd/ccrc-api:32-38`'s stale two-door census | — | planned |
 
 ## Decisions & deviations
@@ -606,6 +606,59 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
   merge, not housekeeping after it. (`gh pr edit` fails on this repo with a Projects-classic GraphQL
   deprecation error and leaves the body UNCHANGED while looking like a failed command; the working
   path is `gh api -X PATCH repos/<o>/<r>/pulls/<n> --input <json>`.)
+
+### Wave 7 review — 2026-09-02 08:56 UTC — SHIP WITH FIXES
+
+Ten adversarial lenses over the branch diff, refute-default verification, every mutation run in an
+isolated checkout — 25 agents. **Five must-fix, one major, one minor. Zero code defects** in the
+health read, migration 7, the wire, or the four-statement batching: four of the five must-fixes are
+FALSE CLAIMS IN SHIPPED PROSE, and the fifth is a live false positive in the wave's headline guard.
+Ruling in mail 194.
+
+- **The fourth ledger collision was avoided, and the brief is what nearly caused it.** The brief said
+  "floor **1243** — and READ the floor from the allocator, never from a document", in one sentence.
+  PR #42 merged mid-wave defining D-1243. The worker read the allocator (1292) and was clean; had it
+  read the bolded number in the same sentence it would have been the program's fourth incident.
+  **Ruling adopted for wave 8 and after: a brief carries a floor as PROVENANCE ("it was N when this
+  was written"), never as an instruction.** Its shelf life here was about two hours.
+- **Verified by the coordinator independently**: 25 numbers allocated with `byId`, 25 defined, and
+  `git grep` finds none of D-1293..D-1317 anywhere on `origin/main`. `origin/main` is an ANCESTOR of
+  `ed81ad85`, so the merge is a fast-forward and **CI's 5/5 green IS the merge-green measurement** —
+  no local re-run can say more.
+- **M1/M2/M3/M4 — the false-claim class, four instances, none of them cosmetic.** A comment asserting
+  a `single-definition` holder that does not exist (measured: the respelled literal ships GREEN);
+  `ledger.ts` shipping two stale cardinals (394/388 and 29) in the docstring whose own subject is not
+  shipping stale cardinals — measured at HEAD as 405/399 and 27, where **29 is the figure belonging to
+  the looser pattern that paragraph exists to distinguish itself from**; `runWords.ts:454` re-asserting
+  verbatim the premise D-1309 was raised to delete, 44 lines below the code that refutes it; and an
+  Execution record whose "verified at close, both directions: 24 allocated, 24 defined" is wrong about
+  its own close (the same document defines 25).
+- **M5 — the cross-tree guard fires on the prose that RECORDS a collision.** D-1310 fixed the
+  whole-phrase-bold citation the corpus happened to contain; the individually-bolded spelling —
+  `- **D-1157** and **D-1158** were taken by PR #38`, which is how *every* collision record in this
+  program is written, and which D-1310's own entry quotes — still reads as a DEFINITION. Wave 8 will
+  narrate exactly that about D-1243, a number `main` really defines, so it trips next wave with the
+  printed remedy "renumber NOW" on a merely-cited number. The other direction is open too: **36
+  line-initial `**D-N — subject**` entries with no bullet are invisible to the scan** (not a
+  regression — `ENTRY` is blind the same way — but a hole in a guard whose subject is not missing one).
+  A candidate lookahead closing both directions was measured (11 shapes, 0 mismatches, +24 visible)
+  and handed over as a starting point, not a mandate.
+- **J1 — the un-briefed-coordinator facet stops firing the moment the kickoff parks**, and the file
+  already owns the right predicate (`OUTSTANDING_OR_ABANDONED_SQL`, whose docstring states the
+  principle in as many words). The finder's ESCALATION was refuted and the refutation upheld: only two
+  gates ever park a kickoff, so the busy/paneless/delivered-then-dead coordinators keep firing
+  indefinitely. What survives is that `store.ts:1524-1526` presents the park-goes-silent chain as a
+  DEFEATED first draft when it is still true of the shipped code — `MIN(m.at)` changed when the
+  warning starts, not that it stops.
+- **The `byId` question the worker escalated — ruled.** Do NOT require it at
+  `POST /api/ledger/deviations`; fix it in the CLIENT. `ccd/ccrc-api:151 cmd_whoami` already derives
+  `{id,uuid}` from tmux + the registry, and the 101 empty holders trace to `peer-protocol.md`'s
+  documented body omitting the field — a documentation default, not a route defect. Requiring it
+  server-side would 400 every session still carrying the old skill text, since a skill reaches a home
+  only once its installer has run there. **Goes to wave 8, which is already AGENT-FIRST**, with the
+  third condition named up front: a caller whose lookup fails, and a caller that is not a session at
+  all, must not silently send an empty `byId` — that recreates the hole quietly, which is what D-1301
+  measured.
 
 ## Carried constraints
 
