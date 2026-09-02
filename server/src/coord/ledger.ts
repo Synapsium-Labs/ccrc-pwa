@@ -115,51 +115,96 @@ export const LEDGER_ALLOCATOR_ERA = 211;
 
 /**
  * A line that DEFINES a number: an entry PREFIX, then the number, then one of the
- * four ways this repo actually opens an entry.
+ * ways this repo actually opens an entry.
  *
  * Looser than `deviation-refs.test.ts`'s `ENTRY` in one direction and TIGHTER in
- * another, and both halves are load-bearing.
+ * another, and both halves are load-bearing. Stated as DELTAS and as SHAPES, never
+ * as totals: a total moves whenever any plan gains an entry, so a cardinal written
+ * here is stale by its own commit. That is not a style preference — it is D-1302's
+ * defect, D-1294's first attempt at this very sentence, and then D-1320, which
+ * found two stale cardinals still standing in this paragraph one wave after it was
+ * rewritten to stop carrying them.
  *
- * LOOSER: `ENTRY` demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE
- * SAME LINE — so it cannot see build 9b's colon form (`- **D-211** (Task 3): …`)
- * or a subject wrapped onto the next line. Measured as a DELTA rather than as two
- * totals, because the totals move whenever any plan gains an entry and a number
- * here would be stale by its own commit (D-1302's defect, and D-1294's first
- * attempt at this sentence made exactly that mistake): this shape sees 29
- * definition lines `ENTRY` cannot, D-1158 among them — one of the five numbers
- * this program lost, and the half of the first incident that would have stayed
- * invisible even in a fully merged tree.
+ * LOOSER, TWICE:
+ *  - `ENTRY` demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE SAME
+ *    LINE — so it cannot see build 9b's colon form (`- **D-211** (Task 3): …`) or a
+ *    subject that wraps onto the next line. D-1158 is one of those, and it is the
+ *    half of the first collision incident that would have stayed invisible even in
+ *    a fully merged tree.
+ *  - The BARE-BOLD entry — `**D-297 — subject**` with no list bullet — which build
+ *    8, stage 2e, the worker-skill plan and upstream-launcher-locks all write, and
+ *    which BOTH `ENTRY` and this regex's first draft were blind to (D-1322). A
+ *    re-definition of any of those numbers was silently missed by a guard whose
+ *    whole subject is not missing one.
  *
- * TIGHTER: a prefix alone is NOT enough, and the review that found this had two
- * live examples in the corpus. `- **D-149 sweep:** any task that…` and
- * `- **D-172, D-173 and D-174 were re-used** by this branch…` are line-initial
- * bolded CITATIONS, not entries, and a prefix-only rule calls both definitions.
- * That is the false-positive direction and it is the dangerous one here: the
- * second of those sentences is the exact prose a wave writes when it RECORDS a
- * ledger collision, so a prefix-only guard reds on the narrative describing the
- * incident it exists to detect, and the only remedy its own message offers is to
- * renumber a deviation the branch merely cited. The lookahead requires what every
- * real entry has after its number — `**` (the bold closing), ` —`, ` (` or a
- * bare `:` — and rejects `,`, `'s`, and a following word. Measured over the
- * scanned plans: 394 prefix matches, 388 entry-shaped, and all six dropped lines
- * are citations (D-149, D-171, D-172, D-291, D-292, D-1026). No real entry moves.
+ * TIGHTER: a prefix alone is NOT enough. `- **D-149 sweep:** any task that…`,
+ * `- **D-1039..D-1045** (seven).` and `- **D-172, D-173 and D-174 were re-used**
+ * by this branch…` are line-initial bolded CITATIONS, not entries, and a
+ * prefix-only rule calls all three definitions. That is the false-positive
+ * direction and it is the dangerous one here: the last of those is the exact prose
+ * a wave writes when it RECORDS a ledger collision, so a prefix-only guard reds on
+ * the narrative describing the incident it exists to detect, and the only remedy
+ * its own message offers is to renumber a deviation the branch merely cited.
+ *
+ * THE FIRST DRAFT OF THE LOOKAHEAD CAUGHT ONLY THE SPELLING THE CORPUS HAPPENED TO
+ * HOLD (D-1322). It accepted a bare `**` after the number, so it read
+ * `- **D-1231** and **D-1232** were re-used by this branch` — the individually
+ * bolded form, which is how every collision record in this program is actually
+ * written — as a DEFINITION of D-1231, while correctly rejecting the whole-phrase
+ * bold. The `**` arm now requires what a real entry has AFTER the bold closes: an
+ * em-dash, a `(`, or a `:`. The three bare arms (` —`, ` (`, `:`) are unchanged.
+ *
+ * Measured over the plans `plansAt` feeds this, at HEAD and at `origin/main`
+ * alike: eighteen prefix-shaped lines are dropped by the lookahead and every one
+ * is a citation; no line the previous shape called a definition stops being one;
+ * and the widened prefix adds twenty-four bare-bold entries. The guard's own
+ * output is unmoved where it counts — zero allocator-era cross-tree collisions
+ * before and after, and no change at all below the era, so `GRANDFATHERED` (which
+ * may only SHRINK) does not have to grow.
  *
  * The dotted-sub-entry lookahead is kept exactly as `ENTRY` has it: `D-310.1`
- * CITES `D-310`, it does not define it.
+ * CITES `D-310`, it does not define it. The lettered form (`D-155-a`) falls out
+ * for free — the lookahead sees `-a`, not an entry opening.
  */
-const DEFINITION = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)(?=\*\*|\s+—|\s+\(|:)/;
+const DEFINITION = /^(?:#{2,4} |- \*\*|\*\*)D-(\d+)\b(?!\.\d)(?=\*\*\s*(?:—|\(|:)|\s+—|\s+\(|:)/;
+
+/** A fenced-code delimiter, at the three-space indent CommonMark still counts as
+ *  one. Both fence characters, because plans use both. */
+const FENCE = /^\s{0,3}(?:```|~~~)/;
 
 export interface Definition { readonly file: string; readonly n: number }
 export interface CrossTreeCollision { readonly n: number; readonly files: readonly string[] }
 
-/** Every definition in a set of already-read files. Pure: the caller does the
- *  reading, so the same function serves fixtures and two real git trees. */
+/**
+ * Every definition in a set of already-read files. Pure: the caller does the
+ * reading, so the same function serves fixtures and two real git trees.
+ *
+ * FENCED BLOCKS ARE SKIPPED (D-1323). A plan that QUOTES another plan's ledger
+ * entry inside a code fence — a review report pasting the line it is arguing
+ * about, a wave narrating the collision it just renumbered — is not defining that
+ * number, and a guard whose printed remedy is "renumber NOW" must not fire on a
+ * quotation. No line in the corpus is affected today; the shape is what plans are
+ * about to write, and the same family as the citation false positive above.
+ *
+ * AN ODD NUMBER OF FENCE LINES IN A FILE DISABLES THE SKIP FOR THAT FILE. An
+ * unbalanced fence would otherwise put everything after the last delimiter
+ * "inside" a block, silently dropping real definitions — a guard going quiet is a
+ * worse failure than a guard being noisy, so the ambiguous file is scanned whole
+ * and reports what it finds. This is the fail-loud direction on purpose; the
+ * corpus is balanced in all 66 plans today, so the arm exists for the file that
+ * is not.
+ */
 export function definitionsIn(
   files: readonly { readonly path: string; readonly text: string }[],
 ): Definition[] {
   const out: Definition[] = [];
   for (const f of files) {
-    for (const line of f.text.split('\n')) {
+    const lines = f.text.split('\n');
+    const balanced = lines.filter((l) => FENCE.test(l)).length % 2 === 0;
+    let inFence = false;
+    for (const line of lines) {
+      if (balanced && FENCE.test(line)) { inFence = !inFence; continue; }
+      if (inFence) continue;
       const m = DEFINITION.exec(line);
       if (m) out.push({ file: f.path, n: Number(m[1]) });
     }

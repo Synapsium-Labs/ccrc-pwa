@@ -385,6 +385,41 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     });
   });
 
+  // D-1322: the classification, checked against lines that are really in the
+  // corpus rather than against fixtures a test author invented. Each row names a
+  // substring; the row FAILS if no plan at HEAD contains a line holding it, which
+  // is what keeps this from becoming an assertion about prose nobody writes any
+  // more. The line is then classified on its own, as a one-line file, so a
+  // number the same plan legitimately defines elsewhere cannot mask the answer.
+  describe.each([
+    ['citation', 'D-149 sweep:'],
+    ['citation', 'D-172, D-173 and D-174 were re-used'],
+    ['citation', 'D-171 was landed twice'],
+    ['citation', 'D-1026 changes the shape the operator approved'],
+    ['citation', 'D-1039..D-1045'],
+    ['citation', 'D-1012 .. D-1019'],
+    ['definition', 'D-297 — the `_spawn` split demoted'],
+    ['definition', 'D-99 — the remote-control switch is a FILE'],
+    ['definition', "D-211** (Task 3) — the plan's red-first step"],
+    ['definition', 'D-190** (Task 1): the session-id pattern'],
+  ] as const)('classifies the corpus line %s: %s', (kind, needle) => {
+    it(`is read as a ${kind}`, () => {
+      const found: string[] = [];
+      for (const p of plansAt('HEAD')) {
+        for (const line of p.text.split('\n')) if (line.includes(needle)) found.push(line);
+      }
+      // The premise, established rather than assumed: if the shape has left the
+      // corpus this row is measuring nothing and must say so.
+      expect(found.length, `no line at HEAD contains "${needle}" — this row asserts nothing`)
+        .toBeGreaterThan(0);
+      for (const line of found) {
+        const got = definitionsIn([{ path: 'one-line.md', text: line }]);
+        expect(got.length > 0, `${kind} expected, got ${got.length} definition(s) from: ${line.slice(0, 90)}`)
+          .toBe(kind === 'definition');
+      }
+    });
+  });
+
   it('sees MORE than the subject-based scan above — the two are not redundant', () => {
     // The proof that this arm is worth its runtime: the wrapped/colon forms
     // `ENTRY` cannot match are real and present in this very tree.

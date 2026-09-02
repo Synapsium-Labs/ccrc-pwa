@@ -14,9 +14,12 @@
 //      which is what the pre-allocator grandfathering needs; scoping the new rule
 //      to n >= 211 leaves GRANDFATHERED untouched and its "may only SHRINK"
 //      invariant intact.
-//   3. PREFIX-ONLY recognition — ENTRY's `—\s*(.+)$` demands the subject on the
-//      same line, and 29 real definitions in today's plans are invisible to it,
-//      D-1158 among them: one of the five numbers this program actually lost.
+//   3. WIDER RECOGNITION than ENTRY's `—\s*(.+)$`, which demands the subject on
+//      the same line: real definitions in today's plans are invisible to it,
+//      D-1158 among them — one of the five numbers this program actually lost.
+//      No cardinal here, deliberately (D-1320): the totals move with every plan,
+//      and a count in a comment is stale by its own commit. What is stable is the
+//      SHAPE, and every shape below is copied from a real plan.
 import { describe, it, expect } from 'vitest';
 import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra,
          unallocatedDefinitions } from '../src/coord/ledger.js';
@@ -74,6 +77,72 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
 
   it('excludes a dotted SUB-entry, which cites its parent rather than defining it', () => {
     expect(definitionsIn([f('a.md', '- **D-310.1** — a finding under D-310')])).toEqual([]);
+  });
+
+  // ── D-1322 ────────────────────────────────────────────────────────────────
+  // The first lookahead caught the whole-phrase-bold citation (tested above) and
+  // MISSED the individually-bolded one, which is how every collision record in
+  // this program is actually written — including the one D-1310's own entry
+  // quotes. Wave 8 will narrate "D-1243 was taken by PR #42" about a number main
+  // really defines, so the first shape below is not hypothetical: it is next
+  // wave's red suite, with the remedy "renumber NOW" printed against a number the
+  // branch only cited.
+  it('is not fooled by INDIVIDUALLY bolded citations — the shape a collision record uses', () => {
+    expect(definitionsIn([f('a.md', '- **D-1231** and **D-1232** were re-used by this branch')])).toEqual([]);
+    expect(definitionsIn([f('a.md', '- **D-1157** and **D-1158** were taken by PR #38')])).toEqual([]);
+    expect(definitionsIn([f('a.md', '- **D-1243** was taken by PR #42, and this wave renumbered')])).toEqual([]);
+    // The range citation, which every wave's closing paragraph writes.
+    expect(definitionsIn([f('a.md', '**D-1039..D-1045** (seven). **D-1046 is the only number left.**')])).toEqual([]);
+    expect(definitionsIn([f('a.md', '**D-1209**, allocated fresh from the allocator (floor now 1210).')])).toEqual([]);
+    // A trailing bold with no entry punctuation after it is a citation too.
+    expect(definitionsIn([f('a.md', '**D-1153**.')])).toEqual([]);
+  });
+
+  it('reads the BARE-BOLD entry, which both ENTRY and the first draft were blind to', () => {
+    // Four plans on main open every entry this way — build 8, stage 2e, the
+    // worker skill, upstream-launcher-locks. A re-definition of any of those
+    // numbers was silently missed by a guard whose subject is not missing one.
+    // Strings copied verbatim from `origin/main`.
+    expect(definitionsIn([f('a.md', '**D-297 — the `_spawn` split demoted a process-fatal error.** Task 3 gave')])
+      .map((d) => d.n)).toEqual([297]);
+    expect(definitionsIn([f('a.md', '**D-301 (was D-B8-5) — four guards were decorated, not pinned.** Review')])
+      .map((d) => d.n)).toEqual([301]);
+    expect(definitionsIn([f('a.md', '**D-99 — the remote-control switch is a FILE, not a config key.**')])
+      .map((d) => d.n)).toEqual([99]);
+  });
+
+  it('does not let the bare-bold arm swallow a mid-sentence bold reference', () => {
+    // The widened prefix is line-ANCHORED, so the arm can only ever fire at the
+    // start of a line. This is the assertion that says so rather than assuming it.
+    expect(definitionsIn([f('a.md', 'the fix for **D-297 — the split** landed in Task 3')])).toEqual([]);
+    expect(definitionsIn([f('a.md', '  **D-297 — indented under a list item**')])).toEqual([]);
+  });
+
+  // ── D-1323 ────────────────────────────────────────────────────────────────
+  it('does not read a QUOTED entry inside a code fence as a definition', () => {
+    const quoting = [
+      'This is the line the review argued about:',
+      '',
+      '```',
+      '- **D-1231** — the entry another plan defines',
+      '### D-1232 — and a heading form too',
+      '```',
+      '',
+      '- **D-1300** — this plan\'s own entry, outside the fence',
+    ].join('\n');
+    expect(definitionsIn([f('a.md', quoting)]).map((d) => d.n)).toEqual([1300]);
+    // Tilde fences too, and a fence carrying an info string.
+    expect(definitionsIn([f('b.md', '~~~md\n- **D-1231** — quoted\n~~~')])).toEqual([]);
+    expect(definitionsIn([f('c.md', '```markdown\n### D-1231 — quoted\n```')])).toEqual([]);
+  });
+
+  it('scans an UNBALANCED file whole rather than going quiet after the stray fence', () => {
+    // The fail-loud arm. An odd fence count would otherwise put everything after
+    // the last delimiter "inside" a block, and a guard that silently stops
+    // reporting is worse than one that over-reports — this is the direction the
+    // ambiguity resolves in, asserted rather than described.
+    const stray = ['```', 'an opened block nobody closed', '- **D-1300** — a real entry after it'].join('\n');
+    expect(definitionsIn([f('a.md', stray)]).map((d) => d.n)).toEqual([1300]);
   });
 
   it('names the file each definition came from', () => {
