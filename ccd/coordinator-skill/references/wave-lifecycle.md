@@ -178,6 +178,14 @@ leaves that clause pointing at nothing and the worker improvising the very
 thing the clause exists to stop. Name it explicitly, every wave, the same way
 you name the plan file.
 
+**A brief may quote the worker's graph card.** Every session's `SessionStart`
+prints one line for its own tree — node count, the commit the graph was built
+at, and whether that is fresh or N commits behind HEAD. Quoting the freshness
+half in the brief tells the worker what it is querying before it queries it: a
+graph 97 commits stale answers confidently and wrongly, and worker clause 12
+sends the worker to `graphify query` first. The card is measured per tree, so a
+brief that quotes it is quoting THAT workspace, not the fleet.
+
 **One sentence from the protocol goes in every brief anyway: "commit on this
 workspace's own branch; do not create or switch to a separate feature
 branch."** (F5, build4 dogfood wave 1.) `ws-add` creates the workspace on its

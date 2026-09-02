@@ -2486,6 +2486,42 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   renaming `_gs_row()` itself reds them at the lift's own assertion, `ccd-graph-sweep no longer defines
   _gs_row()`.
 
+- **D-1338** (2026-09-02, Task 3) — **Step 7's proof command can never print nothing.** The step ends
+  `git grep -n "eleven clauses"` with *Expected: no output*, but `git grep` scans the whole tree,
+  including `docs/`, and the phrase lives there for reasons no edit to the skill can remove: this very
+  plan spells it three times (its own File Structure row and Step 7's two lines), the spec it
+  implements spells it once (`…-design.md:56`, an artifact table describing the skill as it stood when
+  the spec was written), and two shipped plans record it as history
+  (`2026-08-24-build9b-peers-claims-allocator.md`, five hits from the ten→eleven change; a plan's
+  ledger is authoritative history and is not edited backwards). MEASURED after Step 7's three edits:
+  the bare command prints 10 lines, all of them in `docs/`. The proof that actually holds is the one
+  scoped to shipped source — `git grep -n "eleven clauses" -- . ':!docs/'` — which exits 1 with no
+  output, and the broader `git grep -nE "\b(11|eleven) (clause|line)" -- ccd/ server/ pwa/ shared/
+  README.md CLAUDE.md` finds a single unrelated hit (`ccd/ccd:5801`, "the close is eleven lines").
+  Recorded because a verification step whose expected output is unreachable teaches the next reader to
+  ignore it, which is the same failure mode as a comment standing in for a mechanism.
+
+- **D-1339** (2026-09-02, Task 3) — **Step 8's third mutation row names an edit clause 12 cannot
+  carry.** The row is *"replace a straight apostrophe in clause 12 with a curly one"*, cited as the
+  reason D-104 exists. Clause 12 contains **zero** apostrophes of either kind (MEASURED:
+  `sed -n 69p ccd/worker-skill/SKILL.md | grep -o "'" | wc -l` → 0), so the mutation as written cannot
+  be applied and the row would have been reported as measured without anything having been measured.
+  The row's real content is two separate claims, and both were measured on their own terms.
+  (a) *A curly apostrophe reds the pin* — applied to clause 2's `workspace's`, the nearest clause that
+  has one: RED at `Tests  1 failed | 10 passed (11)`, failing on clause 2's own literal. (b) *An
+  invisible lookalike byte inside clause 12 reds the pin* — the ASCII hyphen in `session-side` swapped
+  for U+2011: RED at `Tests  1 failed | 10 passed (11)`, failing on clause 12's literal with the
+  file rendering identically in every editor. Recorded rather than silently substituted, because the
+  substitution changes which clause the row proves anything about.
+
+  A second, sharper note from the same step: **`git checkout -- <file>` is the wrong revert for a
+  mutation applied to a file whose task edits are still unstaged.** Following the standing rule
+  literally after mutation 1 discarded the whole of clause 12 along with the mutation — Step 3's work,
+  silently, with the suite then green for the wrong reason had it not been re-run. The mutation loop
+  here keeps a pristine copy of the edited file outside the tree and restores from that, verifying
+  with `diff` and a re-run before moving on. Any task that measures a mutation table before its commit
+  needs the same, or must stage first.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

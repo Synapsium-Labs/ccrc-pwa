@@ -31,7 +31,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The eleven clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
+// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
 // quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'`
 // — both carry single quotes, and the sibling suite's single-quoted style would
 // need escaping exactly where a copy-paste from SKILL.md is most useful.
@@ -58,6 +58,7 @@ const CONTRACT = [
   "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.",
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
+  "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
 ];
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
@@ -65,7 +66,7 @@ const CONTRACT = [
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all eleven clauses verbatim', () => {
+  it('carries all twelve clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
