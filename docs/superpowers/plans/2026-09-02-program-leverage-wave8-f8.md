@@ -281,9 +281,16 @@ section uses instead of `chmod 000` (see the root-runner rule below).
 
 **Files:**
 - Modify `agent/src/fileops.ts:91-96` (`statPath`) — add `StatResult` + `statMeasured`, `statPath` deleted
-  (`grep -rn "statPath" agent/src` → 3 hits: the definition, the import at `server.ts:32`, the single call at
-  `server.ts:279` — all three replaced here; nothing in `agent/test` imports `fileops.ts` at all —
-  `grep -rn "fileops" agent/test` → empty).
+  (`grep -rn "statPath" agent/src` → **4 hits**: the definition, the import at `server.ts:32`, and TWO
+  calls — `server.ts:279` in the `stat` op and `server.ts:546` in `refreshVerbs`, the `ccd caps`
+  verb-cache refresher. All four are replaced here; `statPath` is DELETED, so a missed call site is a
+  compile error, not a silent survivor. Nothing in `agent/test` imports `fileops.ts` at all —
+  `grep -rn "fileops" agent/test` → empty.
+  **This line said THREE and named three, and it printed the command that returns four.** Corrected
+  from the measurement, not from the draft: `refreshVerbs` is behaviour-preserving under the swap
+  because `statPath` returned `null` on every throw and `statMeasured` returns `{ok:false}` on every
+  throw, so `!st.ok` is exactly the old `st === null` — the ENOENT/other-errno distinction the op
+  handler now makes is one `refreshVerbs` does not consume.)
 - Modify `agent/src/server.ts:32` (import), add `statPayload` after `readPayload` (**:162-170**), rewrite
   `case 'stat'` (**:276-282**).
 - Modify `shared/agent-protocol.ts:106` — the response schema comment.
