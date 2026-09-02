@@ -2351,6 +2351,43 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   (2 failed — the census and the ratchet), and widening the epoch exemption to swallow the event
   dispatch (1 failed — the three body anchors).
 
+- **D-1251** (2026-09-02, whole-branch review) — **the branch took the additive-wire compatibility and
+  did not honour it on the read side.** `graphQueries` ships ADDITIVE with `FLEET_PROTO` deliberately
+  held at 1 (Task 2's own interfaces block, and the field's docstring at `shared/api.ts`), which is a
+  promise that a server predating it keeps talking to a newer client. Absence-permits, though, was
+  implemented on the REVIVE path only (`optNum(o, 'graphQueries')` inside `reviveFleetSession`, whose
+  one consumer is `loadFleetSnapshot`), and the tree already states twice — `pwa/src/lib/offline.ts`
+  and `unmeasuredFields`' docstring — that a LIVE `fleet` frame never revives: `asFleetMsg` validates
+  `Array.isArray(sessions)` and returns `m as FleetMsg`. Both new chips read the field raw
+  (`session.graphQueries !== null`, `pwa/src/fleet/SessionLine.tsx` and
+  `pwa/src/screens/RunsScreen.tsx`), so on a row from an older server `undefined !== null` is true.
+  MEASURED on BOTH surfaces, by rendering a session with the key `delete`d — the shape such a server
+  actually sends: `<span class="sess-graph" title="undefined graphify read(s) this session">graph
+  </span>`. That is the exact inversion of the contract the chip exists to carry: `null` means nothing
+  measured and must render NO chip, `0` means measured-and-read-nothing; the numberless chip paints an
+  ignorant row as one that reported. It is also CLAUDE.md's wire rule broken in its own words — a
+  newer peer tolerates an older peer's omission "through a SINGLE reader per field", and here there
+  were two inline readers and no tolerant one. Scenario reachability is not hypothetical in this repo:
+  `unmeasuredFields`' docstring already enumerates the causes (a rollback, a `dist-pwa` deployed
+  before the process restarts, a cached client shell reconnecting to an old process) and records that
+  reading such a field directly was measured as a TypeError that killed the renderer.
+  **Shipped:** `graphReadCount` in `shared/api.ts`, beside `unmeasuredFields`/`substrateFault` and in
+  their idiom — the ONE place both surfaces read the field, so they cannot drift onto two fallbacks.
+  Absence degrades to `null`, the OPPOSITE direction from `unmeasuredFields`' `[]` and deliberately
+  so: an older server is ignorant of the count, never a witness that the session read nothing. A
+  present-but-unusable value (a string, `NaN`, `Infinity`) degrades to `null` too, matching `optNum`'s
+  rule on the revival path. Three mutations measured RED: reverting `SessionLine` to the raw read
+  (`Tests  2 failed | 87 passed (89)` — the omitted-key row and the non-number row, the first failing
+  with the finding's own `title="undefined graphify read(s) this session"` byte-for-byte), reverting
+  `RunsScreen` to the raw read (`Tests  1 failed | 82 passed (83)`), and gutting `graphReadCount` to
+  `return s.graphQueries as number | null` (`Tests  3 failed | 169 passed (172)` across both suites);
+  the weaker mutation `return s.graphQueries ?? null` still reds the non-number pin (`Tests  1 failed
+  | 171 passed (172)`), so the finite check is pinned separately from the absence check. The two
+  surfaces carry their own tests rather than sharing one: a single reader is what stops them drifting,
+  and a pin on only one of them cannot see the other drift. Both assert on the `.sess-graph` CLASS,
+  not the text — RTL's matcher trims, so `graph ` normalises to `graph` and a text query would miss
+  the very chip the test forbids.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

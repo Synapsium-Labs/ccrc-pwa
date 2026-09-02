@@ -1312,4 +1312,26 @@ describe('the run board worker row carries the graph chip', () => {
     board({ graphQueries: null });
     expect(screen.queryByText(/^graph /)).toBeNull();
   });
+
+  // The board's half of D-1251. The live `fleet` frame is CAST, not revived
+  // (`stores/fleet.ts`'s `asFleetMsg`), and the field is ADDITIVE with
+  // `FLEET_PROTO` held at 1, so a server predating it omits the KEY — a shape
+  // `sess({graphQueries: null})` cannot produce. Read raw, `undefined !== null`
+  // is true and this row paints `graph ` with no number. The two surfaces are
+  // pinned separately on purpose: one shared reader is what keeps them from
+  // drifting, and a pin on only one of them cannot see the other drift.
+  it('shows NO chip when the server omits the key entirely — an older server (D-1251)', () => {
+    const store = makeStore();
+    const raw = sess({ graphQueries: 3 }) as unknown as Record<string, unknown>;
+    delete raw['graphQueries'];
+    act(() => {
+      store.setState({ runs: [r()], runsFrameSeen: true, sessions: [raw as unknown as FleetSession] });
+    });
+    const { container } = render(
+      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    // The class, not the text: RTL's matcher trims, so `graph ` normalises to
+    // `graph` and a text query would MISS the very chip this test forbids.
+    const chip = container.querySelector('.sess-graph');
+    expect(chip, `a numberless chip rendered: ${chip?.outerHTML}`).toBeNull();
+  });
 });

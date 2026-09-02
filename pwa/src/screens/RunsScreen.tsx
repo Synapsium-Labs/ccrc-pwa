@@ -33,7 +33,7 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
+import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
 import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
@@ -128,6 +128,8 @@ function RunRow({
   // directly, for the same reason `SessionLine.tsx` gives — a live frame can
   // omit the key entirely at runtime even though the type says required.
   const degradedFields = session === null ? [] : unmeasuredFields(session);
+  // Same discipline, same reason — the ONE reader for the count (D-1251).
+  const graphReads = session === null ? null : graphReadCount(session);
   // Total lookup, never a raw index (finding 2): `state` degrades a token
   // this build's vocabulary has no key for to the designated `unknown`
   // member, and `items` defaults a row that reached this renderer without
@@ -212,10 +214,14 @@ function RunRow({
       {/* The worker's read counter, in the fleet card's own class — the same
           reuse this row already makes of `.sess-spawn` and `.sess-unmeasured`
           next door, and for the same reason: a second `.run-…` class for one
-          meaning is two vocabularies over one field. */}
-      {session !== null && session.graphQueries !== null && (
-        <span className="sess-graph" title={`${session.graphQueries} graphify read(s) this session`}>
-          graph {session.graphQueries}
+          meaning is two vocabularies over one field. Read through
+          `graphReadCount`, never `session.graphQueries`, for the reason
+          `unmeasuredFields` is used two lines up: the live frame is cast, not
+          revived, so an older server's row omits this ADDITIVE key and a raw
+          `!== null` paints `graph ` with no number (D-1251). */}
+      {graphReads !== null && (
+        <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
+          graph {graphReads}
         </span>
       )}
       {/* D-1, finally on screen. `data-cleared` carries the half the word

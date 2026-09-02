@@ -20,7 +20,7 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  substrateFault, unmeasuredFields,
+  graphReadCount, substrateFault, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -168,6 +168,12 @@ export function SessionLine({
     : `tmux unreachable since ${new Date(fault.at).toLocaleString(undefined, {
         day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
       })} — ${fault.text}`;
+
+  // The read counter (R4), through `graphReadCount` and never
+  // `session.graphQueries`: the live frame is cast, not revived, so a server
+  // predating this ADDITIVE field omits the key and the raw `!== null` test
+  // is true for `undefined` — a `graph ` chip with no number (D-1251).
+  const graphReads = graphReadCount(session);
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
@@ -437,16 +443,17 @@ export function SessionLine({
           {/* The read counter (R4). `!== null` and NOT a truthiness test: a
               measured zero is the finding this chip exists to show — a session
               with a fresh graph in its tree that has queried it not once — and
-              `graphQueries && …` would hide exactly that row. Null is the
-              other answer (no hook data, or a hook too old to count), and it
+              `graphReads && …` would hide exactly that row. Null is the
+              other answer (no hook data, a hook too old to count, or a SERVER
+              too old to send the field at all — see `graphReadCount`), and it
               renders nothing at all rather than a `graph 0` nobody measured.
               A plain cell in .sess-meta, so the shared
               `.sess-meta > *:not(:first-child)::before` rule punctuates it
               like every sibling; no disclosure, because there is nothing
               underneath a count to open. */}
-          {!dead && session.graphQueries !== null && (
-            <span className="sess-graph" title={`${session.graphQueries} graphify read(s) this session`}>
-              graph {session.graphQueries}
+          {!dead && graphReads !== null && (
+            <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
+              graph {graphReads}
             </span>
           )}
 
