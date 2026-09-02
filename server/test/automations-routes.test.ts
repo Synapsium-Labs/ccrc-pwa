@@ -9,7 +9,7 @@
 // runs with `CCRC_AUTH` DARK (the `testDeps` default), `kickoff-route.test
 // .ts`'s own posture, so each fixture below is free to focus on the route's
 // OWN behaviour rather than re-proving the gate.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -20,6 +20,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
+import { FleetWatcher } from '../src/watch.js';
+import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { AUTOMATION_PROMPT_MAX_BYTES, AUTOMATION_RUN_RETENTION } from '../../shared/api.js';
@@ -75,13 +77,53 @@ function makeRunner(home: string, promptText: string, project = PROJECT):
   return { run, calls, sessionId };
 }
 
+/** Keeps the `Deps` OBJECT it built and hands it back, which the original
+ *  shape threw away. The reason is not tidiness: a watcher constructed over a
+ *  DIFFERENT `Deps` would carry a different `CoordStore`, and the whole
+ *  question this rig is now asked (does the route's act and the sweep's act
+ *  collide on one lease?) is invisible unless both read the same
+ *  `~/.ccrc/coord.db` handle. `pr-sweep.test.ts:65` is the shipped idiom for
+ *  one `deps` shared by an app and a watcher. Every fixture that wants only an
+ *  app keeps destructuring `{app, coord, cfg}` and is untouched. */
 const openApp = async (home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'>> = {}) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const base = testDeps(home, run);
-  const app = await buildServer({ ...base, coord, ...over });
-  return { app, coord, cfg: base.cfg };
+  const deps: Deps = { ...base, coord, ...over };
+  const app = await buildServer(deps);
+  return { app, coord, cfg: base.cfg, deps };
 };
+
+/** *Run now* is a CLAIM plus a SWEEP: the route answers `202` the moment the
+ *  lease is open and the ACT — spawn, identify, adopt, prompt, close — is
+ *  performed by the watcher's pass 3. So a fixture that asserts on the act has
+ *  to drive a sweep, and must not mistake `await sweepAutomations()` for
+ *  awaiting the act: `fireOne` void-dispatches (`watch.ts:2440`), which is why
+ *  the settle is observed by POLLING the store rather than by the await.
+ *
+ *  Priming is exactly one `tick()` BEFORE the claim — `primed` flips at the
+ *  END of a tick, immediately after the sweep that tick dispatched has already
+ *  returned on `!primed`, so the priming tick fires nothing and the first
+ *  explicit sweep afterwards always runs (`lastAutomationSweep` starts at 0
+ *  and the interval gate is `!== 0`). ONE sweep needs no clock advance. */
+async function runNowAndSettle(
+  app: FastifyInstance, deps: Deps, coord: CoordStore, id: number,
+): Promise<number> {
+  const w = new FleetWatcher(deps, new Bus(), 2000);
+  try {
+    await w.tick();
+    const res = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
+    expect(res.statusCode, res.body).toBe(202);
+    const runId = (res.json() as { runId: number }).runId;
+    await w.sweepAutomations();
+    await vi.waitFor(() => {
+      expect(coord.automationRuns(id, 5).find((r) => r.id === runId)?.endedAt).not.toBeNull();
+    });
+    return runId;
+  } finally {
+    w.stop();
+  }
+}
 
 const create = (app: FastifyInstance, body: Record<string, unknown>) =>
   app.inject({ method: 'POST', url: '/api/automations', payload: body });
@@ -156,8 +198,10 @@ describe('the arm gate — never-run-by-hand, and what clears it', () => {
     const w = await openApp(home, run); app = w.app;
     const id = (await create(app, validBody())).json().automation.id as number;
 
-    const runRes = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
-    expect(runRes.statusCode, runRes.body).toBe(202);
+    // The arm gate's full loop — manual run -> proof -> arm succeeds — now
+    // spans the route AND the sweep, so this fixture drives both. Re-targeting
+    // it at the 202 alone would delete the only end-to-end proof of the gate.
+    await runNowAndSettle(app, w.deps, w.coord, id);
 
     const after = w.coord.automation(id)!;
     expect(after.provedAt).not.toBeNull();
@@ -184,19 +228,83 @@ describe('POST /:id/run — the manual door, and what it must never read off the
     expect(res.statusCode).toBe(404);
   });
 
-  it('409, carrying the refusal code, when the fleet-wide pause marker is present', async () => {
+  it('records coordinator-paused as a REFUSED RUN, not an HTTP refusal, and still spawns nothing', async () => {
+    // WHY THIS IS NO LONGER A 409. `coordinator-paused` is rung 5 of
+    // `checkPostClaim`, which runs inside `fireAutomation` — on the sweep,
+    // after this route has already answered. The refusal is not lost, and that
+    // is the assertion: `fireAutomation` settles the run row on every refusal
+    // path before returning, so the code reaches the phone as the run's own
+    // `outcome`/`refusal` and as the parent's `lastOutcome`/`lastRefusal` on
+    // the `{type:'automations'}` frame, which arrives with no re-fetch. What
+    // must NOT change is the fleet consequence: still no spawn.
     const home = mkTmp('ccrc-auto-routes-');
-    const { run } = makeRunner(home, 'go');
+    const { run, calls } = makeRunner(home, 'go');
     const w = await openApp(home, run); app = w.app;
     const id = (await create(app, validBody())).json().automation.id as number;
     // rung 5 — the operator's existing fleet-wide pause (§7's own note: "the
     // operator's existing fleet-wide pause already stops automations too").
     writeFileSync(path.join(w.cfg.registryDir, COORDINATOR_PAUSE_MARKER), '');
-    const res = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ ok: false, refused: 'coordinator-paused' });
-    // Refused BEFORE any fleet act: no spawn call was made.
+    await runNowAndSettle(app, w.deps, w.coord, id);
     expect(w.coord.automationRuns(id, 5)[0]).toMatchObject({ outcome: 'refused', refusal: 'coordinator-paused' });
+    expect(w.coord.automation(id)).toMatchObject({ lastOutcome: 'refused', lastRefusal: 'coordinator-paused' });
+    // Refused BEFORE any fleet act: no spawn call was made.
+    expect(calls.filter((c) => c.includes('ws-add'))).toEqual([]);
+  });
+
+  it('409 overlap — the ONE refusal a claim-only route can still decide itself', async () => {
+    // The route's 409 arm did not disappear with the post-claim ladder;
+    // `claimAndOpenRun` refuses `overlap` (a lease already open) and
+    // `unknown-automation` (diverted to 404 above), so `overlap` is the whole
+    // of it. Without this fixture the arm has no coverage at all, since the two
+    // refusals that used to exercise it are now settled on the sweep.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const id = (await create(app, validBody())).json().automation.id as number;
+    const first = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
+    expect(first.statusCode).toBe(202);
+    // No sweep in between: the lease from the first claim is still open, which
+    // is exactly the condition a double-tap on the phone now reaches.
+    const second = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toMatchObject({ ok: false, refused: 'overlap' });
+    expect(w.coord.automationRuns(id, 5)).toHaveLength(1);
+  });
+
+  it('finishes a run that was claimed before the automation was retired, instead of stranding its lease', async () => {
+    // The gap only exists because the manual door became claim-only: the act
+    // now happens on a later tick, and `POST /:id/state` has no lease check,
+    // so `retired` can land in between. Pass 3 reads `leasedAutomations()` for
+    // exactly this reason — `automations({})` filters `retired` out, and with
+    // that query the run below is never fired, never explained, and settles
+    // `lost` only when its hard lease lapses 600 s later, holding the lease
+    // and one of AUTOMATION_MAX_CONCURRENT the whole time.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run, sessionId } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const id = (await create(app, validBody())).json().automation.id as number;
+
+    const claimed = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
+    expect(claimed.statusCode).toBe(202);
+    const retired = await app.inject({
+      method: 'POST', url: `/api/automations/${id}/state`, payload: { state: 'retired' },
+    });
+    expect(retired.statusCode).toBe(200);
+    expect(w.coord.automation(id)!.state).toBe('retired');
+
+    const sweeper = new FleetWatcher(w.deps, new Bus(), 2000);
+    try {
+      await sweeper.tick();
+      await sweeper.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(w.coord.automationRuns(id, 5)[0]!.endedAt).not.toBeNull();
+      });
+    } finally {
+      sweeper.stop();
+    }
+    expect(w.coord.automationRuns(id, 5)[0]).toMatchObject({ outcome: 'ok', sessionId });
+    // And the lease is given back, so the row is not left wedged either.
+    expect(w.coord.automation(id)!.leaseRunId).toBeNull();
   });
 
   it('D-280: a body naming another project/prompt/session/trigger is not a field that exists — the fired call is the STORED automation, verbatim', async () => {
@@ -213,6 +321,22 @@ describe('POST /:id/run — the manual door, and what it must never read off the
       },
     });
     expect(res.statusCode).toBe(202);
+
+    // D-280 gets STRONGER with a claim-only route, not weaker: the body dies
+    // at the route and the act is performed later, from the STORED row alone,
+    // by a sweep that never saw the request. The proof still lives in the
+    // `ws-add` argv, so this fixture drives the sweep rather than re-targeting
+    // itself at the 202 — which would keep the status and drop the property.
+    const wSweep = new FleetWatcher(w.deps, new Bus(), 2000);
+    try {
+      await wSweep.tick();
+      await wSweep.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(w.coord.automationRuns(id, 5)[0]!.endedAt).not.toBeNull();
+      });
+    } finally {
+      wSweep.stop();
+    }
 
     const wsAddCalls = calls.filter((c) => c.includes('ws-add'));
     expect(wsAddCalls.length).toBe(1);
@@ -261,8 +385,11 @@ describe('runs and steps — the read side', () => {
     const { run } = makeRunner(home, 'go');
     const w = await openApp(home, run); app = w.app;
     const id = (await create(app, validBody())).json().automation.id as number;
-    await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
-    const runId = w.coord.automationRuns(id, 1)[0]!.id;
+    // The route under test is the READ route; the step trail is its payload,
+    // and every `automation_run_events` row is written by the act. Asserting
+    // it straight after the claim would assert `steps: []` — the same shape a
+    // broken wiring returns.
+    const runId = await runNowAndSettle(app, w.deps, w.coord, id);
 
     const res = await app.inject({ method: 'GET', url: `/api/automations/runs/${runId}` });
     expect(res.statusCode).toBe(200);
@@ -329,8 +456,14 @@ describe('GET /api/automations, GET /:id, POST /:id (edit), POST /:id/state, POS
     const { run, sessionId } = makeRunner(home, 'go');
     const w = await openApp(home, run); app = w.app;
     const id = (await create(app, validBody())).json().automation.id as number;
-    await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
-    await app.inject({ method: 'POST', url: `/api/automations/${id}/arm` });
+    // This fixture is not about the act; it needs an ARMED row, and arming has
+    // one door that the arm gate opens only once a manual run has SETTLED with
+    // a session. The prelude's own `POST /arm` was unchecked, so a claim-only
+    // route would have left the row `paused` and this fixture would have
+    // measured `nextRunAt` for the wrong state while still reading as a
+    // product regression.
+    await runNowAndSettle(app, w.deps, w.coord, id);
+    expect((await app.inject({ method: 'POST', url: `/api/automations/${id}/arm` })).statusCode).toBe(200);
     void sessionId;
 
     const res = await app.inject({
@@ -352,8 +485,8 @@ describe('GET /api/automations, GET /:id, POST /:id (edit), POST /:id/state, POS
     const { run } = makeRunner(home, 'go');
     const w = await openApp(home, run); app = w.app;
     const id = (await create(app, validBody())).json().automation.id as number;
-    await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
-    await app.inject({ method: 'POST', url: `/api/automations/${id}/arm` });
+    await runNowAndSettle(app, w.deps, w.coord, id);
+    expect((await app.inject({ method: 'POST', url: `/api/automations/${id}/arm` })).statusCode).toBe(200);
 
     const paused = await app.inject({ method: 'POST', url: `/api/automations/${id}/state`, payload: { state: 'paused' } });
     expect(paused.statusCode).toBe(200);
@@ -396,9 +529,12 @@ describe('GET /api/automations, GET /:id, POST /:id (edit), POST /:id/state, POS
     expect(res.statusCode).toBe(200);
     expect(w.coord.automationsPaused()).toMatchObject({ paused: true });
 
-    const fired = await app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
-    expect(fired.statusCode).toBe(409);
-    expect(fired.json()).toMatchObject({ ok: false, refused: 'automations-paused' });
+    // Rung 4, like rung 5 above, is decided on the sweep — so the switch's
+    // effect is a REFUSED RUN rather than an HTTP refusal. Kept in one fixture
+    // because the switch and its consequence are the same claim; the flip is
+    // asserted above, the consequence here.
+    await runNowAndSettle(app, w.deps, w.coord, id);
+    expect(w.coord.automationRuns(id, 5)[0]).toMatchObject({ outcome: 'refused', refusal: 'automations-paused' });
   });
 
   it('400 bad-request for a non-boolean paused', async () => {
@@ -449,5 +585,112 @@ describe('D-280 — only the four body-carrying routes read a body; Run-now neve
       'POST /api/automations/:id/state',
       'POST /api/automations/pause',
     ]);
+  });
+});
+
+// ── ONE manual run, ONE session ─────────────────────────────────────────────
+//
+// The invariant this pins is not about HTTP status codes; it is that a single
+// *Run now* creates a single session. Two actors can perform a manual run's
+// act — `POST /:id/run` and the watcher's sweep pass 3 ("every open lease this
+// process has not already started") — and the sweep's single-flight guard,
+// `automationsInFlight`, is a PRIVATE FIELD OF THE WATCHER (`watch.ts:649`,
+// added only in `fireOne` at `:2441`). A route that performs the act itself
+// therefore cannot register in it. While that route is inside its spawn — ccd's
+// `SPAWN_SETTLE_S` is 240 s, and the automations lane sweeps every 10 s — every
+// sweep in the window reads the same `leaseRunId` as "leased but not started"
+// and fires it AGAIN.
+//
+// The second act is silent, not loud: `markAutomationSpawn` (`store.ts:3834`)
+// is a bare `UPDATE automation_runs SET ... WHERE id = ?` with no idempotency
+// guard, so the second identify OVERWRITES sessionId/workspace/branch on the
+// one run row and the first session becomes an orphan no run row names — the
+// exact thing `store.ts:3829`'s own docstring calls "spec §6's
+// orphan-manufacture rule". Only the second settle is refused.
+//
+// The fixture is written to hold on BOTH sides of the cut-over rather than to
+// describe one implementation: it counts `ws-add` attempts across two sweeps
+// and asserts ONE, whoever performs it. `calls.push` runs BEFORE the gate, so
+// an attempt is counted while it is still blocked.
+describe('a manual run spawns exactly one session', () => {
+  const NOW = Date.UTC(2026, 8, 2, 12, 0);
+  const advance = (ms: number): void => { vi.setSystemTime(Date.now() + ms); };
+  let app: FastifyInstance | undefined;
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+  afterEach(async () => { await app?.close(); app = undefined; vi.useRealTimers(); });
+
+  /** `makeRunner`, with a gate the fixture opens: `ws-add` records its attempt
+   *  and then WAITS, modelling the 240 s a real spawn can hold. */
+  function gatedRunner(home: string, promptText: string):
+  { run: Runner; calls: string[][]; open: () => void } {
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    const panes = ['scrollback\n❯ \n', `scrollback\n❯ ${promptText}\n`, 'scrollback\n❯ \n'];
+    let capIdx = 0;
+    let seeded = false;
+    let open = (): void => { /* replaced below, before any call can await it */ };
+    const gate = new Promise<void>((resolve) => { open = () => resolve(); });
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        await gate;
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        const pane = panes[Math.min(capIdx, panes.length - 1)]!;
+        capIdx++;
+        return { code: 0, stdout: pane, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { run, calls, open };
+  }
+
+  it('does not spawn a second session for a sweep that lands while the act is in flight', async () => {
+    const home = mkTmp('automations-run-once-');
+    const PROMPT = 'go';
+    const r = gatedRunner(home, PROMPT);
+    const opened = await openApp(home, r.run);
+    app = opened.app;
+    const { coord, deps } = opened;
+
+    const created = await create(app, validBody({ prompt: PROMPT }));
+    expect(created.statusCode).toBe(201);
+    const id = (created.json() as { automation: { id: number } }).automation.id;
+
+    // The row is `paused` with `provedAt` NULL, so `dueAutomations` excludes it
+    // by construction: the manual door is the only actor that can fire it, and
+    // pass 2 cannot be the source of a second act.
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    const attempts = (): number => r.calls.filter((c) => c[1] === 'ws-add').length;
+    try {
+      await w.tick();                       // primes; `primed` flips AFTER the dispatch
+      const posted = app.inject({ method: 'POST', url: `/api/automations/${id}/run` });
+
+      // Wait for the CLAIM, not for the response. Awaiting the response would
+      // be the natural thing to write and would make this fixture unable to
+      // measure the defect it exists for: a route that performs the act does
+      // not answer until the act is done, so the sweep below would never land
+      // inside the window. The claim's own row is the observable both shapes
+      // share — it is committed before either performs anything.
+      await vi.waitFor(() => { expect(coord.automationRuns(id, 5)).toHaveLength(1); });
+
+      await w.sweepAutomations();            // the first sweep after priming always runs
+      await vi.waitFor(() => { expect(attempts()).toBeGreaterThanOrEqual(1); });
+      advance(10_000 + 1);                   // past AUTOMATION_SWEEP_MS
+      await w.sweepAutomations();
+
+      r.open();
+      expect((await posted).statusCode).toBe(202);
+      await vi.waitFor(() => {
+        expect(coord.automationRuns(id, 5)[0]!.endedAt).not.toBeNull();
+      });
+
+      expect(attempts(), 'one Run now must issue exactly one ws-add').toBe(1);
+      expect(coord.automationRuns(id, 5)).toHaveLength(1);
+    } finally {
+      w.stop();
+    }
   });
 });

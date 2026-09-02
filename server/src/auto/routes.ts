@@ -27,11 +27,10 @@
 // scan in `automations-routes.test.ts`.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { Deps } from '../server.js';
-import { fireAutomation, type FireDeps } from './fire.js';
-import { planSchedule, type AutomationRow as PolicyAutomationRow } from './schedulepolicy.js';
+import { planSchedule } from './schedulepolicy.js';
 import {
   toAutomationSummary, type AutomationEdit, type AutomationEditResult, type AutomationFilter,
-  type AutomationRow as StoreAutomationRow, type AutomationTransitionResult, type ArmResult,
+  type AutomationTransitionResult, type ArmResult,
   type NewAutomation,
 } from '../coord/store.js';
 import type { Cadence, StoredCadence } from '../../../shared/schedule.js';
@@ -47,26 +46,6 @@ const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false,
  *  `schedulepolicy.ts:30-32`) degrades to `null`, exactly as
  *  `AutomationRow.cadence` documents for the fire-path reader. */
 const cadenceOf = (sc: StoredCadence): Cadence | null => (sc.kind === 'unknown' ? null : sc);
-
-/** The store's own `AutomationRow` (wire summary + lease triple) -> the
- *  fire-path's `AutomationRow` (`schedulepolicy.ts`) — TWO DIFFERENT shapes
- *  under one name, by design (L2 ports are declared BY THE CONSUMER; see
- *  `fire.ts`'s own docstring on why it does not import the store's type).
- *  `fireAutomation` needs the FULL shape, not a `Pick`, so this is a real
- *  conversion rather than a structural pass-through — `cadence` in
- *  particular is a different TYPE on each side (`StoredCadence` vs `Cadence
- *  | null`), which is exactly the seam `cadenceOf` above closes. */
-function toPolicyRow(row: StoreAutomationRow): PolicyAutomationRow {
-  return {
-    id: row.id, name: row.name, state: row.state, project: row.project, prompt: row.prompt,
-    cadence: cadenceOf(row.cadence), graceMs: row.graceMs,
-    provedAt: row.provedAt, nextRunAt: row.nextRunAt, scheduleError: row.scheduleError,
-    lastFireAt: row.lastFireAt, lastOutcome: row.lastOutcome, lastRefusal: row.lastRefusal,
-    leaseUntil: row.leaseUntil, leaseHardUntil: row.leaseHardUntil,
-    consecutiveFailures: row.consecutiveFailures, runsEvicted: row.runsEvicted,
-    createdAt: row.createdAt, updatedAt: row.updatedAt,
-  };
-}
 
 /** `req.body`/`req.query`'s unknown shape, parsed by hand — no schema layer
  *  in this tree (`coord/routes.ts`'s own idiom throughout). */
@@ -291,22 +270,37 @@ export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
       }
       return reply.code(409).send({ ok: false, refused: claim.refused, leaseUntil: claim.leaseUntil });
     }
-    const fireDeps: FireDeps = {
-      coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
-      tmux: deps.tmux, queue: deps.queue,
-    };
-    // `fireAutomation` calls `checkPostClaim` itself (spec §6 step 5, rungs
-    // 3-9 — never rungs 1-2, the due predicate, or `decideFire`: those are
-    // the sweep's alone) and, on success, performs the whole act (spawn,
-    // identify, adopt, prompt, close) — AWAITED here rather than
-    // fired-and-forgotten, because `fireAutomation` is the SINGLE place
-    // `checkPostClaim` may run (its own docstring: "runs exactly once, in
-    // one place, for both doors") and this route holds no duplicate of that
-    // ladder to answer 409 any earlier.
-    const outcome = await fireAutomation(fireDeps, toPolicyRow(row), claim.runId, now);
-    if ('settle' in outcome && outcome.settle === 'refused') {
-      return reply.code(409).send({ ok: false, refused: outcome.refusal, detail: outcome.detail });
-    }
+    // THE CLAIM IS THE WHOLE OF THIS ROUTE'S WORK. `claimAndOpenRun` is one
+    // synchronous store transaction; the act — spawn, identify, adopt, prompt,
+    // close — is performed by the watcher's sweep pass 3, which picks up
+    // "every open lease this process has not already started" and cannot tell
+    // this claim from a scheduled one, because they are the same fact.
+    //
+    // This route USED TO await `fireAutomation` here, and that was a live
+    // defect rather than merely a slow answer. The sweep's single-flight
+    // guard, `automationsInFlight`, is a private field of the watcher
+    // (`watch.ts:649`, added only in `fireOne`), so an act performed HERE
+    // could not register in it: every sweep landing inside the spawn window
+    // (ccd's `SPAWN_SETTLE_S` is 240 s; the automations lane sweeps every
+    // 10 s) read the same `leaseRunId` as un-started and fired it again.
+    // `markAutomationSpawn` has no idempotency guard, so the second identify
+    // overwrote sessionId/workspace/branch on the one run row and the first
+    // session became an orphan no run row names — `store.ts`'s own
+    // "spec §6 orphan-manufacture rule". Measured, before the change:
+    // one *Run now* issued TWO `ws-add` calls
+    // (`automations-routes.test.ts`, "a manual run spawns exactly one
+    // session"). `fireAutomation` now has exactly ONE caller in the tree,
+    // which `single-definition.test.ts` pins mechanically — the property was
+    // prose in three places and measured in none.
+    //
+    // WHAT THE CALLER LOSES, said plainly: the post-claim ladder (rungs 3-9)
+    // runs on the sweep, so its refusals no longer come back as `409
+    // {refused}`. They are not lost — `fireAutomation` settles the run row on
+    // every refusal path before returning, so each one reaches the phone as
+    // the run's own `outcome:'refused'` plus `refusal`, and as the parent's
+    // `lastOutcome`/`lastRefusal` on the `{type:'automations'}` frame, which
+    // needs no re-fetch. The one refusal this route can still answer is
+    // `overlap`, which `claimAndOpenRun` decides.
     return reply.code(202).send({ ok: true, runId: claim.runId });
   });
 

@@ -290,8 +290,13 @@ export async function checkPostClaim(
  * Task 7 — the act: spawn, identify by diff, adopt honestly, prompt.
  * task-6-decisions.md C2.6/C2.7, spec §6 steps 6-10. `checkPostClaim` above
  * runs exactly once, inside `fireAutomation`, for both doors (spec §6 step
- * 5's own sentence) — Run-now (Task 9) calls `fireAutomation` directly and
- * never duplicates rungs 3-9.
+ * 5's own sentence) — and "both doors" is now literal: `fireAutomation` has
+ * exactly ONE caller, the watcher's sweep pass 3, which cannot tell a manual
+ * claim from a scheduled one because they are the same fact. Run-now used to
+ * call this directly; that made the sweep's `automationsInFlight` guard blind
+ * to the route's act and double-spawned (see `auto/routes.ts`'s own note on
+ * the cut-over). The one-caller property is pinned by
+ * `single-definition.test.ts`, not by this sentence.
  * ==========================================================================*/
 
 /**

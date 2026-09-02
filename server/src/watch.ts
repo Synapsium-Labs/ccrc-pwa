@@ -2355,12 +2355,16 @@ export class FleetWatcher {
       }
     }
 
-    // Pass 3 — every open lease this process has not already started.
+    // Pass 3 — every open lease this process has not already started. The
+    // query is `leasedAutomations()`, NOT `automations({})`: the latter's
+    // default filter drops `retired`, which made a lease on a row retired
+    // between a *Run now*'s `202` and this tick invisible here for good — see
+    // that method's own docstring for what it cost.
     let leased: readonly StoreAutomationRow[] = [];
     try {
-      leased = store.automations({});
+      leased = store.leasedAutomations();
     } catch (err) {
-      console.warn(`ccrc-server: automations() failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+      console.warn(`ccrc-server: leasedAutomations() failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     }
     for (const row of leased) {
       if (row.leaseRunId === null) continue;

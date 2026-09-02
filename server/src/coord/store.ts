@@ -3541,6 +3541,28 @@ export class CoordStore {
     return rows.map((r) => this.hydrateAutomation(r));
   }
 
+  /** Every automation holding an OPEN LEASE, whatever its state.
+   *
+   *  The lease is the fact the sweep's pass 3 acts on ("every open lease this
+   *  process has not already started"), and `automations({})` cannot express
+   *  it: its default filter drops `retired`. So a run claimed by *Run now* on
+   *  an automation the operator retired before the next tick was invisible to
+   *  the sweep FOREVER — never fired, never explained, settling `lost` only
+   *  when `leaseHardUntil` lapsed 600 s later, and until then holding the
+   *  automation's lease (a second *Run now* answers `overlap`) and one of
+   *  `AUTOMATION_MAX_CONCURRENT` against every scheduled fire. `setAutomation
+   *  State` has no lease check, so that retire is permitted, and the honest
+   *  answer is to let a run that was legitimately claimed finish rather than
+   *  to strand it. Reachable only once the manual door became claim-only:
+   *  while the route performed the act inside the request, retire could not
+   *  land in the gap. */
+  leasedAutomations(): AutomationRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations WHERE leaseRunId IS NOT NULL ORDER BY id`,
+    ).all() as unknown as AutomationRowDb[];
+    return rows.map((r) => this.hydrateAutomation(r));
+  }
+
   automation(id: number): AutomationRow | null {
     const row = this.db.prepare(
       `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations WHERE id = ?`,

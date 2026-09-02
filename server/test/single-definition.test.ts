@@ -2003,3 +2003,36 @@ describe('the automations frame has exactly one producer', () => {
     expect(ALL.map(rel)).toContain('server/src/watch.ts');
   });
 });
+
+// THE MANUAL DOOR'S CUT-OVER — `fireAutomation` has exactly ONE caller.
+//
+// The property was prose only: `watch.ts:52-57`, `watch.ts:2295` and
+// `automations-sweep.test.ts`'s header all assert it and nothing measured it,
+// so a second call site could be reintroduced with the whole tree green. It is
+// not a style rule. The sweep's single-flight guard, `automationsInFlight`, is
+// a PRIVATE FIELD of the watcher (`watch.ts:649`, added only in `fireOne`), so
+// any act performed elsewhere is invisible to it: while `POST /:id/run`
+// awaited `fireAutomation` itself, every sweep landing in the spawn window
+// (`SPAWN_SETTLE_S` 240 s, sweep every 10 s) read the same `leaseRunId` as
+// un-started and fired it AGAIN, and `markAutomationSpawn` has no idempotency
+// guard, so the second identify overwrote the run row's session identity and
+// the first session became an orphan no run row names. Measured before the
+// fix: one *Run now* issued TWO `ws-add` calls.
+describe('fireAutomation has exactly one caller', () => {
+  it('is called from watch.ts and nowhere else in the tree', () => {
+    // The DECLARATION (`export async function fireAutomation`) and re-exports
+    // are not calls, so the needle is the call form itself.
+    const holders = ALL
+      .filter((f) => /\bfireAutomation\(/.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .filter((f) => f !== 'server/src/auto/fire.ts')     // its own definition site
+      .sort();
+    expect(holders).toEqual(['server/src/watch.ts']);
+  });
+
+  it('the scan can see the caller at all — coverage floor, so an empty ALL cannot pass', () => {
+    expect(ALL.length).toBeGreaterThan(50);
+    expect(ALL.map(rel)).toContain('server/src/watch.ts');
+    expect(ALL.map(rel)).toContain('server/src/auto/fire.ts');
+  });
+});
