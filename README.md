@@ -1501,8 +1501,9 @@ homes to graph, so all six skip there): an **engine**, a ccrc-owned venv at
 `ccd/ccrc`, resolved everywhere by absolute path rather than `command -v` — a shared box's
 `/usr/local/bin/graphify` can be a root-owned symlink an unprivileged install can neither update nor
 remove); a **skill**, assembled from the *installed package* — unlike the coordinator/worker
-skills, it has no vendored tree — into every rostered account's skills directory; the **always-on
-read rule** (below); the **default noise list**, ccrc's own footprint converged to
+skills, it has no vendored tree — into every rostered account's skills directory; the **read-rule
+removal** (below), which takes back what D-1243 wrote into each rostered home's `CLAUDE.md`; the
+**default noise list**, ccrc's own footprint converged to
 `~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
 into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
 hooks are removed if wholly graphify-generated, left in place and reported if they chain other
@@ -1528,6 +1529,65 @@ SKIPPED when they cannot be), the file's own mode preserved, backed up before ev
 else is *left in place; remove by hand*, counted, and reported as a degraded step. It is
 `_inst_graph_hooks_off`'s shape and stays in the tree the same way. What replaced it — starting with
 the `SessionStart` card that tells a session to run `graphify query` before it greps — is below.
+
+**What replaced it: four mechanisms, each in an artifact ccrc owns outright.** The rule D-1245 states
+is that the read side lives only where ccrc owns the file it is written in, and that its effect is
+*measured* rather than asserted.
+
+- **The graph card (R1).** On `SessionStart` — every source, `compact` included, because compaction is
+  exactly when a session loses what it knew — `ccd/session-hook.sh` prints one JSON object on stdout:
+  `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`. The card is
+  measured for *that session's tree* (`cwd` from the payload, `$REG/<id>.workdir` as the fallback):
+  node count, the commit the graph was built at, how that commit stands to `HEAD`, and the
+  engine/pin pair — sessions were measured querying 0.9.9 graphs with an unversioned July build, and
+  that drift is otherwise invisible until a query fails strangely. Every clause is omitted rather than
+  guessed when its read does not answer. Freshness is **ancestry, not distance** (D-1353): the card
+  says `fresh`, `N commits behind HEAD`, `not an ancestor of HEAD` — the graph was built on a tree
+  this session cannot reach, so it describes code the session does not have — or `freshness
+  unmeasured`, which is said out loud rather than left silent, because a card that names a sha and
+  then says nothing about it reads as neutral. No `graph.json` prints **nothing**, except that when
+  `~/.ccrc/graph-sweep.json` carries a row for the tree the sweep's own refusal reason is printed
+  instead, clipped to 400 characters (it is repo-controlled text off an engine's stderr).
+  `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
+  by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
+  because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
+  reads. **Stdout stays empty on every other event** — on `PreToolUse` a stdout JSON is a permission
+  decision — and that is pinned in both directions by `server/test/session-hook.test.ts`.
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+  workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
+  `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
+  and every other word makes a query answer a lead to verify by opening the file it names — and never
+  runs `graphify update` or any build in the workspace, because a session-side build holds the worker
+  at `working` for minutes and wedges the next dispatch `worker-busy`.
+- **The engine on `PATH` (R3).** `_inst_graphify_engine` converges `~/.local/bin/graphify` onto
+  `~/.ccrc/graphify-venv/bin/graphify`: written when absent, left alone when it already resolves into
+  the venv, and backed up (`.pre-ccrc-<UTC>`, `cmd_wrappers`' own discipline) and repointed by an
+  atomic rename when what is there is a pip console-script shim — matched **by content**, through a
+  symlink as readily as directly, so the `pipx` layout is a shim like any other (D-1351). Anything
+  else is **refused with a remedy** and counted as a degraded step: a hand-written launcher is the
+  operator's, and a link this box cannot resolve is *unmeasured*, never *unequal* (D-1348, D-1352).
+  `/usr/local/bin/graphify` is never touched. Doctor's own `graphify-path` check owns the same
+  question from the other side and **FAILs** (it does not warn) when nothing on `PATH` answers
+  `graphify`, when there is no pinned engine to compare against, or when `command -v graphify`
+  resolves anywhere but the venv — the wrong build's answers are indistinguishable from the right
+  build's. A box with no usable `realpath` **SKIPs**: the two halves must agree that an unresolvable
+  pair is unmeasured, or a box neither of them could measure gets two different verdicts (D-1350).
+- **The number (R4).** The hook increments `graphQueries` in the hookstate it already writes, on a
+  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`. Builds do not count — this
+  measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
+  `resume` (D-1248) and kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader
+  on the server side and keeps **`null` (no field — an older hook) apart from `0` (measured none)**; it
+  rides `FleetSession.graphQueries` additively (no `FLEET_PROTO` bump) and renders as a `graph N` chip
+  on the fleet card and on the run board's worker row, both reading it through the single tolerant
+  reader `graphReadCount` in `shared/api.ts` — an older server omits the field, and a row that reported
+  nothing must not paint as one that reported (D-1251). The server never reads
+  `~/.cache/graphify-queries.log`: it is not under the agent whitelist and this design adds no read
+  root.
+
+The `PreToolUse` speed bump — one deny on a session's first `Grep` in a tree with a fresh graph and a
+`graphQueries` of 0 — was considered and **declined**: `PreToolUse` fires for subagents, which never
+saw the card; a deny path would be the first thing in the hook that can wedge a turn; and the counter
+above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
@@ -1567,7 +1627,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   written, tracked content included: that is the escape hatch, and the only one.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
-PATH shadows, per-home skill drift, per-tree excludes, the census's last pass, and free space on the
+per-home skill drift, per-tree excludes, the census's last pass, and free space on the
 graph root (`~/worktrees`, falling back to `~/projects`) — the same 2 GiB FAIL / 10 GiB WARN floors
 `disk` uses over `$HOME`.
 

@@ -2918,6 +2918,77 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | restore R3's stale paragraph verbatim (`git checkout --` the fixture) | `ccrc-doctor-graphify` — `Tests  1 failed \| 24 passed (25)`, the D-1354 test on "it still describes the pre-D-1350 arm, which guessed from the unresolved paths" |
   | re-add the fallback to the shipped arm (`[ -n "$resolved" ] \|\| resolved="$found"`, `[ -n "$want" ] \|\| want="$engine"`) | `ccrc-doctor-graphify` — `Tests  2 failed \| 23 passed (25)`: the new D-1354 test **and** D-1350's own `SKIPs — never FAILs …` case, i.e. the binding reds from either end |
 
+- **D-1355** (2026-09-02, whole-branch review) — **the one README guard the branch left standing
+  passed by SUBSTRING, so the canonical overview documented none of the read side and nothing said
+  so.** Spec §4's last mutation row is "README describes the read side as a `CLAUDE.md` block →
+  derived README guard", and README.md was in exactly that mutated state while
+  `it('the README documents the READ side, not only the write side')` stayed green. Its two
+  assertions were `toMatch(/graphify query/)` and `toMatch(/_inst_graph_always_on/)`; after Task 4
+  the README's ONLY occurrence of the second is inside `_inst_graph_always_on_off` — the name of the
+  step that REMOVES the block — so the assertion matched as a prefix of its own refutation, and both
+  assertions were satisfiable by a README describing nothing but the retired writer (reproduced
+  against a synthetic README that said ccrc "converges graphify's packaged `always_on/claude-md.md`
+  into every rostered home's `CLAUDE.md`": green). MEASURED on the shipped file: `grep -c
+  'graphify-path' README.md` → 0, no `graphQueries`, no `graphReadCount`, no `clause 12` — four of
+  the five mechanisms this branch shipped were absent from the file `CLAUDE.md` designates the
+  canonical system overview, as was the R5 decline the spec asks to be "Recorded so it is not
+  re-derived". Worse than an omission: `8589a0c4`, already on this branch, ended the read-side
+  paragraph with "What replaced it — starting with the `SessionStart` card … — is below" while
+  nothing below described any replacement (the next paragraph is "**The sweep.**"), so the branch
+  shipped a dangling forward reference into the overview and the guard could not see it.
+  **Shipped:** Task 6 Steps 1, 3 and 4 — the read-side subsection, the enumeration clause, and the
+  guard replaced by two: a token census matched with `toContain` (whole tokens, never prefixes) plus
+  the derived present-tense pattern pair that forbids re-describing the read side as something ccrc
+  writes into a `CLAUDE.md` while still permitting the history sentence that says D-1243 did.
+
+  **Two of the plan's five tokens do not bind what they name, MEASURED, and the fix is two more
+  tokens.** `SessionStart` appears twice in the README outside this section (the D-1245 history
+  sentence and the presence hook) and `graphQueries` appears in the R5 decline paragraph
+  legitimately, so deleting the card bullet or the counter bullet outright left the loop GREEN
+  (measured, both). The census now also carries `additionalContext` (the one field the card emits,
+  named nowhere else in the file) and `graphReadCount` (D-1251's single tolerant reader, likewise
+  unique) — one token per mechanism that only that mechanism's own text can satisfy. The plan's own
+  Task 6 Step 2 is wrong for the same reason and is corrected here rather than in place: its
+  "Expected: FAIL — the README mentions none of `SessionStart` …" was already false when written.
+
+  | mutation | red |
+  | --- | --- |
+  | delete the R4 counter bullet from the README | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README never mentions graphReadCount". With the plan's five tokens only, this mutation was **green** (`graphQueries` survives in the R5 paragraph) — which is why the sixth token exists |
+  | delete the R1 card bullet from the README | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README never mentions additionalContext". Green under `SessionStart` alone, same reason |
+  | spell `_inst_graph_always_on_off` as `_inst_graph_always_on` throughout the README (the retired WRITER named where the remover belongs) | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README never mentions `_inst_graph_always_on_off`". This is the substring hole itself: the ancestor assertion was green on this exact text |
+  | delete the R5 decline paragraph | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README does not record the DECLINED PreToolUse speed bump" |
+  | re-insert "`_inst_graph_always_on` converges graphify's own packaged block into every rostered home's `CLAUDE.md`" | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README describes ccrc writing a read rule into a CLAUDE.md again" (FIRST pattern) |
+  | re-insert "`_inst_graph_always_on` installs graphify's packaged `always_on/claude-md.md` in each rostered home" | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README says ccrc installs graphify's packaged block again" (SECOND pattern; one row per pattern, or one of the two stays unmeasured) |
+  | rewrite the history sentence in the earlier draft's words ("D-1243's answer was converging graphify's packaged `always_on/claude-md.md` into every rostered home's config-dir file") | **GREEN, and must be** — `Tests  4 passed \| 36 skipped (40)`. The guard forbids the present-tense claim, never the past-tense record; a guard that forbids the truth is one nobody keeps |
+
+- **D-1356** (2026-09-02, whole-branch review) — **Task 6's draft README text describes a card, a
+  check and a chip the branch had already moved past, and Task 5 left a sentence in the same section
+  saying doctor still measures what it no longer measures.** The plan's Step 4 was written before
+  Tasks 1–5 shipped and before six deviations landed on top of them, so transcribing it verbatim
+  would have put five stale claims into the canonical overview: the card's freshness vocabulary is
+  not "fresh or *N* commits behind" but the four words D-1353 and D-1336 shipped (`fresh`, `N commits
+  behind HEAD`, `not an ancestor of HEAD`, `freshness unmeasured` — ancestry, not distance, and the
+  unmeasured case said out loud rather than left silent); the node count comes off `GRAPH_REPORT.md`,
+  not the census or `manifest.json`, neither of which carries one (D-1246); the no-graph arm's
+  census row is clipped to 400 characters because it is repo-controlled text (D-1335); the PATH
+  converge judges a shim BY CONTENT through a link too and backs it up before an atomic rename
+  (D-1349, D-1351), and its refusals and the doctor check agree that an unresolvable pair is
+  *unmeasured* — the doctor **SKIPs** there, which the draft's flat "FAILs when `command -v graphify`
+  resolves anywhere but the pinned venv" would have contradicted (D-1348, D-1350, D-1352); and both
+  chips read the field through `graphReadCount`, not raw (D-1251). Separately, the section's doctor
+  paragraph still listed "PATH shadows" among what `_check_graphify` reads — Task 5 MOVED that
+  question out to `graphify-path` (the function's own header now says so at item 3) and no plan step
+  touched the README, so the overview described a bucket that no longer exists. All six corrected
+  against the shipped tree; the tree governs, and this entry is the record that the plan's Step 4
+  text is a snapshot rather than the specification of what the README should say.
+
+  One file outside the plan's list moves with it, and a guard is why: `oss-metadata.test.ts`'s
+  "CLAUDE.md's README size claim is still true" holds `CLAUDE.md`'s `~N lines` within 10% of the real
+  file, and the read-side subsection took README.md from 2102 to 2165 lines — 1931 was 8.1% off before
+  and 10.8% after, MEASURED as `Tests  1 failed | 21 passed (22)` (`expected 0.108… to be less than
+  0.1`). The claim is now `~2165 lines`. Noted rather than silently fixed because it is the same class
+  this whole entry is about: a number in prose that only a mechanism keeps honest.
+
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

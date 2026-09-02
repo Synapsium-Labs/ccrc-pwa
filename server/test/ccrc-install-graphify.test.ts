@@ -592,12 +592,78 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
     expect(m![2], 'the two counts in the same sentence disagree with each other').toBe(WORDS[n]);
   });
 
-  it('the README documents the READ side, not only the write side', () => {
-    // The whole point of D-1243, and the thing the canonical overview omitted
-    // entirely while describing five other steps in detail.
+  it('the README documents the read side as it now is — hook, skill, PATH, counter', () => {
+    // The whole point of this plan, and the thing the canonical overview would
+    // otherwise still describe as a block in somebody else's CLAUDE.md.
+    //
+    // THE TOKEN THAT WAS NOT ONE (D-1355). This test's ancestor asserted
+    // `toMatch(/_inst_graph_always_on/)` — and after Task 4 the README's only
+    // occurrence of that string sits INSIDE the name of the remover,
+    // `_inst_graph_always_on_off`, so the assertion passed as a prefix of the
+    // very word that proves the writer is gone. A README describing nothing
+    // but the retired write side satisfied it, which is exactly the mutated
+    // state spec §4's last row ("README describes the read side as a
+    // `CLAUDE.md` block") exists to redden. Each token below is therefore
+    // matched WHOLE via `toContain`, and each names a mechanism that only
+    // exists on the read side: a substring of one of them cannot be a
+    // survivor of the block this plan retired.
     expect(readme, 'the canonical overview never mentions querying the graph')
       .toMatch(/graphify query/);
-    expect(readme).toMatch(/_inst_graph_always_on/);
+    for (const token of [
+      '_inst_graph_always_on_off',   // R0, the remover
+      'SessionStart',                // R1, the card
+      // …and the key the card actually writes, for the same measured reason
+      // `graphReadCount` is below: `SessionStart` alone does NOT bind R1's
+      // bullet — the README names that event twice outside this section (the
+      // D-1245 history sentence and the presence hook), so the card could be
+      // deleted whole with this loop still green. `additionalContext` is the
+      // one field the card emits and nothing else in the file mentions.
+      'additionalContext',
+      'clause 12',                   // R2, the worker skill
+      'graphify-path',               // R3, the doctor check
+      'graphQueries',                // R4, the counter
+      // AND its single tolerant reader, because `graphQueries` alone does NOT
+      // bind R4's bullet: the R5 decline below it names the counter too ("a
+      // `graphQueries` of 0"), legitimately, so deleting the bullet outright
+      // left that token still present and this test still green — MEASURED,
+      // which is why the sixth token is here. `graphReadCount` is named
+      // nowhere else in the file, and it is the mechanism D-1251 shipped: one
+      // reader for both chips, so an older server's omitted field cannot paint
+      // an ignorant row as one that reported.
+      'graphReadCount',
+    ]) {
+      expect(readme, `the README never mentions ${token}`).toContain(token);
+    }
+    // R5 is a DECISION, and the spec asks for it in writing ("Recorded so it
+    // is not re-derived", §2 R5) for the same reason the ledger exists: a
+    // decline nobody wrote down is re-proposed by the next reader of the same
+    // design. It is the one read-side item with no code to point at, so
+    // nothing but this asserts it survives an edit.
+    expect(readme.replace(/\s+/g, ' '),
+      'the README does not record the DECLINED PreToolUse speed bump — an undocumented decline gets re-derived')
+      .toMatch(/PreToolUse[\s\S]{0,240}?declined/i);
+  });
+
+  it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {
+    // THE RULE THIS GUARD ENFORCES, in one sentence, so the next editor of
+    // README.md does not trip it by accident: the README may say what D-1243
+    // DID — past tense, and that history is the whole point of the paragraph
+    // above — and may say that `_inst_graph_always_on_off` TAKES a block back;
+    // what it may never say again is that ccrc, in the PRESENT tense, puts one
+    // into a `CLAUDE.md`. Both patterns therefore hinge on a present-tense
+    // verb, and neither fires on `converged`/`wrote`/`appended`/`planted`.
+    //
+    // DERIVED, not a spelling test. The second pattern was once written as a
+    // bare `always_on/claude-md\.md` preceded by `into` — no verb at all — and
+    // it matched the honest history sentence in the paragraph above, forcing a
+    // choice between the guard and the record. A guard that forbids the truth
+    // is a guard nobody can keep.
+    const flat = readme.replace(/\s+/g, ' ');
+    const NOW = /\b(converges|writes|installs|plants|puts)\b/.source;
+    expect(flat, 'the README describes ccrc writing a read rule into a CLAUDE.md again')
+      .not.toMatch(new RegExp(`${NOW}[^.]{0,140}\\b(block|read rule)\\b[^.]{0,140}CLAUDE\\.md`, 'i'));
+    expect(flat, "the README says ccrc installs graphify's packaged block again")
+      .not.toMatch(new RegExp(`${NOW}[^.]{0,140}always_on/claude-md\\.md`, 'i'));
   });
 });
 
