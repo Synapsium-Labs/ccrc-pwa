@@ -1109,9 +1109,9 @@ wave changes the coordinator's deploy lane.
 
 | package | before (2026-09-02 05:07 UTC) | after |
 |---|---|---|
-| server | 248 files, 6248 passed, 56 skipped | **250 files, 6295 passed, 56 skipped** |
+| server | 248 files, 6248 passed, 56 skipped | **250 files, 6304 passed, 56 skipped** |
 | agent | (unchanged lane) | **18 files, 281 passed** |
-| pwa | 2106 passed (78 files, derived: 2119 less this wave's 13 new cases) | **2119 passed** + `npm run build` produces `server/dist-pwa/index.html` |
+| pwa | 2106 passed (78 files; derived — 2120 less this wave's 14 new cases) | **2120 passed** + `npm run build` produces `server/dist-pwa/index.html` |
 
 `tsc --noEmit` clean in all three packages. Two new server suites (`coord-health`, `ledger-crosstree`)
 and one new PWA suite (`runs-health`). No test was deleted or skipped.
@@ -1126,9 +1126,19 @@ No new `ccd` verb; `EXEC_COMMANDS` untouched. No new route — `GET /api/runs` a
 carry the new data on their existing shapes, so the box-token census and the ungated-door count are
 both unmoved.
 
-**Deviations:** D-1293..D-1307, allocated from `POST /api/ledger/deviations` with `byId` set, in four
-acts (12 + 1 + 1 + 1), each immediately before the entry defining it. Verified at close: every allocated
-number is defined, and no number is defined that was not allocated to this session.
+**Deviations:** D-1293..D-1316 — twenty-four numbers, allocated from `POST /api/ledger/deviations` with
+`byId` set, in six acts (12 + 1 + 1 + 1 + 8 + 1), each immediately before the entry defining it, so the
+allocate→define window that fired three times in this program is never open here. Verified at close, in
+both directions: **24 allocated, 24 defined, zero allocated-but-undefined, zero defined-but-not-allocated
+to this session.**
+
+**The review round.** Nine adversarial lenses over the branch diff, then a refute-default verification
+pass — eighteen agents, every mutation run in a throwaway worktree and never in this one. It found four
+guards that did not work (D-1308, D-1309, D-1312's pair) and one vacuous fixture inside the fix for one
+of them (D-1316); three of those five were measured GREEN, which is the only way that class is ever
+found. One review finding was REFUTED in verification and the refutation upheld (D-1315's D-1169 half),
+and that reversal is recorded rather than quietly dropped. Fifteen of the wave's twenty-four deviations
+are review-round findings, which is the honest ratio for a wave whose headline feature shipped dead.
 
 ## Deviations found
 
