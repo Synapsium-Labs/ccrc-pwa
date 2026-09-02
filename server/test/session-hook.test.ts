@@ -19,10 +19,14 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-/** Run the hook with a payload; env overrides let each test break one leg. */
-const run = (payload: object, env: Record<string, string> = {}): void => {
+/** Run the hook with a payload; env overrides let each test break one leg.
+ *  Returns the hook's STDOUT, which is empty on every event but SessionStart
+ *  (R1) — `encoding: 'utf8'` is what makes execFileSync hand it back as a
+ *  string rather than a Buffer. */
+const run = (payload: object, env: Record<string, string> = {}): string =>
   execFileSync('bash', [HOOK], {
     input: JSON.stringify(payload),
+    encoding: 'utf8',
     env: {
       ...process.env, HOME: home,
       PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
@@ -30,7 +34,6 @@ const run = (payload: object, env: Record<string, string> = {}): void => {
       ...env,
     },
   });
-};
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
 const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
 
@@ -230,4 +233,85 @@ describe('the fleet gate and failure polarity', () => {
     times.sort((a, b) => a - b);
     expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
   }, 30000);
+});
+
+// ── R4: the read side, MEASURED ───────────────────────────────────────────
+// D-1243 shipped an instruction and no number. The whole argument for retiring
+// the account-wide block is that its effect measured zero, and the only way
+// that sentence stays true (or stops being true) is a counter the console can
+// read. `graphify update` and builds deliberately do NOT count: this is
+// measuring READS.
+describe('graphQueries — the read counter the console can see', () => {
+  const bash = (command: string): object =>
+    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command } });
+
+  it('counts query, path and explain — each one, once', () => {
+    run(bash('graphify query "who calls assembleFleet"'));
+    expect(readState().graphQueries).toBe(1);
+    run(bash('graphify path "fleet.ts" "watch.ts"'));
+    expect(readState().graphQueries).toBe(2);
+    run(bash('graphify explain "the mail delivery gate"'));
+    expect(readState().graphQueries).toBe(3);
+  });
+
+  it('counts a graphify that is not the first word of the line', () => {
+    run(bash('cd /tmp && graphify query "x"'));
+    expect(readState().graphQueries).toBe(1);
+    run(bash('true; graphify explain "y"'));
+    expect(readState().graphQueries).toBe(2);
+  });
+
+  it('does NOT count graphify update, a build, or a bare graphify', () => {
+    run(bash('graphify update .'));
+    run(bash('graphify build --all'));
+    run(bash('graphify'));
+    run(bash('graphify --version'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('does NOT count a command that merely contains the word', () => {
+    run(bash('mygraphify query "x"'));
+    run(bash('echo see-graphify-query-docs'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('does NOT count a non-Bash tool whose input happens to say it', () => {
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read',
+      tool_input: { command: 'graphify query "x"' } });
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('carries the count across other events, the way subagents is carried', () => {
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState().graphQueries).toBe(1);
+    run({ hook_event_name: 'Stop' });
+    expect(readState().graphQueries).toBe(1);
+    run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
+    expect(readState().graphQueries).toBe(1);
+  });
+
+  it('resets to 0 on SessionStart(startup) and SessionStart(clear)', () => {
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    expect(readState().graphQueries).toBe(0);
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'SessionStart', source: 'clear' });
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('is KEPT across resume and across compact — a compaction is not a new session', () => {
+    run(bash('graphify query "x"'));
+    run(bash('graphify path "a" "b"'));
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(readState().graphQueries).toBe(2);
+    // compact writes nothing at all (D-306), so the count on disk survives it
+    run({ hook_event_name: 'SessionStart', source: 'compact' });
+    expect(readState().graphQueries).toBe(2);
+  });
+
+  it('starts at 0 on a session that has never queried — 0 is a MEASUREMENT', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState().graphQueries).toBe(0);
+  });
 });

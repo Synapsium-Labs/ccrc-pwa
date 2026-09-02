@@ -21,7 +21,7 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
 };
 
 const mkHookState = (over: Partial<HookState> = {}): HookState =>
-  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false, ...over });
+  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
   const roster = parseRoster(DEFAULT_TEST_ROSTER);
@@ -549,7 +549,7 @@ describe('hook state on the wire', () => {
     expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: 1000 }]);
   });
 
-  it('a hookless session carries all three fields as null', async () => {
+  it('a hookless session carries all four fields as null', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -562,6 +562,7 @@ describe('hook state on the wire', () => {
     expect(s.hookState).toBeNull();
     expect(s.askSummary).toBeNull();
     expect(s.subagents).toBeNull();
+    expect(s.graphQueries).toBeNull();
   });
 
   it('dialogPending is true when only the pane detector says so', async () => {

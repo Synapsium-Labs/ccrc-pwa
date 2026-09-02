@@ -434,6 +434,22 @@ export function SessionLine({
             </span>
           )}
 
+          {/* The read counter (R4). `!== null` and NOT a truthiness test: a
+              measured zero is the finding this chip exists to show — a session
+              with a fresh graph in its tree that has queried it not once — and
+              `graphQueries && …` would hide exactly that row. Null is the
+              other answer (no hook data, or a hook too old to count), and it
+              renders nothing at all rather than a `graph 0` nobody measured.
+              A plain cell in .sess-meta, so the shared
+              `.sess-meta > *:not(:first-child)::before` rule punctuates it
+              like every sibling; no disclosure, because there is nothing
+              underneath a count to open. */}
+          {!dead && session.graphQueries !== null && (
+            <span className="sess-graph" title={`${session.graphQueries} graphify read(s) this session`}>
+              graph {session.graphQueries}
+            </span>
+          )}
+
           {/* The subagent tally, now a disclosure — see `subagentList` above
               for the null-vs-empty-array discipline. Tapping it opens
               `.sess-subagent-list` below with each one's name and elapsed

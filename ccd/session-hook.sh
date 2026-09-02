@@ -42,6 +42,14 @@ _hook_epoch_ms() {
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
+# ── R4: what counts as READING the graph ────────────────────────────────
+# `query`, `path` and `explain` only. `graphify update` and every build are
+# WRITES, and the sweep owns the write side — counting them here would make
+# the number say the opposite of what it is for. The leading class is what
+# stops `mygraphify query` and prose mentioning the command from counting;
+# the trailing one stops `graphify querying-something-else`.
+GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
+
 payload=$(cat 2>/dev/null) || exit 0
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
 tname=$(tmux display-message -p '#S' 2>/dev/null) || exit 0
@@ -54,9 +62,27 @@ command -v jq >/dev/null 2>&1 || exit 0
 event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false"
+state="" ask_json="null" interrupted="false" src="" gcmd=""
 case "$event" in
-  UserPromptSubmit|PostToolUse) state="working" ;;
+  UserPromptSubmit) state="working" ;;
+  PostToolUse)
+    state="working"
+    # ONE payload read for the counter, on the one event that can carry a
+    # command, and only for Bash: a tool_input.command on any other tool is
+    # not a shell line this box ran.
+    #
+    # THE PREFILTER IS A BUDGET, NOT A STYLE CHOICE. This arm is the HOT PATH —
+    # `session-hook.test.ts` pins p95 of 20 PostToolUse runs under 150 ms, and
+    # a bare `jq` fork on this box measures ~5 ms against a ~46 ms run. A shell
+    # line that runs `graphify` CANNOT fail to put the eight characters
+    # `graphify` somewhere in the payload (JSON escaping never touches them),
+    # so a payload without them needs no jq at all and the common tool call
+    # pays nothing. `$gcmd` stays "" there, which the increment below already
+    # treats as "no command".
+    if [[ "$payload" == *graphify* ]]; then
+      gcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
+        <<<"$payload" 2>/dev/null) || gcmd=""
+    fi ;;
   PreCompact) state="working" ;;
   PostCompact)
     trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || exit 0
@@ -131,8 +157,36 @@ esac
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
-subs=$(jq -c '.subagents // []' "$f" 2>/dev/null) || subs="[]"
-prev_state=$(jq -r '.state // empty' "$f" 2>/dev/null) || prev_state=""
+# ONE fork for all three fields (was two, and the counter would have made
+# three). Same hot-path budget as the arm above: `$f` is read on every event,
+# and `subs`/`prev_state` were already two forks over one file. Three values on
+# three LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
+# name as a backslash sequence, which would hand `--argjson subagents` a string
+# that is no longer JSON. `tostring` of a compact array contains no newline, so
+# line-splitting is safe where tab-splitting is not.
+#
+# The read counter survives state transitions exactly as `subs` does, and a
+# file that never carried the field reads as 0 — this is the WRITER, where 0
+# is the honest start; `hookstate.ts` is the reader, and there absent stays
+# `null` rather than folding to 0. A jq that fails (no file, corrupt file)
+# prints nothing, all three `read`s come up empty, and each falls back to the
+# degrade it already had. This file runs under `set -uo pipefail` and NOT
+# `set -e`, so a `read` hitting EOF is inert.
+subs=""; prev_state=""; gq=""
+{ read -r subs; read -r prev_state; read -r gq; } < <(jq -r \
+  '(.subagents // [] | tostring), (.state // ""),
+   (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end)' \
+  "$f" 2>/dev/null)
+[[ "$subs" == \[* ]] || subs="[]"
+[[ "$gq" =~ ^[0-9]+$ ]] || gq=0
+# `startup` and `clear` are new sessions; `resume` and `compact` are the SAME
+# session still going, and a counter that reset on compaction would erase the
+# evidence at precisely the moment the session most needed the card (R1).
+# `compact` never reaches this line at all — the SessionStart arm exits at its
+# compact guard (D-306) — so its carry is STRUCTURAL, protected by that exit
+# and not by this condition. `resume` is the source this condition protects.
+if [[ "$event" == SessionStart && ( "$src" == startup || "$src" == clear ) ]]; then gq=0; fi
+if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
@@ -159,9 +213,9 @@ out=$(jq -cn \
   --argjson v 1 --arg state "$state" --arg event "$event" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
   --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
-  --argjson ask "$ask_json" --argjson subagents "$subs" \
+  --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-    updatedAt:$updatedAt, ask:$ask, subagents:$subagents}
+    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries}
    + (if $interrupted then {interrupted:true} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated

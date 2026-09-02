@@ -809,6 +809,7 @@
 .sess-line--active .sess-meta,
 .sess-line--active .sess-state,
 .sess-line--active .sess-tally,
+.sess-line--active .sess-graph,
 .sess-line--active .sess-subagents,
 .sess-line--active .sess-warn,
 .sess-line--active .sess-acct,
@@ -1076,6 +1077,15 @@
    quiet register as .sess-tally, no colour of its own (inherits .sess-meta's
    ink-secondary), so it needs no new contrast pair. */
 .sess-cleanup-fact {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* The hook's graph-read counter — same quiet register as .sess-tally, no
+   colour of its own (it inherits .sess-meta's ink-secondary), so it brings no
+   new contrast pair with it. */
+.sess-graph {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;

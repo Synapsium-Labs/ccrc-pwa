@@ -209,6 +209,15 @@ function RunRow({
           {verdict.word}
         </span>
       )}
+      {/* The worker's read counter, in the fleet card's own class — the same
+          reuse this row already makes of `.sess-spawn` and `.sess-unmeasured`
+          next door, and for the same reason: a second `.run-…` class for one
+          meaning is two vocabularies over one field. */}
+      {session !== null && session.graphQueries !== null && (
+        <span className="sess-graph" title={`${session.graphQueries} graphify read(s) this session`}>
+          graph {session.graphQueries}
+        </span>
+      )}
       {/* D-1, finally on screen. `data-cleared` carries the half the word
           alone cannot: the two branches are two different facts, and a test
           that could only read the string would be pinning prose. */}

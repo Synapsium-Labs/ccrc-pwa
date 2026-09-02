@@ -15,7 +15,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
   started: true, spawnState: null,
 });
@@ -110,8 +110,9 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.hookState).toBeNull();
     expect(s?.askSummary).toBeNull();
     expect(s?.subagents).toBeNull();
+    expect(s?.graphQueries).toBeNull();
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
-      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents'],
+      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries'],
     ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');

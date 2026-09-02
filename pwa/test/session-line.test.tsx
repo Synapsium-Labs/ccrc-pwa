@@ -19,7 +19,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -882,5 +882,22 @@ describe('the held cell is a door only when there is somewhere to go (Task 5)', 
     render(<SessionLine session={s({ held: null })} onOpenRun={() => {}}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(heldOf()).toBeNull();
+  });
+});
+
+describe('the graph chip', () => {
+  it('renders graph N when the hook counted reads', () => {
+    render(<SessionLine session={s({ graphQueries: 4 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 4')).toBeInTheDocument();
+  });
+
+  it('renders graph 0 — a measured zero is the finding, not the absence of one', () => {
+    render(<SessionLine session={s({ graphQueries: 0 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  it('renders NO chip when the count is null — nothing was measured', () => {
+    render(<SessionLine session={s({ graphQueries: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/^graph /)).toBeNull();
   });
 });

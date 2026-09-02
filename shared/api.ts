@@ -96,6 +96,15 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** How many graph READS this session has made — `hookstate.ts`'s
+   *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
+   *  bump, and an older peer that omits it revives as `null` below.
+   *
+   *  `null` mirrors `hookState`/`subagents`: no fresh hook data, or a hook too
+   *  old to count. `0` is a MEASUREMENT — the session reported and has read
+   *  nothing — and the console shows the two differently (`graph 0` versus no
+   *  chip at all), which is the whole reason this is not a `number`. */
+  graphQueries: number | null;
   bucket: SessionBucket;
   /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
    *  record — never a watcher's memory of when it noticed, which would reset on
@@ -2033,6 +2042,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
+      // Absent → null, exactly as `optSubagents` degrades: a snapshot written
+      // before this field existed is ignorant of the count, not a witness to
+      // its being zero. Present-but-not-a-finite-number throws inside
+      // `optNum`, which this function's catch turns into "reject the whole
+      // session" — the same rule every other numeric field here follows.
+      graphQueries: optNum(o, 'graphQueries'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
       statusUnmeasured: optBool(o, 'statusUnmeasured', false),
       // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the

@@ -41,7 +41,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: 'clear-cove', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/clear-cove', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -1286,5 +1286,30 @@ describe('the resume door on the run board', () => {
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }
+  });
+});
+
+describe('the run board worker row carries the graph chip', () => {
+  const board = (over: Partial<FleetSession>): void => {
+    const store = makeStore();
+    act(() => {
+      store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] });
+    });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  };
+
+  it('shows graph N for the run session the hook counted reads for', () => {
+    board({ graphQueries: 3 });
+    expect(screen.getByText('graph 3')).toBeInTheDocument();
+  });
+
+  it('shows graph 0 — the row this chip exists for is the one that read nothing', () => {
+    board({ graphQueries: 0 });
+    expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  it('shows NO chip when nothing was measured', () => {
+    board({ graphQueries: null });
+    expect(screen.queryByText(/^graph /)).toBeNull();
   });
 });
