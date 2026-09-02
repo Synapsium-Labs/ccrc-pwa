@@ -64,10 +64,10 @@ _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
 # node count comes off the head of GRAPH_REPORT.md's summary line (`head -c
 # 4096`) — the sweep census carries no node count and manifest.json is a
 # per-file hash map, so neither of the design's two named sources actually
-# holds the number (D-1246). `git rev-parse` and `git rev-list --count` are ref
-# reads. Any failure omits its clause; a total failure prints nothing.
+# holds the number (D-1246). `git rev-parse` and `git rev-list --left-right
+# --count` are ref reads. Any failure omits its clause; a total failure prints nothing.
 _hook_graph_card() {
-  local cwd="" row="" nodes="" built="" tip="" behind="" engine="" pin="" fresh="" line=""
+  local cwd="" row="" nodes="" built="" tip="" lr="" ahead="" behind="" engine="" pin="" fresh="" line=""
   cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
   # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
   # for a harness whose SessionStart payload carries no cwd at all.
@@ -125,20 +125,45 @@ _hook_graph_card() {
     if [ "$tip" = "$built" ]; then
       fresh="fresh"
     else
-      behind=$(git -C "$cwd" rev-list --count "$built..HEAD" 2>/dev/null) || behind=""
-      case "$behind" in
-        # NOT SILENCE (D-1336). Silence here would collapse two conditions a
-        # reading session handles differently onto one value, which this repo
-        # calls a defect and not a style ("no overloaded null at a seam"): a
-        # tree with no git names no sha AND no freshness, while this arm has a
-        # sha in hand that git would not answer for. A card that names a sha
-        # and then says nothing about it reads as neutral; the true word is
-        # that the graph is UNDATABLE, so say it.
-        ''|*[!0-9]*) fresh="freshness unmeasured" ;;
-        0)           fresh="fresh" ;;
-        1)           fresh="1 commit behind HEAD" ;;
-        *)           fresh="$behind commits behind HEAD" ;;
-      esac
+      # ANCESTRY, NOT DISTANCE (D-1353). `rev-list --count "$built..HEAD"` asks
+      # ONE side of the question — how many commits HEAD carries that the
+      # graph's commit cannot reach — and it answers 0 for two conditions this
+      # card must not collapse: the graph was built AT this HEAD (an ABBREVIATED
+      # sha, the only way to reach this arm at all, since the equality above
+      # already took the full-sha case), and the graph was built at a commit
+      # HEAD cannot reach forward to. The second is a graph of a tree this
+      # session is not on — the sweep builds at a feature-branch tip, the
+      # session then checks out `main` — and it was announced as `fresh`, which
+      # is the one word clause 12 of the worker skill says licenses taking a
+      # query answer as read. Three dots plus `--left-right` asks BOTH sides: L
+      # is what the graph has and HEAD cannot reach, R is what HEAD has and the
+      # graph does not. Any L at all means the graph describes commits this tree
+      # does not carry — whether it sits ahead of HEAD or on a diverged branch,
+      # where the one-sided count did not merely round to fresh but reported a
+      # bare "behind" for a graph that is also ahead. Those two share ONE word
+      # rather than collapsing onto a word that means something else, because a
+      # reading session does the same thing in both: the graph is not of this
+      # tree, so every answer is a lead.
+      lr=$(git -C "$cwd" rev-list --left-right --count "$built...HEAD" 2>/dev/null) || lr=""
+      # NOT SILENCE (D-1336). Silence here would collapse two conditions a
+      # reading session handles differently onto one value, which this repo
+      # calls a defect and not a style ("no overloaded null at a seam"): a
+      # tree with no git names no sha AND no freshness, while this arm has a
+      # sha in hand that git would not answer for. A card that names a sha
+      # and then says nothing about it reads as neutral; the true word is
+      # that the graph is UNDATABLE, so say it. The pair is matched WHOLE —
+      # anything but two counts is the unmeasured answer, never a half-read
+      # number standing in for both sides.
+      if [[ "$lr" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then
+        ahead="${BASH_REMATCH[1]}"; behind="${BASH_REMATCH[2]}"
+        if   [ "$ahead"  -gt 0 ]; then fresh="not an ancestor of HEAD"
+        elif [ "$behind" -eq 0 ]; then fresh="fresh"
+        elif [ "$behind" -eq 1 ]; then fresh="1 commit behind HEAD"
+        else                           fresh="$behind commits behind HEAD"
+        fi
+      else
+        fresh="freshness unmeasured"
+      fi
     fi
   fi
 

@@ -182,9 +182,12 @@ you name the plan file.
 session whose tree carries `graphify-out/graph.json` gets one `SessionStart`
 line for THAT tree: node count, the commit the graph was built at, and a
 freshness clause reading `fresh`, `1 commit behind HEAD` / `N commits behind
-HEAD`, or `freshness unmeasured` — the last when the graph names a commit that
-git in that tree will not date, which is a different thing from a graph that is
-merely old. Every half is individually optional: whatever the hook could not
+HEAD`, `not an ancestor of HEAD`, or `freshness unmeasured` — the third when the
+graph was built at a commit this tree cannot reach (a branch tip the session has
+since checked away from, or a diverged branch), so the graph describes code the
+tree does not carry rather than merely missing code it does, and the last when
+the graph names a commit that git in that tree will not date, which is a
+different thing again from a graph that is merely old. Every half is individually optional: whatever the hook could not
 measure is simply left out, so a card with no freshness clause at all is a
 fourth state and not a fault. A tree the sweep REFUSED gets a different and
 equally quotable line — `this tree has no knowledge graph`, plus the sweep's own

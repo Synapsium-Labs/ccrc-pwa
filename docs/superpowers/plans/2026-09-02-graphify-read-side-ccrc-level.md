@@ -2834,6 +2834,54 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | `elif [ -L "$gpath" ] && { [ -z "$gnow" ] \|\| [ -z "$gwant" ]; }` → `elif false` (D-1348's arm, re-measured after the message change) | `ccrc-install-graphify` — "LEAVES a link this box cannot resolve in place, degraded — empty is not \"equal\"" | `Tests  1 failed \| 38 passed (39)` |
 
 
+- **D-1353** (2026-09-02, whole-branch review) — **`fresh` was overloaded a SECOND time, on the arm
+  D-1336 left standing.** D-1336 fixed the silence at this seam and kept the measurement that feeds
+  it: `behind=$(git rev-list --count "$built..HEAD")`, whose `0` arm said `fresh`. That count is a
+  ONE-SIDED question — how many commits HEAD carries that the graph's commit cannot reach — and it
+  answers `0` for two conditions the card must not collapse. The legitimate one is the only way to
+  reach the arm at all: `built` is an ABBREVIATED sha of this very HEAD, so the string equality above
+  missed it. The illegitimate one is a graph built at a commit HEAD cannot reach FORWARD to — a
+  descendant of HEAD, the shape the sweep produces routinely (`_gs_trees` sweeps
+  `$PROJECTS_ROOT/*/`, so it builds at a feature-branch tip and the session then `git checkout main`).
+  That graph describes a tree the session is not on, and it was announced as `fresh`. The severity is
+  not the label: `ccd/worker-skill/SKILL.md` clause 12, pinned verbatim at
+  `server/test/worker-skill.test.ts:61`, says *only `fresh` licenses taking it as read* — so the false
+  word is exactly the token that switches a dispatched worker's verification duty OFF over a graph of
+  a tree it is not reading. This is the collapse the block's own D-1336 comment names two lines below
+  ("no overloaded null at a seam"), landing on the state that comment was written to protect.
+  A second, more reachable case rode the same one-sidedness: on a DIVERGED branch (`ws/<slug>` cut
+  from a main the sweep later built at) the count is not "behind" at all, and the card said
+  `1 commit behind HEAD` for a graph that also carried a commit the tree has never had.
+  **Shipped:** ancestry is asked on BOTH sides — `git rev-list --left-right --count "$built...HEAD"`,
+  three dots — and the pair is matched WHOLE (`^([0-9]+)[[:space:]]+([0-9]+)$`) so a half-read number
+  can never stand in for both. Any left-hand count at all means the graph carries commits this tree
+  does not, and the card says `not an ancestor of HEAD`. Descendant and divergence share that ONE word
+  deliberately: a reading session does the same thing in both (the graph is not of this tree, so every
+  answer is a lead), and the rule forbids collapsing conditions a caller handles DIFFERENTLY, not
+  naming one condition once. `0 0` keeps `fresh`, which is what preserves the abbreviated-sha arm.
+  The new word is a fifth `fresh="…"` assignment, so D-1340/D-1341/D-1342's harvests demanded it in
+  both consumers or went red: clause 12 (and `CONTRACT[11]`, byte-identically) and the
+  `wave-lifecycle.md` graph-card paragraph now carry it with the rule attached — the harvest working
+  exactly as designed, not scope creep.
+
+  Measured, on top of `6ae35e56` (baseline `Test Files  3 passed (3)` / `Tests  130 passed (130)`
+  across `session-hook`, `worker-skill`, `coordinator-skill`; pristine-copy revert per D-1339, all
+  five `md5sum -c` clean afterwards):
+
+  | mutation | red |
+  | --- | --- |
+  | the hook's measurement back to the one-sided `rev-list --count "$built..HEAD"` (left side forced to `0`, the pre-fix behaviour exactly) | `session-hook` — `Tests  2 failed \| 49 passed (51)`: "refuses to call a graph built at a DESCENDANT of HEAD fresh" and "…on a DIVERGED branch merely behind HEAD". The abbreviated-sha control stayed GREEN, so the two reds are the defect and not the rewrite |
+  | `fresh="not an ancestor of HEAD"` → `fresh="fresh"` (the collapse itself, restored) | `session-hook` — `Tests  2 failed \| 128 passed (130)`, same two tests |
+  | `fresh="not an ancestor of HEAD"` → `fresh="built off this HEAD"` in the hook | BOTH doc suites — `Test Files  2 failed (2)` / `Tests  2 failed \| 77 passed (79)`: `expected … to match /\bbuilt off this HEAD\b/` in clause 12 and in the paragraph |
+  | drop the new phrase from clause 12 **and** its `CONTRACT` literal | `worker-skill` — `Tests  1 failed \| 13 passed (14)`, "clause 12 branches on no card word matching `not an ancestor of HEAD`" |
+  | drop the new phrase from `wave-lifecycle.md`'s paragraph | `coordinator-skill` — `Tests  1 failed \| 64 passed (65)`, "the graph-card paragraph never names the `not an ancestor of HEAD` state the hook prints" |
+
+  **Stale anchor, corrected here rather than silently:** this plan's Task 2 mutation table (`:1058`,
+  `:1062`) names the `''|*[!0-9]*` `case` arm as the site of `fresh="freshness unmeasured"`. That
+  `case` block is gone — the arm is now the `else` of the pair match — and the two mutations it
+  describes are still available, one branch over.
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

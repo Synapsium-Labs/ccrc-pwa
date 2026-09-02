@@ -417,6 +417,13 @@ describe('the SessionStart graph card', () => {
     return shas[0]!;
   };
 
+  /** Raw git inside a fixture tree, for the tests that have to MOVE HEAD after
+   *  the graph was planted. Identity supplied per call, as `gitTree`'s does, so
+   *  the box's own is never needed and never used. */
+  const git = (dir: string, ...args: string[]): string =>
+    execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
+      '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
+
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
    *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
    *  and run in a bash subshell against this fixture HOME, because the hook is
@@ -498,6 +505,67 @@ describe('the SessionStart graph card', () => {
     plantGraph(tree, { built: first });
     expect(card(run({ hook_event_name: 'SessionStart', cwd: tree })))
       .toContain('2 commits behind HEAD');
+  });
+
+  // ── D-1353: ANCESTRY, not distance ──────────────────────────────────────
+  //
+  // `rev-list --count "$built..HEAD"` asks ONE side of the question, and
+  // answers 0 for two conditions the card must not collapse: the graph was
+  // built AT this HEAD, and the graph was built at a commit HEAD cannot reach
+  // forward to. Only the first is fresh. `fresh` is the one word clause 12 of
+  // the worker skill says licenses taking a query answer as read
+  // (`worker-skill.test.ts`, `CONTRACT[11]`), so the false one does not merely
+  // mislabel a card — it switches a dispatched worker's verification duty off
+  // over a graph of a tree it is not on.
+
+  it('refuses to call a graph built at a DESCENDANT of HEAD fresh', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 3);
+    const tip = git(tree, 'rev-parse', 'HEAD');
+    plantGraph(tree, { built: tip });
+    git(tree, 'checkout', '-q', first);        // the session moves back to c0
+    // The pre-fix measurement itself, so this test names the mechanism it
+    // guards and not only the symptom: the one-sided count cannot tell this
+    // apart from a graph built at HEAD.
+    expect(git(tree, 'rev-list', '--count', `${tip}..HEAD`)).toBe('0');
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'a graph two commits of code away from this tree was announced as fresh')
+      .not.toMatch(/\(fresh\)/);
+    expect(text, 'the card does not say the graph is off this tree\'s history')
+      .toContain('not an ancestor of HEAD');
+  });
+
+  it('refuses to call a graph built on a DIVERGED branch merely behind HEAD', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 2);
+    const mainTip = git(tree, 'rev-parse', 'HEAD');
+    git(tree, 'checkout', '-q', '-b', 'side', first);
+    git(tree, 'commit', '-q', '--allow-empty', '-m', 'd1');
+    plantGraph(tree, { built: mainTip });
+    // The one-sided count reports a bare `1`, which the card spent as
+    // `1 commit behind HEAD` — true of one side only. The graph also carries a
+    // commit this tree has never had.
+    expect(git(tree, 'rev-list', '--count', `${mainTip}..HEAD`)).toBe('1');
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'a graph off a diverged branch was reported as merely behind')
+      .not.toContain('behind HEAD');
+    expect(text).not.toMatch(/\(fresh\)/);
+    expect(text).toContain('not an ancestor of HEAD');
+  });
+
+  // The arm the fix must NOT break. Reaching the freshness measurement at all
+  // requires `tip != built`, and the legitimate way that happens is an
+  // ABBREVIATED sha naming this very HEAD — the state the `0` count was right
+  // about, and the only one it was right about.
+  it('still reads fresh when the graph names HEAD by an ABBREVIATED sha', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 2);
+    const tip = git(tree, 'rev-parse', 'HEAD');
+    plantGraph(tree, { built: tip.slice(0, 12) });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'an abbreviated sha of HEAD stopped reading as fresh').toContain('(fresh)');
+    expect(text).not.toContain('behind HEAD');
+    expect(text).not.toContain('not an ancestor');
   });
 
   it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {
