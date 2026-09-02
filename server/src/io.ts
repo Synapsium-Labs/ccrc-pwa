@@ -2,8 +2,10 @@ import { createReadStream, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-/** Why a read couldn't produce content: `absent` means the path genuinely
- *  does not exist (ENOENT); `unreadable` means everything else — EACCES,
+/** Why a read couldn't produce content — and, since `MeasuredStat` below,
+ *  why a `stat` couldn't produce {mtimeMs,size} either: ONE vocabulary for
+ *  both, because they are the same two facts. `absent` means the path
+ *  genuinely does not exist (ENOENT); `unreadable` means everything else — EACCES,
  *  EISDIR, ENOTDIR, ELOOP, a non-errno failure — the path IS there (or the
  *  box can't even tell) and this box just can't read it. Fail-shut on
  *  purpose: only a proven ENOENT is allowed to answer `absent`.
@@ -32,6 +34,18 @@ export type ReadFailure = 'absent' | 'unreadable';
  *  it outright. */
 export type MeasuredRead = { ok: true; content: string } | { ok: false; reason: ReadFailure };
 
+/** A `stat` that distinguishes its own two failure modes instead of
+ *  collapsing both to `null`, exactly as `MeasuredRead` does for reads — and
+ *  for a sharper reason: the agent's `stat` op used to answer EACCES/ENOTDIR
+ *  as `{missing:true}`, so the wire's absence marker was already a LIE for
+ *  every non-ENOENT failure (D-114). `stat` derives from this. THE GOVERNING
+ *  RULE applies unchanged: `ok`/`absent` are positive answers that
+ *  short-circuit, `unreadable` falls back to exactly the evidence the site
+ *  already used. */
+export type MeasuredStat =
+  | { ok: true; mtimeMs: number; size: number }
+  | { ok: false; reason: ReadFailure };
+
 /**
  * Fs-facade seam every fleet-fs access goes through. `local` (this module)
  * hits node:fs against this box's disk; a `remote` implementation (T3) proxies
@@ -46,7 +60,11 @@ export interface FleetIO {
   readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
   readFileB64(path: string): Promise<string | null>;      // null on missing or unreadable; the agent's implementation folds in a THIRD condition, over-cap (D-114, agent/src/fileops.ts's MAX_READ_B64_BYTES) — localIO has no cap — binary-safe
   readdir(path: string): Promise<string[] | null>;
-  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
+  /** Distinguishes "genuinely does not exist" from "could not be measured".
+   *  `stat` derives from this; see `MeasuredStat` above for why the wire's
+   *  own absence marker could not be trusted before this existed. */
+  statMeasured(path: string): Promise<MeasuredStat>;
+  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;   // null on ANY failure — absent and unreadable both collapse here; use statMeasured to tell them apart
   /** Physical path for `path`, or null when it cannot be resolved (missing
    *  path, permission, or an implementation with no resolver — the remote io
    *  answers null unconditionally, so callers degrade to the unresolved
@@ -76,14 +94,19 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
 
 const TAIL_POLL_MS = 1500;
 
+/** The ONE place an errno becomes a `ReadFailure`. Only a proven ENOENT may
+ *  answer `absent`; every other errno — and a non-errno throw, which carries
+ *  no `code` at all — is `unreadable`. */
+const failureFor = (err: unknown): ReadFailure =>
+  (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
+
 /** node:fs implementation preserving today's exact behavior. */
 export const localIO: FleetIO = {
   async readFileMeasured(p) {
     try {
       return { ok: true, content: await readFile(p, 'utf8') };
     } catch (err) {
-      const reason: ReadFailure = (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
-      return { ok: false, reason };
+      return { ok: false, reason: failureFor(err) };
     }
   },
 
@@ -112,11 +135,18 @@ export const localIO: FleetIO = {
     try { return await readdir(p); } catch { return null; }
   },
 
-  async stat(p) {
+  async statMeasured(p) {
     try {
       const s = await stat(p);
-      return { mtimeMs: s.mtimeMs, size: s.size };
-    } catch { return null; }
+      return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    }
+  },
+
+  async stat(p) {
+    const r = await this.statMeasured(p);
+    return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
   },
 
   async realpath(p) {

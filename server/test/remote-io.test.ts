@@ -136,6 +136,30 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       expect(await f.io.readFileMeasured(file)).toEqual({ ok: false, reason: 'unreadable' });
     });
   });
+
+  describe('statMeasured', () => {
+    it('a real file reads as {ok:true, …}, a missing one as {ok:false, reason:"absent"}', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'sm.txt');
+      writeFileSync(file, 'abcd');
+      expect(await f.io.statMeasured(file)).toMatchObject({ ok: true, size: 4 });
+      expect(await f.io.statMeasured(path.join(fixture!.home, '.cc-sessions', 'nope.txt')))
+        .toEqual({ ok: false, reason: 'absent' });
+    });
+
+    it('a path THROUGH a file (ENOTDIR) reads as "unreadable", NEVER "absent" — the D-114 case, end to end', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'sm2.txt');
+      writeFileSync(file, 'abcd');
+      expect(await f.io.statMeasured(path.join(file, 'child'))).toEqual({ ok: false, reason: 'unreadable' });
+    });
+
+    it('a path outside every whitelist reads as "unreadable", NEVER "absent"', async () => {
+      const f = await connected();
+      const outside = path.join(fixture!.projectsRoot, '..', 'definitely-outside.txt');
+      expect(await f.io.statMeasured(outside)).toEqual({ ok: false, reason: 'unreadable' });
+    });
+  });
 });
 
 describe('remote FleetIO — readFileMeasured against a stub FleetClient (no real agent)', () => {
@@ -175,5 +199,20 @@ describe('remote FleetIO — readFileMeasured against a stub FleetClient (no rea
   it('a rejected request (forbidden/disconnected/timeout) reads as "unreadable"', async () => {
     const io = createIo(rejectingClient(new Error('forbidden')));
     expect(await io.readFileMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('an OLDER AGENT — {missing:true} with no `absent` key — reads as "unreadable", NEVER "absent"', async () => {
+    const io = createIo(clientAnswering({ missing: true }));
+    expect(await io.statMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a modern agent answering {missing:true, absent:true} reads as "absent"', async () => {
+    const io = createIo(clientAnswering({ missing: true, absent: true }));
+    expect(await io.statMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a rejected stat request (forbidden/disconnected/timeout) reads as "unreadable"', async () => {
+    const io = createIo(rejectingClient(new Error('forbidden')));
+    expect(await io.statMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
   });
 });

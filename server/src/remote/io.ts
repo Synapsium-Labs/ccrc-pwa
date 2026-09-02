@@ -20,6 +20,12 @@ import type { FleetClient } from './client.js';
  * `absent` — `checkPath` refuses a path that very often also does not exist,
  * and conflating the two would let a whitelist refusal masquerade as
  * evidence the path is clear.
+ *
+ * `statMeasured` is the second such reader, on the `stat` op's `absent?:
+ * true`, and it is the reason D-114 could be closed at all: a bare
+ * `missing: true` is what an OLDER agent sends for EVERY stat failure and
+ * what a NEWER one sends for EACCES/ENOTDIR/ELOOP, so it means UNMEASURED,
+ * never proof. Only `absent: true` proves.
  */
 
 function isTailReset(msg: TailData | TailReset): msg is TailReset {
@@ -89,16 +95,24 @@ export function createIo(client: FleetClient): FleetIO {
       }
     },
 
-    async stat(path) {
+    async statMeasured(path) {
       try {
         const res = await client.request({ t: 'req', op: 'stat', path });
-        const r = res as { missing?: unknown; mtimeMs?: unknown; size?: unknown };
-        if (r.missing === true) return null;
-        if (typeof r.mtimeMs !== 'number' || typeof r.size !== 'number') return null;
-        return { mtimeMs: r.mtimeMs, size: r.size };
+        const r = res as { missing?: unknown; absent?: unknown; mtimeMs?: unknown; size?: unknown };
+        if (typeof r.mtimeMs === 'number' && typeof r.size === 'number') {
+          return { ok: true, mtimeMs: r.mtimeMs, size: r.size };
+        }
+        return { ok: false, reason: r.absent === true ? 'absent' : 'unreadable' };
       } catch {
-        return null;
+        // Disconnected / timeout / forbidden / bad-request — none of these is
+        // proof the path is absent, same reasoning as `readFileMeasured`.
+        return { ok: false, reason: 'unreadable' };
       }
+    },
+
+    async stat(path) {
+      const r = await this.statMeasured(path);
+      return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
     },
 
     async writeFileB64(path, dataB64) {
