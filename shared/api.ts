@@ -3693,6 +3693,61 @@ export interface RunItemTally { done: number; total: number }
 /** One run, as `/ws/fleet`'s `runs` frame and `GET /api/runs` carry it.
  *  Deliberately flat and deliberately small: this rides the fleet socket
  *  alongside a full session snapshot on every change. */
+/**
+ * Per-run health facts the `/runs` board renders as a compact warn row (F7).
+ * Every wedge below was previously discoverable only by reading /mail or the
+ * database by hand: a parked delivery, a replay count climbing toward the
+ * 20-attempt ceiling, a repeated done-claim refusal, a dispatch whose brief was
+ * never queued, and a coordinator that was never briefed at all.
+ *
+ * ADDITIVE; `FLEET_PROTO` is deliberately NOT bumped. An older server omits the
+ * whole object and the PWA renders NOTHING — never "no wedge here", which is a
+ * claim this build would be making on that server's behalf.
+ *
+ * EVERY MEMBER IS A COUNT, A CODE OR A STORED TIMESTAMP — never an age, and that
+ * is a hard constraint rather than a preference. The WS `runs` frame is dropped
+ * from the broadcast when its JSON is unchanged (`server/test/fleetws.test.ts`),
+ * so a field carrying a clock would differ on every tick, defeat that dedupe and
+ * turn an idle fleet into a broadcast storm — a performance regression shaped
+ * exactly like a feature. The thresholds therefore live in the renderer, which is
+ * the `SPAWN_STALL_MS` precedent (D-1300).
+ */
+export interface RunHealth {
+  /** Deliveries of this run's mail still `queued` or `delivered`. */
+  readonly mailOutstanding: number;
+  /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
+   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
+   *  working as designed and is excluded, because reporting it would announce a
+   *  chair that has already changed hands. */
+  readonly mailParked: number;
+  /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
+   *  delivery attempts and mail 129 reached 911, each arriving after the work it
+   *  was meant to steer; this is the number that was climbing the whole time
+   *  while nothing on any surface showed it. MAX and not SUM: one message nearing
+   *  the ceiling is the signal, and quiet siblings must not dilute it. */
+  readonly mailReplayMax: number;
+  /** How many done-authority refusals this run has collected
+   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+  readonly doneRejects: number;
+  /** The newest one's code, or null when there are none. FREE TEXT on the wire in
+   *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
+   *  unvalidated and read back as a raw string, so a client may DISPLAY this and
+   *  must never key a total `Record<..., ...>` off it. */
+  readonly lastRejectCode: string | null;
+  /** What this run's last committed dispatch DECIDED about the brief.
+   *  `null` is a THIRD condition and not a flavour of `false`: no dispatch has
+   *  committed, or the row predates migration 7. `false` means a dispatch ran and
+   *  queued no brief — the state that previously left no trace at all (D-1298). */
+  readonly briefQueued: boolean | null;
+  /** The `sendPrompt` refusal code that made `briefQueued` false, or null. Free
+   *  text, on `lastError`'s terms. */
+  readonly clearError: string | null;
+  /** When the OLDEST unacked `program-kickoff` addressed to this run's
+   *  `claimedBy` was first sent, or null when there is none outstanding. A
+   *  timestamp, never a verdict — the renderer owns the threshold. */
+  readonly coordKickoffPendingSince: number | null;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -3783,6 +3838,17 @@ export interface RunSummary {
   items: RunItemTally;
   /** Unacked mail addressed to this run's session. */
   unreadMail: number;
+
+  /**
+   * F7's per-run health facts — the wedges this program spent six waves finding
+   * forensically, as measured values. See `RunHealth`.
+   *
+   * REQUIRED here because `hydrateRun` returns a literal and must therefore
+   * compute it, and OPTIONAL at every PWA reader, because an older SERVER omits
+   * it. The one tolerant reader is `runHealth()` in `pwa/src/fleet/runWords.ts`;
+   * no JSX reads a member directly.
+   */
+  health: RunHealth;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
@@ -3796,6 +3862,24 @@ export interface RunSummary {
  *  does NOT silently move what the console calls stalled — that is a
  *  deliberate edit here, made with this paragraph's inequality in hand. */
 export const SPAWN_STALL_MS = 360_000;
+
+/** F7. A `RunHealth.mailReplayMax` at or above this is a delivery climbing toward
+ *  `MAIL_REPLAY_MAX_ATTEMPTS` (20, `server/src/watch.ts`), and the board says so.
+ *
+ *  A RENDERING threshold on `SPAWN_STALL_MS`'s terms — nothing server-side reads
+ *  it, and it is deliberately NOT derived from the ceiling it watches. Half is
+ *  the point: a warning that fires only AT the ceiling arrives with the message
+ *  already parked, which is precisely how mail 120 and mail 129 were discovered
+ *  (722 and 911 attempts, both after the work they were meant to steer). */
+export const MAIL_REPLAY_WARN_COUNT = 10;
+
+/** F7. An unacked `program-kickoff` older than this is a coordinator that was
+ *  never briefed — an open run whose chair nobody ever sat in.
+ *
+ *  A RENDERING threshold, same argument. Fifteen minutes is the `MAIL_GATE_HELD_MS`
+ *  register rather than a copy of any lane number: it clears a full server suite
+ *  (~9 min) with room, so a coordinator that is merely busy stays silent. */
+export const KICKOFF_UNACKED_MS = 900_000;
 
 /** D-792, §6. WHEN the console is allowed to name the gate holding a delivery.
  *

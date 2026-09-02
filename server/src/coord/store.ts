@@ -6,7 +6,7 @@ import type { LedgerLog } from './ledgerlog.js';
 import { CLEAR_REFUSED_STRANDS_TEXT } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS,
+  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
@@ -22,7 +22,8 @@ import {
   type LifecycleGap, type LifecycleGapReason,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
-  type NotifyEvent, type PeerDeliverable, type ProgramState, type RunItemTally, type RunState,
+  type NotifyEvent, type PeerDeliverable, type ProgramState,
+  type RunHealth, type RunItemTally, type RunState,
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -179,6 +180,8 @@ interface RunRowDb {
   dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
   handoffCommit: string | null;
   prLineage: string | null;
+  briefQueued: number | null;
+  clearError: string | null;
 }
 
 const RUN_ROW_COLUMNS =
@@ -186,7 +189,7 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError';
 
 /**
  * Coordination's own terminal-state rule, spelled ONCE (bounded context 5:
@@ -1155,7 +1158,8 @@ export class CoordStore {
     const row = this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program WHERE r.id = ?`,
     ).get(id) as RunRowDb | undefined;
-    return row ? this.hydrateRun(row) : null;
+    if (!row) return null;
+    return this.hydrateRun(row, this.healthFor([row]).get(row.id)!);
   }
 
   /**
@@ -1186,7 +1190,8 @@ export class CoordStore {
         `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
         "WHERE r.state NOT IN ('done','failed') ORDER BY r.id",
       ).all() as unknown as RunRowDb[];
-      return rows.map((row) => this.hydrateRun(row));
+      const health = this.healthFor(rows);
+      return rows.map((row) => this.hydrateRun(row, health.get(row.id)!));
     }
     const n = clampMailLimit(opts.closedLimit ?? 500);
     const rows = this.db.prepare(
@@ -1195,7 +1200,8 @@ export class CoordStore {
       "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[];
-    return rows.map((row) => this.hydrateRun(row));
+    const health = this.healthFor(rows);
+    return rows.map((row) => this.hydrateRun(row, health.get(row.id)!));
   }
 
   /**
@@ -1330,7 +1336,7 @@ export class CoordStore {
    *  shape everything else in this class and its callers use — every enum
    *  column goes through its guard here, never a cast, so this is also the
    *  one place that rule could be forgotten for a future column. */
-  private hydrateRun(row: RunRowDb): RunRow {
+  private hydrateRun(row: RunRowDb, health: RunHealth): RunRow {
     return {
       id: row.id, program: row.program, programTitle: row.programTitle,
       wave: row.wave, waveOf: row.waveOf, project: row.project,
@@ -1365,6 +1371,12 @@ export class CoordStore {
       handoffCommit: row.handoffCommit,
       items: this.itemTally(row.id),
       unreadMail: this.unreadMailCount(row.id, row.sessionId),
+      // F7. Passed IN rather than measured here, and that is the whole design:
+      // `hydrateRun` runs once per row, and four more per-row reads would cost
+      // the board ~3,000 statements on a `?closed=1` load. `runHealth` answers
+      // for the whole batch in four (D-1299). A REQUIRED parameter, so a caller
+      // cannot forget it and quietly ship a zeroed health object.
+      health,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
     };
   }
@@ -1376,6 +1388,127 @@ export class CoordStore {
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
       `WHERE m.runId = ? AND d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
     ).get(runId, sessionId) as { c: number }).c;
+  }
+
+  /** `runHealth` for a batch of rows already read — the shape `runs()`/`run()`
+   *  hold. Keeps the id/coordinator extraction in one place so the two call
+   *  sites cannot disagree about which sessions count as coordinators. */
+  private healthFor(rows: readonly RunRowDb[]): Map<number, RunHealth> {
+    const coords = [...new Set(rows.map((r) => r.claimedBy).filter((c): c is string => c !== null))];
+    return this.runHealth(rows.map((r) => r.id), coords);
+  }
+
+  /**
+   * F7: every health fact for a set of runs, in FOUR statements TOTAL — not four
+   * per row.
+   *
+   * The cost is the design (D-1299). `hydrateRun` already spends two statements
+   * per row (`itemTally`, `unreadMailCount`), and `runs({includeClosed:true})`
+   * returns every open run — deliberately uncapped — plus up to 500 closed ones,
+   * so four naive per-row reads would be roughly three thousand statements for one
+   * board load. Everything below is a `GROUP BY` over an `IN (...)`.
+   *
+   * EVERY id in `runIds` gets a row, including a run with no mail at all. A caller
+   * forced to supply a default for a missing key is where an overloaded null is
+   * born, and this method exists to remove those, not to add one.
+   *
+   * SYNCHRONOUS, like the rest of this class. Reads only; writes nothing.
+   */
+  runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth> {
+    const out = new Map<number, RunHealth>();
+    for (const id of runIds) {
+      out.set(id, { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+                    lastRejectCode: null, briefQueued: null, clearError: null,
+                    coordKickoffPendingSince: null });
+    }
+    // `placeholders` refuses nothing, but an empty `IN ()` is a SQLite syntax
+    // error and the guard is the caller's — this method's own, here.
+    if (runIds.length === 0) return out;
+    const ph = placeholders(runIds.length);
+
+    // (1) outstanding vs parked, and the replay high-water. The deliberate-cancel
+    //     exclusion reuses DELIBERATE_CANCEL_ERRORS_SQL rather than respelling the
+    //     two literals: `single-definition.test.ts` forbids the second copy, and a
+    //     second copy is how the two lists would come to disagree.
+    for (const row of this.db.prepare(
+      'SELECT m.runId AS runId, ' +
+      `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} THEN 1 ELSE 0 END) AS outstanding, ` +
+      "SUM(CASE WHEN d.state = 'rejected' AND " +
+      `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
+      'THEN 1 ELSE 0 END) AS parked, ' +
+      'MAX(d.replayCount) AS replayMax ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      `WHERE m.runId IN (${ph}) GROUP BY m.runId`,
+    ).all(...runIds) as unknown as
+      { runId: number; outstanding: number; parked: number; replayMax: number | null }[]) {
+      const h = out.get(row.runId);
+      if (h === undefined) continue;
+      out.set(row.runId, { ...h, mailOutstanding: row.outstanding, mailParked: row.parked,
+                           mailReplayMax: row.replayMax ?? 0 });
+    }
+
+    // (2) done-claim refusals: how many, and the newest one's code. The
+    //     correlated subquery orders by `at` and then `id`, because
+    //     `recordRejection` stamps its own `Date.now()` and a retried close can
+    //     write two rows inside one millisecond.
+    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    for (const row of this.db.prepare(
+      'SELECT r.runId AS runId, count(*) AS c, ' +
+      '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
+      `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
+      `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
+    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
+      { runId: number; c: number; lastCode: string | null }[]) {
+      const h = out.get(row.runId);
+      if (h === undefined) continue;
+      out.set(row.runId, { ...h, doneRejects: row.c, lastRejectCode: row.lastCode });
+    }
+
+    // (3) what the last committed dispatch decided, straight off the run row.
+    //     `briefQueued === null` is carried through as null, never coerced: the
+    //     column is nullable precisely so "no dispatch committed" and "queued no
+    //     brief" stay two facts (migration 7, D-1298).
+    for (const row of this.db.prepare(
+      `SELECT id, briefQueued, clearError FROM runs WHERE id IN (${ph})`,
+    ).all(...runIds) as unknown as
+      { id: number; briefQueued: number | null; clearError: string | null }[]) {
+      const h = out.get(row.id);
+      if (h === undefined) continue;
+      out.set(row.id, { ...h,
+        briefQueued: row.briefQueued === null ? null : row.briefQueued !== 0,
+        clearError: row.clearError });
+    }
+
+    // (4) the un-briefed coordinator: an OUTSTANDING operator kickoff addressed to
+    //     a run's `claimedBy`. `MIN(COALESCE(ingestedAt, deliveredAt, at))` is
+    //     `dueDeliveries`' own idiom and for its own reason — a replay rewrites
+    //     `deliveredAt` and never touches `ingestedAt`, so preferring
+    //     `deliveredAt` would let the clock slide forward on every sweep and the
+    //     age would never grow.
+    if (coordIds.length > 0) {
+      const since = new Map<string, number>();
+      for (const row of this.db.prepare(
+        'SELECT d.toId AS toId, MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at)) AS since ' +
+        'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+        "WHERE m.fromId = 'operator' AND m.runId IS NULL AND m.subject = ? " +
+        `AND d.toId IN (${placeholders(coordIds.length)}) ` +
+        `AND d.state IN ${OUTSTANDING_STATES_SQL} GROUP BY d.toId`,
+      ).all(PROGRAM_KICKOFF_SUBJECT, ...coordIds) as unknown as
+        { toId: string; since: number }[]) {
+        since.set(row.toId, row.since);
+      }
+      if (since.size > 0) {
+        for (const row of this.db.prepare(
+          `SELECT id, claimedBy FROM runs WHERE id IN (${ph})`,
+        ).all(...runIds) as unknown as { id: number; claimedBy: string | null }[]) {
+          const h = out.get(row.id);
+          if (h === undefined || row.claimedBy === null) continue;
+          const at = since.get(row.claimedBy);
+          if (at !== undefined) out.set(row.id, { ...h, coordKickoffPendingSince: at });
+        }
+      }
+    }
+    return out;
   }
 
   // ── caps ───────────────────────────────────────────────────────────────────
