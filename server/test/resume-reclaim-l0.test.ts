@@ -117,7 +117,16 @@ describe('the sixth refusal union', () => {
     // ever, a guard accepts a member added later and still rejects a typo'd one.
     const src = readFileSync(path.join(root, 'server/test/mail-routes.test.ts'), 'utf8');
     expect(src).toContain('|| isReclaimRefuseCode(tok)');
-    expect(src).toContain('isReclaimRefuseCode }');   // …imported, not just mentioned in prose
+    // …imported, not just mentioned in prose. This reads the import BLOCK rather
+    // than the literal `isReclaimRefuseCode }`, which was an accidental encoding of
+    // that property: it held only while the symbol happened to sit LAST in a
+    // one-line import, and died the moment a second vocabulary joined that import
+    // and reflowed it. `[^}]*` cannot cross a closing brace, so the capture is that
+    // one specifier list — a mention in a comment between imports is not in it.
+    const apiImport = /import\s*\{([^}]*)\}\s*from\s*'[^']*shared\/api\.js'/.exec(src);
+    expect(apiImport, "mail-routes.test.ts no longer imports a specifier list from "
+      + "'shared/api.js' — this harvest is reading a shape that moved").not.toBeNull();
+    expect((apiImport as RegExpExecArray)[1]!).toContain('isReclaimRefuseCode');
     const notCodes = /const NOT_CODES = new Set\(\[([\s\S]*?)\n\s*\]\);/.exec(src);
     expect(notCodes, 'mail-routes.test.ts no longer declares `const NOT_CODES = new Set([...]);` — '
       + 'this harvest is reading a shape that moved, and a silent miss would pass everything').not.toBeNull();
