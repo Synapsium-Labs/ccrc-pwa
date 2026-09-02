@@ -1055,7 +1055,7 @@ Expected: all PASS. If `session-hook`'s p95 budget test is the only red, re-run 
 | change `tail -c 4096` to `head -c 4096` in the `built` read | "reads built_at_commit from the TAIL — a decoy at the head must not win" |
 | delete the `[ ! -f "$cwd/graphify-out/graph.json" ]` early return and emit unconditionally | "prints NOTHING when the tree has no graph and the sweep never mentioned it" |
 | move the card call below `[[ "$src" == compact ]] && exit 0` | "is printed for compact too…" |
-| replace `fresh=""` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "exits 0 and still prints a card when the tree is not a git repo" |
+| replace `fresh=""` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "omits freshness when rev-list will not answer for the built sha (D-1252)" — **not** "…not a git repo", which cannot reach that `case` at all (no `tip`, so the whole block is skipped) and stayed green under the mutation |
 | delete `[ -d "$cwd" ] \|\| return 0` and let the census read run on a missing dir | "exits 0 and prints nothing when cwd does not exist" — the card prints the sweep's row for a directory that is not there (this is why that test now seeds a census row for `$home/gone`; without it the mutation is invisible and the row would be a comment) |
 
 - [ ] **Step 6: Commit**
@@ -2387,6 +2387,22 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   and a pin on only one of them cannot see the other drift. Both assert on the `.sess-graph` CLASS,
   not the text — RTL's matcher trims, so `graph ` normalises to `graph` and a text query would miss
   the very chip the test forbids.
+
+- **D-1252** (2026-09-02, Task 2) — **Task 2's Step 5 row 5 named a mutation its test cannot see.**
+  The table pins `''|*[!0-9]*) fresh=""` — the freshness arm's "a `rev-list` that will not answer gets
+  no clause" degrade — with *"exits 0 and still prints a card when the tree is not a git repo"*. That
+  test's tree has no git at all, so `tip` is empty and the whole `[ -n "$built" ] && [ -n "$tip" ]`
+  block is SKIPPED: the `case` the mutation edits is never reached. MEASURED against a fixture HOME:
+  flipping that arm to `fresh="fresh"` left the suite **`Tests  45 passed (45)`**, byte-identically
+  green — the guard the comment calls the whole reason the clause exists was a comment, not a
+  mechanism. The arm's own condition is a tree that HAS a HEAD but carries a `built` sha git will not
+  measure against (`git rev-list --count <unknown-sha>..HEAD` exits 128, `behind=""`), which is
+  reachable in a fixture and is the live shape too — a graph built before a force-push, or copied in
+  from another checkout. **Shipped:** one added test, "omits freshness when rev-list will not answer
+  for the built sha", planting `built: 'c'.repeat(40)` in a one-commit repo and asserting the card
+  still names `built at cccccccc` while claiming neither `fresh` nor `behind HEAD`. Re-measured with
+  it in place, the same mutation is RED (`Tests  1 failed | 45 passed (46)`). No shell changed: the
+  guard was already right, only unpinned.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

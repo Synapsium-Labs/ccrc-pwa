@@ -550,6 +550,24 @@ describe('the SessionStart graph card', () => {
     expect(text).not.toContain('fresh');
   });
 
+  // D-1252: the not-a-git-repo case above cannot reach the freshness CASE at
+  // all — with no `tip`, the whole `[ -n "$built" ] && [ -n "$tip" ]` block is
+  // skipped, so mutating `''|*[!0-9]*) fresh=""` to `fresh="fresh"` left the
+  // file green. A repo that HAS a HEAD but carries a `built` sha `rev-list`
+  // will not answer for is the arm's own condition, and the one that pins it:
+  // an unmeasurable comparison is not a measurement, and "fresh" is precisely
+  // the wrong thing to say about a graph nobody could date.
+  it('omits freshness when rev-list will not answer for the built sha (D-1252)', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'c'.repeat(40) });   // well-formed hex, no such commit here
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('built at cccccccc');
+    expect(text, 'freshness was claimed against a sha git refused to measure')
+      .not.toContain('fresh');
+    expect(text).not.toContain('behind HEAD');
+  });
+
   it('omits the node count rather than inventing one when GRAPH_REPORT.md is absent', () => {
     const tree = path.join(home, 'tree');
     const first = gitTree(tree, 1);
