@@ -678,10 +678,13 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     expect(r.code, r.stderr).toBe(0);
     expect(readFileSync(f, 'utf8'), 'a half block was deleted instead of reported').toBe(text);
     // SEMICOLON, not an em dash: the tree's own idiom for this refusal is
-    // `— left in place; remove by hand` (`_inst_graph_hooks_off`, ccd/ccrc:5411,
-    // and the unmarked-section refusal at :5249). The spec quotes the phrase
-    // with a second em dash; the tree is what ships, and D-1247 records the
-    // divergence rather than making this file the odd one out.
+    // `— left in place; remove by hand`, said in `_inst_graph_hooks_off`'s
+    // chained-content refusal — the one other place the tree says it. Cited by
+    // NAME, not by line (D-1343): the plan prescribed `ccd/ccrc:5411 and :5249`
+    // verbatim, and :5249 was the converge's unmarked-`## graphify` refusal,
+    // which R0's own commit deletes. The spec quotes the phrase with a second
+    // em dash; the tree is what ships, and D-1247 records the divergence rather
+    // than making this file the odd one out.
     expect(r.stderr).toMatch(/left in place; remove by hand/);
     expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
     expect(r.stdout).toMatch(/degraded step/);
@@ -771,6 +774,31 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
       'a temp file was left in the operator\'s config directory').toEqual([]);
   });
 
+  it('REFUSES to rewrite a file it could not back up, and degrades the install', () => {
+    // THE BACKUP IS THE ONLY COPY of the operator's CLAUDE.md that exists
+    // before a destructive delete, so the guard that refuses the rewrite when
+    // the backup fails needs a fixture in which it CAN fail — without one, the
+    // whole `if ! { mkdir -p && cp -a; }` chain can be replaced by an
+    // unconditional `mkdir -p; cp -a … || true` and every other row here stays
+    // green (measured). `~/ccrc-backups` planted as a REGULAR FILE makes
+    // `mkdir -p "$HOME/ccrc-backups/<ts>"` fail, and that fixture is safe in
+    // this suite because the only other install step that writes there
+    // (`_inst_graph_hooks_off`) backs up solely what it finds pre-existing,
+    // which a `freshBox` has none of.
+    const home = freshBox('ccrc-inst-gfx-off-nobackup-');
+    plantFakeVenv(home);
+    const text = `# head\n\n- operator line\n\n${BLOCK}\n\n## OPERATOR TAIL\n- keep me\n`;
+    const f = seed(home, text);
+    writeFileSync(join(home, 'ccrc-backups'), 'not a directory\n');
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8'), 'the block was deleted with no backup of the file taken')
+      .toBe(text);
+    expect(r.stderr).toMatch(/left in place rather than rewritten unbacked/);
+    expect(r.stdout).toMatch(/always-on read rule — 0 home\(s\) cleared, 1 left in place/);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
   it('is idempotent: the second run removes nothing and cuts no backup', () => {
     const home = freshBox('ccrc-inst-gfx-off-idem-');
     plantFakeVenv(home);
@@ -778,8 +806,19 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     const first = runInstall(home, ['install']);
     expect(first.code, first.stderr).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe('# head\n');
-    const after = backupDirs(home).length;
-    expect(after, 'the first run cut no backup of the file it rewrote').toBeGreaterThan(0);
+    // SCOPED TO THE FILE THIS STEP BACKS UP, not a bare directory count —
+    // `_inst_graph_hooks_off`'s own backup assertion (below) refuses a global
+    // count for the same reason: some other install step may back something up
+    // under `~/ccrc-backups/<ts>/` on this same fresh box, and a count of
+    // timestamp directories says nothing about WHICH file was copied. The
+    // backup name is the absolute path with `/` → `_`, so it ends `_CLAUDE.md`.
+    const backupsRoot = join(home, 'ccrc-backups');
+    const dirs = backupDirs(home);
+    const claudeBackedUp = dirs.some((d) =>
+      readdirSync(join(backupsRoot, d)).some((b) => b.endsWith('_CLAUDE.md')));
+    expect(claudeBackedUp, 'no backup dir holds a copy of the CLAUDE.md the first run rewrote')
+      .toBe(true);
+    const after = dirs.length;
     const second = runInstall(home, ['install']);
     expect(second.code, second.stderr).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe('# head\n');

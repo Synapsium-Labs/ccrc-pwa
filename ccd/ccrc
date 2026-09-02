@@ -5168,9 +5168,13 @@ _inst_graphify_skill() {
 # whose whole job is removing what an earlier layer planted, and it states the
 # rule this one follows — anything not provably WHOLLY ccrc's own is "left in
 # place; remove by hand", counted, and reported. That is the TREE's spelling of
-# the phrase (ccd/ccrc:5411 and :5249), not the spec's em-dashed one; D-1247
-# records the divergence, and the half-block test asserts the semicolon. This
-# step stays in the tree afterwards exactly as that one does.
+# the phrase — `_inst_graph_hooks_off`'s chained-content refusal, the one other
+# place the tree says it — not the spec's em-dashed one; D-1247 records the
+# divergence, and the half-block test asserts the semicolon. Cited BY NAME, not
+# by line (D-1343): the plan prescribed `:5411 and :5249` verbatim, but :5249
+# was the converge's unmarked-`## graphify` refusal, which THIS step's commit
+# deletes, and every number in this file moves the moment a line is added above
+# it. This step stays in the tree afterwards exactly as that one does.
 _inst_graph_always_on_off() {
   [ "$INST_ROLE" = server ] && return 0
   local n=0 kept=0 ts backups

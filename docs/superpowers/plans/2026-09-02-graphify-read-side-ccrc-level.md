@@ -2273,6 +2273,12 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   the opposite direction — the plan's test regex carried the spec's em dash against messages that
   never had one, which no message in the function could ever have satisfied.
 
+  *(Snapshot note, added by D-1343: the two line numbers above — `ccd/ccrc:5411` and `:5249` — are
+  as-of-authoring and are BOTH wrong in the shipped tree. `:5249` was the converge's
+  unmarked-`## graphify` refusal, which Task 4's own commit deletes, so it names no site at all any
+  more. The entry is kept as written because a ledger entry is a snapshot; the SHIPPED comments cite
+  `_inst_graph_hooks_off` by name instead.)*
+
 - **D-1248** (2026-09-02, Task 1 review) — the plan spelled the counter's reset as the ALLOW-LIST
   `SessionStart && ( "$src" == startup || "$src" == clear )`, which makes one file give two different
   answers to one payload. Ten lines above it, the `SessionStart` arm reads an ABSENT `source` by
@@ -2617,6 +2623,48 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   occurrences left `coordinator-skill` green at `Tests  65 passed (65)`, correctly — the paragraph
   still named the state once. The binding is "this doc names the word", not "names it twice"; the
   review's probe had to edit both, and so did the mutation row above.
+
+
+- **D-1343** (2026-09-02, Task 4 review fix) — **two defects the R0 step shipped with, both in the
+  half of the work that is supposed to prove the other half.**
+
+  **(a) The backup guard had no mutation test.** `_inst_graph_always_on_off`'s backup is the ONLY
+  copy of the operator's `CLAUDE.md` that exists before a destructive delete, and its
+  `if ! { mkdir -p "$backups" && cp -a …; }` refusal shipped with no row that goes red when it is
+  deleted: no fixture ever made the backup fail, so replacing the whole chain with an unconditional
+  `mkdir -p …; cp -a … || true` left all 28 rows green (measured). The positive half was loose in the
+  same way — `expect(backupDirs(home).length).toBeGreaterThan(0)` counts `~/ccrc-backups/<ts>`
+  DIRECTORIES and says nothing about which file was copied, which is exactly the assertion
+  `_inst_graph_hooks_off`'s own backup row had already refused one function over ("NOT a global
+  `readdirSync(ccrc-backups).length === 1` count … the assertion should not depend on that staying
+  true"). Both halves are now bound: the idempotence row asserts some backup dir holds an entry
+  ending `_CLAUDE.md`, and a new row plants `$HOME/ccrc-backups` as a REGULAR FILE so `mkdir -p`
+  fails, then asserts the file is byte-identical, `stderr` says `left in place rather than rewritten
+  unbacked`, and the install degrades. That fixture is safe in this suite because the only other
+  install step writing there (`_inst_graph_hooks_off`) backs up solely what it finds pre-existing,
+  which a `freshBox` has none of.
+
+  **(b) The step's header comment cited two line numbers, and the same commit deleted one of the
+  sites.** The plan prescribed `(ccd/ccrc:5411 and :5249)` verbatim (plan line 1481, authored before
+  Task 4 existed), and Task 4 copied it into `ccd/ccrc` and into the half-block test. Both numbers
+  were wrong the moment the commit landed: `sed -n '5249p;5411p'` prints unrelated prose, and `:5249`
+  had been the converge's unmarked-`## graphify` refusal, which R0 removes. Per the standing rule the
+  TREE wins over the plan, so both comments now cite `_inst_graph_hooks_off`'s chained-content
+  refusal BY NAME — the one other place the tree says the phrase — and drop the deleted site. Line
+  numbers into a 6 000-line file that every future edit shifts are not citations; this codebase asks
+  readers to follow its `D-N` comments as authoritative history, and a citation that resolves to
+  unrelated prose teaches them to stop.
+
+  Measured, on top of `8589a0c4` (baseline `Tests  29 passed (29)` with the two test edits in place):
+
+  | mutation | red |
+  | --- | --- |
+  | `ccd/ccrc`: the whole backup guard → `mkdir -p "$backups" 2>/dev/null; cp -a … 2>/dev/null \|\| true` (the review's own probe, GREEN against the 28-row suite) | `Tests  1 failed \| 28 passed (29)` — 'REFUSES to rewrite a file it could not back up, and degrades the install': the block was deleted with no backup of the file taken |
+  | `ccd/ccrc`: drop only the `cp -a` from the guard, keep `mkdir -p` (the mutation a bare directory COUNT cannot see) | `Tests  1 failed \| 28 passed (29)` — 'is idempotent…': "no backup dir holds a copy of the CLAUDE.md the first run rewrote", `expected true, received false` |
+
+  The second row is the point of the scoping change: with `mkdir -p` still running, the timestamp
+  directory exists and empty, so the old `backupDirs(home).length > 0` assertion stayed GREEN while
+  the operator's file was rewritten with nothing kept.
 
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
