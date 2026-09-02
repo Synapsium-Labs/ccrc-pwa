@@ -1534,10 +1534,36 @@ export class CoordStore {
     return { maxConcurrentWorkers: row.maxConcurrentWorkers, maxSessionsPerDay: row.maxSessionsPerDay };
   }
 
-  setCaps(next: CoordCaps): void {
+  /** D-1169. `at` IS THE CALLER'S NOW, the rule `recordRunEvent` states in full
+   *  and `markDispatched`/`capsUsage` — the method directly below this one —
+   *  already follow: the caller owns the moment being recorded. `setCaps` was the
+   *  lone exception in its own neighbourhood, and the cost was concrete rather
+   *  than aesthetic: a fixture that needed to pin a caps timestamp could not.
+   *
+   *  The clock stays where it already was, in L4 — `routes.ts` reads it INSIDE
+   *  `coordMutex.run`, which `dispatch-mutex-gate.test.ts` requires of every
+   *  `coord.setCaps` call site. Nothing moves into `caps.ts`, so its purity scan
+   *  is untouched; the red that scan warns about is for a DEFAULTED clock
+   *  parameter inside `decideCaps`, which this is not. */
+  setCaps(next: CoordCaps, at: number = Date.now()): void {
     this.db.prepare(
       'UPDATE coordinator_state SET maxConcurrentWorkers = ?, maxSessionsPerDay = ?, updatedAt = ? WHERE id = 1',
-    ).run(next.maxConcurrentWorkers, next.maxSessionsPerDay, Date.now());
+    ).run(next.maxConcurrentWorkers, next.maxSessionsPerDay, at);
+  }
+
+  /** D-1169's read half. `coordinator_state.updatedAt` has been written since
+   *  migration 1 and read by NOTHING — `caps()`'s SELECT does not even list the
+   *  column. It rides `CoordCapsView`, the read-side shape, rather than
+   *  `CoordCaps`, which is the stored value and which wave 6 declined to widen
+   *  for good reason: a timestamp is not a cap.
+   *
+   *  `0` is the seed migration 1 writes, and it is returned as `null` here —
+   *  "nobody has ever moved these caps" is a different fact from "they were moved
+   *  at the epoch", and the column has no way to say the second. */
+  capsUpdatedAt(): number | null {
+    const row = this.db.prepare('SELECT updatedAt FROM coordinator_state WHERE id = 1')
+      .get() as { updatedAt: number } | undefined;
+    return row === undefined || row.updatedAt === 0 ? null : row.updatedAt;
   }
 
   /**

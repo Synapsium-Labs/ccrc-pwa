@@ -1251,3 +1251,6 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | `h.briefQueued === false` → `!h.briefQueued`, so null joins false | `AssertionError: expected [ { glyph: '⌦', …(2) } ] to deeply equal []` | pwa `runs-health` |
 | drop the null guard before the kickoff arithmetic (`since ?? 0`) — null coerces to an infinitely old kickoff | `AssertionError: a healthy run drew a warning: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |
 | make an absent `health` render a claim instead of silence | `AssertionError: an older server was made to assert a health claim: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |
+| `setCaps` reads its own `Date.now()` again — the D-1169 revert | `AssertionError: expected { ok: true, caps: { …(2) }, …(2) } to deeply equal { ok: true, caps: { …(2) }, …(2) }` (the pinned `updatedAt: 1_700_000_000_000`) | server `coord-caps-route` |
+| `capsUpdatedAt` returns migration 1's seeded `0` instead of null | `AssertionError: expected +0 to be null` | server `coord-caps-route` |
+| `gate.ts`'s docstring goes back to "all 55 routes" | `AssertionError: gate.ts claims a route count this tree does not derive: expected [ 55 ] to deeply equal [ 68 ]` | server `auth-gate` |

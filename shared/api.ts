@@ -4027,7 +4027,22 @@ export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
  *  TOGETHER, in one shape and one round trip: a cap without its usage is a
  *  number an operator cannot act on, and a usage without its cap is a number
  *  they cannot read. */
-export interface CoordCapsView { caps: CoordCaps; usage: CoordCapsUsage }
+export interface CoordCapsView {
+  caps: CoordCaps;
+  usage: CoordCapsUsage;
+  /** When the caps were last written, or `null` if they never have been (D-1169).
+   *
+   *  ADDITIVE, and on the VIEW rather than on `CoordCaps`: the view is the
+   *  read-side shape, while `CoordCaps` is the stored value that `decideCaps`
+   *  merges and `setCaps` writes — a timestamp is not a cap, and widening the
+   *  stored type for a display fact is what wave 6 declined to do.
+   *
+   *  `null` is not "the epoch": migration 1 seeds `updatedAt = 0`, and a dial
+   *  that rendered 1970 for a box nobody has ever tuned would be inventing an
+   *  event. An older server omits the field entirely, which reads the same way
+   *  through the one reader that consumes it. */
+  updatedAt?: number | null;
+}
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */
