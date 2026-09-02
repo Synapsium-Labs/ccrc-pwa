@@ -1786,6 +1786,22 @@ and the discipline is the whole subject of this wave. Recorded rather than smoot
   corrected**, in all three cases — the ranges now live once per section and are read from the
   allocator, and a line distance is a number nothing derives, so the comment names the guard instead.
 
+- **D-1332** (2026-09-02, self-review of the final round, and the class one more time) — **`projectEra`'s
+  docstring said the two approaches report "the SAME four orphans (D-1066..1069)", and there are six.**
+  True when D-1313 wrote it; falsified nine days later by this wave's OWN next measurement, because
+  D-1325 found two merged plans defining numbers the allocator never issued. Found by scanning my own
+  final-round diff for the very class the round was sent back for, which is the only reason it was
+  found at all — no suite reads that sentence.
+  The enumeration was decoration: the sentence's point is that the hardcoded pair and the derivation
+  report the SAME SET, whatever it is, and that survives. It now says so. The one number kept is 274,
+  and the reason it is safe to write is stated beside it — `MIN(n)` over an append-only allocation
+  table can only move if the allocator issues something lower, which it never does. That is the test a
+  cardinal has to pass to stay in shipped source, and this wave took five deviations to arrive at it
+  (D-1302, D-1294, D-1320, D-1328, and now this).
+  Two editorial slips from the same scan, fixed with it and recorded because unrecorded slips are how
+  the class propagates: the D-1329 insertion left `D-1158 is one of those` with no antecedent, and
+  D-1331's replacement comment put its own correction ahead of the sentence it corrected.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting

@@ -134,9 +134,10 @@ export const LEDGER_ALLOCATOR_ERA = 211;
  *    (D-1329) — `2026-08-24-build9b-peers-claims-allocator.md:72` writes it with
  *    an em-dash, which `ENTRY` sees perfectly well. `deviation-refs.test.ts`'s own
  *    corpus table had that line pinned as an em-dash definition the whole time,
- *    so the docstring was refuted by a test in the same change that wrote it. D-1158 is one of those, and it is the
- *    half of the first collision incident that would have stayed invisible even in
- *    a fully merged tree.
+ *    so the docstring was refuted by a test in the same change that wrote it.
+ *    The WRAPPED subject is the other shape `ENTRY` cannot see, and D-1158 is one
+ *    of those — the half of the first collision incident that would have stayed
+ *    invisible even in a fully merged tree.
  *  - The BARE-BOLD entry — `**D-297 — subject**` with no list bullet — which build
  *    8, stage 2e, the worker-skill plan and upstream-launcher-locks all write, and
  *    which BOTH `ENTRY` and this regex's first draft were blind to (D-1322). A
@@ -331,9 +332,18 @@ export function crossTreeCollisions(
  *
  * The allocator already knows the answer for each project and it costs one
  * `MIN(n)`. Measured on ccrc-pwa: the hardcoded pair and this derivation report
- * the SAME four orphans (D-1066..1069), because this project's first issued
- * number is 274 — so 211..273 were all hand-numbered, and the bootstrap set was
- * both too narrow and specific to one repo.
+ * the SAME orphans, because this project's first issued number is 274 — so
+ * 211..273 were all hand-numbered, and the bootstrap set was both too narrow and
+ * specific to one repo. 274 is safe to write down where a count is not: it is
+ * `MIN(n)` over an append-only allocation table, so it can only change if the
+ * allocator issues something lower, which it never does.
+ *
+ * THE COUNT THAT USED TO SIT IN THAT SENTENCE — "the SAME four orphans
+ * (D-1066..1069)" — WAS FALSIFIED BY THIS WAVE'S OWN NEXT MEASUREMENT (D-1332).
+ * It was true when written and there are six today, because two merged plans
+ * defined numbers the allocator never issued (D-1325). The property is what the
+ * sentence is for; the enumeration was decoration that went stale in nine days,
+ * in the file whose subject is exactly that.
  *
  * `null` — a project with no allocations at all — reports nothing: there is no
  * era, so no definition can be below or above it.

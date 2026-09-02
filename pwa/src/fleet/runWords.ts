@@ -454,16 +454,20 @@ export function runWarnings(
   // warning surface becomes ignorable.
   //
   // The closed-run filter is EARLIER IN THIS SAME FUNCTION, at the `isRunClosed`
-  // guard, and it is not the caller's. (It said "forty-four lines above" and was
-  // forty-six by the time anyone counted — a line distance is a cardinal nothing
-  // derives, so it is gone rather than corrected, D-1331.) The sentence that stood here said the opposite —
-  // "`closedAt`/state is the caller's filter: the board renders warnings on its
-  // `active` slice only" — which is the exact premise D-1309 was raised to delete,
+  // guard, and it is not the caller's. The sentence that stood here said the
+  // opposite — "`closedAt`/state is the caller's filter: the board renders
+  // warnings on its `active` slice only" — the exact premise D-1309 was raised to
+  // delete,
   // re-asserted verbatim in the paragraph next door (D-1321). Both halves were
   // false when written: `RunsScreen` has ONE `rowFor`, applied to `list` AND to
   // `finished`, and this function's parameter type declared `state` without ever
   // reading it. A claim about a caller is the one kind of comment a reader cannot
   // check locally, which is why it survived a whole wave.
+  //
+  // The replacement then said the filter was "forty-four lines above" and it was
+  // forty-six by the time anyone counted (D-1331). A line distance is a cardinal
+  // nothing derives, so it is named by its guard now rather than measured in a
+  // comment nobody re-runs.
   const since = h.coordKickoffPendingSince;
   const undispatched = (run.dispatchedAt ?? null) === null;
   if (since !== null && undispatched && nowMs - since >= KICKOFF_UNACKED_MS) {
