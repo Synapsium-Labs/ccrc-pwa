@@ -1227,3 +1227,6 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | `MAX(d.replayCount)` → `SUM(d.replayCount)` on the replay high-water | `AssertionError: the high-water is not the MAX: expected 20 to be 19` | server `coord-health` |
 | delete the `briefQueued`/`clearError` write from `CoordStore.dispatchRun` | `AssertionError: the dispatch decision is not durable: expected { briefQueued: null, clearError: null } to deeply equal { briefQueued: +0, …(1) }` | server `run-routes` |
 | write `briefQueued` as a constant `0` — the vacuity direction the false-branch case alone could not see | `AssertionError: expected { briefQueued: +0, clearError: null } to deeply equal { briefQueued: 1, clearError: null }` | server `run-routes` |
+| `crossTreeCollisions` filters to `false` — the always-green direction every empty-list assertion above would tolerate | `AssertionError: expected [] to deeply equal [ 1159, 1160, 1161 ]` (and `[ 1157, 1158 ]`) | server `deviation-refs` |
+| restore `ENTRY`'s same-line-subject demand on `DEFINITION` — the D-1294 blindness, put back | `AssertionError: expected [ 1157 ] to deeply equal [ 1157, 1158 ]` | server `deviation-refs` |
+| `LEDGER_ALLOCATOR_ERA` 211 → 0, so the pre-allocator era joins the scan | `AssertionError: expected [ Array(1) ] to deeply equal []` | server `ledger-crosstree` |

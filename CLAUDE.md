@@ -120,9 +120,15 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   red-first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; a build-scoped `D-B4-N` series runs alongside).
-  **Allocate the next number by grepping `origin/main` across BOTH `docs/` and source** — source runs ahead of
-  the plans' ledgers, so a number taken from a plan alone collides with shipped refs (it has, twice). Source
-  files carry `D-N` refs in comments; **read them
+  **Allocate from the allocator and DEFINE IN THE SAME ACT** — read the floor from
+  `POST /api/ledger/deviations`, never from a document (a brief once said 1243 while the allocator said 1292,
+  D-1293), and never predict or reuse a number. Source runs ahead of the plans' ledgers, so a number taken
+  from a plan alone collides with shipped refs. The parallel-branch collision (three incidents: D-1157/1158
+  via PR #38, D-1159/1160/1161 via PR #41) is now MEASURED rather than remembered — `git fetch origin main`
+  then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`, which compares this branch's
+  entries against `origin/main`'s **without merging** and reds on any allocator-era number defined in two
+  plans. It fires before the merge that would otherwise decide it; the older one-tree scan could only name the
+  loser afterwards. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Wire discipline — additive-only, absence-permits:** frames are ADDITIVE; do NOT bump `FLEET_PROTO`

@@ -9,10 +9,10 @@
 // collide, so a stale entry cannot quietly mask a new one.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { floorFromScan } from '../src/coord/ledger.js';
+import { crossTreeCollisions, definitionsIn, floorFromScan } from '../src/coord/ledger.js';
 import { LEDGER_SEED_GAP } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -230,3 +230,133 @@ describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)'
     expect([...`(was ${legacy})`.matchAll(ALIAS)][0]?.[1]).toBe(legacy);
   });
 });
+
+/* ── F7: the same collision, one merge EARLIER ─────────────────────────────── */
+
+/** The base this branch's ledger is measured against — `topology-clean.test.ts`'s
+ *  own `resolveBase`, for its own reason. Returns null rather than guessing, and
+ *  the first row below turns that null RED: a shallow `actions/checkout` (depth 1,
+ *  where `origin/main` does not exist) is exactly how this guard would come to
+ *  measure nothing while reporting green. CI carries `fetch-depth: 0` already. */
+function resolveLedgerBase(cwd: string): string | null {
+  const candidates = [process.env['CCRC_LEDGER_BASE'], 'origin/main', 'main']
+    .filter((r): r is string => Boolean(r));
+  for (const ref of candidates) {
+    try {
+      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+        { cwd, stdio: 'pipe' });
+      return ref;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
+const LEDGER_BASE = resolveLedgerBase(ROOT);
+
+/** `docs/superpowers/plans/*.md` as a given REF holds them, without checking it
+ *  out and without merging it. One `ls-tree` plus one `cat-file` per plan;
+ *  measured at ~0.4 s for 67 files, against the 163 ms this file's floor scan
+ *  already spends walking the whole tracked tree. */
+const plansAt = (ref: string): { path: string; text: string }[] => {
+  const listing = execFileSync('git',
+    ['ls-tree', '-r', '--format=%(objectname) %(path)', ref, 'docs/superpowers/plans/'],
+    { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 22 });
+  const out: { path: string; text: string }[] = [];
+  for (const line of listing.split('\n').filter(Boolean)) {
+    const sp = line.indexOf(' ');
+    const sha = line.slice(0, sp);
+    const file = line.slice(sp + 1).split('/').pop()!;
+    if (!file.endsWith('.md') || LEGACY_PER_PLAN_LEDGERS.has(file)) continue;
+    out.push({ path: file,
+      text: execFileSync('git', ['cat-file', 'blob', sha],
+        { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 24 }) });
+  }
+  return out;
+};
+
+describe('the cross-tree collision scan (F7 — before the merge, not after)', () => {
+  // WHY THIS EXISTS, and why it is not the scan above with a wider net.
+  //
+  // `collisions()` reads ONE checkout. Branch A defines D-1157 in its plan and
+  // branch B defines D-1157 in its own; each checkout holds exactly one of the
+  // two, so the suite is green on BOTH branches simultaneously, and green on
+  // whichever merges first. The pair co-resides only once the loser merges the
+  // winner — one merge too late, when the only remedy left is renumbering.
+  // That has now happened three times (D-1157/1158 via PR #38, D-1159/1160/1161
+  // via PR #41), and the detection procedure the coordinator actually used both
+  // times was a human cloning the tip, merging origin/main and running this file.
+  //
+  // MEASURED BEFORE IT WAS WRITTEN, against both real incidents, from the branch
+  // alone and with no merge (D-1295):
+  //   eee5fa1a vs 47ac50da -> 3 hits: D-1159, D-1160, D-1161
+  //   d620abe8 vs d3de4ec7 -> 2 hits: D-1157 AND D-1158
+  //   HEAD     vs origin/main -> 0
+  // D-1158 is the one the existing scan can never report at all: its definition
+  // line wraps its subject, which `ENTRY` cannot match (D-1294).
+  it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
+    expect(LEDGER_BASE,
+      'no $CCRC_LEDGER_BASE, origin/main or main resolved: a shallow checkout cannot see the other ' +
+      'tree, and this refuses to report a comparison nobody made')
+      .not.toBeNull();
+  });
+
+  it('is looking at two real trees, each with a real ledger in it', () => {
+    // The anti-vacuity partner. `crossTreeCollisions` over two empty lists is
+    // [], which satisfies the assertion below for entirely the wrong reason.
+    const here = plansAt('HEAD');
+    const there = plansAt(LEDGER_BASE!);
+    expect(here.length, 'no plans read from HEAD').toBeGreaterThanOrEqual(50);
+    expect(there.length, `no plans read from ${LEDGER_BASE}`).toBeGreaterThanOrEqual(50);
+    expect(definitionsIn(here).length, 'HEAD holds no ledger entries').toBeGreaterThanOrEqual(300);
+    expect(definitionsIn(there).length, 'the base holds no ledger entries').toBeGreaterThanOrEqual(300);
+  });
+
+  it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
+    const hits = crossTreeCollisions(plansAt('HEAD'), plansAt(LEDGER_BASE!));
+    expect(hits.map((c) => `D-${c.n}: ${c.files.join(' / ')}`),
+      `this branch defines a number ${LEDGER_BASE} already defines in another plan. Allocate fresh ` +
+      'numbers through POST /api/ledger/deviations and renumber NOW, before the merge decides it ' +
+      'for you — that is what this scan exists to buy you, and it is the whole of the remedy')
+      .toEqual([]);
+  });
+
+  // THE GUARD ON THE GUARD, and the only row that proves this scan can FAIL.
+  // Everything above asserts an empty list, which an implementation that always
+  // returned [] would satisfy forever. These two pairs are this program's own
+  // history — the exact branch/base tips of the two incidents — so the scan is
+  // measured against collisions that really happened rather than against
+  // fixtures, and it can never quietly become a no-op.
+  //
+  // The shas are permanent history on this repo: two are ancestors of this
+  // branch, two are on main. A checkout that cannot resolve them is shallow, and
+  // that reds here rather than silently skipping — the same polarity as the base
+  // resolution above.
+  describe.each([
+    ['PR #41', 'eee5fa1a', '47ac50da', [1159, 1160, 1161]],
+    ['PR #38', 'd620abe8', 'd3de4ec7', [1157, 1158]],
+  ] as const)('fires on the %s incident, from the branch alone', (_name, branch, base, expected) => {
+    it(`reports D-${expected.join('/D-')} without merging anything`, () => {
+      for (const ref of [branch, base]) {
+        expect(() => execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+          { cwd: ROOT, stdio: 'pipe' }), `${ref} is unreachable — this checkout is too shallow to ` +
+          'prove the scan fires, and a guard that cannot be shown to fail is not a guard').not.toThrow();
+      }
+      const hits = crossTreeCollisions(plansAt(branch), plansAt(base));
+      expect(hits.map((h) => h.n)).toEqual([...expected]);
+      // Each hit names two DIFFERENT plans — the shape of the defect, not just
+      // its number.
+      for (const h of hits) expect(h.files.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('sees MORE than the subject-based scan above — the two are not redundant', () => {
+    // The proof that this arm is worth its runtime: the wrapped/colon forms
+    // `ENTRY` cannot match are real and present in this very tree.
+    const here = plansAt('HEAD');
+    const loose = definitionsIn(here).length;
+    const strict = entries().length;
+    expect(loose, 'the loose scan sees no more than ENTRY — one of them has drifted')
+      .toBeGreaterThan(strict);
+  });
+});
+

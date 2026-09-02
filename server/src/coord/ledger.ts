@@ -100,3 +100,85 @@ export function floorFromScan(
   if (max === 0) return null;
   return { floor: max + LEDGER_SEED_GAP, evidence, legacy: [...legacy].sort() };
 }
+
+/* ── F7: the cross-tree collision decision ─────────────────────────────────── */
+
+/**
+ * The first allocator-era number. Below it the pre-allocator era legitimately
+ * minted the same number twice (parallel branches; three early plans numbered
+ * per plan), and `deviation-refs.test.ts`'s `GRANDFATHERED` set — whose own rule
+ * is that it may only SHRINK, and that nothing >= 211 may ever join it — is what
+ * carries that history. Scoping the cross-tree rule here is what lets it be
+ * subject-free without forcing that set to grow (D-1295).
+ */
+export const LEDGER_ALLOCATOR_ERA = 211;
+
+/**
+ * A line that DEFINES a number, recognised by its prefix alone.
+ *
+ * Deliberately looser than `deviation-refs.test.ts`'s `ENTRY`, which additionally
+ * demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE SAME LINE — and
+ * is therefore blind to two spellings this repo actually uses: build 9b's colon
+ * form (`- **D-211** (Task 3): …`) and a subject wrapped onto the next line.
+ * Measured across the 64 scanned plans: `ENTRY` sees 350 lines where this shape
+ * sees 386, and of the 36 it misses, 29 are real non-sub definitions carrying
+ * 73, 139-144, 149, 172, 189-195, 200-207, 1026 and **1158** — one of the five
+ * numbers this program lost, and the half of the first incident that would have
+ * stayed invisible even in a fully merged tree (D-1294).
+ *
+ * The dotted-sub-entry lookahead is kept exactly as `ENTRY` has it: `D-310.1`
+ * CITES `D-310`, it does not define it.
+ */
+const DEFINITION = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)/;
+
+export interface Definition { readonly file: string; readonly n: number }
+export interface CrossTreeCollision { readonly n: number; readonly files: readonly string[] }
+
+/** Every definition in a set of already-read files. Pure: the caller does the
+ *  reading, so the same function serves fixtures and two real git trees. */
+export function definitionsIn(
+  files: readonly { readonly path: string; readonly text: string }[],
+): Definition[] {
+  const out: Definition[] = [];
+  for (const f of files) {
+    for (const line of f.text.split('\n')) {
+      const m = DEFINITION.exec(line);
+      if (m) out.push({ file: f.path, n: Number(m[1]) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Allocator-era numbers DEFINED in more than one plan file across two trees.
+ *
+ * SUBJECT-FREE by construction, and that is the point rather than a shortcut:
+ * the allocator issues each number once, for one stated purpose, so a second
+ * defining FILE is the defect however the two entries are worded. The
+ * subject comparison in `deviation-refs.test.ts` exists to grandfather the
+ * pre-allocator era, and this rule steps around that era instead of widening it.
+ *
+ * SAME FILE IN BOTH TREES IS NOT A COLLISION. Every unmerged plan on a branch is
+ * also on the base; if that fired, the guard would be red on every branch forever
+ * and would be switched off within a day.
+ *
+ * Pure, and both trees arrive as data — reading `origin/main` is the caller's
+ * job, which is what keeps this side fixture-testable and this file L1.
+ */
+export function crossTreeCollisions(
+  branch: readonly { readonly path: string; readonly text: string }[],
+  base: readonly { readonly path: string; readonly text: string }[],
+  era: number = LEDGER_ALLOCATOR_ERA,
+): CrossTreeCollision[] {
+  const byN = new Map<number, Set<string>>();
+  for (const d of [...definitionsIn(branch), ...definitionsIn(base)]) {
+    if (d.n < era) continue;
+    const files = byN.get(d.n) ?? new Set<string>();
+    files.add(d.file);
+    byN.set(d.n, files);
+  }
+  return [...byN.entries()]
+    .filter(([, files]) => files.size > 1)
+    .map(([n, files]) => ({ n, files: [...files].sort() }))
+    .sort((a, b) => a.n - b.n);
+}
