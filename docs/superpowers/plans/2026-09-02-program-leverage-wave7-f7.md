@@ -1611,12 +1611,17 @@ document — the wave's own D-1317 is why.
   Same family as D-1322 from the other side, and the same consequence: a guard whose printed remedy is
   "renumber NOW" firing on a quotation. Measured first — **zero lines in the corpus are affected
   today**, so this is a shape plans are about to write rather than one they already have, which is
-  exactly why a fixture and not a corpus count is the right pin. Fixed with a fence toggle over both
-  delimiters. The interesting half is the failure mode of the fix: an unbalanced fence would put
-  everything after the last delimiter "inside" a block and silently drop real definitions, so **an odd
-  fence count disables the skip for that file** and it is scanned whole. A guard going quiet is worse
-  than a guard being noisy; the ambiguous file gets the loud answer. All 66 plans are balanced today,
-  so that arm exists for the file that is not, and it has its own case.
+  exactly why a fixture and not a corpus count is the right pin.
+  **The first fix was parity counting, and self-review found it wrong on a shape the corpus already
+  holds.** `2026-08-28-program-leverage-wave1-f1.md:216` is a four-backtick block quoting two
+  three-backtick blocks; parity opens on the outer fence, closes on the FIRST inner one, and reads the
+  quoted block's middle as ordinary prose. Nothing definition-shaped sits there today — which is exactly
+  the "incidentally correct" this wave keeps finding, so it is fixed now rather than after it matters.
+  A fence now closes only on the same character, at the same length or longer, with no info string after
+  it, which is CommonMark's own rule and the reason a longer fence can quote a shorter one.
+  The other half is the failure mode of the fix: a file that **ends with a fence still open** is scanned
+  WHOLE, because the alternative is dropping every definition after it in silence. A guard going quiet
+  is worse than a guard being noisy; the ambiguous file gets the loud answer, and it has its own case.
 
 - **D-1324** (2026-09-02, MUST-FIX — the Execution record contradicted the document it sits in) —
   **three counts, all wrong, in a wave that corrected five stale cardinals elsewhere.** It said
@@ -1676,7 +1681,7 @@ did, and each one is named in the deviation it produced (D-1306, D-1312 twice, D
 
 The rows are in landing order: Tasks 1–10 first, then the wave's own review round from
 `restore MIN(COALESCE(...))` onward, then the coordinator's fix round from `narrow statement (4)`
-onward. **Counted twice by independent methods, and they agree at 42** — structurally (data rows under
+onward. **Counted twice by independent methods, and they agree at 43** — structurally (data rows under
 the header) and by outcome-classification (rows whose second cell quotes a verbatim failure). A
 section-marker row made those two disagree at 34/33 on the first count, so the fix round's rows carry
 no marker either: the count is the thing that has to survive, not the sub-heading.
@@ -1723,5 +1728,6 @@ no marker either: the count is the thing that has to survive, not the sub-headin
 | loosen `DEFINITION`'s `**` arm back to a bare `**` — the individually-bolded citation reads as a definition again (D-1322) | `AssertionError: expected [ { file: 'a.md', n: 1231 } ] to deeply equal []` | server `ledger-crosstree` |
 | delete the bare-bold prefix arm, restoring the blindness to `**D-297 — …**` entries (D-1322) | `AssertionError: expected [] to deeply equal [ 297 ]`, and the corpus rows: `definition expected, got 0 definition(s) from: **D-297 — the \`_spawn\` split demoted a process-fatal error to a success line.** Task 3 gav` | server `ledger-crosstree`, `deviation-refs` |
 | delete the fence skip from `definitionsIn` (D-1323) | `AssertionError: expected [ 1231, 1232, 1300 ] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
-| drop the odd-fence fail-loud rule, so an unbalanced file goes quiet after its stray delimiter (D-1323) | `AssertionError: expected [] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
+| let a never-closed fence swallow the rest of the file instead of scanning it whole (D-1323) | `AssertionError: expected [] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
+| close a fence on ANY delimiter — parity behaviour, so a four-backtick block quoting a three-backtick block ends at the inner fence (D-1323, found by self-review after the first fix landed) | `AssertionError: expected [ 1231, 1300 ] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
 | drop `isRunClosed(run)` from `runWarnings` — **re-measured this round**, because D-1321 is a false claim ABOUT this guard and the guard itself had to be shown still real | `AssertionError: a done run drew a warning: expected <span class="run-warn">…(3)</span> to be null` | pwa `runs-health` |

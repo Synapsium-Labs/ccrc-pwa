@@ -136,13 +136,42 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
     expect(definitionsIn([f('c.md', '```markdown\n### D-1231 — quoted\n```')])).toEqual([]);
   });
 
-  it('scans an UNBALANCED file whole rather than going quiet after the stray fence', () => {
-    // The fail-loud arm. An odd fence count would otherwise put everything after
-    // the last delimiter "inside" a block, and a guard that silently stops
-    // reporting is worse than one that over-reports — this is the direction the
-    // ambiguity resolves in, asserted rather than described.
+  it('scans a file whose fence is never CLOSED whole, rather than going quiet after it', () => {
+    // The fail-loud arm. An unclosed fence would otherwise put everything after
+    // it "inside" a block, and a guard that silently stops reporting is worse
+    // than one that over-reports — this is the direction the ambiguity resolves
+    // in, asserted rather than described.
     const stray = ['```', 'an opened block nobody closed', '- **D-1300** — a real entry after it'].join('\n');
     expect(definitionsIn([f('a.md', stray)]).map((d) => d.n)).toEqual([1300]);
+  });
+
+  it('lets a ```` block quote a ``` block — the shape wave 1’s plan actually holds', () => {
+    // Parity counting gets this backwards: it opens on the outer fence, closes on
+    // the FIRST inner one, and reads the quoted block's middle as ordinary prose.
+    // `2026-08-28-program-leverage-wave1-f1.md:216` is exactly this shape — a
+    // ````markdown block quoting two ``` blocks — so the case is copied from the
+    // corpus, not invented. A fence closes only on the same character at the same
+    // length or longer.
+    const nested = [
+      '````markdown',
+      '# a quoted document',
+      '```',
+      '- **D-1231** — quoted inside the quoted block',
+      '```',
+      '- **D-1232** — quoted in the outer block',
+      '````',
+      '- **D-1300** — this plan’s own entry',
+    ].join('\n');
+    expect(definitionsIn([f('a.md', nested)]).map((d) => d.n)).toEqual([1300]);
+    // …and the other character never closes it: `~~~` cannot end a ``` block, so
+    // a file that tries reads as never-closed and is scanned whole.
+    expect(definitionsIn([f('b.md', '```\n- **D-1231** — quoted\n~~~')]).map((d) => d.n)).toEqual([1231]);
+  });
+
+  it('does not treat a fence with an info string as a CLOSING fence', () => {
+    // ```` ```md ```` opens; only a bare run closes. Without this the block below
+    // would close on its second line and the entry would read as a definition.
+    expect(definitionsIn([f('a.md', '```md\n```js\n- **D-1231** — still quoted\n```')])).toEqual([]);
   });
 
   it('names the file each definition came from', () => {

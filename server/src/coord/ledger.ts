@@ -168,9 +168,39 @@ export const LEDGER_ALLOCATOR_ERA = 211;
  */
 const DEFINITION = /^(?:#{2,4} |- \*\*|\*\*)D-(\d+)\b(?!\.\d)(?=\*\*\s*(?:—|\(|:)|\s+—|\s+\(|:)/;
 
-/** A fenced-code delimiter, at the three-space indent CommonMark still counts as
- *  one. Both fence characters, because plans use both. */
-const FENCE = /^\s{0,3}(?:```|~~~)/;
+/** A fenced-code delimiter: up to three spaces of indent, then a run of three or
+ *  more backticks or tildes. Captured as the RUN, because a fence closes only on
+ *  the same character at the same length or longer — which is how a ```` block
+ *  can quote a ``` block, and this corpus has one
+ *  (`2026-08-28-program-leverage-wave1-f1.md:216`). Parity counting gets that
+ *  case backwards: it opens at the outer fence, closes at the FIRST inner one,
+ *  and reads the quoted block's middle as ordinary prose. Nothing
+ *  definition-shaped sits there today, which is precisely why it is worth fixing
+ *  now rather than after it does. */
+const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+
+/** The lines of a file that sit INSIDE a fenced block, or `null` when the file
+ *  ends with a fence still open — the ambiguous case, which the caller resolves
+ *  by scanning the file whole. */
+function fencedLines(lines: readonly string[]): Set<number> | null {
+  const inside = new Set<number>();
+  let open: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = FENCE.exec(lines[i]!);
+    if (open === null) {
+      if (m) { open = m[1]!; inside.add(i); }
+      continue;
+    }
+    inside.add(i);
+    // A closing fence is the same character, at least as long, and carries no
+    // info string — `~~~` never closes ```` ``` ````, and ``` never closes ````.
+    if (m && m[1]![0] === open[0] && m[1]!.length >= open.length &&
+        lines[i]!.slice(lines[i]!.indexOf(m[1]!) + m[1]!.length).trim() === '') {
+      open = null;
+    }
+  }
+  return open === null ? inside : null;
+}
 
 export interface Definition { readonly file: string; readonly n: number }
 export interface CrossTreeCollision { readonly n: number; readonly files: readonly string[] }
@@ -186,13 +216,11 @@ export interface CrossTreeCollision { readonly n: number; readonly files: readon
  * quotation. No line in the corpus is affected today; the shape is what plans are
  * about to write, and the same family as the citation false positive above.
  *
- * AN ODD NUMBER OF FENCE LINES IN A FILE DISABLES THE SKIP FOR THAT FILE. An
- * unbalanced fence would otherwise put everything after the last delimiter
- * "inside" a block, silently dropping real definitions — a guard going quiet is a
- * worse failure than a guard being noisy, so the ambiguous file is scanned whole
- * and reports what it finds. This is the fail-loud direction on purpose; the
- * corpus is balanced in all 66 plans today, so the arm exists for the file that
- * is not.
+ * A FILE THAT ENDS WITH A FENCE STILL OPEN IS SCANNED WHOLE. The unclosed fence
+ * would otherwise put everything after it "inside" a block, silently dropping
+ * real definitions — a guard going quiet is a worse failure than a guard being
+ * noisy, so the ambiguous file gets the loud answer. Every plan closes its fences
+ * today, so the arm exists for the file that does not.
  */
 export function definitionsIn(
   files: readonly { readonly path: string; readonly text: string }[],
@@ -200,12 +228,10 @@ export function definitionsIn(
   const out: Definition[] = [];
   for (const f of files) {
     const lines = f.text.split('\n');
-    const balanced = lines.filter((l) => FENCE.test(l)).length % 2 === 0;
-    let inFence = false;
-    for (const line of lines) {
-      if (balanced && FENCE.test(line)) { inFence = !inFence; continue; }
-      if (inFence) continue;
-      const m = DEFINITION.exec(line);
+    const fenced = fencedLines(lines);
+    for (let i = 0; i < lines.length; i++) {
+      if (fenced !== null && fenced.has(i)) continue;
+      const m = DEFINITION.exec(lines[i]!);
       if (m) out.push({ file: f.path, n: Number(m[1]) });
     }
   }
