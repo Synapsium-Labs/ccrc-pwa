@@ -883,10 +883,24 @@ export class CoordStore {
   dispatchRun(input: {
     runId: number; sessionId: string; workspace: string | null; branch: string | null;
     resumed: boolean; clearedAt: number | null; items: readonly string[]; detail?: string;
+    /** F7 (D-1298): what this dispatch DECIDED about the brief, and the
+     *  `sendPrompt` refusal that made it false. OPTIONAL on the input so the
+     *  disaster-recovery and test callers that know neither may omit both — an
+     *  omitted pair leaves the columns NULL, which is exactly the "no dispatch
+     *  decided anything here" reading migration 7 reserves for null. */
+    briefQueued?: boolean; clearError?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
+      // Written UNCONDITIONALLY once `briefQueued` is given, both columns
+      // together: recording only the interesting branch would make an older row
+      // and a dispatch that queued its brief cleanly indistinguishable, which is
+      // the same overloaded null the column's nullability exists to prevent.
+      if (input.briefQueued !== undefined) {
+        this.db.prepare('UPDATE runs SET briefQueued = ?, clearError = ? WHERE id = ?')
+          .run(input.briefQueued ? 1 : 0, input.clearError ?? null, input.runId);
+      }
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
