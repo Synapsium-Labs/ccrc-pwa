@@ -951,7 +951,8 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
   it('is idempotent: the second run removes nothing and cuts no backup', () => {
     const home = freshBox('ccrc-inst-gfx-off-idem-');
     plantFakeVenv(home);
-    const f = seed(home, `# head\n\n${BLOCK}\n`);
+    const PRE = `# head\n\n${BLOCK}\n`;
+    const f = seed(home, PRE);
     const first = runInstall(home, ['install']);
     expect(first.code, first.stderr).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe('# head\n');
@@ -961,12 +962,35 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     // under `~/ccrc-backups/<ts>/` on this same fresh box, and a count of
     // timestamp directories says nothing about WHICH file was copied. The
     // backup name is the absolute path with `/` → `_`, so it ends `_CLAUDE.md`.
+    //
+    // AND ITS BYTES, NOT ITS NAME (D-1358). This was once
+    // `dirs.some(d => readdirSync(...).some(b => b.endsWith('_CLAUDE.md')))` — a
+    // predicate over FILENAMES, which a zero-byte file satisfies. MEASURED:
+    // replacing the copy at `ccd/ccrc`'s remover with `: > "$backups/$(echo "$f"
+    // | tr / _)"` — same name, same success status, the whole `if !` refusal
+    // chain intact — left this file's 39 rows green while the operator's
+    // CLAUDE.md was still rewritten and its only surviving copy was empty. The
+    // row above ('REFUSES to rewrite a file it could not back up') binds the
+    // NEGATIVE arm only: it proves the refusal fires when `mkdir -p` fails, not
+    // that the copy holds anything. The backup is the sole recovery path for a
+    // splice bug — the class D-1244 found six of — so what it must hold is the
+    // PRE-REMOVAL FILE.
+    //
+    // EXACTLY ONE, not `some`: two copies of this file under one run would mean
+    // the remover visited the same physical path twice (the symlink case), and
+    // a `some` predicate would hide it.
     const backupsRoot = join(home, 'ccrc-backups');
     const dirs = backupDirs(home);
-    const claudeBackedUp = dirs.some((d) =>
-      readdirSync(join(backupsRoot, d)).some((b) => b.endsWith('_CLAUDE.md')));
-    expect(claudeBackedUp, 'no backup dir holds a copy of the CLAUDE.md the first run rewrote')
-      .toBe(true);
+    const copies = dirs.flatMap((d) =>
+      readdirSync(join(backupsRoot, d))
+        .filter((b) => b.endsWith('_CLAUDE.md'))
+        .map((b) => join(backupsRoot, d, b)));
+    expect(copies.length, 'no backup dir holds a copy of the CLAUDE.md the first run rewrote')
+      .toBe(1);
+    expect(readFileSync(copies[0]!, 'utf8'),
+      'the backup does not hold the pre-removal bytes — the only copy of the operator\'s file '
+      + 'that exists before the delete is not the file')
+      .toBe(PRE);
     const after = dirs.length;
     const second = runInstall(home, ['install']);
     expect(second.code, second.stderr).toBe(0);
@@ -1110,12 +1134,24 @@ describe('ccrc install: legacy graphify hook removal (_inst_graph_hooks_off, O6b
     // on THIS fixture, but the assertion should not depend on that staying
     // true), so it is scoped to what this step backs up rather than to the
     // directory's total child count.
+    //
+    // AND ITS BYTES, NOT ITS NAME (D-1358), for the reason the remover's own
+    // idempotence row states at length: this step's copy
+    // (`cp -a "$h" "$backups/…" && rm -f "$h"`) is the ONLY copy of a hook it
+    // then deletes, and a `.some(f => f.endsWith('_post-commit'))` predicate is
+    // satisfied by an empty file. Same shape, same one-line mutation, same
+    // silence — so the same assertion.
     const backupsRoot = join(home, 'ccrc-backups');
     const backupDirs = readdirSync(backupsRoot);
     expect(backupDirs.length).toBeGreaterThanOrEqual(1);
-    const hookBackedUp = backupDirs.some((d) =>
-      readdirSync(join(backupsRoot, d)).some((f) => f.endsWith('_post-commit')));
-    expect(hookBackedUp, 'no backup dir holds the removed post-commit hook').toBe(true);
+    const hookCopies = backupDirs.flatMap((d) =>
+      readdirSync(join(backupsRoot, d))
+        .filter((f) => f.endsWith('_post-commit'))
+        .map((f) => join(backupsRoot, d, f)));
+    expect(hookCopies.length, 'no backup dir holds the removed post-commit hook').toBe(1);
+    expect(readFileSync(hookCopies[0]!, 'utf8'),
+      'the backup does not hold the removed hook\'s bytes — the copy taken before `rm -f` is empty')
+      .toBe(HOOK_COMMIT_WHOLLY);
   });
 
   it('is idempotent: a second run finds nothing left to remove', () => {

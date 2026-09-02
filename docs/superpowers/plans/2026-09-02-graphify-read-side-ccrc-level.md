@@ -3020,6 +3020,42 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | unmutated | `Tests  42 passed (42)` (whole file) |
 
 
+- **D-1358** (2026-09-02, whole-branch review) — **the remover's backup was never read back, so an
+  EMPTY backup kept the whole suite green.** R0 deletes lines out of the operator's own `CLAUDE.md` —
+  the file this plan's own R0 header calls "the OPERATOR's, not ccrc's" — and
+  `cp -a "$f" "$backups/$(echo "$f" | tr / _)"` (`ccd/ccrc`, `_inst_graph_always_on_off`) is the ONLY
+  copy of it that exists before the delete. It is also the only copy anywhere: `ccrc update`'s
+  pre-install backup covers dists, `ccd`, `session-hook.sh`, `notify.sh`, units and a `coord.db`
+  snapshot, never a wrapper HOME's `CLAUDE.md`. Nothing on the branch read that copy back. The
+  idempotence row asserted `readdirSync(...).some(b => b.endsWith('_CLAUDE.md'))` — a predicate over
+  FILENAMES — and the row beside it ('REFUSES to rewrite a file it could not back up') plants
+  `~/ccrc-backups` as a regular file so `mkdir -p` fails, which binds the NEGATIVE arm only: it proves
+  the refusal fires, not that the copy holds anything. MEASURED: one line, same name, same success
+  status, the whole `if !` refusal chain intact —
+  `cp -a "$f" "$backups/…"` → `: > "$backups/…"`, `bash -n` clean — and the file's rows stayed green
+  while the operator's `CLAUDE.md` was still rewritten and its only surviving copy was zero bytes.
+  This is the repo's own "tests pin shape, not effect" in its purest form, and the suite already used
+  the stronger idiom two describes down (the `.local/bin` shim rows compare `readFileSync(...)` to
+  `SHIM`), which made R0's name-only check the outlier.
+  **`_inst_graph_hooks_off` had the identical gap** — `cp -a "$h" … && rm -f "$h"` under a
+  `.some(f => f.endsWith('_post-commit'))` name predicate — and is fixed in the same commit, because
+  R0 is explicitly built as that function's idiom and a fix to one of two identical sites teaches the
+  next reader the wrong lesson.
+
+  Severity is a GUARD LEFT UNBOUND on a data-loss path, not live loss: the shipped `cp -a` is correct
+  today and the delete is bounded by the whole-line one-ordered-pair census, so no operator loses
+  bytes now. The backup is the net for a splice bug — the class D-1244 found six of — and that net was
+  what nothing held. **Shipped:** both rows now locate EXACTLY ONE backup copy (`flatMap` +
+  `toBe(1)`, not `some` — two copies under one run would mean the remover visited one physical path
+  twice, which the symlink arm makes reachable) and compare its bytes to the pre-removal file.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/ccrc` `_inst_graph_always_on_off`: `cp -a "$f" "$backups/…"` → `: > "$backups/…"` | `Tests  1 failed \| 41 passed (42)` — `the backup does not hold the pre-removal bytes`, `expected '' to be '# head\n\n<!-- ccrc:graphify-always-o…'` |
+  | `ccd/ccrc` `_inst_graph_hooks_off`: `cp -a "$h" "$backups/…"` → `: > "$backups/…"` | `Tests  1 failed \| 41 passed (42)` — `the backup does not hold the removed hook's bytes`, `expected '' to be '#!/bin/sh\n# graphify-hook-start…'` |
+  | unmutated | `Tests  42 passed (42)` (whole file) |
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
