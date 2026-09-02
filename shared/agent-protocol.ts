@@ -103,7 +103,7 @@ export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null};
-// readB64 → {dataB64: string|null}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true};
+// readB64 → {dataB64: string|null}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
 export interface TailData  { t: 'tail'; tailId: number; dataB64: string }       // appended bytes
 export interface TailReset { t: 'tail'; tailId: number; reset: true; size: number } // file truncated/rotated

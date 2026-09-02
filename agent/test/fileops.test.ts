@@ -162,6 +162,32 @@ describe('ccrc-agent file ops', () => {
     expect(res).toMatchObject({ ok: false, err: 'forbidden' });
   });
 
+  it('stat marks a genuinely missing whitelisted path with absent:true', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), {
+      op: 'stat', path: path.join(fixture!.home, '.cc-limits', 'nope-absent'),
+    });
+    expect(res).toMatchObject({ ok: true, missing: true, absent: true });
+  });
+
+  it('stat THROUGH a file (ENOTDIR) answers missing:true with NO absent key — unmeasured is not absent', async () => {
+    await open();
+    // The whole of D-114 in one case. `claude.json` is a FILE, so the kernel
+    // refuses to walk THROUGH it: ENOTDIR, not ENOENT. Today this op answers
+    // `{missing:true}` — byte-identical to a genuine ENOENT — and the server
+    // reads that as proof the path is gone.
+    //
+    // ENOTDIR rather than `chmod 000` deliberately: chmod does not deny root,
+    // so a root runner would silently assert the wrong thing (D-116, still
+    // open at server/test/coord-fingerprint.test.ts:100/:632/:650/:701, which
+    // is why nothing new here uses chmod).
+    const file = path.join(fixture!.home, '.cc-limits', 'claude.json');
+    writeFileSync(file, 'abcd');
+    const res = await client!.req<Res>(nextId(), { op: 'stat', path: path.join(file, 'child') });
+    expect(res).toMatchObject({ ok: true, missing: true });
+    expect(res).not.toHaveProperty('absent');
+  });
+
   it('writeB64 mkdir-ps the parent and writes decoded bytes under .cc-clips', async () => {
     await open();
     const file = path.join(fixture!.home, '.cc-clips', 'deep', 'nested', 'clip.png');

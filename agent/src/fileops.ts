@@ -88,11 +88,32 @@ export async function listDir(p: string): Promise<string[] | null> {
   try { return await readdir(p); } catch { return null; }
 }
 
-export async function statPath(p: string): Promise<{ mtimeMs: number; size: number } | null> {
+/** `statMeasured`'s result — the `stat` op's half of `ReadResult` above, and
+ *  a LOCAL type for the same reason (this side cannot import
+ *  `server/src/io.ts`, and the reason union stays out of `shared/` because
+ *  that is the PWA's bundle path).
+ *
+ *  `absent` is true ONLY on a proven ENOENT. Every other errno — EACCES,
+ *  ENOTDIR, ELOOP, EIO — and every non-errno throw leaves it false, meaning
+ *  "this path may well be there and this box could not measure it". Before
+ *  this type, all of them left through `server.ts`'s `?? { missing: true }`
+ *  wearing the wire's proven-absence marker (D-114).
+ *
+ *  SAME DANGLING-SYMLINK RESIDUAL as `ReadResult`, and it must be stated here
+ *  too: `stat` follows the link, the TARGET's ENOENT is what throws, and
+ *  `absent` comes back true for a name still in its directory listing. Not
+ *  closed with an `lstat` ladder, for the reason recorded there. */
+export type StatResult =
+  | { ok: true; mtimeMs: number; size: number }
+  | { ok: false; absent: boolean };
+
+export async function statMeasured(p: string): Promise<StatResult> {
   try {
     const s = await stat(p);
-    return { mtimeMs: s.mtimeMs, size: s.size };
-  } catch { return null; }
+    return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
+  } catch (e) {
+    return { ok: false, absent: (e as NodeJS.ErrnoException).code === 'ENOENT' };
+  }
 }
 
 export type WriteResult = { ok: true } | { ok: false; err: string };

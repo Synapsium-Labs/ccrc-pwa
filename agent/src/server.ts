@@ -29,7 +29,7 @@ import type {
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { readB64, readFrom, listDir, readWhole, statPath, writeB64, type ReadResult } from './fileops.js';
+import { readB64, readFrom, listDir, readWhole, statMeasured, writeB64, type ReadResult, type StatResult } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -169,6 +169,20 @@ function readPayload(r: ReadResult): { data: string | null; absent?: true } {
   return { data: r.data, ...(r.absent ? { absent: true as const } : {}) };
 }
 
+/** Builds the `stat` op's wire payload from `statMeasured`'s result.
+ *  `missing: true` keeps its EXACT pre-existing meaning — "no {mtimeMs,size}
+ *  for you", absent and unmeasurable alike — so an older server's
+ *  `r.missing === true ? null : …` reader is unaffected. `absent` is spread
+ *  in ONLY when the failure was a proven ENOENT, never sent as
+ *  `absent: false`, matching `{mtimeMs,size} | {missing: true, absent?: true}`
+ *  in `shared/agent-protocol.ts`. A newer server reads a bare `missing: true`
+ *  as UNMEASURED — which is what makes an OLDER agent's every stat failure
+ *  fail SHUT instead of masquerading as proof the path is gone (D-114). */
+function statPayload(r: StatResult): { mtimeMs: number; size: number } | { missing: true; absent?: true } {
+  if (r.ok) return { mtimeMs: r.mtimeMs, size: r.size };
+  return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
+}
+
 function clampTimeout(ms: number | undefined): number {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return DEFAULT_EXEC_TIMEOUT_MS;
   return Math.min(ms, MAX_EXEC_TIMEOUT_MS);
@@ -276,8 +290,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'stat': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      const result = await statPath(p);
-      send(ws, ok(req.id, result ?? { missing: true }));
+      send(ws, ok(req.id, statPayload(await statMeasured(p))));
       return;
     }
     case 'writeB64': {
@@ -543,8 +556,8 @@ type VerbCache = { verbs: string[]; mtimeMs: number | null; size: number | null 
  *  forever from a cache entry that (wrongly) claims to already reflect the
  *  current file. */
 async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
-  const st = await statPath(resolveSpawnCmd('ccd', home));
-  if (st === null) return cache.verbs;
+  const st = await statMeasured(resolveSpawnCmd('ccd', home));
+  if (!st.ok) return cache.verbs;
   if (st.mtimeMs === cache.mtimeMs && st.size === cache.size) return cache.verbs;
   const verbs = await readCcdVerbs(home);
   if (verbs === null) return cache.verbs;
