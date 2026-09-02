@@ -3056,6 +3056,32 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | unmutated | `Tests  42 passed (42)` (whole file) |
 
 
+- **D-1359** (2026-09-02, whole-branch review) — **half of R4's counting rule was deletable with the
+  suite green: the trailing word boundary that keeps the read counter from over-counting.**
+  `GRAPH_QUERY_RE` (`ccd/session-hook.sh:194`) carries two boundary classes and its comment gives each
+  a separate job — the leading one stops `mygraphify query` and prose, the trailing one stops
+  `graphify querying-something-else`. The leading half was bound ("does NOT count a command that
+  merely contains the word"); the trailing half was bound by nothing. Both of that test's fixtures are
+  stopped by the LEADING class, and all four fixtures in "does NOT count graphify update, a build, or
+  a bare graphify" die on the VERB alternation, so no fixture anywhere planted a
+  `graphify query…`-prefixed word and the clause could be deleted with `Tests  48 passed (48)`
+  unchanged (measured on the branch before this fix).
+
+  Behaviour today is correct — nothing miscounts on a live box — so this is an unpinned guard, not a
+  wrong number. It is worth a ledger entry anyway because of WHICH number it guards: R4 exists so the
+  sentence the whole R0 removal rests on ("the account-wide block measured zero effect") stays
+  honest, and over-counting is the one failure direction that would manufacture adoption out of
+  commands that are not reads at all. Fix is test-only — no behaviour change, `ccd/session-hook.sh`
+  untouched — a fifth negative case, "does NOT count a verb that is merely the prefix of a longer
+  word", spelling out all three verbs so a boundary that holds for `query` and not for `explain` is
+  still caught.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/session-hook.sh:194`: delete the trailing `([[:space:]]\|$)` from `GRAPH_QUERY_RE` (`bash -n` clean) | `Tests  1 failed \| 51 passed (52)` — `expected 4 to be +0`, i.e. all four prefix-extended words counted |
+  | unmutated | `Tests  52 passed (52)` (whole file) |
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

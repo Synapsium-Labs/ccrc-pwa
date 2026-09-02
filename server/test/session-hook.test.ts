@@ -275,6 +275,23 @@ describe('graphQueries — the read counter the console can see', () => {
     expect(readState().graphQueries).toBe(0);
   });
 
+  // The regex carries TWO boundary classes and the comment gives each its own
+  // job; the leading one is bound by the test above, and this binds the
+  // trailing one. A verb that is only the PREFIX of a longer word is not that
+  // verb: `graphify query-builder` is some other command entirely, and if it
+  // counted, the number R4 exists to produce would be inflated — which is the
+  // one failure direction that would corrupt the "measured zero" argument the
+  // whole R0 removal rests on. Every verb is spelled out: a boundary that
+  // holds for `query` and not for `explain` is still a hole.
+  // (D-1359)
+  it('does NOT count a verb that is merely the prefix of a longer word', () => {
+    run(bash('graphify query-builder run'));
+    run(bash('graphify pathological-thing'));
+    run(bash('graphify explainer --all'));
+    run(bash('graphify explain-it'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
   it('does NOT count a non-Bash tool whose input happens to say it', () => {
     run({ hook_event_name: 'PostToolUse', tool_name: 'Read',
       tool_input: { command: 'graphify query "x"' } });
