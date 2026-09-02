@@ -16,6 +16,7 @@
 //   - the RENDER proves a real element still carries the class, which is what
 //     a rule with no matching element would silently stop doing.
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+import type { CoordCapsView } from '../../shared/api';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -113,6 +114,13 @@ const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
 });
 
 // — the token itself —
+
+/** The caps dial's reader, held for every board render in this file. `RunsScreen`
+ *  injects it (see that prop's own docstring): a loader left to the global
+ *  `fetch` puts a request into every test that renders the board, and the
+ *  assertions here are about which routes the board calls. `never` keeps the
+ *  control unrendered, which is what these tests want it to be. */
+const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 
 describe('the tap-target token', () => {
   it('is the 44px acceptance criterion, so every rule below inherits it from one place', () => {
@@ -225,7 +233,13 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
-  it('keeps every one of the eighteen on the token, never a bare 44px literal', () => {
+  it('keeps every floored rule on the token, never a bare 44px literal', () => {
+    // The title no longer states a COUNT. It said "eighteen" while the list
+    // below held twenty-one — a hand-kept number beside a list that grows,
+    // which is the exact defect the box-token census (D-1156/D-1162) exists to
+    // stop, found in this file by wave 6's own self-review. The list IS the
+    // claim; a number restating its length is a second thing to keep in step
+    // with it and buys nothing, so it is gone rather than corrected.
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
     // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
@@ -246,6 +260,8 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
+      ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
+      ruleIn(fleetCss, '.caps-input'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -319,7 +335,7 @@ describe('.runs-back — the run board’s own back control', () => {
     expect(declValue(ruleIn(fleetCss, '.runs-back'), 'min-height')).toBe('var(--tap-min)');
   });
   it('is the class the rendered control actually carries', () => {
-    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('runs-back');
   });
 });
@@ -338,7 +354,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
     // this is what makes the row trustworthy enough to render immediately
     // rather than the "no answer yet" loading state (review finding 19).
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /clear-cove/i })).toHaveClass('run-open');
   });
 });
@@ -385,7 +401,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
   it('is the class the rendered row control actually carries', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
   // D-287's own reason for existing: an inert row (no session, so no
@@ -393,7 +409,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
   it('is present on an inert row too, where .run-open is absent', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
 });
@@ -407,7 +423,7 @@ describe('.program-start-door — the only door onto a new program', () => {
   });
   it('is the class the rendered footer control actually carries', () => {
     const store = makeStore();
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
   });
 });
@@ -422,6 +438,7 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
     });
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={new Set<string>()}
       loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');

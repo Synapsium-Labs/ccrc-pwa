@@ -12,6 +12,7 @@
 // ever exists in its own isolated test file ships missing the moment
 // someone drops the line from `RunsScreen`.
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import type { CoordCapsView } from '../../shared/api';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -66,6 +67,13 @@ function Harness({
     </>
   );
 }
+
+/** The caps dial's reader, held for every board render in this file. `RunsScreen`
+ *  injects it (see that prop's own docstring): a loader left to the global
+ *  `fetch` puts a request into every test that renders the board, and the
+ *  assertions here are about which routes the board calls. `never` keeps the
+ *  control unrendered, which is what these tests want it to be. */
+const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 
 describe('AbandonSheet — the copy and the refusals', () => {
   it('names the run AND its workspace in the confirm line', () => {
@@ -236,7 +244,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
       { status: 200, headers: { 'content-type': 'application/json' } },
     ));
     vi.stubGlobal('fetch', fetchImpl);
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now,
     // whose own `useProjectedHome(open)` (review fix round 1, Minor 2) is
@@ -277,7 +285,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
   it('the run row never nests a button inside a button', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }
@@ -288,7 +296,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     act(() => {
       store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // No session to open — .run-open is absent — but the release valve
     // (an ambiguous-dispatch wedge is exactly a `planned` run with no
     // session) is still there.

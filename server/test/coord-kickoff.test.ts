@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { queueProgramKickoff, type KickoffOutcome } from '../src/coord/kickoff.js';
-import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_000_000_000_000;
@@ -197,6 +197,129 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
     expect(queued(s, ID).queued).toBe(true);
     expect(queued(s, 'demo-calm-ridge').queued).toBe(true);
     expect(due(s).length).toBe(2);
+  });
+});
+
+const RESUME = { runId: 7, wave: 5 };
+
+/** The five sentences, spelled out. The same two-sided pin as the wave-1 body at
+ *  `:52-66`: against the L0 constant, so the seam is pinned to USE it rather
+ *  than compose its own, and against the literal, so a change to the constant
+ *  cannot silently change what a revived coordinator is told. */
+const RESUME_BODY =
+  'You are the coordinator for program `build9-demo` (Build 9 demo).\n'
+  + 'Its ledger is `docs/superpowers/programs/build9-demo.md`.\n'
+  + 'Run the ccrc-coordinator skill. Its run is ALREADY OPEN: read `GET /api/runs`,\n'
+  + 'find run 7 at wave 5, and pick that wave up where the ledger says it\n'
+  + 'stands. Do not open the run for wave 5 again, and do not open wave 1 again.';
+
+describe('queueProgramKickoff(resume) — the wave-N re-kickoff', () => {
+  it('sends the RESUME sentence, byte for byte', () => {
+    const s = store();
+    queueProgramKickoff({ coord: s }, ID, PROGRAM, RESUME);
+    const envelope = due(s)[0]!.envelope;
+    expect(envelope).toContain(
+      programResumeKickoff(PROGRAM.slug, PROGRAM.title, RESUME.runId, RESUME.wave));
+    expect(envelope).toContain(RESUME_BODY);
+    // The half that matters at the recipient: the wave-1 instruction is GONE,
+    // not merely joined. A composer that appended the resume sentences to the
+    // standing body would satisfy the two lines above.
+    expect(envelope).not.toContain('open the run for wave 1.');
+  });
+
+  it('NO resume argument still queues wave 4\'s body, byte for byte', () => {
+    // The "unchanged behaviour" claim, with a fixture that could witness the
+    // change. A seam that composed the resume sentence unconditionally —
+    // defaulting `{runId: 0, wave: 1}`, the cheap way to write this widening —
+    // passes every other test in this file and reds here.
+    const s = store();
+    queueProgramKickoff({ coord: s }, ID, PROGRAM);
+    const envelope = due(s)[0]!.envelope;
+    expect(envelope).toContain(programKickoff(PROGRAM.slug, PROGRAM.title));
+    expect(envelope).not.toContain('ALREADY OPEN');
+  });
+
+  it('names no run on the ENVELOPE, though the body names one in prose', () => {
+    // The body names a run to pick up; `mail.runId` stays null, and that is a
+    // decision. `hasOutstandingMail`'s key is (fromId, runId, toId, subject)
+    // and `queueSystemMail` passes `m.runId` straight into it, so stamping the
+    // run id here would give every wave its own dedupe slot — a fresh
+    // re-kickoff piled on top of an unread one, every wave, which is the
+    // unbounded requeue review finding 33 closed. It would also restore the
+    // `run:` envelope line for a program/wave pair this mail does not carry.
+    //
+    // THE RUN IS REAL, and it has to be. Measured while mutating the seam to
+    // pass `resume.runId` into `queueSystemMail`: against a fixture whose
+    // resume named a run that did not exist, the mutant died on `mail.runId`'s
+    // FOREIGN KEY instead of on either assertion below — a red for a reason
+    // that evaporates in production, where the run a revive names is exactly
+    // the run that already exists. So the fixture opens one and hands its own
+    // id back, and the pin now measures the DECISION rather than the schema.
+    const s = store();
+    const opened = s.openRun({ program: PROGRAM.slug, title: PROGRAM.title, project: 'demo',
+      wave: 5, waveOf: 8, claimedBy: 'demo-dead-coordinator' });
+    if ('refused' in opened) throw new Error(`fixture: openRun refused (${opened.refused})`);
+    queueProgramKickoff({ coord: s }, ID, PROGRAM, { runId: opened.id, wave: 5 });
+    expect(due(s)[0]!.envelope).not.toContain('run:');
+    const row = s.db.prepare('SELECT runId FROM mail').get() as { runId: number | null };
+    expect(row.runId).toBeNull();
+  });
+
+  it('THE FOLD (D-1132), pinned as a decision: an outstanding wave-1 kickoff declines the re-kickoff', () => {
+    // The dedupe key does not widen, and in the scenario this door exists for
+    // the dead coordinator's OWN unacked kickoff is usually still holding it —
+    // so `queued:false` is the common answer here, not the rare one. Pinned so
+    // that "the re-kickoff queued nothing" is documented behaviour of the seam
+    // rather than a surprise at the board, and so that a later slug- or
+    // run-namespaced subject is a decision somebody makes on purpose.
+    const s = store();
+    expect(queued(s, ID).queued).toBe(true);
+    const out = queueProgramKickoff({ coord: s }, ID, PROGRAM, RESUME);
+    if (!out.ok) throw new Error(`fixture: the seam refused this re-kickoff (${out.kind})`);
+    expect(out.queued).toBe(false);
+    expect(due(s).length).toBe(1);
+    expect((s.db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(1);
+  });
+
+  describe('the cap (D-1119) covers the new composer for free', () => {
+    it('refuses an oversize RESUME body and writes NOTHING', () => {
+      const s = store();
+      const out = queueProgramKickoff({ coord: s }, ID,
+        { slug: 'build9-demo', title: 'x'.repeat(MAIL_BODY_MAX_BYTES) }, RESUME);
+      expect(out.ok).toBe(false);
+      if (out.ok) throw new Error('unreachable — narrowed above');
+      expect(out.kind).toBe('oversize');
+      expect(out.limit).toBe(MAIL_BODY_MAX_BYTES);
+      expect(due(s)).toEqual([]);
+    });
+
+    it('a title the WAVE-1 body accepts is refused as a resume — the cap follows the composer', () => {
+      // The window a cap measured on the wrong composition would miss. The
+      // resume sentence is two sentences longer, so there is a band of titles
+      // that fit one body and not the other, and this is a title in it. A cap
+      // on `program.title`, or on `programKickoff(...)` computed before the
+      // branch, queues the second call.
+      const wave1Base = Buffer.byteLength(programKickoff('build9-demo', ''), 'utf8');
+      const title = 'x'.repeat(MAIL_BODY_MAX_BYTES - wave1Base);
+      const asWave1 = store();
+      expect(queueProgramKickoff({ coord: asWave1 }, ID, { slug: 'build9-demo', title }).ok).toBe(true);
+      // A SECOND store: the accepted call above occupies the dedupe key, and a
+      // `queued:false` here would look like a refusal that never happened.
+      const asResume = store();
+      expect(queueProgramKickoff({ coord: asResume }, ID, { slug: 'build9-demo', title }, RESUME).ok)
+        .toBe(false);
+      expect(due(asResume)).toEqual([]);
+    });
+
+    it('a RESUME body at exactly the cap is queued — the refusal is > and not >=', () => {
+      const s = store();
+      const base = Buffer.byteLength(programResumeKickoff('build9-demo', '', 7, 5), 'utf8');
+      const title = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
+      expect(Buffer.byteLength(programResumeKickoff('build9-demo', title, 7, 5), 'utf8'))
+        .toBe(MAIL_BODY_MAX_BYTES);
+      expect(queueProgramKickoff({ coord: s }, ID, { slug: 'build9-demo', title }, RESUME).ok).toBe(true);
+      expect(due(s).length).toBe(1);
+    });
   });
 });
 

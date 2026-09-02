@@ -2837,8 +2837,16 @@ export interface NotifyEvent {
    *  this union was closed and unvalidated — a bare `getJson<CatchUp>`
    *  (`pwa/src/lib/api.ts`) hands a browser's JSON straight to a renderer that
    *  switches on three members, so a fourth arrived typed as one of the three
-   *  it is not. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'unknown';
+   *  it is not.
+   *
+   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or
+   *  lowered — and it is a seventh member rather than a reuse of `run` because
+   *  there is no run: `recordRunEvent` writes `fromState === toState` and
+   *  `pushNewRuns` skips exactly those rows, so an attribution row would land
+   *  in `run_events` and be seen by nobody (D-1163). Additive: an older client
+   *  degrades it to `unknown` through `reviveNotifyEvent`, which is the
+   *  degradation this union was given `unknown` for. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
   sessionId: string; title: string; body: string;
 }
 
@@ -2851,7 +2859,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -3118,6 +3126,28 @@ export const programKickoff = (slug: string, title: string): string =>
   `You are the coordinator for program \`${slug}\` (${title}).\n` +
   `Its ledger is \`${ledgerPath(slug)}\`.\n` +
   `Run the ccrc-coordinator skill and open the run for wave 1.`;
+
+/** The wave-N re-kickoff. Sibling of `programKickoff`, NOT a replacement: that one is
+ *  right exactly once — a program being STARTED — and wrong for every revive after
+ *  it, which is what `ccd/coordinator-skill/references/resume.md` §4 exists to say.
+ *  Same three facts (slug, ledger, skill) plus the two sentences §4 calls its
+ *  load-bearing half: an open run does not need re-opening, and re-opening is not a
+ *  harmless no-op — `openRun` dedupes ONLY a retry naming the same program, wave and
+ *  `claimedBy` against a row that is still `planned`, so re-opening a `working` wave
+ *  writes a SECOND row and an open-run count the program never gets back to zero.
+ *
+ *  L0 for the reason `programKickoff` is: the runbook says this text and the server
+ *  now composes it, and a template with two speakers and no home is the drift this
+ *  file's own header warns about. `resume-reclaim-l0.test.ts` checks the two against
+ *  each other rather than each against itself (D-1126). */
+export const programResumeKickoff = (
+  slug: string, title: string, runId: number, wave: number,
+): string =>
+  `You are the coordinator for program \`${slug}\` (${title}).\n` +
+  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
+  `Run the ccrc-coordinator skill. Its run is ALREADY OPEN: read \`GET /api/runs\`,\n` +
+  `find run ${runId} at wave ${wave}, and pick that wave up where the ledger says it\n` +
+  `stands. Do not open the run for wave ${wave} again, and do not open wave 1 again.`;
 
 /** The kickoff's mail subject. Defined HERE, beside the body it labels, rather
  *  than in `coord/kickoff.ts`: one home for the two halves of one message, and
@@ -3606,6 +3636,44 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
   return typeof v === 'string' && (CLAIM_REFUSE_CODES as readonly string[]).includes(v);
 }
 
+/** SIXTH typed refusal union, admitted to `mail-routes.test.ts`'s kebab scanner
+ *  through its own exported guard exactly as `isLifecycleGapReason`,
+ *  `isClaimRefuseCode` and `isSessionLifecycle` were (`:474-493`) — a guard, never
+ *  a `NOT_CODES` entry, for the reason that file already states: an allowlist
+ *  accepts one spelling for ever, a guard accepts a member added later and still
+ *  rejects a typo'd one.
+ *
+ *  NOT A `RunRefuseCode`, and the exclusion is load-bearing rather than tidy:
+ *  `server/test/coordinator-skill.test.ts` loops every member of THAT union and
+ *  requires each to be named somewhere in the coordinator corpus. This door's whole
+ *  obligation is the opposite — the corpus must not teach a coordinator to reach for
+ *  it, because it is the OPERATOR's act on a coordinator that is already dead, and a
+ *  live coordinator reading about it has found a recovery for a problem it does not
+ *  have. Membership here would drag the word into that corpus by force of a passing
+ *  test, which is exactly backwards: the census would be satisfied and the design
+ *  broken. (D-1127.)
+ *
+ *    claimant-alive — the run's current claimant was MEASURED and answers alive.
+ *                     Refused, 409, and the answer carries `by` plus the sentence
+ *                     that reached it: a live tmux pane and a gone-but-restarting
+ *                     lifecycle are the same ANSWER told apart by evidence, not by
+ *                     a fourth code nobody would branch on
+ *    no-claimant    — the run names nobody. Distinct from `unknown-run` (there is no
+ *                     such run) and from `unknown-session` (the NEW claimant has no
+ *                     registry row): three different things to fix, never one code */
+export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant';
+const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> = { 'claimant-alive': true, 'no-claimant': true };
+export const RECLAIM_REFUSE_CODES: readonly ReclaimRefuseCode[] =
+  Object.keys(RECLAIM_REFUSE_CODE_MAP) as ReclaimRefuseCode[];
+/** `hasOwnProperty`, not `in` and not `MAP[v]`: `'toString' in RECLAIM_REFUSE_CODE_MAP`
+ *  is TRUE, and a refusal vocabulary that answers yes to half of `Object.prototype`
+ *  is a 409 body naming `constructor` as a code. The four sibling guards spell
+ *  `.includes(v)` over their array and are safe for the same reason by a different
+ *  route; this one takes the map it already has. */
+export function isReclaimRefuseCode(v: unknown): v is ReclaimRefuseCode {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(RECLAIM_REFUSE_CODE_MAP, v);
+}
+
 /** Work-item counts for one run. `items`, never `tasks` (D-7). */
 export interface RunItemTally { done: number; total: number }
 
@@ -3624,13 +3692,25 @@ export interface RunSummary {
   branch: string | null;
   state: RunState;
   /** The ONE coordinator that owns this run: the tmux-derived session id of
-   *  the session that opened it, fixed at `POST /api/runs` and rewritten by no
-   *  route afterwards. That immutability is the mechanism behind the
-   *  `claimed-by-another` refusal — a second coordinator, in a fresh
-   *  workspace, naming a programme this one already claimed is refused
-   *  FOREVER, because nothing lowers this flag; recovering from it means
-   *  reaching the original session or opening a new programme, never
-   *  reassigning the run.
+   *  the session that opened it, stamped at `POST /api/runs`. That stamp is the
+   *  mechanism behind the `claimed-by-another` refusal — a second coordinator,
+   *  in a fresh workspace, naming a programme this one already claimed is
+   *  refused AT OPEN TIME, and no amount of retrying the open lowers the flag.
+   *
+   *  THAT IS THE WHOLE OF WHAT THE REFUSAL PROMISES, and it used to promise more
+   *  (D-1125). Until this build the paragraph above went on to say the column is
+   *  written once and by one route, that the second coordinator is turned away
+   *  permanently, and that recovery never moves a run to a different session.
+   *  All three were true of the tree that shipped them and none is true now: an
+   *  operator door MEASURES the current claimant and, on a dead answer, moves
+   *  every run of that programme — terminal rows included, because both readers
+   *  of this column select the lowest-id claimed row with no state predicate, so
+   *  a wave-1 `done` row left naming a corpse answers for the whole programme —
+   *  to the named session inside one transaction. A LIVE claimant is still
+   *  refused. What changed is not that a claim can be taken; it is that a corpse
+   *  can be succeeded. The door is left unnamed here on purpose: nothing that
+   *  reads this field calls it, and a wire type that teaches a call its own
+   *  readers do not make is where a doc lie starts.
    *
    *  THE PWA READS IT AS THE PROGRAMME-OWNERSHIP EDGE: this field (the
    *  parent) paired with `sessionId` (the child, the worker this run
@@ -3644,7 +3724,9 @@ export interface RunSummary {
    *  before the column had a writer, or a hand-inserted recovery row. Absence
    *  permits: a renderer brackets nothing under a `null`, which is the honest
    *  answer, where a fabricated owner would nest a run under a coordinator
-   *  that never claimed it. */
+   *  that never claimed it. A succession leaves these rows exactly as it found
+   *  them — it moves the rows that name somebody and never the rows that name
+   *  nobody — so a reconstructed row cannot acquire an owner it never had. */
   claimedBy: string | null;
   /** Deviation D-1: wave >= 2 resumes its session (no ccd verb can spawn
    *  fresh into an existing workspace) and the dispatch route then injects
@@ -3833,6 +3915,22 @@ export interface MailSummary {
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
  *  `runs`, never stored beside these — see `CoordStore.capsUsage`. */
 export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: number }
+
+/** The two counts `CoordStore.capsUsage` DERIVES from `runs` — never stored
+ *  beside the limits, for the reason that method's own docstring gives (a
+ *  stored counter is a second copy of what `runs` already knows, and the copy
+ *  is always the one that drifts).
+ *
+ *  Named here only since the operator dial shipped (D-1209): before that the
+ *  shape existed solely as an inline structural type on one method, because
+ *  `dispatchRun` was its only reader and never had to name it. */
+export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
+
+/** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
+ *  TOGETHER, in one shape and one round trip: a cap without its usage is a
+ *  number an operator cannot act on, and a usage without its cap is a number
+ *  they cannot read. */
+export interface CoordCapsView { caps: CoordCaps; usage: CoordCapsUsage }
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */

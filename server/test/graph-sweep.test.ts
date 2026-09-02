@@ -50,6 +50,14 @@ exit 0
   const py = path.join(bin, 'python');
   if (!fs.existsSync(py)) fs.writeFileSync(py, '#!/bin/bash\ntrue\n', { mode: 0o755 });
 }
+// D-1161: plants the ACTUAL shipped list, not a hand-written copy of it —
+// `_inst_graph_noise` converges this exact file, so a fixture that paraphrased
+// it could go green against contents no box has.
+function plantDefaultNoise(): void {
+  fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+  fs.copyFileSync(path.resolve(__dirname, '../../ccd/graph-noise.default.list'),
+                  j('.ccrc', 'graph-noise', '_default.list'));
+}
 function plantGuardPython(): void {
   // the fake venv python implements the guard protocol: it prints the corpus,
   // one path per line, reading fixture file corpus-paths if present.
@@ -289,6 +297,59 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
     runSweep();
     expect(fs.existsSync(path.join(repo, '.graphifyignore'))).toBe(false);
   });
+  it('D-1160 — the DEFAULT noise list applies with no per-repo list at all', () => {
+    // The whole point: ccrc's own footprint (`.remember/`, `.superpowers/`,
+    // `.claude/`, `CLAUDE.local.md`) leaves every repo, without an operator
+    // writing a file per repo. Before this, those four names were held against
+    // a repo by the corpus guard and refused its build for ever — 5 of the
+    // reference fleet's 14 refused trees were blocked by nothing else.
+    const repo = makeRepo('alpha'); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n.superpowers/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    plantEngine('cp .graphifyignore "$HOME/gfxignore-during" 2>/dev/null || true');
+    runSweep();
+    const written = fs.readFileSync(j('gfxignore-during'), 'utf8');
+    expect(written).toContain('.remember/');
+    expect(written).toContain('.superpowers/');
+  });
+
+  it('D-1160 — default and per-repo lists are UNIONED, not one-or-the-other', () => {
+    // `<repo>.list` is the operator's and must not be silenced by ccrc shipping
+    // a default, nor the other way round.
+    const repo = makeRepo('alpha'); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n');
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    plantEngine('cp .graphifyignore "$HOME/gfxignore-during" 2>/dev/null || true');
+    runSweep();
+    const written = fs.readFileSync(j('gfxignore-during'), 'utf8');
+    expect(written, "ccrc's own default").toContain('.remember/');
+    expect(written, "the operator's per-repo list").toContain('fixtures/');
+    // …and no filename prefix leaked in from grepping two files at once, which
+    // would be a pattern matching nothing.
+    expect(written).not.toMatch(/_default\.list:|alpha\.list:/);
+  });
+
+  it('D-1160 — a "!" line in the DEFAULT refuses too, not just in the per-repo list', () => {
+    // The negation check runs over EVERY source. A default that could smuggle a
+    // re-include past a per-repo check would be worse than shipping no default.
+    // BOTH lists are present, and the '!' is in the DEFAULT — the one that is
+    // NOT last in the union order. With only the default planted this test
+    // would be vacuous: "check the last source" and "check every source" agree
+    // when there is one source, and a mutation to last-only stayed green until
+    // this fixture grew its second list.
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', '_default.list'), '.remember/\n!secrets.md\n');
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(lastPass().trees.find((t: {path:string}) => t.path === repo).reason).toContain('!');
+  });
+
   it('a worktree of alpha also resolves graph-noise/alpha.list (repo-basename shared across worktrees)', () => {
     const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
     const wtDir = j('worktrees', 'alpha', 'wt1');
@@ -382,6 +443,28 @@ describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branc
     expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
   });
 
+  // D-1161. Case (a) above pinned a world that stopped existing the moment
+  // D-1160 shipped `_default.list` to every non-server box: with a list always
+  // present, the foreign-file refusal became UNIVERSAL and this describe's own
+  // stated guarantee — "a foreign file must survive every pass, forever,
+  // WHETHER OR NOT a noise list applies" — was false on every installed box.
+  // (a) stayed green only because no fixture here installs the shipped default.
+  // This is that same case in the world the box is really in, and it is the
+  // test that goes RED on the first draft of D-1160.
+  it('(a2) D-1161 — with the SHIPPED default installed and no per-repo list, the foreign file still survives and the tree still builds', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    const ignorePath = trackForeignIgnore(repo);
+    const before = fs.readFileSync(ignorePath, 'utf8');
+    plantDefaultNoise();                                // exactly what _inst_graph_noise does
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(repo), 'the shipped default must not turn a repo that owns its own .graphifyignore into a permanent refusal')
+      .not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(fs.readFileSync(ignorePath, 'utf8')).toBe(before);
+    expect(git(repo, 'status', '--porcelain')).toBe('');   // and nothing was dirtied
+  });
+
   it('(b) a noise list present: the foreign file blocks the write — refused-by-guard, naming the file', () => {
     const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
     const ignorePath = trackForeignIgnore(repo);
@@ -403,6 +486,111 @@ describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branc
       '# generated by ccd-graph-sweep for one build — never committed, never edited\nfixtures/\n');
     runSweep();
     expect(fs.existsSync(path.join(repo, '.graphifyignore'))).toBe(false);
+  });
+});
+
+describe('graph-sweep: D-1161 — the default yields, the operator instructs', () => {
+  // `.graphifyignore` is a pure path filter: it knows nothing about git. So the
+  // default list's stated contract — "only what ccrc and its skills create" —
+  // could not be enforced by shipping patterns, and in a repo that COMMITS
+  // `.claude/settings.json` the default removed TRACKED nodes from the corpus.
+  // The corpus guard cannot see that (it measures corpus MINUS tracked, so a
+  // SHRINKING corpus never breaches); graphify's shrink guard then saw an
+  // unaccounted net loss with `had_explicit_deletions=False` and refused the
+  // write, wedging the tree at `refused-shrink` on every pass thereafter.
+  // Seven repos on the reference fleet track such content — three of them among
+  // the five D-1160 was written to unblock.
+  function trackClaudeDir(repo: string): void {
+    fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude', 'settings.json'), '{}\n');
+    git(repo, 'add', '-f', '.claude/settings.json');
+    git(repo, 'commit', '-qm', 'this repo tracks its own .claude/');
+  }
+  // the engine records the filter it was actually handed — the only way to see
+  // a file the sweep deletes before it returns.
+  const captureFilter = 'cp .graphifyignore "$HOME/seen-ignore" 2>/dev/null || true';
+  const seen = () => fs.readFileSync(j('seen-ignore'), 'utf8');
+
+  it('withholds a DEFAULT pattern that would hide tracked content, and still applies the rest', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    trackClaudeDir(repo);
+    plantDefaultNoise();
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'a pattern that hides TRACKED content must be withheld — it is what wedges the tree at refused-shrink')
+      .not.toMatch(/^\.claude\/$/m);
+    expect(seen(), 'and withholding one pattern must not disable the others')
+      .toMatch(/^\.remember\/$/m);
+  });
+
+  it('honours an OPERATOR pattern that hides tracked content — that is the escape hatch', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    trackClaudeDir(repo);
+    plantDefaultNoise();
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), '.claude/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(seen(), "the operator's list is an instruction about THIS repo, honoured as written")
+      .toMatch(/^\.claude\/$/m);
+  });
+
+  it('announces what it withheld, naming the pattern and the remedy — never silently', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    trackClaudeDir(repo);
+    plantDefaultNoise();
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    const r = runSweep();
+    expect(r.stderr).toContain('default noise withheld');
+    expect(r.stderr).toContain('.claude/');
+    expect(r.stderr).toContain('alpha.list');       // the remedy, named
+  });
+
+  it('a guard refusal after the filter was written leaves no armed trap — nothing is rm-ed at the filesystem root', () => {
+    // The trap `_gs_guard` arms interpolated `$tree` at FIRE time. A corpus
+    // breach returns 1 with the trap still armed and the loop `continue`s past
+    // the only disarm, so the leaked EXIT trap fired at pass end — by which
+    // point the loop variable is EMPTY and the command is `rm -f
+    // /.graphifyignore`. Unreachable before D-1160, because the block that arms
+    // the trap only ran for a repo an operator had configured; universal after
+    // it, because the default ships to every box.
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    plantDefaultNoise();
+    const shim = j('shim');
+    fs.mkdirSync(shim, { recursive: true });
+    fs.writeFileSync(path.join(shim, 'rm'),
+      '#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$HOME/rm-calls"\nexec /bin/rm "$@"\n', { mode: 0o755 });
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nnot-tracked.py\n');   // breach => refusal
+    runSweep({ PATH: `${shim}:${process.env.PATH}` });
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const calls = fs.existsSync(j('rm-calls')) ? fs.readFileSync(j('rm-calls'), 'utf8') : '';
+    expect(calls, 'a leaked trap firing with an empty tree deletes at the filesystem root')
+      .not.toMatch(/(^|\s)-f \/\.graphifyignore\s*$/m);
+  });
+
+  // The trap-body fix and the caller-side cleanup are DEFENSE IN DEPTH for the
+  // root-level rm above: each alone closes it, so neither reddens that test on
+  // its own (measured — both single mutations stayed green; the pair reddens).
+  // The cleanup does have an effect of its own, and this is it. A tree refused
+  // on the detect()-failure path removes nothing inside the guard, so without
+  // the caller's cleanup its filter waits for a trap that a LATER tree's arm
+  // renames — and is then never removed at all. A stray .graphifyignore in a
+  // repo is a file a session can commit.
+  it('a filter written for a tree that is then refused is removed at once, not left for a trap that may never name it again', () => {
+    const alpha = makeRepo('alpha'); makeRepo('beta');
+    plantEngine();
+    // detect() FAILS in alpha only — the one refusal path that removes nothing
+    // inside the guard; beta then builds and re-arms the trap onto itself.
+    fs.writeFileSync(j('.ccrc', 'graphify-venv', 'bin', 'python'),
+      '#!/bin/bash\ncase "$PWD" in */alpha) exit 1 ;; esac\ncat "$HOME/fixture-corpus" 2>/dev/null || true\n',
+      { mode: 0o755 });
+    plantDefaultNoise();
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(outcomeOf(alpha)).toBe('refused-by-guard');
+    expect(fs.existsSync(path.join(alpha, '.graphifyignore')),
+      'the refused tree kept a generated filter no later trap will ever name')
+      .toBe(false);
   });
 });
 

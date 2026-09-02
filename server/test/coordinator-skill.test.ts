@@ -237,6 +237,25 @@ describe('the coordinator skill: linkage', () => {
       // claim has stopped coordinating). The claimant's own door is
       // POST /api/claims/:id/release, which IS named.
       'POST /api/claims/:id/break',
+      // F5 (D-1123) — the abandon-door shape, FOURTH instance, and the one with
+      // the sharpest reason to stay unnamed: this door rewrites `claimedBy`. A
+      // coordinator told about it would be told how to reclaim its own program
+      // from itself, which is a no-op it would spend a wave discovering, or how
+      // to take someone else's, which is the thing clause 1 forbids. The
+      // corpus-wide forbid-mention pin (the `/api/claims/:id/break` shape) is
+      // what turns this permission-to-omit into a prohibition.
+      'POST /api/runs/:id/reclaim',
+      // WAVE 6 (D-1240) — the OPERATOR-dial shape, and the `POST
+      // /api/coord/pause` argument one turn sharper. The caps bound how much a
+      // coordinator may dispatch; a coordinator told about this route would be
+      // told how to raise its own limit, which is not a door it is the one to
+      // walk through — it is the cap's own defeat, the way unpausing itself
+      // would be the pause marker's. Neither half is named: the READ is exempt
+      // too, because a coordinator that can read the dial has no use for the
+      // number it is not allowed to change, and naming it would only be the
+      // first half of an invitation.
+      'GET /api/coord/caps',
+      'POST /api/coord/caps',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -992,6 +1011,13 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     }
   });
 
+  it('never names the caps dial — a door that would tell a coordinator how to lift its own cap', () => {
+    // Wave 6's accounting, the same shape: EXEMPT above only PERMITS the
+    // omission, and this is what forbids the mention. Both halves, because the
+    // read is the first half of the invitation.
+    expect(allSkillText).not.toContain('/api/coord/caps');
+  });
+
   it('never names the break door — a door the claimant is not the one to walk through', () => {
     // D16's accounting: `POST /api/claims/:id/break` is EXEMPT (the
     // `/api/runs/:id/abandon` shape) and stays unnamed in EVERY corpus file.
@@ -1048,9 +1074,32 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     expect(flat(rb())).toContain("it is not on the armed gate's exempt list");
   });
 
-  it('says why a revive under a different id wedges the program permanently', () => {
+  it('says why a revive under a different id wedges the program until an OPERATOR moves it', () => {
     expect(rb()).toContain('claimed-by-another');
-    expect(flat(rb())).toContain('nothing in the HTTP API ever rewrites `claimedBy`');
+    // MOVED, not softened (D-1124). The old literal — `nothing in the HTTP API
+    // ever rewrites claimedBy` — was true the day this runbook shipped and is
+    // false the moment this wave's operator door exists. The replacement is
+    // scoped to what a COORDINATOR can reach, which is the only scope this
+    // runbook was ever entitled to speak in: the door is real, it is the
+    // operator's, and this corpus never names it. That last clause is what
+    // makes the sentence self-maintaining — the UNGATED harvest below and the
+    // corpus-wide forbid this wave adds are what keep "named in this corpus"
+    // true, so the prose cannot rot into a lie without a suite going red first.
+    expect(flat(rb())).toContain('no call named in this corpus ever rewrites `claimedBy`');
+  });
+
+  it('carries no copy of the pre-reclaim absolute, in EITHER corpus file', () => {
+    // `allSkillText`, deliberately, not `rb()`: the same claim stood in TWO
+    // places (resume.md:38 and SKILL.md:31, measured), and a per-file pin would
+    // have let the survivor go on teaching a coordinator that the wedge has no
+    // door at all — the D-1000 shape, one file at a time. Truncated before
+    // `claimedBy` so it catches a re-added absolute in any wording that reaches
+    // for "the HTTP API"; the positives in the test above and in the SKILL.md
+    // describe are what stop a DELETION passing for a fix, which a negative
+    // alone cannot.
+    expect(allSkillText, 'the pre-reclaim absolute is back — "nothing in the HTTP API ever ' +
+      'rewrites `claimedBy`" is false once the operator door exists')
+      .not.toContain('nothing in the HTTP API ever rewrites');
   });
 
   it('carries a wave-N re-kickoff template, not the wave-1 text the machine hardcodes', () => {
@@ -1065,6 +1114,34 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     expect(flat(rb())).toContain('do not open wave 1 again');
   });
 
+  it('says the console sends the wave-N text, and names that door WITHOUT a method too', () => {
+    // Wave 4 shipped the kickoff route and this wave widened it with
+    // `runId`/`wave`, so "A revive is briefed by hand" was false in this file
+    // one wave before anyone could act on it (D-1126). The path is spelled bare
+    // for exactly the reason `/api/sessions/:id/ensure` is, four sections up:
+    // it is the browser's own cookie-bearing call, it is not an `EXEMPT` key,
+    // and a method in front of it reds `auth-passkey.test.ts`'s THE SWEEP. The
+    // negative that enforces that is `spells the revive route WITHOUT a method`
+    // above — its regex is `/api/sessions`-wide, so it already covers this new
+    // path for free. THIS positive is what stops the mention being deleted to
+    // satisfy it, and the `programResumeKickoff` mention is what makes the
+    // template below checkable against its one source instead of trusted.
+    expect(rb()).toContain('/api/sessions/:id/kickoff');
+    expect(flat(rb())).toContain('the console sends exactly this text');
+    expect(flat(rb())).toContain('`programResumeKickoff`');
+  });
+
+  it('splits the terminal recovery in two — the id that can be handed over, and the row that cannot', () => {
+    // A program whose id can no longer be revived now has an operator door. A
+    // program RE-OPENED under a second id does not: that is a second run row,
+    // a second ledger the board renders, and rewriting `claimedBy` does not
+    // merge rows. Folding the two would send a coordinator to report a fix that
+    // does not exist for its actual case — which is worse than the old absolute,
+    // not better, because it fails at the moment of a real wedge.
+    expect(flat(rb())).toContain('a second run row is a second ledger, and no reassignment merges them');
+    expect(flat(rb())).toContain('naming the run and the id it claims');
+  });
+
   it('points at the reconstruction drill as the terminal recovery, and at the snapshot first', () => {
     // Order matters in the prose for the same reason it matters in
     // `coord/db.ts:145-149`: the newest deploy snapshot is the restore path,
@@ -1077,6 +1154,15 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     // The one real hazard of naming a revive door in this corpus: a
     // coordinator reaching for it on a WORKER instead of re-dispatching.
     expect(rb()).toContain('A dead WORKER is not this door');
+  });
+
+  it('never names the reclaim door — the release valve for a wedge the coordinator IS', () => {
+    // The fourth ungated door (D-1123), and the same accounting D16 gave the third:
+    // the EXEMPT entry above only PERMITS the omission; this is what FORBIDS the
+    // mention. Wider than the `resume.md` harvest below, which reads one reference
+    // file — a door named in `SKILL.md`, or in any of the other four references,
+    // passes that and fails here.
+    expect(allSkillText).not.toContain('/api/runs/:id/reclaim');
   });
 
   it('names none of the ungated operator doors — the list DERIVED, not typed', () => {
@@ -1151,6 +1237,16 @@ describe('the coordinator skill triggers and resumes on the RUN RECORD, not a ho
     // `toContain`. A negative that the mutation it names can evade is not a
     // guard (review round 1, M1).
     expect(flat(skill), 'the workspace framing is back').not.toContain('same workspace, same id');
+  });
+
+  it('states the wedge as a stop for THIS session, not as a door that does not exist', () => {
+    // The SKILL.md half of the same correction (D-1124), and the one the
+    // corpus-wide negative alone would leave unbacked. `flat()` for the reason
+    // every sibling in this describe uses it: SKILL.md hard-wraps mid-sentence,
+    // so a raw `toContain` on a sentence this long can only match by accident
+    // (review round 1, M1 — a negative its own mutation can evade is not a guard).
+    expect(flat(skill)).toContain('no call named in this corpus ever rewrites `claimedBy`');
+    expect(flat(skill)).toContain('Handing the program to a different session is an operator act');
   });
 
   it('does not count the hold among the things a fresh coordinator resumes from', () => {

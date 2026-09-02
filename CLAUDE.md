@@ -139,13 +139,27 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
-  on missing — **except THREE deliberately ungated operator doors: `POST /api/coord/pause`, `POST
-  /api/runs/:id/abandon` and `POST /api/claims/:id/break`** (D-282 (was D-B4-9), extended to the third by build 9
-  D12: the sessions that would be locked out — the coordinator, and any session holding a claim — are the ones
-  holding the box token, so gating a wedge's release valve behind that key leaves the wedge no door).
-  `coord-pause-route.test.ts`'s `UNGATED` set pins all three in both directions, and with `CCRC_AUTH` armed all
-  three still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there "strengthens
-  D-282 rather than reversing it"). Don't assume — read the guards.
+  on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
+  /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
+  extended to the third by build 9 D12 and to the fourth by program-leverage wave 5: the party that would be
+  locked out — the coordinator, any session holding a claim, and a program whose coordinator is DEAD and whose
+  box token died with it — is the one holding that token, so gating a wedge's release valve behind that key
+  leaves the wedge no door. Reclaim's guard is a RE-MEASUREMENT, not a credential: it refuses unless the run's
+  current `claimedBy` measures dead or registry-absent, and an unmeasurable registry refuses too — never
+  proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
+  armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
+  "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
+  /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
+  `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
+  argument — are the census, not this bullet. What does need saying here are the coordination WRITES that
+  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST /api/coord/caps` (wave 6)
+  are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The
+  first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
+  `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
+  that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
+  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
+  Don't assume — read the guards.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).

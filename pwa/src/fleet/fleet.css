@@ -1996,8 +1996,19 @@ button.sess-held {
    `.run-row .run-glyph`/`.run-row .run-state` a few lines up — a run row is
    a record of a lifecycle position, not a living pane, so this control gets
    no --glow/animation/box-shadow either (`fleet-css.test.ts`'s "runs are not
-   living panes"). */
-.run-row .run-abandon {
+   living panes").
+   `.run-resume` (the resume door, program-leverage wave 5, D-1129) is GROUPED
+   here rather than given a rule of its own: it is the same object — a
+   `flex: none` control sitting beside `.run-open` on the row — and the
+   grouping is what keeps it MEASURED by `design/audit.mjs` (it inherits
+   `.run-row`'s recovered ground) and floored on `var(--tap-min)` by the one
+   declaration, instead of a second copy that drifts. `flex: none` is
+   load-bearing on BOTH: `.run-open` deliberately declares no `width` (above,
+   pinned) precisely so its siblings can share the line; a THIRD control that
+   claimed flexible width would push both onto their own rows at phone widths,
+   which jsdom cannot see and only the stylesheet can prevent. */
+.run-row .run-abandon,
+.run-row .run-resume {
   flex: none;
   min-height: var(--tap-min);
   min-width: var(--tap-min);
@@ -2010,7 +2021,8 @@ button.sess-held {
   cursor: pointer;
   transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
 }
-.run-row .run-abandon:active { transform: scale(0.94); color: var(--ink-secondary); }
+.run-row .run-abandon:active,
+.run-row .run-resume:active { transform: scale(0.94); color: var(--ink-secondary); }
 
 /* ------------------------------------------------------------------ *
  *  Coord banner — the pause readout and its toggle (Task 11, spec      *
@@ -2059,6 +2071,98 @@ button.sess-held {
    selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
    5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
    until this selector named its ancestor). */
+/* Wave 6, spec §8: the caps dial, beside the pause banner and grounded the same
+   way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
+   recover a ground and measure the contrast — a colourless rule lands in
+   `uncovered` and the gate cannot see it at all. */
+.caps-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  /* Anchors the empty live region's out-of-flow box (see `.caps-note:empty`). */
+  position: relative;
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+
+.caps-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.caps-control .caps-label {
+  color: var(--ink-secondary);
+}
+
+.caps-input {
+  width: 4.5rem;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-1);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-primary);
+  /* `--text-input`, not `--text-2xs`: iOS Safari zooms the viewport on focus
+     for any text entry under 16px, and this is the only text entry on the runs
+     board. Every other input in the app is already on this token. */
+  font: var(--weight-regular) var(--text-input) / 1 var(--font-mono);
+}
+
+/* The reading an operator acts on: usage against the cap. Dimmer than the
+   input, because it is a measurement and not a control. */
+.caps-control .caps-usage {
+  color: var(--ink-tertiary);
+}
+
+.caps-save {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+
+.caps-save:active { transform: scale(0.97); }
+
+/* Named-ancestor descendant for the same reason `.coord-error` is one. */
+.caps-control .caps-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-dead-text);
+}
+
+/* The note is a live region that is always mounted, so it is empty most of the
+   time. It must collapse WITHOUT `display: none`, which would remove it from the
+   accessibility tree and defeat the reason it is always mounted (D-1222).
+
+   OUT OF FLOW, not merely zero-height (D-1236). `height: 0` alone left it a flex
+   item with `flex-basis: 100%`, so it still formed a second flex LINE and the
+   container's 8px `row-gap` was still paid — the strip sat permanently taller
+   than before the note existed, while the rule's own comment claimed it collapsed
+   to nothing. An absolutely-positioned child is taken out of the flex flow
+   entirely, so no line and no gap; it stays in the accessibility tree, and the
+   `:empty` selector stops applying the instant it has something to say, which
+   puts it straight back in flow. */
+.caps-control .caps-note:empty {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;
@@ -2182,9 +2286,10 @@ button.sess-held {
 /* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
    `.coord-banner .coord-error`/`.abandon-sheet .abandon-error` already use
    (6.80:1 DARK / 5.73:1 LIGHT), reused rather than a fifth rule re-deriving
-   the same ratio. Three genuine refusals share this register: D-292 (was D-B4-19) (a
-   session already running), D-284 (was D-B4-11) (nothing placeable) and an ordinary
-   create failure. */
+   the same ratio. Four genuine refusals share this register: D-292 (was D-B4-19) (a
+   session already running), D-1130 (a project the run board already shows a run
+   in, or has not answered about yet), D-284 (was D-B4-11) (nothing placeable)
+   and an ordinary create failure. The order is the render chain's own. */
 .program-start-sheet .program-start-existing,
 .program-start-sheet .program-start-refuse,
 .program-start-sheet .program-start-error {

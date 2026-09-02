@@ -638,6 +638,13 @@ if [ "$TARGET" = "agent" ]; then
   # fleet host, so there is no server-role branch to gate it against the way
   # `ccd/ccrc`'s own `_inst_bins` has to.
   install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755
+  # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
+  # every corpus. Shipped on this lane and not only by `ccrc install`, because a
+  # fleet host is DEPLOYED day to day and installed rarely; without it the box
+  # keeps refusing builds over `.remember/` and `.superpowers/` files that ccrc
+  # itself wrote there. 644, not 755: it is data the sweep reads, never run.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
+  install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it

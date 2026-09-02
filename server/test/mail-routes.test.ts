@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import {
   MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason,
-  isClaimRefuseCode, isSessionLifecycle,
+  isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode,
   isAutomationLastFilter, isAutomationOutcome, isAutomationRefusal,
   isAutomationRouteRefusal,
 } from '../../shared/api.js';
@@ -118,6 +118,54 @@ describe('POST /api/mail — the rejection table', () => {
     ['bad-kind', 400, { kind: 'gossip' }],
     ['oversize', 413, { body: 'x'.repeat(8 * 1024 + 1) }],
   ];
+
+  // D-1165: the lower bound the third `runId` reader already had. Wave 5 put
+  // `>= 1` on the kickoff route (D-1151) and left this one and the claims one
+  // accepting 0 and negatives, relying on a downstream `coord.run(runId) ===
+  // null` to answer 404 `unknown-run`. That is a shape error answering as a
+  // missing row, which is the overloaded seam this tree bans by name — and on
+  // THIS route it also mislabels the durable rejection record.
+  //
+  // The behaviour CHANGE is pinned in both directions on purpose: a malformed
+  // runId becomes 400, and a well-formed-but-absent one stays 404.
+  it.each([[0], [-1], [-4242], [1.5], [4242.5]])('refuses runId %s as a shape error, not as a missing run', async (runId) => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app!, { ...GOOD, runId });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-kind' });
+    expect(res.json().detail).toContain('positive');
+    // …AND THE DURABLE ROW SAYS THE SAME THING (D-1218). The comment above
+    // claims this route "also mislabels the durable rejection record" — a
+    // SECOND consequence, beyond the status code, that nothing on THESE two
+    // rows checked. The record itself is well read: `store.rejections()` has
+    // sixteen call sites across three test files (fourteen before this wave
+    // added two), so the gap was never "nothing reads it" — it was that the two
+    // rows whose comment makes the claim did not. The row is the fleet-visible
+    // half of a refusal and the half a later feed will surface, so a shape error
+    // recorded as a missing run is a wrong fact that outlives the response.
+    //
+    // Measured with a mutation that touches the ROW alone — `refuse()` recording
+    // a constant code while the reply still varies — so this assertion is
+    // witnessed independently of the status assertions above it.
+    expect(w.coord.rejections().map((r) => r.code)).toEqual(['bad-kind']);
+  });
+
+  it('still answers 404 unknown-run for a WELL-FORMED runId that names no run', async () => {
+    // The fixture that keeps the row above from being a widening: 4242 is a
+    // perfectly good run id, and it must still reach the existence check.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app!, { ...GOOD, runId: 4242 });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-run' });
+    // The other direction for the durable row too: this one really is recorded
+    // as a missing run, so the row above pins a DISTINCTION rather than a
+    // constant.
+    expect(w.coord.rejections().map((r) => r.code)).toEqual(['unknown-run']);
+  });
 
   it.each(REJECT_CASES)('refuses %s', async (code, status, override) => {
     const home = mkTmp('ccrc-mail-');
@@ -505,17 +553,32 @@ describe('the rejection table is total, in both directions', () => {
         // `mirrorplan.ts` brought `'rotated-away'` here. Same remedy, same
         // reason: the exported guard, never an allowlist pin per member.
         || isSessionLifecycle(tok)
-        // AUTOMATIONS — `store.ts`'s `AutomationFilter.last` narrows the list
-        // by an outcome OR by `'never-ran'` (`lastFireAt IS NULL`), which is
-        // deliberately NOT an `AutomationOutcome`: no run row can carry it, so
-        // putting it in that union would put a word there nothing can write.
-        // Admitted the way every admission above is — through the exported
-        // guard, never an allowlist pin per member.
+        // PROGRAM-LEVERAGE WAVE 5 — the SIXTH union, checked together and never
+        // merged, on the standing rule `enter-ignored` states above. `reclaim.ts`
+        // lives in `server/src/coord` and spells both of its own refusals as
+        // literals. It is a vocabulary of its own and not an extension of
+        // `RunRefuseCode` FOR A REASON THIS SCANNER CANNOT SEE:
+        // `coordinator-skill.test.ts` requires every `RunRefuseCode` member to be
+        // named in the coordinator corpus, and this door is the operator's act on a
+        // coordinator that is already dead — a live one reading about it has found a
+        // recovery for a problem it does not have. Admitted through the exported
+        // guard rather than NOT_CODES, for the reason the `LifecycleGapReason` note
+        // above gives: an allowlist accepts one spelling for ever, a guard accepts a
+        // member added later and still rejects a typo'd one.
+        || isReclaimRefuseCode(tok)
+        // AUTOMATIONS — the SEVENTH..TENTH unions, checked together and never
+        // merged, on the same standing rule. `store.ts`'s
+        // `AutomationFilter.last` narrows the list by an outcome OR by
+        // `'never-ran'` (`lastFireAt IS NULL`), which is deliberately NOT an
+        // `AutomationOutcome`: no run row can carry it, so putting it in that
+        // union would put a word there nothing can write. Admitted the way
+        // every admission above is — through the exported guard, never an
+        // allowlist pin per member.
         || isAutomationLastFilter(tok)
         || isAutomationOutcome(tok)
         || isAutomationRefusal(tok)
         || isAutomationRouteRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode or SessionLifecycle`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or automations vocabulary member`).toBe(true);
     }
   });
 });

@@ -1,9 +1,10 @@
 // `POST /api/coord/pause` — the operator's door onto `$REG/coordinator-paused`,
-// and one of the THREE write routes in `coord/routes.ts` deliberately not behind
+// and one of the FOUR write routes in `coord/routes.ts` deliberately not behind
 // `requireMailToken` (D-282 (was D-B4-9)). The others are `POST /api/runs/:id/abandon` (same
-// build, same reason) and `POST /api/claims/:id/break` (build 9 D12, the same
-// abandon-door shape); the `UNGATED` set below is the whole list, and the
-// scanner holds it to exactly those three.
+// build, same reason), `POST /api/claims/:id/break` (build 9 D12, the same
+// abandon-door shape) and `POST /api/runs/:id/reclaim` (F5, D-1123 — the same
+// shape again, for the coordinator itself); the `UNGATED` set below is the whole
+// list, and the scanner holds it to exactly those four IN BOTH DIRECTIONS.
 //
 // The authorization ruling is spec §4.1 and it is the whole reason this file
 // asserts an ABSENCE: the box token authenticates the FLEET HOST, the
@@ -168,8 +169,55 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  coordinator holds.
    *  `/api/claims/:id/break`: the sessions that hold claims hold the box token;
    *  a wedge's release valve must not be behind the wedger's own key — build 9
-   *  D12. */
-  const UNGATED = new Set(['/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break']);
+   *  D12.
+   *  `/api/runs/:id/reclaim`: the same door one turn further on — the release
+   *  valve for a program whose COORDINATOR is the corpse. The box token is that
+   *  coordinator's own key, so gating the act of replacing it would be the
+   *  D-282 shape exactly (F5, D-1123). */
+  const UNGATED = new Set([
+    '/api/coord/pause', '/api/runs/:id/abandon', '/api/claims/:id/break',
+    '/api/runs/:id/reclaim',
+  ]);
+
+  /** Write routes that carry NO box token and are NOT release valves — the
+   *  distinction `UNGATED` alone cannot express, and which stayed invisible for
+   *  as long as the D-282 doors were the only ungated POSTs in this file
+   *  (D-1240).
+   *
+   *  `UNGATED` is an argument about a WEDGE: the locked-out party holds the box
+   *  token, so the valve must not sit behind it. A name in the set below makes
+   *  no such claim. These are ordinary same-origin PWA writes that no machine
+   *  lane calls, so the fleet's shared secret is simply the wrong key for them
+   *  — and nothing may rely on one of them to open a wedge.
+   *
+   *  Kept DISJOINT from `UNGATED` below, in both directions, so a door cannot
+   *  quietly acquire the release-valve argument by being listed twice. Keeping
+   *  the sets apart also leaves `UNGATED.size` alone, which matters beyond
+   *  tidiness: five prose sites are checked against it, and folding an ordinary
+   *  write in here would have moved a cardinal in all five to record something
+   *  that is not a D-282 door.
+   *
+   *  `/api/coord/caps`: the operator's dial on `maxConcurrentWorkers` and
+   *  `maxSessionsPerDay`, which before it had no door at all and changed only by
+   *  hand-editing sqlite. Raising a cap releases no wedge.
+   *
+   *  A BLIND SPOT, recorded beside the set rather than papered over by widening
+   *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
+   *  kickoff` is the natural second member — a coordination WRITE that is
+   *  session-gated only — and it is ABSENT here because this file scans
+   *  `coord/routes.ts` alone and that route is registered in `server.ts`. Its
+   *  absence is therefore not a judgement that it belongs elsewhere; it is the
+   *  scanner's reach, and the difference matters: dodging a pin by placement is
+   *  not being ungated, it is being unmeasured. Whoever widens the scan to
+   *  `server.ts` should add it here in the same change. */
+  const SESSION_ONLY = new Set(['/api/coord/caps']);
+
+  /** The two mechanisms that count as "the token was checked" — the shared
+   *  helper AND the two inline `checkMailToken` sites. Hoisted because BOTH
+   *  directions below read it now: a narrowed copy in one test and not the
+   *  other would let a route be gated for one assertion and ungated for the
+   *  other, which is the drift this file exists to prevent. */
+  const GATE_PATTERNS = [/requireMailToken\(req/, /checkMailToken\(/];
 
   /** Each `app.post` handler's own text, from its route line to the next
    *  handler in the file. */
@@ -193,9 +241,13 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     // scanner — exactly the failure this file exists to prevent.
     const missing: string[] = [];
     for (const { route, body } of handlers()) {
-      if (UNGATED.has(route)) continue;
+      // TWO exemptions, not one, and they are different arguments — see
+      // `SESSION_ONLY`'s own docstring (D-1240). Both are checked back the other
+      // way below, so neither list can document an exemption the code does not
+      // actually take.
+      if (UNGATED.has(route) || SESSION_ONLY.has(route)) continue;
       const gate = Math.min(
-        ...[/requireMailToken\(req/, /checkMailToken\(/].map((re) => {
+        ...GATE_PATTERNS.map((re) => {
           const m = re.exec(body);
           return m ? m.index : Number.POSITIVE_INFINITY;
         }),
@@ -206,6 +258,63 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
       if (gate === Number.POSITIVE_INFINITY || (firstAwait >= 0 && gate > firstAwait)) missing.push(route);
     }
     expect(missing, 'write routes with no box-token gate ahead of their first await').toEqual([]);
+  });
+
+  it('SESSION_ONLY and UNGATED are disjoint — a door gets one argument, not both', () => {
+    expect([...SESSION_ONLY].filter((r) => UNGATED.has(r)),
+      'a route claims both the release-valve argument and the ordinary-write one').toEqual([]);
+    // …and neither set is empty, or every assertion over them is vacuous.
+    expect(SESSION_ONLY.size, 'SESSION_ONLY emptied — the scans over it prove nothing')
+      .toBeGreaterThan(0);
+    expect(UNGATED.size, 'UNGATED emptied — the scans over it prove nothing').toBeGreaterThan(0);
+  });
+
+  it('every SESSION_ONLY route really IS ungated, and really EXISTS', () => {
+    // The mirror of the UNGATED direction below, for the same reason: a name in
+    // a set that skips a check is a one-way promise until something checks the
+    // other way. Both halves — the route exists, and it takes no box token.
+    const listed = handlers().filter((h) => SESSION_ONLY.has(h.route));
+    expect(listed.map((h) => h.route).sort(), 'a SESSION_ONLY name matches no app.post in this file')
+      .toEqual([...SESSION_ONLY].sort());
+    const gated = listed.filter((h) => GATE_PATTERNS.some((re) => re.test(h.body))).map((h) => h.route);
+    expect(gated, 'a SESSION_ONLY route checks the box token after all').toEqual([]);
+  });
+
+  it('no SESSION_ONLY route is EXEMPT — armed, it sits behind the session gate', () => {
+    // This is what "session-gated when armed" MEANS. Without it the phrase is
+    // prose: a route could be added to the EXEMPT table and still pass every
+    // other assertion in this file.
+    for (const route of SESSION_ONLY) {
+      for (const verb of ['GET', 'POST']) {
+        expect(GATE_SRC.includes(`'${verb} ${route}'`),
+          `${verb} ${route} is in auth/gate.ts's EXEMPT table; a PWA-surface write must not be`)
+          .toBe(false);
+      }
+    }
+  });
+
+  it('every UNGATED route really IS ungated — the direction this set could not fail in', () => {
+    // THE MISSING HALF, and the reason a name in `UNGATED` was until now a
+    // one-way promise. The test above SKIPS the listed routes; the docstring test
+    // below only reads prose. Between them, a route added to this set whose
+    // handler ALSO checked the box token passed both, and the set would be
+    // documenting an exemption the code does not take — the mirror image of
+    // `auth-gate.test.ts:400-402`'s "an exemption whose stated justification is a
+    // gate the route does not actually have", which that file calls the worst
+    // kind of hole. Measured red by adding the gate to the reclaim handler.
+    const seen: string[] = [];
+    const gated: string[] = [];
+    for (const { route, body } of handlers()) {
+      if (!UNGATED.has(route)) continue;
+      seen.push(route);
+      if (GATE_PATTERNS.some((re) => re.test(body))) gated.push(route);
+    }
+    // Guard the guard, and it is not decoration: `handlers()` keys on the exact
+    // registration text, so a route renamed in `coord/routes.ts` and not here
+    // drops silently out of the loop and leaves this green over an empty set.
+    // Every listed name must have been FOUND.
+    expect(seen.sort(), 'a name in UNGATED that no app.post registers').toEqual([...UNGATED].sort());
+    expect(gated, 'listed as UNGATED, and yet the handler checks the box token').toEqual([]);
   });
 
   it('finds the routes it claims to scan — a scanner that matches nothing proves nothing', () => {
@@ -273,5 +382,95 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     expect(doc).toMatch(/Honesty clause/i);
     expect(doc).toMatch(/single-uid box any session can `rm` this marker directly/i);
     expect(doc).toMatch(/convention with a speed bump/i);
+  });
+
+  /** THE COUNT, DERIVED — because the wave that opened the fourth door found
+   *  FIVE prose sites still saying THREE and not one of them had a test.
+   *  `UNGATED` is the only place the door list is decided, so it is the only
+   *  place the count may be spelled; every site below is checked against
+   *  `UNGATED.size`, and the enumerating ones against the names themselves.
+   *
+   *  A CARDINAL is a claim about the tree NOW. An ORDINAL is a PLACE in the
+   *  order the doors were opened and stays true for ever. Confusing the two is
+   *  exactly what left "the THIRD route in this file that is UNGATED", written
+   *  at the end of a list of three, reading as a completeness claim. CAPS is
+   *  the convention that makes the difference checkable: a number in capitals
+   *  is a claim this scanner reads, a number in lower case is history it
+   *  leaves alone. */
+  const CARDINAL = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN'];
+  const ORDINAL = ['ZEROTH', 'FIRST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH', 'SIXTH', 'SEVENTH'];
+  // ZERO/ONE/FIRST stay out of both patterns: they are this repo's ordinary
+  // CAPS emphasis ("Exactly ONE field is read", "the FIRST await"), and
+  // scanning for them would fire on passages that state no count at all.
+  const CARD_RE = /\b(?:TWO|THREE|FOUR|FIVE|SIX|SEVEN)\b/g;
+  const ORD_RE = /\b(?:SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH)\b/g;
+
+  const REPO = path.resolve(__dirname, '..', '..');
+  const SELF = readFileSync(path.resolve(__dirname, 'coord-pause-route.test.ts'), 'utf8');
+  const GATE_SRC = readFileSync(path.resolve(__dirname, '../src/auth/gate.ts'), 'utf8');
+  const CLAUDE_MD = readFileSync(path.resolve(REPO, 'CLAUDE.md'), 'utf8');
+
+  /** A named passage, or a loud failure. An anchor that stopped matching would
+   *  otherwise yield the empty string, and the empty string satisfies the
+   *  negative half of every assertion below — `docstringFor`'s own lesson
+   *  (review finding F-A: a window whose contents depend on how long the
+   *  neighbours are) applied to three more slices. */
+  const passage = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    const out = text.slice(a, b);
+    expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(300);
+    return out;
+  };
+
+  /** The sites that ENUMERATE the doors. Two docstrings in `coord/routes.ts`
+   *  are deliberately absent: the break door's and the reclaim door's each
+   *  argue about THEMSELVES and name two of the four. They state a place, not
+   *  a census, and demanding the full roster there would mint two more copies
+   *  of the list this scanner exists to stop copying. */
+  const enumerations = (): [string, string][] => [
+    ['coord/routes.ts, the pause docstring', docstringFor('/api/coord/pause')],
+    ["coord-pause-route.test.ts, this file's own header",
+      passage('the file header', SELF, '// `POST /api/coord/pause`', 'import {')],
+    ['auth/gate.ts, the NOT-EXEMPT block',
+      passage('the NOT-EXEMPT block', GATE_SRC,
+        ' *  - `POST /api/coord/pause`', 'export const EXEMPT')],
+    ['CLAUDE.md, the box-token bullet',
+      passage('the box-token bullet', CLAUDE_MD,
+        '- **Box token gates every coordination WRITE**', '\n- **')],
+  ];
+
+  it('every prose site that states the door count states the DERIVED one', () => {
+    const want = CARDINAL[UNGATED.size];
+    expect(want, 'the door count outgrew the word list').toBeDefined();
+    const sites: [string, string][] = [
+      ...enumerations(),
+      ['coord/routes.ts, the break docstring', docstringFor('/api/claims/:id/break')],
+    ];
+    // A site deleted from this list rather than corrected is the failure this
+    // pin exists to prevent; five is the number this wave measured stale.
+    expect(sites.length, 'a count site was dropped instead of corrected').toBe(5);
+    for (const [name, text] of sites) {
+      expect(new Set([...text.matchAll(CARD_RE)].map((m) => m[0])),
+        `${name} does not state the count as ${want}`).toEqual(new Set([want]));
+      for (const ord of [...text.matchAll(ORD_RE)].map((m) => m[0])) {
+        expect(ORDINAL.indexOf(ord),
+          `${name} names the ${ord} ungated door and there are ${UNGATED.size}`)
+          .toBeLessThanOrEqual(UNGATED.size);
+      }
+    }
+  });
+
+  it('every site that lists the doors lists ALL of them', () => {
+    // The half that catches the NEXT door rather than this one: a fifth member
+    // joins `UNGATED` and four passages go red until each names it. Nothing
+    // here is typed by hand, so there is no second list to forget.
+    for (const [name, text] of enumerations()) {
+      for (const door of UNGATED) {
+        expect(text, `${name} does not name ${door}`).toContain(door);
+      }
+    }
   });
 });

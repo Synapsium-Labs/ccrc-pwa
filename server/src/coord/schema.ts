@@ -48,6 +48,15 @@
  * to `'unknown'` — the same guard `isRunState`/`isProgramState`/
  * `isMailDeliveryState` already give the other five, never a cast.
  *
+ * That column's own comment inside migration 1 spells the vocabulary out
+ * (`ask|done|merged|mail|run`). Read it as a SNAPSHOT of what the union held
+ * when v1 was written, not as the authority: migration 1 is frozen, so its
+ * bytes are history and are not edited when the union grows — `shared/api.ts`'s
+ * `NotifyEvent['kind']` and `NOTIFY_KINDS` are the live list, and they have
+ * since gained `coord` (D-1163). What the comment says that REMAINS true of
+ * every generation is the part that matters: the server never writes
+ * `'unknown'`.
+ *
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.
  */

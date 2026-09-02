@@ -97,6 +97,39 @@ export const isRunClosed = (run: { state: RunState }): boolean => {
   return s === 'done' || s === 'failed';
 };
 
+/** The programs that still have an OPEN run, by slug — the PROGRAM-level half
+ *  of the run board's resume door (D-1146, review MAJOR 2).
+ *
+ *  The row cannot answer this about itself, which is the whole finding: a
+ *  terminal row is the ordinary end state while its program still has a wave
+ *  that can move, and it is the ONLY thing left to hang a door on the moment
+ *  the program has none. `closeRun` retires a program at zero open runs, so
+ *  between closing wave N and opening wave N+1 — the close-then-open window
+ *  ruling R1 already names as dangerous — every row of the program is terminal
+ *  and a dead coordinator has nowhere on the board to be released from.
+ *
+ *  It re-filters with `isRunClosed` ITSELF rather than trusting the caller to
+ *  pass an already-open list. The board does pass `active`, but a set whose
+ *  openness was decided somewhere else is a SECOND definition of "open", one
+ *  edit away from drifting off `state` and onto `closedAt` — `isRunClosed`'s
+ *  own docstring above records what that cost the last time, and this is the
+ *  same line `CoordStore.runs()` and `programOpenRunCount` draw server-side.
+ *
+ *  A Set, not a `.some()` per row: the Finished group is a flat list carrying
+ *  every program's archive, so this question is asked once for every rendered
+ *  row and a linear scan inside it would be quadratic in the board's own size.
+ *
+ *  An empty answer means "no program on this list has an open run" and NOT
+ *  "nothing has been measured yet" — the caller owes that distinction, and
+ *  `RunsScreen`'s own call site states why it holds there. */
+export function programsWithOpenRun(
+  runs: readonly { program: string; state: RunState }[],
+): ReadonlySet<string> {
+  const open = new Set<string>();
+  for (const run of runs) if (!isRunClosed(run)) open.add(run.program);
+  return open;
+}
+
 /** The dispatch window's three-way answer (Task 3, spawn visibility).
  *
  *  `planned` is OVERLOADED — it means both "opened, nobody has dispatched" and

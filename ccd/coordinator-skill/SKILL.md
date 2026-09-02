@@ -27,12 +27,14 @@ the operator revives it under that SAME id — the id-preserving revive, never a
 re-creation that recomputes one from an account and a project. Revived under a
 different id (the operator's own placement rule may pick any least-loaded
 home), every `POST /api/runs` call for this program then answers
-`claimed-by-another` naming a session that may no longer even exist —
-permanently, since nothing in the HTTP API ever rewrites `claimedBy`. That is
-a recovery on the box, not something this session can fix by retrying.
+`claimed-by-another` naming a session that may no longer even exist, and no
+call named in this corpus ever rewrites `claimedBy`, so it does not lapse on
+its own. Handing the program to a different session is an operator act, from
+the console — outside this session's reach for the reason clause 4's pause
+marker is. From in here it is a stop and a report, never a retry.
 `references/resume.md` is the runbook for all of it: how to measure which run
-is open, the two id-preserving revives, the wave-N re-kickoff text, and what is
-left when the id is already lost.
+is open, the two id-preserving revives, the wave-N re-kickoff text and where
+the console sends it from, and what is left when the id is already lost.
 
 ## Learn who you are, first
 

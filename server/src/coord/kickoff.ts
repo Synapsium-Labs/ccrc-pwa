@@ -1,6 +1,6 @@
 import type { CoordStore } from './store.js';
 import { queueSystemMail, type SystemMailQueued } from './rundefs.js';
-import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff } from '../../../shared/api.js';
+import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -100,6 +100,36 @@ export type KickoffOutcome =
  * stated reason: a cap on the raw title would let a title at exactly the ceiling
  * through and queue a mail over it, and the two producers would then disagree
  * about what 8 KiB means by exactly the length of a template.
+ * Wave 5's resume body is longer than wave 1's by two sentences and a run id,
+ * and it reaches the three lines below through the same `body` local — which is
+ * the whole reason the cap sits there and not on `program.title`. A cap on the
+ * title would have to know which template was about to wrap it.
+ *
+ * THE `resume` ARGUMENT IS A FOURTH PARAMETER, not a second function (wave 5,
+ * D-1126). The brief said "reuse this"; measured, that is not a reuse.
+ * `programKickoff`'s third sentence hardcodes "open the run for wave 1"
+ * (`shared/api.ts`, beside its own composer) — right exactly once, at program
+ * start, and wrong for every revive after it. Handing it to a coordinator
+ * revived on a program standing at wave 5 briefs it to open wave 1, and the open
+ * route dedupes only a `planned` retry naming the same program, wave and
+ * claimant, so what that writes is a SECOND run row: a second ledger the board
+ * renders, and an open-run count the program never gets back to zero.
+ * `ccd/coordinator-skill/references/resume.md` §4 exists to say precisely
+ * that to a human, in prose, because until this wave nothing could say it in a
+ * message.
+ *
+ * What genuinely IS shared is everything around the sentence — the dedupe key
+ * below, the cap above, the operator sender, the run-less envelope and the
+ * three-way answer. A second entry point restates all five, and a second
+ * restatement of the cap is the exact drift D-1119 was opened for. So the
+ * composer is the only thing that varies, and the argument selects nothing but
+ * the composer: absent, this function is byte-for-byte wave 4's.
+ *
+ * NOTHING ELSE MOVES WITH IT — in particular `runId` stays `null` below even
+ * when `resume.runId` names a real run. The prose says which run to pick up; the
+ * ENVELOPE claims no run, because `runId` is one quarter of the dedupe key
+ * `queueSystemMail` reads, and a run-stamped key would give every wave its own
+ * slot and pile a fresh re-kickoff on top of each unread one.
  *
  * THE DEDUPE KEY IS `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — deliberately
  * not namespaced by slug. One session is one program's coordinator; a second
@@ -113,8 +143,11 @@ export function queueProgramKickoff(
   deps: KickoffDeps,
   toId: string,
   program: { slug: string; title: string },
+  resume?: { runId: number; wave: number },
 ): KickoffOutcome {
-  const body = programKickoff(program.slug, program.title);
+  const body = resume
+    ? programResumeKickoff(program.slug, program.title, resume.runId, resume.wave)
+    : programKickoff(program.slug, program.title);
   const bytes = Buffer.byteLength(body, 'utf8');
   if (bytes > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
