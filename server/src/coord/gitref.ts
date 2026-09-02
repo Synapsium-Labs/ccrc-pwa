@@ -93,12 +93,23 @@ export async function readBranchTip(
     // `unreadable` is weaker: EACCES/EISDIR/a transport hiccup — the path
     // could still be a live ref this box just can't read the bytes of, so
     // `stat` on the SAME path proves presence without needing the bytes
-    // (docstring above) — if it succeeds, this IS the loose ref, git's
-    // authoritative answer, and it must be refused rather than silently
-    // answered from packed-refs. An older agent's every measured read
-    // collapses to `unreadable`, so this arm is also what makes it take
-    // today's path verbatim (THE GOVERNING RULE).
-    if (await io.stat(loosePath) !== null) return null;
+    // (docstring above). THREE answers now, where this used to see two:
+    //   ok         — this IS the loose ref, git's authoritative answer, and
+    //                it must be refused rather than answered from packed-refs;
+    //   unreadable — the stat could not be TAKEN. Not proof of anything, and
+    //                this function's whole contract is to refuse what it
+    //                cannot prove rather than let a stale packed tip settle a
+    //                wave close. Until D-114 was closed this arrived wearing
+    //                `{missing:true}`, i.e. indistinguishable from proof;
+    //   absent     — proven no loose ref: packed-refs is the honest fallback.
+    // AGENT SKEW: an OLDER agent's every measured read is `unreadable`, so a
+    // PACKED branch reads `tip-unmeasurable` against one until the agent is
+    // deployed. That is the fail-shut direction (refusing a close, never
+    // settling one on a stale SHA) and the reason this ships AGENT-FIRST.
+    const st = await io.statMeasured(loosePath);
+    if (st.ok) return null;                  // the ref IS there — refuse, as before
+    if (st.reason !== 'absent') return null;  // could not be measured — refuse
+    // Only a PROVEN absence reaches packed-refs below.
   }
   const packed = await io.readFile(path.join(gitDir, 'packed-refs'));
   if (packed === null) return null;

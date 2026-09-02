@@ -1668,9 +1668,12 @@ export function registerCoordRoutes(
    * `projects[]` — every project measured this pass — replaces a
    * `projectKnown` boolean: a typo'd project is this feature's central failure
    * mode (a worker reads `[]` as "I am alone" and conflicts), and the obvious
-   * fix, one `io.stat` of the project dir, is built on the call the tree
-   * already knows lies (D-114: the agent's stat answers EACCES as
-   * `{missing:true}`).
+   * fix, one `io.stat` of the project dir, was built on the call the tree then
+   * knew lied (D-114: the agent's stat answered EACCES as `{missing:true}`).
+   * That lie is CLOSED — `io.statMeasured` exists and the wire carries
+   * `absent?: true` — and `projects[]` still stands, now on its own merit: it
+   * is the measurement this pass already makes, so the probe would be a
+   * second syscall to learn something already in hand.
    *
    * Each row is the L0 `PeerSummary` plus `claimedPaths` (additive wire, one
    * reader per field). No row carries an `archivedReason`, and the type no
