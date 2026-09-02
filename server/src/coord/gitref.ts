@@ -47,7 +47,7 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * to corroborate: a proven ENOENT already IS "no loose ref exists". An
  * `unreadable` loose ref is the weaker fact — it does not know whether the
  * ref exists — so it still needs independent proof before falling through.
- * Below, `io.stat` on the IDENTICAL path is that proof, independent of
+ * Below, `io.statMeasured` on the IDENTICAL path is that proof, independent of
  * whether the bytes are readable — `stat` only needs search permission on
  * the parent directory chain, not read permission on the leaf,
  * so it succeeds on a `chmod 000` file and on a directory (the `EISDIR`

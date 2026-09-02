@@ -132,14 +132,36 @@ describe('readBranchTip', () => {
     };
     expect(await readBranchTip(unmeasurable, root, 'demo', 'ws/quiet-mesa')).toBeNull();
   });
-  it('a PROVEN-absent loose ref still falls through to packed-refs — the ordinary packed branch', async () => {
-    // The other pole, and the one that keeps this fix from being a blanket
-    // refusal: `absent` is a positive answer ("git has no loose ref for this
-    // name"), so packed-refs is git's honest fallback and must still be read.
+  it('a real ENOENT on the loose ref still falls through to packed-refs — the outer absent fast path, never entering the unreadable arm', async () => {
+    // NOT the unreadable arm's own pole — `rmSync` makes `readFileMeasured`
+    // itself answer `absent` (a real ENOENT), which is caught by the OUTER
+    // `if (loose.reason === 'unreadable')` gate failing to match, so this
+    // never reaches `statMeasured` at all. It pins the ordinary "packed and
+    // never re-committed" branch, and it is a hole-check on the guard above
+    // it, not on the arm below — the case below is the arm's own other pole.
     const root = project(TIP, OTHER);
     const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
     rmSync(loosePath);
     expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBe(OTHER);
+  });
+  it('inside the unreadable arm, a stat that PROVES absence still falls through to packed-refs (the arm\'s own other pole)', async () => {
+    // The FALSE branch of `if (st.reason !== 'absent') return null` — covered
+    // by nothing until this test: the loose ref's bytes could not be read
+    // (`unreadable`), but a stat on the SAME path proves it genuinely does
+    // not exist (`absent`) — the TOCTOU shape `ioDoubles.ts` already names as
+    // real (a race between listing and byte-read). Unlike the fixture above,
+    // this double forces BOTH calls on `loosePath` so the arm is actually
+    // entered and its own fall-through, not the outer gate's, is what's
+    // under test. Must red under mutation 2 (the unconditional `return null`)
+    // applied literally, with no other code touched.
+    const root = project(TIP, OTHER);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    const toctou: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => (p === loosePath ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
+      statMeasured: async (p) => (p === loosePath ? { ok: false, reason: 'absent' } : localIO.statMeasured(p)),
+    };
+    expect(await readBranchTip(toctou, root, 'demo', 'ws/quiet-mesa')).toBe(OTHER);
   });
   it('refuses a branch name that could climb out of the ref tree', async () => {
     const root = project(TIP, null);
