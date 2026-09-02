@@ -120,8 +120,11 @@ export const LEDGER_ALLOCATOR_ERA = 211;
  * demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE SAME LINE — and
  * is therefore blind to two spellings this repo actually uses: build 9b's colon
  * form (`- **D-211** (Task 3): …`) and a subject wrapped onto the next line.
- * Measured across the 64 scanned plans: `ENTRY` sees 350 lines where this shape
- * sees 386, and of the 36 it misses, 29 are real non-sub definitions carrying
+ * Measured as a DELTA, not as two totals — the totals move whenever any plan
+ * gains an entry, so a number here would be stale by its own commit (the defect
+ * D-1302 is about, three files away). This shape sees 36 definition-shaped lines
+ * `ENTRY` cannot; 7 are deliberate `D-N.M` sub-entries and 29 are real
+ * non-sub definitions, carrying
  * 73, 139-144, 149, 172, 189-195, 200-207, 1026 and **1158** — one of the five
  * numbers this program lost, and the half of the first incident that would have
  * stayed invisible even in a fully merged tree (D-1294).

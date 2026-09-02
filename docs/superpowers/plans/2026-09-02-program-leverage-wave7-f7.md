@@ -1096,9 +1096,11 @@ in this plan or in the diff is defined below.
   `deviation-refs.test.ts:45`'s `ENTRY = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)[^—\n]*—\s*(.+)$/`
   requires a non-empty subject after an em-dash on the SAME line. PR #38 spelled its entry
   `- **D-1158** (2026-08-31, found by running the full suite for D-1157) —` with the subject wrapped to
-  the next line, so `collisions()` never saw it. Measured across today's 64 scanned plans: the looser
-  `DEFINED` prefix matches **386** lines and `ENTRY` matches **350** — 36 definition-shaped lines
-  invisible, 7 of them deliberate `D-N.M` sub-entries and **29 real definitions**, carrying
+  the next line, so `collisions()` never saw it. Measured across the scanned plans, and stated as the DELTA
+  rather than as two totals, because the totals move every time any plan gains an entry — including
+  this one, whose own thirteen entries moved them from 386/350 to 400/364 between the measurement and
+  the commit: the looser prefix shape sees **36 definition-shaped lines `ENTRY` cannot**, 7 of them
+  deliberate `D-N.M` sub-entries and **29 real definitions**, carrying
   73, 139–144, 149, 172, 189–195, 200–207, **1026** and **1158**. So even in a fully merged tree, half
   of the first incident was undetectable. Fixed for allocator-era numbers only, by Task 7's
   prefix-only `DEFINITION`; the pre-allocator half is left to `GRANDFATHERED`, whose "may only SHRINK"
