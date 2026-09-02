@@ -1796,8 +1796,15 @@ describe('graphify — one pin, one census path', () => {
     expect(holders).toEqual(['ccd/ccrc']);
   });
   it("the census path '.ccrc/graph-sweep.json' is spelled by writers/readers, not duplicated as a second constant", () => {
-    // the sweep WRITES it, doctor READS it — both may spell it; nothing else may.
+    // The sweep WRITES it; doctor and the session hook READ it. Spelling a
+    // path you read is not duplicating a constant — what this guard forbids is
+    // a SECOND definition, a `CENSUS=`-shaped copy nothing derives from. The
+    // hook is a legitimate third holder (D-1333): it is installed on its own
+    // into ~/.cc-sessions and runs as Claude Code's hook with no ccd around to
+    // source, so it can only spell the path. The list stays exact-match, so a
+    // FOURTH holder still reddens this.
     const holders = holdersOf('graph-sweep.json');
-    expect(holders).toEqual(['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']);
+    expect(holders).toEqual(
+      ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
   });
 });

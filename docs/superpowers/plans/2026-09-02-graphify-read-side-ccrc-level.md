@@ -1055,7 +1055,14 @@ Expected: all PASS. If `session-hook`'s p95 budget test is the only red, re-run 
 | change `tail -c 4096` to `head -c 4096` in the `built` read | "reads built_at_commit from the TAIL — a decoy at the head must not win" |
 | delete the `[ ! -f "$cwd/graphify-out/graph.json" ]` early return and emit unconditionally | "prints NOTHING when the tree has no graph and the sweep never mentioned it" |
 | move the card call below `[[ "$src" == compact ]] && exit 0` | "is printed for compact too…" |
-| replace `fresh=""` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "omits freshness when rev-list will not answer for the built sha (D-1252)" — **not** "…not a git repo", which cannot reach that `case` at all (no `tip`, so the whole block is skipped) and stayed green under the mutation |
+| replace `fresh="freshness unmeasured"` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "says the graph is undatable when rev-list will not answer for the built sha (D-1252, D-1336)" — **not** "…not a git repo", which cannot reach that `case` at all (no `tip`, so the whole block is skipped) and stayed green under the mutation |
+| make `[ -z "$engine" ] \|\| line="$line, engine $engine"` unconditional | "omits engine and pin when the graph is unstamped and the box has no pin" (D-1334) — the row Task 2 never had, because `plantGraph` stamped `.graphify_engine` unconditionally and nothing could reach the empty arm |
+| make `[ -z "$pin" ] \|\| line="$line (pin $pin)"` unconditional | same test (D-1334) — a box with no `~/.ccrc/graphify.pin` is every box `ccrc install` has not run on |
+| delete `row="${row:0:400}"` from the no-graph arm | "clips a pathological census reason instead of injecting it whole" (D-1335) — `expected 100140 to be less than 600` |
+| replace the `''\|*[!0-9]*` arm's `fresh="freshness unmeasured"` with `fresh=""`, merging it back onto the no-git silence | "says the graph is undatable when rev-list will not answer for the built sha (D-1252, D-1336)" |
+| in `ccd/ccd-graph-sweep`'s `_gs_row`, rename the census field `reason` to `why` | BOTH census tests, in `session-hook.test.ts` (D-1337) — the hook goes silent, `the hook printed nothing` |
+| in `ccd/ccd-graph-sweep`, rename `_gs_row()` itself | the same two, at the lift's own assertion: `ccd-graph-sweep no longer defines _gs_row()` |
+| plant a FOURTH bash file under `ccd/` whose code spells `$HOME/.ccrc/graph-sweep.json` | `single-definition.test.ts`'s "the census path '.ccrc/graph-sweep.json' is spelled by writers/readers…" (D-1333) — the widened list is still exact-match |
 | delete `[ -d "$cwd" ] \|\| return 0` and let the census read run on a missing dir | "exits 0 and prints nothing when cwd does not exist" — the card prints the sweep's row for a directory that is not there (this is why that test now seeds a census row for `$home/gone`; without it the mutation is invisible and the row would be a comment) |
 
 - [ ] **Step 6: Commit**
@@ -2403,6 +2410,81 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   still names `built at cccccccc` while claiming neither `fresh` nor `behind HEAD`. Re-measured with
   it in place, the same mutation is RED (`Tests  1 failed | 45 passed (46)`). No shell changed: the
   guard was already right, only unpinned.
+
+> **NUMBERING, RE-MEASURED AT COMMIT TIME (and the reason these jump).** The Task-2 review sheet said
+> the next free number was **D-1253**. It is not: that measurement read this branch and this plan
+> only. `origin/main` has moved from `651f40c5` (the commit this branch was cut from, carrying
+> `D-1244`) to `551a6cb6`, and the wave-7 program-leverage plan that landed in between allocated
+> **D-1294..D-1332** from `POST /api/ledger/deviations`. Grepping BOTH trees, as the ledger rule
+> says, the highest defined number anywhere is **D-1332**, so this round takes **D-1333..D-1337**.
+> The branch's own earlier entries (D-1245..D-1252) collide with nothing — main skipped the 1245-1293
+> range entirely — so they are left exactly as they are rather than renumbered under a rewritten
+> commit. Re-measure again before the next allocation; main moves.
+
+- **D-1333** (2026-09-02, Task 2 review) — **the card's census read left a standing single-source-of-
+  truth guard RED on the branch.** `single-definition.test.ts` pins the files that may spell
+  `graph-sweep.json` as exactly `['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']` — "the sweep WRITES
+  it, doctor READS it". `_hook_graph_card`'s no-graph arm reads the same census, which makes
+  `ccd/session-hook.sh` a third holder, and Task 2's Step 4 named only `session-hook` /
+  `install-session-hooks` / `macos-platform`, so the suite that guard lives in was never run: MEASURED
+  at `888124ef` on a clean tree, `npm run test` was `Test Files  1 failed | 247 passed (248)` with the
+  single failure `+ "ccd/session-hook.sh"`. **Shipped: the pin widened, not the read removed.** What
+  the guard forbids is a SECOND DEFINITION — a `CENSUS=`-shaped copy nothing derives from — and the
+  hook cannot derive: it is installed on its own into `~/.cc-sessions` and runs as Claude Code's hook
+  with no ccd around to source, so spelling the path is the only thing available to it. The list stays
+  exact-match, so a fourth holder still reddens it (MEASURED: a planted fourth bash file under `ccd/`
+  gives `Tests  1 failed | 98 passed (99)`).
+
+- **D-1334** (2026-09-02, Task 2 review) — **two shipped guards had no fixture that could reach them.**
+  `[ -z "$engine" ] || …` and `[ -z "$pin" ] || …` were both unmeasurable: `plantGraph` wrote
+  `.graphify_engine` UNCONDITIONALLY (`${opts.engine ?? '0.9.9'}` — and `??` cannot express absence,
+  it would keep `''`), and no test asserted the card is silent about a pin. MEASURED before the fix,
+  making either clause unconditional left the suite byte-identically green at `Tests  46 passed (46)`
+  while the shipped card would read `…, built at deadbeef, engine  (pin )`. Both absences are LIVE, not
+  hypothetical: the fleet-integration design states outright that an unstamped graph is legal
+  ("`unstamped` is not an outcome"), and `~/.ccrc/graphify.pin` exists only after `ccrc install`'s
+  `_inst_graphify_engine` has run on that box. **Shipped:** `plantGraph` takes `engine: null` on its own
+  branch, plus one test — "omits engine and pin when the graph is unstamped and the box has no pin" —
+  that plants neither stamp nor pin. Both mutations are now RED at `Tests  1 failed | 47 passed (48)`.
+  No shell changed; the guards were right, only unpinned.
+
+- **D-1335** (2026-09-02, Task 2 review) — **the card was the one payload this file emitted with no
+  cap.** `$row` is `graph-sweep.json`'s `.reason`, which `ccd-graph-sweep` fills from ONE LINE of the
+  engine's stderr (`BUILD_REASON="$first"`, a bare `head -n1`) or from a whole matched refusal line —
+  repo-controlled, unbounded — and it lands verbatim in `additionalContext` on every subsequent
+  SessionStart for that tree. The same file already clips everything else it produces (`.[0:200]` on
+  the approval summary, the 64KB envelope cap), so this was an omission and not a policy. **Shipped:**
+  `row="${row:0:400}"` before the interpolation, pinned by "clips a pathological census reason instead
+  of injecting it whole" (a 100 000-character reason; the emitted context must stay under 600).
+  MEASURED: deleting the clip gives `expected 100140 to be less than 600`, `Tests  1 failed | 47
+  passed (48)`. The other arm needs no cap — each of its fields is bounded at the read (a validated
+  7–40 hex sha sliced to 8, digits off a 4096-byte head, `head -c 64` on engine and pin).
+
+- **D-1336** (2026-09-02, Task 2 review) — **`fresh` was an overloaded null at the card's seam.** With
+  a `built` sha in hand and a `tip` in hand but `rev-list --count "$built..HEAD"` exiting 128, the arm
+  set `fresh=""` and the card emitted `…, built at cccccccc` with no clause — byte-identical to the
+  card for a tree with no git at all, which names no sha and has nothing to measure against. Two
+  conditions a reading session handles differently collapsed onto one value, which this repo's own
+  conventions call a defect and not a style; and a card that names a sha and then says nothing about
+  it reads as NEUTRAL rather than as undatable, which is the opposite of what the clause exists for.
+  D-1252's new test pinned the SILENCE, so it pinned the collapse. **Shipped:** that arm now says
+  `freshness unmeasured`; the D-1252 test asserts the words, and the not-a-git-repo test asserts their
+  ABSENCE, so the two silences can no longer be merged. MEASURED: merging them back (`fresh=""`) is
+  RED at `Tests  1 failed | 47 passed (48)`.
+
+- **D-1337** (2026-09-02, Task 2 review) — **the hook became a second, hand-rolled reader of the sweep
+  census schema with nothing coupling it to the writer** — the D-306 shape. `_gs_row` in
+  `ccd/ccd-graph-sweep` builds `{path, outcome, reason, duration_ms}`; `_hook_graph_card` re-spells
+  that shape in its own jq filter, `graph-sweep.test.ts` reads the census through its own TS helper and
+  never feeds a real census to the hook, and `session-hook.test.ts` hand-wrote its census fixture.
+  Renaming `reason` to `why` in the sweep would have left every suite green while the shipped card went
+  permanently silent on the no-graph path. **Shipped:** the hook suite now BUILDS its census with the
+  sweep's own writer — `_gs_row` and `_gs_finish` lifted verbatim out of `ccd/ccd-graph-sweep` and run
+  in a bash subshell against the fixture HOME (`install-session-hooks.test.ts` derives its event list
+  from the hook's own `case` block for the same reason). MEASURED: the `reason` -> `why` rename now
+  reds both census tests with `the hook printed nothing` (`Tests  2 failed | 46 passed (48)`), and
+  renaming `_gs_row()` itself reds them at the lift's own assertion, `ccd-graph-sweep no longer defines
+  _gs_row()`.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

@@ -379,7 +379,7 @@ describe('the SessionStart graph card', () => {
    *  `built_at_commit` is the file's LAST key on a real 8 MB graph, and a
    *  reader that parses from the head answers the decoy. */
   const plantGraph = (dir: string, opts: {
-    built?: string; nodes?: number; engine?: string; report?: boolean;
+    built?: string; nodes?: number; engine?: string | null; report?: boolean;
   } = {}): void => {
     const out = path.join(dir, 'graphify-out');
     fs.mkdirSync(out, { recursive: true });
@@ -393,7 +393,12 @@ describe('the SessionStart graph card', () => {
         `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
         + `- ${opts.nodes ?? 7662} nodes · 15645 edges · 423 communities\n`);
     }
-    fs.writeFileSync(path.join(out, '.graphify_engine'), `${opts.engine ?? '0.9.9'}\n`);
+    // `engine: null` plants an UNSTAMPED graph — the fleet design says outright
+    // that one is legal ("`unstamped` is not an outcome"). `??` cannot express
+    // it (it would keep ''), so the absence is its own branch (D-1334).
+    if (opts.engine !== null) {
+      fs.writeFileSync(path.join(out, '.graphify_engine'), `${opts.engine ?? '0.9.9'}\n`);
+    }
   };
 
   /** A git repo whose HEAD is returned. `-c` on every commit so the box's own
@@ -410,6 +415,43 @@ describe('the SessionStart graph card', () => {
       shas.push(git('rev-parse', 'HEAD'));
     }
     return shas[0]!;
+  };
+
+  /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
+   *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
+   *  and run in a bash subshell against this fixture HOME, because the hook is
+   *  a SECOND, hand-rolled reader of that schema (`.passes[].trees[]` carrying
+   *  `path`/`outcome`/`reason`) with nothing importable to couple it to the
+   *  writer — the shape D-306 is the scar from. Hand-written JSON here would
+   *  let a `reason` -> `why` rename leave every suite green while the shipped
+   *  card went permanently silent on the no-graph path. install-session-hooks
+   *  .test.ts derives its event list from the hook's own `case` block for
+   *  exactly this reason. */
+  const SWEEP = path.resolve(__dirname, '../../ccd/ccd-graph-sweep');
+  const liftFn = (name: string): string => {
+    const src = fs.readFileSync(SWEEP, 'utf8');
+    // `<name>() {` through the next line that is exactly `}` — the file's own
+    // layout, and the slice is asserted below rather than assumed.
+    const m = new RegExp(`^${name}\\(\\)[^\\n]*\\n[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+    expect(m, `ccd-graph-sweep no longer defines ${name}() — the hook's census `
+      + 'reader has lost the writer it was coupled to').not.toBeNull();
+    return m![0];
+  };
+  /** One sweep pass, appended to this HOME's census the way the sweep appends
+   *  it. Call twice for two passes; the hook reads the LAST. */
+  const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const script = [
+      'set -uo pipefail',
+      'CENSUS="$HOME/.ccrc/graph-sweep.json"',
+      'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
+      liftFn('_gs_row'), liftFn('_gs_finish'),
+      'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+      '_gs_finish ok 0',
+    ].join('\n');
+    execFileSync('bash', ['-c', script, 'sweep',
+      ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
   };
 
   const card = (stdout: string): string => {
@@ -467,19 +509,25 @@ describe('the SessionStart graph card', () => {
   it('prints the sweep\'s own reason when the census says why there is no graph', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);
-    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
-      passes: [
-        { started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [] },
-        { started: 'y', finished: 'y', pin: '0.9.9', status: 'ok', trees: [
-          { path: tree, outcome: 'refused-by-guard',
-            reason: 'untracked paths entered the corpus: a.py b.py', duration_ms: 12 },
-        ] },
-      ],
-    }));
+    sweepPass([]);                       // an older pass that said nothing
+    sweepPass([{ path: tree, outcome: 'refused-by-guard',
+      reason: 'untracked paths entered the corpus: a.py b.py' }]);
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('refused-by-guard');
     expect(text).toContain('untracked paths entered the corpus');
+  });
+
+  // D-1335: the card was the one payload this file emitted with no cap, and
+  // `.reason` is repo-controlled — the sweep fills it from one line of an
+  // engine's stderr, or from a whole matched refusal line.
+  it('clips a pathological census reason instead of injecting it whole', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    sweepPass([{ path: tree, outcome: 'failed', reason: 'x'.repeat(100_000) }]);
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('failed');
+    expect(text.length, 'an unbounded repo-controlled string reached the session')
+      .toBeLessThan(600);
   });
 
   it('is printed for compact too — compaction is when a session loses what it knew', () => {
@@ -548,6 +596,10 @@ describe('the SessionStart graph card', () => {
     expect(text, 'freshness was claimed with no git to measure it against')
       .not.toContain('behind HEAD');
     expect(text).not.toContain('fresh');
+    // …and NOT the undatable card's words either (D-1336): with no git there is
+    // nothing to measure against and nothing to say, which is a different
+    // silence from "a sha git refused to answer for".
+    expect(text, 'the two silences collapsed into one').not.toContain('freshness');
   });
 
   // D-1252: the not-a-git-repo case above cannot reach the freshness CASE at
@@ -557,15 +609,37 @@ describe('the SessionStart graph card', () => {
   // will not answer for is the arm's own condition, and the one that pins it:
   // an unmeasurable comparison is not a measurement, and "fresh" is precisely
   // the wrong thing to say about a graph nobody could date.
-  it('omits freshness when rev-list will not answer for the built sha (D-1252)', () => {
+  //
+  // D-1336 then took the same arm off SILENCE: a card naming a sha and saying
+  // nothing about it is byte-identical to the no-git card, and the two are not
+  // the same fact. The arm now says which one it is, out loud.
+  it('says the graph is undatable when rev-list will not answer for the built sha (D-1252, D-1336)', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);
     plantGraph(tree, { built: 'c'.repeat(40) });   // well-formed hex, no such commit here
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('built at cccccccc');
+    expect(text, 'the unmeasurable comparison was not named as one')
+      .toContain('freshness unmeasured');
     expect(text, 'freshness was claimed against a sha git refused to measure')
-      .not.toContain('fresh');
+      .not.toContain('(fresh)');
     expect(text).not.toContain('behind HEAD');
+  });
+
+  // Both tail guards were unmeasurable until this fixture existed: plantGraph
+  // stamped `.graphify_engine` unconditionally, and nothing asserted the card
+  // is silent about a pin. Both absences are live — an unstamped graph is legal
+  // by design, and ~/.ccrc/graphify.pin exists only after `ccrc install` has
+  // run on that box — and unguarded the card reads `…, engine  (pin )` (D-1334).
+  it('omits engine and pin when the graph is unstamped and the box has no pin', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, engine: null });   // no .graphify_engine, no ~/.ccrc/graphify.pin
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text).toContain(first.slice(0, 8));
+    expect(text, 'an empty engine clause was printed anyway').not.toContain('engine');
+    expect(text, 'an empty pin clause was printed anyway').not.toContain('pin');
   });
 
   it('omits the node count rather than inventing one when GRAPH_REPORT.md is absent', () => {

@@ -88,6 +88,17 @@ _hook_graph_card() {
        | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
       "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
     [ -n "$row" ] || return 0
+    # CLIP BEFORE INTERPOLATING (D-1335). `.reason` is repo-controlled text the
+    # sweep copied off an engine's stderr LINE (`BUILD_REASON="$first"`, one
+    # `head -n1`, unbounded) or off a whole matched refusal line, and it lands
+    # verbatim in this session's `additionalContext`. Every other payload this
+    # file emits is already capped — `.[0:200]` on the approval summary, 64KB on
+    # the state envelope — and this one was not. 400 characters keeps the
+    # outcome and the head of the reason, which is the part that says what to do
+    # about it. The other arm needs no cap: each of its fields is bounded at the
+    # read (a validated 7-40 hex sha sliced to 8, digits off a 4096-byte head,
+    # `head -c 64` on engine and pin).
+    row="${row:0:400}"
     _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
     return 0
   fi
@@ -116,7 +127,14 @@ _hook_graph_card() {
     else
       behind=$(git -C "$cwd" rev-list --count "$built..HEAD" 2>/dev/null) || behind=""
       case "$behind" in
-        ''|*[!0-9]*) fresh="" ;;
+        # NOT SILENCE (D-1336). Silence here would collapse two conditions a
+        # reading session handles differently onto one value, which this repo
+        # calls a defect and not a style ("no overloaded null at a seam"): a
+        # tree with no git names no sha AND no freshness, while this arm has a
+        # sha in hand that git would not answer for. A card that names a sha
+        # and then says nothing about it reads as neutral; the true word is
+        # that the graph is UNDATABLE, so say it.
+        ''|*[!0-9]*) fresh="freshness unmeasured" ;;
         0)           fresh="fresh" ;;
         1)           fresh="1 commit behind HEAD" ;;
         *)           fresh="$behind commits behind HEAD" ;;
