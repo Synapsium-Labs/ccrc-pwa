@@ -58,7 +58,13 @@
 
 **Modified — tests:**
 
-`server/test/session-hook.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleetstate.test.ts`, `server/test/fleet-health.test.ts`, `server/test/worker-skill.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-install-graphify.test.ts`, `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-doctor-graphify.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/runs-screen.test.tsx`, and 25 PWA/server fixture files that build a whole `FleetSession` literal.
+`server/test/session-hook.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleet.test.ts`, `server/test/fleetstate.test.ts`, `server/test/fleet-health.test.ts`, `server/test/bucket.test.ts`, `server/test/worker-skill.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-install-graphify.test.ts`, `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-doctor-graphify.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/runs-screen.test.tsx`, and 25 PWA/server fixture files that build a whole `FleetSession` literal.
+
+**TWO fixture shapes, not one:** the field lands on `FleetSession` *and* on `HookState`, and
+the `HookState` literals are a different spelling the `FleetSession` seds do not touch —
+`server/test/fleet.test.ts:24`'s `mkHookState`, `server/test/bucket.test.ts:298` and `:491`. Measured:
+adding `graphQueries` to `HookState` alone errors those three sites (`TS2769`/`TS2322`) with tsc
+otherwise clean, which is why both files are named above.
 
 ---
 
@@ -70,15 +76,15 @@
 - Modify: `shared/api.ts` (the `FleetSession` interface, `reviveFleetSession`'s literal)
 - Modify: `server/src/fleet.ts:431` (beside `subagents`)
 - Modify: `pwa/src/fleet/SessionLine.tsx`, `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/fleet.css`
-- Test: `server/test/session-hook.test.ts`, `server/test/hookstate.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/runs-screen.test.tsx`
-- Fixtures (mechanical): `server/test/fleetstate.test.ts`, `server/test/fleet-health.test.ts`, and 25 files under `pwa/test/`
+- Test: `server/test/session-hook.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleet.test.ts`, `server/test/fleetstate.test.ts`, `server/test/fleet-health.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/runs-screen.test.tsx`
+- Fixtures (mechanical): `server/test/bucket.test.ts` and `server/test/fleet.test.ts` (the two `HookState` literal shapes), and 25 files under `pwa/test/` plus `server/test/fleetstate.test.ts` / `server/test/fleet-health.test.ts` (the `FleetSession` shape)
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks (this is the first).
 - Produces:
   - hookstate JSON field name **`graphQueries`** (integer ≥ 0), written by `ccd/session-hook.sh`
-  - `HookState.graphQueries: number | null` (`server/src/hookstate.ts`)
-  - `FleetSession.graphQueries: number | null` (`shared/api.ts`), revived by `optNum(o, 'graphQueries')` under an integer guard
+  - `HookState.graphQueries: number | null` (`server/src/hookstate.ts`) — **the one reader the spec names**, and the only place the integer/non-negative contract is enforced: absent → `null`, a non-integer or negative rejects the whole read
+  - `FleetSession.graphQueries: number | null` (`shared/api.ts`), revived by the file's existing **`optNum(o, 'graphQueries')`** — absent or explicitly null → `null`, a non-number or non-finite value rejects the whole session. **Deliberately laxer than the reader above, and that is not an oversight:** `optNum` is `shared/api.ts`'s single reader for every numeric field (`shared/api.ts:1700`), a snapshot's value has already passed `hookstate.ts`'s guard on the server that wrote it, and a bespoke `optCount` here would be a second numeric-revive vocabulary in the L0 file — the thing "single-source-of-truth values are enumerated once" exists to stop. Say `optNum`, not "under an integer guard"; the guard lives one layer in.
   - shell regex constant **`GRAPH_QUERY_RE`** in `ccd/session-hook.sh`
   - CSS class **`.sess-graph`**, chip text `graph <N>`
 
@@ -225,26 +231,65 @@ state="" ask_json="null" interrupted="false" src="" gcmd=""
     # ONE payload read for the counter, on the one event that can carry a
     # command, and only for Bash: a tool_input.command on any other tool is
     # not a shell line this box ran.
-    gcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
-      <<<"$payload" 2>/dev/null) || gcmd="" ;;
+    #
+    # THE PREFILTER IS A BUDGET, NOT A STYLE CHOICE. This arm is the HOT PATH —
+    # `session-hook.test.ts` pins p95 of 20 PostToolUse runs under 150 ms, and
+    # a bare `jq` fork on this box measures ~5 ms against a ~46 ms run. A shell
+    # line that runs `graphify` CANNOT fail to put the eight characters
+    # `graphify` somewhere in the payload (JSON escaping never touches them),
+    # so a payload without them needs no jq at all and the common tool call
+    # pays nothing. `$gcmd` stays "" there, which the increment below already
+    # treats as "no command".
+    if [[ "$payload" == *graphify* ]]; then
+      gcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
+        <<<"$payload" 2>/dev/null) || gcmd=""
+    fi ;;
 ```
 
-(d) Add the carry/reset/increment block immediately after the existing `prev_state=` read (so it sits beside `subs`, the field it is modelled on, and before the subagent branch that may `exit 0`):
+(d) Fold the counter into the state-file read that is ALREADY there rather than adding a third fork against the same file. Replace the existing two lines
 
 ```bash
+subs=$(jq -c '.subagents // []' "$f" 2>/dev/null) || subs="[]"
+prev_state=$(jq -r '.state // empty' "$f" 2>/dev/null) || prev_state=""
+```
+
+with:
+
+```bash
+# ONE fork for all three fields (was two, and the counter would have made
+# three). Same hot-path budget as the arm above: `$f` is read on every event,
+# and `subs`/`prev_state` were already two forks over one file. Three values on
+# three LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
+# name as a backslash sequence, which would hand `--argjson subagents` a string
+# that is no longer JSON. `tostring` of a compact array contains no newline, so
+# line-splitting is safe where tab-splitting is not.
+#
 # The read counter survives state transitions exactly as `subs` does, and a
 # file that never carried the field reads as 0 — this is the WRITER, where 0
 # is the honest start; `hookstate.ts` is the reader, and there absent stays
-# `null` rather than folding to 0.
-gq=$(jq -r 'if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end' \
-  "$f" 2>/dev/null) || gq=0
+# `null` rather than folding to 0. A jq that fails (no file, corrupt file)
+# prints nothing, all three `read`s come up empty, and each falls back to the
+# degrade it already had. This file runs under `set -uo pipefail` and NOT
+# `set -e`, so a `read` hitting EOF is inert.
+subs=""; prev_state=""; gq=""
+{ read -r subs; read -r prev_state; read -r gq; } < <(jq -r \
+  '(.subagents // [] | tostring), (.state // ""),
+   (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end)' \
+  "$f" 2>/dev/null)
+[[ "$subs" == \[* ]] || subs="[]"
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0
 # `startup` and `clear` are new sessions; `resume` and `compact` are the SAME
 # session still going, and a counter that reset on compaction would erase the
 # evidence at precisely the moment the session most needed the card (R1).
+# `compact` never reaches this line at all — the SessionStart arm exits at its
+# compact guard (D-306) — so its carry is STRUCTURAL, protected by that exit
+# and not by this condition. `resume` is the source this condition protects.
 if [[ "$event" == SessionStart && ( "$src" == startup || "$src" == clear ) ]]; then gq=0; fi
 if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 ```
+
+The subagent branch below still reads `$subs` and `$prev_state` unchanged; only the number of forks
+that produced them changed.
 
 (e) Carry it onto the write. Replace the `out=$(jq -cn …)` invocation with:
 
@@ -269,6 +314,8 @@ cd server && ./node_modules/.bin/vitest run test/install-session-hooks.test.ts
 cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
 ```
 Expected: all PASS. (`install-session-hooks` proves the arm split did not change the derived event set; `macos-platform` proves `_hook_epoch_ms`'s two copies still agree.)
+
+**Watch `session-hook`'s p95 test specifically** (`'p95 of 20 runs stays under the budget (150ms CI allowance; 50ms target)'`). This task touches the `PostToolUse` hot path, which is exactly what that test exercises, and step 3's two measures exist for it: the fold in (d) keeps the state-file reads at ONE fork instead of three, and the `*graphify*` prefilter in (c) means the p95 fixture's own payload (`{hook_event_name:'PostToolUse', tool_name:'Bash'}`, no command at all) forks nothing new. Baseline on this box: ~46 ms/run, a bare `jq` fork ~5 ms. `session-hook` is on the known-load-flake list, so re-run it IN ISOLATION before treating a red p95 as a real break — but if it is genuinely over, the cause is a fork on that arm, not the reader.
 
 - [ ] **Step 5: Write the failing reader test**
 
@@ -321,7 +368,12 @@ describe('graphQueries', () => {
   });
 
   it('a non-integer, a negative or a non-number rejects the WHOLE read', async () => {
-    for (const bad of [1.5, -1, '3', NaN, {}]) {
+    // NOT `NaN`: this suite's `seed` helper `JSON.stringify`s the body, and
+    // `JSON.stringify(NaN)` is the string `null` — which reads back as a
+    // perfectly valid absent counter, so that element would fail the
+    // assertion rather than prove it. `true` is the fifth wrong TYPE and
+    // survives serialisation, which is what this loop is actually testing.
+    for (const bad of [1.5, -1, '3', true, {}]) {
       const reg = mkTmp('ccrc-hookstate-');
       seed(reg, ID, base({ graphQueries: bad }));
       expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW),
@@ -424,9 +476,9 @@ In `server/src/fleet.ts`, in the `const session: FleetSession = {` literal, imme
       graphQueries: hs?.graphQueries ?? null,
 ```
 
-- [ ] **Step 10: Update every fixture that builds a whole `FleetSession`**
+- [ ] **Step 10: Update every fixture, and PIN the null degrade at the assembly seam**
 
-Two shapes cover all 27 sites (a 28th, `s({ subagents: null })` in `pwa/test/session-line.test.tsx:267`, is a partial override and needs nothing). Run exactly:
+**(a) The `FleetSession` fixtures.** Two shapes cover all 27 sites (a 28th, `s({ subagents: null })` in `pwa/test/session-line.test.tsx:267`, is a partial override and needs nothing). Run exactly:
 
 ```bash
 cd "$CCRC_REPO"
@@ -436,13 +488,27 @@ grep -rl 'subagents: null,$' pwa/test server/test \
   | xargs sed -i 's/subagents: null,$/subagents: null, graphQueries: null,/'
 ```
 
-Then prove the compiler agrees:
+**(b) The `HookState` fixtures — a SECOND shape the two seds above cannot see.** Those seds match `FleetSession` wire literals (`subagents: null`); a `HookState` literal spells it `subagents: [], interrupted: false`, and adding a required field to `HookState` makes each one a tsc error. Measured: exactly three sites, all sharing one substring — `server/test/fleet.test.ts:24` (`mkHookState`), `server/test/bucket.test.ts:298` and `:491`. One sed does all three, and it writes `0` rather than `null` deliberately: these stand for a session whose hook DID report, which is what makes `fleet.test.ts`'s hookless-null test below a real contrast rather than a repetition.
+
+```bash
+cd "$CCRC_REPO"
+grep -rl 'subagents: \[\], interrupted: false' server/test \
+  | xargs sed -i 's/subagents: \[\], interrupted: false/subagents: [], graphQueries: 0, interrupted: false/'
+```
+
+**(c) Pin the null degrade — three one-line assertions, without which Step 15's `?? 0` mutation row is a comment.** The seds above only touch *inputs*; nothing yet asserts what an assembled or revived session reports. The analogous field is pinned in all three places already, so put `graphQueries` beside `subagents` in each:
+
+- `server/test/fleet.test.ts` — in `it('a hookless session carries all three fields as null')` (the `expect(s.subagents).toBeNull()` at ~:564), add `expect(s.graphQueries).toBeNull();` and rename the test to **`'a hookless session carries all four fields as null'`**.
+- `server/test/fleetstate.test.ts` — beside `expect(s?.subagents).toBeNull()` (~:112) add `expect(s?.graphQueries).toBeNull();`, and add `'graphQueries'` to the `Object.keys(...)` `arrayContaining` list on the next line. (That list is hand-kept: a field revived as `undefined` instead of `null` would be silently omitted from `Object.keys`, which is the whole point of the assertion.)
+- `server/test/fleet-health.test.ts` — beside `expect(body.sessions[0]?.subagents).toBeNull()` (~:167) add `expect(body.sessions[0]?.graphQueries).toBeNull();`.
+
+**(d)** Then prove the compiler agrees:
 
 ```bash
 cd "$CCRC_REPO"/server && npx tsc --noEmit -p test/tsconfig.tests.json
 cd "$CCRC_REPO"/pwa && npx tsc --noEmit
 ```
-Expected: both clean. Any site the sed missed is named by tsc with a file and line — add `graphQueries: null,` beside that literal's `subagents:` entry.
+Expected: both clean. Any site a sed missed is named by tsc with a file and line — add `graphQueries: null,` beside that literal's `subagents:` entry (or `graphQueries: 0,` if it is a `HookState`).
 
 - [ ] **Step 11: Write the failing PWA chip tests**
 
@@ -581,10 +647,18 @@ Measure each mutation and record the result in the commit body. For each: apply,
 | drop `graphQueries:$graphQueries` from the hook's `jq -cn` object | `ccd/session-hook.sh` | `session-hook` — every `graphQueries` assertion |
 | change `(query\|path\|explain)` to `(query\|path\|explain\|update)` | `ccd/session-hook.sh` | `session-hook` — "does NOT count graphify update…" |
 | delete the `SessionStart && (startup\|clear)` reset line | `ccd/session-hook.sh` | `session-hook` — "resets to 0 on SessionStart(startup)…" |
-| add `compact` to that reset condition | `ccd/session-hook.sh` | `session-hook` — "is KEPT across resume and across compact…" |
+| change that reset condition's `"$src" == clear` to `"$src" == resume` | `ccd/session-hook.sh` | `session-hook` — "is KEPT across resume and across compact…" AND "resets to 0 on SessionStart(startup) and SessionStart(clear)" |
+| delete the `[[ "$src" == compact ]] && exit 0` guard in the `SessionStart` arm | `ccd/session-hook.sh` | `session-hook` — the existing D-306 "writes nothing on compact" tests |
 | make `reviveGraphQueries` return `0` for `undefined` | `server/src/hookstate.ts` | `hookstate` — "ABSENT is null…" |
-| change `graphQueries: hs?.graphQueries ?? null` to `?? 0` | `server/src/fleet.ts` | `fleet` / `fleet-health` — a null row reports 0 |
+| change `graphQueries: hs?.graphQueries ?? null` to `?? 0` | `server/src/fleet.ts` | `fleet` — "a hookless session carries all four fields as null" (Step 10c); `fleet-health`/`fleetstate` red too if the cached-snapshot path is mutated the same way |
 | change the chip's `!== null` to a truthiness test | `pwa/src/fleet/SessionLine.tsx` | `session-line` — "renders graph 0…" |
+
+**Why "add `compact` to the reset condition" is NOT in this table:** it cannot go red in either
+direction. A `SessionStart` whose source is `compact` exits at the arm's own compact guard
+(`ccd/session-hook.sh:123`, D-306) before the counter block is ever reached, so that leg of the
+condition is unreachable code. Compact's carry is **structural** — protected by the early exit, and
+pinned by the D-306 tests the third row above reddens — not by the reset condition. Claiming it here
+would be exactly the guard-that-is-a-comment this table exists to prevent.
 
 - [ ] **Step 16: Commit**
 
@@ -771,7 +845,21 @@ describe('the SessionStart graph card', () => {
   it('exits 0 and prints nothing when cwd does not exist', () => {
     // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
     // assertion — the contract this whole file lives under.
-    expect(run({ hook_event_name: 'SessionStart', cwd: path.join(home, 'gone') })).toBe('');
+    //
+    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
+    // nothing seeded, deleting that guard is invisible: the no-graph branch is
+    // taken anyway, the census read finds no file, and the card stays silent —
+    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
+    // directory check would print the sweep's line about a directory that is
+    // not there, and this assertion goes red.
+    const gone = path.join(home, 'gone');
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
   });
 
@@ -941,7 +1029,7 @@ Expected: all PASS. If `session-hook`'s p95 budget test is the only red, re-run 
 | delete the `[ ! -f "$cwd/graphify-out/graph.json" ]` early return and emit unconditionally | "prints NOTHING when the tree has no graph and the sweep never mentioned it" |
 | move the card call below `[[ "$src" == compact ]] && exit 0` | "is printed for compact too…" |
 | replace `fresh=""` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "exits 0 and still prints a card when the tree is not a git repo" |
-| delete `[ -d "$cwd" ] \|\| return 0` and let git run on a missing dir | "exits 0 and prints nothing when cwd does not exist" (the hook must still exit 0) |
+| delete `[ -d "$cwd" ] \|\| return 0` and let the census read run on a missing dir | "exits 0 and prints nothing when cwd does not exist" — the card prints the sweep's row for a directory that is not there (this is why that test now seeds a census row for `$home/gone`; without it the mutation is invisible and the row would be a comment) |
 
 - [ ] **Step 6: Commit**
 
@@ -1084,9 +1172,18 @@ git commit -m "feat(worker-skill): clause 12 sends a codebase question to the gr
 
 In `server/test/ccrc-install-graphify.test.ts`:
 
-1. **Delete** the describe `'ccrc install: the read rule refuses malformed files rather than splicing (D-1244)'` in full.
-2. **Delete** the describe `'ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'` in full.
-3. **Keep** the engine, noise-list, exclude-writer and hooks-off describes untouched, and keep the `'README: the graphify step enumeration is DERIVED, not remembered (D-1243)'` describe for now (Task 6 retargets it).
+1. **Delete** the describe `'ccrc install: the read rule refuses malformed files rather than splicing (D-1244)'` (line ~552) in full.
+2. **Delete** the describe `'ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'` (line ~737) in full — **except one `it`, which MOVES into the new describe below rather than dying with it.** That describe holds the structural source scan `it('splices with line-addressed sed and no awk at all — the BSD -v hazard is retired, not guarded')` (~:883–908), which is the tree's ONLY defence against `awk` returning to this splice; `macos-platform.test.ts`'s corpora do not ban `awk` at all. The remover reuses the very same `sed -n "1,$((…-1))p"` construction, so retiring the guard while keeping the code it guards would leave the hazard uncovered. Carry it over with two edits and nothing else — the anchor and the addressed variable:
+
+```typescript
+    const at = src.indexOf('_inst_graph_always_on_off() {');
+```
+```typescript
+    expect(body, 'the sed splice went missing').toMatch(/sed -n "1,\$\(\(lb-1\)\)p"/);
+```
+
+  Its executable-line scrape (`.filter((l) => l && !l.startsWith('#'))`) and its `not.toMatch(/(^|[^a-z])awk\s/m)` assertion apply unchanged — the remover's comments discuss `awk` by name for the same reason the converge's did.
+3. **Keep** the engine, noise-list, exclude-writer and hooks-off describes untouched, and keep the `'README: the graphify step enumeration is DERIVED, not remembered (D-1243)'` describe (line ~685) for now — Task 6 retargets it. Its `it('the README documents the READ side, not only the write side')` asserts `toMatch(/graphify query/)` against the README, and README.md:1515 — the single occurrence of that string in the whole file — sits inside the paragraph Step 4 below replaces. **Step 4's replacement paragraph therefore carries `graphify query` deliberately**, so this describe stays green in the commit that invalidates the text around it. Do not drop that token from the paragraph "to tighten it".
 4. Add this describe in their place:
 
 ```typescript
@@ -1100,7 +1197,7 @@ In `server/test/ccrc-install-graphify.test.ts`:
 //
 // The remover is D-1244's own hardened census doing its last job — same
 // whole-line marker census, same exactly-one-ordered-pair rule, same symlink
-// resolution, same mode preservation, same "left in place — remove by hand"
+// resolution, same mode preservation, same "left in place; remove by hand"
 // for anything that is not provably wholly ccrc's — deleting lines ls..le
 // instead of splicing a block in. `_inst_graph_hooks_off` is the idiom: ccrc
 // already has a step whose whole job is removing what an earlier layer
@@ -1135,9 +1232,17 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     // `sed -n "1,0p"` does NOT print nothing — an addr2 at or below addr1 makes
     // sed match the ONE line at addr1 — and line 1 is exactly where the append
     // path put the block for a home that had no CLAUDE.md at all.
+    //
+    // NO BLANK LINE AFTER THE BLOCK, and that is the fixture being faithful
+    // rather than convenient: the append path (`ccd/ccrc:5321-5326`) writes the
+    // block LAST, `printf '%s\n' "$want"` with nothing after it, so a trailing
+    // blank is never a shape the converge produced. `lb` only ever absorbs the
+    // ONE blank line the append path wrote BEFORE a block, and at line 1 there
+    // is none — the remover must not learn to eat a trailing blank, because
+    // that whitespace would be the operator's, not ccrc's.
     const home = freshBox('ccrc-inst-gfx-off-line1-');
     plantFakeVenv(home);
-    const f = seed(home, `${BLOCK}\n\n## OPERATOR\n- keep me\n`);
+    const f = seed(home, `${BLOCK}\n## OPERATOR\n- keep me\n`);
     expect(runInstall(home, ['install']).code).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe('## OPERATOR\n- keep me\n');
   });
@@ -1158,7 +1263,12 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
     expect(readFileSync(f, 'utf8'), 'a half block was deleted instead of reported').toBe(text);
-    expect(r.stderr).toMatch(/left in place — remove by hand/);
+    // SEMICOLON, not an em dash: the tree's own idiom for this refusal is
+    // `— left in place; remove by hand` (`_inst_graph_hooks_off`, ccd/ccrc:5411,
+    // and the unmarked-section refusal at :5249). The spec quotes the phrase
+    // with a second em dash; the tree is what ships, and D-1247 records the
+    // divergence rather than making this file the odd one out.
+    expect(r.stderr).toMatch(/left in place; remove by hand/);
     expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
     expect(r.stdout).toMatch(/degraded step/);
   });
@@ -1190,8 +1300,18 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
     plantFakeVenv(home);
     const text = `# head\n\nccrc wrote between ${START} and ${END} in this file.\n\n- keep\n`;
     const f = seed(home, text);
-    expect(runInstall(home, ['install']).code).toBe(0);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
     expect(readFileSync(f, 'utf8'), 'a sentence mentioning the markers was cut').toBe(text);
+    // THE POSITIVE HALF, and the census mutation's only red. Byte-identity
+    // alone is satisfied by a substring census too: with `grep -cF` the prose
+    // line makes ns=1/ne=1, `grep -nxF` then finds no line, `ls`/`le` come back
+    // EMPTY, every `[` on them errors non-zero (this file runs `set -uo
+    // pipefail`, never `-e`), the splice fails and the `if !` arm leaves the
+    // file untouched — the same bytes, arrived at by accident. What that path
+    // cannot fake is the count: it takes the refusal branch, so `kept` is 1.
+    expect(r.stdout, 'the census matched a marker QUOTED in prose')
+      .toMatch(/always-on read rule — 0 home\(s\) cleared, 0 left in place/);
   });
 
   it('SKIPS a symlink this box cannot resolve — never writes through one', () => {
@@ -1323,8 +1443,10 @@ Delete the whole `# ── _inst_graph_always_on — the READ side, which had no
 # `_inst_graph_hooks_off` IS THE IDIOM, not a wart: ccrc already has a step
 # whose whole job is removing what an earlier layer planted, and it states the
 # rule this one follows — anything not provably WHOLLY ccrc's own is "left in
-# place — remove by hand", counted, and reported. This step stays in the tree
-# afterwards exactly as that one does.
+# place; remove by hand", counted, and reported. That is the TREE's spelling of
+# the phrase (ccd/ccrc:5411 and :5249), not the spec's em-dashed one; D-1247
+# records the divergence, and the half-block test asserts the semicolon. This
+# step stays in the tree afterwards exactly as that one does.
 _inst_graph_always_on_off() {
   [ "$INST_ROLE" = server ] && return 0
   local n=0 kept=0 ts backups
@@ -1436,25 +1558,42 @@ Rename the call in `cmd_install`'s sequence:
 
 - [ ] **Step 4: Replace the README's read-side paragraph**
 
-In `README.md`, replace the whole "**Reading the graph, which is a separate problem from keeping it fresh.**" paragraph with:
+In `README.md`, replace the whole "**Reading the graph, which is a separate problem from keeping it fresh.**" paragraph (README.md:1513–1526) with:
 
 ```markdown
 **Reading the graph, which is a separate problem from keeping it fresh.** Everything above serves
-the WRITE path, and for three deviations nothing served the read path at all. D-1243's answer —
-converging graphify's packaged `always_on/claude-md.md` into every rostered home's config-dir
-`CLAUDE.md` — was wrong on both counts and D-1245 retired it: that block is written for a PROJECT
-file ("This project has a knowledge graph at graphify-out/"), so account-wide it asserts that of
-every project the account opens, including the trees the sweep refuses; and the file is the
-*operator's*, not ccrc's, which is the sole reason every one of D-1244's six data-loss classes
-existed at all. Measured over the week it was deployed: 109 `query`/`path`/`explain` calls across 4
-corpora, 103 of them in the one repository whose *project* `CLAUDE.md` had carried graphify's block
-since July, and zero in ccrc-pwa — the busiest project on the fleet, with five fresh graphs.
-`_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census: whole-line
-markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and SKIPPED when
-they cannot be), the file's own mode preserved, backed up before every write. Anything else is *left
-in place — remove by hand*, counted, and reported as a degraded step. It is `_inst_graph_hooks_off`'s
-shape and stays in the tree the same way. The read side that replaced it is below.
+the WRITE path, and for three deviations nothing served the read path at all: measured across the
+five rostered homes, the rule "for codebase questions, run `graphify query` first" appeared in
+**none** of them. D-1243's answer was graphify's own packaged block, `always_on/claude-md.md`,
+appended to every rostered home's config-dir `CLAUDE.md` between ccrc's markers — and **D-1245
+retired it**, because it was wrong on two counts. That block is written for a PROJECT file ("This
+project has a knowledge graph at graphify-out/"), so account-wide it asserted that of every project
+the account opens, including the trees the sweep refuses; and the file is the *operator's*, not
+ccrc's, which is the sole reason every one of D-1244's six data-loss classes existed at all.
+Measured over the week it was deployed: 109 `query`/`path`/`explain` calls across 4 corpora, 103 of
+them in the one repository whose *project* `CLAUDE.md` had carried graphify's block since July, and
+zero in ccrc-pwa — the busiest project on the fleet, with five fresh graphs.
+`_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census:
+whole-line markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and
+SKIPPED when they cannot be), the file's own mode preserved, backed up before every write. Anything
+else is *left in place; remove by hand*, counted, and reported as a degraded step. It is
+`_inst_graph_hooks_off`'s shape and stays in the tree the same way. What replaced it — starting with
+the `SessionStart` card that tells a session to run `graphify query` before it greps — is below.
 ```
+
+**Two constraints on any rewording of this paragraph, both of them mechanised:**
+
+1. It **must** contain the literal `graphify query`. README.md:1515 is the file's only occurrence, it
+   lives inside the text being replaced, and `it('the README documents the READ side, not only the
+   write side')` (kept by Step 1 item 3, retargeted only in Task 6) asserts `toMatch(/graphify query/)`.
+   Drop the token and this task's own Step 5 goes red.
+2. It **must not** put a present-tense `converges`/`writes`/`installs`/`plants`/`puts` in front of
+   `block`/`read rule` … `CLAUDE.md`, or in front of `always_on/claude-md.md` — Task 6's derived guard
+   forbids exactly that, and only that. Saying what D-1243 **did** is allowed and is the point of the
+   paragraph; saying ccrc **does** it is what the guard catches. (The earlier draft of this paragraph
+   read "converging graphify's packaged `always_on/claude-md.md` into every rostered home's…", which
+   the guard's first spelling matched on the bare path-then-`into` sequence; both halves were fixed —
+   the paragraph now separates the path from `into`, and the guard now requires a present-tense verb.)
 
 - [ ] **Step 5: Run the suites**
 
@@ -1472,7 +1611,7 @@ Expected: all PASS.
 
 | mutation | expected red |
 |---|---|
-| change `grep -cxF` to `grep -cF` (substring census) | "treats markers QUOTED in the operator's prose as prose" |
+| change `grep -cxF` to `grep -cF` (substring census) | "treats markers QUOTED in the operator's prose as prose" — on its `0 cleared, 0 left in place` assertion, NOT on its byte-identity one. Measured: the substring census makes `ns`/`ne` 1, `grep -nxF` still finds no line, `ls`/`le` are empty, the `[` comparisons error non-zero, the splice fails and the `if !` arm leaves the file alone — byte-identical by accident, but `kept` is 1 and stdout reads `0 home(s) cleared, 1 left in place` |
 | relax `[ "$ns" -ne 1 ] \|\| [ "$ne" -ne 1 ]` to `[ "$ns" -lt 1 ]` | "leaves a HALF block in place…" and "leaves TWO blocks in place…" |
 | drop the `[ -z "$phys" ]` skip and fall back to the link path | "SKIPS a symlink this box cannot resolve" |
 | replace `chmod "$mode"` with `chmod 644` | "preserves the file's own mode…" |
@@ -1570,13 +1709,23 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
   });
 
   it('never touches /usr/local/bin/graphify', () => {
+    // THE SLICE STARTS AT THE SIGNATURE, so the function's HEADER comment —
+    // which does name that path, and should, since it is the reason the write
+    // side resolves the engine absolutely — is outside it. Everything from
+    // `_inst_graphify_engine() {` to the closing brace is in, comments
+    // included, so no sentence inside the body may spell the path either.
+    // `ccd/ccrc` carries three other mentions of `_inst_graphify_engine`
+    // (the pin's single-definition comment, `cmd_install`'s sequence, and the
+    // hooks-off header), none of them followed by `() {`, so the anchor is
+    // unambiguous.
     const home = freshBox('ccrc-inst-gfx-path-root-');
     plantFakeVenv(home);
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
     const src = readFileSync(join(treeRoot(home), 'ccd', 'ccrc'), 'utf8');
-    const fn = src.slice(src.indexOf('_inst_graphify_engine() {'));
-    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    const at = src.indexOf('_inst_graphify_engine() {');
+    expect(at, 'the function scan went vacuous').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
     expect(body, 'the converge names a path outside $HOME').not.toMatch(/\/usr\/local\/bin/);
   });
 
@@ -1615,8 +1764,16 @@ In `ccd/ccrc`, append to `_inst_graphify_engine`, after the `printf '%s\n' "$GRA
   # shim (matched BY CONTENT — a `#!` first line and a `from graphify.__main__
   # import main` line, the shape measured on this fleet, never assumed);
   # REFUSE anything else, because a hand-written launcher is the operator's and
-  # this step has no `--force` for anyone to type. `/usr/local/bin/graphify` is
-  # root-owned and is never named here at all — only `$HOME/.local/bin`.
+  # this step has no `--force` for anyone to type.
+  #
+  # ONE PATH ONLY: `$HOME/.local/bin`. The root-owned copy a shared box may
+  # carry higher up the system tree is an unprivileged install's business
+  # nowhere — the header above this function already says why — and it is not
+  # spelled out anywhere inside this body, because the guard
+  # `it('never touches /usr/local/bin/graphify')` slices this function from
+  # `_inst_graphify_engine() {` to its closing brace and refuses that literal.
+  # The slice starts AT the signature, so the header comment is outside it;
+  # a sentence like this one is inside. Name the path in the header, never here.
   local gpath="$HOME/.local/bin/graphify" gvenv="$venv/bin/graphify" gcur=""
   if ! mkdir -p "$HOME/.local/bin" 2>/dev/null; then
     echo "install: graphify: cannot create \$HOME/.local/bin — bare 'graphify' still resolves to whatever is on PATH" >&2
@@ -1721,13 +1878,28 @@ describe('ccrc doctor: graphify-path', () => {
 });
 ```
 
-In `server/test/ccrc-doctor.test.ts`'s `healthy()` fixture, after the graphify venv/pin writes (~line 997), add the same link so every summary-count test keeps its "every check PASSES" contract:
+In `server/test/ccrc-doctor.test.ts`'s `healthy()` fixture, after the graphify venv/pin writes (~line 997), add the link **and a real `realpath`** so every summary-count test keeps its "every check PASSES" contract:
 
 ```typescript
   writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
   // R3: `graphify-path` is a check, and healthy()'s contract is that every
   // check PASSES. `<home>/.local/bin` is already the head of the contained
-  // PATH, so the link is what `command -v graphify` finds.
+  // PATH (`ghContainedEnv` -> `harnessBin`, which also creates the directory),
+  // so the link is what `command -v graphify` finds.
+  //
+  // `linkReal(home, 'realpath')` IS LOAD-BEARING, not tidiness. This file's
+  // contained PATH is `<home>/.local/bin:<home>/stub-bin` and NO system
+  // directory — it links in only jq, timeout, stat and date. `_check_graphify-path`
+  // resolves both sides with `realpath` and falls back to the UNRESOLVED path
+  // when it is unavailable; without a real one on PATH the two sides are the
+  // link path and the engine path, they differ, and the check FAILs on a box
+  // whose whole contract is that nothing fails. Measured: with `realpath` on
+  // PATH the check PASSes; without it, `FAIL graphify-path` and rc=1, which
+  // reds `runDoctor(healthy(...)).code === 0`, the `fail === 0` assertion and
+  // the `"… 1 warned, 1 failed"` summary pin. (`ccrc-doctor-graphify.test.ts`
+  // already links a real `realpath` in its own `healthy()`, which is why the
+  // new check is green there and would not have been here.)
+  linkReal(home, 'realpath');
   symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     join(home, '.local', 'bin', 'graphify'));
 ```
@@ -1799,6 +1971,13 @@ _check_graphify-path() {
       "run: ccrc install — it links \$HOME/.local/bin/graphify at the pinned venv"
     return 1
   fi
+  # `realpath` is explicitly ALLOWED by `macos-platform.test.ts` (so is
+  # `readlink -f`), and both sides are resolved with the SAME tool so a box
+  # without it degrades symmetrically: each side falls back to its own
+  # unresolved path. That fallback is honest but blunt — the link path and the
+  # engine path are never equal — so any FIXTURE that expects a PASS here must
+  # carry a real `realpath` on its contained PATH. Both doctor suites do; see
+  # the `linkReal(home, 'realpath')` note in Step 5.
   resolved="$(realpath "$found" 2>/dev/null)" || resolved=""
   [ -n "$resolved" ] || resolved="$found"
   want="$(realpath "$engine" 2>/dev/null)" || want=""
@@ -1882,14 +2061,25 @@ In `server/test/ccrc-install-graphify.test.ts`, replace the `it('the README docu
   });
 
   it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {
-    // DERIVED, not a spelling test: the README may (and does) say that the
-    // remover TAKES BACK a block from a CLAUDE.md. What it may never say again
-    // is that ccrc PUTS one there — the sentence that made a project-scoped
-    // instruction account-wide in a file ccrc does not own.
+    // THE RULE THIS GUARD ENFORCES, in one sentence, so the next editor of
+    // README.md does not trip it by accident: the README may say what D-1243
+    // DID — past tense, and that history is the whole point of the paragraph
+    // above — and may say that `_inst_graph_always_on_off` TAKES a block back;
+    // what it may never say again is that ccrc, in the PRESENT tense, puts one
+    // into a `CLAUDE.md`. Both patterns therefore hinge on a present-tense
+    // verb, and neither fires on `converged`/`wrote`/`appended`/`planted`.
+    //
+    // DERIVED, not a spelling test. The second pattern was once written as a
+    // bare `always_on/claude-md\.md`? into` — no verb at all — and it matched
+    // the honest history sentence in the paragraph above, forcing a choice
+    // between the guard and the record. A guard that forbids the truth is a
+    // guard nobody can keep.
     const flat = readme.replace(/\s+/g, ' ');
-    expect(flat, "the README describes ccrc writing a read rule into a CLAUDE.md again")
-      .not.toMatch(/(converges|writes|installs|plants)[^.]{0,140}(block|read rule)[^.]{0,140}CLAUDE\.md/i);
-    expect(flat).not.toMatch(/always_on\/claude-md\.md`? into/i);
+    const NOW = /\b(converges|writes|installs|plants|puts)\b/.source;
+    expect(flat, 'the README describes ccrc writing a read rule into a CLAUDE.md again')
+      .not.toMatch(new RegExp(`${NOW}[^.]{0,140}\\b(block|read rule)\\b[^.]{0,140}CLAUDE\\.md`, 'i'));
+    expect(flat, "the README says ccrc installs graphify's packaged block again")
+      .not.toMatch(new RegExp(`${NOW}[^.]{0,140}always_on/claude-md\\.md`, 'i'));
   });
 ```
 
@@ -1914,7 +2104,7 @@ Immediately after the "**Reading the graph…**" paragraph Task 4 wrote, insert:
 
 ```markdown
 **What replaced it: four mechanisms, each in an artifact ccrc owns outright.** The rule D-1245 states
-is that the read side lives only where ccrc installs and owns the file, and that its effect is
+is that the read side lives only where ccrc owns the file it is written in, and that its effect is
 *measured* rather than asserted.
 
 - **The graph card.** On `SessionStart` — every source, `compact` included, because compaction is
@@ -1969,11 +2159,13 @@ Expected: PASS — including "the README's count matches the number of steps tha
 | mutation | expected red |
 |---|---|
 | delete the `graphQueries` bullet from the README | "the README documents the read side as it now is…" |
-| re-insert the sentence "`_inst_graph_always_on` converges graphify's own packaged block … into every rostered home's `CLAUDE.md`" | "never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)" |
+| re-insert the sentence "`_inst_graph_always_on` converges graphify's own packaged block into every rostered home's `CLAUDE.md`" | "never again describes the read side…" — measured red on the FIRST pattern |
+| re-insert the sentence "`_inst_graph_always_on` installs graphify's packaged `always_on/claude-md.md` in each rostered home" | "never again describes the read side…" — measured red on the SECOND pattern (one row per pattern: a table row that only ever reddens one of two assertions leaves the other unmeasured) |
+| replace Task 4's paragraph with the earlier draft ("converging graphify's packaged `always_on/claude-md.md` into every rostered home's…") | **stays GREEN, and must** — this is the history the README is there to record, and the guard's job is to forbid the present-tense claim, not the past-tense one. If this mutation goes red, the guard was re-widened and the paragraph and the guard are fighting again |
 
 - [ ] **Step 7: Re-check the deviation number against `origin/main`**
 
-The ledger allocation rule: grep `origin/main` across BOTH `docs/` and source, take the next number. `origin/main` carries `D-1244` today (PR #44, merged as `651f40c5`), so `D-1245` is expected — but re-measure at commit time, because another branch may have landed in between:
+The ledger allocation rule: grep `origin/main` across BOTH `docs/` and source, take the next number. `origin/main` carries `D-1244` today (PR #44, merged as `651f40c5`; re-measured at plan-review time and still `D-1244`), so this plan's three entries are `D-1245`, `D-1246` and `D-1247` — but re-measure at commit time, because another branch may have landed in between:
 
 ```bash
 cd "$CCRC_REPO"
@@ -1981,7 +2173,7 @@ git fetch origin main --quiet
 git grep -ohE 'D-1[0-9]{3}' origin/main -- docs/ ccd/ server/ agent/ pwa/ shared/ deploy/ README.md CLAUDE.md \
   | sort -u | tail -5
 ```
-Expected: `…D-1242 D-1243 D-1244`. If the highest is **not** D-1244, renumber `D-1245`/`D-1246` in this plan AND in every source comment and test name Tasks 4 and 6 wrote (`git grep -n 'D-1245\|D-1246'` finds them all) to the next two free numbers, then re-run `server/test/deviation-refs.test.ts`.
+Expected: `…D-1242 D-1243 D-1244`. If the highest is **not** D-1244, renumber `D-1245`/`D-1246`/`D-1247` in this plan AND in every source comment and test name Tasks 4, 5 and 6 wrote (`git grep -n 'D-1245\|D-1246\|D-1247'` finds them all) to the next three free numbers, then re-run `server/test/deviation-refs.test.ts`.
 
 - [ ] **Step 8: Run the whole suite, in the foreground**
 
@@ -2036,6 +2228,17 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   arm, reached by a different route. The census is still read, for the refusal reason on a tree with
   no graph, and the reader now takes `.passes | last` rather than the top level.
 
+- **D-1247** (2026-09-02) — the spec quotes the remover's refusal phrase as *"left
+  in place — remove by hand"* (§2 R0, spec line 75), with an em dash before the remedy. **The tree
+  spells it with a semicolon**, in both places that already say it: `_inst_graph_hooks_off`'s chained-
+  content refusal (`ccd/ccrc:5411`, "— left in place; remove by hand") and the converge's unmarked-
+  section refusal (`ccd/ccrc:5249`, "— left in place; remove it by hand"). The remover is explicitly
+  built as `_inst_graph_hooks_off`'s idiom, so it follows the tree: every `_inst_graph_always_on_off`
+  refusal ends `— left in place; remove by hand`, and Task 4's half-block test asserts
+  `/left in place; remove by hand/`. Recorded because the mismatch was live for one review cycle in
+  the opposite direction — the plan's test regex carried the spec's em dash against messages that
+  never had one, which no message in the function could ever have satisfied.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
@@ -2052,3 +2255,22 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   so **no installer change is needed**. Its guard derives the expected set from
   `/^\s{2}([A-Za-z|]+)\)/` over the hook's `case` block, which is why Task 1 may split
   `UserPromptSubmit|PostToolUse)` into two two-space-indented arms without changing what is wired.
+- **`server/test/ccrc-doctor.test.ts`'s contained PATH carries no `realpath`.** It is
+  `<home>/.local/bin:<home>/stub-bin` and no system directory, and that file `linkReal`s only `jq`,
+  `timeout`/`gtimeout`, `stat` and `date` at fixture level. `ccrc-doctor-graphify.test.ts` DOES link a
+  real `realpath` in its own `healthy()`, which is why R3's new check is green there and would have
+  been red in the other file on a fixture whose contract is that every check PASSES. Task 5 Step 5
+  adds `linkReal(home, 'realpath')` for exactly this reason; do not drop it as redundant.
+- **`optNum` is not an integer guard.** `shared/api.ts:1700` rejects only non-numbers and non-finite
+  values, so the WIRE accepts `1.5` and `-1` while `server/src/hookstate.ts` — the one reader the spec
+  names — rejects them. That asymmetry is deliberate and is now stated in Task 1's Interfaces block;
+  the plan's earlier wording ("revived by `optNum` under an integer guard") described a guard that
+  does not exist in that function.
+- **The counter's fixtures come in TWO shapes.** `FleetSession` literals spell it `subagents: null`;
+  `HookState` literals spell it `subagents: [], interrupted: false`. The two `FleetSession` seds reach
+  27 sites and cannot see the three `HookState` ones (`server/test/fleet.test.ts:24`,
+  `server/test/bucket.test.ts:298` and `:491`) — measured as `TS2769`/`TS2322` with tsc otherwise
+  clean. Task 1 Step 10 carries a third sed for them.
+- **`ccd/session-hook.sh` runs `set -uo pipefail` and NOT `set -e`** (`ccd/session-hook.sh:10`), which
+  is what makes Task 1's folded three-value `read` safe: a `read` that hits EOF because `jq` failed is
+  inert, and each variable falls back to the degrade it already had.
