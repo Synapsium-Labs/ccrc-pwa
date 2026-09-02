@@ -2162,7 +2162,7 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 (`c6d38193`), which is why the shipped section is NOT the draft below: this text was written before
 Tasks 1–5 shipped, and transcribing it verbatim would have put five stale claims into the canonical
 overview (the freshness vocabulary of D-1353/D-1336, the converge arms of D-1348/D-1351/D-1352, the
-doctor's SKIP of D-1350, `graphReadCount` from D-1251, the card's clipping from D-1334). Not a
+doctor's SKIP of D-1350, `graphReadCount` from D-1251, the card's clipping from D-1335). Not a
 deviation — read the shipped section, not this draft.
 
 Immediately after the "**Reading the graph…**" paragraph Task 4 wrote, insert:
