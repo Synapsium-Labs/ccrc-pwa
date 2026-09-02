@@ -5232,11 +5232,16 @@ $end"
     fi
     if [ -n "$cur" ] && grep -qF "$start" "$f" 2>/dev/null; then
       # REPLACE between the markers, leaving every other line untouched
-      awk -v s="$start" -v e="$end" -v repl="$want" '
-        index($0,s){print repl; skip=1; next}
-        skip && index($0,e){skip=0; next}
-        skip{next}
-        {print}' "$f" > "$f.tmp.$$"         || _ccrc_die "could not rewrite $f"
+      # THREE PIECES, NOT ONE AWK, and the reason is portability rather than
+      # taste: BSD awk (macOS) refuses a NEWLINE inside a `-v` assignment —
+      # "awk: newline in string" — while GNU awk accepts it. So passing the
+      # multi-line block as `-v repl=` worked on every Linux run here and broke
+      # only on the macOS CI leg, which is the one that caught it. Each `-v`
+      # below carries a single line, and the block never goes through awk at all.
+      { awk -v s="$start" 'index($0,s){exit} {print}' "$f"
+        printf '%s\n' "$want"
+        awk -v e="$end" 'seen{print} index($0,e){seen=1}' "$f"
+      } > "$f.tmp.$$" || _ccrc_die "could not rewrite $f"
     else
       { [ -n "$cur" ] && printf '%s\n\n' "$cur"; printf '%s\n' "$want"; } > "$f.tmp.$$"         || _ccrc_die "could not write $f"
     fi

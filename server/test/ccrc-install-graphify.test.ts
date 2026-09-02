@@ -689,6 +689,27 @@ describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'
     }
   });
 
+  it('never hands awk a multi-line -v value — BSD awk refuses one and only macOS CI can see it', () => {
+    // A SOURCE RULE, deliberately, and its limits are worth stating. The defect
+    // is invisible on Linux: GNU awk accepts a newline inside `-v repl=...`
+    // while BSD awk (macOS) answers "awk: newline in string" and the rewrite
+    // dies. Every Linux run here was green; the macOS CI leg is what caught it.
+    // No fixture on this platform can reproduce that, so the mechanism
+    // available is to forbid the shape that causes it — `$want` is the one
+    // multi-line value in this function, and it must never reach an `-v`.
+    const src = readFileSync(path.resolve(here, '../../ccd/ccrc'), 'utf8');
+    const fn = src.slice(src.indexOf('_inst_graph_always_on() {'));
+    const body = fn.slice(0, fn.indexOf('\n}\n'));
+    expect(body, 'the function scan went vacuous').toContain('awk -v');
+    expect(body, 'the multi-line block was passed to awk -v; BSD awk refuses it')
+      .not.toMatch(/awk[^\n]*-v\s+\w+="\$want"/);
+    // and every -v value it does pass must be one of the single-line markers
+    for (const m of body.matchAll(/awk[^\n]*?-v\s+(\w+)="\$(\w+)"/g)) {
+      expect(['start', 'end'], `awk -v ${m[1]}="$${m[2]}" passes a value that may span lines`)
+        .toContain(m[2]);
+    }
+  });
+
   it('is skipped entirely on a server-role box', () => {
     const home = freshBox('ccrc-inst-gfx-alwayson-server-');
     plantFakeVenv(home);

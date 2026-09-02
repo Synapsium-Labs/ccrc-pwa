@@ -126,6 +126,26 @@ the same mental model as the code, so it reproduced the code's blind spot instea
 it. Only running the mutation exposes that, which is why the table is measured and not
 asserted.
 
+## A third defect, and the only one no test here could have found
+
+`test-macos` went red on the PR: **`awk: newline in string`**. The replace path passed the
+whole multi-line block as `awk -v repl="$want"`. GNU awk accepts a newline inside a `-v`
+assignment; **BSD awk, which macOS ships, refuses it** — so the rewrite died there and nowhere
+else. Every Linux run in this repo was green, including seven mutation runs and two full
+suites.
+
+The splice is now three pieces — lines before the start marker, the block via `printf`, lines
+after the end marker — so each `-v` carries a single line and the block never goes through awk
+at all. Verified under `nawk` locally as well as the suite.
+
+The guard added for it is an honest source rule, not an effect test, and its limits are stated
+in the test itself: no fixture on Linux can reproduce a BSD awk refusal, so what is available
+is to forbid the shape that causes it. `$want` is the one multi-line value in the function and
+it must never reach a `-v`; every other `-v` value is pinned to the two single-line markers.
+
+This is the argument for keeping the macOS CI leg. It is the slowest check by far (~30 min)
+and it is the only thing in the pipeline that could have caught this.
+
 ## Mutation table
 
 | mutation | result |
@@ -136,6 +156,7 @@ asserted.
 | rewrite a file that is already current | the idempotence test red |
 | `_ccrc_die` instead of degrading on a missing block | the degradation test red |
 | drop the symlink resolution | the symlink test red (only after it was de-vacuumed) |
+| pass the multi-line block through `awk -v` again | the awk-portability guard red |
 
 ## What this does NOT claim
 
