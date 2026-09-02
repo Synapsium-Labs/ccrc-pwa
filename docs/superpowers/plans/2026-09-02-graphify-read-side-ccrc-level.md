@@ -2074,9 +2074,26 @@ git commit -m "feat(install,doctor): converge PATH onto the pinned graphify venv
 - Consumes: `_inst_graph_always_on_off` (Task 4), the `graphify-path` check id (Task 5), clause 12 (Task 3), the `graphQueries` field name and the `graph N` chip (Task 1), the `SessionStart` card (Task 2).
 - Produces: nothing later reads.
 
+**Two prose items this task was carrying, both already shipped — checked, not redone:**
+
+- `CLAUDE.md`'s "eleven clauses" → **"twelve clauses"** (the File Structure table above): shipped with
+  clause 12 itself in `c1955022` (R2). Verified at Task 6: `CLAUDE.md:181` reads "twelve clauses
+  pinned by", and `server/test/worker-skill.test.ts` is the mechanism behind the number.
+- the comment above `INST_DEGRADED+=(linger)` in `ccd/ccrc`, which claimed that step was the array's
+  **only** writer — false since the graphify steps landed, and deferred to this task by Task 5's
+  reviewers: shipped in `119dec11` (D-1347..D-1350). Verified at Task 6 (`ccd/ccrc:4975`): the comment
+  now says the "only" sentence "stopped being true the day the graphify steps landed" and names both
+  other writers, `graphify-read-rule` (`_inst_graph_always_on_off`) and `graphify-path`
+  (`_inst_graphify_engine`), as a census rather than a claim.
+
 ---
 
-- [ ] **Step 1: Write the failing README guards**
+- [x] **Step 1: Write the failing README guards** — done ahead of this task by **D-1355** and
+**D-1356** (`c6d38193`), which found the branch's one standing README guard passing by SUBSTRING and
+replaced it with exactly these two `it()` blocks. Not a deviation; the shipped guards are the text
+below plus what that round measured on top of it — the token list gained `additionalContext` and
+`graphReadCount`, because `SessionStart` and `graphQueries` alone left R1's and R4's bullets
+deletable with the loop still green, and the `PreToolUse` decline gained an assertion of its own.
 
 In `server/test/ccrc-install-graphify.test.ts`, replace the `it('the README documents the READ side, not only the write side', …)` test with:
 
@@ -2120,12 +2137,18 @@ In `server/test/ccrc-install-graphify.test.ts`, replace the `it('the README docu
   });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails** — moot as written, and honestly so: **D-1355**
+(`c6d38193`) wrote the guard against the README as it then stood, and MEASURED the red this step
+asks for from the other direction — the pre-D-1355 guard was GREEN on a README that documented none
+of the read side, which is spec §4's last mutation row in its mutated state. Step 6 below re-measures
+the shipped guard's red on the shipped tree.
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts`
 Expected: FAIL — the README mentions none of `SessionStart`, `clause 12`, `graphify-path`, `graphQueries`.
 
-- [ ] **Step 3: Rewrite the README's step enumeration**
+- [x] **Step 3: Rewrite the README's step enumeration** — done ahead of this task by **D-1355**
+(`c6d38193`); the count is still **six** and the enumeration guard is green (Step 5). Not a
+deviation.
 
 In `README.md`, in the "### Graph layer (graphify)" opening paragraph, change the one clause naming the retired step (the count stays **six** — `_inst_graph_always_on_off` is still one step in `cmd_install`'s sequence, and the enumeration guard derives it):
 
@@ -2135,7 +2158,12 @@ removal** (below), which takes back what D-1243 wrote into each rostered home's 
 **default noise list**, ccrc's own footprint converged to
 ```
 
-- [ ] **Step 4: Add the read-side subsection**
+- [x] **Step 4: Add the read-side subsection** — done ahead of this task by **D-1356**
+(`c6d38193`), which is why the shipped section is NOT the draft below: this text was written before
+Tasks 1–5 shipped, and transcribing it verbatim would have put five stale claims into the canonical
+overview (the freshness vocabulary of D-1353/D-1336, the converge arms of D-1348/D-1351/D-1352, the
+doctor's SKIP of D-1350, `graphReadCount` from D-1251, the card's clipping from D-1334). Not a
+deviation — read the shipped section, not this draft.
 
 Immediately after the "**Reading the graph…**" paragraph Task 4 wrote, insert:
 
@@ -2182,7 +2210,7 @@ saw the card; a deny path would be the first thing in the hook that can wedge a 
 above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
 ```
 
-- [ ] **Step 5: Run the README guards and the whole graphify story**
+- [x] **Step 5: Run the README guards and the whole graphify story**
 
 Run:
 ```bash
@@ -2191,16 +2219,28 @@ cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts
 ```
 Expected: PASS — including "the README's count matches the number of steps that actually run" (still six).
 
-- [ ] **Step 6: Prove the new guard is a mechanism**
+MEASURED (2026-09-02, on the shipped tree at `da4ded09`):
 
-| mutation | expected red |
-|---|---|
-| delete the `graphQueries` bullet from the README | "the README documents the read side as it now is…" |
-| re-insert the sentence "`_inst_graph_always_on` converges graphify's own packaged block into every rostered home's `CLAUDE.md`" | "never again describes the read side…" — measured red on the FIRST pattern |
-| re-insert the sentence "`_inst_graph_always_on` installs graphify's packaged `always_on/claude-md.md` in each rostered home" | "never again describes the read side…" — measured red on the SECOND pattern (one row per pattern: a table row that only ever reddens one of two assertions leaves the other unmeasured) |
-| replace Task 4's paragraph with the earlier draft ("converging graphify's packaged `always_on/claude-md.md` into every rostered home's…") | **stays GREEN, and must** — this is the history the README is there to record, and the guard's job is to forbid the present-tense claim, not the past-tense one. If this mutation goes red, the guard was re-widened and the paragraph and the guard are fighting again |
+```
+test/ccrc-install-graphify.test.ts   Tests  43 passed (43)
+test/ccrc-install.test.ts            Tests  103 passed | 18 skipped (121)
+```
 
-- [ ] **Step 7: Re-check the deviation number against `origin/main`**
+- [x] **Step 6: Prove the new guard is a mechanism**
+
+Each mutation was applied to `README.md` on the shipped tree at `da4ded09`,
+`ccrc-install-graphify` was run, and the file was restored from a scratchpad copy before the next
+one. The bullet the first row deletes is R4's — "**The number (R4).**" through the end of that list
+item.
+
+| mutation | expected red | MEASURED |
+|---|---|---|
+| delete the `graphQueries` bullet from the README | "the README documents the read side as it now is…" | `Tests  1 failed \| 42 passed (43)` — red on the `graphReadCount` token, which D-1355 added *because* `graphQueries` survives this very deletion in the R5 decline paragraph below it ("a `graphQueries` of 0"). This row is why: the draft token list above would have stayed GREEN on it |
+| re-insert the sentence "`_inst_graph_always_on` converges graphify's own packaged block into every rostered home's `CLAUDE.md`" | "never again describes the read side…" — measured red on the FIRST pattern | `Tests  1 failed \| 42 passed (43)` — `the README describes ccrc writing a read rule into a CLAUDE.md again` |
+| re-insert the sentence "`_inst_graph_always_on` installs graphify's packaged `always_on/claude-md.md` in each rostered home" | "never again describes the read side…" — measured red on the SECOND pattern (one row per pattern: a table row that only ever reddens one of two assertions leaves the other unmeasured) | `Tests  1 failed \| 42 passed (43)` — `the README says ccrc installs graphify's packaged block again`, the OTHER assertion of the same `it()`, so neither pattern is left unmeasured |
+| replace Task 4's paragraph with the earlier draft ("converging graphify's packaged `always_on/claude-md.md` into every rostered home's…") | **stays GREEN, and must** — this is the history the README is there to record, and the guard's job is to forbid the present-tense claim, not the past-tense one. If this mutation goes red, the guard was re-widened and the paragraph and the guard are fighting again | `Tests  43 passed (43)` — GREEN, as required: `converging` is not one of the five present-tense verbs, so the honest history sentence survives the guard that forbids the present-tense claim |
+
+- [x] **Step 7: Re-check the deviation number against `origin/main`**
 
 The ledger allocation rule: grep `origin/main` across BOTH `docs/` and source, take the next number. `origin/main` carries `D-1244` today (PR #44, merged as `651f40c5`; re-measured at plan-review time and still `D-1244`), so this plan's three entries are `D-1245`, `D-1246` and `D-1247` — but re-measure at commit time, because another branch may have landed in between:
 
@@ -2210,9 +2250,16 @@ git fetch origin main --quiet
 git grep -ohE 'D-1[0-9]{3}' origin/main -- docs/ ccd/ server/ agent/ pwa/ shared/ deploy/ README.md CLAUDE.md \
   | sort -u | tail -5
 ```
+MEASURED (2026-09-02, at Task 6): `origin/main` is `5e9f650d`, which CARRIES `651f40c5` (PR #44,
+this branch's cut point), and its highest defined number is **D-1332** — not D-1244. That re-check
+was first taken and acted on mid-branch; see the NUMBERING note at the head of the D-1333 block
+below. Nothing renumbers now: `D-1245`–`D-1252` are still unused on `origin/main` (0 hits each
+across `docs/ ccd/ server/ agent/ pwa/ shared/ deploy/ README.md CLAUDE.md`), main skipped the
+1245–1293 range entirely, and every later entry on this branch already allocates above D-1332.
+
 Expected: `…D-1242 D-1243 D-1244`. If the highest is **not** D-1244, renumber `D-1245`/`D-1246`/`D-1247` in this plan AND in every source comment and test name Tasks 4, 5 and 6 wrote (`git grep -n 'D-1245\|D-1246\|D-1247'` finds them all) to the next three free numbers, then re-run `server/test/deviation-refs.test.ts`.
 
-- [ ] **Step 8: Run the whole suite, in the foreground**
+- [x] **Step 8: Run the whole suite, in the foreground**
 
 Run each in the FOREGROUND with `timeout` ≥ 600000 ms:
 ```bash
@@ -2225,17 +2272,38 @@ Expected: all green. Anything red among `ccd-ws-gc`, `pr-sweep`, `session-hook`,
 Then the typecheck gates:
 ```bash
 cd "$CCRC_REPO"/server && npx tsc --noEmit -p tsconfig.json
+cd "$CCRC_REPO"/server && npx tsc --noEmit -p test/tsconfig.tests.json   # the tests, which the project above excludes
 cd "$CCRC_REPO"/pwa    && npx tsc --noEmit
 cd "$CCRC_REPO" && bash -n ccd/ccrc && bash -n ccd/session-hook.sh && bash -n ccd/ccrc-doctor-checks
 ```
 
-- [ ] **Step 9: Commit**
+MEASURED (2026-09-02, on the shipped tree at `da4ded09` plus this task's plan edits — no source
+file changed in Task 6, so the suites are measuring Tasks 1–5 and the branch-review rounds):
+
+```
+server   Test Files  248 passed (248)     Tests  6346 passed | 56 skipped (6402)
+agent    Test Files   18 passed (18)      Tests   281 passed (281)
+pwa      Test Files   77 passed (77)      Tests  2116 passed (2116)     Type Errors  no errors
+```
+
+All green on the FIRST run — none of the five known load flakes (`ccd-ws-gc`, `pr-sweep`,
+`session-hook`, `typecheck-tests`, `ccd-session-state`) fired, so nothing needed an isolated re-run.
+The four typecheck/`bash -n` gates above are clean: `tsc -p tsconfig.json`, `tsc -p
+test/tsconfig.tests.json`, the PWA project (also reported inline by its own suite), and all three
+shell files.
+
+- [x] **Step 9: Commit**
 
 ```bash
 cd "$CCRC_REPO"
 git add README.md server/test/ccrc-install-graphify.test.ts docs/superpowers/plans
 git commit -m "docs(readme): the read side is the hook, the skill, the PATH and the number (D-1245)"
 ```
+
+AS RUN: `README.md` and `server/test/ccrc-install-graphify.test.ts` were already committed at
+`c6d38193` under exactly that message and its two D-numbers (D-1355, D-1356), so this task's commit
+carries **only** `docs/superpowers/plans/` — the ticks above, Step 6's measured table, and the two
+stale ledger cells re-measured. Committing the two source files again would be an empty diff.
 
 ---
 
@@ -2424,7 +2492,11 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
 > **NUMBERING, RE-MEASURED AT COMMIT TIME (and the reason these jump).** The Task-2 review sheet said
 > the next free number was **D-1253**. It is not: that measurement read this branch and this plan
 > only. `origin/main` has moved from `651f40c5` (the commit this branch was cut from, carrying
-> `D-1244`) to `551a6cb6`, and the wave-7 program-leverage plan that landed in between allocated
+> `D-1244`) to `5e9f650d` — **corrected at Task 6**, where Step 7 re-took this measurement: the sha
+> first written here, `551a6cb6`, is PR #42's merge, an ANCESTOR of the cut point rather than
+> anywhere main had moved TO. The move is real (`5e9f650d` is PR #43's merge and carries
+> `651f40c5`); only the sha was mis-transcribed. The wave-7 program-leverage plan that landed in
+> between allocated
 > **D-1294..D-1332** from `POST /api/ledger/deviations`. Grepping BOTH trees, as the ledger rule
 > says, the highest defined number anywhere is **D-1332**, so this round takes **D-1333..D-1337**.
 > The branch's own earlier entries (D-1245..D-1252) collide with nothing — main skipped the 1245-1293
@@ -2755,7 +2827,7 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
 
   | mutation | expected red | MEASURED |
   |---|---|---|
-  | reduce the no-op arm to `elif [ -L "$gpath" ]; then` — the mutation nobody had measured | `ccrc-install-graphify` — "REFUSES a symlink that resolves OUTSIDE the venv…" | `Tests  1 failed \| 36 passed (37)` |
+  | reduce the no-op arm to `elif [ -L "$gpath" ]; then` — the mutation nobody had measured | `ccrc-install-graphify` — "REFUSES a symlink at a NON-SHIM engine — the state the no-op arm used to swallow" | `Tests  2 failed \| 41 passed (43)`, RE-MEASURED at Task 6 on `da4ded09`. The row shipped citing "REFUSES a symlink that resolves OUTSIDE the venv…" at `Tests  1 failed \| 36 passed (37)`: honest when it was taken, stale twice over since. `6ae35e56` **renamed** that test to the title above (D-1351 narrowed it to what its `#!/bin/sh` fixture ever pinned) and added the pipx case, which this mutation reddens too — hence 2, not 1 — and D-1358/D-1360 then took the file from 39 tests to 43 |
   | `elif [ -L "$gpath" ] && { [ -z "$gnow" ] \|\| [ -z "$gwant" ]; }` → `elif false` (the unresolvable arm deleted) | `ccrc-install-graphify` — "LEAVES a link this box cannot resolve in place, degraded — empty is not \"equal\"" | `Tests  1 failed \| 36 passed (37)` |
 
 - **D-1349** (2026-09-02, Task 5 fix round) — **the pip-shim arm destroyed a file ccrc did not write,
@@ -2815,7 +2887,7 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
 
   | mutation | expected red | MEASURED |
   |---|---|---|
-  | `if [ -f "$gpath" ] && [ -r "$gpath" ]` → `if [ ! -L "$gpath" ] && [ -f "$gpath" ] && [ -r "$gpath" ]` (links refused instead of judged by content) | `ccrc-install-graphify` — "REPLACES a shim reached THROUGH a symlink, and orphans nothing (D-1351)" | `Tests  2 failed \| 37 passed (39)` (the second is D-1352's case, measured on the same run before its arm was re-applied) |
+  | `if [ -f "$gpath" ] && [ -r "$gpath" ]` → `if [ ! -L "$gpath" ] && [ -f "$gpath" ] && [ -r "$gpath" ]` (links refused instead of judged by content) | `ccrc-install-graphify` — "REPLACES a shim reached THROUGH a symlink, and orphans nothing (D-1351)" | `Tests  1 failed \| 42 passed (43)`, RE-MEASURED at Task 6 on `da4ded09`. The row shipped as `Tests  2 failed \| 37 passed (39)` "(the second is D-1352's case, measured on the same run before its arm was re-applied)" — which is not a mutation table entry at all but a MEASUREMENT SLIP: the number was copied off a run whose tree was carrying a SECOND mutation, so it reported another mutation's collateral as this one's red. A mutation table's count is the count for the mutation in its own row, on an otherwise-shipped tree, or the row proves less than it looks like it proves |
 
 - **D-1352** (2026-09-02, Task 5 review round) — **the arm that stopped overloading EMPTY then printed
   a cause it never measured.** D-1348's new arm said `is a symlink this box cannot resolve (its
