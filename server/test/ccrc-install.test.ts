@@ -712,6 +712,14 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
   writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
   writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
+  // D-1244: `_inst_graph_always_on` reads its block from the same package. A
+  // fixture without one made the step SKIP, and a skip is now (correctly) a
+  // DEGRADED step — which broke four landing-block tests that assert a clean
+  // install says "every step above converged". The fixture, not the rule, was
+  // wrong: a box whose engine step converged always has this file.
+  mkdirSync(join(gfxPkg, 'always_on'), { recursive: true });
+  writeFileSync(join(gfxPkg, 'always_on', 'claude-md.md'),
+    '## graphify\n\n- For codebase questions, first run `graphify query "<q>"`.\n');
   env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
   return env;
 }
