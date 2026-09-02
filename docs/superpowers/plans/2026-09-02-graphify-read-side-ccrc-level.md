@@ -20,7 +20,7 @@
 - **Wire discipline:** `FleetSession.graphQueries` is ADDITIVE. Do **not** bump `FLEET_PROTO` (=1). `reviveFleetSession` returns a literal, so the field goes in that literal.
 - **Rings:** `shared/*.ts` (L0) imports NOTHING — not even `node:*`. `server/src/hookstate.ts` is an L3 adapter and **may not narrow a distinction it received**: `null` (no field) and `0` (measured none) stay distinct, for `graphQueries` exactly as for `subagents`.
 - **The session hook's standing contract is absolute:** exit 0 on every path, write atomically or not at all, **no network, no locks, no waiting**. Every new read is a local file or a git ref. Stdout stays EMPTY on every event but `SessionStart` — on `PreToolUse` a stdout JSON is a permission decision.
-- **Platform:** `server/test/macos-platform.test.ts` refuses un-shimmed GNU calls in `ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-api` — no `stat -c`/`stat -f`, no `date +%s%3N`, no `date -d`, no `sha256sum`, no `uuidgen`, no bare `timeout`, no template-less `mktemp`, no `mv -T`, no `du -sb`. `readlink -f` and `realpath` are explicitly ALLOWED. **Use no `awk` in new shell code** (BSD awk refuses a newline inside `-v`). `sed -n "1,0p"` prints line 1, not nothing.
+- **Platform:** `server/test/macos-platform.test.ts` refuses un-shimmed GNU calls in every shebang'd file under `ccd/` except three named, ratcheted exemptions (`ccclip`, `ccd-graph-sweep`, `ccrc-adopt`) — it enumerated four files (`ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-api`) when this plan was written, which left `ccd/session-hook.sh` unscanned; **D-1250** derives the corpus from the directory instead, so this plan's own +91 lines of hook shell are covered. No `stat -c`/`stat -f`, no `date +%s%3N`, no `date -d`, no `sha256sum`, no `uuidgen`, no bare `timeout`, no template-less `mktemp`, no `mv -T`, no `du -sb`. `readlink -f` and `realpath` are explicitly ALLOWED. **Use no `awk` in new shell code** (BSD awk refuses a newline inside `-v`). `sed -n "1,0p"` prints line 1, not nothing.
 - **Mutation-table discipline:** every guard ships WITH a test that goes RED when the guard is deleted or mutated. Measure the red before/after; a comment is a request, a red suite is a mechanism.
 - **Test commands** (never bare `npx vitest` — it resolves a global copy with no jsdom and falsely reports "no tests"):
   - one suite: `cd server && ./node_modules/.bin/vitest run test/<file>.test.ts` (likewise in `agent/`, `pwa/`)
@@ -317,7 +317,7 @@ cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts
 cd server && ./node_modules/.bin/vitest run test/install-session-hooks.test.ts
 cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
 ```
-Expected: all PASS. (`install-session-hooks` proves the arm split did not change the derived event set; `macos-platform` proves `_hook_epoch_ms`'s two copies still agree.)
+Expected: all PASS. (`install-session-hooks` proves the arm split did not change the derived event set; `macos-platform` proves `_hook_epoch_ms`'s two copies still agree — and, since **D-1250**, that this task's new hook lines carry no un-shimmed GNU call either, which is what this step was citing it for and could not deliver at the time.)
 
 **Watch `session-hook`'s p95 test specifically** (`'p95 of 20 runs stays under the budget (150ms CI allowance; 50ms target)'`). This task touches the `PostToolUse` hot path, which is exactly what that test exercises, and step 3's two measures exist for it: the fold in (d) keeps the state-file reads at ONE fork instead of three, and the `*graphify*` prefilter in (c) means the p95 fixture's own payload (`{hook_event_name:'PostToolUse', tool_name:'Bash'}`, no command at all) forks nothing new. Baseline on this box: ~46 ms/run, a bare `jq` fork ~5 ms. `session-hook` is on the known-load-flake list, so re-run it IN ISOLATION before treating a red p95 as a real break — but if it is genuinely over, the cause is a fork on that arm, not the reader.
 
@@ -2320,6 +2320,36 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   one fork, same hot-path budget. Pinned by a new `session-hook` test that seeds
   `subagents: "evil\nline"` and asserts `state` and the count survive; measured RED against the old
   order.
+
+- **D-1250** (2026-09-02, whole-branch review) — **the branch's 91 new lines of shell landed in the
+  one hot-path ccd file the standing GNU sweep did not scan.** `macos-platform.test.ts`'s "THE SWEEP,
+  STANDING" exists, by its own header, so that "anything main adds later merges cleanly with nothing
+  prompting a BSD-compatibility review" is caught by a mechanism — but its corpus was a hand-kept list
+  of the four files the macOS port itself had touched (`ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`,
+  `ccd/ccrc-api`; this plan enumerates them at line 23 and cites the suite at its own verification
+  step, line 318). `ccd/session-hook.sh` was in none of them. MEASURED: five GNU-only spellings
+  planted in Task 1's new block at `ccd/session-hook.sh:194` — `stat -c %Y`, `date +%s%3N`,
+  `sha256sum`, `uuidgen`, a bare `timeout` — passed `bash -n` and left the suite byte-identically
+  green (`Tests  25 passed | 10 skipped (35)`). That is the file whose own header (:12-27) names a BSD
+  `date` answering `…3N` as the worst way it can fail: `jq` rejects the non-number, `|| exit 0`
+  swallows it, THE HOOK WRITES NOTHING, and every session on the box reads as unsupervised while
+  looking healthy from the inside. Nothing on the branch is actually broken — re-running the suite's
+  own ten `gnuOnly` regexes over the hook finds exactly one hit, the VALIDATED `date +%s%3N` fallback
+  inside `_hook_epoch_ms` — which is why the fix is a guard, not a code change, and why a bare append
+  to `corpora` does not work (measured: it fails on that one legitimate line).
+  **Shipped:** the corpus is now DERIVED from `ccd/`'s shebang'd files rather than listed, so the next
+  file added there is a decision someone records in this suite instead of a gap nobody sees; the
+  hook's `_hook_epoch_ms` is cut out of its scanned text the way the platform block is cut out of ccd
+  and ccrc, exempt because the body-equality pin already ties it byte-for-byte to ccd's
+  `_plat_epoch_ms` inside ccd's own scanned block. Three files carry named `unowned` exemptions with
+  the spellings they still use (`ccclip`, `ccd-graph-sweep`, `ccrc-adopt` — 10 hits between them,
+  measured; porting them is out of this branch's scope), each under a RATCHET that goes red once its
+  GNU-only calls are gone, and the census refuses a shebang'd file that is in neither list. Seven
+  previously-unscanned clean files (`ccd-cap-scopes`, `ccrc-wrapper-shape`, the four `install-*.sh`,
+  `statusline-command.sh`) come into the corpus for free. Three mutations measured RED: the five
+  planted calls in the hook (`Tests  1 failed | 37 passed`), dropping the hook back out of the corpus
+  (2 failed — the census and the ratchet), and widening the epoch exemption to swallow the event
+  dispatch (1 failed — the three body anchors).
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
