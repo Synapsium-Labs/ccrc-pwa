@@ -549,139 +549,6 @@ describe('ccrc install: the default noise list (_inst_graph_noise, D-1160)', () 
   });
 });
 
-describe('ccrc install: the read rule refuses malformed files rather than splicing (D-1244)', () => {
-  // Every case here was raised by an adversarial review of D-1243 and MEASURED
-  // against the shipped code before it was fixed. The header of the function
-  // claimed "content outside them is never read or rewritten" and "NEVER
-  // CLOBBERS"; all of these falsified one or both.
-  const START = '<!-- ccrc:graphify-always-on:start -->';
-  const END = '<!-- ccrc:graphify-always-on:end -->';
-  const claudeMd = (home: string) => join(home, '.claude', 'CLAUDE.md');
-  const seed = (home: string, text: string, mode = 0o644): string => {
-    mkdirSync(join(home, '.claude'), { recursive: true });
-    writeFileSync(claudeMd(home), text, { mode });
-    return claudeMd(home);
-  };
-
-  it('a START marker with no END marker is skipped, not spliced — everything after it survives', () => {
-    // Measured on the shipped code: the tail piece never set `seen`, printed
-    // nothing, and the splice emitted prefix+block — deleting every line after
-    // the start marker while reporting "converged". One hand-edit that drops a
-    // marker line is enough, and CLAUDE.md is a file people edit by hand.
-    const home = freshBox('ccrc-inst-gfx-halfblock-');
-    plantFakeVenv(home);
-    const text = `# head\n\n${START}\nstale\n\n## OPERATOR TAIL\n- keep me\n`;
-    const f = seed(home, text);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(readFileSync(f, 'utf8'), 'a malformed file was spliced instead of skipped').toBe(text);
-    expect(r.stderr).toMatch(/malformed, left untouched/);
-  });
-
-  it('two blocks are skipped, not silently carried forward and rewritten on every run', () => {
-    // The old convergence predicate re-armed at each start marker and returned
-    // both regions concatenated, so it could never equal the wanted block: the
-    // file reached a fixed point the predicate still called "not converged",
-    // and every install rewrote it and cut another backup, forever.
-    const home = freshBox('ccrc-inst-gfx-twoblocks-');
-    plantFakeVenv(home);
-    const one = `${START}\nA\n${END}\n`;
-    const text = `# head\n\n${one}\n${one}\n# tail\n`;
-    const f = seed(home, text);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(readFileSync(f, 'utf8')).toBe(text);
-    expect(r.stderr).toMatch(/2 start and 2 end markers/);
-  });
-
-  it('markers QUOTED inside the operator\'s prose are not markers — whole-line match only', () => {
-    // Measured on the shipped code: a sentence mentioning the markers was cut
-    // at the mention, a fresh block planted there, and the real block below
-    // left stale forever — the precise drift this deviation exists to prevent.
-    const home = freshBox('ccrc-inst-gfx-quoted-');
-    plantFakeVenv(home);
-    const text = `# head\n\nccrc writes between ${START} and ${END} in this file.\n\n## rules\n- keep\n`;
-    const f = seed(home, text);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    const out = readFileSync(f, 'utf8');
-    expect(out, "the operator's sentence was cut at its mention of the markers")
-      .toContain('ccrc writes between');
-    expect(out).toContain('- keep');
-    // it is an append, so exactly one real pair now exists
-    expect(out.split('\n').filter((l) => l === START)).toHaveLength(1);
-    expect(out.split('\n').filter((l) => l === END)).toHaveLength(1);
-  });
-
-  it('a symlink this box cannot resolve is SKIPPED, never written through', () => {
-    // `readlink -f` answers empty for a link whose target's parent does not
-    // exist (a dotfiles repo not yet cloned) and does not exist at all on older
-    // macOS. The first draft fell back to the LINK path, so "resolved" and
-    // "could not resolve" collapsed to one value and the failure case replaced
-    // the link — the overloaded null this codebase forbids at a seam.
-    const home = freshBox('ccrc-inst-gfx-badlink-');
-    plantFakeVenv(home);
-    mkdirSync(join(home, '.claude'), { recursive: true });
-    symlinkSync(join(home, 'not-cloned-yet', 'CLAUDE.md'), claudeMd(home));
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(lstatSync(claudeMd(home)).isSymbolicLink(), 'the unresolvable link was replaced').toBe(true);
-    expect(existsSync(claudeMd(home)), 'a file was created at the link target').toBe(false);
-    expect(r.stderr).toMatch(/symlink this box cannot resolve/);
-  });
-
-  it("preserves the file's own mode instead of widening it to 644", () => {
-    // A symlink is resolved first, so the file being re-moded may not even sit
-    // inside a ccrc home — forcing 644 could widen an operator's restricted
-    // file anywhere on the box.
-    const home = freshBox('ccrc-inst-gfx-mode-');
-    plantFakeVenv(home);
-    const f = seed(home, '# private\n', 0o600);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(readFileSync(f, 'utf8')).toContain(START);
-    expect(statSync(f).mode & 0o777, 'a 0600 CLAUDE.md was silently widened').toBe(0o600);
-  });
-
-  it('replaces a block that sits at LINE 1 without duplicating its start marker', () => {
-    // `sed -n "1,0p"` does not print nothing: an addr2 at or below addr1 makes
-    // sed match the one line at addr1, so the start marker was re-emitted and
-    // the block appended after it. Line 1 is exactly where the append path puts
-    // the block for a home that had no CLAUDE.md at all.
-    const home = freshBox('ccrc-inst-gfx-line1-');
-    plantFakeVenv(home);
-    seed(home, `${START}\nOLD BODY\n${END}\n`);
-    writeFileSync(join(fakePkgDir(home), 'always_on', 'claude-md.md'),
-      '## graphify\n\n- first run `graphify query "<q>"` — REVISED.\n');
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    const out = readFileSync(claudeMd(home), 'utf8');
-    expect(out.split('\n').filter((l) => l === START), 'the start marker was duplicated').toHaveLength(1);
-    expect(out).toContain('REVISED');
-    expect(out, 'the superseded body survived').not.toContain('OLD BODY');
-  });
-
-  it('a skipped home makes the install report DEGRADED, not "every step converged"', () => {
-    const home = freshBox('ccrc-inst-gfx-degraded-');
-    plantFakeVenv(home);
-    seed(home, `# head\n${START}\nno end marker follows\n`);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout, 'a home was skipped and the install still claimed everything converged')
-      .not.toMatch(/^install: done — every step above converged$/m);
-    expect(r.stdout).toMatch(/degraded step/);
-  });
-
-  it('leaves no CLAUDE.md.tmp.<pid> behind when it refuses', () => {
-    const home = freshBox('ccrc-inst-gfx-notmp-');
-    plantFakeVenv(home);
-    seed(home, `${START}\nhalf\n`);
-    runInstall(home, ['install']);
-    expect(readdirSync(join(home, '.claude')).filter((n) => n.includes('CLAUDE.md.tmp')),
-      'a temp file was left in the operator\'s config directory').toEqual([]);
-  });
-});
-
 describe('README: the graphify step enumeration is DERIVED, not remembered (D-1243)', () => {
   // The README calls itself the canonical system overview, and its graphify
   // paragraph said "four role-gated steps" for TWO deviations after the count
@@ -734,150 +601,191 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
-describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)', () => {
-  // Everything else graphify ships on this box serves the WRITE path — engine,
-  // skill, excludes, noise list, the 15-minute sweep — and all of it keeps
-  // graphs fresh. Nothing made a session READ one. Measured before this step:
-  // the only always-on instruction any rostered home carried said "when the
-  // user types `/graphify`", an explicit slash command; the query-first rule
-  // was in zero of five homes.
+// ── R0: the block ccrc should never have written, removed ─────────────────
+// D-1243 put a PROJECT-scoped instruction ("This project has a knowledge graph
+// at graphify-out/") into an ACCOUNT-WIDE file — every rostered home's
+// `~/.claude*/CLAUDE.md`, which Claude Code loads for every session under that
+// account in every project, including the trees the sweep refuses. And that
+// file is the OPERATOR's, not ccrc's: every one of D-1244's six data-loss
+// classes existed only because ccrc was rewriting a file it does not own.
+//
+// The remover is D-1244's own hardened census doing its last job — same
+// whole-line marker census, same exactly-one-ordered-pair rule, same symlink
+// resolution, same mode preservation, same "left in place; remove by hand"
+// for anything that is not provably wholly ccrc's — deleting lines ls..le
+// instead of splicing a block in. `_inst_graph_hooks_off` is the idiom: ccrc
+// already has a step whose whole job is removing what an earlier layer
+// planted.
+describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_off, D-1245)', () => {
   const START = '<!-- ccrc:graphify-always-on:start -->';
   const END = '<!-- ccrc:graphify-always-on:end -->';
+  const BLOCK = `${START}\n## graphify\n\n- first run \`graphify query\`\n${END}`;
+  const claudeMd = (home: string) => join(home, '.claude', 'CLAUDE.md');
+  const seed = (home: string, text: string, mode = 0o644): string => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(claudeMd(home), text, { mode });
+    return claudeMd(home);
+  };
+  const backupDirs = (home: string): string[] => {
+    const d = join(home, 'ccrc-backups');
+    return existsSync(d) ? readdirSync(d) : [];
+  };
 
-  it('converges the block into every rostered home, carrying the query-first rule', () => {
-    const home = freshBox('ccrc-inst-gfx-alwayson-');
+  it('removes a well-formed block from mid-file, byte-identically around it', () => {
+    const home = freshBox('ccrc-inst-gfx-off-mid-');
     plantFakeVenv(home);
+    const f = seed(home, `# head\n\n- operator line\n\n${BLOCK}\n\n## OPERATOR TAIL\n- keep me\n`);
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
-    let seen = 0;
-    for (const dir of readdirSync(home).filter((d) => d.startsWith('.claude'))) {
-      const f = join(home, dir, 'CLAUDE.md');
-      if (!existsSync(f)) continue;
-      const txt = readFileSync(f, 'utf8');
-      if (!txt.includes(START)) continue;
-      seen++;
-      expect(txt, 'the block landed without its end marker — convergence would be ambiguous').toContain(END);
-      expect(txt, 'the READ rule is the whole point of this step').toMatch(/first run `graphify query/);
-    }
-    expect(seen, 'no rostered home received the always-on block').toBeGreaterThan(0);
-    expect(r.stdout).toMatch(/^install: graphify: always-on read rule — \d+ home\(s\) converged/m);
+    // The block AND the one separating blank line the append path wrote.
+    expect(readFileSync(f, 'utf8')).toBe('# head\n\n- operator line\n\n## OPERATOR TAIL\n- keep me\n');
+    expect(r.stdout).toMatch(/always-on read rule — 1 home\(s\) cleared/);
   });
 
-  it('appends without disturbing a line of what was already there', () => {
-    const home = freshBox('ccrc-inst-gfx-alwayson-keep-');
-    plantFakeVenv(home);
-    const dir = join(home, '.claude');
-    mkdirSync(dir, { recursive: true });
-    const prior = '# User instructions\n\nSomething the operator wrote.\n';
-    writeFileSync(join(dir, 'CLAUDE.md'), prior);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    const txt = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
-    expect(txt.startsWith(prior), "the operator's own text was rewritten or reordered").toBe(true);
-    expect(txt).toContain(START);
-  });
-
-  it('is idempotent — a second install neither duplicates the block nor rewrites the file', () => {
-    const home = freshBox('ccrc-inst-gfx-alwayson-idem-');
-    plantFakeVenv(home);
-    runInstall(home, ['install']);
-    const f = join(home, '.claude', 'CLAUDE.md');
-    const after1 = readFileSync(f, 'utf8');
-    const mtime1 = statSync(f).mtimeMs;
-    const r2 = runInstall(home, ['install']);
-    expect(r2.code, r2.stderr).toBe(0);
-    const after2 = readFileSync(f, 'utf8');
-    expect(after2).toBe(after1);
-    expect(after2.split(START).length - 1, 'the block was appended a second time').toBe(1);
-    expect(statSync(f).mtimeMs, 'an already-current file was rewritten anyway').toBe(mtime1);
-    expect(r2.stdout).toMatch(/already current/);
-  });
-
-  it('REPLACES between its markers when the shipped block changes, never appending a rival copy', () => {
-    const home = freshBox('ccrc-inst-gfx-alwayson-repl-');
-    plantFakeVenv(home);
-    runInstall(home, ['install']);
-    const f = join(home, '.claude', 'CLAUDE.md');
-    writeFileSync(join(fakePkgDir(home), 'always_on', 'claude-md.md'),
-      '## graphify\n\nRules:\n- For codebase questions, first run `graphify query "<q>"` — REVISED.\n');
-    const r2 = runInstall(home, ['install']);
-    expect(r2.code, r2.stderr).toBe(0);
-    const txt = readFileSync(f, 'utf8');
-    expect(txt.split(START).length - 1, 'a second copy was appended instead of converging').toBe(1);
-    expect(txt).toContain('REVISED');
-    expect(txt, 'the superseded wording survived the replace').not.toMatch(/graph\.json exists/);
-  });
-
-  it("SKIPS and reports a home carrying an unmarked '## graphify' section — that text is not ours", () => {
-    const home = freshBox('ccrc-inst-gfx-alwayson-foreign-');
-    plantFakeVenv(home);
-    const dir = join(home, '.claude');
-    mkdirSync(dir, { recursive: true });
-    const foreign = '## graphify\n\nHand-written or written by `graphify install`.\n';
-    writeFileSync(join(dir, 'CLAUDE.md'), foreign);
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), 'a section ccrc did not write was rewritten')
-      .toBe(foreign);
-    expect(r.stderr).toMatch(/carries an unmarked '## graphify' section/);
-    expect(r.stdout).toMatch(/\d+ skipped/);
-  });
-
-  it('writes THROUGH a symlinked CLAUDE.md, never replacing the link (D-1243)', () => {
-    // Two homes deliberately sharing one file is a real configuration, not a
-    // hypothetical: on the reference fleet `.claude-gpt/CLAUDE.md` IS a symlink
-    // to `.claude/CLAUDE.md`. The staged `mv` would replace that link with a
-    // regular file and sever the sharing silently — and the first draft only
-    // survived it by ROSTER ORDER, which is luck rather than design.
+  it('removes a block that sits at LINE 1 without eating the line after it', () => {
+    // `sed -n "1,0p"` does NOT print nothing — an addr2 at or below addr1 makes
+    // sed match the ONE line at addr1 — and line 1 is exactly where the append
+    // path put the block for a home that had no CLAUDE.md at all.
     //
-    // THE LINK MUST BE ON THE HOME THAT IS CONVERGED FIRST. The first draft of
-    // this test symlinked a LATER home at an earlier one's file and stayed
-    // GREEN with the fix removed: by the time the link was reached the shared
-    // file already carried the block, so the already-converged branch skipped
-    // the write and no `mv` ever ran. It pinned the roster order, not the fix.
-    // Pointing the FIRST home's CLAUDE.md at a file outside the homes — the
-    // dotfiles case — puts the link squarely on the write path.
-    const home = freshBox('ccrc-inst-gfx-alwayson-link-');
+    // NO BLANK LINE AFTER THE BLOCK, and that is the fixture being faithful
+    // rather than convenient: the append path (`ccd/ccrc:5321-5326`) writes the
+    // block LAST, `printf '%s\n' "$want"` with nothing after it, so a trailing
+    // blank is never a shape the converge produced. `lb` only ever absorbs the
+    // ONE blank line the append path wrote BEFORE a block, and at line 1 there
+    // is none — the remover must not learn to eat a trailing blank, because
+    // that whitespace would be the operator's, not ccrc's.
+    const home = freshBox('ccrc-inst-gfx-off-line1-');
     plantFakeVenv(home);
-    const dots = join(home, 'dotfiles');
-    mkdirSync(dots, { recursive: true });
-    const target = join(dots, 'CLAUDE.md');
-    writeFileSync(target, '# lives in a dotfiles repo\n');
-    const first = join(home, '.claude');
-    mkdirSync(first, { recursive: true });
-    symlinkSync(target, join(first, 'CLAUDE.md'));
-    const r = runInstall(home, ['install']);
-    expect(r.code, r.stderr).toBe(0);
-    expect(lstatSync(join(first, 'CLAUDE.md')).isSymbolicLink(),
-      'the link an operator made deliberately was replaced by a regular file').toBe(true);
-    const txt = readFileSync(target, 'utf8');
-    expect(txt, 'the block went to the link, not through it to the real file')
-      .toContain('<!-- ccrc:graphify-always-on:start -->');
-    expect(txt).toContain('# lives in a dotfiles repo');
-    expect(txt.split('<!-- ccrc:graphify-always-on:start -->').length - 1,
-      'the shared file received the block more than once').toBe(1);
+    const f = seed(home, `${BLOCK}\n## OPERATOR\n- keep me\n`);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('## OPERATOR\n- keep me\n');
   });
 
-  it('DEGRADES, never dies: a graphify build shipping no always-on block still installs clean', () => {
-    // The first draft of this step used `_ccrc_die` on all three availability
-    // gates. A fixture with no package then took the WHOLE install down — a fix
-    // for a missing nicety that was worse than the nicety being missing.
-    // `_inst_enable` already states the rule for the sweep timer: a convenience
-    // "must not turn an otherwise-converged install into a failed one".
-    const home = freshBox('ccrc-inst-gfx-alwayson-none-');
+  it('removes a block that ends the file, leaving the operator text intact', () => {
+    const home = freshBox('ccrc-inst-gfx-off-eof-');
     plantFakeVenv(home);
-    rmSync(join(fakePkgDir(home), 'always_on', 'claude-md.md'));
+    const f = seed(home, `# head\n\n- keep me\n\n${BLOCK}\n`);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# head\n\n- keep me\n');
+  });
+
+  it('leaves a HALF block in place, reports it, and degrades the install', () => {
+    const home = freshBox('ccrc-inst-gfx-off-half-');
+    plantFakeVenv(home);
+    const text = `# head\n\n${START}\nstale\n\n## OPERATOR TAIL\n- keep me\n`;
+    const f = seed(home, text);
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/ships no always-on block .* read rule SKIPPED, nothing invented/);
-    // and it invents nothing in its place
-    for (const dir of readdirSync(home).filter((d) => d.startsWith('.claude'))) {
-      const f = join(home, dir, 'CLAUDE.md');
-      if (existsSync(f)) {
-        expect(readFileSync(f, 'utf8'), 'a block was written from nowhere')
-          .not.toContain('<!-- ccrc:graphify-always-on:start -->');
-      }
-    }
+    expect(readFileSync(f, 'utf8'), 'a half block was deleted instead of reported').toBe(text);
+    // SEMICOLON, not an em dash: the tree's own idiom for this refusal is
+    // `— left in place; remove by hand` (`_inst_graph_hooks_off`, ccd/ccrc:5411,
+    // and the unmarked-section refusal at :5249). The spec quotes the phrase
+    // with a second em dash; the tree is what ships, and D-1247 records the
+    // divergence rather than making this file the odd one out.
+    expect(r.stderr).toMatch(/left in place; remove by hand/);
+    expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
+  it('leaves TWO blocks in place rather than guessing which one is ccrc\'s', () => {
+    const home = freshBox('ccrc-inst-gfx-off-two-');
+    plantFakeVenv(home);
+    const text = `# head\n\n${BLOCK}\n\n${BLOCK}\n\n# tail\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(text);
+    expect(r.stderr).toMatch(/2 start and 2 end markers/);
+  });
+
+  it('leaves a CHAINED file — end marker before start — in place', () => {
+    const home = freshBox('ccrc-inst-gfx-off-chained-');
+    plantFakeVenv(home);
+    const text = `# head\n${END}\nsomething\n${START}\n# tail\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(text);
+    expect(r.stderr).toMatch(/end marker before its start marker/);
+  });
+
+  it('treats markers QUOTED in the operator\'s prose as prose, not as markers', () => {
+    const home = freshBox('ccrc-inst-gfx-off-quoted-');
+    plantFakeVenv(home);
+    const text = `# head\n\nccrc wrote between ${START} and ${END} in this file.\n\n- keep\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8'), 'a sentence mentioning the markers was cut').toBe(text);
+    // THE POSITIVE HALF, and the census mutation's only red. Byte-identity
+    // alone is satisfied by a substring census too: with `grep -cF` the prose
+    // line makes ns=1/ne=1, `grep -nxF` then finds no line, `ls`/`le` come back
+    // EMPTY, every `[` on them errors non-zero (this file runs `set -uo
+    // pipefail`, never `-e`), the splice fails and the `if !` arm leaves the
+    // file untouched — the same bytes, arrived at by accident. What that path
+    // cannot fake is the count: it takes the refusal branch, so `kept` is 1.
+    expect(r.stdout, 'the census matched a marker QUOTED in prose')
+      .toMatch(/always-on read rule — 0 home\(s\) cleared, 0 left in place/);
+  });
+
+  it('SKIPS a symlink this box cannot resolve — never writes through one', () => {
+    const home = freshBox('ccrc-inst-gfx-off-badlink-');
+    plantFakeVenv(home);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    symlinkSync(join(home, 'not-cloned-yet', 'CLAUDE.md'), claudeMd(home));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(claudeMd(home)).isSymbolicLink(), 'the unresolvable link was replaced').toBe(true);
+    expect(existsSync(claudeMd(home)), 'a file was created at the link target').toBe(false);
+    expect(r.stderr).toMatch(/symlink this box cannot resolve/);
+  });
+
+  it('writes through a RESOLVABLE symlink to the TARGET, and the link stays a link', () => {
+    const home = freshBox('ccrc-inst-gfx-off-link-');
+    plantFakeVenv(home);
+    const target = join(home, 'dotfiles', 'CLAUDE.md');
+    mkdirSync(join(home, 'dotfiles'), { recursive: true });
+    writeFileSync(target, `# shared\n\n${BLOCK}\n`);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    symlinkSync(target, claudeMd(home));
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(lstatSync(claudeMd(home)).isSymbolicLink(), 'the link was replaced by a file').toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('# shared\n');
+  });
+
+  it('preserves the file\'s own mode instead of widening it to 644', () => {
+    const home = freshBox('ccrc-inst-gfx-off-mode-');
+    plantFakeVenv(home);
+    const f = seed(home, `# private\n\n${BLOCK}\n`, 0o600);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# private\n');
+    expect(statSync(f).mode & 0o777, 'a 0600 CLAUDE.md was silently widened').toBe(0o600);
+  });
+
+  it('leaves no CLAUDE.md.tmp.<pid> behind, on the write path or the refusal path', () => {
+    const home = freshBox('ccrc-inst-gfx-off-notmp-');
+    plantFakeVenv(home);
+    seed(home, `# head\n\n${BLOCK}\n`);
+    runInstall(home, ['install']);
+    expect(readdirSync(join(home, '.claude')).filter((n) => n.includes('CLAUDE.md.tmp')),
+      'a temp file was left in the operator\'s config directory').toEqual([]);
+  });
+
+  it('is idempotent: the second run removes nothing and cuts no backup', () => {
+    const home = freshBox('ccrc-inst-gfx-off-idem-');
+    plantFakeVenv(home);
+    const f = seed(home, `# head\n\n${BLOCK}\n`);
+    const first = runInstall(home, ['install']);
+    expect(first.code, first.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# head\n');
+    const after = backupDirs(home).length;
+    expect(after, 'the first run cut no backup of the file it rewrote').toBeGreaterThan(0);
+    const second = runInstall(home, ['install']);
+    expect(second.code, second.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# head\n');
+    expect(second.stdout).toMatch(/always-on read rule — 0 home\(s\) cleared/);
+    expect(backupDirs(home).length, 'a second run cut a backup of a file it did not touch')
+      .toBe(after);
   });
 
   it('splices with line-addressed sed and no awk at all — the BSD -v hazard is retired, not guarded', () => {
@@ -889,11 +797,16 @@ describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'
     // cover. The function now uses `sed` with LINE ADDRESSES computed from a
     // marker census, so there is no awk to get wrong and nothing multi-line is
     // passed to any tool. This asserts that structural fact instead.
+    //
+    // D-1245 carried it over from the retired converge's describe: the remover
+    // reuses the very same `sed -n "1,$((…-1))p"` construction, and this is the
+    // tree's ONLY defence against awk returning to it — `macos-platform.test.ts`
+    // does not ban awk at all.
     const src = readFileSync(path.resolve(here, '../../ccd/ccrc'), 'utf8');
-    const at = src.indexOf('_inst_graph_always_on() {');
+    const at = src.indexOf('_inst_graph_always_on_off() {');
     expect(at, 'the function scan went vacuous').toBeGreaterThan(-1);
     const body = src.slice(at, src.indexOf('\n}\n', at));
-    expect(body, 'the sed splice went missing').toMatch(/sed -n "1,\$\(\(ls-1\)\)p"/);
+    expect(body, 'the sed splice went missing').toMatch(/sed -n "1,\$\(\(lb-1\)\)p"/);
     // EXECUTABLE LINES ONLY — the rule `ccrc-api-ship.test.ts` states for
     // deploy.sh: this function's comments discuss awk by name at length, and a
     // scrape that counted prose would redden on its own explanation. And
@@ -908,10 +821,12 @@ describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'
   });
 
   it('is skipped entirely on a server-role box', () => {
-    const home = freshBox('ccrc-inst-gfx-alwayson-server-');
+    const home = freshBox('ccrc-inst-gfx-off-server-');
     plantFakeVenv(home);
-    const r = runInstall(home, ['install', '--role', 'server']);
-    expect(r.stdout).not.toMatch(/always-on read rule/);
+    const f = seed(home, `# head\n\n${BLOCK}\n`);
+    runInstall(home, ['install', '--role', 'server']);
+    expect(readFileSync(f, 'utf8'), 'a server box has no rostered homes to clear')
+      .toContain(START);
   });
 });
 

@@ -2019,10 +2019,12 @@ describe('ccrc install: the order is stated in one place', () => {
       // out of every `git status`. Neither reads what the other wrote, so the
       // position is a grouping rather than a dependency — but it must follow
       // `_inst_tree`, since it copies the list out of the PLACED tree.
-      // D-1243. The READ side, and it sits right after the skill because it is
-      // assembled from the same pinned package the skill is — before the noise
-      // list, which serves the write path this one deliberately does not.
-      '_inst_graph_always_on',
+      // D-1245. The READ side moved OUT of the operator's account-wide
+      // CLAUDE.md and into the artifacts ccrc owns outright (the session
+      // hook's SessionStart card, worker clause 12, the PATH converge). What
+      // is left here is the REMOVER, in `_inst_graph_hooks_off`'s own shape:
+      // a step whose whole job is taking back what an earlier layer planted.
+      '_inst_graph_always_on_off',
       '_inst_graph_noise',
       // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
       // the task brief: the sweep's `check-ignore` precondition needs a

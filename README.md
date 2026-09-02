@@ -1511,19 +1511,23 @@ content. (`server/test/ccrc-install.test.ts` pins that sequence, and
 for two deviations before that guard existed.)
 
 **Reading the graph, which is a separate problem from keeping it fresh.** Everything above serves
-the WRITE path. For three deviations nothing served the read path at all: measured across the five
-rostered homes, the rule "for codebase questions, run `graphify query` first" appeared in **none** of
-them, and the only always-on graphify text any home carried named a `/graphify` slash command — the
-opposite of always-on. A graph could be rebuilt every fifteen minutes, be perfectly current, and
-never be consulted. `_inst_graph_always_on` converges graphify's own packaged block
-(`always_on/claude-md.md`, read from the pinned venv rather than vendored, so its wording tracks the
-engine the box runs) into every rostered home's `CLAUDE.md`, between ccrc's markers. It goes into
-the **homes, not the repos** — ccrc owns its wrapper homes and does not own the repos sessions work
-in — and it writes THROUGH a symlinked `CLAUDE.md` rather than replacing it, because two homes
-sharing one file is a real configuration. A home carrying an *unmarked* `## graphify` section (what
-`graphify install` itself writes) is reported and skipped: ccrc did not author that text. The step
-degrades rather than dies — a build shipping no such block leaves an install otherwise converged.
-It is an instruction, not an enforced path: no mechanism here can make a session query a graph.
+the WRITE path, and for three deviations nothing served the read path at all: measured across the
+five rostered homes, the rule "for codebase questions, run `graphify query` first" appeared in
+**none** of them. D-1243's answer was graphify's own packaged block, `always_on/claude-md.md`,
+appended to every rostered home's config-dir `CLAUDE.md` between ccrc's markers — and **D-1245
+retired it**, because it was wrong on two counts. That block is written for a PROJECT file ("This
+project has a knowledge graph at graphify-out/"), so account-wide it asserted that of every project
+the account opens, including the trees the sweep refuses; and the file is the *operator's*, not
+ccrc's, which is the sole reason every one of D-1244's six data-loss classes existed at all.
+Measured over the week it was deployed: 109 `query`/`path`/`explain` calls across 4 corpora, 103 of
+them in the one repository whose *project* `CLAUDE.md` had carried graphify's block since July, and
+zero in ccrc-pwa — the busiest project on the fleet, with five fresh graphs.
+`_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census:
+whole-line markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and
+SKIPPED when they cannot be), the file's own mode preserved, backed up before every write. Anything
+else is *left in place; remove by hand*, counted, and reported as a degraded step. It is
+`_inst_graph_hooks_off`'s shape and stays in the tree the same way. What replaced it — starting with
+the `SessionStart` card that tells a session to run `graphify query` before it greps — is below.
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its

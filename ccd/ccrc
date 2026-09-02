@@ -3815,7 +3815,7 @@ cmd_install() {
   _inst_hooks
   _inst_skills
   _inst_graphify_skill
-  _inst_graph_always_on
+  _inst_graph_always_on_off
   _inst_graph_noise
   _inst_graph_excludes
   _inst_graph_hooks_off
@@ -5134,206 +5134,141 @@ _inst_graphify_skill() {
 # here more than most: the sweep timer reads this file every 15 minutes, so a
 # non-atomic write has a live reader, and a plain `cp` follows a symlink at the
 # destination instead of replacing it.
-# ── _inst_graph_always_on — the READ side, which had no mechanism ─────────
-# D-1243. Everything graphify ships on the fleet until now serves the WRITE
-# path: the engine, the skill, the excludes, the noise list, the 15-minute
-# sweep. All of it keeps graphs FRESH. Nothing made a session READ one.
+# ── _inst_graph_always_on_off — take back the account-wide block (D-1245) ─
+# D-1243 installed graphify's `always_on/claude-md.md` into every rostered
+# home's config-dir `CLAUDE.md`. Two things were wrong with that, and neither is
+# a wording problem:
 #
-# Measured before this step existed: the only always-on instruction any rostered
-# home carried said "when the user types `/graphify`…" — an explicit slash
-# command, i.e. the OPPOSITE of always-on. The query-first rule appeared in
-# exactly zero of the five homes. So a graph could be rebuilt every 15 minutes,
-# perfectly current, and never once be consulted.
+#   1. The block is written for a PROJECT file. Its first sentence is "This
+#      project has a knowledge graph at graphify-out/". Planted account-wide it
+#      asserts that of every project the account ever opens, including the trees
+#      the sweep refuses.
+#   2. That file is the OPERATOR's, not ccrc's. Every one of D-1244's six
+#      data-loss classes — substring markers, a lost end marker, two blocks, the
+#      line-1 splice, the unchecked `&&` chain, the symlink fallback — existed
+#      ONLY because ccrc was rewriting a file it does not own.
 #
-# graphify ships the remedy and we had never installed it: `always_on/
-# claude-md.md` in the package, whose first rule is "for codebase questions,
-# first run `graphify query`". ASSEMBLED FROM THE PACKAGE, NEVER VENDORED —
-# `install-graphify-skill.sh`'s header states that rule for the skill (spec §B)
-# and the same reasoning binds here: a vendored copy is a second writer, and two
-# writers drift. Reading it from the pinned venv keeps the wording in lockstep
-# with the engine version the box actually runs.
+# MEASURED EFFECT, which is what settled it: graphify's own query log over the
+# week after D-1243 deployed showed 109 query/path/explain calls across 4
+# corpora, 103 of them in the one repository whose PROJECT CLAUDE.md had carried
+# graphify's block, committed, since July. Zero in ccrc-pwa, the busiest project
+# on the fleet, with five fresh graphs. "5/5 homes converged" was shape; that is
+# effect. The read side now lives in `ccd/session-hook.sh`'s SessionStart card,
+# worker clause 12, and `_inst_graphify_engine`'s PATH converge — artifacts ccrc
+# installs and owns outright.
 #
-# INTO THE HOMES, NOT INTO THE REPOS, and that is the same asymmetry D-1161
-# settled for the noise list: ccrc owns its wrapper homes and may converge them;
-# it does not own the repos sessions work in, and writing this block into each
-# project's `CLAUDE.md` would be ccrc editing files it has no claim on — the
-# exact objection that killed O6(a). One block per home covers every session, in
-# every repo, touching nothing that is not ours.
+# THIS IS D-1244'S CENSUS DOING ITS LAST JOB, not a second implementation of it:
+# the same whole-line marker count, the same exactly-one-well-ordered-pair rule,
+# the same symlink resolution that SKIPS rather than falling back to the link,
+# the same `_plat_mode` preservation, the same backup-before-write. It deletes
+# lines ls..le (plus the one separating blank line the append path wrote) where
+# the converge spliced a block in.
 #
-# NEVER CLOBBERS. The block is delimited by ccrc's own markers, so convergence
-# is unambiguous; content outside them is never read or rewritten. A home whose
-# `CLAUDE.md` carries an UNMARKED `## graphify` section — what `graphify
-# install` itself writes — is REPORTED AND SKIPPED, not merged into: this
-# installer is not the author of that text and has no way to tell an operator's
-# edit of it from a stale copy of it.
-_inst_graph_always_on() {
+# `_inst_graph_hooks_off` IS THE IDIOM, not a wart: ccrc already has a step
+# whose whole job is removing what an earlier layer planted, and it states the
+# rule this one follows — anything not provably WHOLLY ccrc's own is "left in
+# place; remove by hand", counted, and reported. That is the TREE's spelling of
+# the phrase (ccd/ccrc:5411 and :5249), not the spec's em-dashed one; D-1247
+# records the divergence, and the half-block test asserts the semicolon. This
+# step stays in the tree afterwards exactly as that one does.
+_inst_graph_always_on_off() {
   [ "$INST_ROLE" = server ] && return 0
-  local pkg src n=0 kept=0 same=0 ts backups
-  # `CCRC_GRAPHIFY_PKG` first, exactly as `install-graphify-skill.sh:24` reads
-  # it — one knob with one meaning across both steps that resolve this package,
-  # rather than a second spelling of the same override.
-  pkg="${CCRC_GRAPHIFY_PKG:-}"
-  [ -n "$pkg" ] || pkg="$("$HOME/.ccrc/graphify-venv/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent)' 2>/dev/null)" || pkg=""
-  if [ -z "$pkg" ]; then
-    # DEGRADES, NEVER DIES — `_inst_enable`'s own idiom for the sweep timer:
-    # "a systemd that will not take this one timer must not turn an otherwise-
-    # converged install into a failed one … the sweep is convenience, not the
-    # guardrail". A read RULE is the same class. The first draft used `_ccrc_die`
-    # on all three gates below, and a box with no resolvable package took the
-    # WHOLE install down with it — a fix for a missing nicety, worse than the
-    # nicety being missing.
-    echo "install: graphify: cannot resolve the graphify package from the venv — always-on read rule SKIPPED"
-    INST_DEGRADED+=(graphify-read-rule)
-    return 0
-  fi
-  src="$pkg/always_on/claude-md.md"
-  if [ ! -f "$src" ]; then
-    # NOT `INST_DEGRADED`, on `_inst_linger_darwin`'s stated distinction: a
-    # degraded step is one that was supposed to happen and did not, which a
-    # re-run might fix. A graphify build that ships no block is a fact about
-    # the build, not a shortfall of this run, and counting it would print
-    # DEGRADED on every install forever.
-    echo "install: graphify: this graphify build ships no always-on block ($src) — read rule SKIPPED, nothing invented"
-    return 0
-  fi
+  local n=0 kept=0 ts backups
   if ! source "$HOME/.ccrc/accounts.sh" 2>/dev/null || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
-    echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule SKIPPED"
+    # DEGRADES, NEVER DIES — `_inst_enable`'s rule for the sweep timer, and it
+    # binds harder here: a block ccrc failed to REMOVE is a stale instruction,
+    # not a broken box, and taking the whole install down over it would be a
+    # fix worse than the thing being fixed.
+    echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule not cleared"
     INST_DEGRADED+=(graphify-read-rule)
     return 0
   fi
   ts=$(date +%Y%m%d-%H%M%S); backups="$HOME/ccrc-backups/$ts"
-  local a dir f start end body want cur phys ns ne ls le mode tmp
+  local a dir f start end phys ns ne ls le lb mode tmp
   start='<!-- ccrc:graphify-always-on:start -->'
   end='<!-- ccrc:graphify-always-on:end -->'
-  body="$(cat "$src")"
-  want="$start
-$body
-$end"
   for a in "${CCRC_ACCOUNTS[@]}"; do
     dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" || continue
     [ -n "$dir" ] || continue
     f="$dir/CLAUDE.md"
-    # A SYMLINK IS RESOLVED, OR THE HOME IS SKIPPED — never written through a
-    # path we failed to resolve. D-1244: the first draft fell back to the LINK
-    # path when `readlink -f` failed, so "resolved" and "could not resolve"
-    # collapsed to one value and the failure case wrote over the link — exactly
-    # the data loss the resolution exists to prevent, reached silently. That is
-    # the overloaded null at a seam this codebase forbids, and it is reachable:
-    # `readlink -f` answers empty for a link whose target's parent does not
-    # exist yet (a dotfiles repo not cloned), and has no `-f` at all on older
-    # macOS, which this repo runs a CI leg for.
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    # A SYMLINK IS RESOLVED, OR THE HOME IS SKIPPED (D-1244). `readlink -f`
+    # answers empty for a link whose target's parent does not exist yet, and
+    # falling back to the LINK path collapses "resolved" and "could not
+    # resolve" into one value — the overloaded null this codebase forbids at a
+    # seam, and here it would delete lines out of a file nobody identified.
+    # Two homes on this fleet ARE symlinks to a third's file, so this is the
+    # ordinary case, not the exotic one.
     if [ -L "$f" ]; then
       phys="$(readlink -f "$f" 2>/dev/null)" || phys=""
       if [ -z "$phys" ]; then
-        echo "install: graphify: $f is a symlink this box cannot resolve — left untouched, read rule not converged there" >&2
+        echo "install: graphify: $f is a symlink this box cannot resolve — left in place; remove the block by hand" >&2
         kept=$((kept+1)); continue
       fi
       f="$phys"
     fi
-    # THE MARKER CENSUS, ON WHOLE LINES, AND EXACTLY ONE ORDERED PAIR OR NOTHING.
-    # D-1244. The first draft matched each marker as a SUBSTRING anywhere in a
-    # line and spliced against whatever it found. Three measured consequences:
-    # a file quoting the markers in the operator's own prose was cut at the
-    # mention; a file carrying a start marker with no end marker had EVERYTHING
-    # after the start silently deleted; and a file with two blocks never
-    # measured current, so every install rewrote and re-backed it up forever
-    # while the stale copy stayed. The function's own header promised "content
-    # outside them is never read or rewritten" — false in all three.
-    ns=0; ne=0
-    if [ -f "$f" ]; then
-      ns="$(grep -cxF "$start" "$f" 2>/dev/null || true)"; ns="${ns:-0}"
-      ne="$(grep -cxF "$end" "$f" 2>/dev/null || true)"; ne="${ne:-0}"
-    fi
+    [ -f "$f" ] || continue
+    # THE MARKER CENSUS, ON WHOLE LINES, EXACTLY ONE ORDERED PAIR OR NOTHING.
+    # A substring match would cut a file at the operator's own MENTION of the
+    # markers; a missing end marker would delete everything after the start.
+    ns="$(grep -cxF "$start" "$f" 2>/dev/null || true)"; ns="${ns:-0}"
+    ne="$(grep -cxF "$end" "$f" 2>/dev/null || true)"; ne="${ne:-0}"
     if [ "$ns" -eq 0 ] && [ "$ne" -eq 0 ]; then
-      if [ -f "$f" ] && grep -qE '^## graphify[[:space:]]*$' "$f"; then
-        echo "install: graphify: $f carries an unmarked '## graphify' section — left in place; remove it by hand to let ccrc converge this block" >&2
-        kept=$((kept+1)); continue
-      fi
-    elif [ "$ns" -eq 1 ] && [ "$ne" -eq 1 ]; then
-      ls="$(grep -nxF "$start" "$f" | head -n1 | cut -d: -f1)"
-      le="$(grep -nxF "$end" "$f" | head -n1 | cut -d: -f1)"
-      if [ "$ls" -ge "$le" ]; then
-        echo "install: graphify: $f carries ccrc's end marker before its start marker — malformed, left untouched" >&2
-        kept=$((kept+1)); continue
-      fi
-      # already converged, byte for byte, over the ONE marked region -> no write
-      if [ "$(sed -n "${ls},${le}p" "$f")" = "$want" ]; then
-        same=$((same+1)); continue
-      fi
-    else
-      echo "install: graphify: $f carries $ns start and $ne end markers, and exactly one pair is required — malformed, left untouched" >&2
+      continue   # nothing of ours here; idempotence lives on this line
+    fi
+    if [ "$ns" -ne 1 ] || [ "$ne" -ne 1 ]; then
+      echo "install: graphify: $f carries $ns start and $ne end markers, and exactly one pair is required — left in place; remove by hand" >&2
       kept=$((kept+1)); continue
     fi
-    cur=""
-    [ -f "$f" ] && cur="$(cat "$f")"
-    if ! mkdir -p "$dir" 2>/dev/null; then
-      echo "install: graphify: cannot create $dir — read rule not converged there" >&2
+    ls="$(grep -nxF "$start" "$f" | head -n1 | cut -d: -f1)"
+    le="$(grep -nxF "$end" "$f" | head -n1 | cut -d: -f1)"
+    if [ "$ls" -ge "$le" ]; then
+      echo "install: graphify: $f carries ccrc's end marker before its start marker — malformed, left in place; remove by hand" >&2
       kept=$((kept+1)); continue
     fi
-    # PRESERVE THE FILE'S OWN MODE. D-1244: forcing 644 silently WIDENED a
-    # CLAUDE.md an operator had restricted — and since a symlink is resolved
-    # first, the file being re-moded may not even be inside a ccrc home. GNU
-    # and BSD `stat` spell this differently and ccrc installs on both.
-    # `_plat_mode`, NOT a bare `stat -c %a` — this file ships to macOS and
-    # `macos-platform.test.ts` refuses a GNU-only call outside the platform
-    # block. The shim already exists and already answers the harder question
-    # correctly (`%Mp%Lp` on BSD, so a setuid file does not read differently
-    # between the arms); my first cut hand-rolled a two-arm `stat` and the
-    # guard caught it.
-    mode=""
-    [ -f "$f" ] && mode="$(_plat_mode "$f" 2>/dev/null || true)"
+    # THE ONE SEPARATING BLANK LINE the append path wrote before the block
+    # (`printf '%s\n\n' "$cur"`), and only when it really is blank and really
+    # is ours to take: without this, removal leaves a growing run of blank
+    # lines behind on a home the converge had appended to.
+    lb="$ls"
+    if [ "$ls" -gt 1 ] && [ -z "$(sed -n "$((ls-1))p" "$f")" ]; then lb=$((ls-1)); fi
+    # PRESERVE THE FILE'S OWN MODE (D-1244): a symlink was resolved first, so
+    # the file being rewritten may not even sit inside a ccrc home, and forcing
+    # 644 would widen a CLAUDE.md an operator had restricted. `_plat_mode`, not
+    # a bare `stat -c %a` — this file ships to macOS and `macos-platform.test.ts`
+    # refuses a GNU-only call outside the platform block.
+    mode="$(_plat_mode "$f" 2>/dev/null || true)"
     [ -n "$mode" ] || mode=644
-    if [ -f "$f" ]; then
-      if ! { mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"; }; then
-        echo "install: graphify: cannot back up $f — left untouched rather than rewritten unbacked" >&2
-        kept=$((kept+1)); continue
-      fi
+    if ! { mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"; }; then
+      echo "install: graphify: cannot back up $f — left in place rather than rewritten unbacked" >&2
+      kept=$((kept+1)); continue
     fi
     tmp="$f.tmp.$$"
-    # EVERY PIECE'S STATUS, NOT JUST THE LAST. D-1244: a `{ a; b; c; } > tmp`
-    # group carries only c's status, and the tail piece writes NOTHING when the
-    # block sits at end of file — the layout the append path itself creates. So
-    # a failed first piece (ENOSPC, an OOM-killed child) silently produced a
-    # file holding the block ALONE, moved it over the operator's CLAUDE.md, and
-    # reported "converged". Measured under real ENOSPC and a real SIGKILL. The
-    # `&&` chain makes the group's status the first failure.
+    # EVERY PIECE'S STATUS, NOT JUST THE LAST (D-1244): a `{ a; b; } > tmp`
+    # group carries only b's status, and b writes NOTHING when the block ends
+    # the file — the layout the append path itself creates. The `&&` chain makes
+    # the group's status the FIRST failure.
     #
-    # `sed` line addressing rather than awk marker matching: it cannot mistake a
-    # marker quoted in prose for a real one (the census above already fixed the
-    # boundaries), and it retires the BSD-awk `-v` newline hazard entirely
-    # rather than guarding against it.
-    if [ "$ns" -eq 1 ]; then
-      # `[ "$ls" -le 1 ] ||` GUARDS AN EMPTY PREFIX, and it is not defensive
-      # padding: `sed -n "1,0p"` does NOT print nothing. An addr2 at or below
-      # addr1 makes sed match the ONE line at addr1, so a block sitting at line
-      # 1 had its own start marker re-emitted and the block appended after it —
-      # two start markers, measured. That layout is not exotic: it is what the
-      # append path produces for a home that had no CLAUDE.md at all, which on
-      # the reference fleet is a real home.
-      if ! { { [ "$ls" -le 1 ] || sed -n "1,$((ls-1))p" "$f"; } &&
-             printf '%s\n' "$want" &&
-             sed -n "$((le+1)),\$p" "$f"; } > "$tmp" 2>/dev/null; then
-        rm -f "$tmp"
-        echo "install: graphify: could not rewrite $f — left untouched" >&2
-        kept=$((kept+1)); continue
-      fi
-    else
-      if ! { { [ -z "$cur" ] || printf '%s\n\n' "$cur"; } &&
-             printf '%s\n' "$want"; } > "$tmp" 2>/dev/null; then
-        rm -f "$tmp"
-        echo "install: graphify: could not write $f — left untouched" >&2
-        kept=$((kept+1)); continue
-      fi
+    # `[ "$lb" -le 1 ] ||` GUARDS AN EMPTY PREFIX and is not padding: `sed -n
+    # "1,0p"` does not print nothing — an addr2 at or below addr1 makes sed
+    # match the ONE line at addr1, so a block at line 1 would have its own
+    # start marker re-emitted. That layout is what the append path produced for
+    # a home that had no CLAUDE.md at all.
+    if ! { { [ "$lb" -le 1 ] || sed -n "1,$((lb-1))p" "$f"; } &&
+           sed -n "$((le+1)),\$p" "$f"; } > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      echo "install: graphify: could not rewrite $f — left in place" >&2
+      kept=$((kept+1)); continue
     fi
     if ! { chmod "$mode" "$tmp" && mv -f "$tmp" "$f"; }; then
       rm -f "$tmp"
-      echo "install: graphify: could not install $f — left untouched" >&2
+      echo "install: graphify: could not replace $f — left in place" >&2
       kept=$((kept+1)); continue
     fi
     n=$((n+1))
   done
   [ "$kept" -eq 0 ] || INST_DEGRADED+=(graphify-read-rule)
-  echo "install: graphify: always-on read rule — $n home(s) converged, $same already current, $kept skipped"
+  echo "install: graphify: always-on read rule — $n home(s) cleared, $kept left in place"
 }
 
 _inst_graph_noise() {
