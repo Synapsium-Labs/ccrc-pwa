@@ -2522,6 +2522,74 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   with `diff` and a re-run before moving on. Any task that measures a mutation table before its commit
   needs the same, or must stage first.
 
+- **D-1340** (2026-09-02, Task 3, R2 review fix) — **Step 5's paragraph describes a `SessionStart`
+  card the hook does not print.** The block was authored before Task 2's own fix commit landed
+  (`2e77f98e`, D-1333..D-1337) and collapses precisely the distinctions that commit exists to
+  preserve. (a) It opens *"Every session's `SessionStart` prints one line for its own tree"*, but
+  `_hook_graph_card` returns SILENTLY for a tree with no `graphify-out/graph.json` and no sweep-census
+  row (`ccd/session-hook.sh:78-103`, `[ -n "$row" ] || return 0`) and prints a DIFFERENT sentence —
+  `graphify: this tree has no knowledge graph — the ccrc sweep's last pass says …` — for a tree the
+  sweep refused. (b) It states freshness as *"fresh or N commits behind HEAD"*, two values, where the
+  hook emits four states plus absence: `fresh`, `1 commit behind HEAD`, `<n> commits behind HEAD`, and
+  D-1336's `freshness unmeasured` (`:130-140`), whose own comment in the hook calls the two-value
+  collapse "a defect and not a style ('no overloaded null at a seam')" — and node count, built-sha and
+  freshness are each omitted individually when their measurement fails (`:148-152`). A coordinator
+  following the paragraph as written quotes a clause that is not there, or reports a missing card as a
+  fault. THE TREE GOVERNS: the paragraph is restated from the hook as shipped.
+  And because nothing under `server/test/` read that paragraph, the drift could never go red — so it
+  is now BOUND, in the idiom `coordinator-skill.test.ts` already uses to cross-check SKILL.md's
+  refusal codes against `wave-lifecycle.md`. A new describe harvests every `fresh="…"` assignment out
+  of `ccd/session-hook.sh` (the count placeholder normalised away, leaving `fresh`,
+  `behind HEAD`, `freshness unmeasured`) and requires each in the paragraph; harvests the refused-tree
+  sentence from the hook's own `_hook_emit_context` call and requires it quoted; and requires the
+  paragraph to say a tree can get NOTHING. MEASURED — renaming the hook's `freshness unmeasured` to
+  `freshness unknown` reds BOTH suites (`Tests  2 failed | 77 passed (79)` across the pair), and
+  deleting the paragraph's absence half reds the coordinator suite
+  (`Tests  1 failed | 64 passed (65)`).
+
+- **D-1341** (2026-09-02, Task 3, R2 review fix) — **Clause 12 as Steps 1/3 spell it consumes nothing
+  of the card Task 2 built, and the clause COUNT was pinned nowhere.** Two holes, both cardinality-
+  or decision-shaped, both closed in the same commit.
+  (a) **The branch.** The plan's clause 12 is unconditional — a codebase question goes to
+  `graphify query` before `grep` or a file read, conditioned only on `graphify-out/graph.json`
+  existing — while the coordinator paragraph three files away exists to hand the worker a freshness
+  figure and says *"a graph 97 commits stale answers confidently and wrongly"*. A worker whose own
+  card reads `97 commits behind HEAD` was told by its contract to prefer that graph's answer over
+  reading the file: information delivered with no decision rule attached, the same shape as a comment
+  standing in for a mechanism. Clause 12 now carries the rule the card was built to feed — *"only
+  `fresh` licenses taking it as read, while `N commits behind HEAD`, `freshness unmeasured`, or no
+  freshness clause at all makes every query answer a LEAD to verify by opening the file it names"* —
+  and `CONTRACT[11]` in `server/test/worker-skill.test.ts` was updated byte-identically in the same
+  edit. Its vocabulary is bound to the hook by the same harvest as D-1340, so a card word the hook
+  stops printing reds the clause that branches on it.
+  (b) **The count.** After Step 7 the number `twelve` was hand-maintained in five places
+  (`SKILL.md:49`, `SKILL.md:52`, `CLAUDE.md:181`, `README.md:1142`, `README.md:1326`) and asserted in
+  none — no test anywhere contained the string. MEASURED at the review: reverting any one of them to
+  `eleven` left the suite GREEN, and so did APPENDING a 13th clause to `SKILL.md`, because the
+  `CONTRACT` pin is a subset check with no cardinality — the contract could be extended with no pin,
+  which is the one thing "pinned verbatim" exists to prevent. D-1338 exists only because proving the
+  old count gone had to be done by `git grep`; a mechanism makes that step unnecessary. Two derived
+  assertions close both: the `^\d+\. ` clause numbering must equal `1..CONTRACT.length` exactly, and
+  the spelled-out count — `WORDS[CONTRACT.length]`, `box-token-census.test.ts`'s index-addressed idiom
+  — is harvested out of `SKILL.md`'s own prose and out of the window following each
+  `ccd/worker-skill/SKILL.md` mention in `README.md` and `CLAUDE.md`, so the sites are DERIVED rather
+  than listed by line number.
+  **Step 8's table gains four rows, all MEASURED** (pristine-copy revert per D-1339, `git diff --stat`
+  and `md5sum -c` clean after each):
+
+  | mutation | measured red |
+  |---|---|
+  | drop clause 12's freshness branch (back to the plan's own wording) | `worker-skill` — `Tests  1 failed / 13 passed (14)`, "carries all twelve clauses verbatim" |
+  | `These twelve clauses` → `These eleven clauses` in `SKILL.md` | `worker-skill` — "spells that same count…": `SKILL.md says eleven where the CONTRACT pins 12` |
+  | `twelve clauses` → `eleven clauses` at `README.md:1142` | `worker-skill` — same test: `README.md says eleven clauses where the CONTRACT pins 12` |
+  | append a 13th clause to `SKILL.md` | `worker-skill` — "numbers exactly as many clauses as the CONTRACT pins": `[1..13]` vs `[1..12]` |
+
+  The three rows the plan already had were re-measured against the new clause text and all still red
+  at `Tests  1 failed | 13 passed (14)` on "carries all twelve clauses verbatim": delete clause 12
+  (which now reds the numbering pin too, `2 failed | 12 passed`), soften "Never run `graphify update`",
+  and the U+2011 lookalike-byte swap in `session-side` (D-1339's substitute for the impossible
+  apostrophe row — clause 12 still carries zero apostrophes).
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

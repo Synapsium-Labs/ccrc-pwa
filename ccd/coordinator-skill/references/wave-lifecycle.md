@@ -178,13 +178,23 @@ leaves that clause pointing at nothing and the worker improvising the very
 thing the clause exists to stop. Name it explicitly, every wave, the same way
 you name the plan file.
 
-**A brief may quote the worker's graph card.** Every session's `SessionStart`
-prints one line for its own tree — node count, the commit the graph was built
-at, and whether that is fresh or N commits behind HEAD. Quoting the freshness
-half in the brief tells the worker what it is querying before it queries it: a
-graph 97 commits stale answers confidently and wrongly, and worker clause 12
-sends the worker to `graphify query` first. The card is measured per tree, so a
-brief that quotes it is quoting THAT workspace, not the fleet.
+**A brief may quote the worker's graph card, where that workspace has one.** A
+session whose tree carries `graphify-out/graph.json` gets one `SessionStart`
+line for THAT tree: node count, the commit the graph was built at, and a
+freshness clause reading `fresh`, `1 commit behind HEAD` / `N commits behind
+HEAD`, or `freshness unmeasured` — the last when the graph names a commit that
+git in that tree will not date, which is a different thing from a graph that is
+merely old. Every half is individually optional: whatever the hook could not
+measure is simply left out, so a card with no freshness clause at all is a
+fourth state and not a fault. A tree the sweep REFUSED gets a different and
+equally quotable line — `this tree has no knowledge graph`, plus the sweep's own
+last reason — and a tree the sweep has not reached gets NOTHING. A missing card
+is never something to report as broken. Quoting the freshness half in the brief
+tells the worker what it is querying before it queries it: a graph 97 commits
+stale answers confidently and wrongly, and worker clause 12 turns anything but
+`fresh` into a lead the worker must verify by reading the file. The card is
+measured per tree, so a brief that quotes it is quoting THAT workspace, not the
+fleet.
 
 **One sentence from the protocol goes in every brief anyway: "commit on this
 workspace's own branch; do not create or switch to a separate feature
