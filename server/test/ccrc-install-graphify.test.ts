@@ -420,8 +420,13 @@ const ALWAYS_ON_FIXTURE = [
   '',
 ].join('\n');
 
+// THE SAME DIRECTORY `ccrcEnv` points `CCRC_GRAPHIFY_PKG` at. D-1244: this
+// helper first planted a package under the venv, which the env override then
+// shadowed — so the block a test wrote was never the block the step read, and
+// every D-1244 case failed for a fixture reason. One package dir, one override,
+// one place a test can rewrite the shipped block.
 function fakePkgDir(home: string): string {
-  return path.join(home, '.ccrc', 'graphify-venv', 'pkg', 'graphify');
+  return path.join(home, 'fixture-graphify-pkg');
 }
 
 function plantFakeVenv(home: string, version = '0.9.9'): string {
@@ -433,6 +438,7 @@ function plantFakeVenv(home: string, version = '0.9.9'): string {
   writeFileSync(path.join(bin, 'python'),
     `#!/bin/sh\necho "$@" >> "$HOME/venv-python-calls"\n`
     + `case "$*" in *"import graphify"*) echo "${pkg}" ;; esac\nexit 0\n`, { mode: 0o755 });
+  // the env override names this same dir, so the probe and the override agree
   writeFileSync(path.join(bin, 'graphify'),
     `#!/bin/sh\n[ "$1" = --version ] && { echo "graphify ${version}"; exit 0; }\nexit 0\n`,
     { mode: 0o755 });
@@ -543,6 +549,191 @@ describe('ccrc install: the default noise list (_inst_graph_noise, D-1160)', () 
   });
 });
 
+describe('ccrc install: the read rule refuses malformed files rather than splicing (D-1244)', () => {
+  // Every case here was raised by an adversarial review of D-1243 and MEASURED
+  // against the shipped code before it was fixed. The header of the function
+  // claimed "content outside them is never read or rewritten" and "NEVER
+  // CLOBBERS"; all of these falsified one or both.
+  const START = '<!-- ccrc:graphify-always-on:start -->';
+  const END = '<!-- ccrc:graphify-always-on:end -->';
+  const claudeMd = (home: string) => join(home, '.claude', 'CLAUDE.md');
+  const seed = (home: string, text: string, mode = 0o644): string => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(claudeMd(home), text, { mode });
+    return claudeMd(home);
+  };
+
+  it('a START marker with no END marker is skipped, not spliced — everything after it survives', () => {
+    // Measured on the shipped code: the tail piece never set `seen`, printed
+    // nothing, and the splice emitted prefix+block — deleting every line after
+    // the start marker while reporting "converged". One hand-edit that drops a
+    // marker line is enough, and CLAUDE.md is a file people edit by hand.
+    const home = freshBox('ccrc-inst-gfx-halfblock-');
+    plantFakeVenv(home);
+    const text = `# head\n\n${START}\nstale\n\n## OPERATOR TAIL\n- keep me\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8'), 'a malformed file was spliced instead of skipped').toBe(text);
+    expect(r.stderr).toMatch(/malformed, left untouched/);
+  });
+
+  it('two blocks are skipped, not silently carried forward and rewritten on every run', () => {
+    // The old convergence predicate re-armed at each start marker and returned
+    // both regions concatenated, so it could never equal the wanted block: the
+    // file reached a fixed point the predicate still called "not converged",
+    // and every install rewrote it and cut another backup, forever.
+    const home = freshBox('ccrc-inst-gfx-twoblocks-');
+    plantFakeVenv(home);
+    const one = `${START}\nA\n${END}\n`;
+    const text = `# head\n\n${one}\n${one}\n# tail\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(text);
+    expect(r.stderr).toMatch(/2 start and 2 end markers/);
+  });
+
+  it('markers QUOTED inside the operator\'s prose are not markers — whole-line match only', () => {
+    // Measured on the shipped code: a sentence mentioning the markers was cut
+    // at the mention, a fresh block planted there, and the real block below
+    // left stale forever — the precise drift this deviation exists to prevent.
+    const home = freshBox('ccrc-inst-gfx-quoted-');
+    plantFakeVenv(home);
+    const text = `# head\n\nccrc writes between ${START} and ${END} in this file.\n\n## rules\n- keep\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const out = readFileSync(f, 'utf8');
+    expect(out, "the operator's sentence was cut at its mention of the markers")
+      .toContain('ccrc writes between');
+    expect(out).toContain('- keep');
+    // it is an append, so exactly one real pair now exists
+    expect(out.split('\n').filter((l) => l === START)).toHaveLength(1);
+    expect(out.split('\n').filter((l) => l === END)).toHaveLength(1);
+  });
+
+  it('a symlink this box cannot resolve is SKIPPED, never written through', () => {
+    // `readlink -f` answers empty for a link whose target's parent does not
+    // exist (a dotfiles repo not yet cloned) and does not exist at all on older
+    // macOS. The first draft fell back to the LINK path, so "resolved" and
+    // "could not resolve" collapsed to one value and the failure case replaced
+    // the link — the overloaded null this codebase forbids at a seam.
+    const home = freshBox('ccrc-inst-gfx-badlink-');
+    plantFakeVenv(home);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    symlinkSync(join(home, 'not-cloned-yet', 'CLAUDE.md'), claudeMd(home));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(claudeMd(home)).isSymbolicLink(), 'the unresolvable link was replaced').toBe(true);
+    expect(existsSync(claudeMd(home)), 'a file was created at the link target').toBe(false);
+    expect(r.stderr).toMatch(/symlink this box cannot resolve/);
+  });
+
+  it("preserves the file's own mode instead of widening it to 644", () => {
+    // A symlink is resolved first, so the file being re-moded may not even sit
+    // inside a ccrc home — forcing 644 could widen an operator's restricted
+    // file anywhere on the box.
+    const home = freshBox('ccrc-inst-gfx-mode-');
+    plantFakeVenv(home);
+    const f = seed(home, '# private\n', 0o600);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toContain(START);
+    expect(statSync(f).mode & 0o777, 'a 0600 CLAUDE.md was silently widened').toBe(0o600);
+  });
+
+  it('replaces a block that sits at LINE 1 without duplicating its start marker', () => {
+    // `sed -n "1,0p"` does not print nothing: an addr2 at or below addr1 makes
+    // sed match the one line at addr1, so the start marker was re-emitted and
+    // the block appended after it. Line 1 is exactly where the append path puts
+    // the block for a home that had no CLAUDE.md at all.
+    const home = freshBox('ccrc-inst-gfx-line1-');
+    plantFakeVenv(home);
+    seed(home, `${START}\nOLD BODY\n${END}\n`);
+    writeFileSync(join(fakePkgDir(home), 'always_on', 'claude-md.md'),
+      '## graphify\n\n- first run `graphify query "<q>"` — REVISED.\n');
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const out = readFileSync(claudeMd(home), 'utf8');
+    expect(out.split('\n').filter((l) => l === START), 'the start marker was duplicated').toHaveLength(1);
+    expect(out).toContain('REVISED');
+    expect(out, 'the superseded body survived').not.toContain('OLD BODY');
+  });
+
+  it('a skipped home makes the install report DEGRADED, not "every step converged"', () => {
+    const home = freshBox('ccrc-inst-gfx-degraded-');
+    plantFakeVenv(home);
+    seed(home, `# head\n${START}\nno end marker follows\n`);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'a home was skipped and the install still claimed everything converged')
+      .not.toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
+  it('leaves no CLAUDE.md.tmp.<pid> behind when it refuses', () => {
+    const home = freshBox('ccrc-inst-gfx-notmp-');
+    plantFakeVenv(home);
+    seed(home, `${START}\nhalf\n`);
+    runInstall(home, ['install']);
+    expect(readdirSync(join(home, '.claude')).filter((n) => n.includes('CLAUDE.md.tmp')),
+      'a temp file was left in the operator\'s config directory').toEqual([]);
+  });
+});
+
+describe('README: the graphify step enumeration is DERIVED, not remembered (D-1243)', () => {
+  // The README calls itself the canonical system overview, and its graphify
+  // paragraph said "four role-gated steps" for TWO deviations after the count
+  // became five and then six — D-1160 added the noise list and D-1243 the
+  // always-on rule, and neither updated the sentence. A previous review caught
+  // the same class of staleness in the paragraph immediately below it. A prose
+  // count that nothing checks is a comment, so this checks it.
+  const ccrc = readFileSync(path.resolve(here, '../../ccd/ccrc'), 'utf8');
+  const readme = readFileSync(path.resolve(here, '../../README.md'), 'utf8');
+  const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+
+  const steps = (): string[] => {
+    const body = ccrc.slice(ccrc.indexOf('cmd_install() {'));
+    const seq = body.slice(0, body.indexOf('\n}\n'));
+    return [...seq.matchAll(/^\s*(_inst_graph(?:ify)?_\w+)\s*$/gm)].map((m) => m[1]!);
+  };
+
+  it('every graphify step in cmd_install is role-gated, and there are more than a couple', () => {
+    const found = steps();
+    expect(found.length, 'the cmd_install scan went vacuous').toBeGreaterThan(3);
+    for (const fn of found) {
+      const at = ccrc.indexOf(`\n${fn}() {`);
+      expect(at, `${fn} is called by cmd_install but never defined`).toBeGreaterThan(-1);
+      expect(ccrc.slice(at, at + 400),
+        `${fn} is not gated off a server box, unlike every other graphify step`)
+        .toMatch(/\[ "\$INST_ROLE" = server \] && return 0/);
+    }
+  });
+
+  it("the README's count matches the number of steps that actually run", () => {
+    const n = steps().length;
+    // WHITESPACE-INSENSITIVE. The first draft embedded the paragraph's exact
+    // line wrap, so re-flowing identical prose reddened the build — a guard
+    // that punishes an editor for touching the file it exists to keep correct
+    // trains people to delete it. Collapse whitespace, then match.
+    const flat = readme.replace(/\s+/g, ' ');
+    const m = flat.match(/provision it in (\w+) role-gated steps \(a server box has no rostered wrapper homes to graph, so all (\w+) skip there\)/);
+    expect(m, "the README's graphify enumeration sentence moved or was reworded — re-derive this guard")
+      .not.toBeNull();
+    expect(m![1], `cmd_install runs ${n} graphify steps; the README says "${m![1]}"`).toBe(WORDS[n]);
+    expect(m![2], 'the two counts in the same sentence disagree with each other').toBe(WORDS[n]);
+  });
+
+  it('the README documents the READ side, not only the write side', () => {
+    // The whole point of D-1243, and the thing the canonical overview omitted
+    // entirely while describing five other steps in detail.
+    expect(readme, 'the canonical overview never mentions querying the graph')
+      .toMatch(/graphify query/);
+    expect(readme).toMatch(/_inst_graph_always_on/);
+  });
+});
+
 describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)', () => {
   // Everything else graphify ships on this box serves the WRITE path — engine,
   // skill, excludes, noise list, the 15-minute sweep — and all of it keeps
@@ -629,7 +820,7 @@ describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'
     expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), 'a section ccrc did not write was rewritten')
       .toBe(foreign);
     expect(r.stderr).toMatch(/carries an unmarked '## graphify' section/);
-    expect(r.stdout).toMatch(/\d+ skipped \(unmarked section\)/);
+    expect(r.stdout).toMatch(/\d+ skipped/);
   });
 
   it('writes THROUGH a symlinked CLAUDE.md, never replacing the link (D-1243)', () => {
@@ -689,25 +880,31 @@ describe('ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'
     }
   });
 
-  it('never hands awk a multi-line -v value — BSD awk refuses one and only macOS CI can see it', () => {
-    // A SOURCE RULE, deliberately, and its limits are worth stating. The defect
-    // is invisible on Linux: GNU awk accepts a newline inside `-v repl=...`
-    // while BSD awk (macOS) answers "awk: newline in string" and the rewrite
-    // dies. Every Linux run here was green; the macOS CI leg is what caught it.
-    // No fixture on this platform can reproduce that, so the mechanism
-    // available is to forbid the shape that causes it — `$want` is the one
-    // multi-line value in this function, and it must never reach an `-v`.
+  it('splices with line-addressed sed and no awk at all — the BSD -v hazard is retired, not guarded', () => {
+    // D-1244. The previous guard scanned for `awk[^\n]*-v ... "$want"`, which
+    // is anchored to ONE physical line: writing the same defect with a `\`
+    // continuation — the spelling ccd/ccrc uses everywhere — stayed GREEN
+    // (measured). A source scan that only catches one spelling of a defect it
+    // is the sole defence against is worse than no scan, because it reads as
+    // cover. The function now uses `sed` with LINE ADDRESSES computed from a
+    // marker census, so there is no awk to get wrong and nothing multi-line is
+    // passed to any tool. This asserts that structural fact instead.
     const src = readFileSync(path.resolve(here, '../../ccd/ccrc'), 'utf8');
-    const fn = src.slice(src.indexOf('_inst_graph_always_on() {'));
-    const body = fn.slice(0, fn.indexOf('\n}\n'));
-    expect(body, 'the function scan went vacuous').toContain('awk -v');
-    expect(body, 'the multi-line block was passed to awk -v; BSD awk refuses it')
-      .not.toMatch(/awk[^\n]*-v\s+\w+="\$want"/);
-    // and every -v value it does pass must be one of the single-line markers
-    for (const m of body.matchAll(/awk[^\n]*?-v\s+(\w+)="\$(\w+)"/g)) {
-      expect(['start', 'end'], `awk -v ${m[1]}="$${m[2]}" passes a value that may span lines`)
-        .toContain(m[2]);
-    }
+    const at = src.indexOf('_inst_graph_always_on() {');
+    expect(at, 'the function scan went vacuous').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    expect(body, 'the sed splice went missing').toMatch(/sed -n "1,\$\(\(ls-1\)\)p"/);
+    // EXECUTABLE LINES ONLY — the rule `ccrc-api-ship.test.ts` states for
+    // deploy.sh: this function's comments discuss awk by name at length, and a
+    // scrape that counted prose would redden on its own explanation. And
+    // continuations are joined first, so a backslash-wrapped invocation cannot
+    // hide from this scan the way it hid from the one it replaced.
+    const code = body.split('\n').map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#')).join('\n')
+      .replace(/\\\n\s*/g, ' ');
+    expect(code, 'the executable-line scan went vacuous').toMatch(/sed -n/);
+    expect(code, 'awk is back in this function; the BSD -v newline hazard returns with it')
+      .not.toMatch(/(^|[^a-z])awk\s/m);
   });
 
   it('is skipped entirely on a server-role box', () => {

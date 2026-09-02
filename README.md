@@ -1495,16 +1495,35 @@ who a message claims to be from.
 ### Graph layer (graphify)
 
 **graphify** keeps one AST-derived knowledge graph fresh per git tree on the fleet host.
-`ccrc install`/`update` provision it in four role-gated steps (a server box has no rostered wrapper
-homes to graph, so all four skip there): an **engine**, a ccrc-owned venv at
+`ccrc install`/`update` provision it in six role-gated steps (a server box has no rostered wrapper
+homes to graph, so all six skip there): an **engine**, a ccrc-owned venv at
 `~/.ccrc/graphify-venv` (`pip install graphifyy==$GRAPHIFY_PIN`, the single-definition pin in
 `ccd/ccrc`, resolved everywhere by absolute path rather than `command -v` — a shared box's
 `/usr/local/bin/graphify` can be a root-owned symlink an unprivileged install can neither update nor
 remove); a **skill**, assembled from the *installed package* — unlike the coordinator/worker
-skills, it has no vendored tree — into every rostered account's skills directory; **excludes**,
-`graphify-out/` and `.graphifyignore` converged into each tree's common-dir `info/exclude`; and
-**legacy hooks off** — the old per-repo graphify git hooks are removed if wholly graphify-generated,
-left in place and reported if they chain other content.
+skills, it has no vendored tree — into every rostered account's skills directory; the **always-on
+read rule** (below); the **default noise list**, ccrc's own footprint converged to
+`~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
+into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
+hooks are removed if wholly graphify-generated, left in place and reported if they chain other
+content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+`ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
+for two deviations before that guard existed.)
+
+**Reading the graph, which is a separate problem from keeping it fresh.** Everything above serves
+the WRITE path. For three deviations nothing served the read path at all: measured across the five
+rostered homes, the rule "for codebase questions, run `graphify query` first" appeared in **none** of
+them, and the only always-on graphify text any home carried named a `/graphify` slash command — the
+opposite of always-on. A graph could be rebuilt every fifteen minutes, be perfectly current, and
+never be consulted. `_inst_graph_always_on` converges graphify's own packaged block
+(`always_on/claude-md.md`, read from the pinned venv rather than vendored, so its wording tracks the
+engine the box runs) into every rostered home's `CLAUDE.md`, between ccrc's markers. It goes into
+the **homes, not the repos** — ccrc owns its wrapper homes and does not own the repos sessions work
+in — and it writes THROUGH a symlinked `CLAUDE.md` rather than replacing it, because two homes
+sharing one file is a real configuration. A home carrying an *unmarked* `## graphify` section (what
+`graphify install` itself writes) is reported and skipped: ccrc did not author that text. The step
+degrades rather than dies — a build shipping no such block leaves an install otherwise converged.
+It is an instruction, not an enforced path: no mechanism here can make a session query a graph.
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its

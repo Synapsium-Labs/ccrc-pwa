@@ -5169,7 +5169,11 @@ _inst_graphify_skill() {
 _inst_graph_always_on() {
   [ "$INST_ROLE" = server ] && return 0
   local pkg src n=0 kept=0 same=0 ts backups
-  pkg="$("$HOME/.ccrc/graphify-venv/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent)' 2>/dev/null)" || pkg=""
+  # `CCRC_GRAPHIFY_PKG` first, exactly as `install-graphify-skill.sh:24` reads
+  # it — one knob with one meaning across both steps that resolve this package,
+  # rather than a second spelling of the same override.
+  pkg="${CCRC_GRAPHIFY_PKG:-}"
+  [ -n "$pkg" ] || pkg="$("$HOME/.ccrc/graphify-venv/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent)' 2>/dev/null)" || pkg=""
   if [ -z "$pkg" ]; then
     # DEGRADES, NEVER DIES — `_inst_enable`'s own idiom for the sweep timer:
     # "a systemd that will not take this one timer must not turn an otherwise-
@@ -5179,20 +5183,26 @@ _inst_graph_always_on() {
     # WHOLE install down with it — a fix for a missing nicety, worse than the
     # nicety being missing.
     echo "install: graphify: cannot resolve the graphify package from the venv — always-on read rule SKIPPED"
+    INST_DEGRADED+=(graphify-read-rule)
     return 0
   fi
   src="$pkg/always_on/claude-md.md"
   if [ ! -f "$src" ]; then
+    # NOT `INST_DEGRADED`, on `_inst_linger_darwin`'s stated distinction: a
+    # degraded step is one that was supposed to happen and did not, which a
+    # re-run might fix. A graphify build that ships no block is a fact about
+    # the build, not a shortfall of this run, and counting it would print
+    # DEGRADED on every install forever.
     echo "install: graphify: this graphify build ships no always-on block ($src) — read rule SKIPPED, nothing invented"
     return 0
   fi
-  # shellcheck source=/dev/null
   if ! source "$HOME/.ccrc/accounts.sh" 2>/dev/null || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
     echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule SKIPPED"
+    INST_DEGRADED+=(graphify-read-rule)
     return 0
   fi
   ts=$(date +%Y%m%d-%H%M%S); backups="$HOME/ccrc-backups/$ts"
-  local a dir f start end body want cur
+  local a dir f start end body want cur phys ns ne ls le mode tmp
   start='<!-- ccrc:graphify-always-on:start -->'
   end='<!-- ccrc:graphify-always-on:end -->'
   body="$(cat "$src")"
@@ -5203,52 +5213,127 @@ $end"
     dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" || continue
     [ -n "$dir" ] || continue
     f="$dir/CLAUDE.md"
-    # RESOLVE A SYMLINK BEFORE WRITING. A home's CLAUDE.md is exactly the kind
-    # of file an operator symlinks — on the reference fleet
-    # `.claude-gpt/CLAUDE.md` IS a symlink to `.claude/CLAUDE.md`, so two homes
-    # deliberately share one file. The staged `mv` below would replace that link
-    # with a regular file and sever the sharing silently. Writing through to the
-    # physical path keeps the link, and makes the second home's pass find the
-    # block already converged instead of writing a rival copy — which also
-    # removes this loop's dependence on ROSTER ORDER, the only reason the live
-    # box survived the first draft.
+    # A SYMLINK IS RESOLVED, OR THE HOME IS SKIPPED — never written through a
+    # path we failed to resolve. D-1244: the first draft fell back to the LINK
+    # path when `readlink -f` failed, so "resolved" and "could not resolve"
+    # collapsed to one value and the failure case wrote over the link — exactly
+    # the data loss the resolution exists to prevent, reached silently. That is
+    # the overloaded null at a seam this codebase forbids, and it is reachable:
+    # `readlink -f` answers empty for a link whose target's parent does not
+    # exist yet (a dotfiles repo not cloned), and has no `-f` at all on older
+    # macOS, which this repo runs a CI leg for.
     if [ -L "$f" ]; then
-      f="$(readlink -f "$f" 2>/dev/null)" || f="$dir/CLAUDE.md"
-      [ -n "$f" ] || f="$dir/CLAUDE.md"
+      phys="$(readlink -f "$f" 2>/dev/null)" || phys=""
+      if [ -z "$phys" ]; then
+        echo "install: graphify: $f is a symlink this box cannot resolve — left untouched, read rule not converged there" >&2
+        kept=$((kept+1)); continue
+      fi
+      f="$phys"
     fi
-    if [ -f "$f" ] && ! grep -qF "$start" "$f" && grep -qE '^## graphify[[:space:]]*$' "$f"; then
-      echo "install: graphify: $f carries an unmarked '## graphify' section — left in place; remove it by hand to let ccrc converge this block" >&2
+    # THE MARKER CENSUS, ON WHOLE LINES, AND EXACTLY ONE ORDERED PAIR OR NOTHING.
+    # D-1244. The first draft matched each marker as a SUBSTRING anywhere in a
+    # line and spliced against whatever it found. Three measured consequences:
+    # a file quoting the markers in the operator's own prose was cut at the
+    # mention; a file carrying a start marker with no end marker had EVERYTHING
+    # after the start silently deleted; and a file with two blocks never
+    # measured current, so every install rewrote and re-backed it up forever
+    # while the stale copy stayed. The function's own header promised "content
+    # outside them is never read or rewritten" — false in all three.
+    ns=0; ne=0
+    if [ -f "$f" ]; then
+      ns="$(grep -cxF "$start" "$f" 2>/dev/null || true)"; ns="${ns:-0}"
+      ne="$(grep -cxF "$end" "$f" 2>/dev/null || true)"; ne="${ne:-0}"
+    fi
+    if [ "$ns" -eq 0 ] && [ "$ne" -eq 0 ]; then
+      if [ -f "$f" ] && grep -qE '^## graphify[[:space:]]*$' "$f"; then
+        echo "install: graphify: $f carries an unmarked '## graphify' section — left in place; remove it by hand to let ccrc converge this block" >&2
+        kept=$((kept+1)); continue
+      fi
+    elif [ "$ns" -eq 1 ] && [ "$ne" -eq 1 ]; then
+      ls="$(grep -nxF "$start" "$f" | head -n1 | cut -d: -f1)"
+      le="$(grep -nxF "$end" "$f" | head -n1 | cut -d: -f1)"
+      if [ "$ls" -ge "$le" ]; then
+        echo "install: graphify: $f carries ccrc's end marker before its start marker — malformed, left untouched" >&2
+        kept=$((kept+1)); continue
+      fi
+      # already converged, byte for byte, over the ONE marked region -> no write
+      if [ "$(sed -n "${ls},${le}p" "$f")" = "$want" ]; then
+        same=$((same+1)); continue
+      fi
+    else
+      echo "install: graphify: $f carries $ns start and $ne end markers, and exactly one pair is required — malformed, left untouched" >&2
       kept=$((kept+1)); continue
     fi
     cur=""
     [ -f "$f" ] && cur="$(cat "$f")"
-    # already converged, byte for byte -> no write, no backup
-    if [ -f "$f" ] && grep -qF "$start" "$f"        && [ "$(awk -v s="$start" -v e="$end" 'index($0,s){p=1} p{print} index($0,e){p=0}' "$f")" = "$want" ]; then
-      same=$((same+1)); continue
+    if ! mkdir -p "$dir" 2>/dev/null; then
+      echo "install: graphify: cannot create $dir — read rule not converged there" >&2
+      kept=$((kept+1)); continue
     fi
-    mkdir -p "$dir" || _ccrc_die "cannot create $dir"
+    # PRESERVE THE FILE'S OWN MODE. D-1244: forcing 644 silently WIDENED a
+    # CLAUDE.md an operator had restricted — and since a symlink is resolved
+    # first, the file being re-moded may not even be inside a ccrc home. GNU
+    # and BSD `stat` spell this differently and ccrc installs on both.
+    # `_plat_mode`, NOT a bare `stat -c %a` — this file ships to macOS and
+    # `macos-platform.test.ts` refuses a GNU-only call outside the platform
+    # block. The shim already exists and already answers the harder question
+    # correctly (`%Mp%Lp` on BSD, so a setuid file does not read differently
+    # between the arms); my first cut hand-rolled a two-arm `stat` and the
+    # guard caught it.
+    mode=""
+    [ -f "$f" ] && mode="$(_plat_mode "$f" 2>/dev/null || true)"
+    [ -n "$mode" ] || mode=644
     if [ -f "$f" ]; then
-      mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"         || _ccrc_die "could not back up $f before rewriting it"
+      if ! { mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"; }; then
+        echo "install: graphify: cannot back up $f — left untouched rather than rewritten unbacked" >&2
+        kept=$((kept+1)); continue
+      fi
     fi
-    if [ -n "$cur" ] && grep -qF "$start" "$f" 2>/dev/null; then
-      # REPLACE between the markers, leaving every other line untouched
-      # THREE PIECES, NOT ONE AWK, and the reason is portability rather than
-      # taste: BSD awk (macOS) refuses a NEWLINE inside a `-v` assignment —
-      # "awk: newline in string" — while GNU awk accepts it. So passing the
-      # multi-line block as `-v repl=` worked on every Linux run here and broke
-      # only on the macOS CI leg, which is the one that caught it. Each `-v`
-      # below carries a single line, and the block never goes through awk at all.
-      { awk -v s="$start" 'index($0,s){exit} {print}' "$f"
-        printf '%s\n' "$want"
-        awk -v e="$end" 'seen{print} index($0,e){seen=1}' "$f"
-      } > "$f.tmp.$$" || _ccrc_die "could not rewrite $f"
+    tmp="$f.tmp.$$"
+    # EVERY PIECE'S STATUS, NOT JUST THE LAST. D-1244: a `{ a; b; c; } > tmp`
+    # group carries only c's status, and the tail piece writes NOTHING when the
+    # block sits at end of file — the layout the append path itself creates. So
+    # a failed first piece (ENOSPC, an OOM-killed child) silently produced a
+    # file holding the block ALONE, moved it over the operator's CLAUDE.md, and
+    # reported "converged". Measured under real ENOSPC and a real SIGKILL. The
+    # `&&` chain makes the group's status the first failure.
+    #
+    # `sed` line addressing rather than awk marker matching: it cannot mistake a
+    # marker quoted in prose for a real one (the census above already fixed the
+    # boundaries), and it retires the BSD-awk `-v` newline hazard entirely
+    # rather than guarding against it.
+    if [ "$ns" -eq 1 ]; then
+      # `[ "$ls" -le 1 ] ||` GUARDS AN EMPTY PREFIX, and it is not defensive
+      # padding: `sed -n "1,0p"` does NOT print nothing. An addr2 at or below
+      # addr1 makes sed match the ONE line at addr1, so a block sitting at line
+      # 1 had its own start marker re-emitted and the block appended after it —
+      # two start markers, measured. That layout is not exotic: it is what the
+      # append path produces for a home that had no CLAUDE.md at all, which on
+      # the reference fleet is a real home.
+      if ! { { [ "$ls" -le 1 ] || sed -n "1,$((ls-1))p" "$f"; } &&
+             printf '%s\n' "$want" &&
+             sed -n "$((le+1)),\$p" "$f"; } > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        echo "install: graphify: could not rewrite $f — left untouched" >&2
+        kept=$((kept+1)); continue
+      fi
     else
-      { [ -n "$cur" ] && printf '%s\n\n' "$cur"; printf '%s\n' "$want"; } > "$f.tmp.$$"         || _ccrc_die "could not write $f"
+      if ! { { [ -z "$cur" ] || printf '%s\n\n' "$cur"; } &&
+             printf '%s\n' "$want"; } > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        echo "install: graphify: could not write $f — left untouched" >&2
+        kept=$((kept+1)); continue
+      fi
     fi
-    chmod 644 "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"       || { rm -f "$f.tmp.$$"; _ccrc_die "could not install $f"; }
+    if ! { chmod "$mode" "$tmp" && mv -f "$tmp" "$f"; }; then
+      rm -f "$tmp"
+      echo "install: graphify: could not install $f — left untouched" >&2
+      kept=$((kept+1)); continue
+    fi
     n=$((n+1))
   done
-  echo "install: graphify: always-on read rule — $n home(s) converged, $same already current, $kept skipped (unmarked section)"
+  [ "$kept" -eq 0 ] || INST_DEGRADED+=(graphify-read-rule)
+  echo "install: graphify: always-on read rule — $n home(s) converged, $same already current, $kept skipped"
 }
 
 _inst_graph_noise() {
