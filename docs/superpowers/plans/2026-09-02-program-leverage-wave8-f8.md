@@ -60,14 +60,17 @@ wave 7's close record.
   table is counted twice by independent methods. A row that comes back GREEN is a hole, not a pass.
   A mutation that reds for the WRONG reason (inert regex edit, or one that breaks compilation rather
   than the guard) is a hole too — name the reason in the row.
-- **Deviations:** allocated from `~/.local/bin/ccrc-api ledger allocate`, floor read from the
-  allocator at the moment of allocation and **never from a document**, **allocated and defined in the
-  same act**. Every entry below is a `D-TBD-<slug>` marker precisely so that no line in this plan can
-  be read as a live definition before the executor allocates it. **No range is printed at the top of
-  this plan**: on 2026-09-02 alone the ccrc-pwa floor read 1333, 1389, 1392 and 1396 on four reads —
-  a standing range is a cardinal that goes stale within the hour, which is what D-1331 records.
+- **Deviations:** `D-1396`-`D-1437`, taken from `~/.local/bin/ccrc-api ledger allocate` in ONE call
+  carrying `byId`, floor read from that answer and **never from a document**, **allocated and defined
+  in the same act**. Every definition lives in this plan's **Deviations found** section and nowhere
+  else — the `LEDGER` line inside a task REFERENCES its number, it does not define it. Use the number
+  the section gives you; never renumber, never predict, never reuse.
+  A deviation found DURING execution is allocated from the same allocator at the moment it is found
+  and defined in that section in the same act. **The floor is never quoted anywhere else in this
+  plan**: on 2026-09-02 alone it read 1333, 1389, 1392, 1396 and then 1438 — a standing floor is a
+  cardinal that goes stale within the hour, which is what D-1331 records.
   Before merge: `git fetch origin main` then `cd server && ./node_modules/.bin/vitest run
-  test/deviation-refs.test.ts`.
+  test/deviation-refs.test.ts test/dtbd.test.ts`.
 - **Suites:** `./node_modules/.bin/vitest run` from inside the package, FOREGROUND, timeout
   ≥600000ms, tails READ not grepped. Never bare `npx vitest`. All three packages installed or
   `typecheck-tests` reports spurious failures. Known load flakes (`ccd-ws-gc`, `pr-sweep`,
