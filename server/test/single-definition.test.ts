@@ -1488,9 +1488,18 @@ describe('one absent/unreadable read vocabulary', () => {
   // is a legitimate lone `'absent'` and must not trip it.
   const PAIR = /'absent'\s*\|\s*'unreadable'|'unreadable'\s*\|\s*'absent'/;
 
-  it('is declared in exactly one file, and that file is server/src/io.ts', () => {
+  // D-1438: moved from `server/src/io.ts` to `shared/agent-protocol.ts`. The
+  // pair is wire-adjacent vocabulary both `agent/src/fileops.ts` and
+  // `server/src/io.ts` fold their read/stat outcomes into — declaring it
+  // server-side only left the agent side to restate it (twice: `ReadB64Result`
+  // and `ReadFromResult`), which is exactly the drift this scan exists to
+  // catch. `shared/` is a real consumer of both ends already (`agent/src/
+  // server.ts`, `server/src/remote/io.ts` both import `agent-protocol.ts`),
+  // so it is the one home reachable from both packages without an agent
+  // importing `server/src`.
+  it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
     const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['server/src/io.ts']);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
 
   it('is what registry.ts derives BranchEvidence from, not a second copy', () => {
@@ -1498,6 +1507,22 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).not.toMatch(PAIR);
     expect(registry).toMatch(/export type BranchEvidence = 'named' \| ReadFailure \| 'empty';/);
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
+  });
+
+  it('server/src/io.ts re-exports ReadFailure rather than restating it', () => {
+    const io = readFileSync(path.join(ccrcRoot, 'server/src/io.ts'), 'utf8');
+    expect(io).not.toMatch(PAIR);
+    expect(io).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/,
+    );
+  });
+
+  it('agent/src/fileops.ts imports ReadFailure rather than restating it', () => {
+    const fileops = readFileSync(path.join(ccrcRoot, 'agent/src/fileops.ts'), 'utf8');
+    expect(fileops).not.toMatch(PAIR);
+    expect(fileops).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/,
+    );
   });
 
   it('trips on EITHER ordering — a second copy spelled the other way round is still a second copy', () => {

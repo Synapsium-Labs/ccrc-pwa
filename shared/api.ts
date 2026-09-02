@@ -1180,13 +1180,14 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
  * home nothing ever looked at).
  *
  * DELIBERATELY NOT spelled with the read-failure pair that `ReadFailure`
- * declares in `server/src/io.ts`. That vocabulary describes ONE read's failure;
- * this one describes a conclusion drawn from a read that may never have
- * happened, and `unmeasurable` is the wider word on purpose.
- * `single-definition.test.ts` pins that pair to `server/src/io.ts` alone — and
- * pins it as TEXT, so even naming it in a docstring here reds the build
- * (measured, while this comment was being written). Say `ReadFailure`, not its
- * members.
+ * declares in `shared/agent-protocol.ts` (moved there from `server/src/
+ * io.ts` by D-1438; re-exported from `io.ts` unchanged). That vocabulary
+ * describes ONE read's failure; this one describes a conclusion drawn from a
+ * read that may never have happened, and `unmeasurable` is the wider word on
+ * purpose. `single-definition.test.ts` pins that pair to `shared/agent-
+ * protocol.ts` alone — and pins it as TEXT, so even naming it in a docstring
+ * here reds the build (measured, while this comment was being written). Say
+ * `ReadFailure`, not its members.
  */
 export type SkillState = 'present' | 'absent' | 'unmeasurable';
 

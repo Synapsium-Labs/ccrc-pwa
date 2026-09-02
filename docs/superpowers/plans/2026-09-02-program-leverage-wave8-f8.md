@@ -8277,6 +8277,15 @@ and the draft was wrong.
   proved still true (the delta 27, and "in one act of six") deliberately KEPT and one anchor, one prose claim
   and one inapplicable mutation row fixed alongside, because fixing seven of ten of one class is the shape
   D-1326 records.
+- **D-1438** (found during execution, after Task 6, fixed in its own commit): Task 6 gave the agent's
+  `readB64Measured`/`readFromMeasured` the failure vocabulary `'absent' | 'unreadable'`, spelling the
+  ORDERED PAIR twice in `agent/src/fileops.ts` while `server/src/io.ts`'s `ReadFailure` already declared
+  it — the exact drift `single-definition.test.ts`'s "one absent/unreadable read vocabulary" scan exists
+  to catch, and which `registry.ts` was made to DERIVE rather than restate for the same reason. The guard
+  went red (`expected [ 'server/src/io.ts', 'agent/src/fileops.ts' ] to deeply equal [ 'server/src/io.ts' ]`)
+  and stayed red for two tasks, because Task 6 is an AGENT-side change and its verification ran the
+  `agent/` suite only — the guard that caught it lives in `server/`. Allocated at the moment it was found,
+  from the allocator, floor 1438 -> 1439.
 
 Before the merge, both arms of the collision guard must be green:
 

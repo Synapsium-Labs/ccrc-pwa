@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ReadFailure } from '../../shared/agent-protocol.js';
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -21,14 +22,23 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  *
  * `readWhole` mirrors `localIO`'s ERRNO BEHAVIOUR, not its TYPE: both sides
  * branch ENOENT vs. everything-else identically, but `readWhole` returns
- * `{data, absent}` here while the server-side distinction lives in a
- * SEPARATE, differently-shaped type — `MeasuredRead` in `server/src/io.ts`.
- * Deliberate, not a gap to close: `agent/tsconfig.json` includes only
- * `src/**` + `../shared/**`, so this side cannot import `server/src/io.ts`
- * at all, and the plan (`docs/superpowers/plans/2026-08-20-fleetio-measured-
- * read.md`, "the seam's shape") keeps the reason union out of `shared/` on
- * purpose — putting it there would also put it on the PWA's bundle path.
- * No convergence is coming; the two stay parallel local types on purpose.
+ * `{data, absent}` here — a boolean, no `unreadable` distinction — while the
+ * server-side equivalent, `MeasuredRead` in `server/src/io.ts`, is a
+ * differently-shaped `{ok,reason}` union. That shape difference is still
+ * deliberate and unconverged: `agent/tsconfig.json` includes only `src/**` +
+ * `../shared/**`, so this side cannot import `server/src/io.ts` at all, and
+ * `readWhole` predates `ReadFailure` (D-114) with no caller that needs the
+ * finer distinction.
+ *
+ * The REASON VOCABULARY itself — `ReadFailure`, used below by
+ * `readB64Measured`/`readFromMeasured` — is a different story: the plan that
+ * introduced it (`docs/superpowers/plans/2026-08-20-fleetio-measured-
+ * read.md`, "the seam's shape") kept it out of `shared/` on purpose, judging
+ * the PWA's bundle path not worth it for a pair only this side and
+ * `server/src/io.ts` used. That judgment was reversed (D-1438): the pair got
+ * spelled out on both sides anyway and `single-definition.test.ts` caught
+ * the drift, so it now lives once in `shared/agent-protocol.ts` as
+ * `ReadFailure`, imported here rather than restated.
  */
 
 /** `readWhole`'s result: `data` keeps the pre-existing null-for-any-failure
@@ -67,10 +77,13 @@ export const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
 /** `readB64Measured`'s result. THREE failure facts where `readB64` had one
  *  null: a proven ENOENT, a file whose size exceeds the cap (carrying the
  *  measured `size`, so a caller can say what it refused and how big it was),
- *  and everything else. Local type, same reason as `ReadResult` above. */
+ *  and everything else. The wrapping `{ok,reason}` shape is local to this
+ *  op (`too-large` has no equivalent on the server side); the two-word
+ *  failure vocabulary it shares with `unreadable`/`absent` is `ReadFailure`,
+ *  imported rather than restated (D-1438). */
 export type ReadB64Result =
   | { ok: true; dataB64: string }
-  | { ok: false; reason: 'absent' | 'unreadable' }
+  | { ok: false; reason: ReadFailure }
   | { ok: false; reason: 'too-large'; size: number };
 
 /** Binary-safe read: never decodes through a string, so bytes that aren't
@@ -98,7 +111,7 @@ export async function readB64Measured(p: string): Promise<ReadB64Result> {
  *  no new bytes", which is a measurement, not a miss. */
 export type ReadFromResult =
   | { ok: true; data: string; size: number }
-  | { ok: false; reason: 'absent' | 'unreadable' };
+  | { ok: false; reason: ReadFailure };
 
 export async function readFromMeasured(p: string, offset: number): Promise<ReadFromResult> {
   // Stream only [offset, size) — never load the whole file. A transcript backlog

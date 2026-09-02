@@ -1,6 +1,7 @@
 import { createReadStream, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ReadFailure } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
  *  why a `stat` couldn't produce {mtimeMs,size} either: ONE vocabulary for
@@ -20,8 +21,15 @@ import path from 'node:path';
  *  reads released, an identity field retires the row). An `lstat` ladder
  *  would close it and is deliberately NOT built: it would put a second
  *  syscall on every field read of every session on every tick to
- *  distinguish a state nothing in this system produces. */
-export type ReadFailure = 'absent' | 'unreadable';
+ *  distinguish a state nothing in this system produces.
+ *
+ *  DECLARED IN `shared/agent-protocol.ts`, not here (D-1438): the pair is
+ *  wire-adjacent vocabulary both this file and `agent/src/fileops.ts` fold
+ *  their read/stat outcomes into, and restating it here drifted into a
+ *  second copy that `single-definition.test.ts` caught. Re-exported so
+ *  every existing `from './io.js'` import (e.g. `registry.ts`'s
+ *  `BranchEvidence`) keeps working unchanged. */
+export type { ReadFailure };
 
 /** A read that distinguishes ITS OWN two failure modes instead of collapsing
  *  both to `null`, unlike `readFile`/`readFileB64` below. See THE GOVERNING
