@@ -1,0 +1,1220 @@
+# program-leverage wave 7 — F7: program health on the board, and the ledger-allocation guard — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan
+> task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Put the wedges this program has been discovering forensically — parked mail, replay counts
+climbing toward the 20-ceiling, repeated done-claim rejections, a dispatch whose brief was never
+queued, a coordinator that was never briefed — onto the `/runs` board as measured facts; and close both
+holes in the deviation-allocation guard that has now fired three times.
+
+**Architecture:** Four independent pieces on one branch. (1) `CoordStore` learns ONE batched health
+read — four `GROUP BY` queries per `runs()` call, not per row — whose answer rides `RunSummary.health`,
+an additive wire object with a single tolerant reader in the PWA. (2) Two new `runs` columns
+(migration 7) make `briefQueued`/`clearError` durable, so the one dispatch outcome that leaves no trace
+today leaves one. (3) `deviation-refs.test.ts` gains a CROSS-TREE arm: an L1 pure decision in
+`ledger.ts` fed by `origin/main`'s plan blobs alongside the working tree's, which fires BEFORE the merge
+instead of one merge after it — measured against both real incidents. (4) The fold-ins: D-1169's clock
+leaves the store, two of `auth-gate.test.ts`'s five hand-pinned cardinals become derivations, and three
+stale prose cardinals that no scanner reads are corrected.
+
+**Tech Stack:** TypeScript (`"type":"module"` in all four packages), Fastify 5, `node:sqlite`
+`DatabaseSync`, vitest 4, React 19 + zustand (PWA), jsdom + @testing-library/react.
+
+**Spec:** `docs/superpowers/specs/2026-08-28-program-leverage-design.md` §9 — fetch `ws/brisk-meadow`
+from origin; the program ledger on that ref carries this wave's brief and wave 6's close record.
+
+## Global Constraints
+
+- **Branch:** commit on `ws/quiet-meadow`, never a feature branch. The done-fingerprint re-measures
+  THIS workspace branch's tip; work parked elsewhere wedges every close with `stale-tip`.
+- **NOT agent-first:** server + PWA + root docs only. If a finding pushes into `ccd/`,
+  `session-hook.sh` or either skill corpus, MAIL THE COORDINATOR BEFORE IMPLEMENTING (runId 28) — it
+  changes the deploy lane. Deploy is not the worker's act.
+- **Wire discipline:** additive-only; a SINGLE reader per new field; an older peer omitting a field is
+  tolerated and renders NOTHING (never a lie); no `FLEET_PROTO` bump (stays 1); no new `ccd` verbs;
+  **no overloaded null at any new seam.**
+- **Rings** (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`): L0 `shared/*.ts`
+  imports nothing but a sibling TYPE; L1 pure decisions, no `fs`/fastify/`reply`/clock; L2 ports
+  declared by the consumer; L3 adapters may not narrow a distinction they received; L4 delivery owns
+  fastify/sockets/timers and may not DECIDE; L5 is `index.ts` only.
+- **Mutation-table discipline:** every guard ships WITH a test measured RED on that guard's deletion.
+  TDD red-first. Rows carry **suite / mutation / verbatim first-fail**, written AS YOU GO, and the
+  table is counted twice by independent methods. A row that comes back GREEN is a hole, not a pass.
+- **Deviations:** allocated from `~/.local/bin/ccrc-api ledger allocate` with `byId`, floor read from
+  the allocator and never from a document, **allocated and defined in the same act**. This wave holds
+  **D-1293..D-1305**. Never predict or reuse a number.
+- **Suites:** `./node_modules/.bin/vitest run` from inside the package, FOREGROUND, timeout ≥600000ms,
+  tails READ not grepped. Never bare `npx vitest`. All three packages installed or `typecheck-tests`
+  reports spurious failures.
+- **Node floor `>=22.13.0`** identical across the three engines. If `node-floor`'s absolute assertion
+  is red while the others are green, RAISE engines — never lower them.
+- **Baseline measured before any edit (2026-09-02 05:07 UTC):** server `248 files / 6248 passed /
+  56 skipped`, 294s. Any red beyond that is this wave's.
+
+## File Structure
+
+| File | Responsibility |
+|---|---|
+| `shared/api.ts` (modify) | L0: `RunHealth`, `RunSummary.health`, `DONE_AUTHORITY_CODES`, the three render thresholds, `CoordCapsView.updatedAt` |
+| `server/src/coord/schema.ts` (modify) | migration 7: `runs.briefQueued`, `runs.clearError` |
+| `server/src/coord/store.ts` (modify) | L3: `runHealth(runIds)` — four batched reads; `hydrateRun` takes the health; `setCaps(next, at)` |
+| `server/src/coord/dispatch.ts` (modify) | writes the two new columns inside the existing commit |
+| `server/src/coord/ledger.ts` (modify) | L1: `definitionsIn`, `crossTreeCollisions`, `auditAllocations` — pure, fixture-testable |
+| `server/src/coord/routes.ts` (modify) | L4: `GET /api/ledger` gains `mismatches`; `capsView` carries `updatedAt` |
+| `pwa/src/fleet/runWords.ts` (modify) | the tolerant reader + the warn decision, never in JSX |
+| `pwa/src/screens/RunsScreen.tsx` (modify) | the compact warn row |
+| `pwa/src/fleet/fleet.css` (modify) | `.run-row .run-warn`, grounded, no glow/animation/box-shadow |
+| `server/test/coord-health.test.ts` (create) | the store's health read, wedge-manufacturing fixtures |
+| `server/test/ledger-crosstree.test.ts` (create) | the L1 cross-tree decision, fixture collisions |
+| `server/test/deviation-refs.test.ts` (modify) | the cross-tree arm over the REAL two trees |
+| `pwa/test/runs-health.test.tsx` (create) | the warn row, incl. the older-server absence case |
+| `CLAUDE.md`, `README.md`, `CONTRIBUTING.md` (modify) | the pre-merge measurement as a documented step |
+
+---
+
+### Task 1: `DONE_AUTHORITY_CODES` — one definition, two copies deleted
+
+**Files:**
+- Modify: `shared/api.ts` (beside `MAIL_REJECT_CODES`, `:3451-3469`)
+- Modify: `server/src/coord/close.ts:55-56`
+- Modify: `server/src/coord/fingerprint.ts:32-33`
+- Test: `server/test/single-definition.test.ts` (add the guard)
+
+**Interfaces:**
+- Produces: `DONE_AUTHORITY_CODES: readonly DoneRejectCode[]`, `type DoneRejectCode`. Task 3's health
+  read filters `mail_rejections.code` by this list; Tasks 2 and 5 consume the type.
+
+The done-authority six are spelled THREE times today: once inside `MAIL_REJECT_CODES` and twice as an
+identical `Extract<MailRejectCode, …>` in `close.ts` and `fingerprint.ts`. Task 3 needs the list at
+runtime (a SQL `IN (…)`), which would be a fourth. Derive it once instead.
+
+- [ ] **Step 1: Write the failing guard**
+
+In `server/test/single-definition.test.ts`, beside the `MAIL_REJECT_CODES` guard at `:341`:
+
+```ts
+  it('the done-authority family is enumerated once, and the two Extract copies are gone', () => {
+    // Three copies today: MAIL_REJECT_CODES's own block, close.ts and
+    // fingerprint.ts. Task 3 needs the list at RUNTIME for a SQL IN (...), which
+    // would be a fourth. This is the guard that keeps it at one.
+    const DEF = /^\s*export const DONE_AUTHORITY_CODES\b/m;
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel))
+      .toEqual(['shared/api.ts']);
+    // The shape both consumers used to spell. Not "no Extract anywhere" — an
+    // Extract over a DIFFERENT union is fine; this is the one literal list.
+    const COPY = /Extract<\s*MailRejectCode\s*,[^>]*'stale-tip'/;
+    expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'done-authority'`
+Expected: FAIL — first assertion reds, `expected [] to deeply equal [ 'shared/api.ts' ]`.
+
+- [ ] **Step 3: Add the single definition**
+
+In `shared/api.ts`, immediately after `MAIL_REJECT_CODES`/`MailRejectCode`:
+
+```ts
+/**
+ * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done or a
+ * forward advance can be refused with, as opposed to the ingress, peer-bound and
+ * delivery families. The as-const idiom (`CLAIM_STATES`, :3268) rather than the
+ * union-first one: the ARRAY is the single definition and the type follows it,
+ * because wave 7's health read needs the members at runtime for a SQL `IN (...)`
+ * and a hand-kept fourth copy is what this replaces (D-1296).
+ */
+export const DONE_AUTHORITY_CODES = [
+  'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
+  'pr-unmeasurable', 'no-handoff-commit',
+] as const satisfies readonly MailRejectCode[];
+export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+export function isDoneRejectCode(v: unknown): v is DoneRejectCode {
+  return typeof v === 'string' && (DONE_AUTHORITY_CODES as readonly string[]).includes(v);
+}
+```
+
+`satisfies readonly MailRejectCode[]` is the load-bearing clause: a typo here is a compile error
+against the parent union, which a bare `as const` would not catch.
+
+- [ ] **Step 4: Delete the two copies**
+
+`server/src/coord/close.ts:55-56` and `server/src/coord/fingerprint.ts:32-33` — replace each
+`Extract<MailRejectCode, 'stale-tip' | …>` with `DoneRejectCode`, importing it from
+`../../../shared/api.js`.
+
+- [ ] **Step 5: Run the guard and the two consumers**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/coord-fingerprint.test.ts test/coord-decide.test.ts`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add shared/api.ts server/src/coord/close.ts server/src/coord/fingerprint.ts server/test/single-definition.test.ts
+git commit -m "refactor(coord): the done-authority six get one definition, and two Extract copies go (D-1296)"
+```
+
+---
+
+### Task 2: Migration 7 — `runs.briefQueued` and `runs.clearError`
+
+**Files:**
+- Modify: `server/src/coord/schema.ts` (append `MIGRATIONS[6]`)
+- Test: `server/test/coord-db.test.ts`
+
+**Interfaces:**
+- Produces: two nullable columns on `runs`. `COORD_SCHEMA_VERSION` becomes 7 (derived from
+  `MIGRATIONS.length`, never hand-written). Task 3 reads them in `RUN_ROW_COLUMNS`; Task 4 writes them.
+
+Today `briefQueued` is computed at `dispatch.ts:642` and never persisted, and `clearError`'s only
+durable trace is a `run_events.detail` string on a route nothing serves. The FALSE branch of
+`briefQueued` — a resume whose `/clear` was refused, so no brief was ever queued — leaves **nothing at
+all**, indistinguishable from "no dispatch happened" (D-1298).
+
+- [ ] **Step 1: Write the failing migration tests**
+
+In `server/test/coord-db.test.ts`, following the `:556-578` pattern exactly:
+
+```ts
+  it('migration 7 adds briefQueued/clearError, both nullable with no default', () => {
+    const p = path.join(mkTmp('ccrc-coorddb-'), '.ccrc', 'coord.db');
+    const db = openCoordDb(p);
+    const bq = runsColumn(db, 'briefQueued');
+    const ce = runsColumn(db, 'clearError');
+    expect(bq, 'runs.briefQueued is absent').toBeDefined();
+    expect(ce, 'runs.clearError is absent').toBeDefined();
+    // Nullable and defaultless BY CONTRACT: null means "an older build wrote this
+    // row", which is a different fact from `briefQueued === false` ("this dispatch
+    // queued no brief"). A DEFAULT 0 would collapse the two — the overloaded null
+    // this wave exists to avoid.
+    expect(bq!.notnull, 'briefQueued is NOT NULL — absence now reads as false').toBe(0);
+    expect(bq!.dflt_value, 'briefQueued carries a default').toBeNull();
+    expect(ce!.notnull).toBe(0);
+    expect(ce!.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('migration 7 reaches a database ALREADY at user_version 6', () => {
+    const p = path.join(mkTmp('ccrc-coorddb-'), '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let i = 0; i <= 5; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 6');
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect(runsColumn(db, 'briefQueued')).toBeDefined();
+    db.close();
+  });
+```
+
+and update the five existing `user_version` expectations (`:330`, `:376`, `:444`, `:551`, `:573`) plus
+`:614-617`'s `expect(COORD_SCHEMA_VERSION).toBe(7); expect(MIGRATIONS.length).toBe(7);`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts`
+Expected: FAIL — `runs.briefQueued is absent: expected undefined not to be undefined`.
+
+- [ ] **Step 3: Append the migration**
+
+`server/src/coord/schema.ts`, after `MIGRATIONS[5]`:
+
+```ts
+  // ── 7: user_version 6 -> 7 ────────────────────────────────────────────────
+  // MIGRATIONS[0..5] ARE FROZEN. Two columns recording what a dispatch DECIDED,
+  // as opposed to what it did (D-1298).
+  //
+  // `briefQueued` is `!resumed || clearedAt !== null` at dispatch.ts:642 — the
+  // answer to "was a wave-brief actually queued for this run". Its TRUE branch
+  // already leaves a durable artefact, the mail row itself; its FALSE branch left
+  // nothing, and absence is indistinguishable from "no dispatch happened". A
+  // reader could re-derive the formula from `resumed`/`clearedAt`, but that is a
+  // re-derivation of a rule, not a record of a decision, and it silently changes
+  // meaning the day anything else writes `clearedAt`.
+  //
+  // `clearError` is the `sendPrompt` refusal code that made it false. It survives
+  // today ONLY as `run_events.detail`'s `clear-refused:<code>`, on a table no HTTP
+  // route serves, folded through a MUTUALLY EXCLUSIVE ternary (dispatch.ts:592-593)
+  // that already drops it whenever `adopted` wins.
+  //
+  // NULLABLE, NO DEFAULT, both: NULL means "an older build wrote this row, or no
+  // dispatch has committed". `briefQueued = 0` means "this dispatch queued no
+  // brief". A `DEFAULT 0` would make those one value — the overloaded null the
+  // wire discipline forbids at a new seam.
+  `
+  ALTER TABLE runs ADD COLUMN briefQueued INTEGER;
+  ALTER TABLE runs ADD COLUMN clearError  TEXT;
+  `,
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts`
+Expected: PASS, 30+ tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/coord/schema.ts server/test/coord-db.test.ts
+git commit -m "feat(coord): migration 7 — a dispatch records whether it queued a brief, and why not (D-1298)"
+```
+
+---
+
+### Task 3: The batched health read
+
+**Files:**
+- Modify: `shared/api.ts` — `RunHealth`, `RunSummary.health`, three render thresholds
+- Modify: `server/src/coord/store.ts` — `runHealth`, `hydrateRun`, `RUN_ROW_COLUMNS`
+- Test: `server/test/coord-health.test.ts` (create)
+
+**Interfaces:**
+- Consumes: `DONE_AUTHORITY_CODES` (Task 1), the two columns (Task 2).
+- Produces: `RunHealth`; `CoordStore.runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth>`.
+  Task 6 renders it; Task 5's route ships it unchanged.
+
+**The cost constraint that shapes this task.** `hydrateRun` already costs two SQL queries per row
+(`itemTally`, `unreadMailCount`) and `GET /api/runs?closed=1` returns every open run plus up to 500
+closed ones. Four more per-row queries would be ~3,000 statements per board read. The health read is
+therefore **four `GROUP BY` queries per `runs()` call, total, regardless of row count** (D-1299).
+
+**The second constraint, and it is not obvious.** `server/test/fleetws.test.ts:637` pins that the WS
+`runs` frame is DROPPED from the broadcast when its JSON is unchanged. A health field carrying a
+*clock* — an age in ms — would differ on every tick and defeat that dedupe, turning an idle fleet into
+a broadcast storm. Every field below is therefore a COUNT, a CODE or a STORED TIMESTAMP; the
+thresholds live in the renderer, exactly as `SPAWN_STALL_MS` does (D-1300).
+
+- [ ] **Step 1: Write the failing fixtures**
+
+Create `server/test/coord-health.test.ts`. Each case MANUFACTURES the wedge:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore, MAIL_RUN_CLOSED_ERROR, MAIL_REPLAY_CEILING_ERROR } from '../src/coord/store.js';
+import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const store = (): CoordStore =>
+  new CoordStore(openCoordDb(path.join(mkTmp('ccrc-health-'), '.ccrc', 'coord.db')));
+
+const openRun = (s: CoordStore, over: Partial<Parameters<CoordStore['openRun']>[0]> = {}) =>
+  s.openRun({ program: 'leverage', title: 'F7', project: 'ccrc-pwa',
+              wave: 7, waveOf: 8, claimedBy: 'ccrc-pwa-brisk-meadow', ...over }) as { id: number };
+
+const mailTo = (s: CoordStore, runId: number | null, toId: string, subject = 'wave-brief') => {
+  const m = s.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId, runId,
+                           kind: 'status', subject, body: 'x', artifacts: [] });
+  return s.queueDelivery(m.id, toId, '<env>');
+};
+
+const healthOf = (s: CoordStore, runId: number, coordIds: string[] = []) =>
+  s.runHealth([runId], coordIds).get(runId)!;
+
+describe('the run health read (F7)', () => {
+  it('splits outstanding from parked, and does NOT count the benign run-closed park', () => {
+    const s = store();
+    const r = openRun(s);
+    s.dispatchRun({ runId: r.id, sessionId: 'w', workspace: 'w', branch: 'ws/w',
+                    resumed: false, clearedAt: null, items: [] });
+    const outstanding = mailTo(s, r.id, 'w');
+    const parked = mailTo(s, r.id, 'w');
+    const benign = mailTo(s, r.id, 'w');
+    s.rejectDelivery(parked.id, 'undeliverable', 'recipient not in registry');
+    s.db.prepare("UPDATE mail_deliveries SET state='rejected', rejectCode='undeliverable', lastError=? WHERE id=?")
+      .run(MAIL_RUN_CLOSED_ERROR, benign.id);
+
+    const h = healthOf(s, r.id);
+    expect(h.mailOutstanding, 'the queued delivery is not counted outstanding').toBe(1);
+    expect(h.mailParked, 'the run-closed park was counted as a wedge').toBe(1);
+    expect(outstanding.id).toBeGreaterThan(0);
+  });
+
+  it('reports the replay high-water — the 722/911 fact that surfaces nowhere', () => {
+    const s = store();
+    const r = openRun(s);
+    s.dispatchRun({ runId: r.id, sessionId: 'w', workspace: 'w', branch: 'ws/w',
+                    resumed: false, clearedAt: null, items: [] });
+    const a = mailTo(s, r.id, 'w');
+    const b = mailTo(s, r.id, 'w');
+    s.markDelivered(a.id, 1); s.markDelivered(b.id, 1);
+    for (let i = 0; i < 19; i++) s.bumpReplayCount(a.id);
+    s.bumpReplayCount(b.id);
+    expect(healthOf(s, r.id).mailReplayMax, 'the high-water is not the MAX').toBe(19);
+  });
+
+  it('counts done-claim rejections and names the LAST code, newest wins', () => {
+    const s = store();
+    const r = openRun(s);
+    s.recordRejection({ code: 'stale-tip', runId: r.id, toId: 'w', detail: 'a' });
+    s.recordRejection({ code: 'pr-regressed', runId: r.id, toId: 'w', detail: 'b' });
+    s.recordRejection({ code: 'unknown-sender', runId: r.id, toId: 'w', detail: 'not done-authority' });
+    const h = healthOf(s, r.id);
+    expect(h.doneRejects, 'an ingress refusal was counted as a done-claim rejection').toBe(2);
+    expect(h.lastRejectCode).toBe('pr-regressed');
+  });
+
+  it('carries the dispatch decision, and NULL is not false', () => {
+    const s = store();
+    const never = openRun(s);
+    expect(healthOf(s, never.id).briefQueued, 'an undispatched run claims a decision').toBeNull();
+    expect(healthOf(s, never.id).clearError).toBeNull();
+  });
+
+  it('names when an unacked kickoff to this run’s coordinator was first sent', () => {
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, 'ccrc-pwa-brisk-meadow', PROGRAM_KICKOFF_SUBJECT);
+    s.db.prepare("UPDATE mail SET fromId='operator' WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)").run(k.id);
+    s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)').run(4_000, k.id);
+    const h = healthOf(s, r.id, ['ccrc-pwa-brisk-meadow']);
+    expect(h.coordKickoffPendingSince, 'the pending kickoff is invisible').toBe(4_000);
+  });
+
+  it('an ACKED kickoff is not pending — absence is silence, never a warning', () => {
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, 'ccrc-pwa-brisk-meadow', PROGRAM_KICKOFF_SUBJECT);
+    s.db.prepare("UPDATE mail SET fromId='operator' WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)").run(k.id);
+    s.markDelivered(k.id, 10);
+    s.markAcked(k.id, 20);
+    expect(healthOf(s, r.id, ['ccrc-pwa-brisk-meadow']).coordKickoffPendingSince).toBeNull();
+  });
+
+  it('is ONE query set for MANY runs — the board must not pay per row', () => {
+    const s = store();
+    const ids = [openRun(s).id, openRun(s).id, openRun(s).id];
+    const m = s.runHealth(ids, []);
+    expect([...m.keys()].sort((a, b) => a - b), 'a run fell out of the batch').toEqual(ids);
+    // Every run gets a row, including one with no mail at all: a MISSING key would
+    // make the caller choose a default, which is where an overloaded null is born.
+    expect(m.get(ids[0]!)!.mailOutstanding).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/coord-health.test.ts`
+Expected: FAIL — `TypeError: s.runHealth is not a function`.
+
+- [ ] **Step 3: Add the wire type**
+
+`shared/api.ts`, beside `RunItemTally`:
+
+```ts
+/**
+ * Per-run health facts the `/runs` board renders as a compact warn row (F7).
+ *
+ * ADDITIVE; `FLEET_PROTO` is deliberately not bumped. An older server omits the
+ * whole object and the PWA renders NOTHING — never "no wedge", which is a claim
+ * this build would be making on that server's behalf. One tolerant reader,
+ * `runHealth()` in `pwa/src/fleet/runWords.ts`, and no JSX reads a member
+ * directly.
+ *
+ * EVERY MEMBER IS A COUNT, A CODE OR A STORED TIMESTAMP — never an age. The WS
+ * `runs` frame is dropped from the broadcast when its JSON is unchanged
+ * (`fleetws.test.ts:637`), and a field carrying a clock differs on every tick,
+ * which would turn an idle fleet into a broadcast storm. Thresholds live in the
+ * renderer, the `SPAWN_STALL_MS` precedent (D-1300).
+ */
+export interface RunHealth {
+  /** Deliveries for this run's mail still `queued` or `delivered`. */
+  readonly mailOutstanding: number;
+  /** Deliveries PARKED (`rejected`) for a reason that is NOT a deliberate cancel.
+   *  A `run closed` or `coordinator reclaimed` park is the machinery working and
+   *  is excluded — reporting it would announce a chair that already changed hands. */
+  readonly mailParked: number;
+  /** MAX(`replayCount`) over this run's deliveries. Mail 120 reached 722 attempts
+   *  and mail 129 reached 911, each arriving after the work it was meant to steer;
+   *  this is the number that was climbing while nothing showed it. */
+  readonly mailReplayMax: number;
+  /** How many done-authority refusals this run has collected (`DONE_AUTHORITY_CODES`). */
+  readonly doneRejects: number;
+  /** The most recent one's code, or null when there are none. FREE-FORM on the
+   *  wire in the `lastError` sense — a client may show it, never key a total
+   *  `Record` off it, because `mail_rejections.code` is stored unvalidated. */
+  readonly lastRejectCode: string | null;
+  /** What the last committed dispatch DECIDED about the brief. `null` is a third
+   *  condition, not a flavour of false: no dispatch has committed, or the row was
+   *  written by a build before migration 7. */
+  readonly briefQueued: boolean | null;
+  /** The `sendPrompt` refusal that made `briefQueued` false, or null. */
+  readonly clearError: string | null;
+  /** When the oldest UNACKED `program-kickoff` addressed to this run's `claimedBy`
+   *  was first sent, or null when there is none. A TIMESTAMP, not a verdict: the
+   *  renderer owns the threshold. */
+  readonly coordKickoffPendingSince: number | null;
+}
+```
+
+then on `RunSummary`, after `unreadMail`:
+
+```ts
+  /** F7's health facts. Required here because `hydrateRun` returns a literal and
+   *  must compute it; OPTIONAL at every PWA reader, because an older SERVER omits
+   *  it. See `RunHealth`. */
+  health: RunHealth;
+```
+
+and the three render thresholds, beside `SPAWN_STALL_MS`:
+
+```ts
+/** A replay count at or above this is climbing toward `MAIL_REPLAY_MAX_ATTEMPTS`
+ *  (20, `watch.ts`) and the board says so. A RENDERING threshold: nothing
+ *  server-side reads it, and it is not derived from the ceiling — a warning that
+ *  fires only at the ceiling arrives with the message already parked. */
+export const MAIL_REPLAY_WARN_COUNT = 10;
+/** An unacked `program-kickoff` older than this is a coordinator that was never
+ *  briefed. A RENDERING threshold, the `SPAWN_STALL_MS` argument. */
+export const KICKOFF_UNACKED_MS = 900_000;
+```
+
+- [ ] **Step 4: Add the batched store read**
+
+`server/src/coord/store.ts`. Add `briefQueued`, `clearError` to `RUN_ROW_COLUMNS` (`:184-189`), and:
+
+```ts
+  /**
+   * F7: every health fact for a set of runs, in FOUR statements total — not four
+   * per row. `hydrateRun` already costs two queries per row and `?closed=1`
+   * returns every open run plus up to 500 closed ones, so a per-row read here
+   * would be ~3,000 statements for one board load (D-1299).
+   *
+   * Every id in `runIds` gets a row, including one with no mail: a caller that had
+   * to supply a default for a missing key is where an overloaded null is born.
+   */
+  runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth> {
+    const out = new Map<number, RunHealth>();
+    const base = { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+                   lastRejectCode: null as string | null, briefQueued: null as boolean | null,
+                   clearError: null as string | null,
+                   coordKickoffPendingSince: null as number | null };
+    for (const id of runIds) out.set(id, { ...base });
+    if (runIds.length === 0) return out;
+    const ph = placeholders(runIds.length);
+
+    // 1) outstanding vs parked, and the replay high-water. The exclusion reuses
+    //    DELIBERATE_CANCEL_ERRORS_SQL rather than respelling the two literals —
+    //    single-definition.test.ts forbids the second copy.
+    for (const row of this.db.prepare(
+      'SELECT m.runId AS runId, ' +
+      `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} THEN 1 ELSE 0 END) AS outstanding, ` +
+      "SUM(CASE WHEN d.state = 'rejected' AND " +
+      `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} THEN 1 ELSE 0 END) AS parked, ` +
+      'MAX(d.replayCount) AS replayMax ' +
+      `FROM mail_deliveries d JOIN mail m ON m.id = d.mailId WHERE m.runId IN (${ph}) GROUP BY m.runId`,
+    ).all(...runIds) as { runId: number; outstanding: number; parked: number; replayMax: number | null }[]) {
+      const h = out.get(row.runId); if (!h) continue;
+      out.set(row.runId, { ...h, mailOutstanding: row.outstanding, mailParked: row.parked,
+                           mailReplayMax: row.replayMax ?? 0 });
+    }
+
+    // 2) done-claim rejections: how many, and the newest code.
+    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    for (const row of this.db.prepare(
+      'SELECT runId, count(*) AS c, ' +
+      '(SELECT code FROM mail_rejections x WHERE x.runId = r.runId ' +
+      `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
+      `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
+    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES)
+      as { runId: number; c: number; lastCode: string | null }[]) {
+      const h = out.get(row.runId); if (!h) continue;
+      out.set(row.runId, { ...h, doneRejects: row.c, lastRejectCode: row.lastCode });
+    }
+
+    // 3) the dispatch decision, straight off the run row.
+    for (const row of this.db.prepare(
+      `SELECT id, briefQueued, clearError FROM runs WHERE id IN (${ph})`,
+    ).all(...runIds) as { id: number; briefQueued: number | null; clearError: string | null }[]) {
+      const h = out.get(row.id); if (!h) continue;
+      out.set(row.id, { ...h, briefQueued: row.briefQueued === null ? null : row.briefQueued === 1,
+                        clearError: row.clearError });
+    }
+
+    // 4) the un-briefed coordinator: an OUTSTANDING operator kickoff to a
+    //    claimedBy. `MIN(COALESCE(ingestedAt, deliveredAt, at))` is dueDeliveries'
+    //    own idiom (store.ts:1856-1871) — a replay rewrites deliveredAt and never
+    //    touches ingestedAt, so ingestedAt must win where it exists.
+    if (coordIds.length > 0) {
+      const cph = placeholders(coordIds.length);
+      const since = new Map<string, number>();
+      for (const row of this.db.prepare(
+        'SELECT d.toId AS toId, MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at)) AS since ' +
+        'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+        `WHERE m.fromId = 'operator' AND m.runId IS NULL AND m.subject = ? AND d.toId IN (${cph}) ` +
+        `AND d.state IN ${OUTSTANDING_STATES_SQL} GROUP BY d.toId`,
+      ).all(PROGRAM_KICKOFF_SUBJECT, ...coordIds) as { toId: string; since: number }[]) {
+        since.set(row.toId, row.since);
+      }
+      for (const [id, h] of out) {
+        const claimed = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?')
+          .get(id) as { claimedBy: string | null } | undefined;
+        const at = claimed?.claimedBy == null ? undefined : since.get(claimed.claimedBy);
+        if (at !== undefined) out.set(id, { ...h, coordKickoffPendingSince: at });
+      }
+    }
+    return out;
+  }
+```
+
+Then thread it: `hydrateRun(row: RunRowDb, health: RunHealth): RunRow` gains the parameter and puts
+`health` in its literal; `runs()` calls `this.runHealth(rows.map(r => r.id), [...new Set(rows.map(r => r.claimedBy).filter(...))])` once and maps; `run(id)` calls it for the single id;
+`reconstruct` passes a zeroed literal.
+
+- [ ] **Step 5: Run to verify they pass**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/coord-health.test.ts test/coord-store.test.ts`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add shared/api.ts server/src/coord/store.ts server/test/coord-health.test.ts
+git commit -m "feat(coord): the board learns four health facts, batched (D-1299, D-1300)"
+```
+
+---
+
+### Task 4: The dispatch writes its own decision
+
+**Files:**
+- Modify: `server/src/coord/dispatch.ts` (the commit at `:571-594`, `briefQueued` at `:642`)
+- Modify: `server/src/coord/store.ts` (`dispatchRun` input)
+- Test: `server/test/dispatch-skillstate.test.ts` or a new block in `server/test/run-routes.test.ts`
+
+**Interfaces:**
+- Consumes: Task 2's columns. Produces: the run row carries the decision after every dispatch.
+
+The ordering problem is real and must not be papered over: `briefQueued` is computed at `:642`, AFTER
+the commit at `:571-594`. Moving the commit later would change the transaction's contents; moving the
+computation earlier is safe because both its inputs (`resumed`, `clearedAt`) are final by `:544`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+  it('a resume whose /clear was refused records that it queued NO brief, and why', async () => {
+    // The false branch of briefQueued left nothing durable at all — absence,
+    // indistinguishable from "no dispatch happened" (D-1298). This is the fixture
+    // that manufactures it: a resume whose sendPrompt refuses.
+    …drive dispatch with a tmux double whose send refuses 'draft-present'…
+    const row = coord.db.prepare('SELECT briefQueued, clearError FROM runs WHERE id = ?').get(runId);
+    expect(row, 'the dispatch decision is not durable').toMatchObject({ briefQueued: 0, clearError: 'draft-present' });
+    expect(coord.runHealth([runId], []).get(runId)!.briefQueued).toBe(false);
+  });
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts -t 'queued NO brief'`
+Expected: FAIL — `expected { briefQueued: null, clearError: null } to match object { briefQueued: 0, … }`.
+
+- [ ] **Step 3: Implement**
+
+Hoist `const briefQueued = !resumed || clearedAt !== null;` above the commit (it currently sits at
+`:642`), pass `briefQueued` and `clearError` into `coord.dispatchRun({...})`, and have
+`CoordStore.dispatchRun` write both columns inside its existing transaction. Leave the
+`run_events.detail` ternary exactly as it is — this wave does not widen it; see D-1298's note.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/run-routes.test.ts test/dispatch-adopt.test.ts test/dispatch-skillstate.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/coord/dispatch.ts server/src/coord/store.ts server/test/run-routes.test.ts
+git commit -m "feat(coord): a dispatch that queued no brief now says so durably (D-1298)"
+```
+
+---
+
+### Task 5: The route and frame census catch up
+
+**Files:**
+- Modify: `server/test/reconstruction-drill.test.ts:277-291` (the `RUN_SUMMARY_KEYS` census)
+- Modify: `server/test/run-routes.test.ts` (`describe('GET /api/runs')`)
+- Modify: `server/test/fleetws.test.ts:575-660`
+
+No production change: `GET /api/runs` is `runs.map(toRunSummary)` and `toRunSummary` is a strip, so the
+field rides both surfaces the moment `hydrateRun` computes it. What this task does is make the census
+and the frame's stability EXPLICIT.
+
+- [ ] **Step 1: Update the exhaustive census**
+
+`RUN_SUMMARY_KEYS` gains `health: true` and the count moves `20 → 21`. Decide and record `health` in
+`UNRECOVERABLE` (`:252-271`): it IS unrecoverable from ledger + registry + `.prhistory`, so the count
+moves `14 → 15` with a stated reason.
+
+- [ ] **Step 2: Pin the frame's stability — the constraint D-1300 names**
+
+```ts
+  it('the runs frame is byte-identical across two ticks when nothing changed', async () => {
+    // D-1300: RunHealth carries no clock precisely so this stays true. A field
+    // holding an age would differ every tick and defeat the broadcast dedupe at
+    // fleetws.test.ts:637, turning an idle fleet into a storm.
+    const a = JSON.stringify(coord.runs().map(toRunSummary));
+    vi.setSystemTime(Date.now() + 600_000);
+    const b = JSON.stringify(coord.runs().map(toRunSummary));
+    expect(b, 'a health field moved with the clock').toBe(a);
+  });
+```
+
+- [ ] **Step 3: Run**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/reconstruction-drill.test.ts test/fleetws.test.ts test/run-routes.test.ts`
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add server/test/reconstruction-drill.test.ts server/test/fleetws.test.ts server/test/run-routes.test.ts
+git commit -m "test(coord): the RunSummary census counts health, and the frame stays byte-stable (D-1300)"
+```
+
+---
+
+### Task 6: The compact warn row
+
+**Files:**
+- Modify: `pwa/src/fleet/runWords.ts` — the tolerant reader and the warn decision
+- Modify: `pwa/src/screens/RunsScreen.tsx` — one element inside `body`
+- Modify: `pwa/src/fleet/fleet.css` — `.run-row .run-warn`
+- Test: `pwa/test/runs-health.test.tsx` (create); update `pwa/test/fleet-css.test.ts:567-579`
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `pwa/test/runs-health.test.tsx`, copying `runs-screen.test.tsx`'s `board`/`atFrozenClock`
+helpers. The cases: a parked delivery renders a warn with a word AND a glyph; a replay high-water at
+`MAIL_REPLAY_WARN_COUNT` renders; `briefQueued:false` renders and names `clearError`; a stale kickoff
+past `KICKOFF_UNACKED_MS` renders; **and the older-server case**:
+
+```ts
+  it('renders NOTHING when the server omits health — absence is never a verdict', () => {
+    const noHealth = { ...r() } as Partial<RunSummary>;
+    delete noHealth.health;
+    const store = makeStore();
+    act(() => { store.setState({ runs: [noHealth as RunSummary], runsFrameSeen: true }); });
+    expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />))
+      .not.toThrow();
+    expect(document.querySelector('.run-warn'), 'an older server rendered a health claim').toBeNull();
+  });
+
+  it('a healthy run renders no warn row at all', () => { … expect(document.querySelector('.run-warn')).toBeNull(); });
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd pwa && ./node_modules/.bin/vitest run test/runs-health.test.tsx`
+Expected: FAIL — `expected null not to be null` on the first positive case.
+
+- [ ] **Step 3: The decision, in `runWords.ts`, never in JSX**
+
+```ts
+export interface RunWarning { readonly glyph: string; readonly word: string; readonly title: string }
+
+/** The tolerant reader. An older SERVER omits `health` entirely; `undefined` is
+ *  not "no wedge", so every caller goes through here and gets an empty list. */
+export const runWarnings = (
+  run: { health?: RunHealth; state: RunState }, nowMs: number,
+): readonly RunWarning[] => {
+  const h = run.health;
+  if (h === undefined) return [];
+  const out: RunWarning[] = [];
+  if (h.mailParked > 0) out.push({ glyph: '⛒', word: `${h.mailParked} parked`, title: … });
+  if (h.mailReplayMax >= MAIL_REPLAY_WARN_COUNT) out.push({ glyph: '↻', word: `replayed ${h.mailReplayMax}×`, title: … });
+  if (h.briefQueued === false) out.push({ glyph: '⌦', word: 'no brief queued', title: h.clearError ?? … });
+  if (h.doneRejects > 0) out.push({ glyph: '⊘', word: `${h.doneRejects} rejected`, title: … });
+  if (h.coordKickoffPendingSince !== null
+      && nowMs - h.coordKickoffPendingSince >= KICKOFF_UNACKED_MS) out.push({ … });
+  return out;
+};
+```
+
+`h.briefQueued === false`, never `!h.briefQueued` — `null` (older row / no dispatch) must render
+nothing. `h.coordKickoffPendingSince !== null` before the arithmetic, the `MailStrip.tsx:176`
+negated-comparison idiom, so an absent numeric fails the test rather than passing it.
+
+- [ ] **Step 4: The markup, and the CSS**
+
+Inside `body` in `RunsScreen.tsx`, after the `degradedFields` block, one wrapped line:
+
+```jsx
+      {warnings.length > 0 && (
+        <span className="run-warn" data-count={String(warnings.length)}>
+          {warnings.map((w) => (
+            <span key={w.word} className="run-warn-item" title={w.title}>
+              <span className="run-warn-glyph" aria-hidden="true">{w.glyph}</span>{' '}{w.word}
+            </span>
+          ))}
+        </span>
+      )}
+```
+
+`fleet.css`, scoped under `.run-row` so `design/audit.mjs` sees it grounded, `flex-basis: 100%` so it
+owns its own wrapped line inside the existing `flex-wrap: wrap` row, an already-declared ink, and **no
+`--glow`, no `animation`, no `box-shadow`** — add `.run-row .run-warn` to `fleet-css.test.ts:572`'s
+"runs are not living panes" list.
+
+- [ ] **Step 5: Run**
+
+Run: `cd pwa && ./node_modules/.bin/vitest run test/runs-health.test.tsx test/fleet-css.test.ts test/contrast.test.ts test/tap-targets.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add pwa/src/fleet/runWords.ts pwa/src/screens/RunsScreen.tsx pwa/src/fleet/fleet.css pwa/test/
+git commit -m "feat(pwa): a compact warn row per run, and an older server renders nothing"
+```
+
+---
+
+### Task 7: The cross-tree ledger guard — the L1 decision
+
+**Files:**
+- Modify: `server/src/coord/ledger.ts` — `definitionsIn`, `crossTreeCollisions`
+- Test: `server/test/ledger-crosstree.test.ts` (create)
+
+**Interfaces:**
+- Produces: `definitionsIn(files): Definition[]` and
+  `crossTreeCollisions(branch, base, era): Collision[]`. Task 8 feeds them real git blobs.
+
+**Why this shape closes the hole the existing scan cannot.** `deviation-refs.test.ts`'s collision scan
+reads ONE checkout (`readdirSync(PLANS)` + `readFileSync`), so two branches each holding one of the two
+definitions are BOTH green, and the pair only co-resides after the loser merges — one merge too late.
+Three properties fix it, and each was measured (D-1294, D-1295):
+
+1. **Cross-tree.** Compare the working tree's definitions against `origin/main`'s, without merging.
+2. **Subject-free, for allocator-era numbers only.** The allocator issues each `n` once for one
+   purpose, so two DEFINING files is a defect regardless of wording. Today's scan requires two distinct
+   SUBJECTS as well, which is what the pre-allocator grandfathering needs — so the new arm is scoped to
+   `n >= 211` and `GRANDFATHERED` is untouched, its "may only shrink" invariant intact.
+3. **Prefix-only recognition.** `ENTRY`'s `[^—\n]*—\s*(.+)$` requires the subject on the SAME line, and
+   **29 real definitions in today's plans are invisible to it**, including allocator-era D-1026 and
+   **D-1158 — one of the five numbers this program lost.** The new arm uses the looser `DEFINED` shape
+   the floor assertion already trusts.
+
+- [ ] **Step 1: Write the failing unit tests**
+
+Create `server/test/ledger-crosstree.test.ts` with FIXTURES, not the real tree:
+
+```ts
+const f = (path: string, text: string) => ({ path, text });
+
+describe('crossTreeCollisions (F7 — one merge earlier)', () => {
+  it('fires when the branch and the base define one allocator-era number in different plans', () => {
+    const hits = crossTreeCollisions(
+      [f('a.md', '- **D-1157** — my subject')], [f('b.md', '- **D-1157** — their subject')], 211);
+    expect(hits.map((h) => h.n)).toEqual([1157]);
+    expect(hits[0]!.files).toEqual(['a.md', 'b.md']);
+  });
+
+  it('does NOT fire on the same file in both trees — that is one definition, not two', () => {
+    expect(crossTreeCollisions([f('a.md', '- **D-1157** — s')], [f('a.md', '- **D-1157** — s')], 211)).toEqual([]);
+  });
+
+  it('is SUBJECT-FREE: identical wording in two files is still two definitions', () => {
+    // The existing scan requires two distinct subjects and would return []. An
+    // allocator-era number is issued once, for one purpose — two defining files is
+    // the defect whatever they say.
+    expect(crossTreeCollisions([f('a.md', '- **D-900** — same')], [f('b.md', '- **D-900** — same')], 211))
+      .toHaveLength(1);
+  });
+
+  it('leaves the pre-allocator era alone — GRANDFATHERED must not have to grow', () => {
+    expect(crossTreeCollisions([f('a.md', '- **D-72** — x')], [f('b.md', '- **D-72** — y')], 211)).toEqual([]);
+  });
+
+  it('sees the colon form and the WRAPPED form ENTRY is blind to (D-1294)', () => {
+    // Exactly PR #38's spelling of D-1158: an em-dash at end of line, subject on
+    // the next. ENTRY's `—\s*(.+)$` cannot match it, which is why that half of the
+    // first incident was undetectable even in a merged tree.
+    const wrapped = f('a.md', '- **D-1158** (2026-08-31, found by running the suite) —\n  the subject');
+    const colon   = f('b.md', '- **D-1158** (Task 3): a different finding');
+    expect(crossTreeCollisions([wrapped], [colon], 211).map((h) => h.n)).toEqual([1158]);
+  });
+
+  it('ignores a dotted SUB-entry, which cites its parent rather than defining it', () => {
+    expect(crossTreeCollisions([f('a.md', '- **D-310.1** — finding')], [f('b.md', '- **D-310** — parent')], 211))
+      .toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts`
+Expected: FAIL — `SyntaxError: The requested module '../src/coord/ledger.js' does not provide an export named 'crossTreeCollisions'`.
+
+- [ ] **Step 3: Implement, in `ledger.ts` (L1, still pure)**
+
+```ts
+/** The first allocator-era number. Below it the pre-allocator era legitimately
+ *  reused numbers, and `deviation-refs.test.ts`'s GRANDFATHERED set — which may
+ *  only SHRINK — is what carries that history. Scoping the cross-tree arm here
+ *  keeps that invariant intact. */
+export const LEDGER_ALLOCATOR_ERA = 211;
+
+/** Definition-SHAPED, prefix only — deliberately looser than deviation-refs'
+ *  ENTRY, which demands the subject on the same line and is therefore blind to
+ *  the colon form (`- **D-211** (Task 3): …`) and to a subject wrapped onto the
+ *  next line. 29 real definitions in today's plans sit in that blind spot,
+ *  D-1158 among them (D-1294). A dotted sub-entry cites its parent and is
+ *  excluded by the lookahead, exactly as ENTRY excludes it. */
+const DEFINITION = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)/;
+
+export interface Definition { readonly file: string; readonly n: number }
+export interface CrossTreeCollision { readonly n: number; readonly files: readonly string[] }
+
+export function definitionsIn(
+  files: readonly { readonly path: string; readonly text: string }[],
+): Definition[] { … }
+
+/**
+ * Numbers at or above `era` DEFINED in more than one plan file across the two
+ * trees. Subject-free by construction: the allocator issues each number once,
+ * for one purpose, so a second defining file is the defect however it is worded.
+ *
+ * Pure, and both trees arrive as data — the git reading belongs to the caller.
+ */
+export function crossTreeCollisions(
+  branch: readonly { readonly path: string; readonly text: string }[],
+  base:   readonly { readonly path: string; readonly text: string }[],
+  era: number = LEDGER_ALLOCATOR_ERA,
+): CrossTreeCollision[] { … }
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts test/ledger.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/coord/ledger.ts server/test/ledger-crosstree.test.ts
+git commit -m "feat(ledger): a cross-tree, subject-free collision decision for allocator-era numbers (D-1294, D-1295)"
+```
+
+---
+
+### Task 8: The cross-tree arm over the real two trees
+
+**Files:**
+- Modify: `server/test/deviation-refs.test.ts`
+- Modify: `CONTRIBUTING.md`, `CLAUDE.md`
+
+**Interfaces:**
+- Consumes: Task 7's `crossTreeCollisions`, and `topology-clean.test.ts:137-148`'s `resolveBase`
+  pattern — the shipped, working way to read another ref's content from inside a vitest file.
+
+**Measured, before writing a line** (`scratchpad/union.py`, re-runnable):
+
+| branch | base | hits |
+|---|---|---|
+| `eee5fa1a` (wave 6, pre-renumber) | `47ac50da` (main after PR #41) | **3** — D-1159, D-1160, D-1161 |
+| `d620abe8` (wave 6, pre-renumber) | `d3de4ec7` (main after PR #38) | **2** — D-1157 **and D-1158** |
+| `HEAD` | `origin/main` | **0** |
+
+Both incidents, from the branch alone, without merging, in ~380 ms. The existing scan finds neither
+until after the merge, and can never find D-1158 at all.
+
+- [ ] **Step 1: Write the failing arm**
+
+```ts
+describe('the cross-tree collision scan (F7 — before the merge, not after)', () => {
+  const base = resolveBase(ROOT);   // CCRC_LEDGER_BASE, then origin/main, then main
+
+  const plansAt = (ref: string): { path: string; text: string }[] => { … git ls-tree + cat-file --batch … };
+
+  it('resolves a base at all — a missing one is RED, never a quiet pass', () => {
+    // topology-clean.test.ts:509's rule. A scan with no base measures nothing and
+    // would report green forever; CI's fetch-depth: 0 is what pays for this.
+    expect(base, 'no origin/main to compare against — fetch it, do not disarm this').not.toBeNull();
+  });
+
+  it('the scan is looking at two real trees', () => {
+    expect(plansAt('HEAD').length).toBeGreaterThanOrEqual(50);
+    expect(plansAt(base!).length).toBeGreaterThanOrEqual(50);
+    expect(definitionsIn(plansAt('HEAD')).length).toBeGreaterThanOrEqual(300);
+  });
+
+  it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
+    expect(crossTreeCollisions(plansAt('HEAD'), plansAt(base!)).map((c) => `D-${c.n}: ${c.files.join(' / ')}`),
+      'this branch defines a number origin/main already defines elsewhere — allocate a fresh one ' +
+      'and renumber NOW, before the merge decides it for you').toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify the anti-vacuity guards bite**
+
+Run with a deliberately absent base: `cd server && CCRC_LEDGER_BASE=nope git -C .. update-ref -d refs/remotes/origin/main` is
+NOT the way — instead assert the arm by pointing it at a known-colliding pair:
+`cd server && CCRC_LEDGER_BASE=47ac50da ./node_modules/.bin/vitest run test/deviation-refs.test.ts`
+against a checkout at `eee5fa1a`. Expected: FAIL, naming D-1159/1160/1161. **Record the verbatim
+first-fail in the mutation table.**
+
+- [ ] **Step 3: Document the step it replaces**
+
+`CONTRIBUTING.md:66-69` today says *"check `main` first — two branches allocating in parallel has
+caused a renumber before"* with no mechanism. Replace the parenthetical with the command that now
+performs it, and add the same one line to `CLAUDE.md`'s deviation-ledger bullet. State plainly what it
+does and does not see: it compares against whatever `origin/main` your checkout has fetched, so a stale
+remote-tracking ref measures a stale base — `git fetch origin main` first.
+
+- [ ] **Step 4: Run the whole file**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`
+Expected: PASS, 12 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/test/deviation-refs.test.ts CONTRIBUTING.md CLAUDE.md
+git commit -m "feat(ledger): the collision scan reads origin/main too, so it fires before the merge (D-1295)"
+```
+
+---
+
+### Task 9: The allocator's own half — what `landedIn` already knew
+
+**Files:**
+- Modify: `server/src/coord/ledger.ts` — `auditAllocations`
+- Modify: `server/src/coord/routes.ts` — `GET /api/ledger` gains `mismatches`
+- Test: `server/test/ledger-routes.test.ts`
+
+**The measurement this task exists for.** `ledger_alloc` rows 1157–1161 all read
+`allocatedTo: 'ccrc-pwa-quiet-meadow'` with this program's own title, and `landedIn` pointing at FIVE
+different plan files — three of them other lanes'. `sweepLedgerReconcile` wrote every one of those and
+surfaced nothing: it marks a number landed on ANY `\bD-<n>\b` occurrence and never asks whose file it
+landed in (`watch.ts:2102-2104`). **The allocator recorded the theft and said nothing** (D-1297).
+
+This cannot become an enforcement — an allocation is a record that you asked, not a claim on a number,
+and this wave does not pretend otherwise. What it can do is make the mismatch READABLE.
+
+- [ ] **Step 1: Write the failing route test**
+
+```ts
+  it('reports an allocation whose landedIn is not where its block landed', async () => { … });
+  it('reports a DEFINED allocator-era number with no allocation row at all', async () => { … });
+  it('reports an allocation whose allocatedTo is empty — unattributable, not clean (D-1301)', async () => { … });
+  it('says nothing about a block that landed in one file', async () => { … });
+```
+
+- [ ] **Step 2–4:** implement `auditAllocations` as a pure L1 function over
+`(definitions, allocations)`, wire it into the route beside `stale`, run the file.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/coord/ledger.ts server/src/coord/routes.ts server/test/ledger-routes.test.ts
+git commit -m "feat(ledger): GET /api/ledger reports the mismatches landedIn already knew (D-1297, D-1301)"
+```
+
+---
+
+### Task 10: The fold-ins
+
+**Files:** `server/src/coord/store.ts`, `server/src/coord/routes.ts`, `shared/api.ts`,
+`server/src/auth/gate.ts`, `server/test/auth-gate.test.ts`, `server/test/coord-caps-route.test.ts`
+
+- [ ] **Step 1: D-1169 — the clock leaves the store, and the dial can show it**
+
+`setCaps(next: CoordCaps, at: number = Date.now())` — the `markDispatched`/`recordRunEvent`/`capsUsage`
+convention it is the odd one out against. The clock read must stay INSIDE `coordMutex.run(...)`
+(`dispatch-mutex-gate.test.ts:73`'s `TARGETS` includes `coord.setCaps`). Then widen `caps()`'s SELECT
+and carry `updatedAt` on **`CoordCapsView`**, not on `CoordCaps` — the view is the read-side shape and
+widening it is not a change to the shipped caps type. That answers BOTH halves of D-1169 rather than
+half of it. **`caps.ts` is not edited, so no purity assertion moves** — record that measurement.
+
+- [ ] **Step 2: Two of the five cardinals become derivations**
+
+`auth-gate.test.ts:207` — `expect(ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length - WS_ROUTES.length);`
+keeping the `> 50` floor, because the identity survives `ROUTES` collapsing.
+`auth-gate.test.ts:495` — collapse into `:496`'s relation, and upgrade `EXEMPT.size - 1` to the
+strictly stronger set assertion:
+`expect([...EXEMPT.keys()].filter((k) => !ROUTES.map(key).includes(k))).toEqual(['GET /*']);`
+Leave **46 and 25 alone**: nothing in the tree attributes a live route to the file that registered it
+(`registerCoordRoutes` is called on the root instance with no prefix), so every in-file "derivation" is
+circular. Record that as the reason, not as an omission.
+
+- [ ] **Step 3: Three stale cardinals no scanner reads (D-1302)**
+
+`gate.ts:8` says *"all 55 routes"*; the tree derives **68**. `auth-gate.test.ts:365-369`'s breakdown
+enumerates 24 while `EXEMPT.size` is 25. `auth-gate.test.ts:472-473` says *"69 − 3 − 24 = 42"* nine
+lines above the assertion that says 44. Correct all three, and extend D-1223's digit scan to cover
+`gate.ts`'s numeral — the census reads number WORDS and D-1223's digit scan reads `auth-gate.test.ts`
+only, which is exactly why all three survived.
+
+- [ ] **Step 4: D-1224, recorded not mechanised**
+
+The case to watch is a single-session program — a run whose `claimedBy` is also its `sessionId`. It does
+not exist today. Task 3's board makes it OBSERVABLE for the first time: such a run shows
+`coordKickoffPendingSince` against itself. Record that, and say plainly that no fixture manufactures it
+because no such program exists to measure.
+
+- [ ] **Step 5: Run and commit**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/coord-caps-route.test.ts test/coord-caps-policy.test.ts test/dispatch-mutex-gate.test.ts`
+
+```bash
+git commit -m "fix(fold-ins): D-1169's clock, two derived cardinals, three stale ones (D-1302, D-1303)"
+```
+
+---
+
+## Deviations found
+
+This wave's numbers are **D-1293..D-1305**, allocated from `POST /api/ledger/deviations` with `byId`
+set, in two acts (12 + 1), each immediately before the entry that defines it. **The floor was read from
+the allocator, not from a document, and the two disagreed** — see D-1293. Every number cited anywhere
+in this plan or in the diff is defined below.
+
+- **D-1293** (2026-09-02, brief premise corrected by measurement) — **the brief's floor was 1243; the
+  allocator's was 1292.** The brief said "floor **1243** — and READ the floor from the allocator, never
+  from a document". Read: `GET /api/ledger?project=ccrc-pwa` answered `floor: 1292`, and there were
+  **zero** allocation rows at or above 1243. 1243 is `max(defined) + 1`; the allocator's floor is
+  `max(defined) + LEDGER_SEED_GAP` (50, `shared/api.ts:5443`), i.e. 1242 + 50. A worker who had trusted
+  the brief would have defined D-1243, forty-nine numbers below the floor — which
+  `deviation-refs.test.ts`'s floor assertion cannot catch, because it only rejects refs ABOVE the
+  high-water. The instruction was right and the number in the same sentence was wrong; the instruction
+  is what saved it.
+
+- **D-1294** (2026-09-02, pre-existing defect, measured) — **`ENTRY` cannot see a definition whose
+  subject is not on its own line, and one of the five lost numbers sits in that blind spot.**
+  `deviation-refs.test.ts:45`'s `ENTRY = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)[^—\n]*—\s*(.+)$/`
+  requires a non-empty subject after an em-dash on the SAME line. PR #38 spelled its entry
+  `- **D-1158** (2026-08-31, found by running the full suite for D-1157) —` with the subject wrapped to
+  the next line, so `collisions()` never saw it. Measured across today's 64 scanned plans: the looser
+  `DEFINED` prefix matches **386** lines and `ENTRY` matches **350** — 36 definition-shaped lines
+  invisible, 7 of them deliberate `D-N.M` sub-entries and **29 real definitions**, carrying
+  73, 139–144, 149, 172, 189–195, 200–207, **1026** and **1158**. So even in a fully merged tree, half
+  of the first incident was undetectable. Fixed for allocator-era numbers only, by Task 7's
+  prefix-only `DEFINITION`; the pre-allocator half is left to `GRANDFATHERED`, whose "may only SHRINK"
+  rule a widened subject scan would have forced us to break (measured: widening the subject extraction
+  surfaces six sub-211 collisions — D-73/142/143/144/149/172 — every one of which would have had to
+  join that set).
+
+- **D-1295** (2026-09-02, the mechanism this wave was asked for) — **the collision scan reads one tree,
+  and the fix is to read two, not to document a merge.** The brief offered "make the pre-merge
+  measurement cheap and make it a documented step, or find something better". Something better exists
+  and the repo already ships the pattern: `topology-clean.test.ts:137-148`'s `resolveBase` reads
+  another ref's blobs from inside a vitest file and is written to go RED on a missing base. Measured
+  before implementing (`scratchpad/union.py`): comparing a branch's plan definitions against
+  `origin/main`'s, subject-free, for `n >= 211`, finds **D-1159/1160/1161** on `eee5fa1a` vs
+  `47ac50da` and **D-1157 AND D-1158** on `d620abe8` vs `d3de4ec7` — both incidents, from the branch
+  alone, no merge, ~380 ms — and **0** on `HEAD` vs `origin/main` today. Reading all 67 plans out of
+  `origin/main` costs 94 ms. A documented manual step would have been strictly worse: it runs when
+  someone remembers, and this one runs on every suite invocation.
+
+- **D-1296** (2026-09-02, single-definition) — the done-authority six were spelled three times
+  (`MAIL_REJECT_CODES`, and an identical `Extract<MailRejectCode, …>` in both `close.ts:55-56` and
+  `fingerprint.ts:32-33`). Task 3 needs them at runtime for a SQL `IN (…)`, which would have been a
+  fourth. Replaced by one `DONE_AUTHORITY_CODES` with `satisfies readonly MailRejectCode[]`, both
+  `Extract` copies deleted, and a scanner that keeps it at one.
+
+- **D-1297** (2026-09-02, live measurement) — **the allocator recorded the theft and said nothing.**
+  `ledger_alloc` rows 1157–1161 all carry `allocatedTo: 'ccrc-pwa-quiet-meadow'` and this program's own
+  block title, while their `landedIn` names five different plan files — `2026-08-31-d1157-…`,
+  `2026-08-31-d1159-…`, `2026-08-31-d1160-…`, `2026-09-01-d1161-…` and, for 1162–1172, the wave-6 plan.
+  The cause is `watch.ts:2102-2104`: reconcile marks a number landed on ANY `\bD-<n>\b` occurrence, in
+  any plan, and never compares the file to the holder. So the ledger positively asserts the wrong thing
+  rather than staying silent, and the fact that a block landed scattered across five lanes' files was
+  sitting in the database the whole time. Surfaced by Task 9, not enforced: an allocation is a record
+  that you asked.
+
+- **D-1298** (2026-09-02, spec item made durable) — **`briefQueued: false` left no trace at all.**
+  `briefQueued` is computed at `dispatch.ts:642` and never persisted; `clearError`'s only durable trace
+  is `run_events.detail`'s `clear-refused:<code>`, on a table no HTTP route serves, written through a
+  MUTUALLY EXCLUSIVE ternary (`dispatch.ts:592-593`) that drops it whenever `adopted` wins. The TRUE
+  branch leaves the brief mail row as evidence; the FALSE branch leaves absence, indistinguishable
+  from "no dispatch happened". Two nullable columns (migration 7) record the decision itself. NULL is a
+  third condition and is kept distinct from `false` by a defaultless column — a `DEFAULT 0` would have
+  been the overloaded null this wave's own wire rule forbids.
+
+- **D-1299** (2026-09-02, design constraint found by measurement) — **health facts must be batched or
+  the board pays ~3,000 queries.** `hydrateRun` already costs two SQL statements per row (`itemTally`,
+  `unreadMailCount`) and `runs({includeClosed:true})` returns every open run plus up to 500 closed ones
+  with no cap on the open arm (`store.ts:1185-1189`, deliberately). Four naive per-row health reads
+  would be six statements per row. `runHealth` is therefore four `GROUP BY` statements per `runs()`
+  call regardless of row count, and `hydrateRun` takes the answer as a parameter.
+
+- **D-1300** (2026-09-02, design constraint, and it is not obvious) — **no health field may carry a
+  clock.** `fleetws.test.ts:637` pins that the WS `runs` frame is dropped from the broadcast when its
+  JSON is unchanged. A field holding an age in milliseconds differs on every tick, so it would defeat
+  that dedupe and turn an idle fleet into a broadcast storm — a performance regression shaped exactly
+  like a feature. Every `RunHealth` member is a count, a code or a STORED timestamp, and the two
+  thresholds (`MAIL_REPLAY_WARN_COUNT`, `KICKOFF_UNACKED_MS`) are rendering constants the PWA applies,
+  the `SPAWN_STALL_MS` precedent. Pinned by a two-tick byte-equality test in Task 5.
+
+- **D-1301** (2026-09-02, why hole (a) could not be closed as literally stated) — **`allocatedTo`
+  defaults to the empty string, and the documented coordinator call omits it.**
+  `routes.ts:2124` binds `allocatedTo: byId ?? ''`; `byId` is optional, unvalidated beyond
+  `typeof === 'string'`, and carries no uuid — unlike `POST /api/claims`, which runs the mail-ingress
+  attribution gate. The canonical allocation, the program's whole block at run-open, is documented in
+  `ccd/coordinator-skill/references/peer-protocol.md:126-129` **without `byId`**, so it lands with
+  `allocatedTo = ''` and there is nothing to compare a definer against. `runId` is hardcoded `null` at
+  the same call, so a program-level fallback identity does not exist either. Making `byId` required
+  would be a breaking change to a route whose documented caller lives in the skill corpus — out of this
+  wave's lane, and it would need the coordinator's ruling. This wave therefore reports `allocatedTo:
+  ''` as **unattributable** rather than as clean, and every allocation it makes itself passes `byId`.
+
+- **D-1302** (2026-09-02, three stale cardinals no scanner reads) — `server/src/auth/gate.ts:8` claims
+  the gate stands in front of *"all 55 routes"*; the tree derives **68** HTTP routes. This is the
+  identical sentence D-1223's own docstring names as the defect — the three copies inside
+  `auth-gate.test.ts` were fixed and the copy in `gate.ts` was not, because
+  `box-token-census.test.ts` reads number WORDS and this is a numeral, while D-1223's digit scan reads
+  `auth-gate.test.ts` only. Two more in the test file itself: `:365-369`'s breakdown enumerates 24
+  while the `toEqual` three lines below it lists 25 `EXEMPT` keys (the tail omits
+  `GET /api/runs/:id/items`), and `:472-473` computes *"69 − 3 − 24 = 42"* nine lines above the
+  assertion that says **44**. All three corrected, and the digit scan extended to `gate.ts`.
+
+- **D-1303** (2026-09-02, D-1169 ruled and closed BOTH halves) — the fix is
+  `setCaps(next, at = Date.now())`, matching `markDispatched`/`recordRunEvent`/`capsUsage`, which
+  `setCaps` was the lone exception to in its own neighbourhood; the clock read stays inside
+  `coordMutex.run` because `dispatch-mutex-gate.test.ts:73`'s `TARGETS` names `coord.setCaps`. The read
+  half — `updatedAt` reaching the dial — goes on **`CoordCapsView`**, the read-side shape, not on
+  `CoordCaps`, which is what wave 6 declined to widen. **`caps.ts` is not edited and no purity
+  assertion moves**; the `coord-caps-policy.test.ts:143-148` red the fix was feared to cause was for a
+  DEFAULTED clock parameter inside `decideCaps`, which this does not add. Recorded either way, as the
+  brief asked, and closed rather than deferred.
+
+- **D-1304** (2026-09-02, D-1224 recorded, not mechanised) — the case to watch is a single-session
+  program, a run whose `claimedBy` equals its `sessionId`. No such program exists today, so no fixture
+  can manufacture it honestly. What changed is that it becomes OBSERVABLE for the first time: such a
+  run renders `coordKickoffPendingSince` measured against itself, which is visible on the board and was
+  visible nowhere before. Reported as an observation the board now supports, not as a guard.
+
+- **D-1305** (2026-09-02, found by following the brief's own instruction) — **`GET /api/ledger`
+  advertises a floor `POST` will not issue.** The GET computes `Math.max(floorRow.floor, maxN + 1)`
+  over `ledger_alloc` alone (`routes.ts:2221`); `allocateDeviations` computes
+  `Math.max(floor, maxIssued + 1)` where `maxIssued` is `MAX(db, ~/.ccrc/ledger-alloc.log)`
+  (`store.ts:3025-3035`). Measured this session: GET said **1292**; `POST` issued **1293..1304**; there
+  is no `ledger_alloc` row for 1292. So the log holds 1292 with no committed row — the file-first
+  design working exactly as specified ("a number is skipped, NEVER reissued") — and the read surface
+  cannot see it. The consequence is hole (a)'s own family: a caller who reads the floor from `GET` and
+  hand-writes `D-<floor>` into a plan defines a number the allocator will never issue to anyone, and
+  `deviation-refs.test.ts`'s floor assertion then reds on it with a message about fixtures. Reported
+  with its measurement; the honest fix is for the GET to consult the same three sources the POST does,
+  which is a change to the allocator's read path and is named here rather than smuggled into this wave.
+
+## Mutation table
+
+Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
+the FIRST failing assertion verbatim, reverting, and confirming `git status --porcelain` is clean.
+Written as each guard lands, never at the end. A row that comes back GREEN is a hole, not a pass.
+
+| mutation | first-fail assertion | suite |
+| --- | --- | --- |
+| _(filled in as each task lands)_ | | |
