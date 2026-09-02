@@ -359,6 +359,53 @@ describe('Build 7 nouns', () => {
     expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 
+  // D-1319. `runHealth`'s statement (1) reuses `DELIBERATE_CANCEL_ERRORS_SQL`
+  // "rather than respelling the two literals", and said in the same breath that
+  // `single-definition.test.ts` forbids the second copy. IT DID NOT — this file
+  // had never mentioned the pair. Measured before this test existed: a
+  // hand-respelled `NOT IN ('run closed','coordinator reclaimed')` in that very
+  // query shipped GREEN through the whole suite. A comment is a request; this is
+  // the mechanism it claimed to be standing on.
+  //
+  // Same shape as the terminal-trio scan below, and for the same reason: the
+  // shipped list is BUILT by interpolation from the two exported constants, so
+  // this scanner sees no literal at all in the real source, and any hand-written
+  // SQL list of the pair scores a hit. Either order, because a copy written from
+  // memory is as likely to be the other way round.
+  //
+  // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
+  // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
+  // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
+  // explaining the constant is a guard someone deletes.
+  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
+    const PAIR = new RegExp(
+      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
+    // The premise, established inside the test rather than assumed: this pattern
+    // really does recognise the copy it forbids, in both orders. Without these
+    // two lines the assertion below is satisfied by a regex that matches nothing.
+    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+
+    // …and the one definition is still built from the two named constants, so
+    // "no literal anywhere" cannot be satisfied by deleting the exclusion.
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      const defs = ALL.filter((f) =>
+        new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
+      expect(defs, name).toEqual(['server/src/coord/store.ts']);
+    }
+    // The two readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from both.
+    expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
+      .toBeGreaterThanOrEqual(2);
+  });
+
   // D-7: `tasks` is Claude Code's TodoWrite vocabulary and belongs to it. A
   // coordination type that spells itself Task is the collision spec:40-44
   // exists to prevent, and it would land in the same union, the same store and
