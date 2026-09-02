@@ -273,7 +273,13 @@ section uses instead of `chmod 000` (see the root-runner rule below).
   self-matching-needle hazard (`server/test/auth-gate.test.ts`'s `claim('in one loop ' + 'over all')` split) does not
   arise. That is the standing "structural over textual" ruling recorded at **agent/src/whitelist.ts:104-107**.
 - **Suites run from INSIDE the package**, foreground, `timeout ≥ 600000`:
-  `cd server && ./node_modules/.bin/vitest run test/x.test.ts`. Never bare `npx vitest`.
+  `cd server && ./node_modules/.bin/vitest run test/x.test.ts` (`x` is a placeholder, not a suite).
+  Never bare `npx vitest`. **A suite NAME in this plan is provenance like a line number.** Two of
+  them were invented plausibly rather than measured — `test/watch.test.ts` (Task 2) and
+  `test/coord-mirror.test.ts` (Task 7), the second named after the module `coord/mirror.ts` whose
+  suites are actually `lifecycle-mirror` and `lifecycle-replay`. Both are corrected below. If a
+  named suite does not exist, DERIVE the right one — `git grep -ln "<the module>.js'" -- server/test`
+  — and say so in the report; do not silently drop the step.
 
 ---
 
@@ -555,6 +561,13 @@ and to the stub-client describe, after **:178**:
       Expected: FAIL at compile/type level first —
       `TS2339: Property 'statMeasured' does not exist on type 'FleetIO'` — and at runtime
       `TypeError: localIO.statMeasured is not a function`. The member does not exist yet.
+      **`vitest run` in `server/` and `agent/` does NOT type-check** — esbuild strips types, and
+      neither `server/vitest.config.ts` nor the agent's sets `typecheck`. So the TS half of this
+      expectation is observed with `cd server && ./node_modules/.bin/tsc --noEmit` (or by
+      `typecheck-tests.test.ts`, the suite that exists for exactly this), and the RUNTIME half is
+      what the vitest command above prints. Both halves are real; only one is visible per command.
+      (`pwa/` is different: `pwa/vite.config.ts` sets `typecheck: { enabled: true }`, so a PWA task
+      DOES see its TS error from `vitest run` — see Task 4, whose prediction is correct as written.)
 
 - [ ] **Step 3: Implement** — `server/src/io.ts`. Extend the `ReadFailure` docstring's first sentence (**:5-9**) so the
       vocabulary's second user is declared where it is defined:
@@ -689,7 +702,12 @@ export function absentStatIO(predicate: (path: string) => boolean): FleetIO {
 
 - [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
       then the suites that own the 17 existing `io.stat` callers:
-      `cd server && ./node_modules/.bin/vitest run test/transcript-ladder.test.ts test/sessionws.test.ts test/coord-fingerprint.test.ts test/watch.test.ts`.
+      `cd server && ./node_modules/.bin/vitest run test/transcript-ladder.test.ts test/sessionws.test.ts test/coord-fingerprint.test.ts`,
+      then the suites that actually own `src/watch.ts`'s `io.stat` call site — **there is no
+      `test/watch.test.ts`; sixteen suites import `../src/watch.js`** — a representative four being
+      `cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/hold-gate.test.ts test/dialog.test.ts test/mail-sweep.test.ts`.
+      For a derivation that is meant to be byte-identical at every call site, the full server suite
+      is the real evidence and a named subset is only the fast signal.
       All must stay green — the derivation makes this a no-op for them.
 
 - [ ] **Step 5: MUTATION CHECK** — two, each reverted:
@@ -1592,6 +1610,13 @@ file gains `import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';` �
       `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`
       Expected: FAIL with `TS2339: Property 'readFileB64Measured' does not exist on type 'FleetIO'` and, at runtime,
       `TypeError: localIO.readFileFromMeasured is not a function`.
+      **`vitest run` in `server/` and `agent/` does NOT type-check** — esbuild strips types, and
+      neither `server/vitest.config.ts` nor the agent's sets `typecheck`. So the TS half of this
+      expectation is observed with `cd server && ./node_modules/.bin/tsc --noEmit` (or by
+      `typecheck-tests.test.ts`, the suite that exists for exactly this), and the RUNTIME half is
+      what the vitest command above prints. Both halves are real; only one is visible per command.
+      (`pwa/` is different: `pwa/vite.config.ts` sets `typecheck: { enabled: true }`, so a PWA task
+      DOES see its TS error from `vitest run` — see Task 4, whose prediction is correct as written.)
 
 - [ ] **Step 3: Implement** — `server/src/io.ts`, after `MeasuredStat`:
 
@@ -1704,7 +1729,12 @@ Interface members, replacing **:46-47**:
 
 - [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
       then the suites whose subjects call the derived methods:
-      `cd server && ./node_modules/.bin/vitest run test/routes.test.ts test/transcript-tail.test.ts test/coord-mirror.test.ts test/dialog.test.ts`.
+      `cd server && ./node_modules/.bin/vitest run test/routes.test.ts test/transcript-tail.test.ts test/lifecycle-mirror.test.ts test/lifecycle-replay.test.ts test/ask.test.ts test/naming.test.ts test/dialog.test.ts`.
+      **There is no `test/coord-mirror.test.ts`** — the MODULE is `server/src/coord/mirror.ts`, and
+      its suites are `lifecycle-mirror` and `lifecycle-replay`. The list above is derived, not
+      remembered: `git grep -lE '\.(readFileB64|readFileFrom)\(' -- server/src` gives
+      `coord/mirror.ts`, `server.ts`, `transcript/ask.ts`, `transcript/tail.ts`, `transcript/title.ts`,
+      and the suites importing those are the ones named. Re-derive rather than trust this list.
       Behaviour of all four derived methods is unchanged, so all must be green.
 
 - [ ] **Step 5: MUTATION CHECK** — three, each reverted:
