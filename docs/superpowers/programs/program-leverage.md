@@ -19,8 +19,8 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 4 | F4 — program kickoff rides the idle-gated mail lane (`queueSystemMail`), direct-injection race retired | run 16, PR #36 (merged `592ec425`) | done 2026-08-31 ~06:05 UTC — fix round `f1ccd9cd` verified hunk-by-hunk (all 8 rulings landed; worker found a THIRD supersession arm, the `finally`), CI 5/5, merged, deployed server lane from the merge sha; `/health` reports `592ec425` (NOT agent-first); D-1039..D-1046 consumed (block EXHAUSTED) + D-1119..D-1122 allocated |
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18, PR #37 (merged `6458a14d`) | done 2026-08-31 ~18:57 UTC — fix round `8262d2b3` verified hunk-by-hunk (all 11 rulings landed with measured reds), CI 5/5, merged, deployed **AGENT-FIRST** (fleet host then server; `ccd` and `/health` both report `6458a14d`, all live sessions verified active through it). Review was SHIP-WITH-FIXES: 3 majors + 1 raised to must-fix, 7 minors, 2 refuted. D-1123..D-1156 spent, floor 1157 |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial + D-1156's derived box-token census | run 19, PR #39 (merged `6ee36ca5`) | done 2026-09-01 ~22:48 UTC — TWO fix rounds plus a renumber. Round 1 (`ff85c514`) answered 3 must-fixes; the worker then AUDITED ITS OWN FIX ROUND (88 agents) and found **4 majors, 3 of them the same guard-with-no-mechanism fault** (`eee5fa1a`). Coordinator verification: 13 lenses, 7 running real mutations in isolated checkouts — **3/3 must-fixes and 4/4 self-audit majors hold**, zero code majors. Then BLOCKED: PR #41 merged at 21:54 taking D-1159/1160/1161, so `deviation-refs` red on the merged tree; renumbered to D-1240..D-1242 (`1c7ccb06`). CI 5/5, merged, deployed **server lane** from the merge sha; `/health` reports `6ee36ca5` (NOT agent-first). D-1163..D-1172 + D-1208..D-1242 spent, floor 1243 |
-| 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) **+ the ledger-allocation guard, three incidents behind it** | run 28, PR #43 | wave-done 2026-09-02 08:23 UTC, CI 5/5 on `ed81ad85` (incl. test-macos). **REVIEWED 08:56 UTC — SHIP-WITH-FIXES: 5 must-fix, 1 major, 1 minor** (10 lenses, refute-default verification, 25 agents; mail 194). Fix round pending. D-1293..D-1317 allocated and defined, **zero collisions against main** — the fourth incident avoided |
-| 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm (re-queue a parked role-addressed delivery after a reclaim), and `ccd/ccrc-api:32-38`'s stale two-door census | — | planned |
+| 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) **+ the ledger-allocation guard, three incidents behind it** | run 28, PR #43 (merged `5e9f650d`) | **done 2026-09-02 12:43 UTC** — THREE rounds. Review SHIP-WITH-FIXES (5 must-fix, 1 major, 1 minor); fix round verified all six HOLD under mutation; a third bounded round of six with the merge committed in advance, which the worker answered plus a seventh it found scanning its own diff for the class. Final verification: **zero not-landed, zero blocking**, all four earlier-round mutations still red. CI 5/5 on `36859151`, merged, deployed **server lane** from the merge sha; `/health` reports `5e9f650d`. D-1293..D-1332 — **40 allocated, 40 defined, zero collisions** |
+| 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit **+ THE LEDGER PROCEDURE: root CLAUDE.md's grep instruction is the generator of all three collisions**. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm, `ccd/ccrc-api:32-38`'s stale two-door census, and wave 7's twelve prose/guard carries | run 30 | planned 2026-09-02 12:44 UTC |
 
 ## Decisions & deviations
 
@@ -750,69 +750,97 @@ and that is precisely what PR #42 did. It is a PARTIAL fix and is recorded as on
 
 ## Next-wave brief
 
-**Wave 7 — F7: program health on the board.** Spec:
-`docs/superpowers/specs/2026-08-28-program-leverage-design.md` §9 (fetch `ws/brisk-meadow` from
-origin; the ledger on that ref carries this brief and wave 6's close record). Same workspace
-(`quiet-meadow`, resumed). Wave 6 is merged as `6ee36ca5` and DEPLOYED — diff against `origin/main`,
-never a stale local ref.
+**Wave 8 of 8 — F8, THE LAST WAVE, and AGENT-FIRST.** Spec:
+`docs/superpowers/specs/2026-08-28-program-leverage-design.md` (fetch `ws/brisk-meadow` from origin;
+the ledger on that ref carries this brief and wave 7's close record). Same workspace
+(`quiet-meadow`, resumed). **Wave 7 is merged as `5e9f650d` and DEPLOYED (server lane)** — diff
+against `origin/main`, never a stale local ref.
 
-**(1) THE HEALTH FACTS, additive on the /runs board's existing reads.** Per run: outstanding vs
-parked delivery counts (excluding the benign `run closed` parks); max `replayCount` high-water;
-count + last code of done-claim rejections (`mail_rejections`/`run_events`); `briefQueued`/`clearError`
-from the dispatch response made durable and re-readable. Per program: un-briefed-coordinator detection
-(open run, `dispatchedAt` null, kickoff delivery unacked past a threshold). PWA renders a compact warn
-row per run. No polling changes — the data rides frames and reads the board already makes.
+**(1) THE MEASURED-READ COMPLETION — F8 as declared.** `readFileMeasured` shipped
+(`MeasuredRead`/`ReadFailure`, `server/src/io.ts`), but the collapse is not gone from the tree:
+`readFile`, `readFileB64` and `readFileFrom` still fold every failure to one `null`. The agent's half
+of `readFileB64` folds a **THIRD** condition — an over-cap file — where `localIO`'s has no cap, and
+the agent's `stat` op answers EACCES as `{missing: true}`, so that wire's own absent-marker already
+lies for every non-ENOENT failure. D-114,
+`docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`. **No overloaded null at any seam you
+touch** — two conditions a caller handles differently must not collapse to one value.
 
-**(2) THE ONE THE PROGRAM HAS PAID FOR TWICE — a worker cannot learn that steering mail is waiting.**
-Mail 120 sat gated `not-idle` for **722** attempts and mail 129 for **911**, each arriving after the
-work it was meant to steer. The gate is working as designed; the blocked party was the WORKER
-mid-wave, exactly the session the 60s floor protects, so `COORD_QUIET_MS` does NOT address it (wave 6
-established this and refused the credit). What the board must surface is the replay count approaching
-the ceiling and the parked/outstanding split — including the visible half of the ~15.5-minute repoint
-window. Surfacing it is this wave; changing the gate is NOT.
+**(2) THE `MailDeliveryState` TERMINALITY AUDIT.** Terminality is incomplete: some writers lack the
+guard. Find every writer, say which are guarded and which are not, and close them — or record, per
+writer, why not.
 
-**(3) THE LEDGER-ALLOCATION GUARD — three incidents now, and it is the wave's sharpest item.**
-D-1157/1158 went to PR #38, D-1159/1160/1161 to PR #41, both DEFINING numbers the allocator had issued
-to this program, both merging first, and wave 6 renumbered twice. Two holes, and the guard must close
-both: (a) **nothing checks that a DEFINED number was allocated to its definer** — every `D-N` defined
-in a plan needs an allocation row whose holder matches; (b) `deviation-refs.test.ts`'s collision scan
-reads ONE tree, so it fires only once both definitions coexist — **one merge too late**. The
-pre-merge measurement that DOES see it is merging `origin/main` locally and running that one file;
-make that cheap and make it a documented step, or find something better. Its floor assertion is a MAX
-compared for equality, so it rejects refs only ABOVE the high-water — that half is fine and is not the
-gap. **An allocation is a record that you asked, not a claim on a number** — the guard cannot pretend
-otherwise; it can only make the mismatch visible before the merge that decides it.
+**(3) THE LEDGER PROCEDURE — the sharpest item, and it is agent-first by nature.** Three parts:
 
-**(4) FOLD IN, all inherited and all small.** D-1169: `coordinator_state.updatedAt` is write-only and
-`setCaps` reads its own clock — its fix is what would make `caps.ts` impure, which is why that file now
-carries a purity scan; decide and record either way. `auth-gate.test.ts` still hand-pins FIVE exact
-cardinals (46/25/71/68/44) after wave 6 derived the sixth — the census machinery exists now, so this is
-an extension, not a design. D-1224 is a live behaviour change recorded with reasoning and no mechanism
-(the narrow window reaches a session that is simultaneously a run's WORKER — intended, keyed on the
-session not the message); the case to watch is a single-session program, which does not exist today —
-if the board makes that observable, say so.
+  (a) **`byId`, ruled: fix the CLIENT, not the route.** `ccd/ccrc-api:151 cmd_whoami` already derives
+      `{id,uuid}` from tmux + the registry, so `ledger allocate` can fill `byId` when the caller's
+      JSON omits it. Show it in `peer-protocol.md`'s documented body too — that text is what every
+      future coordinator copies, and its omission is why 101 of 243 allocator-era rows carry an empty
+      holder. Do NOT make it required at the route: that 400s every session still carrying the old
+      skill text, since a skill reaches a home only once its installer has run there. **The third
+      condition is the part to design rather than discover:** a caller whose tmux/registry lookup
+      FAILS, and a caller that is not a session at all, must not silently send an empty `byId`.
 
-**Tests.** Each health fact: a fixture that MANUFACTURES the wedge and asserts the fact appears; the
-delete-the-measurement mutation direction; wire-revive tolerance (older server omits → PWA renders
-nothing, never a lie). Every guard ships WITH a test measured red on its deletion, TDD red-first, and
-**verbatim first-fail rows written AS YOU GO** — wave 6 shipped its review round with 265 lines of
-deviations and not one table row, and the single guard it did mutation-test end to end turned out to
-be unwitnessed. Three of that round's four majors were guards that would not have survived being
-written into a table. Rows carry the suite, the mutation and the quoted first-fail; count the table
-twice. Watch this program's recurring classes: an absence assertion whose fixture cannot produce the
-presence, and a pin whose premise is never established.
+  (b) **ROOT `CLAUDE.md`'s ALLOCATION INSTRUCTION IS THE GENERATOR OF ALL THREE COLLISIONS, and it
+      must go.** Measured against the live allocator on 2026-09-02:
 
-**Wire:** additive-only, single reader per field, older-peer omission tolerated, no `FLEET_PROTO` bump,
-no new ccd verbs, no overloaded null at any new seam.
+          issued range 274..1325 = 1052 numbers; 263 issued; 789 NEVER ISSUED — 75%
+          17 holes, THIRTEEN of them exactly 49 wide, plus 14, 35, 50 and 53
 
-**Deviations:** allocate from `~/.local/bin/ccrc-api ledger allocate`, floor **1243**, and read the
-floor from the allocator rather than from any document — and **allocate and define in the same act**,
-because the gap between them is what fired three times. Never predict or reuse a number.
+      That is the signature of `floorFromScan` — `max(any D-N TOKEN in docs/superpowers/{plans,specs})
+      + LEDGER_SEED_GAP (50)` — against a floor that ONLY RISES. Every publish-and-sweep burns 49
+      numbers by design, and a hand-written number seals its own band forever: PR #42 wrote D-1243,
+      the sweep raised the floor to 1293, and 1243..1292 are unissuable. 1066..1118 is the identical
+      event. Root `CLAUDE.md` says "allocate the next number by grepping `origin/main`" — `maxRef + 1`
+      is inside the burned band by construction, and two lanes both grepping get the same `maxRef`.
+      **Replace that paragraph with the allocator, and say what the floor actually means.** Measure
+      the figures yourself before you write them; they are this brief's provenance, not its authority.
 
-**NOT agent-first** (server + PWA + root docs only). If a finding pushes you into `ccd/`,
-`session-hook.sh` or the skill corpus, MAIL ME BEFORE IMPLEMENTING — it changes the deploy lane, and a
-mid-wave mail can arrive after the commit it was meant to shape. Deploy is not the worker's act. Commit
-on `ws/quiet-meadow`, never a feature branch. All coordinator mail names this wave's `runId`. Plan
-first (superpowers:writing-plans), execute with superpowers:executing-plans. Suites:
-`./node_modules/.bin/vitest run` from inside the package, foreground, tails READ not grepped; all three
-packages installed or `typecheck-tests` reports spurious failures.
+  (c) **`landed` does not mean merged** — a defect on `main`, not wave 7's. `watch.ts:2076` and
+      `schema.ts:552` both claim it does, but `readLedgerDocs` reads the main checkout's WORKING TREE
+      with **no git ref**, so the sweep reads whatever branch that checkout is sitting on. Measured
+      live: eleven orphans instead of six, five of them from an unmerged branch, and `markLanded` can
+      stamp `landedIn` with a file that is not on main. Fix the read or correct both docstrings.
+
+**(4) THE THREE INHERITED.** The fifth repoint arm (re-queue a parked role-addressed delivery after a
+reclaim); `ccd/ccrc-api:32-38`'s stale two-door census (D-1168).
+
+**(5) WAVE 7'S TWELVE CARRIES.** Two are real and small: `FENCE` admits a TAB-indented delimiter where
+CommonMark reads indented code (`ledger.ts:202`, a hide-only under-report, zero instances today); and
+**D-1329's retraction reached `ledger.ts` only** — the false "build 9b spells its entries
+`- **D-211** (Task 3):` … which ENTRY cannot see" still ships, asserted, at
+`deviation-refs.test.ts:117-119` and `ledger-crosstree.test.ts:43-51`, so at HEAD that file
+contradicts itself. The other ten are prose: a fresh unpinned cardinal at `ledger.ts:341-346`, an
+anti-vacuity message that says "no plans read" when plans were read (`deviation-refs.test.ts:334`),
+`ledger-sweep.test.ts:190` attributing D-1067..1069 to the wrong plan file, and seven stale
+counts/ranges in the wave-7 plan. **One commit, measured, not a design.**
+
+**THE RULE THIS PROGRAM TOOK FIVE DEVIATIONS TO STATE, and it is now the standard:** *a cardinal may
+stay in shipped source only if it cannot move.* `274` passes (MIN(n) over an append-only table).
+"eighteen dropped lines" does not. When in doubt, assert the PROPERTY and name an exemplar you have
+verified exists.
+
+**Tests.** Every guard ships WITH a test measured red on its deletion, TDD red-first, verbatim
+first-fail rows written AS YOU GO, table counted twice. Watch this program's recurring classes: the
+vacuous fixture (four instances in wave 7 alone), the pin whose premise is never established, the
+absence assertion whose fixture cannot produce the presence, and the mutation that reds for the WRONG
+REASON — wave 7's F6 fixture took three attempts because two of them reddened for over-reporting.
+
+**Wire:** additive-only, single reader per field, older-peer omission tolerated, no `FLEET_PROTO`
+bump, no new ccd verbs, no overloaded null at any new seam.
+
+**Deviations:** allocate from `~/.local/bin/ccrc-api ledger allocate` and **read the floor from the
+allocator at the moment you allocate**. It was 1333 when this was written — that is PROVENANCE, not
+an instruction, and its shelf life has been as short as two hours (D-1317). **Allocate and define in
+the same act**, and put the ref in the file only after the allocate call has RETURNED (wave 7 recorded
+getting this backwards and being saved by luck).
+
+**AGENT-FIRST.** This wave touches `ccd/ccrc-api`, `ccd/coordinator-skill/references/peer-protocol.md`
+and root `CLAUDE.md`, so it ships to the FLEET HOST before the server. Deploy is not the worker's act
+— report the fingerprint and I do both lanes in order. Commit on `ws/quiet-meadow`, never a feature
+branch. All coordinator mail names this wave's `runId`. Plan first (superpowers:writing-plans),
+execute with superpowers:executing-plans. Suites: `./node_modules/.bin/vitest run` from inside the
+package, foreground, tails READ not grepped; all three packages installed or `typecheck-tests`
+reports spurious failures.
+
+**This is the last wave.** At its merge the program closes: the ledger and spec PR to main from
+`ws/brisk-meadow`, and run 30 closes `final:true`.
