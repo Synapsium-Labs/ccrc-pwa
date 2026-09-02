@@ -573,7 +573,7 @@ describe('runs are not living panes', () => {
       // F7's warn row joins the list rather than getting an exemption: it is the
       // one new class on this row that carries an attention hue, which is exactly
       // the shape that tends to acquire a glow next.
-      '.run-warn', '.run-row .run-warn-item', '.run-row .run-warn-glyph',
+      '.run-row .run-warn', '.run-row .run-warn-item', '.run-row .run-warn-glyph',
       '.run-row .run-abandon']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');

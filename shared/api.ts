@@ -3490,9 +3490,13 @@ export const DONE_AUTHORITY_CODES = [
 ] as const satisfies readonly MailRejectCode[];
 export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 
-export function isDoneRejectCode(v: unknown): v is DoneRejectCode {
-  return typeof v === 'string' && (DONE_AUTHORITY_CODES as readonly string[]).includes(v);
-}
+// NO `isDoneRejectCode` PREDICATE, deliberately. Every sibling vocabulary here
+// exports one because something reads a raw string back through it; nothing does
+// for this family — `mail_rejections.code` is read back UNTYPED on purpose
+// (`CoordStore.rejections`), and the list's only consumer is a SQL `IN (...)`
+// bind. A predicate with no caller is a guard that guards nothing and a second
+// place for the members to be spelled. It shipped in this wave's first draft with
+// zero callers and zero tests, and was deleted in review.
 
 /**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
@@ -3845,8 +3849,10 @@ export interface RunSummary {
    *
    * REQUIRED here because `hydrateRun` returns a literal and must therefore
    * compute it, and OPTIONAL at every PWA reader, because an older SERVER omits
-   * it. The one tolerant reader is `runHealth()` in `pwa/src/fleet/runWords.ts`;
-   * no JSX reads a member directly.
+   * it. The one tolerant reader is `runWarnings()` in `pwa/src/fleet/runWords.ts`
+   * — NOT `runHealth`, which is the SERVER store method that measures this
+   * object; naming that one here pointed a maintainer at the wrong ring for the
+   * tolerance guarantee. No JSX reads a member directly.
    */
   health: RunHealth;
 }
@@ -4040,7 +4046,22 @@ export interface CoordCapsView {
    *  `null` is not "the epoch": migration 1 seeds `updatedAt = 0`, and a dial
    *  that rendered 1970 for a box nobody has ever tuned would be inventing an
    *  event. An older server omits the field entirely, which reads the same way
-   *  through the one reader that consumes it. */
+   *  through whatever reads it.
+   *
+   *  NO CLIENT READS THIS YET, and saying so is the point — the sentence here used
+   *  to claim absence "reads the same way through the one reader that consumes it",
+   *  and there is no such reader (`CapsControl` takes a `CoordCapsView` and touches
+   *  only `caps` and `usage`). A wire type that teaches a call its own readers do
+   *  not make is where a doc lie starts, which `RunSummary.claimedBy` says in as
+   *  many words two hundred lines up.
+   *
+   *  D-1169 IS closed by this field, both halves as that deviation states them —
+   *  "the column already exists and only the read is missing", plus `setCaps`
+   *  reading its own clock. The read is here and the clock is the caller's. The
+   *  dial is a further thing D-1169 names as motivation rather than as a
+   *  deliverable, and whoever builds it must treat absent (an older server) and
+   *  `null` (a box nobody has tuned) alike — which is why both are spelled out
+   *  here rather than discovered then. */
   updatedAt?: number | null;
 }
 

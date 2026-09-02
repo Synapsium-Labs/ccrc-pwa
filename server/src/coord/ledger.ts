@@ -114,25 +114,40 @@ export function floorFromScan(
 export const LEDGER_ALLOCATOR_ERA = 211;
 
 /**
- * A line that DEFINES a number, recognised by its prefix alone.
+ * A line that DEFINES a number: an entry PREFIX, then the number, then one of the
+ * four ways this repo actually opens an entry.
  *
- * Deliberately looser than `deviation-refs.test.ts`'s `ENTRY`, which additionally
- * demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE SAME LINE — and
- * is therefore blind to two spellings this repo actually uses: build 9b's colon
- * form (`- **D-211** (Task 3): …`) and a subject wrapped onto the next line.
- * Measured as a DELTA, not as two totals — the totals move whenever any plan
- * gains an entry, so a number here would be stale by its own commit (the defect
- * D-1302 is about, three files away). This shape sees 36 definition-shaped lines
- * `ENTRY` cannot; 7 are deliberate `D-N.M` sub-entries and 29 are real
- * non-sub definitions, carrying
- * 73, 139-144, 149, 172, 189-195, 200-207, 1026 and **1158** — one of the five
- * numbers this program lost, and the half of the first incident that would have
- * stayed invisible even in a fully merged tree (D-1294).
+ * Looser than `deviation-refs.test.ts`'s `ENTRY` in one direction and TIGHTER in
+ * another, and both halves are load-bearing.
+ *
+ * LOOSER: `ENTRY` demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE
+ * SAME LINE — so it cannot see build 9b's colon form (`- **D-211** (Task 3): …`)
+ * or a subject wrapped onto the next line. Measured as a DELTA rather than as two
+ * totals, because the totals move whenever any plan gains an entry and a number
+ * here would be stale by its own commit (D-1302's defect, and D-1294's first
+ * attempt at this sentence made exactly that mistake): this shape sees 29
+ * definition lines `ENTRY` cannot, D-1158 among them — one of the five numbers
+ * this program lost, and the half of the first incident that would have stayed
+ * invisible even in a fully merged tree.
+ *
+ * TIGHTER: a prefix alone is NOT enough, and the review that found this had two
+ * live examples in the corpus. `- **D-149 sweep:** any task that…` and
+ * `- **D-172, D-173 and D-174 were re-used** by this branch…` are line-initial
+ * bolded CITATIONS, not entries, and a prefix-only rule calls both definitions.
+ * That is the false-positive direction and it is the dangerous one here: the
+ * second of those sentences is the exact prose a wave writes when it RECORDS a
+ * ledger collision, so a prefix-only guard reds on the narrative describing the
+ * incident it exists to detect, and the only remedy its own message offers is to
+ * renumber a deviation the branch merely cited. The lookahead requires what every
+ * real entry has after its number — `**` (the bold closing), ` —`, ` (` or a
+ * bare `:` — and rejects `,`, `'s`, and a following word. Measured over the
+ * scanned plans: 394 prefix matches, 388 entry-shaped, and all six dropped lines
+ * are citations (D-149, D-171, D-172, D-291, D-292, D-1026). No real entry moves.
  *
  * The dotted-sub-entry lookahead is kept exactly as `ENTRY` has it: `D-310.1`
  * CITES `D-310`, it does not define it.
  */
-const DEFINITION = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)/;
+const DEFINITION = /^(?:#{2,4} |- \*\*)D-(\d+)\b(?!\.\d)(?=\*\*|\s+—|\s+\(|:)/;
 
 export interface Definition { readonly file: string; readonly n: number }
 export interface CrossTreeCollision { readonly n: number; readonly files: readonly string[] }
@@ -187,53 +202,43 @@ export function crossTreeCollisions(
 }
 
 /**
- * The numbers that could not have been allocated, because they ARE the block
- * that introduced the allocator (`docs/superpowers/plans/
- * 2026-08-24-build9b-peers-claims-allocator.md` — and 211 is
- * `LEDGER_ALLOCATOR_ERA` for exactly this reason). Measured from the tree rather
- * than guessed: 211..224 are the only allocator-era numbers on `main` defined
- * before the door that would have issued them existed.
+ * A project's own allocator era: the FIRST number its allocator ever issued.
+ * Anything a plan defines below it predates the allocator for that project and is
+ * not reportable — nobody could have asked.
  *
- * MAY ONLY SHRINK — the standing rule for every grandfather set in this repo.
+ * DERIVED PER PROJECT, and that is the whole point. The first version of this
+ * hardcoded `LEDGER_ALLOCATOR_ERA` (211, this repo's first allocator-era number)
+ * plus a `LEDGER_BOOTSTRAP` set of 211..224 (build 9b's own hand-numbered plan) —
+ * and `sweepLedgerReconcile` applies this to EVERY project that has ever issued a
+ * number. The second project to adopt the allocator, carrying its own few hundred
+ * hand-numbered deviations, would have had most of them named as "never
+ * allocated" alongside a nonsensical 14-number hole grandfathered out of a
+ * different repo's history (review finding).
+ *
+ * The allocator already knows the answer for each project and it costs one
+ * `MIN(n)`. Measured on ccrc-pwa: the hardcoded pair and this derivation report
+ * the SAME four orphans (D-1066..1069), because this project's first issued
+ * number is 274 — so 211..273 were all hand-numbered, and the bootstrap set was
+ * both too narrow and specific to one repo.
+ *
+ * `null` — a project with no allocations at all — reports nothing: there is no
+ * era, so no definition can be below or above it.
  */
-export const LEDGER_BOOTSTRAP: ReadonlySet<number> = new Set(
-  Array.from({ length: 14 }, (_, i) => 211 + i));
+export function projectEra(allocated: ReadonlySet<number>): number | null {
+  let min: number | null = null;
+  for (const n of allocated) if (min === null || n < min) min = n;
+  return min;
+}
 
-/**
- * Allocator-era numbers a plan DEFINES that the allocator never issued — the
- * half of the "allocated to its definer" question that can actually be answered.
- *
- * WHAT THIS DELIBERATELY IS NOT. The question the incidents pose is "was this
- * number allocated to the party that defined it", and that comparison cannot be
- * built today: `allocatedTo` is optional at the one door that writes it and
- * defaults to the empty string, and the coordinator's own documented allocation
- * call omits it — measured, 101 of this project's 243 allocator-era rows carry
- * `''` (D-1301). A guard resting on that field would compare a self-declared
- * string that is usually absent.
- *
- * BATCH SCATTER WAS TRIED AND REJECTED, by measurement rather than by taste. An
- * allocation batch (one `allocatedTo`/`allocatedAt`/`title`) whose members landed
- * in more than one plan file looks exactly like the wreck the incidents were:
- * D-1157..1172 landed across FIVE files, three of them other lanes'. But across
- * this project's 65 batches only TWO are scattered, and the other is
- * D-999..D-1046 — one program's block, allocated at run-open and spent correctly
- * across its own waves 1-4. The two are structurally identical (a contiguous
- * sub-range per file, one file per wave), so one is a theft and one is the
- * documented way to run a program. Scatter is therefore an OBSERVATION and never
- * a defect, and it is not reported.
- *
- * What IS unambiguous is a number defined with no allocation row at all: nobody
- * asked for it. `grandfathered` carries the bootstrap.
- */
 export function unallocatedDefinitions(
   definitions: readonly Definition[],
   allocated: ReadonlySet<number>,
-  grandfathered: ReadonlySet<number>,
-  era: number = LEDGER_ALLOCATOR_ERA,
 ): CrossTreeCollision[] {
+  const era = projectEra(allocated);
+  if (era === null) return [];
   const byN = new Map<number, Set<string>>();
   for (const d of definitions) {
-    if (d.n < era || allocated.has(d.n) || grandfathered.has(d.n)) continue;
+    if (d.n < era || allocated.has(d.n)) continue;
     const files = byN.get(d.n) ?? new Set<string>();
     files.add(d.file);
     byN.set(d.n, files);

@@ -392,12 +392,31 @@ export function runWarnings(
 ): readonly RunWarning[] {
   const h = run.health;
   if (h === undefined) return [];
+  // A CLOSED run draws nothing, and this is the filter itself rather than a claim
+  // about a caller. The first draft asserted "the board renders warnings on its
+  // active slice only" and the board does no such thing: `RunsScreen` has ONE
+  // `rowFor`, applied to `list` AND to `finished`. So a wave whose first done-claim
+  // was refused `stale-tip` and then closed cleanly carried an amber "1 rejected"
+  // in the archive forever, and an ABANDONED run — `failed`, never dispatched,
+  // which is exactly what the Abandon control produces on a wedged row — drew
+  // "never briefed … an open run whose chair nobody sat in", a flatly false
+  // sentence about a closed run.
+  //
+  // Health facts stay MEASURED for a closed run on the server side, deliberately:
+  // they are that run's history, and an adapter may not narrow a distinction it
+  // received. Whether history deserves ATTENTION is this renderer's decision, and
+  // the answer is no — a warning nobody can act on is how a warning surface
+  // becomes ignorable, which is the thing this whole wave exists to prevent.
+  if (isRunClosed(run)) return [];
   const out: RunWarning[] = [];
   if (h.mailParked > 0) {
+    // The spec's ask is "outstanding VS parked", so the title carries both — which
+    // is also what gives `mailOutstanding` a reader. Without it the field was
+    // measured, shipped on every run in every frame, and rendered by nothing.
     out.push({ glyph: '⛒', word: `${h.mailParked} parked`,
       title: `${h.mailParked} mail deliver${h.mailParked === 1 ? 'y' : 'ies'} to this run gave up ` +
-        'and parked unread — a run-closed or reclaimed cancel is not counted here, so these are ' +
-        'messages nobody received' });
+        `and parked unread (${h.mailOutstanding} still outstanding) — a run-closed or reclaimed ` +
+        'cancel is not counted here, so these are messages nobody received' });
   }
   if (h.mailReplayMax >= MAIL_REPLAY_WARN_COUNT) {
     out.push({ glyph: '↻', word: `replayed ${h.mailReplayMax}×`,
@@ -409,13 +428,21 @@ export function runWarnings(
   // `=== false`, never `!h.briefQueued`: null is a THIRD condition (no dispatch
   // has committed, or the row predates migration 7) and must stay silent.
   if (h.briefQueued === false) {
-    out.push({ glyph: '⌦', word: 'no brief',
+    out.push({ glyph: '⌦',
+      // The CODE rides the word, not only the title: this is a mobile-first board
+      // with no hover, and a `title` on a span flattened inside `.run-open` is not
+      // announced either — so a title-only fact is a fact the operator cannot
+      // reach, which is the state F7 exists to end.
+      word: h.clearError === null ? 'no brief' : `no brief (${h.clearError})`,
       title: "this run's dispatch queued NO wave-brief" +
         (h.clearError === null ? '' : ` — the injected /clear was refused: ${h.clearError}`) +
         '. The worker was resumed into a context nothing was written to' });
   }
   if (h.doneRejects > 0) {
-    out.push({ glyph: '⊘', word: `${h.doneRejects} rejected`,
+    out.push({ glyph: '⊘',
+      word: h.lastRejectCode === null
+        ? `${h.doneRejects} rejected`
+        : `${h.doneRejects} rejected (${h.lastRejectCode})`,
       title: `${h.doneRejects} done-claim${h.doneRejects === 1 ? '' : 's'} refused by the server's ` +
         're-measurement' + (h.lastRejectCode === null ? '' : `, most recently ${h.lastRejectCode}`) });
   }

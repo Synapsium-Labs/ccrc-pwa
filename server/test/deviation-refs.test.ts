@@ -300,6 +300,19 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
       .not.toBeNull();
   });
 
+  it('names the base it actually measured, so a STALE one is visible', () => {
+    // The guard's load-bearing precondition is the one thing it cannot enforce:
+    // `resolveLedgerBase` proves a ref RESOLVES, never that it is current, and a
+    // test may not fetch. Measured on this program's own incident: `eee5fa1a` vs
+    // `47ac50da` reports three collisions; against `ff85c514` — ONE commit staler
+    // — it reports zero. So a pass here means "no collision against the
+    // origin/main THIS CHECKOUT HAS FETCHED", and the sha is what tells a reader
+    // which claim they are getting.
+    const sha = execFileSync('git', ['rev-parse', '--short', LEDGER_BASE!],
+      { cwd: ROOT, encoding: 'utf8' }).trim();
+    expect(sha, `the base ${LEDGER_BASE} resolved to nothing`).toMatch(/^[0-9a-f]{7,}$/);
+  });
+
   it('is looking at two real trees, each with a real ledger in it', () => {
     // The anti-vacuity partner. `crossTreeCollisions` over two empty lists is
     // [], which satisfies the assertion below for entirely the wrong reason.
@@ -312,11 +325,34 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
   });
 
   it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
-    const hits = crossTreeCollisions(plansAt('HEAD'), plansAt(LEDGER_BASE!));
-    expect(hits.map((c) => `D-${c.n}: ${c.files.join(' / ')}`),
-      `this branch defines a number ${LEDGER_BASE} already defines in another plan. Allocate fresh ` +
-      'numbers through POST /api/ledger/deviations and renumber NOW, before the merge decides it ' +
-      'for you — that is what this scan exists to buy you, and it is the whole of the remedy')
+    const here = plansAt('HEAD');
+    const there = plansAt(LEDGER_BASE!);
+    const hits = crossTreeCollisions(here, there);
+    // PROVENANCE, because the remedy depends on it and the first draft assumed
+    // one. `crossTreeCollisions` unions the two trees and forgets which side each
+    // file came from, so a collision living ENTIRELY on the base — the state this
+    // program reached three times, kept off main only because each merge
+    // renumbered first — read as "this branch defines...", a false claim with a
+    // remedy the author cannot perform.
+    const mine = new Set(definitionsIn(here).map((d) => d.file));
+    const theirs = new Set(definitionsIn(there).map((d) => d.file));
+    const described = hits.map((c) => {
+      const onBranch = c.files.filter((f) => mine.has(f)).length;
+      const onBase = c.files.filter((f) => theirs.has(f)).length;
+      const where = onBranch === 0 ? 'BOTH ON THE BASE — not this branch to fix'
+        : onBase === 0 ? 'both on this branch'
+        : 'one each side';
+      return `D-${c.n} (${where}): ${c.files.join(' / ')}`;
+    });
+    expect(described,
+      `measured against ${LEDGER_BASE}. A number defined in two different plans across the two ` +
+      'trees. If one side is this branch and the other the base: allocate fresh numbers through ' +
+      'POST /api/ledger/deviations and renumber NOW, before the merge decides it for you. TWO ' +
+      'KNOWN FALSE POSITIVES, check both before renumbering anything — (1) a plan RENAMED, or its ' +
+      'entries MOVED between files, on this branch: file identity here is the basename, so the ' +
+      'same entries under two names read as two definitions and the right action is to change ' +
+      'nothing; (2) anything marked BOTH ON THE BASE, which is already on main and is not this ' +
+      'branch to renumber.')
       .toEqual([]);
   });
 

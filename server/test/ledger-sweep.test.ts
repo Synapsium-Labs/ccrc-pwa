@@ -215,6 +215,32 @@ describe('sweepLedgerReconcile', () => {
     expect(warn, 'a healthy ledger produced a warning').not.toHaveBeenCalled();
   });
 
+  it('reports an unchanged orphan set ONCE, not on every sweep — the stale side is pinned, this was not', async () => {
+    // Measured GREEN in review: deleting the `oJson !== lastOrphanReport.get(project)`
+    // condition changed nothing, in any suite. The mirrored guard on the STALE side
+    // has had a test since D13 ("reported (once per changing set)"), which is what
+    // makes the omission on this side an omission rather than a policy.
+    //
+    // The live case it protects is on main right now: D-1066..1069 have no
+    // allocation row, so without the dedupe every ccrc-server on the fleet logs
+    // that line every 15 minutes, forever.
+    const h = fixture();
+    await seedAndAllocate(h, 1);
+    h.plantDoc('demo', 'plans', 'p.md', `- **D-${299}** — never asked for`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    at(NOW + 1000 + 15 * 60_000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'an unchanged orphan set was reported twice').toHaveBeenCalledTimes(1);
+    // …and a CHANGED set speaks again, so the memo is a dedupe and not a mute.
+    h.plantDoc('demo', 'plans', 'q.md', `- **D-${298}** — also never asked for`);
+    at(NOW + 1000 + 30 * 60_000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'a CHANGED orphan set was swallowed by the memo').toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]![0] as string).toContain(`D-${298}`);
+  });
+
   it('audits a project whose numbers have ALL landed — the corpus the old list could not reach', async () => {
     // The behaviour change stated in the sweep: the project list used to come
     // from OPEN allocations, so a project working correctly — everything landed,

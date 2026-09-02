@@ -1997,7 +1997,7 @@ button.sess-held {
    is `--status-attention-text`, already declared and already priced by
    contrast-check.mjs — the amber warn register `.pr-warn` and
    `.program-start-warn` use, not a new pair. */
-.run-warn {
+.run-row .run-warn {
   flex: 1 0 100%;
   display: flex;
   flex-wrap: wrap;

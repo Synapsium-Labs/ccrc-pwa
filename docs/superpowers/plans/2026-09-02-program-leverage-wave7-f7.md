@@ -60,8 +60,8 @@ from origin; the program ledger on that ref carries this wave's brief and wave 6
 | `server/src/coord/schema.ts` (modify) | migration 7: `runs.briefQueued`, `runs.clearError` |
 | `server/src/coord/store.ts` (modify) | L3: `runHealth(runIds)` — four batched reads; `hydrateRun` takes the health; `setCaps(next, at)` |
 | `server/src/coord/dispatch.ts` (modify) | writes the two new columns inside the existing commit |
-| `server/src/coord/ledger.ts` (modify) | L1: `definitionsIn`, `crossTreeCollisions`, `auditAllocations` — pure, fixture-testable |
-| `server/src/coord/routes.ts` (modify) | L4: `GET /api/ledger` gains `mismatches`; `capsView` carries `updatedAt` |
+| `server/src/coord/ledger.ts` (modify) | L1: `definitionsIn`, `crossTreeCollisions`, `unallocatedDefinitions`, `projectEra` — pure, fixture-testable |
+| `server/src/coord/routes.ts` (modify) | L4: `capsView` carries `updatedAt`, and `setCaps` takes the caller's clock. **NOT** `GET /api/ledger` — see Task 9 |
 | `pwa/src/fleet/runWords.ts` (modify) | the tolerant reader + the warn decision, never in JSX |
 | `pwa/src/screens/RunsScreen.tsx` (modify) | the compact warn row |
 | `pwa/src/fleet/fleet.css` (modify) | `.run-row .run-warn`, grounded, no glow/animation/box-shadow |
@@ -69,7 +69,7 @@ from origin; the program ledger on that ref carries this wave's brief and wave 6
 | `server/test/ledger-crosstree.test.ts` (create) | the L1 cross-tree decision, fixture collisions |
 | `server/test/deviation-refs.test.ts` (modify) | the cross-tree arm over the REAL two trees |
 | `pwa/test/runs-health.test.tsx` (create) | the warn row, incl. the older-server absence case |
-| `CLAUDE.md`, `README.md`, `CONTRIBUTING.md` (modify) | the pre-merge measurement as a documented step |
+| `CLAUDE.md`, `CONTRIBUTING.md` (modify) | the pre-merge measurement as a documented step (README needed no change) |
 
 ---
 
@@ -656,6 +656,8 @@ and the frame's stability EXPLICIT.
 moves `14 → 15` with a stated reason.
 
 - [x] **Step 2: Pin the frame's stability — the constraint D-1300 names**
+  *(landed in `server/test/coord-health.test.ts`, not `fleetws.test.ts` as this step first said: the
+  pin belongs beside the facts whose shape it constrains, and the mutation table names the right suite.)*
 
 ```ts
   it('the runs frame is byte-identical across two ticks when nothing changed', async () => {
@@ -989,40 +991,59 @@ git commit -m "feat(ledger): the collision scan reads origin/main too, so it fir
 
 ### Task 9: The allocator's own half — what `landedIn` already knew
 
+> **REWRITTEN AFTER THE FACT (D-1311).** This task originally specified `auditAllocations`,
+> `GET /api/ledger` gaining a `mismatches` field, and an arm in `ledger-routes.test.ts`. **None of that
+> shipped**, and the steps below describe what actually did. The original text stood ticked for one
+> commit, which is how a task nobody performed came to read as done; it is corrected here rather than
+> quietly left, because a coordinator re-measures a wave against its own plan.
+
 **Files:**
-- Modify: `server/src/coord/ledger.ts` — `auditAllocations`
-- Modify: `server/src/coord/routes.ts` — `GET /api/ledger` gains `mismatches`
-- Test: `server/test/ledger-routes.test.ts`
+- Modify: `server/src/coord/ledger.ts` — `unallocatedDefinitions`, `projectEra`
+- Modify: `server/src/coord/store.ts` — `ledgerProjects()`, `ledgerIssued(project)`
+- Modify: `server/src/watch.ts` — `sweepLedgerReconcile` reports the inverse
+- Test: `server/test/ledger-crosstree.test.ts` (unit), `server/test/ledger-sweep.test.ts` (the sweep)
+
+**Why not the route.** The obvious home was `GET /api/ledger`, and it is the wrong one. That route is
+a synchronous read over `ledger_alloc` alone; the audit needs the project's PLANS, which means an async
+`readLedgerDocs` on every GET — a new failure mode and new latency on a route whose whole job is to
+answer instantly. `sweepLedgerReconcile` already reads exactly those files every fifteen minutes, and
+already owns the report-once-per-changing-set channel the stale-allocation warning uses. The audit is
+the INVERSE of the `markLanded` that sweep performs, so it belongs in the same pass over the same bytes.
+The cost is that the finding lands in the server's log rather than on the phone — stated, not hidden.
 
 **The measurement this task exists for.** `ledger_alloc` rows 1157–1161 all read
-`allocatedTo: 'ccrc-pwa-quiet-meadow'` with this program's own title, and `landedIn` pointing at FIVE
-different plan files — three of them other lanes'. `sweepLedgerReconcile` wrote every one of those and
-surfaced nothing: it marks a number landed on ANY `\bD-<n>\b` occurrence and never asks whose file it
-landed in (`watch.ts:2102-2104`). **The allocator recorded the theft and said nothing** (D-1297).
+`allocatedTo: 'ccrc-pwa-quiet-meadow'` with this program's own block title, while `landedIn` names four
+other lanes' plan files. `sweepLedgerReconcile` wrote every one of those and surfaced nothing: it marks
+a number landed on ANY `\bD-<n>\b` occurrence in any plan and never asks whose file it landed in
+(`watch.ts`). **The allocator recorded the theft and said nothing** (D-1297).
 
-This cannot become an enforcement — an allocation is a record that you asked, not a claim on a number,
-and this wave does not pretend otherwise. What it can do is make the mismatch READABLE.
+**What is reported, and what is deliberately not.** Reported: an allocator-era number a plan DEFINES
+with no allocation row — unambiguous, because nobody asked for it. Live instance on `main` while this
+was written: D-1066..1069. NOT reported, each rejected by measurement:
+- *"allocated to its definer"*, the question as posed — it cannot be built. 101 of 243 allocator-era
+  rows carry `allocatedTo: ''`, because `byId` is optional and the coordinator's own documented call
+  omits it (D-1301).
+- *batch scatter* — across 65 batches exactly two are scattered, and one of them (D-999..D-1046) is a
+  program block spent correctly across its own waves. Structurally identical to the theft, so scatter
+  is an observation and never a defect.
 
-- [x] **Step 1: Write the failing route test**
+- [x] **Step 1: `unallocatedDefinitions` + `projectEra` as L1, with fixtures** — including the
+  per-project era derivation that replaced a hardcoded `LEDGER_ALLOCATOR_ERA`/`LEDGER_BOOTSTRAP` pair
+  (D-1313), and the boundary on both sides of a project's own first issued number.
 
-```ts
-  it('reports an allocation whose landedIn is not where its block landed', async () => { … });
-  it('reports a DEFINED allocator-era number with no allocation row at all', async () => { … });
-  it('reports an allocation whose allocatedTo is empty — unattributable, not clean (D-1301)', async () => { … });
-  it('says nothing about a block that landed in one file', async () => { … });
-```
+- [x] **Step 2: two store reads** — `ledgerProjects()` and `ledgerIssued(project)`.
 
-- [x] **Step 2–4:** implement `auditAllocations` as a pure L1 function over
-`(definitions, allocations)`, wire it into the route beside `stale`, run the file.
+- [x] **Step 3: the sweep reports it**, through `lastOrphanReport`, the same once-per-changing-set
+  channel the stale warning uses. The project list widens from OPEN allocations to every project with
+  any — stated as a behaviour change, because a project whose numbers have all landed has no open rows
+  and was never audited, which is the state a project reaches once it is working.
 
-- [x] **Step 5: Commit**
+- [x] **Step 4: tests that manufacture the wedge** — an orphan is named; a healthy ledger is silent; a
+  fully-landed project is still audited; an unchanged orphan set is reported once and a changed one
+  speaks again (the last added in review, D-1312, after the dedupe measured green).
 
-```bash
-git add server/src/coord/ledger.ts server/src/coord/routes.ts server/test/ledger-routes.test.ts
-git commit -m "feat(ledger): GET /api/ledger reports the mismatches landedIn already knew (D-1297, D-1301)"
-```
-
----
+- [x] **Step 5: commit** — `feat(ledger): the sweep measures the inverse of markLanded, and reports it
+  (D-1297, D-1301, D-1306)`, plus the review round's follow-ups.
 
 ### Task 10: The fold-ins
 
@@ -1090,7 +1111,7 @@ wave changes the coordinator's deploy lane.
 |---|---|---|
 | server | 248 files, 6248 passed, 56 skipped | **250 files, 6295 passed, 56 skipped** |
 | agent | (unchanged lane) | **18 files, 281 passed** |
-| pwa | 2119 passed | **2119 passed** + `npm run build` produces `server/dist-pwa/index.html` |
+| pwa | 2106 passed (78 files, derived: 2119 less this wave's 13 new cases) | **2119 passed** + `npm run build` produces `server/dist-pwa/index.html` |
 
 `tsc --noEmit` clean in all three packages. Two new server suites (`coord-health`, `ledger-crosstree`)
 and one new PWA suite (`runs-health`). No test was deleted or skipped.
@@ -1163,8 +1184,11 @@ in this plan or in the diff is defined below.
 
 - **D-1297** (2026-09-02, live measurement) — **the allocator recorded the theft and said nothing.**
   `ledger_alloc` rows 1157–1161 all carry `allocatedTo: 'ccrc-pwa-quiet-meadow'` and this program's own
-  block title, while their `landedIn` names five different plan files — `2026-08-31-d1157-…`,
-  `2026-08-31-d1159-…`, `2026-08-31-d1160-…`, `2026-09-01-d1161-…` and, for 1162–1172, the wave-6 plan.
+  block title, while their `landedIn` names FOUR different plan files — `2026-08-31-d1157-…` (which
+  took both 1157 and 1158), `2026-08-31-d1159-…`, `2026-08-31-d1160-…` and `2026-09-01-d1161-…`, all
+  four of them OTHER LANES'. (Five files, one of them this program's own wave-6 plan, is true of the
+  wider 1157–1172 block; the first draft of this sentence said five and "three of them other lanes'",
+  and both cardinals were wrong — corrected as D-1314.)
   The cause is `watch.ts:2102-2104`: reconcile marks a number landed on ANY `\bD-<n>\b` occurrence, in
   any plan, and never compares the file to the holder. So the ledger positively asserts the wrong thing
   rather than staying silent, and the fact that a block landed scattered across five lanes' files was
@@ -1221,8 +1245,11 @@ in this plan or in the diff is defined below.
   `setCaps(next, at = Date.now())`, matching `markDispatched`/`recordRunEvent`/`capsUsage`, which
   `setCaps` was the lone exception to in its own neighbourhood; the clock read stays inside
   `coordMutex.run` because `dispatch-mutex-gate.test.ts:73`'s `TARGETS` names `coord.setCaps`. The read
-  half — `updatedAt` reaching the dial — goes on **`CoordCapsView`**, the read-side shape, not on
-  `CoordCaps`, which is what wave 6 declined to widen. **`caps.ts` is not edited and no purity
+  half goes on **`CoordCapsView`**, the read-side shape, not on `CoordCaps`, which is what wave 6
+  declined to widen. Both halves as D-1169 itself states them — "the column already exists and only the
+  read is missing", and `setCaps` reading its own clock — are closed. No client renders it yet;
+  D-1169's dial sentence is that deviation's motivation, not a deliverable it claims, and the review
+  finding that said otherwise was refuted in verification (see D-1315). **`caps.ts` is not edited and no purity
   assertion moves**; the `coord-caps-policy.test.ts:143-148` red the fix was feared to cause was for a
   DEFAULTED clock parameter inside `decideCaps`, which this does not add. Recorded either way, as the
   brief asked, and closed rather than deferred.
@@ -1275,6 +1302,141 @@ in this plan or in the diff is defined below.
   bug**: a condition restated in two places in one document will be implemented from the nearer one, so
   the clause belongs in the field's own docstring — where it now is.
 
+## Deviations found — the wave's own review round
+
+Before claiming the wave done, the whole branch was reviewed adversarially: nine lenses, each told to
+prefer fewer and harder findings, then a refute-default verification pass. The lenses ran mutations in
+throwaway worktrees, never in this one. **Three of the findings are guards that did not work at all**,
+and two of those were measured GREEN — the class this wave had already recorded once, as D-1306, before
+the review found two more of it.
+
+- **D-1308** (2026-09-02, MAJOR, found by two lenses independently) — **the "never briefed" fact could
+  never fire.** Statement (4) read `MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at))`, borrowed from
+  `dueDeliveries`. `ingestedAt` is stamped only on an observed `UserPromptSubmit` edge, so it stays
+  NULL for exactly the population this fact exists to name — a chair nobody ever sat in — and the
+  COALESCE then fell through to `deliveredAt`, which `markDelivered` re-stamps on EVERY replay, every
+  `MAIL_REPLAY_MS` (600 000 ms). Against `KICKOFF_UNACKED_MS` of 900 000 the reported age topped out at
+  **599 999 across 25 replays and the warning fired zero times**; then the row parked at the replay
+  ceiling, left `OUTSTANDING_STATES_SQL`, and the fact went `null` — indistinguishable from "acked,
+  healthy". The headline wedge of the wave, dead on arrival. Fixed to `MIN(m.at)`, which is what
+  `RunHealth.coordKickoffPendingSince`'s own docstring already promised ("was FIRST SENT") and the only
+  one of the three instants nothing rewrites. The borrowed precedent was wrong twice over:
+  `dueDeliveries` answers "when may this be sent again", and its own docstring records
+  `COALESCE(ingestedAt, deliveredAt)` as a review-found defect it was fixed AWAY from. The test that
+  existed pinned only the branch where `ingestedAt` IS set — the branch where the COALESCE works.
+
+- **D-1309** (2026-09-02, MAJOR, found by two lenses independently) — **the warn row rendered on CLOSED
+  runs, and the comment saying it could not was false.** `RunsScreen` has ONE `rowFor` and applies it to
+  `list` AND to `finished`; `runWarnings` declared `state` in its parameter type and never read it. So a
+  wave whose first done-claim was refused `stale-tip` and then closed cleanly carried an amber
+  "1 rejected" in the archive forever, and an ABANDONED run — `failed`, never dispatched, which is
+  exactly what the Abandon control produces on a wedged row — drew *"never briefed … an open run whose
+  chair nobody sat in"*, a flatly false sentence about a closed run. D-1307's `dispatchedAt === null`
+  clause, landed hours earlier, **widened** this: a never-dispatched run is precisely what an abandoned
+  one is. Fixed with the filter itself rather than a claim about a caller. The server keeps measuring
+  health for closed runs, deliberately — that is the run's history, and an adapter may not narrow a
+  distinction it received; whether history deserves ATTENTION is the renderer's call, and the answer is
+  no. No test had ever mounted a closed run.
+
+- **D-1310** (2026-09-02, MAJOR) — **a line-initial bolded CITATION read as a definition, and the prose
+  it fires on is the prose that records a ledger collision.** `DEFINITION` recognised an entry by prefix
+  alone, so `- **D-172, D-173 and D-174 were re-used** by this branch…` and `- **D-149 sweep:** any task
+  that…` — both real lines on `main` — are definitions to it. The unit test asserting otherwise used
+  only MID-LINE mentions, which the prefix rule already rejected, so it established nothing. The sharp
+  version: the second of those sentences is exactly what a wave writes when it RECORDS the incident this
+  guard detects, so wave 8 narrating "D-1231 and D-1232 were re-used" would red the guard, and the only
+  remedy the failure message offered was to renumber a deviation the branch merely cited. Fixed with a
+  lookahead for the four ways a real entry opens (`**`, ` —`, ` (`, `:`); measured over the scanned
+  plans as 394 prefix matches → 388 entry-shaped, and **all six dropped lines are citations**
+  (D-149, D-171, D-172, D-291, D-292, D-1026). Both directions now pinned. Knock-on: two of the six
+  sub-211 collisions this wave cited as evidence for the era scoping (D-149, D-172) were never
+  collisions — they are these citations — so that argument rested on four data points, not six.
+
+- **D-1311** (2026-09-02, MAJOR, and the one that is about honesty rather than code) — **Task 9 was
+  ticked complete and shipped a different surface than it describes.** The plan's Task 9 specifies
+  `auditAllocations`, `GET /api/ledger` gaining a `mismatches` field, an arm in `ledger-routes.test.ts`
+  and a named commit. What shipped is `unallocatedDefinitions` reported by `sweepLedgerReconcile` as a
+  `console.warn`. The redesign is defensible and its commit message argues it — but the plan was never
+  updated, and the fifty step checkboxes were ticked in one `sed` at the end rather than as each landed,
+  which is how a task nobody performed came to read as done. **A coordinator re-measuring this wave
+  against its own ticked plan would expect `GET /api/ledger` to carry `mismatches`; it does not.**
+  Task 9 and the File Structure table are rewritten below to say what shipped and why the route was not
+  the right home. The lesson is the mutation table's own: tick as you land, or the record is a claim
+  rather than a measurement.
+
+- **D-1312** (2026-09-02, MAJOR — the D-1306 class, twice more, both measured GREEN) — two guards this
+  wave shipped could be deleted with the whole suite staying green.
+  (a) **`healthFor`'s coordinator extraction.** Every test exercising `coordKickoffPendingSince` called
+  `runHealth([id], [COORD])` directly, passing the coordinator ids by hand; not one reached the fact
+  through `runs()` or `run()`, which are the only production paths. Replacing the extraction with
+  `const coords: string[] = []` left **6295 tests passing**. The failure it hides is invisible by
+  construction: the field is present on the wire and reads as a healthy `null`.
+  (b) **`lastOrphanReport`.** The sweep's once-per-changing-set dedupe had no test in any suite;
+  deleting the condition left `ledger-sweep` 14/14. Without it, the live D-1066..1069 orphan set logs on
+  every 15-minute sweep forever. Its mirror on the *stale* side has been pinned since D13, which is what
+  makes this an omission rather than a policy. Both now have tests that red on the deletion.
+
+- **D-1313** (2026-09-02, the fix is better than the thing it replaces) — **the allocator era is derived
+  per project, and `LEDGER_BOOTSTRAP` is retired.** The first version hardcoded `LEDGER_ALLOCATOR_ERA`
+  (211, THIS repo's first allocator-era number) plus a `LEDGER_BOOTSTRAP` set of 211..224 (build 9b's
+  own hand-numbered plan) — and `sweepLedgerReconcile` applies the audit to every project that has ever
+  issued a number. The second project to adopt the allocator would have had most of its own hand-numbered
+  history named as "never allocated", beside a nonsensical fourteen-number hole grandfathered out of a
+  different repo. The allocator already knows each project's answer and it costs one `MIN(n)`. Measured:
+  this project's first ISSUED number is **274**, not 211 — so 211..273 were all hand-numbered and the
+  bootstrap set was both too narrow and repo-specific — and the two forms report the **same four
+  orphans** (D-1066..1069). A project with no allocations reports nothing, because it has no era.
+  This also retires the constant D-1306 was written about; that deviation's lesson stands and its
+  mechanism is gone with the constant.
+
+- **D-1314** (2026-09-02, a stale cardinal in the wave that corrects three) — **D-1297's evidence count
+  was wrong.** It said rows 1157–1161's `landedIn` names "five different plan files" with "three of them
+  other lanes'". Re-measured against the live allocator: that range lands in **four** distinct files
+  (1157 and 1158 share one), and **four** of them are other lanes' — five files is true only of the
+  wider 1157–1172 block, and the wave-6 plan is the one file that is this program's own. The conclusion
+  is untouched and everything else in D-1297 reproduces exactly; the cardinal was wrong, in a document
+  whose whole currency is measured cardinals, in the wave that corrects three of exactly that kind
+  (D-1302). Corrected in place.
+
+- **D-1315** (2026-09-02, minors worth the record because each is a false claim in shipped source) —
+  four sentences that were not true. (1) `.run-warn`'s CSS comment claimed it was "scoped under
+  `.run-row`" and "already priced by contrast-check.mjs"; the rule shipped unscoped, so the auditor
+  could not reach it and it sat in the 249-rule uncovered census while the file said it was measured —
+  one token, and it now prices at 10.09 dark / 5.92 light. (2) `RunHealth`'s docstring named the
+  tolerant reader as `runHealth()` in `runWords.ts`; that is the SERVER store method, and the reader is
+  `runWarnings` — pointing a maintainer at the wrong ring for the tolerance guarantee. (3)
+  `CoordCapsView.updatedAt` said absence "reads the same way through the one reader that consumes it",
+  and there is no such reader — `CapsControl` takes a `CoordCapsView` and touches only `caps` and
+  `usage`. (The review went one step further and called the commit's "both halves closed" an overclaim;
+  **that half was REFUTED in verification and the refutation is right**: D-1169 states its own gap as
+  "the column already exists and only the read is missing", plus the `setCaps` clock, and this wave
+  closes exactly those two. The dial is motivation in that deviation's text, not a deliverable. The
+  correction to the correction is recorded rather than silently reverted, because a wave that fixes
+  false claims can introduce one while doing it.) (4) `runHealth` said "FOUR statements TOTAL" and issued five
+  whenever the kickoff facet was doing its job, two of them re-reading `runs` columns the caller already
+  held; `claimedBy` now rides statement (3) and the count is true. Also fixed: `lastRejectCode` and
+  `clearError` reached the operator only through `title=`, which a mobile board with no hover cannot
+  surface, so both now ride the word; `mailOutstanding` was measured, shipped on every run in every
+  frame and read by nothing, and now carries the spec's own "outstanding VS parked" in the title;
+  `isDoneRejectCode` shipped with zero callers and zero tests and is deleted.
+
+- **D-1316** (2026-09-02, the class a THIRD time, in the review round's own fix) — **D-1309's fixture
+  was vacuous, and only re-measuring the row found it.** The closed-run case pushed its run onto the
+  LIVE frame (`store.setState({ runs: [closed] })`), and the board's `active` slice is the live frame
+  MINUS closed rows — so the run was filtered out before rendering and the case asserted "no warn row"
+  against a board with **no row at all**. The mutation that deletes `isRunClosed` from `runWarnings`
+  measured **GREEN** against it: 14 passed. A closed run reaches the board by exactly one path, the
+  cold `?closed=1` loader into the `finished` group, and the fixture now goes that way (with real
+  timers, because `waitFor` polls and fake ones deadlock it) plus an assertion that a `.run-row`
+  rendered at all before the absence is asserted. Re-measured: the deletion now reds with `a done run
+  drew a warning: expected <span class="run-warn">…(3)</span> to be null`.
+
+  **This is the third instance in one wave** — D-1306 (a test passing its own Set), D-1312 (two guards
+  with no test at all), and now a guard whose test could not see it. All three were found the same way
+  and only that way: by actually running the mutation and reading the result, rather than writing the
+  row from the code. Two of the three were in fixes written to close the previous one. The table is
+  not a record of the guards; it is the only thing that establishes they exist.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
@@ -1306,3 +1468,14 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | `capsUpdatedAt` returns migration 1's seeded `0` instead of null | `AssertionError: expected +0 to be null` | server `coord-caps-route` |
 | `gate.ts`'s docstring goes back to "all 55 routes" | `AssertionError: gate.ts claims a route count this tree does not derive: expected [ 55 ] to deeply equal [ 68 ]` | server `auth-gate` |
 | drop `undispatched` from the un-briefed condition — spec §9's middle clause (D-1307) | `AssertionError: a dispatched run was called never-briefed: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |
+| _the review round (D-1308..D-1315) — every row below re-measured after the fix_ | | |
+| restore `MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at))` on the kickoff clock (D-1308) | `AssertionError: the clock slid forward with deliveredAt — the age can never reach the threshold: expected 15001000 to be 1000` | server `coord-health` |
+| `healthFor` supplies no coordinator ids (`const coords: string[] = []`) — **measured GREEN across 6295 tests before D-1312's test existed** | `AssertionError: runs() never told runHealth who the coordinator is: expected null to be 4000` | server `coord-health` |
+| delete `lastOrphanReport`'s dedupe condition — **measured GREEN in every suite before D-1312's test existed** | `AssertionError: an unchanged orphan set was reported twice: expected "warn" to be called 1 times, but got 2 times` | server `ledger-sweep` |
+| drop `isRunClosed(run)` from `runWarnings` (D-1309) — **measured GREEN against the first fixture, which pushed a closed run onto the LIVE frame the board already filters (D-1316)** | `AssertionError: a done run drew a warning: expected <span class="run-warn">…(3)</span> to be null` | pwa `runs-health` |
+| revert `DEFINITION` to prefix-only, so a bolded citation is a definition again (D-1310) | `AssertionError: expected [ { file: 'a.md', n: 149 } ] to deeply equal []` | server `ledger-crosstree` |
+| unscope `.run-row .run-warn` back to `.run-warn` (D-1315) | `Error: no rule for .run-row .run-warn` (thrown by `findRule`, `test/cssRule.ts:94` — the loop refuses a selector it cannot find rather than reading `''` and passing) | pwa `fleet-css` |
+| hardcode the era back to 211 + a bootstrap set instead of `projectEra` (D-1313) | `AssertionError: expected [ { n: 211, files: [ 'a.md' ] }, …(1) ] to deeply equal []` | server `ledger-crosstree` |
+| drop `input.briefQueued !== undefined` from `dispatchRun`, so an omitting caller binds `0` — **measured GREEN in review** | `AssertionError: an omitted decision was written as false: expected false to be null` | server `coord-health` |
+| drop the `x.id DESC` half of the rejection tiebreak | `AssertionError: the newest row did not win the tie: expected 'stale-tip' to be 'pr-regressed'` | server `coord-health` |
+| run statement (3) per-row instead of over an `IN (…)` — the batching claim itself | `AssertionError: the read scales with the number of runs: expected 11 to be 4` | server `coord-health` |

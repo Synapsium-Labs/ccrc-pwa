@@ -1387,7 +1387,7 @@ export class CoordStore {
       unreadMail: this.unreadMailCount(row.id, row.sessionId),
       // F7. Passed IN rather than measured here, and that is the whole design:
       // `hydrateRun` runs once per row, and four more per-row reads would cost
-      // the board ~3,000 statements on a `?closed=1` load. `runHealth` answers
+      // the board 2,000 more statements on a `?closed=1` load. `runHealth` answers
       // for the whole batch in four (D-1299). A REQUIRED parameter, so a caller
       // cannot forget it and quietly ship a zeroed health object.
       health,
@@ -1416,11 +1416,18 @@ export class CoordStore {
    * F7: every health fact for a set of runs, in FOUR statements TOTAL — not four
    * per row.
    *
-   * The cost is the design (D-1299). `hydrateRun` already spends two statements
-   * per row (`itemTally`, `unreadMailCount`), and `runs({includeClosed:true})`
-   * returns every open run — deliberately uncapped — plus up to 500 closed ones,
-   * so four naive per-row reads would be roughly three thousand statements for one
-   * board load. Everything below is a `GROUP BY` over an `IN (...)`.
+   * The cost is the design (D-1299). `hydrateRun` already spends two statements per
+   * row (`itemTally`, `unreadMailCount`), and `runs({includeClosed:true})` returns
+   * every open run — deliberately uncapped — plus up to 500 closed ones. Four naive
+   * per-row health reads would make six statements per row: ~3,000 for one board
+   * load. This spends AT MOST FOUR in total, whatever the row count.
+   *
+   * At most, not exactly: statement (4) runs only when some run names a
+   * coordinator, so the real count is three or four. The first version of this
+   * sentence said "FOUR TOTAL" and issued FIVE whenever a kickoff was actually
+   * outstanding — the one case the facet exists for — because it re-read `runs` a
+   * second time for `claimedBy`. That read now rides statement (3), which was
+   * already selecting from the same table by the same key.
    *
    * EVERY id in `runIds` gets a row, including a run with no mail at all. A caller
    * forced to supply a default for a missing key is where an overloaded null is
@@ -1482,27 +1489,50 @@ export class CoordStore {
     //     `briefQueued === null` is carried through as null, never coerced: the
     //     column is nullable precisely so "no dispatch committed" and "queued no
     //     brief" stay two facts (migration 7, D-1298).
+    const claimedBy = new Map<number, string>();
     for (const row of this.db.prepare(
-      `SELECT id, briefQueued, clearError FROM runs WHERE id IN (${ph})`,
+      `SELECT id, briefQueued, clearError, claimedBy FROM runs WHERE id IN (${ph})`,
     ).all(...runIds) as unknown as
-      { id: number; briefQueued: number | null; clearError: string | null }[]) {
+      { id: number; briefQueued: number | null; clearError: string | null;
+        claimedBy: string | null }[]) {
       const h = out.get(row.id);
       if (h === undefined) continue;
+      // `claimedBy` rides this pass rather than earning a fifth statement of its
+      // own: the first draft re-read it below, which made this method's own
+      // "four statements" sentence false exactly when the kickoff facet was
+      // doing its job (review finding).
+      if (row.claimedBy !== null) claimedBy.set(row.id, row.claimedBy);
       out.set(row.id, { ...h,
         briefQueued: row.briefQueued === null ? null : row.briefQueued !== 0,
         clearError: row.clearError });
     }
 
     // (4) the un-briefed coordinator: an OUTSTANDING operator kickoff addressed to
-    //     a run's `claimedBy`. `MIN(COALESCE(ingestedAt, deliveredAt, at))` is
-    //     `dueDeliveries`' own idiom and for its own reason — a replay rewrites
-    //     `deliveredAt` and never touches `ingestedAt`, so preferring
-    //     `deliveredAt` would let the clock slide forward on every sweep and the
-    //     age would never grow.
+    //     a run's `claimedBy`.
+    //
+    //     `MIN(m.at)` — WHEN IT WAS FIRST SENT, which is what the wire field
+    //     promises and the only one of the three available instants that is never
+    //     rewritten. The first draft wrote
+    //     `MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at))`, borrowing
+    //     `dueDeliveries`' shape, and that made the whole facet DEAD — measured,
+    //     not argued. `ingestedAt` is stamped only on an observed
+    //     `UserPromptSubmit` edge, so it stays NULL for exactly the population this
+    //     fact exists to name (a chair nobody ever sat in); the COALESCE then fell
+    //     through to `deliveredAt`, which `markDelivered` re-stamps on EVERY
+    //     replay, every `MAIL_REPLAY_MS` (600 000 ms). Against a
+    //     `KICKOFF_UNACKED_MS` of 900 000 the reported age topped out at 599 999
+    //     and the warning fired ZERO times across 25 replays — then the row parked
+    //     at the replay ceiling, left `OUTSTANDING_STATES_SQL`, and the fact went
+    //     null forever, indistinguishable from "acked, healthy".
+    //
+    //     The borrowed idiom was also the wrong precedent: `dueDeliveries` answers
+    //     "when may this be sent again", and its own docstring records
+    //     `COALESCE(ingestedAt, deliveredAt)` as a review-found defect it was fixed
+    //     AWAY from, for freezing the very clock this one needs to keep moving.
     if (coordIds.length > 0) {
       const since = new Map<string, number>();
       for (const row of this.db.prepare(
-        'SELECT d.toId AS toId, MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at)) AS since ' +
+        'SELECT d.toId AS toId, MIN(m.at) AS since ' +
         'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
         "WHERE m.fromId = 'operator' AND m.runId IS NULL AND m.subject = ? " +
         `AND d.toId IN (${placeholders(coordIds.length)}) ` +
@@ -1511,15 +1541,10 @@ export class CoordStore {
         { toId: string; since: number }[]) {
         since.set(row.toId, row.since);
       }
-      if (since.size > 0) {
-        for (const row of this.db.prepare(
-          `SELECT id, claimedBy FROM runs WHERE id IN (${ph})`,
-        ).all(...runIds) as unknown as { id: number; claimedBy: string | null }[]) {
-          const h = out.get(row.id);
-          if (h === undefined || row.claimedBy === null) continue;
-          const at = since.get(row.claimedBy);
-          if (at !== undefined) out.set(row.id, { ...h, coordKickoffPendingSince: at });
-        }
+      for (const [id, h] of out) {
+        const owner = claimedBy.get(id);
+        const at = owner === undefined ? undefined : since.get(owner);
+        if (at !== undefined) out.set(id, { ...h, coordKickoffPendingSince: at });
       }
     }
     return out;

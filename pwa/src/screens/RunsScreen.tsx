@@ -237,7 +237,7 @@ function RunRow({
         // fourth `flex: none` control competing for phone width. Not tappable, so
         // it may live inside `body` (and therefore inside `.run-open`) — D-287's
         // sibling rule binds controls, and this is prose.
-        <span className="run-warn" data-count={String(warnings.length)}>
+        <span className="run-warn">
           {warnings.map((w) => (
             <span key={w.word} className="run-warn-item" title={w.title}>
               <span className="run-warn-glyph" aria-hidden="true">{w.glyph}</span>

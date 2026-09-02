@@ -18,7 +18,7 @@
 //      same line, and 29 real definitions in today's plans are invisible to it,
 //      D-1158 among them: one of the five numbers this program actually lost.
 import { describe, it, expect } from 'vitest';
-import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, LEDGER_BOOTSTRAP,
+import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra,
          unallocatedDefinitions } from '../src/coord/ledger.js';
 
 const f = (path: string, text: string): { path: string; text: string } => ({ path, text });
@@ -43,6 +43,33 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
   it('is not fooled by a prose REFERENCE — this scans entries, not mentions', () => {
     expect(definitionsIn([f('a.md', 'see D-108 for the ruling')])).toEqual([]);
     expect(definitionsIn([f('a.md', 'The fix (D-1157) landed.')])).toEqual([]);
+  });
+
+  it('is not fooled by a LINE-INITIAL BOLDED citation, which is the shape this repo writes', () => {
+    // The first version of this suite tested only MID-LINE mentions, and a
+    // prefix-only DEFINITION called all four of these definitions. Every string
+    // here is copied from a real plan on main. The second is the exact prose a
+    // wave writes when it RECORDS a ledger collision — so a prefix-only rule reds
+    // on the narrative describing the incident this guard exists to detect, and
+    // tells the author to renumber a deviation they only cited.
+    expect(definitionsIn([f('a.md', '- **D-149 sweep:** any task that touches the EXEMPT table')])).toEqual([]);
+    expect(definitionsIn([f('a.md', '- **D-172, D-173 and D-174 were re-used** by this branch')])).toEqual([]);
+    expect(definitionsIn([f('a.md', "- **D-291's wait — `startedSessionFor`.** It asks whether")])).toEqual([]);
+    expect(definitionsIn([f('a.md', '- **D-1026 changes the shape the operator approved** (`ready: false`)')])).toEqual([]);
+  });
+
+  it('still reads all four ways a REAL entry opens', () => {
+    // The other direction, so the tightening cannot quietly swallow entries: the
+    // bold close, the em-dash, the parenthetical and the bare colon.
+    const forms = [
+      '- **D-900** — subject',            // bold close
+      '## D-901 — subject',               // em-dash after a heading
+      '### D-902 (bug) — subject',        // parenthetical
+      '- **D-903**: subject',             // colon
+      '- **D-904** (2026-08-20) — subject',
+    ];
+    expect(definitionsIn(forms.map((t, i) => f(`p${i}.md`, t))).map((d) => d.n))
+      .toEqual([900, 901, 902, 903, 904]);
   });
 
   it('excludes a dotted SUB-entry, which cites its parent rather than defining it', () => {
@@ -122,40 +149,40 @@ describe('crossTreeCollisions — one merge earlier', () => {
 
 describe('unallocatedDefinitions — a number nobody asked for', () => {
   const defs = (...pairs: [string, number][]) => pairs.map(([file, n]) => ({ file, n }));
-  const none = new Set<number>();
 
   it('names an allocator-era number defined with no allocation row', () => {
-    expect(unallocatedDefinitions(defs(['a.md', 1066]), none, none))
+    expect(unallocatedDefinitions(defs(['a.md', 1066]), new Set([274, 1065])))
       .toEqual([{ n: 1066, files: ['a.md'] }]);
   });
 
   it('says nothing about a number the allocator issued', () => {
-    expect(unallocatedDefinitions(defs(['a.md', 1066]), new Set([1066]), none)).toEqual([]);
+    expect(unallocatedDefinitions(defs(['a.md', 1066]), new Set([274, 1066]))).toEqual([]);
   });
 
-  it('leaves the pre-allocator era alone', () => {
-    expect(unallocatedDefinitions(defs(['a.md', 72]), none, none)).toEqual([]);
+  it('derives the era PER PROJECT from its own first issued number', () => {
+    // The first version hardcoded 211 (this repo's first allocator-era number)
+    // plus a 211..224 bootstrap set, and the sweep applies this to EVERY project
+    // on the box — so the second project to adopt the allocator would have had
+    // most of its own hand-numbered history named as "never allocated". The
+    // allocator already knows each project's answer and it costs one MIN(n).
+    expect(projectEra(new Set([274, 300, 1066]))).toBe(274);
+    expect(projectEra(new Set())).toBeNull();
+    // Below the project's own era: hand-numbered before the allocator existed
+    // for it, so nobody could have asked.
+    expect(unallocatedDefinitions(defs(['a.md', 211], ['a.md', 273]), new Set([274]))).toEqual([]);
+    // At and above it: reportable.
+    expect(unallocatedDefinitions(defs(['a.md', 274], ['a.md', 275]), new Set([274])).map((o) => o.n))
+      .toEqual([275]);
   });
 
-  it('honours the bootstrap grandfather — the block that INTRODUCED the allocator', () => {
-    // THE SHIPPED SET, not a local one. Written with a local `new Set([211,212,213])`
-    // first, and the mutation that emptied LEDGER_BOOTSTRAP came back GREEN —
-    // the test never established that the constant it names is the constant the
-    // sweep uses. A row that comes back green is a hole, not a pass.
-    expect([...LEDGER_BOOTSTRAP].sort((a, b) => a - b),
-      'the bootstrap set is not 211..224 — it may only SHRINK, never move')
-      .toEqual(Array.from({ length: 14 }, (_, i) => 211 + i));
-    // 211..224 are build 9b's own plan: the allocator did not exist to ask.
-    expect(unallocatedDefinitions(defs(['b.md', 211], ['b.md', 224]), none, LEDGER_BOOTSTRAP))
-      .toEqual([]);
-    // 225 is one past the block and IS reportable — the boundary, both sides.
-    expect(unallocatedDefinitions(defs(['b.md', 225]), none, LEDGER_BOOTSTRAP))
-      .toEqual([{ n: 225, files: ['b.md'] }]);
+  it('reports nothing for a project the allocator has never issued for', () => {
+    // No era means no claim. Reporting every definition as an orphan because a
+    // project has not adopted the allocator would be a warning nobody can act on.
+    expect(unallocatedDefinitions(defs(['a.md', 900], ['a.md', 901]), new Set())).toEqual([]);
   });
 
   it('collects every file that defines the same unallocated number', () => {
-    expect(unallocatedDefinitions(defs(['b.md', 900], ['a.md', 900]), none, none))
+    expect(unallocatedDefinitions(defs(['b.md', 900], ['a.md', 900]), new Set([274])))
       .toEqual([{ n: 900, files: ['a.md', 'b.md'] }]);
   });
 });
-

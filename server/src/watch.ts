@@ -33,8 +33,7 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
-import { definitionsIn, floorFromScan, LEDGER_BOOTSTRAP,
-         unallocatedDefinitions } from './coord/ledger.js';
+import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
@@ -2123,7 +2122,7 @@ export class FleetWatcher {
       // down). See `unallocatedDefinitions` for what this deliberately does NOT
       // claim, and why batch scatter is not reported here.
       const orphans = unallocatedDefinitions(
-        definitionsIn(files), store.ledgerIssued(project), LEDGER_BOOTSTRAP);
+        definitionsIn(files), store.ledgerIssued(project));
       const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
       if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
         this.lastOrphanReport.set(project, oJson);

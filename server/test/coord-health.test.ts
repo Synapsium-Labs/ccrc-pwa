@@ -103,12 +103,67 @@ describe('the per-run health read (F7)', () => {
     expect(h.lastRejectCode).toBe('pr-regressed');
   });
 
+  it('breaks a same-millisecond tie by id — recordRejection owns its own clock', () => {
+    // `recordRejection` stamps its own Date.now() and takes no `at`, so a retried
+    // close writes two rows inside one millisecond — which is exactly what
+    // `close.ts` does, because the mail dedupe guards the MAIL and deliberately
+    // not the audit record. Without the `x.id DESC` half of the tiebreak the
+    // reported code is whichever row SQLite happens to return.
+    const s = store();
+    const r = openRun(s);
+    s.recordRejection({ code: 'stale-tip', runId: r.id, toId: WORKER, detail: 'first' });
+    s.recordRejection({ code: 'pr-regressed', runId: r.id, toId: WORKER, detail: 'second' });
+    // Force the tie the clock cannot be relied upon to produce on a fast box.
+    s.db.prepare('UPDATE mail_rejections SET at = 5_000 WHERE runId = ?').run(r.id);
+    expect(healthOf(s, r.id).lastRejectCode, 'the newest row did not win the tie').toBe('pr-regressed');
+    expect(healthOf(s, r.id).doneRejects).toBe(2);
+  });
+
+  it('costs a FIXED number of statements however many runs it is asked about', () => {
+    // The batching claim, measured rather than asserted. `runHealth` is O(1) in
+    // rows by construction; the case titled "is ONE query set for MANY runs" only
+    // proved every id gets a row, which a per-row implementation satisfies too.
+    const s = store();
+    const ids = [1, 2, 3, 4, 5, 6, 7, 8].map((w) => openRun(s, { wave: w }).id);
+    let prepares = 0;
+    const real = s.db.prepare.bind(s.db);
+    (s.db as unknown as { prepare: typeof real }).prepare = (sql: string) => {
+      prepares += 1; return real(sql);
+    };
+    try {
+      s.runHealth(ids.slice(0, 1), [COORD]);
+      const forOne = prepares;
+      prepares = 0;
+      s.runHealth(ids, [COORD]);
+      expect(prepares, 'the read scales with the number of runs').toBe(forOne);
+      expect(forOne, 'the read issues more than the four statements it documents')
+        .toBeLessThanOrEqual(4);
+    } finally {
+      (s.db as unknown as { prepare: typeof real }).prepare = real;
+    }
+  });
+
   it('says nothing about rejections when there are none — null, not a word', () => {
     const s = store();
     const r = openRun(s);
     const h = healthOf(s, r.id);
     expect(h.doneRejects).toBe(0);
     expect(h.lastRejectCode).toBeNull();
+  });
+
+  it('an OMITTED dispatch decision leaves the columns alone — it does not read as false', () => {
+    // The `input.briefQueued !== undefined` guard in dispatchRun, measured GREEN
+    // in review across every suite that calls it. Without it a caller that knows
+    // neither value binds `0`, which the board draws as "no brief" and which
+    // RunHealth.briefQueued reserves for "a dispatch ran and queued none" — the
+    // overloaded null the column pair exists to prevent, on the side nothing
+    // measured. Today's omitting callers are the recovery and test paths.
+    const s = store();
+    const r = openRun(s);
+    s.dispatchRun({ runId: r.id, sessionId: WORKER, workspace: 'w', branch: 'ws/w',
+                    resumed: false, clearedAt: null, items: [] });
+    expect(healthOf(s, r.id).briefQueued,
+      'an omitted decision was written as false').toBeNull();
   });
 
   it('carries the dispatch decision, and NULL is a third condition, not a flavour of false', () => {
@@ -132,7 +187,28 @@ describe('the per-run health read (F7)', () => {
       'the pending kickoff is invisible').toBe(4_000);
   });
 
-  it('prefers ingestedAt over deliveredAt — a replay rewrites one and never the other', () => {
+  it('IS the first-sent instant, and no replay moves it — the facet was dead without this', () => {
+    // The first draft read MIN(COALESCE(ingestedAt, deliveredAt, at)), borrowed
+    // from dueDeliveries. `ingestedAt` is stamped only on an observed
+    // UserPromptSubmit edge, so it is NULL for exactly the population this fact
+    // names — a chair nobody sat in — and the COALESCE then fell through to
+    // `deliveredAt`, which markDelivered re-stamps on EVERY replay. Against a
+    // 900s threshold and a 600s replay cadence the reported age could never reach
+    // the threshold: the warning fired zero times, forever, and then the row
+    // parked and the fact went null. This case is the one that could see it.
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
+    s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)')
+      .run(1_000, k);
+    // Twenty-five replays on the real cadence, NO UserPromptSubmit edge ever.
+    for (let i = 1; i <= 25; i++) s.markDelivered(k, 1_000 + i * 600_000);
+    expect(healthOf(s, r.id, [COORD]).coordKickoffPendingSince,
+      'the clock slid forward with deliveredAt — the age can never reach the threshold')
+      .toBe(1_000);
+  });
+
+  it('is unmoved by an ingestedAt edge too — first sent is first sent', () => {
     const s = store();
     const r = openRun(s);
     const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
@@ -140,9 +216,24 @@ describe('the per-run health read (F7)', () => {
       .run(1_000, k);
     s.markDelivered(k, 5_000);
     s.markIngested(k, 7_000);
-    s.markDelivered(k, 9_000);   // a replay moves deliveredAt and not ingestedAt
-    expect(healthOf(s, r.id, [COORD]).coordKickoffPendingSince,
-      'the clock froze on deliveredAt, which a replay rewrites').toBe(7_000);
+    expect(healthOf(s, r.id, [COORD]).coordKickoffPendingSince).toBe(1_000);
+  });
+
+  it('reaches the board THROUGH runs() — the coordinator extraction is production code too', () => {
+    // The whole `never briefed` wedge can be deleted by emptying healthFor's
+    // coordinator list, and every test that passed `[COORD]` by hand stays green
+    // (measured: 6295 passed). This is the case that establishes the premise —
+    // no test may hand `runHealth` its coordinator ids and call that coverage.
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
+    s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)')
+      .run(4_000, k);
+    const wire = s.runs().find((x) => x.id === r.id)!;
+    expect(wire.health.coordKickoffPendingSince,
+      'runs() never told runHealth who the coordinator is').toBe(4_000);
+    // and the single-run read too, which is the other production path.
+    expect(s.run(r.id)!.health.coordKickoffPendingSince).toBe(4_000);
   });
 
   it('an ACKED kickoff is not pending — absence is silence, never a warning', () => {

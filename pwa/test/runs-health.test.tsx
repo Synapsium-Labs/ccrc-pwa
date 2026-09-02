@@ -3,7 +3,7 @@
 // server is older than the field or when the run is healthy. An older server
 // omitting `health` must render exactly as the board did before it existed.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT,
          type CoordCapsView, type RunHealth, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
@@ -69,6 +69,46 @@ describe('the warn row says nothing it was not told', () => {
     expect(warn(), 'an older server was made to assert a health claim').toBeNull();
   });
 
+  it('draws NOTHING on a closed run, in either the done or the failed arm', async () => {
+    // The board has ONE rowFor and applies it to `list` AND to `finished`
+    // (RunsScreen), so this is the only thing that keeps warnings out of the
+    // archive. Before the filter: a wave whose first done-claim was refused
+    // stale-tip and then closed cleanly carried an amber "1 rejected" forever, and
+    // an ABANDONED run — failed, never dispatched, which is exactly what the
+    // Abandon control produces on a wedged row — drew "never briefed … an open run
+    // whose chair nobody sat in", about a closed run.
+    // REAL timers here, deliberately: `waitFor` polls, and fake timers deadlock it.
+    // The only clock-sensitive fact is the kickoff, so it is anchored to the real
+    // now rather than to FROZEN.
+    const wedged = (): Partial<RunSummary> => health({
+      mailParked: 2, doneRejects: 1, lastRejectCode: 'stale-tip',
+      coordKickoffPendingSince: Date.now() - 86_400_000 });
+    // THROUGH THE COLD LOADER, which is the only path a closed run reaches the
+    // board by: `active` is the live frame MINUS closed rows, and `finished` comes
+    // from `?closed=1` alone. The first version of this case pushed the closed run
+    // onto the LIVE frame, where the board filtered it out before rendering — so it
+    // asserted an absence its own fixture could not produce, and the mutation that
+    // deletes `isRunClosed` from `runWarnings` measured GREEN against it.
+    for (const state of ['done', 'failed'] as const) {
+      const store = makeStore();
+      act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+      const closed = r({ state, closedAt: Date.now() - 10_000, dispatchedAt: null, ...wedged() });
+      render(<RunsScreen store={store} loadRuns={async () => ({ runs: [closed] })}
+                         loadCaps={NO_CAPS} />);
+      await waitFor(() => expect(document.querySelector('.run-row')).not.toBeNull());
+      expect(document.querySelector('[aria-label^="finished"]'),
+        `the ${state} fixture did not reach the Finished group`).not.toBeNull();
+      expect(warn(), `a ${state} run drew a warning`).toBeNull();
+      cleanup();
+    }
+    // Non-vacuity: the SAME health on an OPEN run does draw, so the fixture could
+    // have gone either way.
+    board({ state: 'working', dispatchedAt: null,
+            ...health({ mailParked: 2, doneRejects: 1, lastRejectCode: 'stale-tip',
+                        coordKickoffPendingSince: FROZEN - 86_400_000 }) });
+    expect(warn(), 'the fixture cannot produce the presence it asserts the absence of').not.toBeNull();
+  });
+
   it('says nothing about briefQueued === null — no dispatch decided anything', () => {
     // NULL is a third condition, not a flavour of false. A row from before
     // migration 7, or a run nobody dispatched, has no decision to report.
@@ -78,9 +118,13 @@ describe('the warn row says nothing it was not told', () => {
 });
 
 describe('the warn row draws each wedge, with two cues', () => {
-  it('names parked mail', () => {
-    board(health({ mailParked: 2 }));
+  it('names parked mail, and the outstanding half beside it', () => {
+    board(health({ mailParked: 2, mailOutstanding: 5 }));
     expect(warn()?.textContent).toContain('2 parked');
+    // The spec's ask is "outstanding VS parked". Without this the field was
+    // measured, shipped on every run in every frame, and read by nothing.
+    expect(warn()?.querySelector('[title]')?.getAttribute('title'),
+      'mailOutstanding has no reader').toContain('5 still outstanding');
     // A word AND a glyph — the board's standing rule, so no state is read out
     // of colour alone.
     expect(warn()?.querySelector('[aria-hidden="true"]')).not.toBeNull();
@@ -96,14 +140,17 @@ describe('the warn row draws each wedge, with two cues', () => {
 
   it('names a dispatch that queued no brief, and says why', () => {
     board(health({ briefQueued: false, clearError: 'draft-present' }));
+    // The code rides the WORD, not only the title: this board is mobile-first,
+    // has no hover, and a title on a span flattened inside `.run-open` is not
+    // announced either — so a title-only fact is one the operator cannot reach.
     expect(warn()?.textContent).toContain('no brief');
-    expect(warn()?.querySelector('[title]')?.getAttribute('title')).toContain('draft-present');
+    expect(warn()?.textContent, 'the /clear refusal is title-only').toContain('draft-present');
   });
 
   it('names done-claim rejections and the last code', () => {
     board(health({ doneRejects: 3, lastRejectCode: 'stale-tip' }));
     expect(warn()?.textContent).toContain('3');
-    expect(warn()?.querySelector('[title]')?.getAttribute('title')).toContain('stale-tip');
+    expect(warn()?.textContent, 'the reject code is title-only').toContain('stale-tip');
   });
 
   it('names an un-briefed coordinator only past the threshold, and only before dispatch', () => {
