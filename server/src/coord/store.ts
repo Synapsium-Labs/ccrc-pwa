@@ -1449,8 +1449,18 @@ export class CoordStore {
 
     // (1) outstanding vs parked, and the replay high-water. The deliberate-cancel
     //     exclusion reuses DELIBERATE_CANCEL_ERRORS_SQL rather than respelling the
-    //     two literals: `single-definition.test.ts` forbids the second copy, and a
-    //     second copy is how the two lists would come to disagree.
+    //     two literals, because a second copy is how the two lists would come to
+    //     disagree — and `single-definition.test.ts`'s "spells the deliberate-cancel
+    //     pair ONCE" is what stops one, in both directions: a hand-written SQL list
+    //     of the pair anywhere in the four source roots, and a reader that drops the
+    //     exclusion instead of copying it.
+    //
+    //     THAT SENTENCE NAMED A GUARD THAT DID NOT EXIST (D-1319). It shipped one
+    //     wave earlier reading "`single-definition.test.ts` forbids the second copy"
+    //     while that file had never mentioned this pair; the review measured a
+    //     respelled list in this very query passing the whole suite green. The
+    //     doctrine is the wave's own — a comment is a request, a red suite is a
+    //     mechanism — and it was broken in the wave that restated it.
     for (const row of this.db.prepare(
       'SELECT m.runId AS runId, ' +
       `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} THEN 1 ELSE 0 END) AS outstanding, ` +
@@ -1529,14 +1539,41 @@ export class CoordStore {
     //     "when may this be sent again", and its own docstring records
     //     `COALESCE(ingestedAt, deliveredAt)` as a review-found defect it was fixed
     //     AWAY from, for freezing the very clock this one needs to keep moving.
+    //
+    //     THE SECOND HALF OF THAT SENTENCE WAS STILL TRUE OF THE FIX (D-1318).
+    //     `MIN(m.at)` corrected WHEN the warning starts; it did nothing about the
+    //     warning STOPPING. A kickoff nobody ever acked parks at the replay ceiling
+    //     (or on a registry-absent recipient), leaves `OUTSTANDING_STATES_SQL`, and
+    //     the fact goes null — and null on this field already means "acked" and
+    //     "no coordinator", so the one caller renders identical silence for the
+    //     wedge, which is the overloaded null this wave forbids. Statement (1)
+    //     cannot compensate: a `program-kickoff` carries `m.runId IS NULL` by
+    //     construction, so it is not in any run's mail at all and `mailParked`
+    //     stays 0. The whole `RunHealth` came back byte-identical to a run nobody
+    //     ever mailed.
+    //
+    //     So the predicate is `OUTSTANDING_OR_ABANDONED_SQL`, which this file
+    //     already owns and whose docstring states the principle in the general
+    //     case: "A message that was never acked and never acted on does not stop
+    //     being a fact worth surfacing just because the lane stopped trying to hand
+    //     it over." It brings the `LEFT JOIN runs rr` its `rr.state` arm needs —
+    //     INERT here, and provably so rather than incidentally: `m.runId IS NULL`
+    //     is in this WHERE clause, so the join matches nothing, `rr.state` is NULL
+    //     and `COALESCE(rr.state,'')` is `''`. What the predicate DOES bring is the
+    //     deliberate-cancel exclusion, and that arm is live and wanted:
+    //     `reclaimProgram` parks the dead coordinator's kickoff with
+    //     `MAIL_RECLAIM_CANCELLED_ERROR` and sends a fresh one to the new chair
+    //     (D-1143's own worked example), so a reclaimed program must NOT keep
+    //     drawing the corpse's wedge.
     if (coordIds.length > 0) {
       const since = new Map<string, number>();
       for (const row of this.db.prepare(
         'SELECT d.toId AS toId, MIN(m.at) AS since ' +
         'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+        'LEFT JOIN runs rr ON rr.id = m.runId ' +
         "WHERE m.fromId = 'operator' AND m.runId IS NULL AND m.subject = ? " +
         `AND d.toId IN (${placeholders(coordIds.length)}) ` +
-        `AND d.state IN ${OUTSTANDING_STATES_SQL} GROUP BY d.toId`,
+        `AND ${OUTSTANDING_OR_ABANDONED_SQL} GROUP BY d.toId`,
       ).all(PROGRAM_KICKOFF_SUBJECT, ...coordIds) as unknown as
         { toId: string; since: number }[]) {
         since.set(row.toId, row.since);

@@ -236,6 +236,70 @@ describe('the per-run health read (F7)', () => {
     expect(s.run(r.id)!.health.coordKickoffPendingSince).toBe(4_000);
   });
 
+  // ── D-1318 ────────────────────────────────────────────────────────────────
+  // The other half of the sentence the case above only half-fixed. `MIN(m.at)`
+  // corrected WHEN the warning starts; it said nothing about the warning
+  // STOPPING. A kickoff nobody ever acked eventually PARKS — at the replay
+  // ceiling, or on a recipient the registry no longer lists — and a park left
+  // `OUTSTANDING_STATES_SQL`, so the fact went null. Null on this field already
+  // means "acked" and "no coordinator", so the wedge became indistinguishable
+  // from health, on the one surface built to show it.
+  //
+  // Nothing else could compensate: a program-kickoff carries `m.runId IS NULL` by
+  // construction, so statement (1) never sees it and `mailParked` stays 0. Every
+  // one of the eight facts read exactly as they do for a run nobody ever mailed —
+  // which is what the last assertion here says, in those terms.
+  it('KEEPS naming a kickoff that parked at the replay ceiling — the lane giving up is not an ack', () => {
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
+    s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)')
+      .run(1_000, k);
+    for (let i = 1; i <= 20; i++) s.markDelivered(k, 1_000 + i * 600_000);
+    // The park the replay sweep writes when it reaches MAIL_REPLAY_MAX_ATTEMPTS.
+    parkWith(s, k, 'replay ceiling reached');
+
+    const h = healthOf(s, r.id, [COORD]);
+    expect(h.coordKickoffPendingSince,
+      'the park erased the wedge — a message nobody ever acked is still unacked').toBe(1_000);
+    // The premise this case rests on, established rather than assumed: the row
+    // really is parked, and no other fact carries it.
+    expect(s.db.prepare('SELECT state FROM mail_deliveries WHERE id=?').get(k))
+      .toEqual({ state: 'rejected' });
+    expect(h.mailParked, 'a runId-less kickoff can never appear in a run’s mail counts').toBe(0);
+  });
+
+  it('KEEPS naming one parked on a recipient the registry no longer lists', () => {
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
+    s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)')
+      .run(2_000, k);
+    parkWith(s, k, 'recipient not in registry');
+    expect(healthOf(s, r.id, [COORD]).coordKickoffPendingSince).toBe(2_000);
+  });
+
+  it('goes SILENT when a reclaim cancelled it — that park is a decision, not abandonment', () => {
+    // The one arm the widening must NOT swallow. `reclaimProgram` parks the dead
+    // coordinator's kickoff with MAIL_RECLAIM_CANCELLED_ERROR and sends a fresh
+    // one to the new chair, so a reclaimed program must stop drawing the corpse's
+    // wedge. This is why the predicate is OUTSTANDING_OR_ABANDONED_SQL — which
+    // carries the deliberate-cancel exclusion — and not a bare widening to
+    // `state != 'acked'`.
+    const s = store();
+    const r = openRun(s);
+    const k = mailTo(s, null, COORD, { fromId: 'operator', subject: PROGRAM_KICKOFF_SUBJECT });
+    s.db.prepare('UPDATE mail SET at=? WHERE id=(SELECT mailId FROM mail_deliveries WHERE id=?)')
+      .run(3_000, k);
+    parkWith(s, k, MAIL_RECLAIM_CANCELLED_ERROR);
+    expect(healthOf(s, r.id, [COORD]).coordKickoffPendingSince,
+      'a reclaimed program keeps drawing the dead coordinator’s wedge').toBeNull();
+    // …and the fixture could have gone the other way: the same park with an
+    // abandonment reason still reports.
+    parkWith(s, k, 'replay ceiling reached');
+    expect(healthOf(s, r.id, [COORD]).coordKickoffPendingSince).toBe(3_000);
+  });
+
   it('an ACKED kickoff is not pending — absence is silence, never a warning', () => {
     const s = store();
     const r = openRun(s);
