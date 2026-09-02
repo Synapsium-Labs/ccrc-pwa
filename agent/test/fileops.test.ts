@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+import { MAX_READ_B64_BYTES } from '../src/fileops.js';
 
 interface Res { ok: boolean; err?: string; [k: string]: unknown }
 
@@ -126,6 +127,61 @@ describe('ccrc-agent file ops', () => {
       path: path.join(fixture!.home, '.cc-clips', 'nope.png'),
     });
     expect(res).toMatchObject({ ok: true, dataB64: null });
+  });
+
+  it('readB64 marks a genuinely missing whitelisted file absent:true', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), {
+      op: 'readB64', path: path.join(fixture!.home, '.cc-clips', 'nope-absent.png'),
+    });
+    expect(res).toMatchObject({ ok: true, dataB64: null, absent: true });
+  });
+
+  it('readB64 of a DIRECTORY (EISDIR) answers null with no absent and no tooLarge key', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), { op: 'readB64', path: path.join(fixture!.home, '.cc-clips') });
+    expect(res).toMatchObject({ ok: true, dataB64: null });
+    expect(res).not.toHaveProperty('absent');
+    expect(res).not.toHaveProperty('tooLarge');
+  });
+
+  it('readB64 REPORTS an over-cap clip as tooLarge with its measured size, never as missing', async () => {
+    await open();
+    // Sparse via truncate: the cap is checked against st.size BEFORE any byte
+    // is read, so no 12 MB buffer is ever allocated by this test. Reachable in
+    // production because `ccd clip` (ccd/ccd:13416) mv -f's an image of any
+    // size into this directory with no size check, while the upload route
+    // refuses one (server/src/server.ts:1803-1804).
+    const file = path.join(fixture!.home, '.cc-clips', 'huge.png');
+    writeFileSync(file, '');
+    truncateSync(file, MAX_READ_B64_BYTES + 1);
+    const res = await client!.req<Res>(nextId(), { op: 'readB64', path: file });
+    expect(res).toMatchObject({ ok: true, dataB64: null, tooLarge: true, size: MAX_READ_B64_BYTES + 1 });
+    expect(res).not.toHaveProperty('absent');
+  });
+
+  it('readFrom marks a genuinely missing whitelisted file absent:true', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), {
+      op: 'readFrom', path: path.join(fixture!.home, '.cc-limits', 'nope-absent.json'), offset: 0,
+    });
+    expect(res).toMatchObject({ ok: true, data: null, absent: true });
+  });
+
+  it('readFrom at EOF is a POSITIVE answer — empty data with the real size, and no absent key', async () => {
+    await open();
+    const file = path.join(fixture!.home, '.cc-limits', 'eof.json');
+    writeFileSync(file, 'abcd');
+    const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: file, offset: 4 });
+    expect(res).toMatchObject({ ok: true, data: '', size: 4 });
+    expect(res).not.toHaveProperty('absent');
+  });
+
+  it('readFrom of a DIRECTORY (stat ok, range read EISDIR) answers null with no absent key', async () => {
+    await open();
+    const res = await client!.req<Res>(nextId(), { op: 'readFrom', path: path.join(fixture!.home, '.cc-clips'), offset: 0 });
+    expect(res).toMatchObject({ ok: true, data: null });
+    expect(res).not.toHaveProperty('absent');
   });
 
   it('readdir lists entries for a whitelisted directory', async () => {

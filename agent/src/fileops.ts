@@ -57,31 +57,66 @@ export async function readWhole(p: string): Promise<ReadResult> {
 
 /** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`
  *  in server/src/server.ts) — a clip round-trips through both, so neither
- *  side should accept what the other would reject. */
-const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
+ *  side should accept what the other would reject. Exported so tests assert
+ *  against THIS number rather than a second copy of it; it is a property of
+ *  the WS round trip (one JSON frame carrying a base64 payload), not of the
+ *  file, which is why `server/src/io.ts`'s `localIO` deliberately has no
+ *  equivalent and why over-cap is REPORTED rather than folded (D-114). */
+export const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
+
+/** `readB64Measured`'s result. THREE failure facts where `readB64` had one
+ *  null: a proven ENOENT, a file whose size exceeds the cap (carrying the
+ *  measured `size`, so a caller can say what it refused and how big it was),
+ *  and everything else. Local type, same reason as `ReadResult` above. */
+export type ReadB64Result =
+  | { ok: true; dataB64: string }
+  | { ok: false; reason: 'absent' | 'unreadable' }
+  | { ok: false; reason: 'too-large'; size: number };
 
 /** Binary-safe read: never decodes through a string, so bytes that aren't
- *  valid UTF-8 (e.g. a PNG header) survive byte-for-byte. `null` for
- *  missing/unreadable/over-cap files, same never-throw contract as the
- *  other read ops. */
-export async function readB64(p: string): Promise<string | null> {
+ *  valid UTF-8 (e.g. a PNG header) survive byte-for-byte. Never throws, same
+ *  contract as every other op in this file. */
+export async function readB64Measured(p: string): Promise<ReadB64Result> {
+  let size: number;
   try {
-    const s = await stat(p);
-    if (s.size > MAX_READ_B64_BYTES) return null;
-    return (await readFile(p)).toString('base64');
-  } catch { return null; }
+    size = (await stat(p)).size;
+  } catch (e) {
+    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+  }
+  if (size > MAX_READ_B64_BYTES) return { ok: false, reason: 'too-large', size };
+  try {
+    return { ok: true, dataB64: (await readFile(p)).toString('base64') };
+  } catch (e) {
+    // Unlinked between the stat and the read is a real race and a real
+    // absence; anything else is not.
+    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+  }
 }
 
-export async function readFrom(p: string, offset: number): Promise<{ data: string; size: number } | null> {
+/** `readFromMeasured`'s result. The EOF arm is `ok`, NOT a failure: an offset
+ *  at or past the file's size means "the cursor is at the end and there are
+ *  no new bytes", which is a measurement, not a miss. */
+export type ReadFromResult =
+  | { ok: true; data: string; size: number }
+  | { ok: false; reason: 'absent' | 'unreadable' };
+
+export async function readFromMeasured(p: string, offset: number): Promise<ReadFromResult> {
   // Stream only [offset, size) — never load the whole file. A transcript backlog
   // read of a tens-of-MB file used to slurp the whole thing here, ballooning the
   // agent's memory and stalling its event loop.
   let size: number;
-  try { size = (await stat(p)).size; } catch { return null; }
+  try {
+    size = (await stat(p)).size;
+  } catch (e) {
+    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+  }
   const from = Math.max(0, Math.min(offset, size));
-  if (from >= size) return { data: '', size };
-  try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
-  catch { return null; }
+  if (from >= size) return { ok: true, data: '', size };
+  try {
+    return { ok: true, data: (await readRange(p, from, size)).toString('utf8'), size };
+  } catch (e) {
+    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+  }
 }
 
 export async function listDir(p: string): Promise<string[] | null> {
