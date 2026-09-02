@@ -367,3 +367,195 @@ describe('graphQueries — the read counter the console can see', () => {
     expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: expect.any(Number) }]);
   });
 });
+
+// ── R1: the graph card ────────────────────────────────────────────────────
+// The ONE printf to stdout in this file, and it lives inside the SessionStart
+// arm. On PreToolUse a stdout JSON is a PERMISSION DECISION, so a card that
+// leaked onto another event would not be noise — it would answer a question
+// nobody asked.
+describe('the SessionStart graph card', () => {
+  /** A tree with a graph in it. `built` is the sha the graph claims; the DECOY
+   *  at the head of graph.json is the mutation this fixture exists to catch —
+   *  `built_at_commit` is the file's LAST key on a real 8 MB graph, and a
+   *  reader that parses from the head answers the decoy. */
+  const plantGraph = (dir: string, opts: {
+    built?: string; nodes?: number; engine?: string; report?: boolean;
+  } = {}): void => {
+    const out = path.join(dir, 'graphify-out');
+    fs.mkdirSync(out, { recursive: true });
+    const built = opts.built ?? 'a'.repeat(40);
+    const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
+    const filler = `  "pad": "${'x'.repeat(9000)}",\n`;
+    fs.writeFileSync(path.join(out, 'graph.json'),
+      `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+    if (opts.report !== false) {
+      fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'),
+        `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
+        + `- ${opts.nodes ?? 7662} nodes · 15645 edges · 423 communities\n`);
+    }
+    fs.writeFileSync(path.join(out, '.graphify_engine'), `${opts.engine ?? '0.9.9'}\n`);
+  };
+
+  /** A git repo whose HEAD is returned. `-c` on every commit so the box's own
+   *  identity is never needed and never used. */
+  const gitTree = (dir: string, commits = 1): string => {
+    fs.mkdirSync(dir, { recursive: true });
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
+        '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
+    git('init', '-q');
+    const shas: string[] = [];
+    for (let i = 0; i < commits; i++) {
+      git('commit', '-q', '--allow-empty', '-m', `c${i}`);
+      shas.push(git('rev-parse', 'HEAD'));
+    }
+    return shas[0]!;
+  };
+
+  const card = (stdout: string): string => {
+    expect(stdout.trim(), 'the hook printed nothing').not.toBe('');
+    const lines = stdout.trim().split('\n');
+    expect(lines, 'the hook printed more than one line on stdout').toHaveLength(1);
+    const j = JSON.parse(lines[0]!);
+    expect(j.hookSpecificOutput.hookEventName).toBe('SessionStart');
+    return String(j.hookSpecificOutput.additionalContext);
+  };
+
+  it('prints a card naming the graph, its node count, its engine and the pin', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, nodes: 4242, engine: '0.9.9' });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+    const text = card(run({ hook_event_name: 'SessionStart', source: 'startup', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text).toContain('4242 nodes');
+    expect(text).toContain(first.slice(0, 8));
+    expect(text).toContain('fresh');
+    expect(text).toContain('engine 0.9.9');
+    expect(text).toContain('pin 0.9.9');
+    expect(text).toContain('graphify query');
+    expect(text).toContain('graphify path');
+    expect(text).toContain('graphify explain');
+    expect(text, 'the card must forbid a session-side build').toContain('graphify update');
+  });
+
+  it('reads built_at_commit from the TAIL — a decoy at the head must not win', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'the head decoy was read instead of the real last key')
+      .not.toContain('00000000');
+    expect(text).toContain(first.slice(0, 8));
+  });
+
+  it('says how far behind HEAD the graph is, in commits', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 3);
+    plantGraph(tree, { built: first });
+    expect(card(run({ hook_event_name: 'SessionStart', cwd: tree })))
+      .toContain('2 commits behind HEAD');
+  });
+
+  it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree })).toBe('');
+  });
+
+  it('prints the sweep\'s own reason when the census says why there is no graph', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
+      passes: [
+        { started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [] },
+        { started: 'y', finished: 'y', pin: '0.9.9', status: 'ok', trees: [
+          { path: tree, outcome: 'refused-by-guard',
+            reason: 'untracked paths entered the corpus: a.py b.py', duration_ms: 12 },
+        ] },
+      ],
+    }));
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('refused-by-guard');
+    expect(text).toContain('untracked paths entered the corpus');
+  });
+
+  it('is printed for compact too — compaction is when a session loses what it knew', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    // the state write stays skipped for compact (D-306); the card does not
+    run({ hook_event_name: 'PreCompact' });
+    const out = run({ hook_event_name: 'SessionStart', source: 'compact', cwd: tree });
+    expect(card(out)).toContain('graphify-out/');
+    expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
+  });
+
+  it('prints NOTHING on every other event, even with a graph right there', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    for (const payload of [
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
+      { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
+      { hook_event_name: 'Stop', cwd: tree },
+      { hook_event_name: 'UserPromptSubmit', cwd: tree },
+      { hook_event_name: 'PreCompact', cwd: tree },
+      { hook_event_name: 'PostCompact', trigger: 'auto', cwd: tree },
+      { hook_event_name: 'SubagentStart', agent_name: 'reviewer', cwd: tree },
+    ]) {
+      expect(run(payload), `${payload.hook_event_name} printed on stdout`).toBe('');
+    }
+  });
+
+  it('falls back to $REG/<id>.workdir when the payload carries no cwd', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.workdir'), `${tree}\n`);
+    expect(card(run({ hook_event_name: 'SessionStart' }))).toContain('graphify-out/');
+  });
+
+  it('exits 0 and prints nothing when cwd does not exist', () => {
+    // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
+    // assertion — the contract this whole file lives under.
+    //
+    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
+    // nothing seeded, deleting that guard is invisible: the no-graph branch is
+    // taken anyway, the census read finds no file, and the card stays silent —
+    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
+    // directory check would print the sweep's line about a directory that is
+    // not there, and this assertion goes red.
+    const gone = path.join(home, 'gone');
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
+    expect(readState().state).toBe('done');
+  });
+
+  it('exits 0 and still prints a card when the tree is not a git repo', () => {
+    const tree = path.join(home, 'notarepo');
+    fs.mkdirSync(tree, { recursive: true });
+    plantGraph(tree, { built: 'b'.repeat(40) });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text, 'freshness was claimed with no git to measure it against')
+      .not.toContain('behind HEAD');
+    expect(text).not.toContain('fresh');
+  });
+
+  it('omits the node count rather than inventing one when GRAPH_REPORT.md is absent', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, report: false });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text).not.toContain('nodes');
+  });
+});

@@ -39,6 +39,106 @@ _hook_epoch_ms() {
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
+# ── THE GRAPH CARD (R1) — the only printf to stdout in this file ─────────
+# Claude Code reads a hook's stdout as a PER-EVENT CONTRACT, and on PreToolUse
+# that contract is a permission decision. A card that leaked onto another event
+# would not be noise; it would be an answer to a question nobody asked. So the
+# emitter is called from inside the SessionStart arm and nowhere else, and
+# every failure path in here prints NOTHING and returns 0 — this file's
+# standing contract (exit 0 on every path, no network, no locks, no waiting) is
+# unchanged. Every read below is a local file or a git ref.
+_hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
+  local j=""
+  j=$(jq -cn --arg c "$1" \
+    '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
+    || return 0
+  printf '%s\n' "$j"
+}
+
+# Measured for THIS session's tree, never for the fleet in general — the block
+# this replaces asserted "this project has a knowledge graph" of every project
+# the account ever opened, including the trees the sweep refuses.
+#
+# COST. `built_at_commit` is the LAST key of graph.json, which is 8 MB on this
+# repo, so it is read with `tail -c 4096` and never by parsing the file. The
+# node count comes off the head of GRAPH_REPORT.md's summary line (`head -c
+# 4096`) — the sweep census carries no node count and manifest.json is a
+# per-file hash map, so neither of the design's two named sources actually
+# holds the number (D-1246). `git rev-parse` and `git rev-list --count` are ref
+# reads. Any failure omits its clause; a total failure prints nothing.
+_hook_graph_card() {
+  local cwd="" row="" nodes="" built="" tip="" behind="" engine="" pin="" fresh="" line=""
+  cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
+  # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
+  # for a harness whose SessionStart payload carries no cwd at all.
+  [ -n "$cwd" ] || cwd=$(cat "$REG/$id.workdir" 2>/dev/null) || cwd=""
+  [ -n "$cwd" ] || return 0
+  [ -d "$cwd" ] || return 0
+
+  if [ ! -f "$cwd/graphify-out/graph.json" ]; then
+    # SILENCE IS THE TRUE ANSWER for a tree the sweep has not reached: a card
+    # asserting a graph that is not there is worse than no card. The one thing
+    # worth saying instead is the sweep's OWN last word about this tree, when
+    # its census carries one — a session that knows the tree was REFUSED does
+    # not go hunting for a graph that is never going to appear. The census is
+    # `{passes:[…]}`, last 10, newest LAST.
+    row=$(jq -r --arg p "$cwd" \
+      '(.passes // []) | last | (.trees // [])
+       | map(select(.path == $p and ((.reason // "") != "")))
+       | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
+      "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
+    [ -n "$row" ] || return 0
+    _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
+    return 0
+  fi
+
+  built=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
+    | grep -oE '"built_at_commit"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' | tail -n1) || built=""
+  built="${built##*:}"; built="${built//\"/}"; built="${built// /}"
+  [[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""
+
+  nodes=$(head -c 4096 "$cwd/graphify-out/GRAPH_REPORT.md" 2>/dev/null \
+    | grep -oE '[0-9]+ nodes' | head -n1) || nodes=""
+  nodes="${nodes% nodes}"
+  [[ "$nodes" =~ ^[0-9]+$ ]] || nodes=""
+
+  engine=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || engine=""
+  pin=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || pin=""
+
+  # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
+  # rev-list that will not answer, gets no freshness clause rather than a
+  # "fresh" nobody checked — a session querying a graph 97 commits stale gets
+  # confident wrong answers, which is the whole reason this clause exists.
+  tip=$(git -C "$cwd" rev-parse HEAD 2>/dev/null) || tip=""
+  if [ -n "$built" ] && [ -n "$tip" ]; then
+    if [ "$tip" = "$built" ]; then
+      fresh="fresh"
+    else
+      behind=$(git -C "$cwd" rev-list --count "$built..HEAD" 2>/dev/null) || behind=""
+      case "$behind" in
+        ''|*[!0-9]*) fresh="" ;;
+        0)           fresh="fresh" ;;
+        1)           fresh="1 commit behind HEAD" ;;
+        *)           fresh="$behind commits behind HEAD" ;;
+      esac
+    fi
+  fi
+
+  line="graphify: this tree has a knowledge graph — graphify-out/"
+  [ -z "$nodes" ]  || line="$line, $nodes nodes"
+  [ -z "$built" ]  || line="$line, built at ${built:0:8}"
+  [ -z "$fresh" ]  || line="$line ($fresh)"
+  # The engine/pin pair earns its place: sessions were measured running an
+  # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
+  # invisible until a query fails strangely.
+  [ -z "$engine" ] || line="$line, engine $engine"
+  [ -z "$pin" ]    || line="$line (pin $pin)"
+  # Single-quoted: the sentence carries backticks and double quotes verbatim.
+  line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
+  _hook_emit_context "$line"
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -146,6 +246,11 @@ case "$event" in
     # startup, resume, clear, or ABSENT on an older harness — is a real idle
     # boundary (absence-permits: the pre-`source` payload was the F1 startup).
     src=$(jq -r '.source // empty' <<<"$payload" 2>/dev/null) || src=""
+    # BEFORE the compact exit, deliberately: the hookstate write stays skipped
+    # for compact (D-306 — PreCompact/PostCompact own that transition), and the
+    # card is independent of it. Compaction is precisely when a session loses
+    # what it knew, so it is the source that most needs the card.
+    _hook_graph_card || true
     [[ "$src" == compact ]] && exit 0
     state="done" ;;
   Stop)
