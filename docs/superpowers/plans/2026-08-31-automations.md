@@ -888,10 +888,40 @@ the `runsEvicted` gap row and the `adopted` chip.
 
 ## Deviations found
 
-_(allocated from `POST /api/ledger/deviations` during execution — this plan invents no number.
-See Task 12.)_
+**UNALLOCATED, and the blocker is measured, not guessed.** Task 12 says to mint the block from
+`POST /api/ledger/deviations` and, failing that, to STOP rather than invent — inventing is the
+recorded root cause (`bb47c9e`, 30 files, 394 D-ref lines rewritten under merge pressure). The
+allocator is REACHABLE (it answers `200`; an earlier `400` on this branch was a malformed request
+header of mine, not the route's contract, and `~/.ccrc/mail.token` holds a header line plus the
+64-hex secret on line 2 — read line 2 alone). What it cannot do is issue a number that does not
+collide:
 
-Three are already known before a line is written, and all three should be in the block:
+    GET /api/ledger?project=ccrc-pwa  ->  {"ok":true,"floor":1178,"allocations":[]}
+
+`floor` is the next free number, so the very next allocation would issue **1178** — while
+`origin/main` already carries shipped refs up to **D-1244**. The cause is exact and not a bug in
+the allocator's arithmetic: the seed is `max(D-N in docs/superpowers/{plans,specs}) +
+LEDGER_SEED_GAP(50)`, measured against `$CCRC_PROJECTS_ROOT` — here `/Users/maciek/projects`,
+whose `ccrc-pwa` checkout sits on branch `feat/ticket-named-workspaces`, **149 commits behind
+`origin/main`**, where the docs' own maximum is D-1128. 1128 + 50 = 1178, exactly the observed
+floor. The 50-number gap was sized to absorb drift; the tree has run 116 numbers past the
+snapshot because — as `allocations: []` proves — every number from D-1129 to D-1244 was
+hand-picked and none ever went through the allocator.
+
+So the floor is stale for a reason no amount of retrying fixes, and `raiseLedgerFloor` only ever
+raises off a re-measurement of that same lagging checkout. **The remedy is one operator step,
+outside this worktree and therefore not mine to take:** advance
+`/Users/maciek/projects/ccrc-pwa` to current `main` (it is clean, 0 dirty files) and let
+`sweepLedgerFloor` re-measure — the floor becomes 1244 + 50 = 1294 — then mint the block and
+substitute the numbers into the entries below, in the scanner's form
+`- **D-<n>** — <subject>` with a real em-dash so `deviation-refs.test.ts`'s collision scan sees
+them. No `D-TBD-<slug>` placeholder is written anywhere in the tree, deliberately:
+`server/test/dtbd.test.ts` greps every TRACKED file for a concrete placeholder and turns one
+into a red diff, which is the mechanism working as designed rather than a thing to route around.
+
+Nothing is lost by the wait: the source files carry these findings as ordinary comments, and the
+commit bodies state each one. Twelve were found. The first three were known before a line of
+code was written:
 
 - **(number to allocate) — the scanner blindspot.** `server/test/auth-gate.test.ts:80` builds its route
   inventory from two hard-coded filenames, and `single-definition.test.ts:403`'s coord-ring
@@ -915,3 +945,53 @@ Three are already known before a line is written, and all three should be in the
   on exactly the sessions the operator opens from their phone. Closed by a second builder
   (Task 5) rather than by widening the first, because the flag is the whole difference
   between the two callers.
+
+Nine more were found while executing, and each is already closed in the tree:
+
+- **(number to allocate) — the spring-forward gap answered BEFORE the gap.** A forward
+  minute-scan from the nominal local value evaluates the zone offset at a NAIVE number, which
+  near a transition picks the PRE-transition offset: it returned local `01:31` for Warsaw's
+  missing `02:30` — an answer 89 minutes EARLY, in the wrong DST regime, and plausible enough to
+  survive a review. A sibling of the fold defect above but a distinct wrong answer with a
+  distinct fix: the gap's answer is the TRANSITION INSTANT, found by bisection
+  (`shared/schedule.ts`'s `transitionInstant`), and fixture (b) of
+  `server/test/schedule.test.ts` is that measurement.
+- **(number to allocate) — `afterLocal` had no producer.** The pre-flight conflict scan's first
+  critical, and the shape all four criticals shared: an interface every task ASSUMES and no task
+  DECLARES. The fold fix consumes a last-fired LOCAL TUPLE; no task wrote one, so the store would
+  have carried the epoch alone and the fold defect above would have shipped with its own test
+  passing.
+- **(number to allocate) — `automation_runs` had NOT NULL columns no store method could write.**
+  Declared by the schema task, written by nobody: the first real insert would have thrown a
+  constraint violation at runtime, not at build time.
+- **(number to allocate) — seven identity columns written by three tasks and declared by none.**
+  The mirror image of the previous two, and the reason the pre-flight scan exists at all: three
+  independent implementers each assumed a column another was declaring.
+- **(number to allocate) — the post-claim ladder was one function for a split the spec requires.**
+  The plan carried a single `checkPreconditions`; spec §6 splits the ladder AT THE CLAIM, and the
+  two halves must have DISJOINT refusal alphabets — rungs 1-2 (`checkPreClaim`) are the sweep's
+  alone, rungs 3-9 (`checkPostClaim`) run exactly once, inside `fireAutomation`, for both doors.
+  Collapsed into one function, an overlap loser and a spawn failure become the same fact at the
+  same seam, which is CLAUDE.md's "no overloaded null at a seam" defect rather than a style
+  preference.
+- **(number to allocate) — spec §8's failure ceiling was implemented by NO task.**
+  `consecutiveFailures` appears zero times in the 917-line plan. It is the mechanism that stops a
+  broken automation firing at 03:00 every night forever; without it the runner's worst failure
+  mode is unbounded. Closed in the store (the counter, its auto-pause, and the ruling that a
+  `skipped` outcome does not count toward it) and in `decideFire`.
+- **(number to allocate) — the plan REVERSED the spec's prompt retry ladder.** It settled a
+  terminal `failed` on the first `draft-present`, which both makes a transient condition
+  permanent AND spends one of the three lives the failure ceiling counts. Restored to the spec's
+  bounded retry.
+- **(number to allocate) — a scanner pinned a symbol's POSITION in an import list, not its
+  presence.** `server/test/resume-reclaim-l0.test.ts` asserted the literal `isReclaimRefuseCode }`
+  in `mail-routes.test.ts` — satisfied only while that symbol happened to sit LAST in a one-line
+  import. Adding the automation vocabularies to the same import reflowed it and reddened a wave-5
+  file whose property had never broken. CI caught it as the single red in 254 files and 6434
+  tests. The guard now reads the import BLOCK.
+- **(number to allocate) — `POST /:id/run` awaited the whole act while the sweep's docstring
+  already said it did not.** `server/src/watch.ts`'s `sweepAutomations` states "`POST /:id/run`
+  now only claims ... and answers `202`" and "`fireAutomation` has exactly ONE caller in the whole
+  tree after this"; `server/src/auto/routes.ts` awaited `fireAutomation` regardless, giving two
+  callers and a false document. With ccd's `SPAWN_SETTLE_S` at 240 s a phone tap could block four
+  minutes and time out at the proxy while the run succeeded.
