@@ -1023,8 +1023,13 @@ the fifth fact belongs inside it. It drives the pure reducer (`applySessionMsg(e
 - [ ] **Step 2: Run it and watch it fail** — Run: `cd pwa && ./node_modules/.bin/vitest run test/session-lifecycle.test.tsx test/stores.test.ts`
       Expected: FAIL — `Unable to find an element with the text: Can't read the fleet host right now`
       (the screen still prints the can't-find sentence), and in `stores.test.ts`
-      `TS2353: Object literal may only specify known properties, and 'fileMeasured' does not exist in type …`
-      followed, once the field lands on the wire type, by `expected undefined to be false`.
+      `expected undefined to be false`.
+      **NOT a `TS2353`, though an earlier draft of this step predicted one.** `pwa/` does type-check
+      during `vitest run` (`pwa/vite.config.ts` sets `typecheck: { enabled: true }`), so a genuine
+      TS2353 here WOULD be visible — but there is none to see: **Task 3 lands `fileMeasured?: boolean`
+      on the `backlog` frame BEFORE this task runs**, so the object literals type-check from the start
+      and only the runtime half of the old prediction can fire. A predicted RED must be read against
+      the state its own plan has already reached, not against HEAD as the plan was drafted.
 
 - [ ] **Step 3: Implement** — `pwa/src/stores/session.ts`. After **:107**:
 
@@ -8068,7 +8073,7 @@ and the draft was wrong.
   exactly one place (`statMeasured`), omission failing shut.
 - **D-1397** (Task 2): the ENOENT→`absent` ternary was about to exist in three copies inside
   `server/src/io.ts`; `failureFor` makes it one, and one mutation of it now reds both measured readers.
-- **D-1398** (Task 3): the `backlog` frame's `missing` was derived from a collapsed `io.stat`, so a transcript
+- **D-1398** (Tasks 3 and 4): the `backlog` frame's `missing` was derived from a collapsed `io.stat`, so a transcript
   the server merely could not measure rendered as "Can't find this session's transcript"; `fileMeasured`
   reports the difference the way `searchComplete` already does on the readdir side.
 - **D-1399** (Task 3): `sessionws.ts` and `readBacklog` stat'd the same transcript path a moment apart and
