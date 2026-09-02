@@ -225,7 +225,7 @@ describe('the session store takes the mail frame', () => {
   const snap = (): SessionSnapshot => ({
     events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
     dialog: null, ask: null, tasks: [], mail: [], missingFile: null,
-    strandedAccount: null, searchComplete: true, file: null,
+    strandedAccount: null, searchComplete: true, fileMeasured: true, file: null,
   });
 
   it('replaces the list, and an old client still shrugs at an unknown frame', () => {
