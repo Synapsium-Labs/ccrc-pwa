@@ -1110,15 +1110,18 @@ wave changes the coordinator's deploy lane.
 
 | package | before (2026-09-02 05:07 UTC) | after the wave | after the fix round |
 |---|---|---|---|
-| server | 248 files, 6248 passed, 56 skipped | 250 files, **6313** passed, 56 skipped | **250 files, 6332 passed, 56 skipped** |
+| server | 248 files, 6248 passed, 56 skipped | 250 files, **6313** passed, 56 skipped | **250 files, 6343 passed, 56 skipped** |
 | agent | (unchanged lane) | 18 files, 281 passed | **18 files, 281 passed** |
 | pwa | 2106 passed (78 files; derived — 2120 less this wave's 14 new cases) | 2120 passed | **78 files, 2120 passed** + `npm run build` produces `server/dist-pwa/index.html` |
 
 The wave's server figure was written here as **6304** and reported to the coordinator as **6313**; the
 review caught the disagreement (D-1324). 6313 is the true one, and it is now derived rather than
-recalled: the fix round measured 6332 and added exactly nineteen cases (`single-definition` 100→101,
-`coord-health` 20→23, `ledger-crosstree` 19→25, `deviation-refs` 17→26), each count taken from that
-suite's own run in this round.
+recalled: the fix round measured **6332 before merging main** and added exactly nineteen cases
+(`single-definition` 100→101, `coord-health` 20→23, `ledger-crosstree` 19→25, `deviation-refs` 17→26),
+each count taken from that suite's own run in this round. 6332 − 19 = 6313. The **6343** in the table is
+the same tree with `origin/main` at `651f40c5` merged in, whose PR #44 brings eleven cases of its own —
+two numbers for two trees, said as two numbers, because that is the distinction the first version of
+this paragraph collapsed.
 
 `tsc --noEmit` clean in all three packages. Two new server suites (`coord-health`, `ledger-crosstree`)
 and one new PWA suite (`runs-health`). No test was deleted or skipped.
