@@ -1511,8 +1511,9 @@ one major, one minor. It found no code defect in the health read, the migration,
 batching; four of the five must-fixes are **false claims in shipped prose**, which this project counts
 as defects, and the fifth is a live false positive in the wave's own headline guard.
 
-Numbers **D-1318..D-1324**, allocated from `POST /api/ledger/deviations` with `byId` set, in one act of
-seven, and defined here in the same act. The floor was read from the allocator (1318), never from this
+Numbers **D-1318..D-1325**, allocated from `POST /api/ledger/deviations` with `byId` set, in two acts
+(7 + 1), each defined here in the same act — the eighth is D-1325, found while verifying that the
+seventh had not changed the sweep. The floor was read from the allocator (1318), never from this
 document — the wave's own D-1317 is why.
 
 - **D-1318** (2026-09-02, MAJOR from the review — the second half of a sentence the first fix only half
@@ -1628,6 +1629,29 @@ document — the wave's own D-1317 is why.
   page below. The acts are now stated from the allocator's timestamps (12 + 1 + 1 + 1 + 8 + 1 + 1,
   seven acts, 25 numbers) rather than recalled, and the suite figure is re-measured at the end of this
   round rather than carried forward.
+
+- **D-1325** (2026-09-02, hole (a) measured LIVE, twice, by the audit this wave shipped) — **D-1243 and
+  D-1244 are defined on `main` and were never allocated.** Found while checking that D-1322's widening
+  had not changed `sweepLedgerReconcile`'s orphan report — it had not (six orphans before, the same six
+  after, and the fence skip removes none), and the six are the finding.
+  `~/.local/bin/ccrc-api ledger list --project ccrc-pwa` holds a contiguous run that stops at **1242**;
+  `docs/superpowers/plans/2026-09-01-d1243-the-read-side-had-no-mechanism.md:38` defines `D-1243` and
+  `2026-09-02-d1244-the-read-rule-clobbered-what-it-promised-not-to.md:26` defines `D-1244`, both
+  merged (PR #42, PR #44). Neither number exists in the allocator at all — not with an empty
+  `allocatedTo`, which is D-1301's population, but **absent**.
+  Two consequences worth separating. First, this is the direct cause of D-1317: PR #42 did not take a
+  number the allocator had issued to it, it took the number a DOCUMENT named — while the live floor was
+  1292 — which is why the brief and the allocator disagreed by 49 and why following the brief's
+  instruction rather than its number is what avoided the fourth collision. Second, it is the answer to
+  "is hole (a) worth closing": the ruling sends `byId` to the client, and a client that fills `byId`
+  perfectly still cannot see a session that never calls the allocator at all. **The two halves are
+  different holes** — *who asked for this number* and *was this number ever asked for* — and only the
+  second is what happened here. The audit that names it already ships (wave 7, `sweepLedgerReconcile`'s
+  inverse arm), report-only, on the server's own sweep; nothing in this tree refuses a definition, and
+  nothing should without an operator ruling, because the refusal would land on plans rather than on
+  code. Reported, not fixed: it is a finding about other branches' behaviour, and the mechanism that
+  would change it lives in `ccd/coordinator-skill/` — AGENT-FIRST, and out of this wave's scope by the
+  brief's own fence.
 
 ### The escalated question, ruled — recorded here because the answer is better than the ask
 
