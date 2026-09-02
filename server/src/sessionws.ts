@@ -561,12 +561,16 @@ export class SessionStream {
    * then tail from the end of what the backlog covered.
    */
   private async sendBacklogAndTail(r: Resolved): Promise<void> {
-    const missing = (await this.deps.io.stat(r.file)) === null;
-    const { events, offset } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
+    // ONE stat, not two. `missing` used to come from a second `io.stat` right
+    // here, so this method and `readBacklog` could stat the same path a
+    // moment apart and disagree; and that stat's `null` asserted absence for
+    // conditions nobody measured (D-114).
+    const { events, offset, missing, measured } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.tailed = r.resolution;
     this.send({
       type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing,
+      fileMeasured: measured,
       foreignAccount: r.resolution.kind === 'found' ? r.resolution.account : null,
       searchComplete: r.resolution.kind === 'fallback' ? r.resolution.complete : true,
     });

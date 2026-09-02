@@ -11,15 +11,36 @@ import type { ChatEvent } from '../../../shared/api.js';
 const BACKLOG_TAIL_BYTES = 1024 * 1024;
 
 /**
- * Return the last `lastN` events plus the end-of-file byte offset (where a
- * tailer should resume), reading only the file's tail. Missing/empty → empty.
+ * What `readBacklog` answers. THREE facts, not one:
+ *   - `events`/`offset` as before;
+ *   - `missing` — no {mtimeMs,size} came back for `file`. Byte-identical in
+ *     meaning to `io.stat(file) === null`, which is what the `backlog` frame's
+ *     own `missing` was derived from at `sessionws.ts:564` before this type
+ *     existed, so the wire field's meaning does not move;
+ *   - `measured` — false when that failure was NOT a proven absence. An
+ *     UNMEASURED absence rendered as a confident empty chat is the defect
+ *     D-114 closes, and `searchComplete` on the same frame already refuses it
+ *     on the readdir side (`shared/api.ts`'s `backlog` docstring).
  */
-export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<{ events: ChatEvent[]; offset: number }> {
-  const st = await io.stat(file);
-  if (st === null || st.size === 0) return { events: [], offset: st?.size ?? 0 };
+export interface BacklogRead {
+  events: ChatEvent[];
+  offset: number;
+  missing: boolean;
+  measured: boolean;
+}
+
+/**
+ * Return the last `lastN` events plus the end-of-file byte offset (where a
+ * tailer should resume), reading only the file's tail, and say whether the
+ * answer rests on a completed measurement.
+ */
+export async function readBacklog(io: FleetIO, file: string, lastN: number): Promise<BacklogRead> {
+  const st = await io.statMeasured(file);
+  if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
+  if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true };
   const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
   const res = await io.readFileFrom(file, start);
-  if (res === null) return { events: [], offset: st.size };
+  if (res === null) return { events: [], offset: st.size, missing: false, measured: true };
   let text = res.data;
   // A non-zero start almost certainly lands mid-line — drop the partial head so
   // we never hand half a JSON object to the parser.
@@ -28,7 +49,7 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
     text = nl >= 0 ? text.slice(nl + 1) : '';
   }
   const events = text.split('\n').filter((l) => l.trim() !== '').flatMap(parseTranscriptLine);
-  return { events: events.slice(-lastN), offset: res.size };
+  return { events: events.slice(-lastN), offset: res.size, missing: false, measured: true };
 }
 
 const NL = 0x0a;

@@ -2740,9 +2740,20 @@ export type SessionStreamMsg =
    *      the fleet host right now" — NEVER "no messages yet". Remote `readdir`
    *      returns null for a missing directory, a forbidden path and a
    *      disconnected agent alike, and this build refuses to render that
-   *      ambiguity as a confident empty chat. */
+   *      ambiguity as a confident empty chat.
+   *    - `fileMeasured`: false when the transcript itself could not be
+   *      MEASURED — a stat that failed for a reason that is not a proven
+   *      ENOENT (an unreachable agent, a whitelist refusal, an EACCES or
+   *      ENOTDIR on the way to it). `missing: true` with
+   *      `fileMeasured: false` earns the same sentence `searchComplete:
+   *      false` earns — "can't read the fleet host right now", NEVER "there
+   *      is no transcript". Absent on the wire reads as TRUE, exactly like
+   *      `searchComplete` and for the same reason: every older server DID
+   *      stat the file, it simply could not tell you what the failure meant,
+   *      and reading omission as `false` would put the host-unreadable
+   *      banner on every session of every pre-field server. */
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
-      foreignAccount?: string | null; searchComplete?: boolean }
+      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer

@@ -6,6 +6,7 @@ import { readBacklog, TranscriptTailer } from '../src/transcript/tail.js';
 import { localIO } from '../src/io.js';
 import type { ChatEvent } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedStatIO } from './ioDoubles.js';
 
 const userLine = (uuid: string, text: string): string =>
   JSON.stringify({
@@ -43,9 +44,20 @@ describe('readBacklog', () => {
     expect(offset).toBe(statSync(file).size);
   });
 
-  it('missing file returns empty events and offset 0', async () => {
+  it('missing file returns empty events, offset 0, and says so as a MEASUREMENT', async () => {
     const out = await readBacklog(localIO, path.join(tmpdir(), 'ccrc-definitely-missing', 'x.jsonl'), 50);
-    expect(out).toEqual({ events: [], offset: 0 });
+    expect(out).toEqual({ events: [], offset: 0, missing: true, measured: true });
+  });
+
+  it('a transcript whose stat cannot be MEASURED is missing-but-unmeasured, never a measured absence', async () => {
+    // The file is really there. Only the stat is unmeasurable — one dropped
+    // agent round trip, or (before D-114) an EACCES anywhere on the way to
+    // it. `missing` keeps its old wire meaning; `measured` is the new fact
+    // that stops the PWA rendering this as "there is no transcript".
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one'));
+    const io = degradedStatIO((p) => p === file);
+    expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: 0, missing: true, measured: false });
   });
 
   it('reads only the file TAIL for a huge transcript (last N events, EOF offset, no partial head)', async () => {
