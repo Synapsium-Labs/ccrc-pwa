@@ -6,7 +6,8 @@
 //
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
-import { SPAWN_STALL_MS, isRunState, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
+  type RunHealth, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -355,3 +356,75 @@ export function programWave(list: readonly RunSummary[]): { wave: number; waveOf
   for (const run of list) if (run.wave > best.wave) best = run;
   return { wave: best.wave, waveOf: best.waveOf };
 }
+
+/* ── F7: the compact warn row ──────────────────────────────────────────────── */
+
+/** One thing worth saying about a run, as the board says everything: a WORD and
+ *  a GLYPH, so the state is never read out of colour alone, plus the long form
+ *  for `title=`. */
+export interface RunWarning {
+  readonly glyph: string;
+  readonly word: string;
+  readonly title: string;
+}
+
+/**
+ * The warn row's whole decision. Lives here rather than in JSX for the reason
+ * `resumeNote` and `dispatchWindow` do: a condition spelled inside a component
+ * is a condition with no home and no test of its own.
+ *
+ * TOLERANT BY CONSTRUCTION. `health` is declared optional here even though
+ * `RunSummary.health` is not, the `runItems`/`unmeasuredFields` idiom and for the
+ * identical reason: a row reaches this renderer through an unvalidated boundary
+ * (`asFleetMsg` shape-checks the ARRAY only, `api.runs()` is a bare cast), so an
+ * older SERVER omits the key at runtime whatever the type promises. `undefined`
+ * yields NO warnings — never "no wedge here", which is a claim this build would
+ * be making on that server's behalf.
+ *
+ * Each threshold comparison is written so an ABSENT value fails it rather than
+ * passing it (`MailStrip.tsx`'s negated-comparison rule): `coordKickoffPendingSince`
+ * is null-checked before any arithmetic, because `null` coerces to 0 and would
+ * read as an infinitely old kickoff on every healthy row.
+ */
+export function runWarnings(
+  run: { state: RunState; health?: RunHealth },
+  nowMs: number,
+): readonly RunWarning[] {
+  const h = run.health;
+  if (h === undefined) return [];
+  const out: RunWarning[] = [];
+  if (h.mailParked > 0) {
+    out.push({ glyph: '⛒', word: `${h.mailParked} parked`,
+      title: `${h.mailParked} mail deliver${h.mailParked === 1 ? 'y' : 'ies'} to this run gave up ` +
+        'and parked unread — a run-closed or reclaimed cancel is not counted here, so these are ' +
+        'messages nobody received' });
+  }
+  if (h.mailReplayMax >= MAIL_REPLAY_WARN_COUNT) {
+    out.push({ glyph: '↻', word: `replayed ${h.mailReplayMax}×`,
+      title: `a delivery to this run has been replayed ${h.mailReplayMax} times without an ack. ` +
+        'The lane parks it at 20 and the message is then lost to whoever it was steering — ' +
+        'mail 120 reached 722 attempts and mail 129 reached 911, both arriving after the work ' +
+        'they were meant to shape' });
+  }
+  // `=== false`, never `!h.briefQueued`: null is a THIRD condition (no dispatch
+  // has committed, or the row predates migration 7) and must stay silent.
+  if (h.briefQueued === false) {
+    out.push({ glyph: '⌦', word: 'no brief',
+      title: "this run's dispatch queued NO wave-brief" +
+        (h.clearError === null ? '' : ` — the injected /clear was refused: ${h.clearError}`) +
+        '. The worker was resumed into a context nothing was written to' });
+  }
+  if (h.doneRejects > 0) {
+    out.push({ glyph: '⊘', word: `${h.doneRejects} rejected`,
+      title: `${h.doneRejects} done-claim${h.doneRejects === 1 ? '' : 's'} refused by the server's ` +
+        're-measurement' + (h.lastRejectCode === null ? '' : `, most recently ${h.lastRejectCode}`) });
+  }
+  const since = h.coordKickoffPendingSince;
+  if (since !== null && nowMs - since >= KICKOFF_UNACKED_MS) {
+    out.push({ glyph: '☡', word: 'never briefed',
+      title: "the program-kickoff addressed to this run's coordinator has never been acked. " +
+        'An open run whose chair nobody sat in cannot dispatch, close or answer mail' });
+  }
+  return out;
+}
+

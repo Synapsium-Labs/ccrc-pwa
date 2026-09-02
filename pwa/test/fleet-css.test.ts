@@ -570,6 +570,10 @@ describe('runs are not living panes', () => {
     // row is a record of a lifecycle position; the pane it names may be alive,
     // and THAT row (the fleet line) is where the lamp belongs.
     for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row',
+      // F7's warn row joins the list rather than getting an exemption: it is the
+      // one new class on this row that carries an attention hue, which is exactly
+      // the shape that tends to acquire a glow next.
+      '.run-warn', '.run-row .run-warn-item', '.run-row .run-warn-glyph',
       '.run-row .run-abandon']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
