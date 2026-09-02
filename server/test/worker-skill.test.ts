@@ -366,10 +366,20 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
     return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
   })();
 
+  /** Word-BOUNDARY match, never a raw substring. `fresh` is a substring of
+   *  `freshness unmeasured`, so a `toContain` arm for the one state that
+   *  licenses trusting the graph passes on the mere presence of the longer
+   *  word and can never fail — vacuous exactly where this describe is most
+   *  load-bearing (D-1342). `\bfresh\b` is false on `freshness unmeasured`
+   *  and true on the clause's own `` `fresh` ``. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
   it('names every freshness word the card can carry, and says what each licenses', () => {
     const clause = CONTRACT[CONTRACT.length - 1]!;
     for (const word of FRESHNESS) {
-      expect(clause, `clause 12 branches on no card word matching \`${word}\``).toContain(word);
+      expect(clause, `clause 12 branches on no card word matching \`${word}\``)
+        .toMatch(wordRe(word));
     }
     // The BRANCH, not merely the vocabulary. A clause that lists the words
     // without saying what each one licenses is information delivered with no

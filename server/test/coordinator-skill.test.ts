@@ -734,10 +734,18 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
     return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
   })();
 
+  /** Word-BOUNDARY match, never a raw substring — the same hole as the worker
+   *  suite's twin harvest (D-1342). `fresh` is a substring of `freshness
+   *  unmeasured`, so a `toContain` arm for it passes on the longer word alone
+   *  and can never fail; this paragraph carries NO verbatim pin, so that
+   *  harvest is its only binding and a vacuous arm leaves it unbound. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
   it('names every freshness state the hook can print, including the unmeasured one', () => {
     for (const word of FRESHNESS) {
       expect(para(), `the graph-card paragraph never names the \`${word}\` state the hook prints`)
-        .toContain(word);
+        .toMatch(wordRe(word));
     }
   });
 

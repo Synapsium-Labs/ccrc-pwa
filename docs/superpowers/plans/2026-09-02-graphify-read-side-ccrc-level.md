@@ -2590,6 +2590,35 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   and the U+2011 lookalike-byte swap in `session-side` (D-1339's substitute for the impossible
   apostrophe row — clause 12 still carries zero apostrophes).
 
+- **D-1342** (2026-09-02, Task 3, second R2 review fix) — **D-1340/D-1341's two harvest bindings were
+  VACUOUS on `fresh`, the one state that licenses trusting the graph.** Both describes compared with
+  `toContain`, and the harvest yields `['fresh', 'freshness unmeasured', 'behind HEAD']`: `fresh` is a
+  SUBSTRING of `freshness unmeasured`, so its arm was satisfied by the longer word's mere presence and
+  could never fail. That is precisely the failure the describes were written to prevent — "a clause
+  that branches on a word the hook stopped printing is a rule that can never fire" — landing on the
+  most load-bearing word in the card, and on the wave-lifecycle paragraph, which carries NO verbatim
+  pin and so had that harvest as its ONLY binding. Both now match on a word BOUNDARY
+  (`new RegExp('\\b' + escape(word) + '\\b')`, `.toMatch`) instead of a raw substring: `\bfresh\b` is
+  false on `freshness unmeasured` and true on both docs' own backticked `` `fresh` ``, so all three
+  arms stay green today and all three became mechanisms. The backticked-form alternative was rejected
+  because the harvest normalises the count away to a bare `behind HEAD`, which neither doc backticks
+  in that form.
+
+  Measured, on top of `5bcbc881` (baseline `Test Files  2 passed (2)` / `Tests  79 passed (79)`):
+
+  | mutation | red |
+  | --- | --- |
+  | clause 12 + its `CONTRACT` literal: ``only `fresh` licenses`` → ``only `up to date` licenses`` | `worker-skill` — `Tests  1 failed \| 13 passed (14)`, "clause 12 branches on no card word matching `fresh`" — the review's own probe, GREEN before this fix |
+  | `wave-lifecycle.md`: BOTH of the paragraph's `` `fresh` `` → `` `up to date` `` | `coordinator-skill` — `Tests  1 failed \| 64 passed (65)`, "the graph-card paragraph never names the `fresh` state the hook prints" — GREEN before this fix |
+  | clause 12 + `CONTRACT`: `` `N commits behind HEAD` `` → `` `N commits stale` `` | `worker-skill` — `Tests  1 failed \| 13 passed (14)`, "…no card word matching `behind HEAD`" |
+  | `ccd/session-hook.sh`: `fresh="freshness unmeasured"` → `fresh="freshness unknown"` (re-measured) | BOTH — `Test Files  2 failed (2)` / `Tests  2 failed \| 77 passed (79)`, each now naming the regex: `expected … to match /\bfreshness unknown\b/` |
+
+  One measurement worth keeping: replacing only the FIRST of the paragraph's two `` `fresh` ``
+  occurrences left `coordinator-skill` green at `Tests  65 passed (65)`, correctly — the paragraph
+  still named the state once. The binding is "this doc names the word", not "names it twice"; the
+  review's probe had to edit both, and so did the mutation row above.
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
