@@ -660,6 +660,64 @@ Ruling in mail 194.
   all, must not silently send an empty `byId` — that recreates the hole quietly, which is what D-1301
   measured.
 
+### Wave 7 fix round — VERIFIED 2026-09-02 11:06 UTC — all six hold; one final bounded round
+
+Eight verification agents, every landed fix mutation-RUN in an isolated checkout, then an adversarial
+second pass over all six. **Zero "does-not-hold".** M1's new guard reds on the coordinator's exact
+mutation with the quoted message; M5's pattern reds on the pre-fix revert; J1's three park cases each
+red on their own reversion; M3's closed-run filter reds on deletion. Fingerprint re-measured at
+`e37237b5`; `origin/main` at `651f40c5` (now carrying PR #44) is still an ANCESTOR, so the merge stays
+a fast-forward; 33 allocated, 33 defined, zero collisions against the new main.
+
+**A third round was opened, bounded to six items, with the merge committed in advance** — the
+coordinator stated it will not open a fourth. Its justification is consistency, not new doubt: four
+prose falsehoods were ruled MUST-FIX in round one, and round two left or introduced five more of the
+same class. One of them (`:1143`, "the fix round adds D-1318..D-1324" against its own correct
+D-1318..D-1325) is **D-1324's own title recurring inside D-1324's fix**. The sharpest is a false
+PROVENANCE in three shipped places: `wave1-f1.md:216` is offered as a corpus instance of a ````
+block quoting ``` blocks, and it quotes none — measured, the block runs 216→338 with zero inner
+fences. The corpus does hold that shape, at `build7-surfaces.md:408`, but that file is in
+`LEGACY_PER_PLAN_LEDGERS` and is never scanned. The guard's BEHAVIOUR is correct and red-on-mutation;
+only the measurement selling it lies, which is exactly this wave's own class. One real code item
+rides with them: the fence fix has no info-string check on the OPENING fence, so a prose line
+carrying a triple-backtick code span opens a phantom block a later bare fence closes, and
+`crossTreeCollisions` was driven end-to-end returning `[]` for a number defined on both sides. Zero
+instances in the tree today — potential, not live — but a silent miss in a collision guard is what
+that file's own docstring forbids.
+
+### The allocator burns numbers, and root CLAUDE.md's procedure mints an orphan every time — measured
+
+The worker volunteered D-1325; it is larger than stated and it is the most valuable thing this wave
+produced. Measured by the coordinator against the LIVE allocator:
+
+> issued range **274..1325 = 1052 numbers; 263 issued; 789 NEVER ISSUED — 75%**, in 17 holes,
+> **thirteen of them exactly 49 wide**, plus 14, 35, 50 and 53.
+
+That is the signature of `floorFromScan` — `max(any D-N TOKEN in docs/superpowers/{plans,specs}) +
+LEDGER_SEED_GAP (50)` — against a floor that ONLY RISES. Every publish-and-sweep burns 49 numbers by
+design, and **a hand-written number seals its own band forever**: PR #42 wrote D-1243, the sweep
+raised the floor to 1293, and 1243..1292 are unissuable. 1066..1118 has the identical signature.
+
+**The part that reaches past this program: root `CLAUDE.md` instructs a coder to "allocate the next
+number by grepping `origin/main`".** `maxRef + 1` is inside the burned band by construction, and
+writing it raises the floor to `maxRef + 51`. Two lanes both grepping get the same `maxRef` — which
+is the mechanism behind ALL THREE of this program's collisions. The documented human procedure is not
+merely suboptimal; it is the generator. **Wave 8 carries the CLAUDE.md correction.**
+
+Carried with it, a defect live on `main` and not this wave's doing: `watch.ts:2076` claims "`landed`
+genuinely means merged, the signal the bb47c9e incident lacked", but `readLedgerDocs` reads the main
+checkout's WORKING TREE with no git ref — that checkout sits on `feat/graphify-read-side-ccrc-level`
+today, so the sweep names eleven orphans, five of them from an unmerged branch, and `markLanded` can
+stamp `landedIn` with a file that is not on main.
+
+**The coordinator's own correction, owned here rather than left to the worker:** the widened bare-bold
+prefix handed over as M5's starting point opens a small new false-positive class the eleven shapes it
+was tested against did not cover. Mine, not the worker's.
+
+**Ruling amended:** the `byId` ruling closes "who asked for this number". It cannot touch "was this
+number ever asked for" — a session that never calls the allocator is invisible to a client-side fix,
+and that is precisely what PR #42 did. It is a PARTIAL fix and is recorded as one.
+
 ## Carried constraints
 
 - **A steering mail sent mid-wave may arrive AFTER the work it was meant to steer** (measured
