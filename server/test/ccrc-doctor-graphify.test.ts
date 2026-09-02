@@ -425,6 +425,39 @@ describe('ccrc doctor: graphify-path', () => {
     expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
   });
 
+  // D-1350: the arm that used to be folded into the mismatch FAIL. Before the
+  // fix both `realpath` calls fell back to their own UNRESOLVED paths when the
+  // tool was missing, and a link path is never equal to an engine path — so a
+  // fully CONVERGED box without coreutils' `realpath` was told `FAIL
+  // graphify-path: … which is not the pinned engine …`, a mismatch verdict on
+  // a comparison nobody made, with a remedy (`ccrc install`) that cannot put
+  // `realpath` on the box. "I could not measure" is the fourth outcome this
+  // file's header names, and SKIP is its spelling.
+  it('SKIPs — never FAILs — when the box has no usable realpath, on a CONVERGED link (D-1350)', () => {
+    const home = healthy('ccrc-doctor-gfxpath-noreal-'); graphifyHealthy(home);
+    // The one difference from the PASSing fixture above: `realpath` is off the
+    // contained PATH. The link, the engine and the pin are all exactly as the
+    // converged box has them.
+    rmSync(join(home, 'stub-bin', 'realpath'), { force: true });
+    const line = lineFor(runDoctor(home).stdout, 'graphify-path');
+    expect(line, 'an unmeasurable box was given the mismatch verdict').toMatch(/^SKIP graphify-path:/);
+    expect(line, 'the skip does not name the tool it is missing').toContain('realpath');
+  });
+
+  // …and the condition that is NOT unmeasurable keeps its FAIL. A missing
+  // engine is measured directly with `-e`, so it must never be folded into the
+  // skip above just because `realpath` answers empty for a path that is not
+  // there.
+  it('FAILs when something answers graphify but there is NO pinned engine to compare against', () => {
+    const home = healthy('ccrc-doctor-gfxpath-noengine-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    rmSync(join(home, '.ccrc', 'graphify-venv'), { recursive: true, force: true });
+    stub(home, 'graphify', 'echo "some other graphify"; exit 0');
+    const line = lineFor(runDoctor(home).stdout, 'graphify-path');
+    expect(line).toMatch(/^FAIL graphify-path:/);
+    expect(line).toContain('no pinned engine');
+  });
+
   it('SKIPs on a server-role box, like every other graphify condition', () => {
     const home = healthy('ccrc-doctor-gfxpath-srv-'); graphifyHealthy(home);
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');

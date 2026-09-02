@@ -4973,8 +4973,15 @@ _inst_linger() {
   fi
   echo "install: linger: could not enable — run: sudo loginctl enable-linger $UID"
   # NAMED, so the closing line can count it rather than claim it did not happen.
-  # This is the only writer of `INST_DEGRADED` today and the only step entitled
-  # to be one: every other step converges or dies.
+  # It was the ONLY writer of `INST_DEGRADED` when this comment was first
+  # written, and that sentence stopped being true the day the graphify steps
+  # landed: `graphify-read-rule` (`_inst_graph_always_on_off`, D-1244) and
+  # `graphify-path` (`_inst_graphify_engine`, D-1348/D-1349) write it too, for
+  # the same reason and under the same rule — a step that neither converged nor
+  # is entitled to take the box down says so and is counted. Kept as a census
+  # rather than a claim, because a hand-kept "only" is exactly the sentence a
+  # later step falsifies without noticing (D-1347 is the same defect one
+  # function over).
   INST_DEGRADED+=(linger)
   return 0
 }
@@ -5040,12 +5047,13 @@ _inst_graphify_engine() {
   # `__version__`, while every graph on the box was built by the 0.9.9 venv.
   # The drift is invisible until a query fails strangely.
   #
-  # `cmd_wrappers`' DISCIPLINE, and no flags: write when absent; replace when
-  # the file is already a link into the venv, or is a pip/pipx console-script
-  # shim (matched BY CONTENT — a `#!` first line and a `from graphify.__main__
-  # import main` line, the shape measured on this fleet, never assumed);
-  # REFUSE anything else, because a hand-written launcher is the operator's and
-  # this step has no `--force` for anyone to type.
+  # `cmd_wrappers`' DISCIPLINE, and no flags: write when absent; do NOTHING
+  # when the link already resolves into the venv; back up and then repoint a
+  # pip/pipx console-script shim (matched BY CONTENT — a `#!` first line and a
+  # `from graphify.__main__ import main` line, the shape measured on this
+  # fleet, never assumed); REFUSE anything else — a hand-written launcher is
+  # the operator's, a link this box cannot resolve is unmeasured, and this step
+  # has no `--force` for anyone to type.
   #
   # ONE PATH ONLY: `$HOME/.local/bin`. The root-owned copy a shared box may
   # carry higher up the system tree is an unprivileged install's business
@@ -5059,25 +5067,87 @@ _inst_graphify_engine() {
   # the path — which is how the wording originally drafted for this paragraph
   # went red against the guard it was describing (D-1344). Name the path in the
   # header, never here, not even in quotation.
-  local gpath="$HOME/.local/bin/graphify" gvenv="$venv/bin/graphify" gcur=""
+  local gpath="$HOME/.local/bin/graphify" gvenv="$venv/bin/graphify"
+  local gnow="" gwant="" gbak="" gtmp=""
+  # BOTH SIDES RESOLVED ONCE, AND "COULD NOT RESOLVE" IS ITS OWN ANSWER
+  # (D-1348). The first cut of this step compared the two `readlink -f`
+  # substitutions inline, and a box whose readlink has no `-f` (macOS below
+  # 12.3 — a floor this repo accepts rather than enforces,
+  # `macos-platform.test.ts`) answers EMPTY on both sides: empty = empty is
+  # TRUE, so ANY symlink, including one pointing at a completely different
+  # engine, was declared converged and left in place. That is the overloaded
+  # null this codebase bans at a seam, in the shape D-1244 already named one
+  # step below — and `_inst_graph_always_on_off` takes the path this one now
+  # takes: an unresolvable link is LEFT IN PLACE, said out loud, and counted
+  # as a degraded step rather than acted on unmeasured.
+  #
+  # TWO TOOLS, ONE FAILURE SEMANTICS. This step resolves with `readlink -f` and
+  # `_check_graphify-path` (`ccd/ccrc-doctor-checks`) resolves with `realpath`;
+  # `macos-platform.test.ts` allows both, and neither is preferred here — the
+  # install already reaches for `readlink -f` one step below (D-1244) and the
+  # doctor's own file already reaches for `realpath`. What is NOT optional is
+  # that they agree about EMPTY: on both sides an unresolvable pair is
+  # "unmeasured", never "unequal". This step degrades and leaves the link; the
+  # doctor SKIPs and names the missing tool (D-1350). If either ever falls back
+  # to the raw path instead, the two halves start disagreeing about a box
+  # neither of them measured.
+  if [ -L "$gpath" ]; then
+    gnow="$(readlink -f "$gpath" 2>/dev/null)" || gnow=""
+    gwant="$(readlink -f "$gvenv" 2>/dev/null)" || gwant=""
+  fi
   if ! mkdir -p "$HOME/.local/bin" 2>/dev/null; then
     echo "install: graphify: cannot create \$HOME/.local/bin — bare 'graphify' still resolves to whatever is on PATH" >&2
     INST_DEGRADED+=(graphify-path)
-  elif [ -L "$gpath" ] && [ "$(readlink -f "$gpath" 2>/dev/null)" = "$(readlink -f "$gvenv" 2>/dev/null)" ]; then
+  elif [ -L "$gpath" ] && { [ -z "$gnow" ] || [ -z "$gwant" ]; }; then
+    echo "install: graphify: $gpath is a symlink this box cannot resolve (its readlink has no -f) — left in place rather than judged unmeasured. Remedy: inspect it (ls -l \"$gpath\"), and if it is not the pinned engine, move it aside and re-run" >&2
+    INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && [ "$gnow" = "$gwant" ]; then
     echo "install: graphify: graphify on \$PATH already points at the pinned venv"
   elif [ ! -e "$gpath" ] && [ ! -L "$gpath" ]; then
     ln -sfn "$gvenv" "$gpath" \
       && echo "install: graphify: \$HOME/.local/bin/graphify -> the pinned venv engine (written)" \
       || { echo "install: graphify: cannot write $gpath" >&2; INST_DEGRADED+=(graphify-path); }
   else
-    gcur=""
-    [ -f "$gpath" ] && [ -r "$gpath" ] && gcur="$(head -c 4096 "$gpath" 2>/dev/null)"
-    if [ -n "$gcur" ] \
-       && printf '%s' "$gcur" | head -n1 | grep -q '^#!' \
-       && printf '%s' "$gcur" | grep -qxF 'from graphify.__main__ import main'; then
-      ln -sfn "$gvenv" "$gpath" \
-        && echo "install: graphify: \$HOME/.local/bin/graphify was a pip console-script shim -> repointed at the pinned venv" \
-        || { echo "install: graphify: cannot replace $gpath" >&2; INST_DEGRADED+=(graphify-path); }
+    # SNIFFED THROUGH A PIPE, NEVER THROUGH `$(…)`. The first cut read the file
+    # into a variable with `gcur="$(head -c 4096 …)"` and matched against that,
+    # and the candidate this arm exists to judge may be a COMPILED launcher: a
+    # command substitution over binary makes bash print `warning: command
+    # substitution: ignored null byte in input` on the install's own stderr,
+    # noise from a step that has not decided anything yet. Two piped reads cost
+    # one extra `head` on a file that is at most 4 KB and say the same thing
+    # with nothing to warn about; `grep -q` stays silent on binary input where
+    # a bare `grep` would announce `Binary file … matches`.
+    if [ -f "$gpath" ] && [ -r "$gpath" ] \
+       && head -c 4096 "$gpath" 2>/dev/null | head -n1 | grep -q '^#!' \
+       && head -c 4096 "$gpath" 2>/dev/null | grep -qxF 'from graphify.__main__ import main'; then
+      # BACKED UP FIRST, THEN SWAPPED ATOMICALLY (D-1349) — `cmd_wrappers`'
+      # discipline in FULL, which the comment above claimed while this arm did
+      # neither. A pip console-script shim is a file ccrc did not write: it is
+      # replaceable because its content proves what it is, not because it is
+      # ccrc's, so it gets `cmd_wrappers`' own `<name>.pre-ccrc-<UTC>` copy
+      # (`cp -p`, mode and timestamps preserved) BEFORE anything is unlinked,
+      # and a failed backup degrades instead of replacing unbacked — the rule
+      # `_inst_graph_always_on_off` states as "left in place rather than
+      # rewritten unbacked". The "." in the backup name is load-bearing for the
+      # reason `cmd_wrappers` gives: no legal wrapper id can carry one, so the
+      # copy is invisible to `ccrc adopt`'s scan and to `_check_wrappers`, and
+      # the leading "." on the temp name keeps a leftover out of the `*` glob
+      # `_uninst_wrappers` walks. The swap itself is `ln` to that temp name
+      # then `mv -f`, one rename, because `ln -sfn` over a live path is
+      # unlink+symlink: a session that types `graphify` in that window gets
+      # ENOENT.
+      gbak="$gpath.pre-ccrc-$(date -u +%Y%m%dT%H%M%SZ)"
+      gtmp="$HOME/.local/bin/.graphify.tmp.$$"
+      if ! cp -p -- "$gpath" "$gbak" 2>/dev/null; then
+        echo "install: graphify: cannot copy $gpath aside to $gbak — left in place rather than replaced unbacked. Remedy: make \$HOME/.local/bin writable and re-run" >&2
+        INST_DEGRADED+=(graphify-path)
+      elif ln -sfn "$gvenv" "$gtmp" 2>/dev/null && mv -f -- "$gtmp" "$gpath"; then
+        echo "install: graphify: \$HOME/.local/bin/graphify was a pip console-script shim -> repointed at the pinned venv (the shim it replaced is at $gbak)"
+      else
+        rm -f -- "$gtmp"
+        echo "install: graphify: cannot replace $gpath — the file that was there is untouched, and the copy at $gbak is the same file" >&2
+        INST_DEGRADED+=(graphify-path)
+      fi
     else
       echo "install: graphify: $gpath is not a pip shim and ccrc did not write it — left in place. Remedy: inspect it (ls -l \"$gpath\"), and if you want ccrc's pinned engine on PATH, move it aside and re-run; nothing here overrides that." >&2
       INST_DEGRADED+=(graphify-path)
@@ -6314,6 +6384,36 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-graph-sweep" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
   echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher removed from \$HOME/.local/bin"
+  # ── the FIFTH entry, and the only one that is not ccrc's own binary ──────
+  # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
+  # pinned venv, and the rule the four names above follow binds here too: an
+  # uninstall that removed the engine's home (`--purge` takes `~/.ccrc` whole,
+  # a few lines below) and left the link would leave a DANGLING `graphify`
+  # first on every session's PATH — strictly worse than the box was before
+  # ccrc, because the pip shim that used to answer there was copied aside by
+  # the install and never put back (`_uninst_keep_asides` prints that `mv`).
+  # D-1347: the install grew a fifth name and this census did not, because it
+  # is hand-kept.
+  #
+  # ONLY IF IT IS OURS, which is `_uninst_wrappers`' rule one function up:
+  # "everything ccrc could not prove it wrote was left in place". Proof here is
+  # the link's own target, read with plain `readlink` — ONE HOP, no `-f`, so no
+  # box is asked for a tool it may not have (D-1348's lesson on the install
+  # side) — against the exact literal `_inst_graphify_engine` writes. A regular
+  # file (the hand-written launcher that step REFUSES to touch) and a symlink
+  # pointing anywhere else are both reported and kept.
+  local glink="$HOME/.local/bin/graphify" gtgt=""
+  if [ -L "$glink" ]; then
+    gtgt="$(readlink "$glink" 2>/dev/null)" || gtgt=""
+    if [ "$gtgt" = "$HOME/.ccrc/graphify-venv/bin/graphify" ]; then
+      rm -f -- "$glink" || _ccrc_die "removing $glink failed"
+      echo "uninstall: tree: graphify removed from \$HOME/.local/bin (it was ccrc's link into the pinned venv)"
+    else
+      echo "uninstall: tree: kept $glink — it is a symlink to ${gtgt:-something this box cannot read}, not the link ccrc wrote; remove it by hand if it is worthless"
+    fi
+  elif [ -e "$glink" ]; then
+    echo "uninstall: tree: kept $glink — ccrc never wrote it (the install refuses to touch a launcher it did not write); remove it by hand if it is worthless"
+  fi
 }
 
 # The keep-asides `_inst_keep_aside` wrote for the two operator-namespace
@@ -6321,12 +6421,21 @@ _uninst_tree_bins() {
 # operator's own edits made since the install, and a restore that ate them
 # would be the very damage the keep-aside existed to prevent. Restoring is
 # one visible `mv`, and it is theirs to run.
+#
+# THE THIRD GLOB is the graphify shim `_inst_graphify_engine` copies aside
+# before repointing `$HOME/.local/bin/graphify` (D-1349), and it belongs here
+# for exactly the reason the other two do: `_uninst_tree_bins` has just removed
+# ccrc's link from that path, so the `mv` this loop prints puts the operator's
+# own pip shim back where it was — the difference between "off ccrc" and "off
+# ccrc with a hole where your graphify used to be". It runs AFTER that step
+# (see `cmd_uninstall`'s sequence), so the target path is already free.
 _uninst_keep_asides() {
   local f said=0
   local had_nullglob=0
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
-  for f in "$HOME/.tmux.conf.pre-ccrc-"* "$HOME/.claude/statusline-command.sh.pre-ccrc-"*; do
+  for f in "$HOME/.tmux.conf.pre-ccrc-"* "$HOME/.claude/statusline-command.sh.pre-ccrc-"* \
+    "$HOME/.local/bin/graphify.pre-ccrc-"*; do
     if [ "$said" -eq 0 ]; then
       echo "uninstall: keep-asides: the files ccrc copied aside before replacing them are still there — restore any of them with:"
       said=1

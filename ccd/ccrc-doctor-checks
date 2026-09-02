@@ -2986,16 +2986,37 @@ _check_graphify-path() {
     return 1
   fi
   # `realpath` is explicitly ALLOWED by `macos-platform.test.ts` (so is
-  # `readlink -f`), and both sides are resolved with the SAME tool so a box
-  # without it degrades symmetrically: each side falls back to its own
-  # unresolved path. That fallback is honest but blunt — the link path and the
-  # engine path are never equal — so any FIXTURE that expects a PASS here must
-  # carry a real `realpath` on its contained PATH. Both doctor suites do; see
-  # the `linkReal(home, 'realpath')` note in `ccrc-doctor.test.ts`'s `healthy()`.
+  # `readlink -f`), and both sides are resolved with the SAME tool. WHAT THIS
+  # ARM MUST NOT DO is fall back to the UNRESOLVED paths when it cannot answer
+  # (D-1350): the link path and the engine path are never equal, so a fully
+  # CONVERGED box without `realpath` was told `FAIL graphify-path` — the
+  # mismatch verdict, on a comparison nobody made, with a remedy (`ccrc
+  # install`) that cannot fix a missing coreutils. An adapter may not narrow a
+  # distinction it received, and "I could not measure" is not "the wrong engine
+  # answers". Unmeasurable is the FOURTH OUTCOME, this file's header: SKIP,
+  # `_check_scopes`' own shape for a tool that is not on PATH, no remedy line
+  # by contract — the fact goes in the detail. A MISSING ENGINE is a different
+  # condition and keeps its FAIL: `-e` measures it directly, so it is never
+  # folded into the skip.
+  #
+  # TWO TOOLS, ONE FAILURE SEMANTICS: the install's own converge
+  # (`_inst_graphify_engine` in `ccd/ccrc`) resolves the same pair with
+  # `readlink -f` rather than `realpath`, and that is allowed only because both
+  # halves answer EMPTY the same way — "unmeasured", never "unequal". There the
+  # link is left in place and the step is counted degraded; here the verdict is
+  # SKIP. Change one side's empty handling and the other must change with it,
+  # or a box neither of them could measure gets two different verdicts.
   resolved="$(realpath "$found" 2>/dev/null)" || resolved=""
-  [ -n "$resolved" ] || resolved="$found"
   want="$(realpath "$engine" 2>/dev/null)" || want=""
-  [ -n "$want" ] || want="$engine"
+  if [ ! -e "$engine" ]; then
+    _dr_fail graphify-path "\$PATH answers 'graphify' with $found, and there is no pinned engine at $engine to compare it against" \
+      "run: ccrc install — it builds the pinned venv and links \$HOME/.local/bin/graphify at it"
+    return 1
+  fi
+  if [ -z "$resolved" ] || [ -z "$want" ]; then
+    _dr_skip graphify-path "this box has no usable realpath, so the graphify on \$PATH ($found) and the pinned engine at $engine cannot be resolved to the files they name and compared — coreutils' realpath is what this check measures with"
+    return 3
+  fi
   if [ "$resolved" = "$want" ]; then
     _dr_pass graphify-path "graphify resolves to $found -> the pinned venv engine"
     return 0

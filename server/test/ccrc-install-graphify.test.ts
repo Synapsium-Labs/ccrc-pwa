@@ -1029,6 +1029,19 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
     expect(r.code, r.stderr).toBe(0);
     expect(lstatSync(link(home)).isSymbolicLink(), 'the stale pip shim survived').toBe(true);
     expect(realpathSync(link(home))).toBe(realpathSync(venv(home)));
+    // …AND THE SHIM IT DESTROYED IS STILL ON DISK (D-1349). The step's own
+    // comment claims `cmd_wrappers`' discipline, and that discipline is a
+    // `cp -p` copy aside BEFORE the overwrite — this arm had none, so a file
+    // ccrc did not write was unlinked with nothing kept. `cmd_wrappers`' name
+    // shape exactly: `<name>.pre-ccrc-<UTC>`, the "." keeping it out of every
+    // wrapper scan.
+    const bin = readdirSync(join(home, '.local', 'bin'));
+    const backups = bin.filter((f) => f.startsWith('graphify.pre-ccrc-'));
+    expect(backups.length, "the operator's pip shim was replaced with no copy kept").toBe(1);
+    expect(readFileSync(join(home, '.local', 'bin', backups[0]!), 'utf8')).toBe(SHIM);
+    expect(r.stdout).toMatch(/the shim it replaced is at /);
+    // The swap staged a temp name and renamed it; nothing of it survives.
+    expect(bin.filter((f) => f.startsWith('.graphify.tmp')), 'a staged temp link leaked').toEqual([]);
   });
 
   it('is a NO-OP on a link that already points into the venv, and cuts no backup', () => {
@@ -1039,6 +1052,70 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/graphify on \$PATH already points at the pinned venv/);
+    expect(readdirSync(join(home, '.local', 'bin')).filter((f) => f.startsWith('graphify.pre-ccrc-')),
+      'a converged link was backed up as if it had been replaced').toEqual([]);
+  });
+
+  it('REFUSES a symlink that resolves OUTSIDE the venv — the state the no-op arm used to swallow', () => {
+    // A moved venv, a pipx install, a link an older layout wrote: the file is
+    // a SYMLINK, so the arm that judges links is the one that answers, and
+    // what it points at is a real engine that is not the pinned one. Before
+    // D-1348 no fixture in this suite ever planted this state — the four it
+    // planted were absent, a pip shim, a link INTO the venv, and a
+    // hand-written launcher — so the resolution comparison, the whole
+    // mechanism of that arm, could be deleted with every test still green.
+    const home = freshBox('ccrc-inst-gfx-path-stale-');
+    plantFakeVenv(home);
+    const stale = join(home, '.ccrc', 'graphify-venv.old', 'bin');
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, 'graphify'),
+      '#!/bin/sh\necho "graphify 0.9.1"\nexit 0\n', { mode: 0o755 });
+    rmSync(link(home), { force: true });
+    symlinkSync(join(stale, 'graphify'), link(home));
+    const r = runInstall(home, ['install']);
+    // EXIT 1, and that is the CORRECT answer, not a fixture wart: the install
+    // ran to completion (its `done — converged with N degraded step(s)` line
+    // is asserted below) and its closing `ccrc doctor` then FAILed
+    // `graphify-path`, because this box really does answer `graphify` with an
+    // engine ccrc does not pin. Same shape as the hand-written-launcher case
+    // below, which has never asserted a zero either.
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stdout, 'a link at a different engine was called converged')
+      .not.toMatch(/already points at the pinned venv/);
+    expect(realpathSync(link(home)), 'the link ccrc refused was repointed anyway')
+      .toBe(realpathSync(join(stale, 'graphify')));
+    expect(r.stderr).toMatch(/ccrc did not write it/);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
+  it('LEAVES a link this box cannot resolve in place, degraded — empty is not "equal"', () => {
+    // macOS below 12.3 has no `readlink -f` (`macos-platform.test.ts`: a floor
+    // this repo accepts rather than shims). Both resolutions come back EMPTY
+    // there, and an inline `[ "$(readlink -f a)" = "$(readlink -f b)" ]`
+    // answers TRUE for every link on the box. The stub is that userland: one
+    // hop still works, `-f` does not.
+    const home = freshBox('ccrc-inst-gfx-path-noresolve-');
+    plantFakeVenv(home);
+    const stale = join(home, '.ccrc', 'graphify-venv.old', 'bin');
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, 'graphify'),
+      '#!/bin/sh\necho "graphify 0.9.1"\nexit 0\n', { mode: 0o755 });
+    rmSync(link(home), { force: true });
+    symlinkSync(join(stale, 'graphify'), link(home));
+    const r = runInstall(home, ['install'], {}, { stubs: {
+      readlink: '#!/bin/sh\ncase "$1" in\n  -f) echo "readlink: illegal option -- f" >&2; exit 1 ;;\nesac\n'
+        + `exec ${realPath('readlink')} "$@"\n`,
+    } });
+    // Exit 1 for the reason the case above states: the closing doctor resolves
+    // with the REAL `realpath` (this stub only breaks `readlink -f`), sees the
+    // stale engine, and FAILs `graphify-path`. The install step's own answer —
+    // left in place, said out loud, counted degraded — is what is asserted.
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stdout, 'an unresolved comparison was reported as converged')
+      .not.toMatch(/already points at the pinned venv/);
+    expect(r.stderr).toMatch(/is a symlink this box cannot resolve/);
+    expect(r.stdout).toMatch(/degraded step/);
+    expect(realpathSync(link(home))).toBe(realpathSync(join(stale, 'graphify')));
   });
 
   it('REFUSES a hand-written launcher with a remedy, and does not fail the install', () => {
