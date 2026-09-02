@@ -2794,6 +2794,45 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   | replace the `[ -z "$resolved" ] \|\| [ -z "$want" ]` SKIP arm with the old `\|\| resolved="$found"` / `\|\| want="$engine"` fallback | `ccrc-doctor-graphify` — "SKIPs — never FAILs — when the box has no usable realpath…" | `Tests  1 failed \| 23 passed (24)` |
   | delete the `[ ! -e "$engine" ]` FAIL arm, letting a missing engine fall into the skip | `ccrc-doctor-graphify` — "FAILs when something answers graphify but there is NO pinned engine…" | `Tests  1 failed \| 23 passed (24)` |
 
+- **D-1351** (2026-09-02, Task 5 review round) — **a symlink whose TARGET is a console-script shim —
+  the commonest real state this step exists to fix — took the replace arm by accident, pinned by
+  nothing.** `pipx install graphify` leaves `~/.local/bin/graphify -> ~/.local/pipx/venvs/graphify/bin/graphify`.
+  That link resolves fine and is not the venv, so no link arm answers it: `[ -f ]` and both content
+  probes FOLLOW the link, it reads as a shim, and it is replaced. That verdict is defensible — content
+  proves what the thing is, and being reached through a link does not make it the operator's
+  hand-written launcher — but no fixture planted the state, so the behaviour was unspecified and could
+  have flipped silently in either direction, while the header comment's "REFUSE anything else" and the
+  neighbouring test title read as though no foreign symlink is ever touched. Shipped: a fixture that
+  plants exactly that pipx shape and asserts the verdict, including the two surprising consequences —
+  `cp -p` DEREFERENCES, so the keep-aside is a regular-file copy of the shim rather than a copy of the
+  link, and the pipx-owned file at the far end is left untouched. The header comment now states the
+  rule ("content decides, and it decides through a link too") and the sibling test's title is narrowed
+  to `REFUSES a symlink at a NON-SHIM engine`, which is all its `#!/bin/sh` fixture ever pinned.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `if [ -f "$gpath" ] && [ -r "$gpath" ]` → `if [ ! -L "$gpath" ] && [ -f "$gpath" ] && [ -r "$gpath" ]` (links refused instead of judged by content) | `ccrc-install-graphify` — "REPLACES a shim reached THROUGH a symlink, and orphans nothing (D-1351)" | `Tests  2 failed \| 37 passed (39)` (the second is D-1352's case, measured on the same run before its arm was re-applied) |
+
+- **D-1352** (2026-09-02, Task 5 review round) — **the arm that stopped overloading EMPTY then printed
+  a cause it never measured.** D-1348's new arm said `is a symlink this box cannot resolve (its
+  readlink has no -f)`. EMPTY from `readlink -f` is itself overloaded across at least two conditions:
+  a userland without `-f`, and a chain the tool cannot walk. Measured with GNU coreutils 9.4 on the
+  box this was written on: `ln -s /gone/deeper/bin/graphify x; readlink -f x` exits 1 printing
+  nothing, because `-f` requires every component but the last to exist. So an operator whose coreutils
+  is perfectly capable — after an ordinary `pipx uninstall graphify` — was told their readlink was the
+  problem. Same defect class as the commit it shipped in, one message over. Shipped: the
+  distinguishable half is MEASURED FIRST, mirroring what `_check_graphify-path` does with
+  `[ ! -e "$engine" ]` — `elif [ -L "$gpath" ] && [ ! -e "$gpath" ]` gets its own sentence naming the
+  target it read with a plain one-hop `readlink` — and what remains states only what it measured, the
+  way `_inst_graph_always_on_off` (`ccd/ccrc`) has always said it, with no cause claimed. The new arm
+  also catches the shape whose parents DO exist, which resolved non-empty and used to fall through to
+  the not-a-shim refusal; both routes are planted by the fixture.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `elif [ -L "$gpath" ] && [ ! -e "$gpath" ]` → `elif false` (the broken-link arm deleted) | `ccrc-install-graphify` — "names a BROKEN link for what it measured — not for a cause it guessed (D-1352)" | `Tests  1 failed \| 38 passed (39)` |
+  | `elif [ -L "$gpath" ] && { [ -z "$gnow" ] \|\| [ -z "$gwant" ]; }` → `elif false` (D-1348's arm, re-measured after the message change) | `ccrc-install-graphify` — "LEAVES a link this box cannot resolve in place, degraded — empty is not \"equal\"" | `Tests  1 failed \| 38 passed (39)` |
+
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

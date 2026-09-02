@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync, lstatSync, realpathSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, lstatSync, realpathSync, readlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1056,10 +1056,51 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
       'a converged link was backed up as if it had been replaced').toEqual([]);
   });
 
-  it('REFUSES a symlink that resolves OUTSIDE the venv — the state the no-op arm used to swallow', () => {
-    // A moved venv, a pipx install, a link an older layout wrote: the file is
-    // a SYMLINK, so the arm that judges links is the one that answers, and
-    // what it points at is a real engine that is not the pinned one. Before
+  it('REPLACES a shim reached THROUGH a symlink, and orphans nothing (D-1351)', () => {
+    // THE COMMONEST REAL STATE, and the one no fixture reached: a box that ran
+    // `pipx install graphify` has a LINK on PATH pointing into a pipx venv,
+    // and the file at the end of it is a console-script shim. "Symlink" is not
+    // a verdict — this one resolves fine and is not the pinned venv, so the
+    // content probes answer it, following the link exactly as `[ -f ]` does.
+    // The arm that runs is REPLACE-with-backup, deliberately: content proves
+    // what the thing is, and being reached through a link does not make it the
+    // operator's hand-written launcher. Two consequences are pinned here
+    // because they are surprising and were previously unspecified — `cp -p`
+    // DEREFERENCES, so the keep-aside is a regular-file copy of the shim
+    // rather than a copy of the link, and the pipx-owned file the link pointed
+    // at is left untouched where it lies.
+    const home = freshBox('ccrc-inst-gfx-path-linkshim-');
+    plantFakeVenv(home);
+    const pipx = join(home, '.local', 'pipx', 'venvs', 'graphify', 'bin');
+    mkdirSync(pipx, { recursive: true });
+    writeFileSync(join(pipx, 'graphify'), SHIM, { mode: 0o755 });
+    rmSync(link(home), { force: true });
+    symlinkSync(join(pipx, 'graphify'), link(home));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/was a pip console-script shim -> repointed at the pinned venv/);
+    expect(realpathSync(link(home)), 'a shim behind a link was not repointed')
+      .toBe(realpathSync(venv(home)));
+    const backups = readdirSync(join(home, '.local', 'bin'))
+      .filter((f) => f.startsWith('graphify.pre-ccrc-'));
+    expect(backups.length, 'the shim behind the link was replaced with no copy kept').toBe(1);
+    const bak = join(home, '.local', 'bin', backups[0]!);
+    expect(lstatSync(bak).isSymbolicLink(), 'the keep-aside is documented as a dereferenced COPY')
+      .toBe(false);
+    expect(readFileSync(bak, 'utf8')).toBe(SHIM);
+    // The pipx install itself is somebody else's tree: ccrc unlinked its own
+    // `$HOME/.local/bin` entry and touched nothing at the far end.
+    expect(readFileSync(join(pipx, 'graphify'), 'utf8'), "a file outside ccrc's own bin was altered")
+      .toBe(SHIM);
+  });
+
+  it('REFUSES a symlink at a NON-SHIM engine — the state the no-op arm used to swallow', () => {
+    // A moved venv, an older layout's link, anything whose target is a real
+    // engine that is NOT a console-script shim: the file is a SYMLINK, so the
+    // arm that judges links is the one that answers, and what it points at is
+    // an engine that is not the pinned one. (A link whose target IS a shim
+    // takes the replace arm instead — the case above; the fixture here plants
+    // a `#!/bin/sh` launcher precisely so the content probes say no.) Before
     // D-1348 no fixture in this suite ever planted this state — the four it
     // planted were absent, a pip shim, a link INTO the venv, and a
     // hand-written launcher — so the resolution comparison, the whole
@@ -1116,6 +1157,39 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
     expect(r.stderr).toMatch(/is a symlink this box cannot resolve/);
     expect(r.stdout).toMatch(/degraded step/);
     expect(realpathSync(link(home))).toBe(realpathSync(join(stale, 'graphify')));
+  });
+
+  it('names a BROKEN link for what it measured — not for a cause it guessed (D-1352)', () => {
+    // EMPTY FROM `readlink -f` IS ITSELF OVERLOADED. Measured with GNU
+    // coreutils 9.4 on the box this was written on: `ln -s
+    // /gone/deeper/bin/graphify x; readlink -f x` exits 1 printing nothing,
+    // because `-f` requires every component but the last to exist. So a
+    // perfectly capable userland reaches the empty that the "cannot resolve"
+    // arm answers — and that arm's first cut told the operator their readlink
+    // had no `-f`. The real trigger is ordinary: `pipx uninstall graphify`
+    // leaves exactly this link behind. Both shapes are planted, because they
+    // take different routes to the same arm and only the arm makes them agree:
+    // parents GONE (`readlink -f` empty, would otherwise hit "cannot resolve")
+    // and parents PRESENT (`readlink -f` answers a path, so the comparison is
+    // unequal and it would otherwise fall through to the not-a-shim refusal).
+    for (const [tag, mkdirParent] of [['gone', false], ['present', true]] as const) {
+      const home = freshBox(`ccrc-inst-gfx-path-dangling-${tag}-`);
+      plantFakeVenv(home);
+      const target = join(home, '.local', 'pipx', 'venvs', 'graphify', 'bin', 'graphify');
+      if (mkdirParent) mkdirSync(dirname(target), { recursive: true });
+      rmSync(link(home), { force: true });
+      symlinkSync(target, link(home));
+      const r = runInstall(home, ['install']);
+      expect(r.stderr, `${tag}: a broken link was not named as one`)
+        .toMatch(/is a symlink whose target this box cannot reach/);
+      expect(r.stderr, `${tag}: the target it read is not in the message`).toContain(target);
+      expect(r.stderr, `${tag}: a cause nothing measured was asserted`)
+        .not.toMatch(/readlink has no/);
+      expect(r.stdout).toMatch(/degraded step/);
+      expect(lstatSync(link(home)).isSymbolicLink(), `${tag}: the link was not left in place`)
+        .toBe(true);
+      expect(readlinkSync(link(home)), `${tag}: the link was repointed`).toBe(target);
+    }
   });
 
   it('REFUSES a hand-written launcher with a remedy, and does not fail the install', () => {

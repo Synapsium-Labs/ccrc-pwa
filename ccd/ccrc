@@ -5055,6 +5055,21 @@ _inst_graphify_engine() {
   # the operator's, a link this box cannot resolve is unmeasured, and this step
   # has no `--force` for anyone to type.
   #
+  # CONTENT DECIDES, AND IT DECIDES THROUGH A LINK TOO (D-1351). "Symlink" is
+  # not a verdict here — only three link SHAPES get answered as links: one that
+  # resolves into the venv (converged), one whose target cannot be reached
+  # (`-e` false: left in place), and one neither resolution could be measured
+  # for (left in place). Everything else is judged by what is at the end of the
+  # link, because `[ -f ]` and the two content probes follow it: so
+  # `~/.local/bin/graphify -> ~/.local/pipx/venvs/graphify/bin/graphify`, the
+  # single commonest state on a box that ever ran `pipx install graphify`, is a
+  # SHIM by content and is replaced like any other shim. Two consequences worth
+  # saying out loud, both pinned by the suite: the keep-aside `cp -p` cuts is a
+  # DEREFERENCED regular-file copy of the shim, not a copy of the link, and the
+  # pipx-owned file the link pointed at is left exactly where it was — ccrc
+  # unlinks its own `$HOME/.local/bin` entry and touches nothing it did not
+  # find there.
+  #
   # ONE PATH ONLY: `$HOME/.local/bin`. The root-owned copy a shared box may
   # carry higher up the system tree is an unprivileged install's business
   # nowhere — the header above this function already says why — and it is not
@@ -5091,6 +5106,21 @@ _inst_graphify_engine() {
   # doctor SKIPs and names the missing tool (D-1350). If either ever falls back
   # to the raw path instead, the two halves start disagreeing about a box
   # neither of them measured.
+  #
+  # AND EMPTY IS ITSELF OVERLOADED (D-1352). `readlink -f` answers empty for a
+  # userland that has no `-f` AND for a chain it cannot walk — measured with
+  # GNU coreutils 9.4: a link at `/gone/deeper/bin/graphify` exits 1 with no
+  # output, because `-f` requires every component but the last to exist. The
+  # first cut of this arm printed "(its readlink has no -f)" as the cause,
+  # which is one of the two, picked and stated as fact — the same overloaded
+  # null one paragraph up, moved into the sentence describing it. So the
+  # distinguishable half is MEASURED FIRST, the way `_check_graphify-path`
+  # measures a missing engine with `[ ! -e ]` before it compares anything: a
+  # link whose target cannot be reached gets its own arm and its own sentence,
+  # naming the target it read with a plain one-hop `readlink`. What is left
+  # after that arm — no `-f`, or something rarer — is named for what was
+  # measured and nothing else, exactly as `_inst_graph_always_on_off` says it
+  # ("is a symlink this box cannot resolve", no cause claimed).
   if [ -L "$gpath" ]; then
     gnow="$(readlink -f "$gpath" 2>/dev/null)" || gnow=""
     gwant="$(readlink -f "$gvenv" 2>/dev/null)" || gwant=""
@@ -5098,8 +5128,11 @@ _inst_graphify_engine() {
   if ! mkdir -p "$HOME/.local/bin" 2>/dev/null; then
     echo "install: graphify: cannot create \$HOME/.local/bin — bare 'graphify' still resolves to whatever is on PATH" >&2
     INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && [ ! -e "$gpath" ]; then
+    echo "install: graphify: $gpath is a symlink whose target this box cannot reach — it points at $(readlink "$gpath" 2>/dev/null), and nothing there answers. Left in place. Remedy: inspect it (ls -l \"$gpath\"), and if you want ccrc's pinned engine on PATH, move it aside and re-run" >&2
+    INST_DEGRADED+=(graphify-path)
   elif [ -L "$gpath" ] && { [ -z "$gnow" ] || [ -z "$gwant" ]; }; then
-    echo "install: graphify: $gpath is a symlink this box cannot resolve (its readlink has no -f) — left in place rather than judged unmeasured. Remedy: inspect it (ls -l \"$gpath\"), and if it is not the pinned engine, move it aside and re-run" >&2
+    echo "install: graphify: $gpath is a symlink this box cannot resolve — left in place rather than judged unmeasured. Remedy: inspect it (ls -l \"$gpath\"), and if it is not the pinned engine, move it aside and re-run" >&2
     INST_DEGRADED+=(graphify-path)
   elif [ -L "$gpath" ] && [ "$gnow" = "$gwant" ]; then
     echo "install: graphify: graphify on \$PATH already points at the pinned venv"
