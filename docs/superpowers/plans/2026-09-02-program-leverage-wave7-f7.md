@@ -1479,7 +1479,14 @@ the review found two more of it.
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
 the FIRST failing assertion verbatim, reverting, and confirming `git status --porcelain` is clean.
-Written as each guard lands, never at the end. A row that comes back GREEN is a hole, not a pass.
+Written as each guard lands, never at the end. A row that comes back GREEN is a hole, not a pass — four
+did, and each one is named in the deviation it produced (D-1306, D-1312 twice, D-1316).
+
+The rows are in landing order: Tasks 1–10 first, then the review round from
+`restore MIN(COALESCE(...))` onward. **Counted twice by independent methods, and they agree at 33** —
+structurally (data rows under the header) and by outcome-classification (rows whose second cell quotes a
+verbatim failure). A section-marker row made those two disagree at 34/33 on the first count, which is
+what counting twice is for.
 
 | mutation | first-fail assertion | suite |
 | --- | --- | --- |
@@ -1506,7 +1513,6 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | `capsUpdatedAt` returns migration 1's seeded `0` instead of null | `AssertionError: expected +0 to be null` | server `coord-caps-route` |
 | `gate.ts`'s docstring goes back to "all 55 routes" | `AssertionError: gate.ts claims a route count this tree does not derive: expected [ 55 ] to deeply equal [ 68 ]` | server `auth-gate` |
 | drop `undispatched` from the un-briefed condition — spec §9's middle clause (D-1307) | `AssertionError: a dispatched run was called never-briefed: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |
-| _the review round (D-1308..D-1315) — every row below re-measured after the fix_ | | |
 | restore `MIN(COALESCE(d.ingestedAt, d.deliveredAt, m.at))` on the kickoff clock (D-1308) | `AssertionError: the clock slid forward with deliveredAt — the age can never reach the threshold: expected 15001000 to be 1000` | server `coord-health` |
 | `healthFor` supplies no coordinator ids (`const coords: string[] = []`) — **measured GREEN across 6295 tests before D-1312's test existed** | `AssertionError: runs() never told runHealth who the coordinator is: expected null to be 4000` | server `coord-health` |
 | delete `lastOrphanReport`'s dedupe condition — **measured GREEN in every suite before D-1312's test existed** | `AssertionError: an unchanged orphan set was reported twice: expected "warn" to be called 1 times, but got 2 times` | server `ledger-sweep` |
