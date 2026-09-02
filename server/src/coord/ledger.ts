@@ -127,8 +127,14 @@ export const LEDGER_ALLOCATOR_ERA = 211;
  *
  * LOOSER, TWICE:
  *  - `ENTRY` demands `[^—\n]*—\s*(.+)$` — a subject after an em-dash ON THE SAME
- *    LINE — so it cannot see build 9b's colon form (`- **D-211** (Task 3): …`) or a
- *    subject that wraps onto the next line. D-1158 is one of those, and it is the
+ *    LINE — so it cannot see the colon form (`- **D-190** (Task 1): …`,
+ *    `2026-08-23-stage5-oss-polish.md:430`, and D-189/191/192/193/194/195 beside
+ *    it) or a subject that wraps onto the next line. This exemplar was
+ *    `- **D-211** (Task 3): …` for two waves and D-211 IS NOT THE COLON FORM
+ *    (D-1329) — `2026-08-24-build9b-peers-claims-allocator.md:72` writes it with
+ *    an em-dash, which `ENTRY` sees perfectly well. `deviation-refs.test.ts`'s own
+ *    corpus table had that line pinned as an em-dash definition the whole time,
+ *    so the docstring was refuted by a test in the same change that wrote it. D-1158 is one of those, and it is the
  *    half of the first collision incident that would have stayed invisible even in
  *    a fully merged tree.
  *  - The BARE-BOLD entry — `**D-297 — subject**` with no list bullet — which build
@@ -155,12 +161,20 @@ export const LEDGER_ALLOCATOR_ERA = 211;
  * em-dash, a `(`, or a `:`. The three bare arms (` —`, ` (`, `:`) are unchanged.
  *
  * Measured over the plans `plansAt` feeds this, at HEAD and at `origin/main`
- * alike: eighteen prefix-shaped lines are dropped by the lookahead and every one
- * is a citation; no line the previous shape called a definition stops being one;
- * and the widened prefix adds twenty-four bare-bold entries. The guard's own
- * output is unmoved where it counts — zero allocator-era cross-tree collisions
- * before and after, and no change at all below the era, so `GRANDFATHERED` (which
- * may only SHRINK) does not have to grow.
+ * alike: every prefix-shaped line the lookahead drops is a citation; no line the
+ * previous shape called a definition stops being one; and the widened prefix adds
+ * the bare-bold entries named above. NO COUNTS (D-1328) — the first version of
+ * this paragraph gave two, both true the day they were written and neither
+ * pinned, so appending one citation line to any plan would have made them false
+ * with every suite still green. That is D-1320's own defect, one paragraph below
+ * the sentence that states it; the counts live in the plan, where a snapshot is
+ * what a document is for. What is asserted here is a PROPERTY, and
+ * `ledger-crosstree.test.ts` and `deviation-refs.test.ts` between them hold a
+ * fixture or a corpus row for each shape named.
+ *
+ * The guard's own output is unmoved where it counts — zero allocator-era
+ * cross-tree collisions before and after, and no change at all below the era, so
+ * `GRANDFATHERED` (which may only SHRINK) does not have to grow.
  *
  * The dotted-sub-entry lookahead is kept exactly as `ENTRY` has it: `D-310.1`
  * CITES `D-310`, it does not define it. The lettered form (`D-155-a`) falls out
@@ -170,14 +184,42 @@ const DEFINITION = /^(?:#{2,4} |- \*\*|\*\*)D-(\d+)\b(?!\.\d)(?=\*\*\s*(?:—|\(
 
 /** A fenced-code delimiter: up to three spaces of indent, then a run of three or
  *  more backticks or tildes. Captured as the RUN, because a fence closes only on
- *  the same character at the same length or longer — which is how a ```` block
- *  can quote a ``` block, and this corpus has one
- *  (`2026-08-28-program-leverage-wave1-f1.md:216`). Parity counting gets that
- *  case backwards: it opens at the outer fence, closes at the FIRST inner one,
- *  and reads the quoted block's middle as ordinary prose. Nothing
- *  definition-shaped sits there today, which is precisely why it is worth fixing
- *  now rather than after it does. */
+ *  the same character at the same length or longer — which is how a four-backtick
+ *  block can quote a three-backtick one.
+ *
+ *  THE EXEMPLAR THIS DOCSTRING FIRST GAVE WAS INVENTED (D-1326).
+ *  `2026-08-28-program-leverage-wave1-f1.md:216` was named as a corpus instance
+ *  "copied from the corpus, not invented"; measured, its four-backtick block
+ *  (216–338) contains ZERO fence runs at all, and the file says why at :212 —
+ *  "Indented code blocks, not fences". The shape IS in this repo —
+ *  `2026-08-08-build7-surfaces.md:408`, inner fences at 429/432 and 460/465 — but
+ *  that file is in `LEGACY_PER_PLAN_LEDGERS`, so `plansAt` never feeds it to this
+ *  guard. The nesting fixture is therefore CONSTRUCTED, deliberately, and saying
+ *  so is the point: the behaviour was always right and red-on-mutation, and only
+ *  the provenance lied. A true guard sold with a false measurement is this wave's
+ *  own recurring class. */
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+
+/** Whether a fence-shaped line really OPENS a block.
+ *
+ *  A backtick fence's info string may not contain a backtick (CommonMark 4.5),
+ *  because that spelling is a code SPAN, not a fence — and this repo's prose
+ *  writes exactly that at the start of a line when it names a file:
+ *  ``` ```coordinator-paused``` is a FILE, not a flag. ```
+ *
+ *  Without this the line opened a block, a later bare fence closed it, and every
+ *  definition in between vanished with `open` back to null at EOF — so the
+ *  whole-file arm below never fired and the guard went QUIET (D-1327). Driven end
+ *  to end: two such prose lines in one file are enough, and both are real names in
+ *  this project. Zero instances in `docs/` today, so this is potential rather than
+ *  live; a silent miss in a collision guard is what the next paragraph's own
+ *  invariant forbids, which is why potential is enough.
+ *
+ *  Tilde fences are unaffected — a `~~~` info string may contain backticks. */
+function opensFence(line: string, run: string): boolean {
+  if (run[0] !== '`') return true;
+  return !line.slice(line.indexOf(run) + run.length).includes('`');
+}
 
 /** The lines of a file that sit INSIDE a fenced block, or `null` when the file
  *  ends with a fence still open — the ambiguous case, which the caller resolves
@@ -188,12 +230,13 @@ function fencedLines(lines: readonly string[]): Set<number> | null {
   for (let i = 0; i < lines.length; i++) {
     const m = FENCE.exec(lines[i]!);
     if (open === null) {
-      if (m) { open = m[1]!; inside.add(i); }
+      if (m && opensFence(lines[i]!, m[1]!)) { open = m[1]!; inside.add(i); }
       continue;
     }
     inside.add(i);
     // A closing fence is the same character, at least as long, and carries no
-    // info string — `~~~` never closes ```` ``` ````, and ``` never closes ````.
+    // info string at all — a tilde run never closes a backtick block, and a
+    // shorter run never closes a longer one.
     if (m && m[1]![0] === open[0] && m[1]!.length >= open.length &&
         lines[i]!.slice(lines[i]!.indexOf(m[1]!) + m[1]!.length).trim() === '') {
       open = null;

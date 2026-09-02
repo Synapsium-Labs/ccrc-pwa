@@ -42,8 +42,10 @@ from origin; the program ledger on that ref carries this wave's brief and wave 6
   TDD red-first. Rows carry **suite / mutation / verbatim first-fail**, written AS YOU GO, and the
   table is counted twice by independent methods. A row that comes back GREEN is a hole, not a pass.
 - **Deviations:** allocated from `~/.local/bin/ccrc-api ledger allocate` with `byId`, floor read from
-  the allocator and never from a document, **allocated and defined in the same act**. This wave holds
-  **D-1293..D-1305**. Never predict or reuse a number.
+  the allocator and never from a document, **allocated and defined in the same act**. This wave's
+  numbers are listed per section below, taken from the allocator rather than restated here — a
+  standing range at the top of a plan is a cardinal that goes stale on the next act, which is what it
+  did (D-1331). Never predict or reuse a number.
 - **Suites:** `./node_modules/.bin/vitest run` from inside the package, FOREGROUND, timeout ≥600000ms,
   tails READ not grepped. Never bare `npx vitest`. All three packages installed or `typecheck-tests`
   reports spurious failures.
@@ -1110,17 +1112,24 @@ wave changes the coordinator's deploy lane.
 
 | package | before (2026-09-02 05:07 UTC) | after the wave | after the fix round |
 |---|---|---|---|
-| server | 248 files, 6248 passed, 56 skipped | 250 files, **6313** passed, 56 skipped | **250 files, 6345 passed, 56 skipped** |
+| server | 248 files, 6248 passed, 56 skipped | 250 files, **6313** passed, 56 skipped | **250 files, 6348 passed, 56 skipped** |
 | agent | (unchanged lane) | 18 files, 281 passed | **18 files, 281 passed** |
 | pwa | 2106 passed (78 files; derived — 2120 less this wave's 14 new cases) | 2120 passed | **78 files, 2120 passed** + `npm run build` produces `server/dist-pwa/index.html` |
 
 The wave's server figure was written here as **6304** and reported to the coordinator as **6313**; the
-review caught the disagreement (D-1324). 6313 is the true one, and it is now derived rather than
-recalled: the fix round measured **6332 before merging main** and added exactly nineteen cases
-(`single-definition` 100→101, `coord-health` 20→23, `ledger-crosstree` 19→25, `deviation-refs` 17→26),
-each count taken from that suite's own run in this round. 6332 − 19 = 6313. The **6345** in the table is
-the same tree with `origin/main` at `651f40c5` merged in (PR #44 brings eleven cases) plus the two the
-fence-nesting fix added afterwards — two numbers for two trees, said as two numbers, because that is the
+review caught the disagreement (D-1324). 6313 is the true one, and the derivation is now MEASURED
+end to end: the fix round measured **6332 before merging main** and added exactly nineteen cases.
+Per-suite, run in a detached worktree at `ed81ad85` against this round's own numbers —
+`single-definition` **100→101**, `coord-health` **20→23**, `ledger-crosstree` **20→25**,
+`deviation-refs` **16→26** (+1, +3, +5, +10 = 19). 6332 − 19 = 6313.
+**The first version of this sentence gave two of those four "before" counts as 19 and 17 (D-1330).**
+The total and the conclusion survive — the two errors are equal and opposite — but 19 was never
+`ledger-crosstree`'s count at any commit in this wave and 17 was never `deviation-refs`'s, so those two
+addends cannot have come from a run: they were split out of a combined 36 by arithmetic and written
+down as if measured. A paragraph whose own subject is "derived rather than recalled" was half recalled.
+The four above come from `vitest run` at `ed81ad85` in a detached worktree, one suite per invocation. The **6348** in the table is
+the same tree with `origin/main` at `651f40c5` merged in (PR #44 brings eleven cases) plus the five the
+fence-nesting fix and the final round added afterwards — two numbers for two trees, said as two numbers, because that is the
 distinction the first version of this paragraph collapsed.
 
 `tsc --noEmit` clean in all three packages. Two new server suites (`coord-health`, `ledger-crosstree`)
@@ -1140,8 +1149,8 @@ both unmoved.
 `byId` set, in seven acts (12 + 1 + 1 + 1 + 8 + 1 + 1), each immediately before the entry defining it, so
 the allocate→define window that fired three times in this program is never open here. Verified at close,
 in both directions: **25 allocated, 25 defined, zero allocated-but-undefined, zero
-defined-but-not-allocated to this session.** (The fix round adds D-1318..D-1324; its own count is at the
-bottom of this record.)
+defined-but-not-allocated to this session.** (The fix rounds add D-1318..D-1325 and D-1326..D-1331; each
+section below states its own range and act structure, taken from the allocator.)
 
 **The review round.** Nine adversarial lenses over the branch diff, then a refute-default verification
 pass — eighteen agents, every mutation run in a throwaway worktree and never in this one. It found four
@@ -1612,11 +1621,12 @@ document — the wave's own D-1317 is why.
   "renumber NOW" firing on a quotation. Measured first — **zero lines in the corpus are affected
   today**, so this is a shape plans are about to write rather than one they already have, which is
   exactly why a fixture and not a corpus count is the right pin.
-  **The first fix was parity counting, and self-review found it wrong on a shape the corpus already
-  holds.** `2026-08-28-program-leverage-wave1-f1.md:216` is a four-backtick block quoting two
-  three-backtick blocks; parity opens on the outer fence, closes on the FIRST inner one, and reads the
-  quoted block's middle as ordinary prose. Nothing definition-shaped sits there today — which is exactly
-  the "incidentally correct" this wave keeps finding, so it is fixed now rather than after it matters.
+  **The first fix was parity counting, and self-review found it wrong** — parity opens on the outer
+  fence, closes on the FIRST inner one, and reads the quoted block's middle as ordinary prose. **The
+  corpus instance that self-review claimed was INVENTED; see D-1326.** The shape is real
+  (`2026-08-08-build7-surfaces.md:408`) but lives in a file `plansAt` excludes, so it is fixed on the
+  strength of the class rather than of an instance the guard can reach — which is a good enough reason,
+  and the only honest one.
   A fence now closes only on the same character, at the same length or longer, with no info string after
   it, which is CommonMark's own rule and the reason a longer fence can quote a shorter one.
   The other half is the failure mode of the fix: a file that **ends with a fence still open** is scanned
@@ -1672,6 +1682,107 @@ technicality. It goes to wave 8, which is already AGENT-FIRST. The part flagged 
 discover: **a caller whose lookup fails, and a caller that is not a session at all, must not silently
 send an empty `byId`** — that recreates the hole quietly, which is precisely what D-1301 measured.
 
+## Deviations found — the coordinator's final round
+
+Mail 196 verified all six ruled items with eight agents and an adversarial second pass, then returned
+six more: **five prose falsehoods of the class the previous round was sent back for — one of them
+D-1324 recurring inside D-1324's own fix — and one real silent miss in the fence fix.** The
+coordinator committed in advance to merging when these land, and was right to send them: a must-fix
+ruling that tolerates five recurrences of its own class is advisory.
+
+Numbers **D-1326..D-1331**, allocated from `POST /api/ledger/deviations` with `byId` set, in one act of
+six. **The refs for D-1326 and D-1327 were written into `ledger.ts` BEFORE the allocate call
+returned** — the floor happened to be 1326 and nobody raced it, but that is luck, not the discipline,
+and the discipline is the whole subject of this wave. Recorded rather than smoothed over.
+
+- **D-1326** (2026-09-02, MUST-FIX — a true guard sold with a false measurement) — **the nested-fence
+  exemplar was invented, and it shipped in three places.** D-1323's fix asserted that
+  `2026-08-28-program-leverage-wave1-f1.md:216` is "a four-backtick block quoting two three-backtick
+  blocks — so the case is copied from the corpus, not invented". Measured: that block runs 216–338 and
+  contains **zero** fence runs of any length, and the file states why at :212 — *"Indented code blocks,
+  not fences"*. The false claim stood at `ledger.ts`'s `FENCE` docstring, at
+  `ledger-crosstree.test.ts`'s nesting case, and in this plan.
+  **How I produced it:** `sed -n '216,338p' … | grep -c '^```'` returned 2, and I read that as
+  two inner fences. The range is inclusive, so what it counted was the outer block's own two
+  delimiters. A count that includes its own endpoints is the oldest arithmetic error there is, and it
+  was enough to turn a constructed fixture into a claimed corpus instance.
+  The shape IS real: `2026-08-08-build7-surfaces.md:408`, inner fences at 429/432 and 460/465 — but
+  that file is in `LEGACY_PER_PLAN_LEDGERS`, so `plansAt` never feeds it to this guard. All three
+  sites now say the fixture is constructed and why, which is the honest version and a better argument:
+  the class is real, the corpus this guard reads excludes the instance, and the behaviour was correct
+  and red-on-mutation throughout. **Only the provenance lied** — which is exactly this wave's
+  recurring class, arriving one more time in the fix for its own previous instance.
+  Recorded here too, at the reviewer's request: **the widened bare-bold prefix they handed me opens a
+  small new false-positive class their eleven shapes did not cover.** Theirs to own, carried to wave 8.
+
+- **D-1327** (2026-09-02, MUST-FIX and the round's only code item — the fence fix's own silent miss) —
+  **a line-initial code SPAN opened a fenced block, and a later bare fence closed it.** A backtick
+  fence's info string may not contain a backtick (CommonMark 4.5): that spelling is a code span. This
+  repo's prose writes exactly it when naming a file, and both names in the reproduction are real ones
+  from this project. With two such lines in a file the parity works out, `open` is back to null at EOF,
+  **the whole-file fail-loud arm never fires**, and every definition between them is dropped in
+  silence — which is precisely what the shipped docstring's own invariant forbids (*"a guard going
+  quiet is a worse failure than a guard being noisy"*). Driven end to end: the same number defined on
+  both sides, one behind a span, and `crossTreeCollisions` returned `[]`. Zero instances in `docs/`
+  today, so potential rather than live; a collision guard that can go quiet is worth closing on
+  potential. Fixed with `opensFence`, which rejects only a BACKTICK fence whose info string contains a
+  backtick — tilde fences may hold them and are untouched, and that has its own case so the rule cannot
+  be satisfied by never opening anything.
+  **The fixture took three measurements to get right, and that is the part worth reading.** Two drafts
+  appended a real fenced block after the spans; that leaves an odd fence line at EOF, the fail-loud arm
+  rescues the file, and the mutation reds for OVER-reporting (`expected [ 1400, 1402, 1401 ] to deeply
+  equal [ 1400, 1401 ]`) — a red for the wrong reason, about a direction this rule is not for. One
+  fence line's parity separates a fixture that demonstrates the finding from one that merely fails.
+  Both shapes were measured, and the comment in the test now carries the difference.
+  **And the fixture's own numbers tripped a different guard**, which is worth the line. They sit above
+  the ledger high-water, and spelled contiguously they made `deviation-refs.test.ts`'s floor scan red:
+  *"a tracked file names a global D-ref above the ledger high-water … spell a fixture SPLIT
+  ('D-' + '9876'), never contiguous, or the first live seed lands there forever"*. Its own message is
+  the remedy, and the fixtures now build their numbers split. It fired a SECOND time, on this very
+  paragraph, when the first draft of it quoted them contiguously to explain the first failure — so the
+  sentence describes them instead. A guard whose failure text tells you what to do next caught two
+  mistakes in the guard being written beside it.
+
+- **D-1328** (2026-09-02, MUST-FIX — two fresh unpinned cardinals in the docstring whose subject is
+  stale cardinals) — D-1320 removed two; the same rewrite added *"eighteen prefix-shaped lines are
+  dropped"* and *"adds twenty-four bare-bold entries"* one paragraph below the sentence forbidding
+  exactly that. Both true when written, neither pinned: appending one citation line to any plan makes
+  "eighteen" read nineteen with `ledger-crosstree` and `deviation-refs` both still green. Dropped
+  rather than pinned, and the choice is the argument D-1320 started: a pinned count is a suite that
+  reds on an unrelated plan's prose, so the docstring asserts a PROPERTY (every dropped line is a
+  citation; no previously-recognised line stops being one) and the counts live in this plan, where a
+  dated snapshot is what a document is for. Every shape the paragraph names has a fixture or a corpus
+  row behind it.
+
+- **D-1329** (2026-09-02, MUST-FIX — an exemplar refuted by a test in the same change that wrote it) —
+  **`- **D-211** (Task 3): …` was offered as "build 9b's colon form" and D-211 is not the colon form.**
+  `2026-08-24-build9b-peers-claims-allocator.md:72` writes it with an EM-DASH, which `ENTRY` sees
+  perfectly well, so the exemplar undercut the very sentence it illustrated. `deviation-refs.test.ts`'s
+  own corpus table carried that line pinned as an em-dash definition the whole time — the docstring was
+  contradicted by a test in the same commit. The CLASS is true and colon-form entries are real:
+  `2026-08-23-stage5-oss-polish.md:430` (`- **D-190** (Task 1): …`) and D-189/191/192/193/194/195
+  beside it, one of which the corpus table already pins. The paragraph keeps its point and gains a true
+  example.
+
+- **D-1330** (2026-09-02, MUST-FIX — "derived rather than recalled" was half recalled) — **two of the
+  four per-suite before-counts in the Execution record were arithmetic, not measurement.** The record
+  gave `ledger-crosstree` 19 and `deviation-refs` 17; measured at `ed81ad85` in a detached worktree,
+  one suite per invocation, they are **20 and 16**. Neither 19 nor 17 was that suite's count at any
+  commit in this wave: a combined run of 36 was split into a plausible pair and written down as if each
+  half had been observed. The two errors are equal and opposite, so the total 19 and the conclusion
+  6332 − 19 = 6313 both survive — which is what makes it worth recording rather than quietly fixing,
+  because a wrong addend that cancels is a wrong addend nobody would ever have found from the result.
+  The paragraph now carries four measured numbers and says the correction happened.
+
+- **D-1331** (2026-09-02, MUST-FIX — three stale ranges, one of them D-1324's own title recurring
+  inside D-1324's fix) — the Execution record said the fix round "adds **D-1318..D-1324**" while its
+  own section header said D-1318..D-1325 and the allocator held 7+1; the plan's Global Constraints said
+  "this wave holds **D-1293..D-1305**"; and M3's replacement prose said the closed-run filter is
+  "**forty-four lines above**" where it is forty-six. All three are the same defect: a cardinal
+  restated in a second place, going stale the moment the first place moves. **Deleted rather than
+  corrected**, in all three cases — the ranges now live once per section and are read from the
+  allocator, and a line distance is a number nothing derives, so the comment names the guard instead.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
@@ -1680,11 +1791,16 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 did, and each one is named in the deviation it produced (D-1306, D-1312 twice, D-1316).
 
 The rows are in landing order: Tasks 1–10 first, then the wave's own review round from
-`restore MIN(COALESCE(...))` onward, then the coordinator's fix round from `narrow statement (4)`
-onward. **Counted twice by independent methods, and they agree at 43** — structurally (data rows under
-the header) and by outcome-classification (rows whose second cell quotes a verbatim failure). A
-section-marker row made those two disagree at 34/33 on the first count, so the fix round's rows carry
-no marker either: the count is the thing that has to survive, not the sub-heading.
+`restore MIN(COALESCE(...))` onward, the coordinator's fix round from `narrow statement (4)` onward,
+and the final round from `delete the opening info-string rule` onward. **Counted twice by independent
+methods, and they agree at 45** — structurally (data rows under the header) and by
+outcome-classification (rows whose second cell quotes a verbatim failure). A section-marker row made
+those two disagree at 34/33 on the first count, so no later round's rows carry a marker either: the
+count is the thing that has to survive, not the sub-heading.
+
+One row in the final round — the tilde-fence one — was WRITTEN from the shape its sibling assertion
+would produce and measured afterwards. It matched verbatim, so nothing false shipped, but the order was
+wrong and this table's own rule is the order. Recorded here rather than left as a habit.
 
 | mutation | first-fail assertion | suite |
 | --- | --- | --- |
@@ -1731,3 +1847,5 @@ no marker either: the count is the thing that has to survive, not the sub-headin
 | let a never-closed fence swallow the rest of the file instead of scanning it whole (D-1323) | `AssertionError: expected [] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
 | close a fence on ANY delimiter — parity behaviour, so a four-backtick block quoting a three-backtick block ends at the inner fence (D-1323, found by self-review after the first fix landed) | `AssertionError: expected [ 1231, 1300 ] to deeply equal [ 1300 ]` | server `ledger-crosstree` |
 | drop `isRunClosed(run)` from `runWarnings` — **re-measured this round**, because D-1321 is a false claim ABOUT this guard and the guard itself had to be shown still real | `AssertionError: a done run drew a warning: expected <span class="run-warn">…(3)</span> to be null` | pwa `runs-health` |
+| delete the opening info-string rule, so a line-initial code SPAN opens a block and the miss goes SILENT (D-1327) | `AssertionError: expected [ 1401 ] to deeply equal [ 1400, 1401 ]`, and end to end `AssertionError: expected [] to deeply equal [ 1400 ]` | server `ledger-crosstree` |
+| apply the info-string rule to TILDE fences too, so a `~~~` block with a backticked info string never opens | `AssertionError: expected [ { file: 'a.md', n: 1400 } ] to deeply equal []` | server `ledger-crosstree` |

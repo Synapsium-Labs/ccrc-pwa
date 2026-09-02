@@ -26,6 +26,13 @@ import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra,
 
 const f = (path: string, text: string): { path: string; text: string } => ({ path, text });
 
+/** Fixture numbers, spelled SPLIT — `deviation-refs.test.ts`'s floor scan reads
+ *  every tracked file, so a contiguously-spelled fixture number above the ledger
+ *  high-water seeds the next live floor there forever. Its own failure message
+ *  prescribes this spelling; D-1327's first fixtures ignored it and reded the
+ *  floor scan, which is the guard working. */
+const D = (n: number): string => 'D-' + String(n);
+
 describe('definitionsIn — what counts as DEFINING a number', () => {
   it('reads both heading forms and the bullet form', () => {
     expect(definitionsIn([f('a.md', '### D-12 (bug) — subject')]).map((d) => d.n)).toEqual([12]);
@@ -145,13 +152,20 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
     expect(definitionsIn([f('a.md', stray)]).map((d) => d.n)).toEqual([1300]);
   });
 
-  it('lets a ```` block quote a ``` block — the shape wave 1’s plan actually holds', () => {
+  it('lets a longer fence quote a shorter one — a CONSTRUCTED case, and here is why', () => {
     // Parity counting gets this backwards: it opens on the outer fence, closes on
     // the FIRST inner one, and reads the quoted block's middle as ordinary prose.
-    // `2026-08-28-program-leverage-wave1-f1.md:216` is exactly this shape — a
-    // ````markdown block quoting two ``` blocks — so the case is copied from the
-    // corpus, not invented. A fence closes only on the same character at the same
-    // length or longer.
+    //
+    // THIS FIXTURE IS CONSTRUCTED, and the sentence that used to stand here said
+    // the opposite (D-1326). It named `2026-08-28-program-leverage-wave1-f1.md:216`
+    // as a corpus instance "copied from the corpus, not invented"; measured, that
+    // four-backtick block (216–338) contains ZERO fence runs, and the file says
+    // why at :212 — "Indented code blocks, not fences". The shape does exist in
+    // this repo — `2026-08-08-build7-surfaces.md:408`, inner fences at 429/432 and
+    // 460/465 — but that file is in LEGACY_PER_PLAN_LEDGERS, so `plansAt` never
+    // feeds it to this guard. So the shape is real, the corpus this guard reads
+    // excludes it, and the fixture is built on purpose. A fence closes only on the
+    // same character at the same length or longer.
     const nested = [
       '````markdown',
       '# a quoted document',
@@ -166,6 +180,61 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
     // …and the other character never closes it: `~~~` cannot end a ``` block, so
     // a file that tries reads as never-closed and is scanned whole.
     expect(definitionsIn([f('b.md', '```\n- **D-1231** — quoted\n~~~')]).map((d) => d.n)).toEqual([1231]);
+  });
+
+  // ── D-1327 ────────────────────────────────────────────────────────────────
+  // The fence fix's own silent miss, found by the coordinator's verification.
+  // A backtick fence's info string may not contain a backtick (CommonMark 4.5):
+  // that spelling is a code SPAN. This repo's prose writes exactly it at the
+  // start of a line when naming a file, and both names below are real.
+  //
+  // THE FIXTURE'S SHAPE IS THE FINDING, and getting it wrong TWICE is why it is
+  // spelled out here rather than left to a reader. Without the rule: the first
+  // span opens a block; the second span is NOT a close (a closing fence carries
+  // no text); the bare fence closes it — and `open` is back to null at EOF, so
+  // the whole-file fail-loud arm never fires and the entry between them is
+  // dropped IN SILENCE. That is the finding.
+  //
+  // Two earlier drafts of this fixture appended a real fenced block after the
+  // spans. That leaves an odd fence line at EOF, the fail-loud arm rescues the
+  // file, and the mutation then reds for OVER-reporting (`expected
+  // [ 1400, 1402, 1401 ] to deeply equal [ 1400, 1401 ]`) — a red for the wrong
+  // reason, about a direction this rule is not for. Both were measured; the
+  // difference is one fence line's parity, which is exactly the kind of thing a
+  // fixture is supposed to make concrete instead of leaving to argument.
+  const SPAN_DOC = [
+    '```coordinator-paused``` is a FILE, not a flag.',
+    '',
+    `- **${D(1400)}** — the entry the first fix swallowed in silence`,
+    '',
+    '```mail-disabled``` has no writer in the tree.',
+    '',
+    '```',
+    '',
+    `- **${D(1401)}** — an entry the miss leaves visible, so the drop is SILENT`,
+  ].join('\n');
+
+  it('does not open a block on a line-initial code SPAN', () => {
+    expect(definitionsIn([f('a.md', SPAN_DOC)]).map((d) => d.n)).toEqual([1400, 1401]);
+  });
+
+  it('and the miss it prevents is a COLLISION going unreported, end to end', () => {
+    // The shape the finding was driven with: the same allocator-era number
+    // defined in two plans, the branch's copy sitting behind a code span. Before
+    // the rule this returned [] — a collision guard going quiet, which this
+    // file's own invariant calls the worse failure.
+    expect(crossTreeCollisions([f('mine.md', SPAN_DOC)], [f('theirs.md', `- **${D(1400)}** — their subject`)])
+      .map((h) => h.n)).toEqual([1400]);
+  });
+
+  it('leaves TILDE fences alone — their info string may hold backticks', () => {
+    // The rule is the backtick fence's, not every fence's. A `~~~` block whose
+    // info string mentions a backticked name still opens, so its content is
+    // still quoted.
+    expect(definitionsIn([f('a.md', '~~~`coordinator-paused`\n- **' + D(1400) + '** — quoted\n~~~')])).toEqual([]);
+    // …and the ordinary backtick fence with a plain info string still opens, so
+    // the new rule cannot be satisfied by never opening anything.
+    expect(definitionsIn([f('b.md', '```markdown\n- **' + D(1400) + '** — quoted\n```')])).toEqual([]);
   });
 
   it('does not treat a fence with an info string as a CLOSING fence', () => {

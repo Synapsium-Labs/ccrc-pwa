@@ -453,8 +453,10 @@ export function runWarnings(
   // kickoff, which is odd but is not the wedge, and drawing it as one is how a
   // warning surface becomes ignorable.
   //
-  // The closed-run filter is FORTY-FOUR LINES ABOVE, in this same function, and it
-  // is not the caller's. The sentence that stood here said the opposite —
+  // The closed-run filter is EARLIER IN THIS SAME FUNCTION, at the `isRunClosed`
+  // guard, and it is not the caller's. (It said "forty-four lines above" and was
+  // forty-six by the time anyone counted — a line distance is a cardinal nothing
+  // derives, so it is gone rather than corrected, D-1331.) The sentence that stood here said the opposite —
   // "`closedAt`/state is the caller's filter: the board renders warnings on its
   // `active` slice only" — which is the exact premise D-1309 was raised to delete,
   // re-asserted verbatim in the paragraph next door (D-1321). Both halves were
