@@ -182,3 +182,60 @@ export function crossTreeCollisions(
     .map(([n, files]) => ({ n, files: [...files].sort() }))
     .sort((a, b) => a.n - b.n);
 }
+
+/**
+ * The numbers that could not have been allocated, because they ARE the block
+ * that introduced the allocator (`docs/superpowers/plans/
+ * 2026-08-24-build9b-peers-claims-allocator.md` — and 211 is
+ * `LEDGER_ALLOCATOR_ERA` for exactly this reason). Measured from the tree rather
+ * than guessed: 211..224 are the only allocator-era numbers on `main` defined
+ * before the door that would have issued them existed.
+ *
+ * MAY ONLY SHRINK — the standing rule for every grandfather set in this repo.
+ */
+export const LEDGER_BOOTSTRAP: ReadonlySet<number> = new Set(
+  Array.from({ length: 14 }, (_, i) => 211 + i));
+
+/**
+ * Allocator-era numbers a plan DEFINES that the allocator never issued — the
+ * half of the "allocated to its definer" question that can actually be answered.
+ *
+ * WHAT THIS DELIBERATELY IS NOT. The question the incidents pose is "was this
+ * number allocated to the party that defined it", and that comparison cannot be
+ * built today: `allocatedTo` is optional at the one door that writes it and
+ * defaults to the empty string, and the coordinator's own documented allocation
+ * call omits it — measured, 101 of this project's 243 allocator-era rows carry
+ * `''` (D-1301). A guard resting on that field would compare a self-declared
+ * string that is usually absent.
+ *
+ * BATCH SCATTER WAS TRIED AND REJECTED, by measurement rather than by taste. An
+ * allocation batch (one `allocatedTo`/`allocatedAt`/`title`) whose members landed
+ * in more than one plan file looks exactly like the wreck the incidents were:
+ * D-1157..1172 landed across FIVE files, three of them other lanes'. But across
+ * this project's 65 batches only TWO are scattered, and the other is
+ * D-999..D-1046 — one program's block, allocated at run-open and spent correctly
+ * across its own waves 1-4. The two are structurally identical (a contiguous
+ * sub-range per file, one file per wave), so one is a theft and one is the
+ * documented way to run a program. Scatter is therefore an OBSERVATION and never
+ * a defect, and it is not reported.
+ *
+ * What IS unambiguous is a number defined with no allocation row at all: nobody
+ * asked for it. `grandfathered` carries the bootstrap.
+ */
+export function unallocatedDefinitions(
+  definitions: readonly Definition[],
+  allocated: ReadonlySet<number>,
+  grandfathered: ReadonlySet<number>,
+  era: number = LEDGER_ALLOCATOR_ERA,
+): CrossTreeCollision[] {
+  const byN = new Map<number, Set<string>>();
+  for (const d of definitions) {
+    if (d.n < era || allocated.has(d.n) || grandfathered.has(d.n)) continue;
+    const files = byN.get(d.n) ?? new Set<string>();
+    files.add(d.file);
+    byN.set(d.n, files);
+  }
+  return [...byN.entries()]
+    .map(([n, files]) => ({ n, files: [...files].sort() }))
+    .sort((a, b) => a.n - b.n);
+}

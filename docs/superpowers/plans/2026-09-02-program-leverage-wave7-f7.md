@@ -1209,6 +1209,21 @@ in this plan or in the diff is defined below.
   with its measurement; the honest fix is for the GET to consult the same three sources the POST does,
   which is a change to the allocator's read path and is named here rather than smuggled into this wave.
 
+- **D-1306** (2026-09-02, a mutation row that came back GREEN, and what it caught) — the brief's own
+  warning, fired on this wave's own work. `unallocatedDefinitions`'s bootstrap-grandfather test was
+  written passing a LOCAL `new Set([211, 212, 213])`, so emptying the SHIPPED `LEDGER_BOOTSTRAP`
+  changed nothing and the mutation measured **green** — a guard whose constant nothing held. It is
+  precisely this program's recurring class, *a pin whose premise is never established*, and it was
+  invisible until the row was actually run: the test read correctly, named the right constant in its
+  own title, and asserted nothing about it. Closed by asserting the shipped set's exact content
+  (`211..224`, with its may-only-shrink rule stated) and by feeding that same constant to both arms,
+  including the `225` boundary on the other side. Re-measured: emptying it now reds with `the bootstrap
+  set is not 211..224 — it may only SHRINK, never move: expected [] to deeply equal [ 211, 212, 213,
+  214, 215, 216, …(8) ]`. **Recorded because the row is the mechanism** — had the table been written
+  at the end from memory rather than measured as each guard landed, this would have shipped as a
+  green row describing a guard that did not exist, which is exactly what wave 6's review round was
+  sent back for.
+
 ## Mutation table
 
 Every row measured by applying the mutation ALONE, running the named suite in the foreground, quoting
@@ -1230,3 +1245,6 @@ Written as each guard lands, never at the end. A row that comes back GREEN is a 
 | `crossTreeCollisions` filters to `false` — the always-green direction every empty-list assertion above would tolerate | `AssertionError: expected [] to deeply equal [ 1159, 1160, 1161 ]` (and `[ 1157, 1158 ]`) | server `deviation-refs` |
 | restore `ENTRY`'s same-line-subject demand on `DEFINITION` — the D-1294 blindness, put back | `AssertionError: expected [ 1157 ] to deeply equal [ 1157, 1158 ]` | server `deviation-refs` |
 | `LEDGER_ALLOCATOR_ERA` 211 → 0, so the pre-allocator era joins the scan | `AssertionError: expected [ Array(1) ] to deeply equal []` | server `ledger-crosstree` |
+| delete the orphan report from `sweepLedgerReconcile` | `AssertionError: expected "warn" to be called 1 times, but got 0 times` | server `ledger-sweep` |
+| revert the sweep's project list to `openByProject.keys()` — OPEN allocations only | `AssertionError: a fully-landed project is never audited: expected "warn" to be called 1 times, but got 0 times` | server `ledger-sweep` |
+| empty `LEDGER_BOOTSTRAP` — **came back GREEN first time** (D-1306), reds only after the test was made to read the shipped constant | `AssertionError: the bootstrap set is not 211..224 — it may only SHRINK, never move: expected [] to deeply equal [ 211, 212, 213, 214, 215, 216, …(8) ]` | server `ledger-crosstree` |

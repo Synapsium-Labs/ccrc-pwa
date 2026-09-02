@@ -18,7 +18,8 @@
 //      same line, and 29 real definitions in today's plans are invisible to it,
 //      D-1158 among them: one of the five numbers this program actually lost.
 import { describe, it, expect } from 'vitest';
-import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA } from '../src/coord/ledger.js';
+import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, LEDGER_BOOTSTRAP,
+         unallocatedDefinitions } from '../src/coord/ledger.js';
 
 const f = (path: string, text: string): { path: string; text: string } => ({ path, text });
 
@@ -118,3 +119,43 @@ describe('crossTreeCollisions — one merge earlier', () => {
     expect(hits.map((h) => h.n)).toEqual([800, 900]);
   });
 });
+
+describe('unallocatedDefinitions — a number nobody asked for', () => {
+  const defs = (...pairs: [string, number][]) => pairs.map(([file, n]) => ({ file, n }));
+  const none = new Set<number>();
+
+  it('names an allocator-era number defined with no allocation row', () => {
+    expect(unallocatedDefinitions(defs(['a.md', 1066]), none, none))
+      .toEqual([{ n: 1066, files: ['a.md'] }]);
+  });
+
+  it('says nothing about a number the allocator issued', () => {
+    expect(unallocatedDefinitions(defs(['a.md', 1066]), new Set([1066]), none)).toEqual([]);
+  });
+
+  it('leaves the pre-allocator era alone', () => {
+    expect(unallocatedDefinitions(defs(['a.md', 72]), none, none)).toEqual([]);
+  });
+
+  it('honours the bootstrap grandfather — the block that INTRODUCED the allocator', () => {
+    // THE SHIPPED SET, not a local one. Written with a local `new Set([211,212,213])`
+    // first, and the mutation that emptied LEDGER_BOOTSTRAP came back GREEN —
+    // the test never established that the constant it names is the constant the
+    // sweep uses. A row that comes back green is a hole, not a pass.
+    expect([...LEDGER_BOOTSTRAP].sort((a, b) => a - b),
+      'the bootstrap set is not 211..224 — it may only SHRINK, never move')
+      .toEqual(Array.from({ length: 14 }, (_, i) => 211 + i));
+    // 211..224 are build 9b's own plan: the allocator did not exist to ask.
+    expect(unallocatedDefinitions(defs(['b.md', 211], ['b.md', 224]), none, LEDGER_BOOTSTRAP))
+      .toEqual([]);
+    // 225 is one past the block and IS reportable — the boundary, both sides.
+    expect(unallocatedDefinitions(defs(['b.md', 225]), none, LEDGER_BOOTSTRAP))
+      .toEqual([{ n: 225, files: ['b.md'] }]);
+  });
+
+  it('collects every file that defines the same unallocated number', () => {
+    expect(unallocatedDefinitions(defs(['b.md', 900], ['a.md', 900]), none, none))
+      .toEqual([{ n: 900, files: ['a.md', 'b.md'] }]);
+  });
+});
+

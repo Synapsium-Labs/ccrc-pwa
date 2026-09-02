@@ -185,6 +185,56 @@ describe('sweepLedgerReconcile', () => {
     expect(rows[1]).toMatchObject({ n: 262, state: 'allocated' });
   });
 
+  it('REPORTS a number a plan defines that the allocator never issued (F7)', async () => {
+    // The inverse of markLanded, and the half nothing has ever measured. Live
+    // instance on main while this was written: D-1066..1069, defined in
+    // 2026-08-30-d1066-dead-recipient-parks.md with no allocation row.
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261 IS issued
+    h.plantDoc('demo', 'plans', 'p.md',
+      `### D-${261} — issued and landed\n- **D-${299}** — never asked for`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const said = warn.mock.calls[0]![0] as string;
+    expect(said, 'the orphan is not named').toContain(`D-${299}`);
+    expect(said, 'the file that defines it is not named').toContain('p.md');
+    // The issued one must NOT be reported — otherwise the warning says nothing.
+    expect(said).not.toContain(`D-${261} `);
+  });
+
+  it('says nothing once every defined number IS issued — silence is the healthy state', async () => {
+    const h = fixture();
+    const ns = await seedAndAllocate(h, 2);               // 261, 262
+    h.plantDoc('demo', 'plans', 'p.md',
+      `### D-${ns[0]!} — one\n### D-${ns[1]!} — two`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'a healthy ledger produced a warning').not.toHaveBeenCalled();
+  });
+
+  it('audits a project whose numbers have ALL landed — the corpus the old list could not reach', async () => {
+    // The behaviour change stated in the sweep: the project list used to come
+    // from OPEN allocations, so a project working correctly — everything landed,
+    // nothing open — was never audited at all, which is precisely backwards.
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261
+    h.plantDoc('demo', 'plans', 'p.md', `### D-${261} — landed`);
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(h.coord.openAllocations(), 'the fixture still has an open row').toEqual([]);
+    // Now add an orphan. With no open allocations left, the old loop would not
+    // have read this project's plans at all.
+    h.plantDoc('demo', 'plans', 'q.md', `- **D-${299}** — never asked for`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 2 * 15 * 60_000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'a fully-landed project is never audited').toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0] as string).toContain(`D-${299}`);
+  });
+
   it(`D-${261} does not land D-${2611} — the boundary is a word boundary`, async () => {
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261

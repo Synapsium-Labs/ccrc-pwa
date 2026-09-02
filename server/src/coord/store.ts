@@ -3232,6 +3232,23 @@ export class CoordStore {
 
   /** allocated -> landed, once — `landed` genuinely means "in a merged plan"
    *  (D13), so the guard keeps a re-scan from re-stamping the date. */
+  /** Every project the allocator has ever issued a number for. The reconcile
+   *  sweep's own project list used to be derived from OPEN allocations alone,
+   *  which is the right corpus for "did this number land" and the wrong one for
+   *  "was this number ever asked for" — a fully-landed project has no open rows
+   *  and would never be audited. */
+  ledgerProjects(): string[] {
+    return (this.db.prepare('SELECT DISTINCT project FROM ledger_alloc ORDER BY project')
+      .all() as unknown as { project: string }[]).map((r) => r.project);
+  }
+
+  /** Every number ever ISSUED for a project, in any state — the set
+   *  `unallocatedDefinitions` measures a plan's definitions against. */
+  ledgerIssued(project: string): Set<number> {
+    return new Set((this.db.prepare('SELECT n FROM ledger_alloc WHERE project = ?')
+      .all(project) as unknown as { n: number }[]).map((r) => r.n));
+  }
+
   markLanded(project: string, n: number, landedIn: string, at: number): void {
     this.db.prepare(
       "UPDATE ledger_alloc SET state = 'landed', landedAt = ?, landedIn = ? " +
