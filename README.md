@@ -1520,9 +1520,11 @@ retired it**, because it was wrong on two counts. That block is written for a PR
 project has a knowledge graph at graphify-out/"), so account-wide it asserted that of every project
 the account opens, including the trees the sweep refuses; and the file is the *operator's*, not
 ccrc's, which is the sole reason every one of D-1244's six data-loss classes existed at all.
-Measured over the week it was deployed: 109 `query`/`path`/`explain` calls across 4 corpora, 103 of
-them in the one repository whose *project* `CLAUDE.md` had carried graphify's block since July, and
-zero in ccrc-pwa — the busiest project on the fleet, with five fresh graphs.
+Measured over the one day since it was deployed (2026-09-01, measured 2026-09-02): 109
+`query`/`path`/`explain` calls across 4 corpora, 103 of them in the one repository whose *project*
+`CLAUDE.md` had carried graphify's block since July, and zero in ccrc-pwa — the busiest project on
+the fleet, with five fresh graphs. (The block's own week-shaped window is a different row of the
+spec's table — 265 calls across 11 corpora over the last 7 days, ccrc-pwa **zero** in both.)
 `_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census:
 whole-line markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and
 SKIPPED when they cannot be), the file's own mode preserved, backed up before every write. Anything

@@ -1604,9 +1604,11 @@ retired it**, because it was wrong on two counts. That block is written for a PR
 project has a knowledge graph at graphify-out/"), so account-wide it asserted that of every project
 the account opens, including the trees the sweep refuses; and the file is the *operator's*, not
 ccrc's, which is the sole reason every one of D-1244's six data-loss classes existed at all.
-Measured over the week it was deployed: 109 `query`/`path`/`explain` calls across 4 corpora, 103 of
-them in the one repository whose *project* `CLAUDE.md` had carried graphify's block since July, and
-zero in ccrc-pwa — the busiest project on the fleet, with five fresh graphs.
+Measured over the one day since it was deployed (2026-09-01, measured 2026-09-02): 109
+`query`/`path`/`explain` calls across 4 corpora, 103 of them in the one repository whose *project*
+`CLAUDE.md` had carried graphify's block since July, and zero in ccrc-pwa — the busiest project on
+the fleet, with five fresh graphs. (The block's own week-shaped window is a different row of the
+spec's table — 265 calls across 11 corpora over the last 7 days, ccrc-pwa **zero** in both.)
 `_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census:
 whole-line markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and
 SKIPPED when they cannot be), the file's own mode preserved, backed up before every write. Anything
@@ -2242,8 +2244,9 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   does not own: graphify's `always_on/claude-md.md` opens "This project has a knowledge graph at
   `graphify-out/`" and was converged into every rostered home's config-dir `CLAUDE.md`, which Claude
   Code loads for every session under that account in every project — including the trees the sweep
-  refuses. Measured effect over the week it was deployed: 109 `query`/`path`/`explain` calls across 4
-  corpora, 103 of them in the one repository whose *project* `CLAUDE.md` had carried graphify's block,
+  refuses. Measured effect over the one day since it was deployed (2026-09-01, measured 2026-09-02):
+  109 `query`/`path`/`explain` calls across 4 corpora, 103 of them in the one repository whose
+  *project* `CLAUDE.md` had carried graphify's block,
   committed, since 2026-07-08; **zero** in ccrc-pwa, the busiest project on the fleet, with five fresh
   graphs. Every one of D-1244's six data-loss classes existed only because ccrc was rewriting a file
   it does not own. Retired for R0–R4: the read side now lives only in artifacts ccrc installs and owns
@@ -2988,6 +2991,33 @@ git commit -m "docs(readme): the read side is the hook, the skill, the PATH and 
   and 10.8% after, MEASURED as `Tests  1 failed | 21 passed (22)` (`expected 0.108… to be less than
   0.1`). The claim is now `~2165 lines`. Noted rather than silently fixed because it is the same class
   this whole entry is about: a number in prose that only a mechanism keeps honest.
+
+- **D-1357** (2026-09-02, whole-branch review) — **the one sentence carrying the evidence for
+  retiring D-1243 stated a week-shaped window over a one-day row's numbers.** The design spec's §0
+  table reports the query log over TWO windows — `| last 7 days | 265 | 11 | 0 |` and
+  `| since D-1243 deployed (2026-09-01) | 109 | 4 | 0 |`, measured 2026-09-02 — and the README, this
+  plan's Step 4 draft text, and the permanent D-1245 ledger entry above all said "Measured over the
+  **week** it was deployed: 109 … across 4 corpora": the week row's window word with the since-deploy
+  row's figures. The block shipped 2026-09-01 (`git log -S'_inst_graph_always_on' -- ccd/ccrc` →
+  `551a6cb6`, 2026-09-02 01:37), so 109/4 spans one day, and no calendar-week reading rescues it —
+  the seven-day span is the OTHER row. The conclusion is untouched (ccrc-pwa measures **zero** in
+  both rows, and 103/109 in MekWarLive is the load-bearing fact), which is exactly why it survived
+  three copies: nothing about it was wrong except the thing this repo says a measurement may never
+  get wrong. All three now read "the one day since it was deployed (2026-09-01, measured 2026-09-02)"
+  and the README additionally names the week row so the two are not confusable again.
+
+  The guard is DERIVED, not a spelling test (`ccrc-install-graphify.test.ts`, "README: the
+  retirement's evidence sentence names the window its numbers came from"): it parses the spec's §0
+  table, looks the README's quoted figures up IN it, and holds the sentence to the row it actually
+  quotes — week-shaped window word iff week-shaped row, plus the row's anchor date if it has one.
+  Re-measure over a different window and it stays green; cross the rows either way and it reddens.
+
+  | mutation | measured |
+  | --- | --- |
+  | restore "Measured over the week it was deployed: 109 … across 4 corpora" in README.md | `Tests  1 failed \| 1 passed \| 40 skipped (42)` — `expected true to be false` at the WEEKISH equality |
+  | keep the one-day window but drop its anchor date ("the one day since it was deployed") | `Tests  1 failed \| 1 passed \| 40 skipped (42)` — `Received: "the one day since it was deployed"`, does not contain `2026-09-01` |
+  | keep the dated one-day window, swap in the week row's figures (265 across 11 corpora) | `Tests  1 failed \| 1 passed \| 40 skipped (42)` — same WEEKISH equality, reddening in the OTHER direction |
+  | unmutated | `Tests  42 passed (42)` (whole file) |
 
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
