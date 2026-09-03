@@ -3068,6 +3068,24 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
   return typeof v === 'string' && (MAIL_DELIVERY_STATES as readonly string[]).includes(v);
 }
 
+/** The two terminal members of `MailDeliveryState`, ONCE. `TERMINAL_ITEM_STATES`
+ *  (`server/src/coord/store.ts`) is the precedent and carries the argument: the
+ *  SQL literal in every delivery writer's `WHERE` is BUILT from this list
+ *  (`TERMINAL_DELIVERY_SQL`), so the guard and the prose that explains it cannot
+ *  drift — and `single-definition.test.ts` pins that this is the only place the
+ *  pair is spelled as one adjacent list under any of the four roots.
+ *
+ *  L0 rather than beside the guards it feeds, and that is the load-bearing
+ *  choice: a copy of this pair also lived in `pwa/src/session/MailStrip.tsx`,
+ *  in a DIFFERENT PACKAGE, which a constant minted in `server/src` could not
+ *  have been imported by (D-1405).
+ *
+ *  `unknown` is deliberately NOT a member. A state this build cannot name is not
+ *  a state it may declare finished; what to do with one is an open question
+ *  recorded by this wave, not a decision this list makes. */
+export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
+  readonly MailDeliveryState[];
+
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
 export const MAIL_BODY_MAX_BYTES = 8 * 1024;

@@ -457,6 +457,78 @@ describe('Build 7 nouns', () => {
     }
   });
 
+  // D-1404. Same shape and the same reason as the
+  // deliberate-cancel scan at the top of this describe (D-1319) and the
+  // terminal-trio scan above: the shipped SQL is BUILT by `join`, so this
+  // scanner sees no literal at all in the real source, and any hand-written SQL
+  // list of the delivery terminal pair scores a hit. Either order, because a
+  // copy written from memory is as likely to be the other way round.
+  //
+  // Measured before this test existed (2026-09-02, 5e9f650d): the pair was
+  // spelled six times in `store.ts`'s own SQL and seven more times in its
+  // docstrings, and the whole suite was green. Those prose copies are why the
+  // SQL rewrite must also rewrite the comments — unlike the deliberate-cancel
+  // case the prose here spells the SQL FORM itself, so an SQL-shaped regex hits
+  // a comment explaining the constant.
+  //
+  // ANCHORED ON `(` AND `)` ONLY, never `[`. The trio scan above can use
+  // `[[(]` because its own definition lives in a file it EXPECTS to see in
+  // `holders`; this one asserts `holders` is EMPTY, and the definition is
+  // `['acked', 'rejected']` — bracketed. A `[[(]` here would match the
+  // definition itself and the test could never pass. The cost is stated
+  // honestly: a hand-written JS ARRAY copy under another name is out of this
+  // scanner's reach, exactly as this file's own header paragraph says
+  // ("A determined author can evade either one").
+  it('spells the delivery terminal pair ONCE — TERMINAL_DELIVERY_STATES, never a hand-written SQL list', () => {
+    // This scan reads ALL, and ALL is built from ROOTS — which does NOT include
+    // `server/test`. That is what makes it safe for this test to spell the
+    // forbidden literal in its own self-checks below, and it is measured here
+    // rather than assumed: adding `server/test` to ROOTS would turn every
+    // literal-scan in this file into a guard that matches its own source.
+    expect(ALL.map(rel)).not.toContain('server/test/single-definition.test.ts');
+
+    const PAIR = /\(\s*'(acked|rejected)'\s*,\s*'(acked|rejected)'\s*\)/;
+    // The premise, established inside the test rather than assumed: without
+    // these three lines the assertion below is satisfied by a regex that
+    // matches nothing.
+    expect(PAIR.test("NOT IN ('acked','rejected') ")).toBe(true);
+    expect(PAIR.test("NOT IN ( 'rejected', 'acked' )")).toBe(true);
+    expect(PAIR.test("IN ('queued','delivered')")).toBe(false);
+
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the delivery terminal pair').toEqual([]);
+
+    // …and the one definition still exists and is still what the guards are
+    // built from, so "no literal anywhere" cannot be satisfied by deleting
+    // every guard instead.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const TERMINAL_DELIVERY_STATES = \['acked', 'rejected'\] as const/);
+    const defs = ALL.filter((f) =>
+      /^\s*export const TERMINAL_DELIVERY_STATES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(defs, 'TERMINAL_DELIVERY_STATES').toEqual(['shared/api.ts']);
+
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(
+      /const TERMINAL_DELIVERY_SQL =\s*\n?\s*`\('\$\{TERMINAL_DELIVERY_STATES\.join\("','"\)\}'\)`/);
+
+    // THE FLOOR IS COUNTED OVER CODE, NOT PROSE, and that is the whole point of
+    // it. This task rewrites SEVEN DOCSTRING lines to read
+    // `NOT IN ${TERMINAL_DELIVERY_SQL}` as well, so a count over the raw file
+    // would sit at 13 and stay above 6 with every real guard deleted — an
+    // anti-vacuity check that is itself vacuous. Comment lines are stripped
+    // first, and the strip is proved to work on a sentence that only exists
+    // inside a comment.
+    const code = store.split('\n').filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l)).join('\n');
+    expect(store, 'the sentinel is gone from store.ts — pick another comment-only phrase')
+      .toContain('the same guard every other');
+    expect(code, 'the comment strip did not strip comments').not.toContain('the same guard every other');
+    // Six negative-form guards at 5e9f650d (2026-09-02), as a FLOOR so a
+    // seventh writer raises it rather than breaking it.
+    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length)
+      .toBeGreaterThanOrEqual(6);
+  });
+
   // D-289 (was D-B4-16): no L1 file holds a database handle. `architecture:78-81` puts
   // `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 as TYPES only,
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this

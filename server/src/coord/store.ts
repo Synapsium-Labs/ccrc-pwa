@@ -16,7 +16,7 @@ import {
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   PROGRAM_KICKOFF_SUBJECT,
-  RUN_TRANSITIONS,
+  RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleGap, type LifecycleGapReason,
@@ -209,6 +209,20 @@ const RUN_ROW_COLUMNS =
  */
 const OUTSTANDING_STATES_SQL = "('queued','delivered')";
 
+/** The WRITE-side complement of `OUTSTANDING_STATES_SQL` above, built from L0's
+ *  `TERMINAL_DELIVERY_STATES` by the same `.join` interpolation
+ *  `CoordStore.TERMINAL_SQL` already uses for work items. Every delivery-row
+ *  `UPDATE` in this file names one of these two fragments and never a literal —
+ *  pinned in both directions by `single-definition.test.ts`'s two pair scans and
+ *  by `mail-hardening.test.ts`'s writer scan.
+ *
+ *  NOT the complement of `OUTSTANDING_STATES_SQL` for a token in NEITHER list: a
+ *  row holding an out-of-vocabulary `state` is not-outstanding to the positive
+ *  form and still-live to this one. That asymmetry is deliberate, unchanged by
+ *  this wave, and recorded as an open design question
+ *  (D-1406). */
+const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
+
 /** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
  *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
  *  where a value would slip into the statement text. One home, and it can emit
@@ -344,12 +358,12 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
  * exactly the outcome the ruling's own text calls out. Written entirely as
  * a `LEFT JOIN` in this one SQL definition: no writer touched, no park
  * restamped, every existing park-immutability guard in this file (`markDelivered`/
- * `backOff`/`rejectDelivery`'s own `NOT IN ('acked','rejected')` guards)
+ * `backOff`/`rejectDelivery`'s own `NOT IN ${TERMINAL_DELIVERY_SQL}` guards)
  * unchanged.
  *
  * DELIBERATELY NOT threaded through `hasOutstandingMail` (the dedupe guard
  * on `queueSystemMail`'s own retry loop) or `dueDeliveries`/`markDelivered`/
- * `rejectDelivery`'s own `NOT IN ('acked','rejected')` write-guards — this
+ * `rejectDelivery`'s own `NOT IN ${TERMINAL_DELIVERY_SQL}` write-guards — this
  * predicate answers "is this worth a human's attention", a UI-facing
  * question, not "should the delivery lane act on this again", which stays
  * exactly `'rejected'`-is-terminal (bounded context 5) for every one of
@@ -2154,7 +2168,7 @@ export class CoordStore {
     ).all() as { id: number; toId: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
-  /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22,
+  /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — review finding 22,
    *  widened by a scoped-verify fix — a park must not be reopened either):
    *  `sweepMail` reads the row it is about to (re)send BEFORE
    *  `await sendPrompt(...)`, and writes the outcome AFTER — a window of
@@ -2183,7 +2197,7 @@ export class CoordStore {
       // guard skips keeps its gate. A second UPDATE could clear a gate off a
       // row this one declined to touch.
       "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, " +
-      "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(at, id);
   }
 
@@ -2202,7 +2216,7 @@ export class CoordStore {
    * `rejected('undeliverable')` — the spec's own terminal state, otherwise
    * structurally unreachable for exactly the deliveries that succeed.
    *
-   * `AND state NOT IN ('acked','rejected')` — the same guard every other
+   * `AND state NOT IN ${TERMINAL_DELIVERY_SQL}` — the same guard every other
    * writer of this table carries (`markDelivered`/`backOff`/`rejectDelivery`
    * above and below), closing the same seconds-to-half-a-minute window in
    * which an ack or a park lands from a separate code path between the
@@ -2220,7 +2234,7 @@ export class CoordStore {
    */
   bumpReplayCount(id: number): { state: 'counted'; replayCount: number } | { state: 'terminal' } {
     const res = this.db.prepare(
-      "UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(id);
     if (res.changes === 0) return { state: 'terminal' };
     return {
@@ -2234,7 +2248,7 @@ export class CoordStore {
    *  NOT touch `deliveredAt` — a REPLAY re-dates the clock through its own
    *  fresh `markDelivered` call, and `dueDeliveries`'s `MAX(...)` above is
    *  what combines the two rather than either writer clobbering the other's
-   *  column. `AND state NOT IN ('acked','rejected')` (Build 9b wave 0, D10
+   *  column. `AND state NOT IN ${TERMINAL_DELIVERY_SQL}` (Build 9b wave 0, D10
    *  hole 3): shielded until now only by its caller's query filter
    *  (`deliveredUnacked()` selects `delivered` rows) — a filter is a
    *  courtesy of one caller, a guard is a property of the row; the same
@@ -2242,7 +2256,7 @@ export class CoordStore {
    *  guards against. */
   markIngested(id: number, at: number): void {
     this.db.prepare(
-      "UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(at, id);
   }
 
@@ -2293,7 +2307,7 @@ export class CoordStore {
     return true;
   }
 
-  /** `WHERE state NOT IN ('acked','rejected')` (fix — scoped-verify H1, the
+  /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — scoped-verify H1, the
    *  same guard `markDelivered`/`rejectDelivery` below carry): this is the
    *  sweep's own SEND-FAILURE path, resolving on `sendPrompt`'s own delayed
    *  timeline, so a send that was in flight when a SEPARATE park
@@ -2323,7 +2337,7 @@ export class CoordStore {
   backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
       'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
-      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
   }
 
@@ -2351,11 +2365,11 @@ export class CoordStore {
     this.db.prepare(
       'UPDATE mail_deliveries SET lastGate = ?, gateAt = ?, ' +
       'gateCount = CASE WHEN ? THEN gateCount + 1 ELSE 1 END, gateSince = ? ' +
-      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(gate, now, same ? 1 : 0, same ? (sinceIfSame ?? now) : now, id);
   }
 
-  /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22, the
+  /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — review finding 22, the
    *  same ack-race guard `markDelivered` above now carries, applied to this
    *  writer's own unconditional `state` overwrite, and widened for the same
    *  reason): a `sendPrompt` failure resolving after a concurrent ack landed
@@ -2372,7 +2386,7 @@ export class CoordStore {
     this.db.prepare(
       "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ?, " +
       "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL " +
-      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(code, lastError, id);
   }
 
