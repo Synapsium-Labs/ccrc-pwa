@@ -890,7 +890,9 @@ designing around a broken one.
 ## 14. Deviations
 
 D-numbers are **not allocated in this document**. The ledger is global and monotonic across project
-history, and four PRs merged onto `main` during this design conversation. The next free number must be
-read from `origin/main` at plan-writing time — not from this branch, and not from Stage 3a's ceiling.
-The renumber that cost a full descending-order rewrite of D-108..D-140 is the reason this paragraph
-exists.
+history, and four PRs merged onto `main` during this design conversation. Numbers are ISSUED by the
+allocator at plan-writing time (`POST /api/ledger/deviations`) and defined in the same act — never
+derived from this branch, from any checkout, or from Stage 3a's ceiling. The renumber that cost a full
+descending-order rewrite of D-108..D-140 is the reason this paragraph exists; the procedure it
+originally prescribed was itself the defect, and root `CLAUDE.md`'s deviation-ledger bullet is the
+current rule.

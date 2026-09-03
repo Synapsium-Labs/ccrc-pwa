@@ -90,4 +90,27 @@ describe('the allocation instruction', () => {
     expect(b, 'a collision cardinal is back; the bullet names two events and the tree counts them differently elsewhere')
       .not.toMatch(/\b(two|three|four|five|six|seven|eight)\s+(incidents|collisions|times)\b/i);
   });
+
+  it('CONTRIBUTING.md, the public-facing copy, says the same thing and no cardinal', () => {
+    const p = passage('CONTRIBUTING.md, the ledger paragraph', read('CONTRIBUTING.md'),
+      '**`D-N` markers in comments are the deviation ledger**', '\n**Do');
+    expect(p, 'the public file prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
+    expect(p).toContain('POST /api/ledger/deviations');
+    expect(p, 'the take-a-number framing is what produced the collisions')
+      .not.toMatch(/take the next free number/i);
+    expect(p, 'a renumber cardinal is back; this file names no incident at all')
+      .not.toMatch(/\b(two|three|four|five|six|seven|eight)\s+times\b/i);
+  });
+
+  it('the account-provisioning spec no longer prescribes reading a tree for a number', () => {
+    // A design SPEC, imperative and present tense — not a dated note. Its
+    // INCIDENT RECORD stays: the D-108..D-140 renumber is why the section
+    // exists, and deleting the instruction must not take the history with it.
+    const s = sectionToEnd('account-provisioning spec, section 14',
+      read('docs/superpowers/specs/2026-08-21-account-provisioning-design.md'),
+      '## 14. Deviations');
+    expect(s, 'the spec still prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
+    expect(s, 'the incident record was deleted along with the instruction')
+      .toContain('descending-order rewrite');
+  });
 });

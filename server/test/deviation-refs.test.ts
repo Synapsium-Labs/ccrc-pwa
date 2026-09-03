@@ -107,7 +107,8 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
 // it that way. It runs the REAL floorFromScan over the WHOLE tracked tree
 // (163 ms measured, so no need to scope down to the sweep's own {plans,specs}
 // classes — the wider net also guards test/source fixtures, which poison the
-// hand-allocation grep the ledger convention prescribes).
+// live FLOOR: one contiguous ref seeds it thousands of numbers high, and it
+// only rises).
 describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)', () => {
   const trackedFiles = (): { path: string; text: string }[] =>
     execSync('git ls-files -z', { cwd: ROOT, maxBuffer: 1 << 22 })
@@ -294,9 +295,11 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
   // two, so the suite is green on BOTH branches simultaneously, and green on
   // whichever merges first. The pair co-resides only once the loser merges the
   // winner — one merge too late, when the only remedy left is renumbering.
-  // That has now happened three times (D-1157/1158 via PR #38, D-1159/1160/1161
-  // via PR #41), and the detection procedure the coordinator actually used both
-  // times was a human cloning the tip, merging origin/main and running this file.
+  // That has now happened more than once (D-1157/1158 via PR #38, D-1159/1160/1161
+  // via PR #41 — the tree counts the class differently in different places, so the
+  // count is deliberately not restated here), and the detection procedure the
+  // coordinator actually used both times was a human cloning the tip, merging
+  // origin/main and running this file.
   //
   // MEASURED BEFORE IT WAS WRITTEN, against both real incidents, from the branch
   // alone and with no merge (D-1295):

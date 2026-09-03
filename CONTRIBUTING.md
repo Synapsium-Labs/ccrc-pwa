@@ -65,11 +65,11 @@ density of the file you are editing.
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If
-you add one, take the next free number from the allocator (`POST /api/ledger/deviations`),
+you add one, you are ISSUED numbers by the allocator (`POST /api/ledger/deviations`),
 and **allocate and define in the same act** — the gap between asking for a number and
 writing it down is where two branches come to hold the same one.
 
-Two branches allocating in parallel has caused a renumber three times, so it is checked
+Two branches allocating in parallel has forced a renumber more than once, so it is checked
 rather than remembered:
 
 ```bash
