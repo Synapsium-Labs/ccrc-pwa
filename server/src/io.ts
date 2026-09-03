@@ -128,7 +128,8 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
 
 const TAIL_POLL_MS = 1500;
 
-/** The ONE place an errno becomes a `ReadFailure`. Only a proven ENOENT may
+/** The ONE place an errno becomes a `ReadFailure` (D-1397 closed the other two
+ *  copies this file used to carry). Only a proven ENOENT may
  *  answer `absent`; every other errno — and a non-errno throw, which carries
  *  no `code` at all — is `unreadable`. */
 const failureFor = (err: unknown): ReadFailure =>

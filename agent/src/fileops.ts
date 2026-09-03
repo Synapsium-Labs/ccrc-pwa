@@ -71,7 +71,8 @@ export async function readWhole(p: string): Promise<ReadResult> {
  *  against THIS number rather than a second copy of it; it is a property of
  *  the WS round trip (one JSON frame carrying a base64 payload), not of the
  *  file, which is why `server/src/io.ts`'s `localIO` deliberately has no
- *  equivalent and why over-cap is REPORTED rather than folded (D-114). */
+ *  equivalent and why over-cap is REPORTED rather than folded into the
+ *  same failure as missing (D-114, D-1401). */
 export const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
 
 /** `readB64Measured`'s result. THREE failure facts where `readB64` had one
@@ -145,7 +146,8 @@ export async function listDir(p: string): Promise<string[] | null> {
  *  ENOTDIR, ELOOP, EIO — and every non-errno throw leaves it false, meaning
  *  "this path may well be there and this box could not measure it". Before
  *  this type, all of them left through `server.ts`'s `?? { missing: true }`
- *  wearing the wire's proven-absence marker (D-114).
+ *  wearing the wire's proven-absence marker (D-114); this type is what
+ *  closes it (D-1396), read in exactly one place, this function.
  *
  *  SAME DANGLING-SYMLINK RESIDUAL as `ReadResult`, and it must be stated here
  *  too: `stat` follows the link, the TARGET's ENOENT is what throws, and

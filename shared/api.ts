@@ -2752,7 +2752,9 @@ export type SessionStreamMsg =
    *      `searchComplete` and for the same reason: every older server DID
    *      stat the file, it simply could not tell you what the failure meant,
    *      and reading omission as `false` would put the host-unreadable
-   *      banner on every session of every pre-field server. */
+   *      banner on every session of every pre-field server. This field is
+   *      what tells the difference the collapsed `io.stat` this frame's
+   *      `missing` used to be derived from could not (D-1398). */
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
       foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }

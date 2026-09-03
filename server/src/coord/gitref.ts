@@ -108,7 +108,7 @@ export async function readBranchTip(
     // settling one on a stale SHA) and the reason this ships AGENT-FIRST.
     const st = await io.statMeasured(loosePath);
     if (st.ok) return null;                  // the ref IS there — refuse, as before
-    if (st.reason !== 'absent') return null;  // could not be measured — refuse
+    if (st.reason !== 'absent') return null;  // could not be measured — refuse (D-1400)
     // Only a PROVEN absence reaches packed-refs below.
   }
   const packed = await io.readFile(path.join(gitDir, 'packed-refs'));

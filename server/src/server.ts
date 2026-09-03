@@ -1832,7 +1832,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // the measured size when the agent sent one. Everything else — a dropped
       // agent round trip, a whitelist refusal, an EACCES — is 502, matching
       // `GET /api/peers?of=`'s `registry-unmeasurable` rather than
-      // manufacturing an absence out of a failure to look (D-114).
+      // manufacturing an absence out of a failure to look (D-114); this route
+      // used to fold all six conditions into one 404 (D-1402).
       if (r.reason === 'absent') return reply.code(404).send({ ok: false, error: 'not-found' });
       if (r.reason === 'too-large') {
         return reply.code(413).send({ ok: false, error: 'too-large', ...(r.size !== null ? { bytes: r.size } : {}) });
