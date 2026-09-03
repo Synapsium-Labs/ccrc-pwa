@@ -3418,6 +3418,46 @@ stale ledger cells re-measured. Committing the two source files again would be a
   guard's own author did not look at). The guard's negative case in
   `install-graphify-skill.test.ts` is unchanged and still the one that pins the warning.
 
+- **D-1367** (2026-09-03, live-fleet measurement after the read-side deploy) — **the sweep's discovery
+  predicate accepted every SUBDIRECTORY of a work tree and the one shape that matters least: the tree
+  itself.** `_gs_trees` globbed one level under `$PROJECTS_ROOT` and TWO under `$WORKTREES_ROOT`, then
+  admitted a candidate on `git rev-parse --is-inside-work-tree`. That predicate is true of every
+  directory inside a work tree, `.git` included, and false of nothing that sits under one — so a
+  worktree living at DEPTH 1 (`~/worktrees/<name>`, its own toplevel, which is what `ccd ws-add`
+  leaves for a single-workspace repo) was never discovered at all, while each of its immediate
+  subdirectories was discovered as a tree in its own right and BUILT INTO. Measured on the live fleet
+  2026-09-03: **8 stray `graphify-out/` directories under one worktree** — `node_modules/graphify-out`
+  and `graphify-out/graphify-out` among them — plus two `failed` census rows every pass, for ever.
+  **Those 8 directories are the operator's to delete: this fix stops the sweep creating them, and
+  deletes nothing** (the sweep's only removal site is the ownership-gated `.graphifyignore` one,
+  D-1161, and widening it to `graphify-out/` would be exactly the class of act this file refuses).
+
+  The fix asks the question the sweep actually means. A candidate is a tree **iff the realpath of its
+  own `git rev-parse --show-toplevel` is the realpath of itself** — "are you a tree", not "are you
+  inside one". `"$WORKTREES_ROOT"/*/` joins the glob so the depth-1 shape is asked at all; the two
+  worktree globs now overlap, so candidates are **deduped by realpath**, which also collapses two
+  names that reach one tree (a symlink and its target) and would otherwise be built twice in a pass.
+  The canonicaliser is a named shim, `_gs_realpath` (`realpath`, then `readlink -f`) — both spellings
+  are acceptable on both userlands, and `ccd-graph-sweep` is already outside `macos-platform.test.ts`'s
+  owned corpus for the GNU calls it still carries. **Its empty answer is a SKIP, never a value**: the
+  predicate is an equality, so an unmeasurable path spent rather than skipped makes every candidate
+  compare equal to every other and walks the whole subdirectory class straight back in. The census row
+  keeps the path AS GLOBBED rather than the canonical one — `$REG/<id>.workdir` and the hook's `cwd`
+  are compared against it verbatim, and canonicalising it would silently unmatch every reader.
+
+  Measured (`server/test/graph-sweep.test.ts`, baseline `Tests  42 passed | 2 skipped (44)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | restore the `--is-inside-work-tree` predicate in place of the toplevel equality | `Tests  1 failed \| 40 passed \| 2 skipped (43)` — *a subdirectory of a work tree was censused as a tree of its own: expected [ Array(1) ] to deeply equal []* |
+  | drop `"$WORKTREES_ROOT"/*/` from the glob | `Tests  1 failed \| 40 passed \| 2 skipped (43)` — the depth-1 tree is not discovered, nothing else is either, and the pass exits `probed-zero`: *expected 1 to be +0* |
+  | drop the realpath dedupe loop | `Tests  1 failed \| 40 passed \| 2 skipped (43)` — *one tree, censused 2 times: …/projects/beta, …/projects/beta-link: expected […(2)] to have a length of 1 but got 2* |
+  | drop `_gs_realpath`'s empty skip (`[ -n "$p" ] \|\| return 1`), so two empties compare equal | `Tests  1 failed \| 41 passed \| 2 skipped (44)` — *an unmeasurable canonical path was spent as if it were a measurement: expected [ Array(1) ] to deeply equal []* |
+
+  The last row's fixture puts stub `realpath` and `readlink` on the sweep's `PATH` that print nothing,
+  which is the only way to make the shim's failure arm reachable at all; without it the empty-skip
+  clause was a guard no test could redden.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

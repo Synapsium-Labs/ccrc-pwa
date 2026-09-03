@@ -154,6 +154,80 @@ describe('graph-sweep: probe + census (Task 6)', () => {
   });
 });
 
+describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367)', () => {
+  /** A git tree at `~/worktrees/<name>` — the DEPTH-1 shape, where the
+   *  workspace directly under the worktrees root is itself the toplevel. The
+   *  old glob pair (one level under `projects`, two under `worktrees`) never
+   *  named it, while `--is-inside-work-tree` said yes to every one of its
+   *  subdirectories, so the
+   *  sweep built a graph into each of them instead. Measured on the live fleet
+   *  2026-09-03 — 8 stray `graphify-out/` directories under one worktree,
+   *  including `node_modules/graphify-out` and `graphify-out/graphify-out`. */
+  function makeWorktreeRoot(name: string): string {
+    const d = j('worktrees', name);
+    fs.mkdirSync(path.join(d, 'src'), { recursive: true });
+    execFileSync('git', ['init', '-q', d]);
+    fs.writeFileSync(path.join(d, 'a.py'), 'x = 1\n');
+    fs.writeFileSync(path.join(d, 'src', 'b.py'), 'y = 2\n');
+    git(d, 'add', '.'); git(d, 'commit', '-qm', 'init');
+    fs.appendFileSync(path.join(d, '.git', 'info', 'exclude'), 'graphify-out/\n.graphifyignore\n');
+    return d;
+  }
+  const paths = (): string[] => lastPass().trees.map((t: { path: string }) => t.path);
+
+  it('discovers a depth-1 worktree ITSELF, and none of its subdirectories', () => {
+    const solo = makeWorktreeRoot('solo'); plantEngine();
+    expect(runSweep().status).toBe(0);
+    expect(paths(), 'a depth-1 worktree is never discovered at all').toContain(solo);
+    expect(paths().filter((p) => p.startsWith(solo + '/')),
+      'a subdirectory of a work tree was censused as a tree of its own').toEqual([]);
+    // The effect, not merely the census row: the stray graphs the live fleet
+    // grew are graphs the sweep BUILT into those subdirectories.
+    expect(fs.existsSync(path.join(solo, 'src', 'graphify-out')),
+      'the sweep built a graph into a plain subdirectory').toBe(false);
+    expect(fs.existsSync(path.join(solo, '.git', 'graphify-out')),
+      'the sweep built a graph inside .git').toBe(false);
+    expect(outcomeOf(solo)).toBe('never-built');
+  });
+
+  it('still discovers a depth-2 worktree, and never its container directory', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const wtDir = j('worktrees', 'alpha', 'wt1');
+    fs.mkdirSync(path.dirname(wtDir), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'wt1-branch', wtDir);
+    expect(runSweep().status).toBe(0);
+    expect(paths()).toContain(wtDir);
+    expect(paths()).toContain(repo);
+    expect(paths(), 'the plain directory that merely HOLDS worktrees was censused as a tree')
+      .not.toContain(j('worktrees', 'alpha'));
+  });
+
+  it('skips a candidate whose canonical path is UNMEASURABLE — never "two empties are equal"', () => {
+    // Both spellings of the shim answer nothing. The predicate is an EQUALITY,
+    // so an unmeasurable answer that is spent rather than skipped makes every
+    // candidate compare equal to every other and the whole
+    // subdirectory-of-a-worktree class walks straight back in.
+    const solo = makeWorktreeRoot('solo'); plantEngine();
+    const stub = j('pathstub'); fs.mkdirSync(stub, { recursive: true });
+    for (const name of ['realpath', 'readlink']) {
+      fs.writeFileSync(path.join(stub, name), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+    }
+    runSweep({ PATH: `${stub}:${process.env.PATH}` });
+    expect(paths().filter((p) => p === solo || p.startsWith(solo + '/')),
+      'an unmeasurable canonical path was spent as if it were a measurement').toEqual([]);
+    expect(lastPass().status).toBe('probed-zero');
+  });
+
+  it('censuses one row per tree when two names reach the same one (dedupe by realpath)', () => {
+    const repo = makeRepo('beta'); plantEngine();
+    fs.symlinkSync(repo, j('projects', 'beta-link'));
+    expect(runSweep().status).toBe(0);
+    const real = fs.realpathSync(repo);
+    const hits = paths().filter((p) => fs.realpathSync(p) === real);
+    expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
+  });
+});
+
 describe('graph-sweep: build discriminators (Task 7)', () => {
   it('row 7 — a wedged engine is timed-out by the knob, not a hung pass', () => {
     const repo = makeRepo('alpha');

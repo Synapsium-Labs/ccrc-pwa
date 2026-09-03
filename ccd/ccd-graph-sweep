@@ -48,11 +48,59 @@ _gs_finish() {   # pass-status ; exit-code
   exit "$rc"
 }
 
-_gs_trees() {    # every git working tree under the two roots
-  local d
-  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
+# D-1367 — canonical path, or NOTHING. `realpath` and `readlink -f` are both
+# acceptable on both userlands (macos-platform.test.ts refuses neither), but an
+# EMPTY answer is the one thing this shim must never let a caller spend: two
+# unmeasurable paths would compare equal, and "equal" is what admits a
+# candidate as a tree. Every caller checks for empty and SKIPS.
+_gs_realpath() {   # <path> -> its canonical path, or nothing at all
+  local p=""
+  p="$(realpath "$1" 2>/dev/null)" || p=""
+  [ -n "$p" ] || p="$(readlink -f "$1" 2>/dev/null)" || p=""
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+}
+
+# D-1367 — A TREE IS A TOPLEVEL, NEVER A DIRECTORY INSIDE ONE.
+#
+# The old predicate was `git rev-parse --is-inside-work-tree`, which is true of
+# every subdirectory of every work tree — and the glob pair asked it of one
+# level under $PROJECTS_ROOT and TWO under $WORKTREES_ROOT. A worktree that
+# lives at depth 1 (`~/worktrees/<name>`, its own toplevel) was therefore never
+# discovered, while every one of its immediate subdirectories was, `.git`
+# included. The sweep then built a graph into each of them. MEASURED on the
+# live fleet 2026-09-03: 8 stray `graphify-out/` directories under one
+# worktree — `node_modules/graphify-out` and `graphify-out/graphify-out` among
+# them — plus two `failed` census rows every pass, for ever.
+#
+# The question a candidate has to answer is not "are you inside a tree" but
+# "ARE YOU A TREE": the realpath of its own `--show-toplevel` is the realpath
+# of itself. `$WORKTREES_ROOT`/*/ joins the glob so the depth-1 shape is asked
+# at all, and the two worktree globs now overlap — so candidates are deduped by
+# realpath, which also collapses two names (a symlink and its target) that
+# reach one tree and would otherwise be built twice.
+#
+# The row keeps the path AS GLOBBED, not the canonical one: `$REG/<id>.workdir`
+# and the hook's `cwd` are compared against it verbatim, and canonicalising the
+# census would silently unmatch every reader.
+_gs_trees() {    # every git working TOPLEVEL under the two roots, once each
+  local d top real s dup
+  local -a seen=()
+  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
     [ -d "$d" ] || continue
-    git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && printf '%s\n' "${d%/}"
+    d="${d%/}"
+    top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || continue
+    [ -n "$top" ] || continue
+    top="$(_gs_realpath "$top")" || continue
+    real="$(_gs_realpath "$d")" || continue
+    [ "$top" = "$real" ] || continue
+    dup=0
+    for s in ${seen[@]+"${seen[@]}"}; do
+      [ "$s" = "$real" ] && { dup=1; break; }
+    done
+    [ "$dup" -eq 1 ] && continue
+    seen+=("$real")
+    printf '%s\n' "$d"
   done
 }
 
