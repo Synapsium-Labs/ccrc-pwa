@@ -4249,11 +4249,20 @@ one contains none.
 And the comment above `CONTRACT` at `worker-skill.test.ts:34-35` currently reads
 `// The eleven clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1` /
 `// quotes \`tmux display-message -p '#S'\` and clause 3 quotes \`toId:'coordinator'\``. Clause 1 no
-longer quotes that, so those two lines become:
+longer quotes that, so those two lines become these six. Note what the reason
+actually is (round-1 review, D-1416): clause 9's single quote is the APOSTROPHE in
+`done-claim's` — its eight enum words are backticked — so after clause 1 loses
+`'#S'`, clause 3's `toId:'coordinator'` is the only genuinely single-quoted literal
+left. The conclusion (double-quote the entries) is unchanged; only the reason is,
+and a dictated reason that is false is the plan's defect, not the implementer's:
 
 ```ts
 // The eleven clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
-// quotes `toId:'coordinator'` and clause 9 quotes the eight enum words
+// quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
+// since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
+// `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
+// Both therefore hold a single quote, and the sibling suite's single-quoted style
+// would need escaping exactly where a copy-paste from SKILL.md is most useful.
 ```
 
 - [ ] **Step 3: Run it and watch it fail**
@@ -4279,7 +4288,18 @@ REG="$HOME/.cc-sessions"                       # named here; the prose below use
 who=$("$HOME/.local/bin/ccrc-api" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
 id=${who#*\"id\":\"};     id=${id%%\"*}        # your session id, cc- prefix already stripped
 uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}    # the current $REG/$id.uuid, read by the client
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
 ```
+
+The fifth line is round 1's (D-1416): the two expansions are TEXTUAL, so a
+`whoami` that ever exited 0 with empty or non-envelope stdout would hand the
+prose below an empty or garbage identity and nothing would say so. Unreachable
+through today's client — every `derive_identity` failure goes through `refuse`
+with exit 2 — but it is the last residue of the very no-check class this task
+removed. The block stays byte-identical across the two corpora; `diff` them
+after any edit, and `ccrc-api.test.ts` now runs the two expansions it extracts
+from them against the real `whoami` stdout, so the byte format is pinned by the
+coupling rather than by a restatement of it.
 
 The introducing sentence gains one clause in both files. Coordinator `:42-43`
 (`… what tmux says about the pane you are in:`) and worker `:25-26` (same wording) become:
@@ -8193,7 +8213,13 @@ and the draft was wrong.
   or existence check (coordinator `SKILL.md:46-49`, worker `:29-32`, `diff` empty) — the path that produced
   the empty holders, and the one measured to name another session for a caller with no pane; both blocks, and
   the worker's verbatim-pinned clause 1 plus the test comment that described it, now derive through `ccrc-api
-  whoami`, which refuses instead of guessing.
+  whoami`, which refuses instead of guessing. Round 1 closed the residue under this same number: the byte
+  format those blocks slice was pinned nowhere (`JSON.parse` constrains no whitespace — measured: a space
+  after each colon in `cmd_whoami`'s `printf` left `ccrc-api.test.ts` green while both corpora derived
+  `id={`), so that suite now extracts the corpora's own two expansions and runs them against the real stdout;
+  a fifth fence line refuses an empty extraction; and two prose sentences this task falsified — worker `:40`
+  and coordinator `:59`, which still told the session to re-READ a file the client now reads for it — say
+  re-derive.
 - **D-1417** (Task 42): `peer-protocol.md:48`'s `body="${resp%$'\n'*}"` was a curl-era leftover assigning from
   a variable nothing in either corpus sets, so a coordinator copying that fence overwrote the whole claims
   response — including the 409 address the section teaches reading — with an empty expansion; deleted and

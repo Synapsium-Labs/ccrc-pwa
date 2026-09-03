@@ -132,6 +132,44 @@ const tmuxArgv = (): string[] => {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
 };
 
+/** The repo root, taken from the client's own resolved path
+ *  (`<root>/ccd/ccrc-api`) rather than from `import.meta.url` a second time. */
+const root = path.resolve(CCRC_API, '../..');
+
+/** One skill corpus's identity fence: the two parameter expansions a session
+ *  runs against `whoami`'s stdout, EXTRACTED from `SKILL.md` rather than
+ *  retyped here. Retyped they would be a second copy of the coupling; extracted
+ *  they ARE it, so the case below reds on a drift on either side — this
+ *  command's `printf` byte format, or the corpora's slicing of it.
+ *
+ *  D-1416, and the reason it needs its own case: the skills' dependency on this
+ *  output is TEXTUAL, and the `JSON.parse(r.stdout)` case in the whoami describe
+ *  below — the only other test of it — constrains neither whitespace nor
+ *  punctuation. Measured: one space after each colon in `cmd_whoami`'s `printf`
+ *  leaves every other assertion in this file GREEN while both corpora derive
+ *  `id={` and `uuid={` — a malformed identity on every session on the fleet.
+ *  (Key ORDER is safe without a pin: `"uuid":"` cannot satisfy `*"id":"`,
+ *  because of the quote in front of it. It is the bytes between the keys that
+ *  were unpinned.) */
+const identityFence = (skill: 'coordinator' | 'worker'): string => {
+  const md = fs.readFileSync(path.join(root, `ccd/${skill}-skill/SKILL.md`), 'utf8');
+  const lines = md.split('\n').filter((l) => /^(id|uuid)=\$\{who#/.test(l));
+  expect(lines, `${skill}: expected exactly the two identity expansions`).toHaveLength(2);
+  return lines.join('\n');
+};
+
+/** Runs a shell fragment under bash with `input` on stdin, answering its stdout.
+ *  `who=$(cat)` at the call site is `who=$(… whoami)` in the corpora: command
+ *  substitution strips the trailing newline on both sides. */
+const sh = (script: string, input: string): Promise<string> =>
+  new Promise<string>((resolve) => {
+    const child = spawn('bash', ['-c', script]);
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.stdin.end(input);
+    child.on('close', () => resolve(out));
+  });
+
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
   // table if every row is reachable and lands where it says. The ids here are
@@ -451,6 +489,21 @@ describe('whoami: the pane is the proof', () => {
     const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
     expect(r.status).not.toBe(0);
     expect(r.stdout).toContain('no-uuid');
+  });
+
+  it('is sliced correctly by the corpora that slice it — their expansions, this stdout', async () => {
+    plantPane('demo-ws');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).toBe(0);
+    const fence = identityFence('worker');
+    // Byte-identical across the two corpora is a standing property (a skill
+    // reaches a home only once its installer has run there, so the block is
+    // duplicated on purpose); asserting it here is what lets ONE run below
+    // speak for both.
+    expect(identityFence('coordinator'), 'the two corpora have drifted apart').toBe(fence);
+    const got = await sh(`who=$(cat)\n${fence}\nprintf '%s|%s' "$id" "$uuid"`, r.stdout);
+    expect(got, 'the corpora slice this stdout into a malformed identity')
+      .toBe('demo-ws|u-1234');
   });
 });
 

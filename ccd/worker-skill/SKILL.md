@@ -32,12 +32,13 @@ REG="$HOME/.cc-sessions"                       # named here; the prose below use
 who=$("$HOME/.local/bin/ccrc-api" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
 id=${who#*\"id\":\"};     id=${id%%\"*}        # your session id, cc- prefix already stripped
 uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}    # the current $REG/$id.uuid, read by the client
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
 ```
 
 `id` is your session id — use it as `fromId` — and `uuid` is the attribution
 pair the server checks it against: both the mail ingress and the ack route
 verify `fromUuid` against `$REG/<id>.uuid` and answer 403 `stale-uuid` on a
-mismatch. **Re-read that file, do not cache it.** `/clear` rotates its
+mismatch. **Re-derive, do not cache.** `/clear` rotates that file's
 contents, dispatch `/clear`s you on every wave from the second on, and a uuid
 carried across a wave boundary is not merely stale-ish — it is guaranteed
 wrong. Re-deriving is one call; a `stale-uuid` on a `wave-done` costs a

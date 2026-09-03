@@ -32,9 +32,11 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
 // The eleven clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
-// quotes `toId:'coordinator'` and clause 9 quotes the eight enum words
-// — both carry single quotes, and the sibling suite's single-quoted style would
-// need escaping exactly where a copy-paste from SKILL.md is most useful.
+// quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
+// since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
+// `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
+// Both therefore hold a single quote, and the sibling suite's single-quoted style
+// would need escaping exactly where a copy-paste from SKILL.md is most useful.
 // For the same reason SKILL.md is written with STRAIGHT apostrophes throughout:
 // `coordinator-skill.test.ts`'s literals carry curly ones (`operator’s`,
 // `judgement`) because its prose does, and a straight/curly mismatch is a
