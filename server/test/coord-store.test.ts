@@ -929,39 +929,72 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
   // D-1407. The guard on `cancelOutstandingDeliveries`
   // is real and has been since the run-close park shipped, but nothing measured
   // it: every test that named this method used it as a FIXTURE to park a queued
-  // row, so nothing in this describe asserts what it must NOT touch. Three rows,
-  // not one — an ACKED row, a row parked for a DIFFERENT reason, and a live row
-  // beside them so a mutation cannot pass by moving nothing at all.
-  it('cancelOutstandingDeliveries leaves an acked row and a DIFFERENTLY-parked row alone', () => {
+  // row, so nothing in this describe asserts what it must NOT touch. And one
+  // row per condition was not enough either, because the `WHERE` has TWO
+  // independent halves and each has to answer for itself. A `state IN
+  // ('queued','delivered')` measured on `queued` alone is HALF A GUARD: narrow
+  // it to `('queued')` and a `delivered`-but-unacked row survives the close to
+  // replay wave N's mail into wave N+1's freshly-cleared context — the exact
+  // harm this method exists to prevent — while the whole tree stays green. The
+  // `mailId IN (… WHERE runId = ?)` half tells the same story against a
+  // one-run fixture: drop the scoping and closing this run cancels every OTHER
+  // run's outstanding mail, and nothing can see it. So five rows across TWO
+  // runs — an ACKED row and a DIFFERENTLY-parked row this close must leave
+  // alone, a `queued` AND a `delivered` row it must park (a positive control of
+  // its own for each arm, rather than one shared between them, so neither arm
+  // can be deleted behind the other's evidence), and a sibling run's
+  // outstanding row proving the blast radius stops at this run's own mail.
+  it('cancelOutstandingDeliveries parks BOTH outstanding states, only for its own run, and leaves finished rows alone', () => {
     const s = store();
     const r = openRun(s) as { id: number };
-    const queue = (): { id: number } => {
+    // Wave 2 of the same program, same coordinator: a second OPEN run whose
+    // mail this close has no business touching. (`openRun`'s idempotent-retry
+    // arm reuses a `planned` row for the same wave, so the wave must differ or
+    // there is only one run here and the scoping stays unmeasured.)
+    const r2 = openRun(s, { wave: 2 }) as { id: number };
+    const queue = (runId: number): { id: number } => {
       const m = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
-                               runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                               runId, kind: 'status', subject: 'wave-brief', body: 'go',
                                artifacts: [] });
       return s.queueDelivery(m.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
     };
-    const acked = queue();
-    const parked = queue();
-    const live = queue();
+    const acked = queue(r.id);
+    const parked = queue(r.id);
+    const live = queue(r.id);
+    const inFlight = queue(r.id);
+    const sibling = queue(r2.id);
     s.markAcked(acked.id, 1_776_000_000_000);
     s.rejectDelivery(parked.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
-
-    s.cancelOutstandingDeliveries(r.id);
+    s.markDelivered(inFlight.id, 1_776_000_000_001);
 
     const row = (id: number) => s.db.prepare(
       'SELECT state, rejectCode, lastError FROM mail_deliveries WHERE id = ?',
     ).get(id) as { state: string; rejectCode: string | null; lastError: string | null };
+
+    // The fixture PROVES it can produce the `delivered`-but-unacked condition
+    // before the call, rather than assuming it: a `markDelivered` that silently
+    // declined would otherwise leave the second arm's assertion below passing
+    // for the first arm's reason.
+    expect(s.db.prepare('SELECT state, ackedAt FROM mail_deliveries WHERE id = ?').get(inFlight.id))
+      .toEqual({ state: 'delivered', ackedAt: null });
+
+    s.cancelOutstandingDeliveries(r.id);
 
     // An ack is a decision this close does not get to reverse.
     expect(row(acked.id)).toEqual({ state: 'acked', rejectCode: null, lastError: null });
     // …and a park already has a reason; a later park must not restamp it.
     expect(row(parked.id)).toEqual({ state: 'rejected', rejectCode: 'undeliverable',
                                      lastError: MAIL_REPLAY_CEILING_ERROR });
-    // The positive control: the live row DID move, so a mutant cannot satisfy
-    // the two assertions above by cancelling nothing at all.
+    // Positive control for the `'queued'` arm: the live row DID move, so a
+    // mutant cannot satisfy the two assertions above by cancelling nothing.
     expect(row(live.id)).toEqual({ state: 'rejected', rejectCode: 'undeliverable',
                                    lastError: MAIL_RUN_CLOSED_ERROR });
+    // Positive control for the `'delivered'` arm, which is the one that would
+    // otherwise replay: sent but never acked is still OUTSTANDING.
+    expect(row(inFlight.id)).toEqual({ state: 'rejected', rejectCode: 'undeliverable',
+                                       lastError: MAIL_RUN_CLOSED_ERROR });
+    // The scoping: wave 2's own outstanding mail is not this close's to park.
+    expect(row(sibling.id)).toEqual({ state: 'queued', rejectCode: null, lastError: null });
   });
 });
 
