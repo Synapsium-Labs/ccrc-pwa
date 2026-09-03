@@ -42,7 +42,18 @@ wave 7's close record.
 
 - **Branch:** commit on `ws/quiet-meadow`, never a feature branch. The done-fingerprint re-measures
   THIS workspace branch's tip; work parked elsewhere wedges every close with `stale-tip`.
-- **AGENT-FIRST.** Items 3 and 4 touch `ccd/ccrc-api`, `ccd/coordinator-skill/` and
+- **AGENT-FIRST, and WORK ITEM 1 IS TOO — decided during execution.** Item 1 splits across the two
+  deployables: Tasks 1 and 6 make the AGENT send `absent` / `tooLarge` / `size`, and Tasks 2, 7 and 8
+  make the SERVER consume them. Deploying the server lane first opens a window in which a genuinely
+  absent clip answers **502 `clip-unmeasurable` instead of 404**, because an old agent sends no marker
+  and the server's reader fails SHUT rather than guessing absence. That window is not a defect and
+  not a lie — it is the fail-shut contract behaving exactly as designed, it is honest about what the
+  server can prove, and it self-heals the moment the agent lane ships. It is nonetheless avoidable for
+  free by shipping the agent lane first, which this wave already requires for items 3 and 4. **So the
+  rule covers the whole wave, and the wave-done mail says so.** Raised as an open decision by Task 8's
+  review; ruled here rather than deferred, because the answer follows from the fail-shut design and
+  the deploy discipline already in force.
+- Items 3 and 4 additionally touch `ccd/ccrc-api`, `ccd/coordinator-skill/` and
   `ccd/worker-skill/`. Root `CLAUDE.md`: such a change ships to the fleet host BEFORE the server.
   **Deploy is not the worker's act** — the plan lands the change and says so in the wave-done mail; it
   does not run `deploy.sh`.
