@@ -529,6 +529,35 @@ describe('Build 7 nouns', () => {
       .toBeGreaterThanOrEqual(6);
   });
 
+  // …and the SAME pair in its JS shape, which the SQL-anchored regex above is
+  // structurally incapable of seeing. Two scans, not one, because the two
+  // copies do not look alike: `store.ts` wrote an SQL list, `MailStrip.tsx`
+  // wrote a disjunction, and a single regex that caught both would have to be
+  // loose enough to fire on prose (D-1404).
+  it('spells the delivery terminal pair ONCE in JS too — no hand-written === disjunction', () => {
+    const DISJ = /===\s*'(acked|rejected)'[^\n]*\|\|[^\n]*===\s*'(acked|rejected)'/;
+    // The premise, established here: both orders are recognised, and a
+    // SINGLE-member test — which is not a copy of the pair and is a legitimate
+    // thing to write (`statusArm`, MailStrip.tsx: `state === 'rejected'` alone)
+    // — is not.
+    expect(DISJ.test("if (item.state === 'acked' || item.state === 'rejected') return null;")).toBe(true);
+    expect(DISJ.test("x.state === 'rejected' || x.state === 'acked'")).toBe(true);
+    expect(DISJ.test("if (item.state === 'rejected') return 'abandoned';")).toBe(false);
+
+    const holders = ALL.filter((f) => DISJ.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written JS disjunction of the delivery terminal pair').toEqual([]);
+
+    // The client really does still EXCLUDE the pair — "no disjunction anywhere"
+    // is also satisfied by deleting the test entirely, which would put a gate
+    // line on an acked row. Asserted as the CALL SHAPE, not as the identifier:
+    // the identifier also appears in this file's own new docstring paragraph,
+    // so a `toContain('TERMINAL_DELIVERY_STATES')` would be satisfied by the
+    // comment alone and would pass with line 167 deleted.
+    const strip = readFileSync(path.join(ccrcRoot, 'pwa/src/session/MailStrip.tsx'), 'utf8');
+    expect(strip).toMatch(
+      /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
+  });
+
   // D-289 (was D-B4-16): no L1 file holds a database handle. `architecture:78-81` puts
   // `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 as TYPES only,
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this

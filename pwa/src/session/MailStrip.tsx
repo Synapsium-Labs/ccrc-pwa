@@ -23,6 +23,7 @@ import type { ReactNode } from 'react';
 import type { MailGate, MailSummary } from '../../../shared/api';
 import {
   MAIL_MAX_ATTEMPTS, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
+  TERMINAL_DELIVERY_STATES,
 } from '../../../shared/api';
 import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
@@ -155,16 +156,20 @@ const gatePhrase = (gate: string): string =>
  *
  * The state test is an EXCLUSION of the two terminal words, not an allow-list
  * of the live ones — so `unknown`, which is what a state this client does not
- * recognise revives as, keeps its gate line instead of losing it. The server
- * clears all four columns on send, ack and reject, but a client must not
- * depend on a server having done that, and the row's terminal arm outranks
- * this one anyway (there is one status line per row, by design).
+ * recognise revives as, keeps its gate line instead of losing it. It reads
+ * those two words from `TERMINAL_DELIVERY_STATES` rather than respelling them:
+ * this file held a copy of that pair, and the server's own guards are built
+ * from the same list, so a member added there can never again mean one thing to
+ * the lane and another to the strip. The server clears all four columns on
+ * send, ack and reject, but a client must not depend on a server having done
+ * that, and the row's terminal arm outranks this one anyway (there is one
+ * status line per row, by design).
  *
  * Returns `null`, not a flag: the caller needs the gate AND the span, and
  * computing the span twice is how the headline and the row come to disagree.
  */
 export function heldGate(item: MailSummary, now: number): { gate: string; forMs: number } | null {
-  if (item.state === 'acked' || item.state === 'rejected') return null;
+  if ((TERMINAL_DELIVERY_STATES as readonly string[]).includes(item.state)) return null;
   // `== null`, NOT `=== null`, and the difference is the entire absence-permits
   // rule in one operator. A server that predates these columns omits them, so
   // they arrive `undefined` — and `undefined === null` is false, so the first
