@@ -207,7 +207,7 @@ export function queueSystemMail(
     // placeholder envelope, which carries no `ack:` line and so names no
     // delivery id for any recipient to ack against. The throw ESCAPES
     // `queueSystemMail` — callers `close.ts:248`, `dispatch.ts:661`,
-    // `kickoff.ts:156`, `routes.ts:1204` — deliberately: `{ queued: false }`
+    // `kickoff.ts:156`, `routes.ts:1211` — deliberately: `{ queued: false }`
     // already means "the dedupe guard suppressed it", a different and true
     // statement this must not borrow.
     if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
