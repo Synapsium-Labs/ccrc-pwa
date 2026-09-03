@@ -3514,8 +3514,12 @@ Every anchor and cardinal below was re-opened at HEAD `5e9f650d` on 2026-09-02 (
 `git rev-parse HEAD` → `5e9f650d36a39b1cb0482411c673315b5dd0ca0b`). Where a number could move, the
 task asserts the PROPERTY and names a dated exemplar instead.
 
-Deviation numbers are **not** allocated here. Each task names `D-TBD-<slug>` markers; the executor
-allocates from `POST /api/ledger/deviations` and defines in the same act.
+Deviation numbers ARE allocated: this section's tasks carry **D-1413..D-1424**, minted in one block
+from `POST /api/ledger/deviations` before execution began. (The drafted plan carried `D-TBD-<slug>`
+markers here; `server/test/dtbd.test.ts` refuses a concrete placeholder in a tracked file, so the whole
+wave allocated up front instead — see `## Deviations found`.) **Do not allocate again**: use the number
+the task names. If execution uncovers a deviation no task anticipated, THAT one is minted fresh and
+defined in the same act.
 
 ---
 
@@ -7007,10 +7011,13 @@ candidates rather than guessed at, and no work was scheduled against it.
 
 > **Scope note every executor in this section must read first.**
 >
-> **Allocate every `D-TBD-<slug>` before you write it.** Each task below carries one or two
-> `D-TBD-<slug>` placeholders and a `LEDGER:` line. Read the floor from `POST /api/ledger/deviations`
-> at the moment you write the entry, never from this document and never from a plan — and allocate
-> BEFORE the ref goes into source, which is the exact discipline D-1332 records this program breaking.
+> **The numbers are already allocated — do NOT mint more.** This section's tasks carry
+> **D-1430..D-1437** (plus D-1422, shared with work item 3), minted in one block from
+> `POST /api/ledger/deviations` before execution began, because `server/test/dtbd.test.ts` refuses a
+> concrete `D-TBD-` placeholder in a tracked file. Use the number the task names. Should execution
+> uncover a deviation no task anticipated, read the floor from the allocator at the moment you write
+> the entry — never from this document and never from a plan — and allocate BEFORE the ref goes into
+> source, which is the exact discipline D-1332 records this program breaking.
 > Measured on 2026-09-02 in this worktree, the ccrc-pwa floor read **1333**, then **1389**, then
 > **1392** on three reads in one day. Any floor printed in a document is already stale; that is why
 > none is printed here.
