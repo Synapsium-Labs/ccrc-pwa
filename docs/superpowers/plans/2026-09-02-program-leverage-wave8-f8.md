@@ -8257,11 +8257,20 @@ and the draft was wrong.
   (measured 2026-09-02) — the matcher is deliberately NOT changed and the docstring now argues why: a
   conservative floor burns numbers, which is waste, where reconcile's looseness wrote a false fact into a
   terminal column.
-- **D-1424** (Task 48): a `user_version` 7→8 migration un-lands exactly the rows whose recorded landing names
-  the file the citation stamped, because `markLanded`'s terminal WHERE clause means the corrected sweep would
-  otherwise never re-decide them — keyed on the path rather than on a number list, which is provably safe
-  because that file defines 18 numbers of which the allocator issued none, so no correctly-landed row can name
-  it.
+- **D-1424** (Task 48): a `user_version` 7→8 migration un-lands exactly the two rows a CITATION stamped,
+  because `markLanded`'s terminal `WHERE ... state = 'allocated'` means the corrected sweep would otherwise
+  never re-decide them — keyed on the two NUMBERS **and** the path, not on the path alone. THE PATH-ONLY
+  FORM WAS PLANNED AND IS WRONG, and the correction is itself the deviation: it rested on a 2026-09-02
+  measurement that the citing file defined 18 numbers of which the allocator had issued none, and the file
+  merged to `origin/main` on 2026-09-03 (`6a26a9a3`, PR #45) carrying a ledger of its own. Re-measured by
+  replaying `definitionsIn` over that copy: 43 definition lines, 42 distinct — D-1245..D-1252 and
+  D-1333..D-1366 — the upper band allocator-issued by the file's own record (`:2507`, "this round takes
+  D-1333..D-1337"). A path-keyed statement would have un-landed up to 42 CORRECT rows, some of them already
+  stamped: the old bare-`\b` matcher landed D-1333 against that same file too, and there it was right. What
+  holds the narrow form instead is a property of the two numbers rather than of the file's size — that file
+  CITES `D-1294..D-1332` in a blockquote at `:2506` and defines neither, while both are DEFINED on
+  `origin/main` in `2026-09-02-program-leverage-wave7-f7.md` (`:1195`, `:1789`) — so it cannot expire the
+  way the first argument did.
 - **D-1425** (Task 61): `reclaimProgram` moved only OUTSTANDING role-addressed mail (arm (c),
   `OUTSTANDING_STATES_SQL` at `store.ts:764`), so a wave-done report that had already parked `undeliverable`
   against the dead coordinator stayed readable at `outstandingMailFor(<corpse>)` and nowhere else, falsifying
