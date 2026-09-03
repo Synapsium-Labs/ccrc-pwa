@@ -131,11 +131,16 @@ describe('the coordinator skill: its contract', () => {
     }
   });
 
-  it('tells the session how to learn its own id the ONE way that works on this box', () => {
-    // ccd/session-hook.sh:15-19 — derived from tmux, never from a `from:`
-    // field. Copied because the skill runs where the hook runs.
-    expect(skill).toContain("tmux display-message -p '#S'");
+  it('tells the session how to learn its own id the ONE way that is actually its own', () => {
+    // The bare derivation this replaced was measured on the fleet host three
+    // times on 2026-09-02: with no TMUX_PANE it exits 0 naming the MOST RECENTLY
+    // ACTIVE session — a different one on each run — so a session whose lookup
+    // went wrong got another session's id and believed it. `ccrc-api whoami`
+    // targets THIS pane and refuses instead.
+    expect(skill).toContain('ccrc-api" whoami');
     expect(skill).toContain('cc-');
+    expect(skill, 'the unchecked derivation is back')
+      .not.toContain("tname=$(tmux display-message -p '#S')");
   });
 
   // Wave 3 §3.1. A coordinator writes a ledger and a brief that name the
@@ -997,12 +1002,24 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(pp()).toMatch(/ledger allocate[\s\S]{0,220}"byId":"\$id"/);
   });
 
-  it('carries no ${resp expansion — the client returns the body, and there is no second stream', () => {
+  it('no reference file carries a ${resp expansion — the client returns the body, and there is no second stream', () => {
     // A curl-era leftover: `resp` is assigned nowhere in either corpus, so the
     // line overwrote the captured body with the empty expansion of an unset
     // variable. A coordinator copying that fence lost the whole 409 answer —
     // the ADDRESS this section's own prose (`:79`) teaches reading.
-    expect(pp()).not.toContain('${resp');
+    //
+    // WIDENED (D-1417, same number as the fix): this scanned `peer-protocol.md`
+    // ALONE, so the identical clobber landing in a sibling reference — every
+    // one of which ships copyable fences — was invisible to it. The corpus is
+    // DERIVED from the directory, the `REFERENCE_NAMES` reason (D-1003): a
+    // reference file added tomorrow is scanned without anyone remembering to
+    // add it. SKILL.md is deliberately OUT of this scan and must stay out — its
+    // `:134` names `${resp` in PROSE, as the history of what the capture idiom
+    // USED TO be, and that sentence is the reason a reader does not reinvent it.
+    for (const name of REFERENCE_NAMES) {
+      expect(refs(name), `${name} carries the curl-era \${resp clobber`)
+        .not.toContain('${resp');
+    }
   });
 
   it('tells the truth about which layer refuses a bad claim path (fix, post-9b review)', () => {

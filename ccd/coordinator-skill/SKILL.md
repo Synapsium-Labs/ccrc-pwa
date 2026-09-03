@@ -40,13 +40,15 @@ the console sends it from, and what is left when the id is already lost.
 
 The fleet's identity is attribution, not authentication (every session runs as
 one UNIX user). The one thing that is not carried in a payload is what tmux
-says about the pane you are in:
+says about the pane you are in — asked through the client, which targets THIS
+pane and refuses if you are not in one, rather than answering for whichever
+session happened to be active last:
 
 ```bash
-tname=$(tmux display-message -p '#S')   # cc-<id>
-id="${tname#cc-}"
-REG="$HOME/.cc-sessions"
-uuid=$(cat "$REG/$id.uuid")
+REG="$HOME/.cc-sessions"                       # named here; the prose below uses it
+who=$("$HOME/.local/bin/ccrc-api" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}        # your session id, cc- prefix already stripped
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}    # the current $REG/$id.uuid, read by the client
 ```
 
 That `id` is your session id and `uuid` is the attribution pair the server
