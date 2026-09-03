@@ -192,7 +192,19 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   skill reaches a home only once its installer has run there.
 
 ## Open on `main` — do NOT assume these are fixed
-`MailDeliveryState` terminality is incomplete (some writers lack the guard); `FleetIO.readFile`'s docstring now
+`MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in
+`server/src/coord/store.ts` names one of two shared guard fragments — `OUTSTANDING_STATES_SQL` or
+`TERMINAL_DELIVERY_SQL`, the latter built by `.join` from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`) —
+pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-written copy in SQL or in JS, by
+two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
+that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
+`markDelivered`, `markIngested`, `backOff`, `noteGate` and `rejectDelivery`. Their guard is invisible to the
+caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered` as the archetype of,
+and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its
+replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
+that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
+ruled on. `FleetIO.readFile`'s docstring now
 ADMITS the collapse instead of denying it, and `readFileMeasured` (`MeasuredRead`/`ReadFailure`,
 `server/src/io.ts`) ships a result-returning read that tells absent from unreadable — but the collapse
 isn't gone from the tree: `readFile`, `readFileB64` and `readFileFrom` still fold every failure to one `null`

@@ -4,6 +4,8 @@
 // — quotas and the dark-behavior pin — lives in mail-peer-quota.test.ts.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { queueSystemMail } from '../src/coord/rundefs.js';
@@ -262,5 +264,201 @@ describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)',
     s.noteGate(d.id, 'not-idle', now + 100, false, null);
     expect(gates(s, d.id)).toEqual({ lastGate: 'not-idle', gateAt: now + 100,
                                      gateCount: 1, gateSince: now + 100 });
+  });
+});
+
+// D-1411. The audit, as a mechanism instead of a sentence.
+// Every `UPDATE mail_deliveries` in the store must name one of the TWO shared
+// guard fragments — `OUTSTANDING_STATES_SQL` (the positive form: this write is
+// only for a row still in play) or `TERMINAL_DELIVERY_SQL` (the negative form:
+// this write is for any row that is not finished). A hand-written state list
+// fails this too, which is deliberate: it is the same rule the single-definition
+// scans state, said once more at the point of use.
+//
+// This is what lets `CLAUDE.md`'s "Open on main" section stop hedging. It scans
+// TEXT, and that limitation is worth stating: it cannot tell a guard that is
+// correct from one that is merely present, and it does not reach `server/test`,
+// where a fixture may still write raw SQL (`coord-health.test.ts` does, on
+// purpose). The bar is "a twelfth writer added in the ordinary way is stopped
+// before review".
+describe('every delivery-row writer names a shared terminality guard (wave 8)', () => {
+  const ccrcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const storeSrc = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+  const srcLines = storeSrc.split('\n');
+
+  /** A single-line method signature at class-member indent, e.g.
+   *  `  markIngested(id: number, at: number): void {`. Single-line ON PURPOSE:
+   *  the walk-back below names the writer by finding the nearest one above the
+   *  statement, and a signature split across lines would silently attribute a
+   *  statement to the PREVIOUS method. The `^  }` check guards exactly that. */
+  const SIG = /^ {2}(?:private |public |static |readonly )*([A-Za-z_$][\w$]*)\(.*\)\s*:\s*(.+?)\s*\{\s*$/;
+
+  /** Every prepared statement in `store.ts` that writes a delivery row, sliced
+   *  from `this.db.prepare(` to the call that executes it, and tagged with the
+   *  method it lives in. Anchored on `prepare(` rather than on the SQL verb so
+   *  that PROSE naming the table — a docstring explaining one of these guards —
+   *  can never be counted as a twelfth statement. */
+  const writers = (): { line: number; method: string; returns: string; text: string }[] => {
+    const out: { line: number; method: string; returns: string; text: string }[] = [];
+    const EXEC = /\.(?:run|get|all|iterate)\(/;
+    for (const m of storeSrc.matchAll(/this\.db\.prepare\(/g)) {
+      const at = m.index!;
+      const rest = storeSrc.slice(at);
+      const e = EXEC.exec(rest);
+      expect(e, `the prepare( at offset ${at} never reaches an execution call`).not.toBeNull();
+      const text = rest.slice(0, e!.index);
+      if (!/UPDATE mail_deliveries\b/.test(text)) continue;
+      const line = storeSrc.slice(0, at).split('\n').length;
+      let sigLine = 0;
+      for (let i = line - 1; i > 0; i--) { if (SIG.test(srcLines[i - 1]!)) { sigLine = i; break; } }
+      expect(sigLine, `no method signature above the delivery write at store.ts:${line}`)
+        .toBeGreaterThan(0);
+      // If a method CLOSED between that signature and this statement, the
+      // walk-back left its own method and the name below would be a lie.
+      const between = srcLines.slice(sigLine, line - 1).join('\n');
+      expect(/^ {2}\}/m.test(between),
+        `the walk-back from store.ts:${line} crossed a method close — its signature is not single-line`)
+        .toBe(false);
+      const sig = SIG.exec(srcLines[sigLine - 1]!)!;
+      out.push({ line, method: sig[1]!, returns: sig[2]!, text });
+    }
+    return out;
+  };
+
+  it('finds every one of them — a renamed table or a rewritten call shape must red this, not disarm it', () => {
+    const found = writers();
+    // A FLOOR, not a count: eleven at 5e9f650d (2026-09-02), and a twelfth
+    // writer raises it rather than breaking it. Without this the assertion in
+    // the next test is satisfied by an extractor that found nothing.
+    expect(found.length).toBeGreaterThanOrEqual(11);
+    // …and each window is a STATEMENT, not a runaway slice that swallowed the
+    // next method's docstring. Measured max: 498 characters at 5e9f650d, 502
+    // once this wave's guards landed — `markDelivered`'s window is the long
+    // one. The 1000 is a plausibility ceiling with room above the measurement,
+    // not a second count.
+    for (const w of found) {
+      expect(w.text.includes('*/'), `store.ts:${w.line}'s window swallowed a docstring`).toBe(false);
+      expect(w.text.length, `store.ts:${w.line}'s window is implausibly long`).toBeLessThan(1000);
+      expect(w.method.length, `store.ts:${w.line} resolved to an empty method name`).toBeGreaterThan(0);
+    }
+    // Eleven statements in eleven distinct methods — a duplicate name means the
+    // walk-back attributed two statements to one signature.
+    expect(new Set(found.map((w) => w.method)).size).toBe(found.length);
+  });
+
+  it('names OUTSTANDING_STATES_SQL or TERMINAL_DELIVERY_SQL, never a hand-written state list', () => {
+    for (const w of writers()) {
+      expect(/OUTSTANDING_STATES_SQL|TERMINAL_DELIVERY_SQL/.test(w.text),
+        `store.ts:${w.line} (${w.method}) writes a delivery row with no shared terminality guard`).toBe(true);
+    }
+  });
+
+  it("CLAUDE.md names exactly the delivery-row writers that still return void", () => {
+    // THE OTHER HALF OF THE SENTENCE, as a mechanism. The clause this replaces
+    // sat unreworded from 2026-08-12 while three guard commits landed after it,
+    // because nothing measured it. This derives the list from source and
+    // compares both directions, so widening one of these writers reds here and
+    // the sentence has to move with the code.
+    const md = readFileSync(path.join(ccrcRoot, 'CLAUDE.md'), 'utf8').replace(/\s+/g, ' ');
+    // Flattened first, the way `box-token-census.test.ts` flattens its own
+    // corpus and for the same reason: this is hard-wrapped prose and a
+    // backticked name routinely sits either side of a newline.
+    const MARK = 'still return `void` are ';
+    expect(md, 'CLAUDE.md no longer carries the void-writer sentence this test reads')
+      .toContain(MARK);
+    const span = md.slice(md.indexOf(MARK) + MARK.length);
+    const listed = span.slice(0, span.indexOf('.'));
+    const named = [...listed.matchAll(/`([A-Za-z_$][\w$]*)`/g)].map((m) => m[1]!);
+    expect(named, 'the void-writer list in CLAUDE.md came out empty — was the sentence reworded?')
+      .not.toEqual([]);
+    const voids = writers().filter((w) => w.returns === 'void').map((w) => w.method);
+    expect([...named].sort(), 'CLAUDE.md and store.ts disagree about which delivery writers return void')
+      .toEqual([...voids].sort());
+  });
+
+  // D-1409, the half of it that was still a promise. `setDeliveryEnvelope` was
+  // widened from `void` to `SetEnvelopeResult` "so the guard is not invisible"
+  // — but TypeScript does not require a caller to consume a returned value, so
+  // that half rested on author discipline alone. MEASURED: reverting both call
+  // sites to the bare one-liner leaves `tsc` clean and 497 tests across nine
+  // suites green. A union nobody reads is a `void` with extra characters, and
+  // Task 61 of this same wave adds a THIRD call site, so the rule has to be
+  // enforced on call sites this test has never seen.
+  //
+  // SCOPE LIMITS, stated because this is a text scan and cannot tell a correct
+  // check from a present one:
+  //   • It pins ONE consumption shape — bind the result to a name, then read
+  //     `<name>.ok` within the following 40 lines. A destructuring call site
+  //     (`const { ok } = …`) is CORRECT and would still red here. That is a
+  //     deliberate trade: a false red on a new-but-valid shape costs one edit
+  //     to this scan, while a loose scan costs the guarantee.
+  //   • It sees `server/src` only, and only files ending `.ts`.
+  //   • Comment lines are blanked before matching, so prose mentioning the
+  //     method is not a call site — proved on this file's own corpus below.
+  //   • It cannot see whether the `.ok` branch does anything USEFUL; the
+  //     behavioural half is `coord-store.test.ts`'s refusal tests.
+  it('every setDeliveryEnvelope call site consumes the result and checks it (D-1409)', () => {
+    const CALL = /[A-Za-z_$][\w$]*\.setDeliveryEnvelope\(/;
+    const BOUND = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.setDeliveryEnvelope\(/;
+    // The premises, established here rather than assumed: without them the
+    // loop below is satisfied by a regex that matches nothing, or by one that
+    // counts the DEFINITION (which has no receiver) as a call site.
+    expect(CALL.test('    const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);')).toBe(true);
+    expect(CALL.test('    coord.setDeliveryEnvelope(delivery.id, envelope);')).toBe(true);
+    expect(CALL.test('  setDeliveryEnvelope(id: number, envelope: string): SetEnvelopeResult {')).toBe(false);
+    expect(BOUND.exec('    const stamped = coord.setDeliveryEnvelope(a, b);')?.[1]).toBe('stamped');
+    expect(BOUND.exec('    coord.setDeliveryEnvelope(a, b);')).toBeNull();
+
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) walk(f);
+        else if (e.name.endsWith('.ts')) files.push(f);
+      }
+    };
+    walk(path.join(ccrcRoot, 'server/src'));
+    expect(files.length, 'the walk over server/src found no TypeScript at all').toBeGreaterThan(20);
+
+    const sites: { at: string; bound: string | null; checked: boolean }[] = [];
+    for (const f of files) {
+      // Comment lines are BLANKED rather than removed, so the index below
+      // still names the real line of the file. Same idiom, and the same
+      // stated cost, as `single-definition.test.ts`'s literal scans.
+      const code = readFileSync(f, 'utf8').split('\n')
+        .map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l));
+      for (let i = 0; i < code.length; i++) {
+        if (!CALL.test(code[i]!)) continue;
+        const name = BOUND.exec(code[i]!)?.[1] ?? null;
+        const after = code.slice(i + 1, i + 41).join('\n');
+        sites.push({
+          at: `${path.relative(ccrcRoot, f)}:${i + 1}`,
+          bound: name,
+          checked: name !== null && new RegExp(`\\b${name}\\.ok\\b`).test(after),
+        });
+      }
+    }
+
+    // THE ANTI-VACUITY FLOOR. Two call sites at f7421733 (`rundefs.ts`'s
+    // `queueSystemMail` and `routes.ts`'s mail-send route); Task 61 adds a
+    // third and raises this rather than breaking it. Without the floor a scan
+    // that found nothing — a renamed method, a broken walk, an over-eager
+    // comment strip — passes silently, which is the failure this wave has hit
+    // more than once.
+    expect(sites.length, 'no setDeliveryEnvelope call site found in server/src at all')
+      .toBeGreaterThanOrEqual(2);
+    // …and the comment strip really did strip: `store.ts` and `routes.ts` both
+    // discuss this method in prose, and prose is not a call site.
+    expect(sites.map((s) => s.at).filter((a) => a.startsWith('server/src/coord/store.ts')),
+      'a mention of setDeliveryEnvelope inside store.ts was counted as a call site').toEqual([]);
+
+    for (const s of sites) {
+      expect(s.bound,
+        `${s.at} discards setDeliveryEnvelope's result — the refusal it carries is invisible there, `
+        + 'which is the exact defect D-1409 widened the return type to fix').not.toBeNull();
+      expect(s.checked,
+        `${s.at} binds setDeliveryEnvelope's result as \`${s.bound}\` but never reads \`${s.bound}.ok\``)
+        .toBe(true);
+    }
   });
 });
