@@ -1206,7 +1206,12 @@ const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
   state: 'dispatched', claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
   openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
-  unreadMail: 0, ...over,
+  unreadMail: 0,
+  // F7's per-run health facts. All-clear, deliberately: every case in this file
+  // predates the warn row and must keep rendering exactly as it did.
+  health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+            lastRejectCode: null, briefQueued: true, clearError: null,
+            coordKickoffPendingSince: null }, ...over,
 });
 
 describe('the programme tree on the fleet screen', () => {

@@ -3513,6 +3513,36 @@ export const MAIL_REJECT_CODES = [
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
+ * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
+ * a forward advance can be refused with, as distinct from the ingress, peer-bound
+ * and delivery families above.
+ *
+ * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
+ * one: the ARRAY is the single definition and the type follows it, because wave
+ * 7's per-run health read needs the members at RUNTIME for a SQL `IN (...)` and a
+ * hand-kept fourth copy is exactly what this replaces. It was spelled three times
+ * — here, and as an identical `Extract<MailRejectCode, ...>` in both
+ * `coord/close.ts` and `coord/fingerprint.ts` (D-1296).
+ *
+ * `satisfies readonly MailRejectCode[]` is the load-bearing clause: a typo, or a
+ * member that leaves the parent union, is a compile error here — which a bare
+ * `as const` could not catch.
+ */
+export const DONE_AUTHORITY_CODES = [
+  'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
+  'pr-unmeasurable', 'no-handoff-commit',
+] as const satisfies readonly MailRejectCode[];
+export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+// NO `isDoneRejectCode` PREDICATE, deliberately. Every sibling vocabulary here
+// exports one because something reads a raw string back through it; nothing does
+// for this family — `mail_rejections.code` is read back UNTYPED on purpose
+// (`CoordStore.rejections`), and the list's only consumer is a SQL `IN (...)`
+// bind. A predicate with no caller is a guard that guards nothing and a second
+// place for the members to be spelled. It shipped in this wave's first draft with
+// zero callers and zero tests, and was deleted in review.
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT
@@ -3711,6 +3741,70 @@ export interface RunItemTally { done: number; total: number }
 /** One run, as `/ws/fleet`'s `runs` frame and `GET /api/runs` carry it.
  *  Deliberately flat and deliberately small: this rides the fleet socket
  *  alongside a full session snapshot on every change. */
+/**
+ * Per-run health facts the `/runs` board renders as a compact warn row (F7).
+ * Every wedge below was previously discoverable only by reading /mail or the
+ * database by hand: a parked delivery, a replay count climbing toward the
+ * 20-attempt ceiling, a repeated done-claim refusal, a dispatch whose brief was
+ * never queued, and a coordinator that was never briefed at all.
+ *
+ * ADDITIVE; `FLEET_PROTO` is deliberately NOT bumped. An older server omits the
+ * whole object and the PWA renders NOTHING — never "no wedge here", which is a
+ * claim this build would be making on that server's behalf.
+ *
+ * EVERY MEMBER IS A COUNT, A CODE OR A STORED TIMESTAMP — never an age, and that
+ * is a hard constraint rather than a preference. The WS `runs` frame is dropped
+ * from the broadcast when its JSON is unchanged (`server/test/fleetws.test.ts`),
+ * so a field carrying a clock would differ on every tick, defeat that dedupe and
+ * turn an idle fleet into a broadcast storm — a performance regression shaped
+ * exactly like a feature. The thresholds therefore live in the renderer, which is
+ * the `SPAWN_STALL_MS` precedent (D-1300).
+ */
+export interface RunHealth {
+  /** Deliveries of this run's mail still `queued` or `delivered`. */
+  readonly mailOutstanding: number;
+  /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
+   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
+   *  working as designed and is excluded, because reporting it would announce a
+   *  chair that has already changed hands. */
+  readonly mailParked: number;
+  /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
+   *  delivery attempts and mail 129 reached 911, each arriving after the work it
+   *  was meant to steer; this is the number that was climbing the whole time
+   *  while nothing on any surface showed it. MAX and not SUM: one message nearing
+   *  the ceiling is the signal, and quiet siblings must not dilute it. */
+  readonly mailReplayMax: number;
+  /** How many done-authority refusals this run has collected
+   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+  readonly doneRejects: number;
+  /** The newest one's code, or null when there are none. FREE TEXT on the wire in
+   *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
+   *  unvalidated and read back as a raw string, so a client may DISPLAY this and
+   *  must never key a total `Record<..., ...>` off it. */
+  readonly lastRejectCode: string | null;
+  /** What this run's last committed dispatch DECIDED about the brief.
+   *  `null` is a THIRD condition and not a flavour of `false`: no dispatch has
+   *  committed, or the row predates migration 7. `false` means a dispatch ran and
+   *  queued no brief — the state that previously left no trace at all (D-1298). */
+  readonly briefQueued: boolean | null;
+  /** The `sendPrompt` refusal code that made `briefQueued` false, or null. Free
+   *  text, on `lastError`'s terms. */
+  readonly clearError: string | null;
+  /** When the OLDEST unacked `program-kickoff` addressed to this run's
+   *  `claimedBy` was first sent, or null when there is none. A timestamp, never a
+   *  verdict — the renderer owns the threshold.
+   *
+   *  "UNACKED" AND NOT "STILL BEING RETRIED" (D-1318). A kickoff that parked —
+   *  the replay ceiling, a recipient the registry no longer lists — is still a
+   *  kickoff nobody ever acked, and the first version of this field went null the
+   *  moment the lane gave up, which is the one moment the wedge became permanent.
+   *  Null here means acked, or no coordinator, or a park the store treats as a
+   *  DECISION (a reclaim cancelling the dead chair's kickoff before mailing the
+   *  new one) — three conditions a caller renders identically, and deliberately:
+   *  none of them is "somebody is stuck". */
+  readonly coordKickoffPendingSince: number | null;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -3801,6 +3895,19 @@ export interface RunSummary {
   items: RunItemTally;
   /** Unacked mail addressed to this run's session. */
   unreadMail: number;
+
+  /**
+   * F7's per-run health facts — the wedges this program spent six waves finding
+   * forensically, as measured values. See `RunHealth`.
+   *
+   * REQUIRED here because `hydrateRun` returns a literal and must therefore
+   * compute it, and OPTIONAL at every PWA reader, because an older SERVER omits
+   * it. The one tolerant reader is `runWarnings()` in `pwa/src/fleet/runWords.ts`
+   * — NOT `runHealth`, which is the SERVER store method that measures this
+   * object; naming that one here pointed a maintainer at the wrong ring for the
+   * tolerance guarantee. No JSX reads a member directly.
+   */
+  health: RunHealth;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
@@ -3814,6 +3921,24 @@ export interface RunSummary {
  *  does NOT silently move what the console calls stalled — that is a
  *  deliberate edit here, made with this paragraph's inequality in hand. */
 export const SPAWN_STALL_MS = 360_000;
+
+/** F7. A `RunHealth.mailReplayMax` at or above this is a delivery climbing toward
+ *  `MAIL_REPLAY_MAX_ATTEMPTS` (20, `server/src/watch.ts`), and the board says so.
+ *
+ *  A RENDERING threshold on `SPAWN_STALL_MS`'s terms — nothing server-side reads
+ *  it, and it is deliberately NOT derived from the ceiling it watches. Half is
+ *  the point: a warning that fires only AT the ceiling arrives with the message
+ *  already parked, which is precisely how mail 120 and mail 129 were discovered
+ *  (722 and 911 attempts, both after the work they were meant to steer). */
+export const MAIL_REPLAY_WARN_COUNT = 10;
+
+/** F7. An unacked `program-kickoff` older than this is a coordinator that was
+ *  never briefed — an open run whose chair nobody ever sat in.
+ *
+ *  A RENDERING threshold, same argument. Fifteen minutes is the `MAIL_GATE_HELD_MS`
+ *  register rather than a copy of any lane number: it clears a full server suite
+ *  (~9 min) with room, so a coordinator that is merely busy stays silent. */
+export const KICKOFF_UNACKED_MS = 900_000;
 
 /** D-792, §6. WHEN the console is allowed to name the gate holding a delivery.
  *
@@ -3961,7 +4086,37 @@ export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
  *  TOGETHER, in one shape and one round trip: a cap without its usage is a
  *  number an operator cannot act on, and a usage without its cap is a number
  *  they cannot read. */
-export interface CoordCapsView { caps: CoordCaps; usage: CoordCapsUsage }
+export interface CoordCapsView {
+  caps: CoordCaps;
+  usage: CoordCapsUsage;
+  /** When the caps were last written, or `null` if they never have been (D-1169).
+   *
+   *  ADDITIVE, and on the VIEW rather than on `CoordCaps`: the view is the
+   *  read-side shape, while `CoordCaps` is the stored value that `decideCaps`
+   *  merges and `setCaps` writes — a timestamp is not a cap, and widening the
+   *  stored type for a display fact is what wave 6 declined to do.
+   *
+   *  `null` is not "the epoch": migration 1 seeds `updatedAt = 0`, and a dial
+   *  that rendered 1970 for a box nobody has ever tuned would be inventing an
+   *  event. An older server omits the field entirely, which reads the same way
+   *  through whatever reads it.
+   *
+   *  NO CLIENT READS THIS YET, and saying so is the point — the sentence here used
+   *  to claim absence "reads the same way through the one reader that consumes it",
+   *  and there is no such reader (`CapsControl` takes a `CoordCapsView` and touches
+   *  only `caps` and `usage`). A wire type that teaches a call its own readers do
+   *  not make is where a doc lie starts, which `RunSummary.claimedBy` says in as
+   *  many words two hundred lines up.
+   *
+   *  D-1169 IS closed by this field, both halves as that deviation states them —
+   *  "the column already exists and only the read is missing", plus `setCaps`
+   *  reading its own clock. The read is here and the clock is the caller's. The
+   *  dial is a further thing D-1169 names as motivation rather than as a
+   *  deliverable, and whoever builds it must treat absent (an older server) and
+   *  `null` (a box nobody has tuned) alike — which is why both are spelled out
+   *  here rather than discovered then. */
+  updatedAt?: number | null;
+}
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */

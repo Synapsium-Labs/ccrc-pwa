@@ -6,7 +6,7 @@ import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { Deps } from '../server.js';
-import { isPrPhase, type MailRejectCode, type PrPhase } from '../../../shared/api.js';
+import { isPrPhase, type DoneRejectCode, type PrPhase } from '../../../shared/api.js';
 
 const SHA = /^[0-9a-f]{40}$/;
 
@@ -28,10 +28,7 @@ export interface DoneClaim {
 
 export type DoneVerdict =
   | { ok: true; measured: { branchTip: string; prNumber: number | null; prPhase: PrPhase } }
-  | { ok: false; code: Extract<MailRejectCode,
-      'stale-tip' | 'tip-unmeasurable' | 'branch-unmeasurable' | 'pr-regressed' | 'pr-unmeasurable' |
-      'no-handoff-commit'>;
-      detail: string };
+  | { ok: false; code: DoneRejectCode; detail: string };
 
 /** `verifyDone`'s two object parameters, named rather than inlined: the
  *  verb-gate scanner (`verb-gate.test.ts`) recognises an enclosing function by

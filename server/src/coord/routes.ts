@@ -1342,7 +1342,7 @@ export function registerCoordRoutes(
    *  an inline object literal in either half would satisfy the compiler while
    *  saying something the other does not. */
   const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
-    ({ caps: store.caps(), usage: store.capsUsage() });
+    ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
 
   app.get('/api/coord/caps', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1388,7 +1388,9 @@ export function registerCoordRoutes(
       // supplies the untouched fields. Thrown rather than swallowed, so if that
       // ever stops being true it is a 500 that says so and not a silent 200.
       if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
-      coord.setCaps(merged.next);
+      // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
+      // timestamp belongs to the write that actually won the lock.
+      coord.setCaps(merged.next, Date.now());
       return { before: current, view: capsView(coord) };
     });
     // A `run_events` row would be WRONG here: there is no run, and

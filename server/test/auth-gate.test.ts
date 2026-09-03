@@ -202,9 +202,20 @@ describe('the scanner is looking at something', () => {
     // box-token gated nor one of the D-282 ungated doors (D-1240).
     expect(scanRoutes('coord/routes.ts').length).toBe(25);
     expect(ROUTES.length).toBe(71);
-    // …and the three partitions add up: 3 websockets + 68 HTTP.
+    // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(68);
+    // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
+    // is declared with exactly its three members and the sweep test below proves
+    // each was FOUND, so this equality says "the HTTP half is everything that is
+    // not one of those sockets" — which is what the literal stood in for.
+    //
+    // THE FLOOR STAYS, and it is not decoration: the derived form is an identity
+    // that a collapsed `ROUTES` satisfies at 0 = 0, which is the one thing the
+    // literal could never do. `httpCount > 50` in the D-1223 block below asserts
+    // the same floor from the other end; this one keeps it local to the
+    // assertion it protects.
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBeGreaterThan(50);
+    expect(ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length - WS_ROUTES.length);
   });
 
   it('found the specific registrations this file reasons about', () => {
@@ -362,11 +373,18 @@ describe('EXEMPT is complete in both directions', () => {
 
   it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 24 = /health + the 13
+    // that edits this list with a reviewer looking at it. 25 = /health + the 13
     // box-token lanes + /api/notify + login + status + the SPA shell + the two
-    // halves of the passkey door + GET /api/runs, GET /api/lifecycle,
-    // GET /api/peers and GET /api/claims (D-149's pattern,
-    // exempt-BUT-authenticated).
+    // halves of the passkey door + the FIVE exempt-BUT-authenticated GETs
+    // (D-149's pattern): GET /api/runs, GET /api/runs/:id/items,
+    // GET /api/lifecycle, GET /api/peers and GET /api/claims.
+    //
+    // It read 24 and enumerated 24 until F7 (D-1302), three lines above a
+    // `toEqual` listing 25 keys: the tail omitted `GET /api/runs/:id/items`,
+    // which IS in the exempt-but-authenticated class and is the fifth member
+    // `EXEMPT_BUT_AUTHENTICATED` in box-token-census.test.ts already derives. A
+    // breakdown beside the list it describes is the one place a reader checks
+    // the list against, so it being wrong is worse than it being absent.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/auth/status',
@@ -469,8 +487,8 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 69 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 42; the gated non-exempt
+    // 71 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 44; the gated non-exempt
     // routes this file reasons about by name are `POST /api/claims/:id/break`,
     // which meets the session gate on an armed box exactly as abandon and pause
     // do, — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`, and —
@@ -492,8 +510,22 @@ describe('with the gate ARMED and no cookie', () => {
     // 44 since the caps pair: both are NOT exempt (an operator dial is not a
     // machine lane), so both raise the scanned count without raising the exempt
     // count — the arithmetic this comment's own paragraph above describes.
-    expect(gated.length).toBe(44);
-    expect(ROUTES.length - ROUTES.filter(isWs).length - gated.length).toBe(EXEMPT.size - 1);
+    // DERIVED (F7), the same move as the HTTP half above. The relation on the
+    // line below already WAS this arithmetic; collapsing the literal into it
+    // means the count cannot disagree with the sets it is a count of.
+    //
+    // The `- 1` it used to carry was an ASSUMPTION — that exactly one EXEMPT key
+    // is not a scanned registration — so it is replaced by the set itself, which
+    // is strictly stronger: it names WHICH key, and a second unscanned entry
+    // (a typo'd path, a route that moved out of these two files) reds here with
+    // that key in the message instead of silently keeping the count right.
+    const unscanned = [...EXEMPT.keys()].filter((k) => !ROUTES.map(key).includes(k));
+    expect(unscanned,
+      'an EXEMPT entry names no scanned registration — a typo here is an exemption for nothing, ' +
+      'and an exemption for nothing is how a real route later inherits one')
+      .toEqual(['GET /*']);
+    expect(gated.length, 'the gated sweep went vacuous').toBeGreaterThan(30);
+    expect(gated.length).toBe(ROUTES.length - ROUTES.filter(isWs).length - (EXEMPT.size - unscanned.length));
   });
 
   it.each(gated.map((r) => [key(r), r] as const))(
@@ -1341,6 +1373,7 @@ describe('device/label never appear in a decision branch — a structural scan, 
  */
 describe('the gate sweep states the route counts it derives', () => {
   const SELF = readFileSync(path.join(here, 'auth-gate.test.ts'), 'utf8');
+  const GATE_SRC = readFileSync(path.join(here, '..', 'src', 'auth', 'gate.ts'), 'utf8');
   const httpCount = ROUTES.filter((r) => !isWs(r)).length;
   const exemptHttp = ROUTES.filter((r) => !isWs(r) && EXEMPT.has(key(r))).length;
 
@@ -1370,6 +1403,18 @@ describe('the gate sweep states the route counts it derives', () => {
     expect(digitsIn(claim('the assertion ' + 'that covers all')),
       'the third probe states a whole or an exempt count this file does not derive')
       .toEqual([httpCount, exemptHttp]);
+  });
+
+  // F7 (D-1302). gate.ts's own module docstring said "all 55 routes" while the
+  // tree derived 68 — the SAME defect D-1223's docstring names, at the one copy
+  // D-1223 did not reach. It survived because `box-token-census.test.ts` reads
+  // number WORDS and this is a numeral, while the scan above reads `SELF`, which
+  // is this test file and not gate.ts. One more corpus, same alphabet.
+  it("gate.ts's own docstring names the HTTP-route count it stands in front of", () => {
+    const hit = GATE_SRC.split('\n').filter((l) => l.includes('stands in front of all'));
+    expect(hit.length, 'expected exactly one line in gate.ts claiming a route count').toBe(1);
+    expect(digitsIn(hit[0]!),
+      'gate.ts claims a route count this tree does not derive').toEqual([httpCount]);
   });
 
   it('the websocket row names the socket count', () => {
