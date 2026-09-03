@@ -3405,6 +3405,19 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | unmutated | `Tests  51 passed (51)` (whole file) |
 
 
+- **D-1366** (2026-09-03, whole-suite pass after the completeness fixes) — **D-1364's guard shipped
+  red against the install suites' own fixtures.** The guard warns, correctly, when the packaged
+  skill's frontmatter description no longer carries the query-first sentence — and two install
+  suites (`ccrc-install.test.ts`, `ccrc-install-graphify.test.ts`) planted `skill.md` as a one-line
+  stub with no frontmatter at all, so the warning fired on the FIXTURE, not the package, and
+  `ccrc install: a fresh box › finishes clean: exit 0, nothing on stderr` went red deterministically
+  (re-run twice in isolation; not a load flake). The fixer had run only its own suite. The shipped
+  description now lives in ONE place, `server/test/graphifySkillFixture.ts` (`PKG_DESCRIPTION`,
+  `skillMd`), imported by all three install suites — a fixture plants the shipped artifact, never a
+  paraphrase of it ([[a-green-test-can-go-stale-untouched]]'s rule, applied to the fixture the
+  guard's own author did not look at). The guard's negative case in
+  `install-graphify-skill.test.ts` is unchanged and still the one that pins the warning.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

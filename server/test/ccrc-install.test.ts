@@ -56,6 +56,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
+import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -710,7 +711,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // teaching the shared fake venv python to answer a `-c` argv.
   const gfxPkg = join(home, 'fixture-graphify-pkg');
   mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
-  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skill.md'), skillMd(PKG_DESCRIPTION));  // the shipped description, not a stub (D-1366)
   writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
   // D-1244: `_inst_graph_always_on` reads its block from the same package. A
   // fixture without one made the step SKIP, and a skip is now (correctly) a

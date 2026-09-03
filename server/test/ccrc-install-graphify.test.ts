@@ -21,6 +21,7 @@ import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -372,7 +373,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // anything this file's three tests are about.
   const gfxPkg = join(home, 'fixture-graphify-pkg');
   mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
-  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skill.md'), skillMd(PKG_DESCRIPTION));  // the shipped description, not a stub (D-1366)
   writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
   env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
   return env;
