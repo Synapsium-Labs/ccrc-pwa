@@ -209,4 +209,58 @@ describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)',
     expect(s.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?').get(acked.id))
       .toEqual({ replayCount: 0 });
   });
+
+  // D-1408. `noteGate` is hole 3/4's sibling and shipped WITH
+  // its guard — and with nothing that measures it: every `noteGate` call in the
+  // suite is on a fresh `queued` row, so deleting the guard left everything
+  // green. The gate columns are the one place a terminal row could acquire a
+  // fresh claim that something is still holding it.
+  const gates = (s: CoordStore, id: number) => s.db.prepare(
+    'SELECT lastGate, gateAt, gateCount, gateSince FROM mail_deliveries WHERE id = ?',
+  ).get(id) as { lastGate: string | null; gateAt: number | null;
+                 gateCount: number; gateSince: number | null };
+
+  /** The fixture's own proof. Both setup calls below (`rejectDelivery`,
+   *  `markAcked`) carry terminality guards of their OWN and can decline in
+   *  silence — `rejectDelivery` returns void, so a declined park is
+   *  indistinguishable from a taken one at the call site. Without this the
+   *  "gate columns unchanged" assertion could pass for a row that never
+   *  reached the state the test names, i.e. it would measure nothing. */
+  const stateOf = (s: CoordStore, id: number) => (s.db.prepare(
+    'SELECT state FROM mail_deliveries WHERE id = ?',
+  ).get(id) as { state: string }).state;
+
+  it('noteGate leaves a PARKED row\'s gate columns alone — nothing is holding an abandoned delivery', () => {
+    const s = store();
+    const d = deliveredRow(s);
+    s.rejectDelivery(d.id, 'undeliverable', 'parked at the ceiling');
+    expect(stateOf(s, d.id)).toBe('rejected');
+    // `rejectDelivery` clears all four columns on the way in (its own statement
+    // sets `lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL`),
+    // so this is the honest starting point, not an assumption. `gateCount` is
+    // `INTEGER NOT NULL DEFAULT 0` in the schema, hence 0 rather than null.
+    expect(gates(s, d.id)).toEqual({ lastGate: null, gateAt: null, gateCount: 0, gateSince: null });
+    s.noteGate(d.id, 'not-idle', now + 100, false, null);
+    expect(gates(s, d.id)).toEqual({ lastGate: null, gateAt: null, gateCount: 0, gateSince: null });
+  });
+
+  it('noteGate leaves an ACKED row\'s gate columns alone', () => {
+    const s = store();
+    const d = deliveredRow(s);
+    expect(s.markAcked(d.id, now + 1)).toBe(true);
+    expect(stateOf(s, d.id)).toBe('acked');
+    expect(gates(s, d.id)).toEqual({ lastGate: null, gateAt: null, gateCount: 0, gateSince: null });
+    s.noteGate(d.id, 'not-idle', now + 100, false, null);
+    expect(gates(s, d.id)).toEqual({ lastGate: null, gateAt: null, gateCount: 0, gateSince: null });
+  });
+
+  it('noteGate still records a gate on a live delivered row', () => {
+    // The positive control. Without it the two assertions above are satisfied
+    // by a `noteGate` that writes nothing at all, on any row.
+    const s = store();
+    const d = deliveredRow(s);
+    s.noteGate(d.id, 'not-idle', now + 100, false, null);
+    expect(gates(s, d.id)).toEqual({ lastGate: 'not-idle', gateAt: now + 100,
+                                     gateCount: 1, gateSince: now + 100 });
+  });
 });
