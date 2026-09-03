@@ -549,9 +549,12 @@ export const MIGRATIONS: readonly string[] = [
 
   -- D13: the allocator's record. One row per issued number, forever. state
   -- stores exactly TWO values, allocated|landed (DEVIATION_ALLOC_STATES,
-  -- shared/api.ts) — 'landed' means the number appears in a plan in the MAIN
-  -- checkout (sweepLedgerReconcile, part B), the signal the bb47c9e incident
-  -- lacked. 'stale' is NEVER WRITTEN here: a fact about a row and a clock is
+  -- shared/api.ts) — 'landed' means the number was seen DEFINED in a plan file
+  -- in the working tree of the MAIN checkout at sweep time, on whatever branch
+  -- that checkout was on, uncommitted edits included (sweepLedgerReconcile,
+  -- part B). NOT proof of a merge: no git is consulted on that path, so it is a
+  -- weaker signal than the one the bb47c9e incident lacked, not the same one.
+  -- 'stale' is NEVER WRITTEN here: a fact about a row and a clock is
   -- derived by the reader (allocatedAt + LEDGER_STALE_MS, 7 days
   -- never-landed), reported and NEVER reclaimed. Read back through the L0
   -- guard, never a cast.

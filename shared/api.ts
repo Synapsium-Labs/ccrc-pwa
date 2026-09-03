@@ -5554,11 +5554,13 @@ export function isDeviationAllocState(v: unknown): v is DeviationAllocState {
  * nothing (the ledger is prose, parsed by nothing); a reissue cost 394
  * rewritten D-ref lines across 30 files under merge pressure.
  *
- * `'landed'` means the number appears in a plan in the MAIN checkout
- * (`sweepLedgerReconcile`) — genuinely merged, the signal the incident
- * lacked. `stale` is DERIVED at read time from `allocatedAt`, `state` and
- * the clock, never stored (see `DEVIATION_ALLOC_STATES`); it rides the
- * wire so a phone can see it without owning a clock policy.
+ * `'landed'` means the number was seen DEFINED in a plan file in the
+ * working tree of the MAIN checkout at sweep time (`sweepLedgerReconcile`),
+ * on whatever branch that checkout was on — NOT proof of a merge; `landedIn`
+ * (below) names a path in that tree, which may exist on no ref. `stale` is
+ * DERIVED at read time from `allocatedAt`, `state` and the clock, never
+ * stored (see `DEVIATION_ALLOC_STATES`); it rides the wire so a phone can
+ * see it without owning a clock policy.
  */
 export interface DeviationAllocation {
   readonly project: string;

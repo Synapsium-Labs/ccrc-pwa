@@ -10,7 +10,8 @@
 // the first live floor seed, permanently: the floor only rises.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -345,5 +346,82 @@ describe('sweepLedgerReconcile', () => {
     const w = new FleetWatcher(testDeps(mkTmp('ccrc-ledger-sweep-')), new Bus(), 10_000);
     await expect(w.sweepLedgerReconcile()).resolves.toBeUndefined();
     await expect(w.sweepLedgerFloor([])).resolves.toBeUndefined();
+  });
+});
+
+describe('what `landed` is allowed to claim', () => {
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+  /** A named slice between two literal anchors. An anchor that stopped matching
+   *  yields '', and '' satisfies every assertion below it — box-token-census
+   *  .test.ts:220's rule, copied for its reason as much as its shape. */
+  const passage = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    const out = flat(text.slice(a, b));
+    expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(120);
+    return out;
+  };
+
+  // THIS FILE IS DELIBERATELY NOT A SITE. It makes no merge claim (measured: the
+  // regex below scores zero against it at 5e9f650d), and it holds that regex as a
+  // literal — scanning itself is the self-matching-guard failure, permanently red
+  // for a reason that has nothing to do with the corpus.
+  const SITES = ['server/src/watch.ts', 'server/src/coord/schema.ts',
+                 'server/src/coord/store.ts', 'shared/api.ts'] as const;
+
+  // ANCHORED PER SITE, not whole-file: `shared/api.ts` already contains a
+  // lowercase "working tree" at :652 (`cmd_ws_audit reads the working tree
+  // ITSELF`), so a whole-file presence check would be green before the change and
+  // stay green if the corrected sentence were deleted — the exact mutation this
+  // case exists to catch.
+  const PASSAGES: ReadonlyArray<readonly [string, string, string, string]> = [
+    ['watch.ts, sweepLedgerReconcile', 'server/src/watch.ts',
+     '   * D13: allocated -> landed', '  async sweepLedgerReconcile'],
+    ['watch.ts, sweepLedgerFloor', 'server/src/watch.ts',
+     '   * D13: the allocator SELF-SEEDS', '  async sweepLedgerFloor'],
+    ['schema.ts, the ledger_alloc DDL comment', 'server/src/coord/schema.ts',
+     "  -- D13: the allocator's record.", '  CREATE TABLE ledger_alloc ('],
+    ['store.ts, markLanded', 'server/src/coord/store.ts',
+     '  /** allocated -> landed, once', '  markLanded(project: string'],
+    ['shared/api.ts, DeviationAllocation', 'shared/api.ts',
+     ' * One allocated deviation number, as `GET /api/ledger` reports it.',
+     'export interface DeviationAllocation'],
+  ];
+
+  it('no site claims a merge the reader never performs', () => {
+    // The read is io.readdir/io.readFile under ${projectsRoot}/${project}, on
+    // whatever branch that checkout is on, uncommitted edits included — measured
+    // 2026-09-02, when it stamped landedIn with a path on no merged ref.
+    for (const rel of SITES) {
+      expect(flat(read(rel)), `${rel} still says landed means merged`)
+        .not.toMatch(/genuinely means merged|genuinely merged|in a merged plan|in a plan in the MAIN/);
+    }
+  });
+
+  it('and each passage that used to lie says what IS measured', () => {
+    // Absence is not enough: deleting the sentence would satisfy the case above.
+    // Lowercase on purpose — the assertion is case-SENSITIVE, so the prose must
+    // spell it `working tree`, not `WORKING TREE`.
+    for (const [name, rel, from, to] of PASSAGES) {
+      expect(passage(name, read(rel), from, to),
+        `${name} dropped the claim instead of correcting it`).toMatch(/working tree/);
+    }
+  });
+
+  it('markLanded carries its own docstring, and ledgerProjects is not described as landing', () => {
+    const src = read('server/src/coord/store.ts');
+    const i = src.indexOf('  markLanded(project: string');
+    expect(i, 'markLanded moved — re-anchor this guard').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, i - 700), i),
+      'markLanded still has no docstring of its own').toMatch(/allocated -> landed, once/);
+    const j = src.indexOf('  ledgerProjects(): string[]');
+    expect(j, 'ledgerProjects moved — re-anchor this guard').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, j - 700), j),
+      'the landing docstring is still attached to ledgerProjects').not.toMatch(/allocated -> landed/);
   });
 });

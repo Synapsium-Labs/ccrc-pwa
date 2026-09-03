@@ -1979,6 +1979,18 @@ export class FleetWatcher {
    * decoration: numbers allocated but not yet written into any plan are
    * invisible to this scan, and re-issuing one IS the bb47c9e failure.
    *
+   * SEEDED FROM THE SAME branch-dependent working tree as reconcile, and unlike
+   * reconcile that is left alone DELIBERATELY. A floor that reads a plan on an
+   * unmerged branch raises the fleet's floor permanently and burns every number
+   * below it — measured 2026-09-02, this project's floor stood well above the
+   * highest number the allocator had ever issued, raised off a file on no merged
+   * ref. (No cardinal here: the floor rises on its own sweep, so any figure
+   * written down is false by the next tick.) That is WASTE, not corruption: the
+   * numbers are cheap and a conservative floor is exactly what prevents a
+   * reissue, which is the failure this lane exists to make impossible.
+   * Reconcile's looseness was different in kind — it wrote a false fact into a
+   * TERMINAL column — which is why only that one was tightened.
+   *
    * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
    * `void`, so a test that awaits `tick()` has not awaited this.
    */
@@ -2073,11 +2085,19 @@ export class FleetWatcher {
   }
 
   /**
-   * D13: allocated -> landed when the number appears in a PLAN of the main
-   * checkout — so `landed` genuinely means merged, the signal the bb47c9e
-   * incident lacked while the authoritative record sat on an unmerged ref
-   * for 15 hours. A number 7 days old and never landed is REPORTED (once per
-   * changing set) and NEVER reclaimed.
+   * D13: allocated -> landed when a plan of the main checkout DEFINES the number.
+   * `landed` means exactly that and no more: the number was seen defined in a plan
+   * file in the working tree of `<projectsRoot>/<project>` at the moment of a
+   * sweep, on whatever branch that checkout was sitting on, uncommitted edits
+   * included. It is NOT proof of a merge — nothing between `readLedgerDocs`'s
+   * readdir and this column consults git, and `landedIn` names a path in that tree
+   * which may exist on no ref (measured 2026-09-02: it did). Reading a REF instead
+   * would need git, which is unreachable BY POLICY rather than by construction:
+   * `CCRC_FLEET=remote` sends every command across the agent's
+   * `EXEC_COMMANDS = ['tmux','ccd']` whitelist, while the server process itself
+   * holds an unwhitelisted `execFile` (`server/src/exec.ts:59-71`) that LOCAL mode
+   * uses. A number 7 days old and never landed is REPORTED (once per changing set)
+   * and NEVER reclaimed.
    */
   async sweepLedgerReconcile(): Promise<void> {
     const now = Date.now();

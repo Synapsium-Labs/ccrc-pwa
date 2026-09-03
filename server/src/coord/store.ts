@@ -3408,8 +3408,6 @@ export class CoordStore {
     return rows.map((r) => this.hydrateLedger(r));
   }
 
-  /** allocated -> landed, once — `landed` genuinely means "in a merged plan"
-   *  (D13), so the guard keeps a re-scan from re-stamping the date. */
   /** Every project the allocator has ever issued a number for. The reconcile
    *  sweep's own project list used to be derived from OPEN allocations alone,
    *  which is the right corpus for "did this number land" and the wrong one for
@@ -3427,6 +3425,10 @@ export class CoordStore {
       .all(project) as unknown as { n: number }[]).map((r) => r.n));
   }
 
+  /** allocated -> landed, once. `landed` means the number was seen DEFINED in a
+   *  plan file of the main checkout's working tree (D13) — not proof of a merge —
+   *  and the `state = 'allocated'` guard makes it TERMINAL, so a re-scan never
+   *  re-stamps the date and a wrong stamp is never re-decided. */
   markLanded(project: string, n: number, landedIn: string, at: number): void {
     this.db.prepare(
       "UPDATE ledger_alloc SET state = 'landed', landedAt = ?, landedIn = ? " +
