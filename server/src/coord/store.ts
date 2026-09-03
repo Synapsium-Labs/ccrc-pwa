@@ -2241,8 +2241,8 @@ export class CoordStore {
    *  build's only two states a send racing a concurrent writer must never
    *  reopen; every other three-writers-of-this-column guard
    *  (`rejectDelivery` below) carries the identical `NOT IN` list for the
-   *  same reason. `markAcked` itself already reads-before-writing for the
-   *  identical reason (see its own docstring). */
+   *  same reason. `markAcked` itself refuses a terminal row in its own
+   *  `WHERE` for the identical reason (see its own docstring). */
   markDelivered(id: number, at: number): void {
     this.db.prepare(
       // The gate columns clear IN THE SAME STATEMENT as the move (D-792), so
@@ -2328,11 +2328,11 @@ export class CoordStore {
    *  `{state:'acked', rejectCode:'undeliverable'}` — self-contradictory, and
    *  the gap `markDelivered`'s own docstring already claimed shut ("`acked`
    *  and `rejected` are this build's only two states a concurrent writer
-   *  must never reopen... `markAcked` itself already reads-before-writing
-   *  for the identical reason") before this fix made that claim true here
-   *  too. Harmless for replay either way (`dueDeliveries` selects neither
-   *  `acked` nor `rejected`), but a row is not allowed to claim both an ack
-   *  and a park happened to it.
+   *  must never reopen... `markAcked` itself refuses a terminal row in its
+   *  own `WHERE` for the identical reason") before this fix made that claim
+   *  true here too. Harmless for replay either way (`dueDeliveries` selects
+   *  neither `acked` nor `rejected`), but a row is not allowed to claim both
+   *  an ack and a park happened to it.
    *
    *  ONE NAMED EXCEPTION (orchestrator ruling I2, part (b)): a row whose
    *  rejection is EXACTLY the replay-ceiling park — `rejectCode:'undeliverable'`

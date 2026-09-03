@@ -674,7 +674,14 @@ describe('POST /api/mail/:id/ack', () => {
 
     const first = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ ok: true, already: false });
+    // Exact shape, not `toMatchObject`: `parked` is the POSITIVE marker the
+    // route's own comment says is "present in both directions", so its
+    // ABSENCE has to mean "this server does not know" — which only holds if
+    // a fresh, landed ack is pinned to carry it. Under `toMatchObject` the
+    // route could drop `parked`/`state` from this arm with zero reds, and a
+    // client reading a successful ack would be back to the ambiguity D-1410
+    // exists to remove.
+    expect(first.json()).toEqual({ ok: true, already: false, parked: false, state: 'acked' });
 
     const second = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
     expect(second.statusCode).toBe(200);

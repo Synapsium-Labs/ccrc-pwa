@@ -926,8 +926,8 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     // and the exact case `markDelivered`'s own docstring already claimed
     // this method covered ("`acked` and `rejected` are this build's only two
     // states a concurrent writer must never reopen... `markAcked` itself
-    // already reads-before-writing for the identical reason") before this
-    // fix made that claim true.
+    // refuses a terminal row in its own `WHERE` for the identical reason")
+    // before this fix made that claim true.
     const s = store();
     const r = openRun(s) as { id: number };
     const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
