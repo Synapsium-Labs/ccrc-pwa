@@ -1,0 +1,93 @@
+// server/test/ledger-instruction.test.ts
+// The LIVE-INSTRUCTION surfaces for getting a deviation number: root CLAUDE.md's
+// ledger bullet, CONTRIBUTING.md's ledger paragraph, and the account-provisioning
+// spec's section 14. Merged PLANS are history and deliberately out of reach here
+// (operator ruling).
+//
+// This is three ANCHORED PASSAGES, not a corpus scanner. topology-clean.test.ts's
+// FORBIDDEN table is the corpus ratchet, and its `scope?` docstring (:216-219)
+// states "at ship NO class carries one" — a class scoped to three files would
+// break a stated ship invariant of that file. box-token-census.test.ts:220's
+// `passage()` idiom touches nothing shared, so that is the one copied.
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
+
+/** box-token-census.test.ts:220's helper, copied for its REASON as much as its
+ *  shape: an anchor that stopped matching yields '', and '' satisfies every
+ *  negative assertion below it. This tree has been bitten by that twice. */
+const passage = (name: string, text: string, from: string, to: string): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const b = text.indexOf(to, a + from.length);
+  expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+  const out = text.slice(a, b).replace(/\s+/g, ' ');
+  expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(120);
+  return out;
+};
+
+/** A section that runs to end of file. The spec's §14 is the LAST section (the
+ *  file is 896 lines and §14 opens at :890, both measured 2026-09-03), so
+ *  `passage`'s closing anchor cannot exist and would red for the wrong reason. */
+const sectionToEnd = (name: string, text: string, from: string): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const out = text.slice(a).replace(/\s+/g, ' ');
+  expect(out.length, `${name} is too short to be the section`).toBeGreaterThan(120);
+  return out;
+};
+
+const NUM = '(?:next (?:free|available|unused)|highest|next number)';
+const VERB = '(?:grep\\w*|sweep\\w*|scan\\w*|read)';
+const TREE = '(?:origin/main|remote ref|both trees|the tree|`main`)';
+/** "Get your number by reading a tree", in the spellings this corpus has used. */
+const BY_SCANNING = new RegExp(
+  `${NUM}[^.]{0,120}${VERB}[^.]{0,120}${TREE}` + '|' +
+  `${NUM}[^.]{0,120}${TREE}` + '|' +
+  `${VERB}[^.]{0,120}${TREE}[^.]{0,120}(?:before allocating|${NUM})`, 'i');
+
+describe('the allocation instruction', () => {
+  it('the scanner is LIVE — it catches the sentences it replaced and spares the ones it keeps', () => {
+    // ANTI-VACUITY. Most assertions below are absences, and an absence proves
+    // nothing unless the pattern can produce a presence. These three positives
+    // are real historical texts (the middle one is still in the spec at HEAD).
+    for (const yes of [
+      'Allocate the next number by grepping `origin/main` across BOTH `docs/` and source',
+      'The next free number must be read from `origin/main` at plan-writing time',
+      'Verify at execution by sweeping every remote ref across `docs/` AND source before allocating',
+    ]) expect(BY_SCANNING.test(yes), yes).toBe(true);
+    // …and the procedures the bullets KEEP must not trip it, or the guard gets
+    // deleted the first time it cries wolf.
+    for (const no of [
+      'git fetch origin main then vitest run test/deviation-refs.test.ts, which compares ' +
+      "this branch's entries against `origin/main` without merging",
+      '`GET /api/ledger?project=` is the READ, and its `floor` is what the next POST would mint',
+    ]) expect(BY_SCANNING.test(no), no).toBe(false);
+  });
+
+  it('CLAUDE.md tells you that you are ISSUED a number, and what the floor is', () => {
+    const b = passage('CLAUDE.md, the deviation-ledger bullet', read('CLAUDE.md'),
+      '- **Deviation ledger (D-N):**', '\n- **');
+    // A RATCHET, stated as one: this passage does NOT match today (measured), so
+    // it is here to keep the instruction from coming back, not to go red first.
+    // The liveness case above is what proves it can still fire.
+    expect(b, 'the bullet prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
+    expect(b).toContain('POST /api/ledger/deviations');
+    expect(b, 'nothing says the floor cannot come back down').toMatch(/only ever rises/i);
+    // NAMED, not valued: the gap lives in shared/api.ts and the bullet points at
+    // it. Asserting its NUMBER here would red a doc test on a legitimate change
+    // to the constant — a red for the wrong reason.
+    expect(b, 'the bullet does not name the gap the floor is built from')
+      .toContain('LEDGER_SEED_GAP');
+    expect(b, 'the reconciled legacy series is described as still running')
+      .not.toMatch(/runs alongside/);
+    expect(b, 'source cannot run ahead of the plans — deviation-refs.test.ts reds on it')
+      .not.toMatch(/[Ss]ource runs ahead/);
+    expect(b, 'a collision cardinal is back; the bullet names two events and the tree counts them differently elsewhere')
+      .not.toMatch(/\b(two|three|four|five|six|seven|eight)\s+(incidents|collisions|times)\b/i);
+  });
+});
