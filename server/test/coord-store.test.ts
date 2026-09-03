@@ -8,7 +8,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR } from '../src/coord/store.js';
+import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
+         MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
 import { releaseIsSafe } from '../src/coord/rundefs.js';
 import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -923,6 +924,44 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(s.markAcked(d.id, Date.now())).toBe(false);
     expect(s.db.prepare('SELECT state, ackedAt FROM mail_deliveries WHERE id = ?').get(d.id))
       .toEqual({ state: 'rejected', ackedAt: null });
+  });
+
+  // D-1407. The guard on `cancelOutstandingDeliveries`
+  // is real and has been since the run-close park shipped, but nothing measured
+  // it: every test that named this method used it as a FIXTURE to park a queued
+  // row, so nothing in this describe asserts what it must NOT touch. Three rows,
+  // not one — an ACKED row, a row parked for a DIFFERENT reason, and a live row
+  // beside them so a mutation cannot pass by moving nothing at all.
+  it('cancelOutstandingDeliveries leaves an acked row and a DIFFERENTLY-parked row alone', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const queue = (): { id: number } => {
+      const m = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                               runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                               artifacts: [] });
+      return s.queueDelivery(m.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
+    };
+    const acked = queue();
+    const parked = queue();
+    const live = queue();
+    s.markAcked(acked.id, 1_776_000_000_000);
+    s.rejectDelivery(parked.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
+
+    s.cancelOutstandingDeliveries(r.id);
+
+    const row = (id: number) => s.db.prepare(
+      'SELECT state, rejectCode, lastError FROM mail_deliveries WHERE id = ?',
+    ).get(id) as { state: string; rejectCode: string | null; lastError: string | null };
+
+    // An ack is a decision this close does not get to reverse.
+    expect(row(acked.id)).toEqual({ state: 'acked', rejectCode: null, lastError: null });
+    // …and a park already has a reason; a later park must not restamp it.
+    expect(row(parked.id)).toEqual({ state: 'rejected', rejectCode: 'undeliverable',
+                                     lastError: MAIL_REPLAY_CEILING_ERROR });
+    // The positive control: the live row DID move, so a mutant cannot satisfy
+    // the two assertions above by cancelling nothing at all.
+    expect(row(live.id)).toEqual({ state: 'rejected', rejectCode: 'undeliverable',
+                                   lastError: MAIL_RUN_CLOSED_ERROR });
   });
 });
 
