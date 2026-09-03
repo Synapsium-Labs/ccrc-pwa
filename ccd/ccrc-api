@@ -145,20 +145,56 @@ read_token() {
 }
 
 # Attribution, not authentication: the one fact not carried in any payload is
-# what tmux says about the pane this runs in. No pane, no answer — and
-# deliberately no flag to supply one, because a client that made forging an
-# identity convenient would be the worst place on the fleet to add that.
+# what tmux says about the pane this runs in.
+#
+# THE VARIABLE THAT DECIDES IS `TMUX_PANE`, NOT `$TMUX`, and that gate is the
+# whole guard. `tmux display-message -p '#S'` with no pane in the environment
+# does NOT refuse on a box running a tmux server — it answers for the MOST
+# RECENTLY ACTIVE session and exits 0. Measured on the fleet host three times
+# across 2026-09-02: from `env -i` the same binary named a DIFFERENT session on
+# each run, and on the last one it named another project's session while the
+# caller's own pane belonged to this one. A caller with no pane therefore got a
+# complete, confident, WRONG identity. WHICH session it names is a race, so no
+# cardinal about it belongs in this file; the property is what is guarded. The
+# detail this refusal used to carry — 'not inside a tmux session' — was itself
+# false on any box that has panes at all.
+#
+# THE PANE ID IS VALIDATED BEFORE IT IS PASSED, and that check is load-bearing
+# rather than tidy: `-t` accepts a SESSION name, so an unvalidated TMUX_PANE of
+# `cc-other` would ask tmux about someone else's session and be believed.
+#
+# TWO REFUSAL CODES, NOT ONE. 'no-pane' (you are not in a pane) and 'bad-pane'
+# (your TMUX_PANE is not a pane id) are different facts to whoever reads them —
+# "run me inside a session" against "your environment is lying" — and collapsing
+# them is the overloaded value this repo forbids at a seam.
+DERIVED_ID=''
+DERIVED_UUID=''
+derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call it
+                      # inside $( ): `refuse` prints the envelope on stdout and a
+                      # substitution would swallow it (`server_url` has that shape).
+  local pane tname
+  # READ ONCE into a local, so `set -u` (line 43) cannot turn a deleted gate
+  # below into an unbound-variable error instead of the misattribution the gate
+  # is there to stop. A guard whose removal fails for the wrong reason is a
+  # guard nobody has actually measured.
+  pane="${TMUX_PANE:-}"
+  [[ -n "$pane" ]] \
+    || refuse 'no-pane' 'not inside a tmux pane (TMUX_PANE unset); identity cannot be derived'
+  [[ "$pane" =~ ^%[0-9]+$ ]] \
+    || refuse 'bad-pane' 'TMUX_PANE is not a pane id'
+  tname=$(tmux display-message -p -t "$pane" '#S' 2>/dev/null) \
+    || refuse 'no-tmux' 'tmux could not answer for this pane'
+  [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session for this pane'
+  DERIVED_ID="${tname#cc-}"
+  [[ "$DERIVED_ID" =~ $SAFE_RE ]] || refuse 'bad-session' 'tmux session name is not a usable id'
+  [[ -r "$REG/$DERIVED_ID.uuid" ]] || refuse 'no-uuid' "no $REG/$DERIVED_ID.uuid for this session"
+  DERIVED_UUID=$(tr -d '[:space:]' < "$REG/$DERIVED_ID.uuid")
+  [[ -n "$DERIVED_UUID" ]] || refuse 'no-uuid' "$REG/$DERIVED_ID.uuid is empty"
+}
+
 cmd_whoami() {
-  local tname id uuid
-  tname=$(tmux display-message -p '#S' 2>/dev/null) \
-    || refuse 'no-tmux' 'not inside a tmux session; identity cannot be derived'
-  [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session'
-  id="${tname#cc-}"
-  [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-session' 'tmux session name is not a usable id'
-  [[ -r "$REG/$id.uuid" ]] || refuse 'no-uuid' "no $REG/$id.uuid for this session"
-  uuid=$(tr -d '[:space:]' < "$REG/$id.uuid")
-  [[ -n "$uuid" ]] || refuse 'no-uuid' "$REG/$id.uuid is empty"
-  printf '{"id":"%s","uuid":"%s"}\n' "$id" "$uuid"
+  derive_identity
+  printf '{"id":"%s","uuid":"%s"}\n' "$DERIVED_ID" "$DERIVED_UUID"
 }
 
 main() {

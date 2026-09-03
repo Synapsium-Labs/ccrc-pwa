@@ -17,7 +17,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCRC_API, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let home: string;
@@ -81,8 +81,16 @@ type Run = { stdout: string; stderr: string; status: number };
  *
  *  Never rejects on a non-zero exit: the exit status is part of what these tests
  *  measure, so turning it into an exception would hide it. */
-function run(args: string[], input?: string): Promise<Run> {
+function run(args: string[], input?: string,
+             overrides?: Record<string, string | undefined>): Promise<Run> {
   const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
+  // EXPLICIT, NEVER INHERITED. `process.env` is spread above, so a developer
+  // running this suite inside a tmux pane hands the child a real TMUX_PANE and
+  // the "no pane" case would measure their terminal instead of the fixture.
+  // `undefined` DELETES — the state cron and CI are actually in.
+  for (const [k, v] of Object.entries(overrides ?? {})) {
+    if (v === undefined) delete env[k]; else env[k] = v;
+  }
   return new Promise<Run>((resolve) => {
     const child = spawn(CCRC_API, args, { env });
     let stdout = '', stderr = '';
@@ -100,6 +108,29 @@ function run(args: string[], input?: string): Promise<Run> {
  *  both streams, so `runBoth` is the same call — kept as an alias only until the
  *  call sites below read as one vocabulary. */
 const runBoth = run;
+
+/** A tmux that ANSWERS, planted where `ghContainedEnv`'s poison cannot displace
+ *  it: `ccdWsHelpers.ts:233` is `if (fs.existsSync(p)) continue;`, so the stub
+ *  loop SKIPS a file already there, and `harnessBin` is the first PATH entry
+ *  (`ccdWsHelpers.ts:109-122, :245`). Every test plants before it calls `run`,
+ *  so this is the tmux the client meets — NOT a vacuous fixture.
+ *
+ *  It logs argv to the SAME `$HOME/tmux-calls` the poison stub uses
+ *  (`ccdWsHelpers.ts:229`), so `tmuxArgv()` reads one file whichever stub is in
+ *  place, and a test can prove the pane was passed as an explicit target. */
+const plantPane = (id: string, uuid = 'u-1234'): void => {
+  fs.writeFileSync(path.join(harnessBin(home), 'tmux'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf 'cc-${id}\\n'\n`,
+    { mode: 0o755 });
+  fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.cc-sessions', `${id}.uuid`), `${uuid}\n`);
+};
+
+/** Every argv the tmux on PATH saw. Absent file == no calls. */
+const tmuxArgv = (): string[] => {
+  const p = path.join(home, 'tmux-calls');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
 
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
@@ -364,12 +395,61 @@ describe('unknown verbs refuse rather than improvise', () => {
   });
 });
 
-describe('whoami', () => {
-  it('refuses outside tmux rather than inventing an identity', async () => {
-    // Identity on this fleet is attribution, and the one thing not carried in a
-    // payload is what tmux says about the pane. No pane, no answer — never a
-    // guess, and deliberately no flag to supply one.
-    const r = await runBoth(['whoami']);
+describe('whoami: the pane is the proof', () => {
+  it('answers for THIS pane, and names it as an explicit target', async () => {
+    plantPane('demo-ws');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ id: 'demo-ws', uuid: 'u-1234' });
+    expect(tmuxArgv()[0], 'tmux was asked about the BOX, not about this pane')
+      .toContain('-t %7');
+  });
+
+  it('refuses with NO pane even though tmux would gladly answer', async () => {
+    // THE PRESENCE THE ABSENCE NEEDS: the stub SUCCEEDS and names a session that
+    // is not the caller's, which is exactly what the real binary does — measured
+    // 2026-09-02 from `env -i`, exit 0, another project's session.
+    plantPane('someone-else');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    // ASSERTED FIRST, deliberately: this is the live defect, and a mutation that
+    // reopens it should red with the leaked identity in the message rather than
+    // with `expected 0 not to be 0`.
+    expect(r.stdout + r.stderr, 'it answered with another session identity')
+      .not.toContain('someone-else');
     expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+    expect(tmuxArgv(), 'tmux was shelled before the gate decided').toEqual([]);
+  });
+
+  it('refuses a TMUX_PANE that is not a pane id — the forgery door', async () => {
+    // `-t` accepts a SESSION name, so an unvalidated `TMUX_PANE=cc-other` asks
+    // tmux about someone else's session and is believed.
+    plantPane('demo-ws');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: 'cc-someone-else' });
+    expect(tmuxArgv(), 'a session NAME reached -t as though it were a pane').toEqual([]);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-pane');
+  });
+
+  it('says tmux could not answer FOR THIS PANE, not that there is no session', async () => {
+    // No plantPane: the harness's own poisoned tmux answers rc 97 and prints
+    // nothing (`ccdWsHelpers.ts:229,235-239`), which is the "tmux refused" case.
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('could not answer for this pane');
+    expect(r.stdout, 'the measured-false detail is back')
+      .not.toContain('not inside a tmux session');
+  });
+
+  it('refuses when the registry has no uuid for the derived id', async () => {
+    // A REGRESSION PIN CARRIED ACROSS THE REWRITE, not a new guard: today's
+    // client already refuses here, so this case is green before and after. It is
+    // written down because the rewrite moves the check into a new function, and
+    // its mutation (Step 5 (iv)) is what makes it more than decoration.
+    plantPane('demo-ws');
+    fs.rmSync(path.join(home, '.cc-sessions', 'demo-ws.uuid'));
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-uuid');
   });
 });
