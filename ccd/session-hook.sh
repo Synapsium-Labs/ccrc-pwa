@@ -39,8 +39,168 @@ _hook_epoch_ms() {
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
+# ── THE GRAPH CARD (R1) — the only printf to stdout in this file ─────────
+# Claude Code reads a hook's stdout as a PER-EVENT CONTRACT, and on PreToolUse
+# that contract is a permission decision. A card that leaked onto another event
+# would not be noise; it would be an answer to a question nobody asked. So the
+# emitter is called from inside the SessionStart arm and nowhere else, and
+# every failure path in here prints NOTHING and returns 0 — this file's
+# standing contract (exit 0 on every path, no network, no locks, no waiting) is
+# unchanged. Every read below is a local file or a git ref.
+_hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
+  local j=""
+  j=$(jq -cn --arg c "$1" \
+    '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
+    || return 0
+  printf '%s\n' "$j"
+}
+
+# Measured for THIS session's tree, never for the fleet in general — the block
+# this replaces asserted "this project has a knowledge graph" of every project
+# the account ever opened, including the trees the sweep refuses.
+#
+# COST. `built_at_commit` is the LAST key of graph.json, which is 8 MB on this
+# repo, so it is read with `tail -c 4096` and never by parsing the file. The
+# node count comes off the head of GRAPH_REPORT.md's summary line (`head -c
+# 4096`) — the sweep census carries no node count and manifest.json is a
+# per-file hash map, so neither of the design's two named sources actually
+# holds the number (D-1246). `git rev-parse` and `git rev-list --left-right
+# --count` are ref reads. Any failure omits its clause; a total failure prints nothing.
+_hook_graph_card() {
+  local cwd="" row="" nodes="" built="" tip="" lr="" ahead="" behind="" engine="" pin="" fresh="" line=""
+  cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
+  # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
+  # for a harness whose SessionStart payload carries no cwd at all.
+  [ -n "$cwd" ] || cwd=$(cat "$REG/$id.workdir" 2>/dev/null) || cwd=""
+  [ -n "$cwd" ] || return 0
+  [ -d "$cwd" ] || return 0
+
+  if [ ! -f "$cwd/graphify-out/graph.json" ]; then
+    # SILENCE IS THE TRUE ANSWER for a tree the sweep has not reached: a card
+    # asserting a graph that is not there is worse than no card. The one thing
+    # worth saying instead is the sweep's OWN last word about this tree, when
+    # its census carries one — a session that knows the tree was REFUSED does
+    # not go hunting for a graph that is never going to appear. The census is
+    # `{passes:[…]}`, last 10, newest LAST.
+    row=$(jq -r --arg p "$cwd" \
+      '(.passes // []) | last | (.trees // [])
+       | map(select(.path == $p and ((.reason // "") != "")))
+       | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
+      "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
+    [ -n "$row" ] || return 0
+    # CLIP BEFORE INTERPOLATING (D-1335). `.reason` is repo-controlled text the
+    # sweep copied off an engine's stderr LINE (`BUILD_REASON="$first"`, one
+    # `head -n1`, unbounded) or off a whole matched refusal line, and it lands
+    # verbatim in this session's `additionalContext`. Every other payload this
+    # file emits is already capped — `.[0:200]` on the approval summary, 64KB on
+    # the state envelope — and this one was not. 400 characters keeps the
+    # outcome and the head of the reason, which is the part that says what to do
+    # about it. The other arm needs no cap: each of its fields is bounded at the
+    # read (a validated 7-40 hex sha sliced to 8, digits off a 4096-byte head,
+    # `head -c 64` on engine and pin).
+    row="${row:0:400}"
+    _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
+    return 0
+  fi
+
+  built=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
+    | grep -oE '"built_at_commit"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' | tail -n1) || built=""
+  # ONE CLAUSE DECIDES WHICH MATCH WINS, and it is `| tail -n1` above (D-1361).
+  # `${built#*:}` takes the FIRST colon because the key it strips carries none;
+  # the older `##*:` took the last, which silently re-implemented the pipeline's
+  # last-wins decision inside the field split — two mechanisms for one decision,
+  # and the effect was that `| tail -n1` could be deleted with the whole suite
+  # green (measured), because on a two-match read the parameter expansion went
+  # on quietly answering the right sha. Behaviour is unchanged for every single
+  # match, which is every read `tail -n1` survives; what changes is that the
+  # clause is now a mechanism a test can redden.
+  built="${built#*:}"; built="${built//\"/}"; built="${built// /}"
+  [[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""
+
+  nodes=$(head -c 4096 "$cwd/graphify-out/GRAPH_REPORT.md" 2>/dev/null \
+    | grep -oE '[0-9]+ nodes' | head -n1) || nodes=""
+  nodes="${nodes% nodes}"
+  [[ "$nodes" =~ ^[0-9]+$ ]] || nodes=""
+
+  engine=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || engine=""
+  pin=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || pin=""
+
+  # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
+  # rev-list that will not answer, gets no freshness clause rather than a
+  # "fresh" nobody checked — a session querying a graph 97 commits stale gets
+  # confident wrong answers, which is the whole reason this clause exists.
+  tip=$(git -C "$cwd" rev-parse HEAD 2>/dev/null) || tip=""
+  if [ -n "$built" ] && [ -n "$tip" ]; then
+    if [ "$tip" = "$built" ]; then
+      fresh="fresh"
+    else
+      # ANCESTRY, NOT DISTANCE (D-1353). `rev-list --count "$built..HEAD"` asks
+      # ONE side of the question — how many commits HEAD carries that the
+      # graph's commit cannot reach — and it answers 0 for two conditions this
+      # card must not collapse: the graph was built AT this HEAD (an ABBREVIATED
+      # sha, the only way to reach this arm at all, since the equality above
+      # already took the full-sha case), and the graph was built at a commit
+      # HEAD cannot reach forward to. The second is a graph of a tree this
+      # session is not on — the sweep builds at a feature-branch tip, the
+      # session then checks out `main` — and it was announced as `fresh`, which
+      # is the one word clause 12 of the worker skill says licenses taking a
+      # query answer as read. Three dots plus `--left-right` asks BOTH sides: L
+      # is what the graph has and HEAD cannot reach, R is what HEAD has and the
+      # graph does not. Any L at all means the graph describes commits this tree
+      # does not carry — whether it sits ahead of HEAD or on a diverged branch,
+      # where the one-sided count did not merely round to fresh but reported a
+      # bare "behind" for a graph that is also ahead. Those two share ONE word
+      # rather than collapsing onto a word that means something else, because a
+      # reading session does the same thing in both: the graph is not of this
+      # tree, so every answer is a lead.
+      lr=$(git -C "$cwd" rev-list --left-right --count "$built...HEAD" 2>/dev/null) || lr=""
+      # NOT SILENCE (D-1336). Silence here would collapse two conditions a
+      # reading session handles differently onto one value, which this repo
+      # calls a defect and not a style ("no overloaded null at a seam"): a
+      # tree with no git names no sha AND no freshness, while this arm has a
+      # sha in hand that git would not answer for. A card that names a sha
+      # and then says nothing about it reads as neutral; the true word is
+      # that the graph is UNDATABLE, so say it. The pair is matched WHOLE —
+      # anything but two counts is the unmeasured answer, never a half-read
+      # number standing in for both sides.
+      if [[ "$lr" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then
+        ahead="${BASH_REMATCH[1]}"; behind="${BASH_REMATCH[2]}"
+        if   [ "$ahead"  -gt 0 ]; then fresh="not an ancestor of HEAD"
+        elif [ "$behind" -eq 0 ]; then fresh="fresh"
+        elif [ "$behind" -eq 1 ]; then fresh="1 commit behind HEAD"
+        else                           fresh="$behind commits behind HEAD"
+        fi
+      else
+        fresh="freshness unmeasured"
+      fi
+    fi
+  fi
+
+  line="graphify: this tree has a knowledge graph — graphify-out/"
+  [ -z "$nodes" ]  || line="$line, $nodes nodes"
+  [ -z "$built" ]  || line="$line, built at ${built:0:8}"
+  [ -z "$fresh" ]  || line="$line ($fresh)"
+  # The engine/pin pair earns its place: sessions were measured running an
+  # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
+  # invisible until a query fails strangely.
+  [ -z "$engine" ] || line="$line, engine $engine"
+  [ -z "$pin" ]    || line="$line (pin $pin)"
+  # Single-quoted: the sentence carries backticks and double quotes verbatim.
+  line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
+  _hook_emit_context "$line"
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
+
+# ── R4: what counts as READING the graph ────────────────────────────────
+# `query`, `path` and `explain` only. `graphify update` and every build are
+# WRITES, and the sweep owns the write side — counting them here would make
+# the number say the opposite of what it is for. The leading class is what
+# stops `mygraphify query` and prose mentioning the command from counting;
+# the trailing one stops `graphify querying-something-else`.
+GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
 
 payload=$(cat 2>/dev/null) || exit 0
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
@@ -54,9 +214,27 @@ command -v jq >/dev/null 2>&1 || exit 0
 event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false"
+state="" ask_json="null" interrupted="false" src="" gcmd=""
 case "$event" in
-  UserPromptSubmit|PostToolUse) state="working" ;;
+  UserPromptSubmit) state="working" ;;
+  PostToolUse)
+    state="working"
+    # ONE payload read for the counter, on the one event that can carry a
+    # command, and only for Bash: a tool_input.command on any other tool is
+    # not a shell line this box ran.
+    #
+    # THE PREFILTER IS A BUDGET, NOT A STYLE CHOICE. This arm is the HOT PATH —
+    # `session-hook.test.ts` pins p95 of 20 PostToolUse runs under 150 ms, and
+    # a bare `jq` fork on this box measures ~5 ms against a ~46 ms run. A shell
+    # line that runs `graphify` CANNOT fail to put the eight characters
+    # `graphify` somewhere in the payload (JSON escaping never touches them),
+    # so a payload without them needs no jq at all and the common tool call
+    # pays nothing. `$gcmd` stays "" there, which the increment below already
+    # treats as "no command".
+    if [[ "$payload" == *graphify* ]]; then
+      gcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
+        <<<"$payload" 2>/dev/null) || gcmd=""
+    fi ;;
   PreCompact) state="working" ;;
   PostCompact)
     trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || exit 0
@@ -120,6 +298,11 @@ case "$event" in
     # startup, resume, clear, or ABSENT on an older harness — is a real idle
     # boundary (absence-permits: the pre-`source` payload was the F1 startup).
     src=$(jq -r '.source // empty' <<<"$payload" 2>/dev/null) || src=""
+    # BEFORE the compact exit, deliberately: the hookstate write stays skipped
+    # for compact (D-306 — PreCompact/PostCompact own that transition), and the
+    # card is independent of it. Compaction is precisely when a session loses
+    # what it knew, so it is the source that most needs the card.
+    _hook_graph_card || true
     [[ "$src" == compact ]] && exit 0
     state="done" ;;
   Stop)
@@ -131,8 +314,61 @@ esac
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
-subs=$(jq -c '.subagents // []' "$f" 2>/dev/null) || subs="[]"
-prev_state=$(jq -r '.state // empty' "$f" 2>/dev/null) || prev_state=""
+# ONE fork for all three fields (was two, and the counter would have made
+# three). Same hot-path budget as the arm above: `$f` is read on every event,
+# and `subs`/`prev_state` were already two forks over one file. Three values on
+# three LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
+# name as a backslash sequence, which would hand `--argjson subagents` a string
+# that is no longer JSON. `tostring` of a compact ARRAY contains no newline, so
+# line-splitting is safe where tab-splitting is not.
+#
+# D-1249: order matters, because line-splitting is POSITIONAL. `tostring` keeps
+# the escape only for an array — on a JSON *string* it returns the text RAW, so
+# an externally-corrupted `.subagents` that is a string with a newline in it
+# emits four lines and shifts every field after it onto the wrong one. So the
+# one field that can carry unbounded text goes LAST: a shift can then only
+# corrupt `subs` itself, which the `\[*` guard below already catches. `state`
+# leads (bounded set, and the shifted-into value it would otherwise take has no
+# guard — an out-of-set `state` reaches `hookstate.ts:233` and degrades to
+# NO_STATE, but it should never be reachable from another field's overflow),
+# and `gq` sits in the middle behind its own `^[0-9]+$` guard.
+#
+# The read counter survives state transitions exactly as `subs` does, and a
+# file that never carried the field reads as 0 — this is the WRITER, where 0
+# is the honest start; `hookstate.ts` is the reader, and there absent stays
+# `null` rather than folding to 0. A jq that fails (no file, corrupt file)
+# prints nothing, all three `read`s come up empty, and each falls back to the
+# degrade it already had. This file runs under `set -uo pipefail` and NOT
+# `set -e`, so a `read` hitting EOF is inert.
+subs=""; prev_state=""; gq=""
+{ read -r prev_state; read -r gq; read -r subs; } < <(jq -r \
+  '(.state // ""),
+   (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
+   (.subagents // [] | tostring)' \
+  "$f" 2>/dev/null)
+[[ "$subs" == \[* ]] || subs="[]"
+[[ "$gq" =~ ^[0-9]+$ ]] || gq=0
+# `startup` and `clear` are new sessions; `resume` and `compact` are the SAME
+# session still going, and a counter that reset on compaction would erase the
+# evidence at precisely the moment the session most needed the card (R1).
+# `compact` never reaches this line at all — the SessionStart arm exits at its
+# compact guard (D-306) — so its carry is STRUCTURAL, protected by that exit
+# and not by this condition. `resume` is the source this condition protects.
+#
+# D-1248: written as "everything except resume", NOT "startup or clear", so a
+# SessionStart carrying NO `source` reads the same way here as it does in the
+# arm above — where absence-permits makes it the F1 startup (:146-147) and
+# `session-hook.test.ts` pins it as `done`. Spelled as an allow-list, a
+# source-less SessionStart would be a NEW session for `state` and the SAME
+# session for `graphQueries`, one file collapsing a distinction it drew two
+# lines earlier: the counter would never reset on an older harness and would
+# accumulate forever across restarts of one tmux session name (the hookstate
+# file is keyed `cc-<id>`, which survives them), so the card would report
+# previous sessions' reads as this one's. A future `source` this build has
+# never heard of lands on the same side as absence — a new boundary resets,
+# which is the degrade that costs a count rather than inventing one.
+if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; fi
+if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
@@ -159,9 +395,9 @@ out=$(jq -cn \
   --argjson v 1 --arg state "$state" --arg event "$event" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
   --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
-  --argjson ask "$ask_json" --argjson subagents "$subs" \
+  --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-    updatedAt:$updatedAt, ask:$ask, subagents:$subagents}
+    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries}
    + (if $interrupted then {interrupted:true} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated

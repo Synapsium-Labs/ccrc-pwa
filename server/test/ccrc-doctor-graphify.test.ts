@@ -39,7 +39,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
 import {
-  writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync } from 'node:fs';
+  writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync, readFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -52,6 +52,7 @@ const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CHECKS_SRC = join(REPO, 'ccd', 'ccrc-doctor-checks');
 const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
+const DOCTOR_TEST_SRC = join(REPO, 'server', 'test', 'ccrc-doctor.test.ts');
 
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
@@ -228,6 +229,12 @@ function graphifyHealthy(home: string): void {
   writeFileSync(join(venvBin, 'graphify'),
     '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  // R3: a converged box has `graphify` on PATH resolving into the pinned venv.
+  // `<home>/.local/bin` is the head of every contained PATH in this fixture, so
+  // this is what `command -v graphify` answers.
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+  symlinkSync(join(venvBin, 'graphify'), join(home, '.local', 'bin', 'graphify'));
   for (const d of ['.claude', '.claude-personal']) {
     const s = join(home, d, 'skills', 'graphify');
     mkdirSync(s, { recursive: true });
@@ -349,15 +356,6 @@ describe('ccrc doctor: graphify', () => {
     expect(line).toMatch(/^WARN graphify:/);
   });
 
-  it('WARNs when PATH resolves graphify outside the pinned venv', () => {
-    const home = healthy('ccrc-doctor-gfx-shadow-'); graphifyHealthy(home);
-    // stub-bin sits on the contained PATH, second after <home>/.local/bin —
-    // command -v must find this one, and it is not the venv path.
-    stub(home, 'graphify', 'echo "shadow graphify"; exit 0');
-    const line = lineFor(runDoctor(home).stdout, 'graphify');
-    expect(line).toMatch(/^WARN graphify:/);
-  });
-
   it('WARNs when a tracked tree has not been given the graphify-out/ exclude', () => {
     const home = healthy('ccrc-doctor-gfx-excl-'); graphifyHealthy(home);
     const repo = join(home, 'projects', 'demo');
@@ -403,5 +401,124 @@ describe('ccrc doctor: graphify', () => {
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line).toMatch(/^WARN graphify:/);
     expect(line).toContain('worktrees');
+  });
+});
+
+describe('ccrc doctor: graphify-path', () => {
+  it('PASSes when bare graphify resolves into the pinned venv', () => {
+    const home = healthy('ccrc-doctor-gfxpath-ok-'); graphifyHealthy(home);
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^PASS graphify-path:/);
+  });
+
+  it('FAILs when PATH resolves graphify outside the venv — a WARN understates it', () => {
+    // The session runs the wrong build silently, and every answer it gets from
+    // it looks exactly like an answer from the right one.
+    const home = healthy('ccrc-doctor-gfxpath-shadow-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    stub(home, 'graphify', 'echo "shadow graphify"; exit 0');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
+  });
+
+  it('FAILs when there is no graphify on PATH at all', () => {
+    const home = healthy('ccrc-doctor-gfxpath-none-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
+  });
+
+  // D-1350: the arm that used to be folded into the mismatch FAIL. Before the
+  // fix both `realpath` calls fell back to their own UNRESOLVED paths when the
+  // tool was missing, and a link path is never equal to an engine path — so a
+  // fully CONVERGED box without coreutils' `realpath` was told `FAIL
+  // graphify-path: … which is not the pinned engine …`, a mismatch verdict on
+  // a comparison nobody made, with a remedy (`ccrc install`) that cannot put
+  // `realpath` on the box. "I could not measure" is the fourth outcome this
+  // file's header names, and SKIP is its spelling.
+  it('SKIPs — never FAILs — when the box has no usable realpath, on a CONVERGED link (D-1350)', () => {
+    const home = healthy('ccrc-doctor-gfxpath-noreal-'); graphifyHealthy(home);
+    // The one difference from the PASSing fixture above: `realpath` is off the
+    // contained PATH. The link, the engine and the pin are all exactly as the
+    // converged box has them.
+    rmSync(join(home, 'stub-bin', 'realpath'), { force: true });
+    const line = lineFor(runDoctor(home).stdout, 'graphify-path');
+    expect(line, 'an unmeasurable box was given the mismatch verdict').toMatch(/^SKIP graphify-path:/);
+    expect(line, 'the skip does not name the tool it is missing').toContain('realpath');
+  });
+
+  // …and the condition that is NOT unmeasurable keeps its FAIL. A missing
+  // engine is measured directly with `-e`, so it must never be folded into the
+  // skip above just because `realpath` answers empty for a path that is not
+  // there.
+  it('FAILs when something answers graphify but there is NO pinned engine to compare against', () => {
+    const home = healthy('ccrc-doctor-gfxpath-noengine-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    rmSync(join(home, '.ccrc', 'graphify-venv'), { recursive: true, force: true });
+    stub(home, 'graphify', 'echo "some other graphify"; exit 0');
+    const line = lineFor(runDoctor(home).stdout, 'graphify-path');
+    expect(line).toMatch(/^FAIL graphify-path:/);
+    expect(line).toContain('no pinned engine');
+  });
+
+  it('SKIPs on a server-role box, like every other graphify condition', () => {
+    const home = healthy('ccrc-doctor-gfxpath-srv-'); graphifyHealthy(home);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^SKIP graphify-path:/);
+  });
+
+  it('the graphify check no longer answers the PATH question, and its wrong remedy is gone', () => {
+    // Two checks answering one question is two vocabularies over one field, and
+    // the old remedy was FACTUALLY WRONG: "only the operator can clear a
+    // root-owned link outside $HOME" describes neither a user-owned file inside
+    // $HOME (the measured case) nor anything a session can act on.
+    const checks = readFileSync(CHECKS_SRC, 'utf8');
+    expect(checks, 'the old, factually wrong remedy is still in the tree')
+      .not.toContain('root-owned link outside');
+    expect(checks).not.toContain('gfx_shadow_warn');
+  });
+
+  it('the table and the functions agree about graphify-path', () => {
+    const names = execFileSync(BASH, ['-c',
+      `set -uo pipefail; . ${JSON.stringify(CHECKS_SRC)}; printf '%s\\n' "\${CCRC_DOCTOR_CHECKS[@]}"`],
+    { encoding: 'utf8' }).trim().split('\n');
+    expect(names).toContain('graphify-path');
+  });
+
+  // D-1354: the sibling suite's recorded reason for its `realpath` link is
+  // HISTORY, and history goes stale in silence. `server/test/ccrc-doctor.test.ts`'s
+  // `healthy()` links a real `realpath` in, and the paragraph above that line is
+  // the whole written reason for it. D-1350 turned the unmeasurable box from a
+  // mismatch verdict into a SKIP without touching that paragraph, so the fixture
+  // that seeds the biggest doctor suite went on describing the GUESSING arm --
+  // the exact defect D-1350 removed -- as if it were still shipped, and the next
+  // reader of `healthy()` would have learned it from there. This binds the two
+  // ends together so they cannot drift apart again: the shipped arm must skip
+  // rather than guess, and the paragraph must describe THAT.
+  it("the sibling fixture's reason for linking `realpath` describes the SHIPPED arm (D-1354)", () => {
+    // End 1 - the arm itself: "unmeasurable" is a SKIP, and neither side falls
+    // back to the path it could not resolve.
+    const checks = readFileSync(CHECKS_SRC, 'utf8');
+    expect(checks).toContain('_dr_skip graphify-path "this box has no usable realpath');
+    expect(checks, 'the unresolved-path fallback D-1350 removed is back')
+      .not.toMatch(/resolved="\$found"/);
+    expect(checks, 'the unresolved-path fallback D-1350 removed is back')
+      .not.toMatch(/want="\$engine"/);
+
+    // End 2 - the paragraph, read between its opening claim and the line it
+    // justifies.
+    const src = readFileSync(DOCTOR_TEST_SRC, 'utf8');
+    const from = src.indexOf("`linkReal(home, 'realpath')` IS LOAD-BEARING");
+    expect(from, 'the justification paragraph is gone -- say why the link is there')
+      .toBeGreaterThan(-1);
+    const to = src.indexOf("linkReal(home, 'realpath');", from);
+    expect(to).toBeGreaterThan(from);
+    const why = src.slice(from, to);
+    expect(why, 'it still describes the pre-D-1350 arm, which guessed from the unresolved paths')
+      .not.toMatch(/falls back to the UNRESOLVED/i);
+    expect(why, 'it still claims the missing tool ends the run with rc=1').not.toContain('rc=1');
+    expect(why, 'it still claims the missing tool FAILs this check')
+      .not.toContain('FAIL graphify-path');
+    expect(why, 'it does not name the verdict the shipped arm actually gives').toContain('SKIP');
+    expect(why, 'it does not name the count a stray skip actually moves')
+      .toContain('HEALTHY_SKIPS');
   });
 });

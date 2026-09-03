@@ -46,7 +46,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: 'clear-cove', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/clear-cove', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -1291,5 +1291,52 @@ describe('the resume door on the run board', () => {
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }
+  });
+});
+
+describe('the run board worker row carries the graph chip', () => {
+  const board = (over: Partial<FleetSession>): void => {
+    const store = makeStore();
+    act(() => {
+      store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] });
+    });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  };
+
+  it('shows graph N for the run session the hook counted reads for', () => {
+    board({ graphQueries: 3 });
+    expect(screen.getByText('graph 3')).toBeInTheDocument();
+  });
+
+  it('shows graph 0 — the row this chip exists for is the one that read nothing', () => {
+    board({ graphQueries: 0 });
+    expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  it('shows NO chip when nothing was measured', () => {
+    board({ graphQueries: null });
+    expect(screen.queryByText(/^graph /)).toBeNull();
+  });
+
+  // The board's half of D-1251. The live `fleet` frame is CAST, not revived
+  // (`stores/fleet.ts`'s `asFleetMsg`), and the field is ADDITIVE with
+  // `FLEET_PROTO` held at 1, so a server predating it omits the KEY — a shape
+  // `sess({graphQueries: null})` cannot produce. Read raw, `undefined !== null`
+  // is true and this row paints `graph ` with no number. The two surfaces are
+  // pinned separately on purpose: one shared reader is what keeps them from
+  // drifting, and a pin on only one of them cannot see the other drift.
+  it('shows NO chip when the server omits the key entirely — an older server (D-1251)', () => {
+    const store = makeStore();
+    const raw = sess({ graphQueries: 3 }) as unknown as Record<string, unknown>;
+    delete raw['graphQueries'];
+    act(() => {
+      store.setState({ runs: [r()], runsFrameSeen: true, sessions: [raw as unknown as FleetSession] });
+    });
+    const { container } = render(
+      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    // The class, not the text: RTL's matcher trims, so `graph ` normalises to
+    // `graph` and a text query would MISS the very chip this test forbids.
+    const chip = container.querySelector('.sess-graph');
+    expect(chip, `a numberless chip rendered: ${chip?.outerHTML}`).toBeNull();
   });
 });

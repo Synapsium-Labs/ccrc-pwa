@@ -1,0 +1,3455 @@
+# Graphify read side at the ccrc level — Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Move graphify's read side out of the account-wide `CLAUDE.md` block ccrc does not own and into the five artifacts ccrc installs outright — the session hook, the worker skill, the pinned venv on `PATH`, the hookstate file — and make its effect measurable instead of asserted.
+
+**Architecture:** Five mechanisms, each landing in an artifact ccrc already owns and already tests. R4 puts a `graphQueries` counter in the hookstate the session hook already writes, carries it onto `FleetSession` additively and renders it as a `graph N` chip. R1 makes the hook print one `SessionStart` context card measured for the session's own tree. R2 adds clause 12 to the worker skill. R0 retires `_inst_graph_always_on` and replaces it with `_inst_graph_always_on_off`, a remover built from PR #44's own marker census. R3 converges `~/.local/bin/graphify` onto the pinned venv and gives the PATH question its own doctor check. R5 (the `PreToolUse` speed bump) is declined by the spec and has **no task here**.
+
+**Tech Stack:** bash 4.4+ (`ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`), `jq`, TypeScript 7 strict (`server/`, `shared/`, `pwa/`), vitest, React 19, node `>=22.13.0`.
+
+**Spec:** `docs/superpowers/specs/2026-09-02-graphify-read-side-ccrc-level-design.md`
+
+## Global Constraints
+
+- **`$CCRC_REPO`** in every command below is the absolute path of your checkout (`export CCRC_REPO=$(git rev-parse --show-toplevel)` once per shell). The plan never spells a real path: the pre-push guard refuses identity residue, and a checkout path is one.
+
+- **Branch:** all work happens on `feat/graphify-read-side-ccrc-level`, cut from `origin/main`. PR #44 is **already merged** (`origin/main` = `651f40c5`, "fix(graphify): the read rule clobbered exactly what its own header promised not to (D-1244) (#44)"), so `origin/main` already carries the hardened census/splice this plan reuses. Conventional commits; **each task ends in its own commit**; nothing is pushed by the implementer.
+- **SAFETY (repo `CLAUDE.md`, sacred):** every test uses a FIXTURE `HOME` (`mkTmp`), never the live `$HOME`. Never run `ccd ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`, `ws-restore`. Never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*` units. Never print the contents of a secret file. Deploy is **not** part of this plan (it is AGENT-FIRST and the orchestrator runs it).
+- **No new ccd verb, no new agent read root, `EXEC_COMMANDS` unchanged, `gh` untouched.** The server never reads `~/.cache/graphify-queries.log`.
+- **Wire discipline:** `FleetSession.graphQueries` is ADDITIVE. Do **not** bump `FLEET_PROTO` (=1). `reviveFleetSession` returns a literal, so the field goes in that literal.
+- **Rings:** `shared/*.ts` (L0) imports NOTHING — not even `node:*`. `server/src/hookstate.ts` is an L3 adapter and **may not narrow a distinction it received**: `null` (no field) and `0` (measured none) stay distinct, for `graphQueries` exactly as for `subagents`.
+- **The session hook's standing contract is absolute:** exit 0 on every path, write atomically or not at all, **no network, no locks, no waiting**. Every new read is a local file or a git ref. Stdout stays EMPTY on every event but `SessionStart` — on `PreToolUse` a stdout JSON is a permission decision.
+- **Platform:** `server/test/macos-platform.test.ts` refuses un-shimmed GNU calls in every shebang'd file under `ccd/` except three named, ratcheted exemptions (`ccclip`, `ccd-graph-sweep`, `ccrc-adopt`) — it enumerated four files (`ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-api`) when this plan was written, which left `ccd/session-hook.sh` unscanned; **D-1250** derives the corpus from the directory instead, so this plan's own +91 lines of hook shell are covered. No `stat -c`/`stat -f`, no `date +%s%3N`, no `date -d`, no `sha256sum`, no `uuidgen`, no bare `timeout`, no template-less `mktemp`, no `mv -T`, no `du -sb`. `readlink -f` and `realpath` are explicitly ALLOWED. **Use no `awk` in new shell code** (BSD awk refuses a newline inside `-v`). `sed -n "1,0p"` prints line 1, not nothing.
+- **Mutation-table discipline:** every guard ships WITH a test that goes RED when the guard is deleted or mutated. Measure the red before/after; a comment is a request, a red suite is a mechanism.
+- **Test commands** (never bare `npx vitest` — it resolves a global copy with no jsdom and falsely reports "no tests"):
+  - one suite: `cd server && ./node_modules/.bin/vitest run test/<file>.test.ts` (likewise in `agent/`, `pwa/`)
+  - full suite: `cd server && npm run test` — **FOREGROUND, timeout ≥ 600000 ms**
+  - typecheck: `cd server && npx tsc --noEmit -p tsconfig.json`; `cd pwa && npx tsc --noEmit`
+  - after every shell edit: `bash -n ccd/ccrc`, `bash -n ccd/session-hook.sh`, `bash -n ccd/ccrc-doctor-checks`
+- **Known load flakes** (re-run IN ISOLATION before calling a real break): `ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`.
+
+---
+
+## File Structure
+
+**Modified — shell (ships to the fleet host first; the orchestrator deploys):**
+
+| file | responsibility after this plan |
+|---|---|
+| `ccd/session-hook.sh` | unchanged contract; gains `graphQueries` in the state it already writes (R4) and the single `SessionStart` stdout card (R1). |
+| `ccd/ccrc` | `_inst_graph_always_on` DELETED; `_inst_graph_always_on_off` added in its place (R0). `_inst_graphify_engine` gains the `~/.local/bin/graphify` converge (R3). |
+| `ccd/ccrc-doctor-checks` | `_check_graphify` loses its PATH-shadow bucket; new `graphify-path` table entry + `_check_graphify-path` owns that question and FAILs on it (R3). |
+| `ccd/worker-skill/SKILL.md` | clause 12 (R2); "eleven" → "twelve" in two places. |
+| `ccd/coordinator-skill/references/wave-lifecycle.md` | §2 gains one sentence about quoting the card's freshness line in a brief (R2). |
+
+**Modified — TypeScript:**
+
+| file | responsibility |
+|---|---|
+| `server/src/hookstate.ts` | `HookState.graphQueries: number \| null`; a revive helper that keeps absent (`null`) apart from measured zero. |
+| `shared/api.ts` | `FleetSession.graphQueries: number \| null`; `reviveFleetSession`'s literal gains it (absent on the wire → `null`). |
+| `server/src/fleet.ts` | maps `hs?.graphQueries` onto the wire beside `subagents`. |
+| `pwa/src/fleet/SessionLine.tsx` | `graph N` chip in `.sess-meta`, rendered only when non-null. |
+| `pwa/src/screens/RunsScreen.tsx` | the same chip on the run board's worker row. |
+| `pwa/src/fleet/fleet.css` | `.sess-graph`, in `.sess-tally`'s quiet register; added to the `.sess-line--active` ink override group. |
+| `README.md` | the graphify section's step enumeration and its read-side paragraph, rewritten for R0–R4. |
+| `CLAUDE.md` | "eleven clauses" → "twelve clauses". |
+
+**Modified — tests:**
+
+`server/test/session-hook.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleet.test.ts`, `server/test/fleetstate.test.ts`, `server/test/fleet-health.test.ts`, `server/test/bucket.test.ts`, `server/test/worker-skill.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-install-graphify.test.ts`, `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-doctor-graphify.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/runs-screen.test.tsx`, and 25 PWA/server fixture files that build a whole `FleetSession` literal.
+
+**TWO fixture shapes, not one:** the field lands on `FleetSession` *and* on `HookState`, and
+the `HookState` literals are a different spelling the `FleetSession` seds do not touch —
+`server/test/fleet.test.ts:24`'s `mkHookState`, `server/test/bucket.test.ts:298` and `:491`. Measured:
+adding `graphQueries` to `HookState` alone errors those three sites (`TS2769`/`TS2322`) with tsc
+otherwise clean, which is why both files are named above.
+
+---
+
+## Task 1: R4 — `graphQueries`, hook to chip
+
+**Files:**
+- Modify: `ccd/session-hook.sh` (the declaration line, the `PostToolUse` arm, the carry block, the `jq -cn` output)
+- Modify: `server/src/hookstate.ts`
+- Modify: `shared/api.ts` (the `FleetSession` interface, `reviveFleetSession`'s literal)
+- Modify: `server/src/fleet.ts:431` (beside `subagents`)
+- Modify: `pwa/src/fleet/SessionLine.tsx`, `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/fleet.css`
+- Test: `server/test/session-hook.test.ts`, `server/test/hookstate.test.ts`, `server/test/fleet.test.ts`, `server/test/fleetstate.test.ts`, `server/test/fleet-health.test.ts`, `pwa/test/session-line.test.tsx`, `pwa/test/runs-screen.test.tsx`
+- Fixtures (mechanical): `server/test/bucket.test.ts` and `server/test/fleet.test.ts` (the two `HookState` literal shapes), and 25 files under `pwa/test/` plus `server/test/fleetstate.test.ts` / `server/test/fleet-health.test.ts` (the `FleetSession` shape)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks (this is the first).
+- Produces:
+  - hookstate JSON field name **`graphQueries`** (integer ≥ 0), written by `ccd/session-hook.sh`
+  - `HookState.graphQueries: number | null` (`server/src/hookstate.ts`) — **the one reader the spec names**, and the only place the integer/non-negative contract is enforced: absent → `null`, a non-integer or negative rejects the whole read
+  - `FleetSession.graphQueries: number | null` (`shared/api.ts`), revived by the file's existing **`optNum(o, 'graphQueries')`** — absent or explicitly null → `null`, a non-number or non-finite value rejects the whole session. **Deliberately laxer than the reader above, and that is not an oversight:** `optNum` is `shared/api.ts`'s single reader for every numeric field (`shared/api.ts:1700`), a snapshot's value has already passed `hookstate.ts`'s guard on the server that wrote it, and a bespoke `optCount` here would be a second numeric-revive vocabulary in the L0 file — the thing "single-source-of-truth values are enumerated once" exists to stop. Say `optNum`, not "under an integer guard"; the guard lives one layer in.
+  - shell regex constant **`GRAPH_QUERY_RE`** in `ccd/session-hook.sh`
+  - CSS class **`.sess-graph`**, chip text `graph <N>`
+
+---
+
+- [ ] **Step 1: Write the failing hook tests**
+
+Add to `server/test/session-hook.test.ts`. First change the `run` helper (top of the file) so it returns stdout — existing call sites ignore the return value and are unaffected:
+
+```typescript
+/** Run the hook with a payload; env overrides let each test break one leg.
+ *  Returns the hook's STDOUT, which is empty on every event but SessionStart
+ *  (R1) — `encoding: 'utf8'` is what makes execFileSync hand it back as a
+ *  string rather than a Buffer. */
+const run = (payload: object, env: Record<string, string> = {}): string =>
+  execFileSync('bash', [HOOK], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: {
+      ...process.env, HOME: home,
+      PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
+      ...env,
+    },
+  });
+```
+
+Then append this describe block at the end of the file:
+
+```typescript
+// ── R4: the read side, MEASURED ───────────────────────────────────────────
+// D-1243 shipped an instruction and no number. The whole argument for retiring
+// the account-wide block is that its effect measured zero, and the only way
+// that sentence stays true (or stops being true) is a counter the console can
+// read. `graphify update` and builds deliberately do NOT count: this is
+// measuring READS.
+describe('graphQueries — the read counter the console can see', () => {
+  const bash = (command: string): object =>
+    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command } });
+
+  it('counts query, path and explain — each one, once', () => {
+    run(bash('graphify query "who calls assembleFleet"'));
+    expect(readState().graphQueries).toBe(1);
+    run(bash('graphify path "fleet.ts" "watch.ts"'));
+    expect(readState().graphQueries).toBe(2);
+    run(bash('graphify explain "the mail delivery gate"'));
+    expect(readState().graphQueries).toBe(3);
+  });
+
+  it('counts a graphify that is not the first word of the line', () => {
+    run(bash('cd /tmp && graphify query "x"'));
+    expect(readState().graphQueries).toBe(1);
+    run(bash('true; graphify explain "y"'));
+    expect(readState().graphQueries).toBe(2);
+  });
+
+  it('does NOT count graphify update, a build, or a bare graphify', () => {
+    run(bash('graphify update .'));
+    run(bash('graphify build --all'));
+    run(bash('graphify'));
+    run(bash('graphify --version'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('does NOT count a command that merely contains the word', () => {
+    run(bash('mygraphify query "x"'));
+    run(bash('echo see-graphify-query-docs'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('does NOT count a non-Bash tool whose input happens to say it', () => {
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read',
+      tool_input: { command: 'graphify query "x"' } });
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('carries the count across other events, the way subagents is carried', () => {
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState().graphQueries).toBe(1);
+    run({ hook_event_name: 'Stop' });
+    expect(readState().graphQueries).toBe(1);
+    run({ hook_event_name: 'SubagentStart', agent_name: 'reviewer' });
+    expect(readState().graphQueries).toBe(1);
+  });
+
+  it('resets to 0 on SessionStart(startup) and SessionStart(clear)', () => {
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    expect(readState().graphQueries).toBe(0);
+    run(bash('graphify query "x"'));
+    run({ hook_event_name: 'SessionStart', source: 'clear' });
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it('is KEPT across resume and across compact — a compaction is not a new session', () => {
+    run(bash('graphify query "x"'));
+    run(bash('graphify path "a" "b"'));
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(readState().graphQueries).toBe(2);
+    // compact writes nothing at all (D-306), so the count on disk survives it
+    run({ hook_event_name: 'SessionStart', source: 'compact' });
+    expect(readState().graphQueries).toBe(2);
+  });
+
+  it('starts at 0 on a session that has never queried — 0 is a MEASUREMENT', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState().graphQueries).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts`
+Expected: FAIL — every assertion on `graphQueries` reads `undefined`, not a number.
+
+- [ ] **Step 3: Implement the counter in `ccd/session-hook.sh`**
+
+(a) Declare the regex once, immediately after the `REG="$HOME/.cc-sessions"` line:
+
+```bash
+# ── R4: what counts as READING the graph ────────────────────────────────
+# `query`, `path` and `explain` only. `graphify update` and every build are
+# WRITES, and the sweep owns the write side — counting them here would make
+# the number say the opposite of what it is for. The leading class is what
+# stops `mygraphify query` and prose mentioning the command from counting;
+# the trailing one stops `graphify querying-something-else`.
+GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
+```
+
+(b) Initialise the two new carriers on the existing declaration line (both must be SET before the case block, because the carry block below reads them for every event and this file runs under `set -u`):
+
+```bash
+state="" ask_json="null" interrupted="false" src="" gcmd=""
+```
+
+(c) Split the `UserPromptSubmit|PostToolUse` arm. `install-session-hooks.test.ts` derives the wired event set from these arm labels with `/^\s{2}([A-Za-z|]+)\)/`, so two arms at two-space indentation still yield both event names — the label TEXT is what must not change, not its grouping:
+
+```bash
+  UserPromptSubmit) state="working" ;;
+  PostToolUse)
+    state="working"
+    # ONE payload read for the counter, on the one event that can carry a
+    # command, and only for Bash: a tool_input.command on any other tool is
+    # not a shell line this box ran.
+    #
+    # THE PREFILTER IS A BUDGET, NOT A STYLE CHOICE. This arm is the HOT PATH —
+    # `session-hook.test.ts` pins p95 of 20 PostToolUse runs under 150 ms, and
+    # a bare `jq` fork on this box measures ~5 ms against a ~46 ms run. A shell
+    # line that runs `graphify` CANNOT fail to put the eight characters
+    # `graphify` somewhere in the payload (JSON escaping never touches them),
+    # so a payload without them needs no jq at all and the common tool call
+    # pays nothing. `$gcmd` stays "" there, which the increment below already
+    # treats as "no command".
+    if [[ "$payload" == *graphify* ]]; then
+      gcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
+        <<<"$payload" 2>/dev/null) || gcmd=""
+    fi ;;
+```
+
+(d) Fold the counter into the state-file read that is ALREADY there rather than adding a third fork against the same file. Replace the existing two lines
+
+```bash
+subs=$(jq -c '.subagents // []' "$f" 2>/dev/null) || subs="[]"
+prev_state=$(jq -r '.state // empty' "$f" 2>/dev/null) || prev_state=""
+```
+
+with:
+
+```bash
+# ONE fork for all three fields (was two, and the counter would have made
+# three). Same hot-path budget as the arm above: `$f` is read on every event,
+# and `subs`/`prev_state` were already two forks over one file. Three values on
+# three LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
+# name as a backslash sequence, which would hand `--argjson subagents` a string
+# that is no longer JSON. `tostring` of a compact array contains no newline, so
+# line-splitting is safe where tab-splitting is not.
+#
+# The read counter survives state transitions exactly as `subs` does, and a
+# file that never carried the field reads as 0 — this is the WRITER, where 0
+# is the honest start; `hookstate.ts` is the reader, and there absent stays
+# `null` rather than folding to 0. A jq that fails (no file, corrupt file)
+# prints nothing, all three `read`s come up empty, and each falls back to the
+# degrade it already had. This file runs under `set -uo pipefail` and NOT
+# `set -e`, so a `read` hitting EOF is inert.
+subs=""; prev_state=""; gq=""
+{ read -r subs; read -r prev_state; read -r gq; } < <(jq -r \
+  '(.subagents // [] | tostring), (.state // ""),
+   (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end)' \
+  "$f" 2>/dev/null)
+[[ "$subs" == \[* ]] || subs="[]"
+[[ "$gq" =~ ^[0-9]+$ ]] || gq=0
+# `startup` and `clear` are new sessions; `resume` and `compact` are the SAME
+# session still going, and a counter that reset on compaction would erase the
+# evidence at precisely the moment the session most needed the card (R1).
+# `compact` never reaches this line at all — the SessionStart arm exits at its
+# compact guard (D-306) — so its carry is STRUCTURAL, protected by that exit
+# and not by this condition. `resume` is the source this condition protects.
+#
+# D-1248 (review): written as "everything except resume", NOT the allow-list
+# `( "$src" == startup || "$src" == clear )` this plan first specified — see
+# the deviation entry.
+if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; fi
+if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
+```
+
+The subagent branch below still reads `$subs` and `$prev_state` unchanged; only the number of forks
+that produced them changed.
+
+(e) Carry it onto the write. Replace the `out=$(jq -cn …)` invocation with:
+
+```bash
+out=$(jq -cn \
+  --argjson v 1 --arg state "$state" --arg event "$event" \
+  --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
+  --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
+  --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
+  '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
+    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries}
+   + (if $interrupted then {interrupted:true} else {} end)') || exit 0
+```
+
+- [ ] **Step 4: Run the hook tests and the wiring guard**
+
+Run:
+```bash
+bash -n ccd/session-hook.sh
+cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts
+cd server && ./node_modules/.bin/vitest run test/install-session-hooks.test.ts
+cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
+```
+Expected: all PASS. (`install-session-hooks` proves the arm split did not change the derived event set; `macos-platform` proves `_hook_epoch_ms`'s two copies still agree — and, since **D-1250**, that this task's new hook lines carry no un-shimmed GNU call either, which is what this step was citing it for and could not deliver at the time.)
+
+**Watch `session-hook`'s p95 test specifically** (`'p95 of 20 runs stays under the budget (150ms CI allowance; 50ms target)'`). This task touches the `PostToolUse` hot path, which is exactly what that test exercises, and step 3's two measures exist for it: the fold in (d) keeps the state-file reads at ONE fork instead of three, and the `*graphify*` prefilter in (c) means the p95 fixture's own payload (`{hook_event_name:'PostToolUse', tool_name:'Bash'}`, no command at all) forks nothing new. Baseline on this box: ~46 ms/run, a bare `jq` fork ~5 ms. `session-hook` is on the known-load-flake list, so re-run it IN ISOLATION before treating a red p95 as a real break — but if it is genuinely over, the cause is a fork on that arm, not the reader.
+
+- [ ] **Step 5: Write the failing reader test**
+
+In `server/test/hookstate.test.ts`, add `graphQueries: 0` to the `base()` helper's literal so the writer's real shape is what the suite seeds:
+
+```typescript
+/** A complete, valid hookstate body — the writer's own shape. */
+const base = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  v: 1, state: 'working', event: 'UserPromptSubmit', sessionId: UUID, pid: 1234,
+  updatedAt: NOW, ask: null, subagents: [], graphQueries: 0,
+  ...overrides,
+});
+```
+
+Add `graphQueries: 0` to the full-object assertion in the `'fresh + matching round-trips every field, including subagents'` test (the `expect(out).toEqual({…})` at the top of the file), then append this describe:
+
+```typescript
+// ── graphQueries: null and 0 are two different answers ────────────────────
+// An L3 adapter may not narrow a distinction it received. A session that
+// reported no queries (`0`) and a session running a hook too old to report at
+// all (`null`) are two facts the console shows differently — `graph 0` versus
+// no chip — so folding absent to 0 would invent a measurement.
+describe('graphQueries', () => {
+  it('a measured zero is 0, not null', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: 0 }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphQueries).toBe(0);
+  });
+
+  it('a count round-trips', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: 7 }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphQueries).toBe(7);
+  });
+
+  it('ABSENT is null — an older hook said nothing, which is not "said zero"', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    const body = base();
+    delete body['graphQueries'];
+    seed(reg, ID, body);
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out).not.toBeNull();
+    expect(out?.graphQueries, 'an absent counter was folded to a measured zero').toBeNull();
+  });
+
+  it('explicit null is null too', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: null }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphQueries).toBeNull();
+  });
+
+  it('a non-integer, a negative or a non-number rejects the WHOLE read', async () => {
+    // NOT `NaN`: this suite's `seed` helper `JSON.stringify`s the body, and
+    // `JSON.stringify(NaN)` is the string `null` — which reads back as a
+    // perfectly valid absent counter, so that element would fail the
+    // assertion rather than prove it. `true` is the fifth wrong TYPE and
+    // survives serialisation, which is what this loop is actually testing.
+    for (const bad of [1.5, -1, '3', true, {}]) {
+      const reg = mkTmp('ccrc-hookstate-');
+      seed(reg, ID, base({ graphQueries: bad }));
+      expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW),
+        `graphQueries: ${String(bad)} was laundered into a reading`)
+        .toEqual({ ok: false, reason: 'no-state' });
+    }
+  });
+});
+```
+
+- [ ] **Step 6: Run it to verify it fails**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/hookstate.test.ts`
+Expected: FAIL — `graphQueries` is not a property of `HookState` (a tsc error in the suite) and the assertions read `undefined`.
+
+- [ ] **Step 7: Implement the reader**
+
+In `server/src/hookstate.ts`, add the field to the `HookState` interface, immediately after `subagents`:
+
+```typescript
+  subagents: { name: string; startedAt: number }[];
+  /** How many `graphify query` / `path` / `explain` calls this session has
+   *  made since it last started or cleared, as the hook counted them
+   *  (`ccd/session-hook.sh`'s `GRAPH_QUERY_RE`). R4 of the read-side design:
+   *  the whole case for retiring the account-wide block is that its effect
+   *  measured zero, and this is the number that keeps that claim honest.
+   *
+   *  `null` is NO FIELD — a hookstate written by a hook that predates the
+   *  counter. `0` is a MEASUREMENT: this session reported, and it has read
+   *  nothing. Folding the first into the second is exactly the narrowing an
+   *  adapter may not do, and it would make an un-upgraded fleet box look like
+   *  a fleet that ignores its graphs. */
+  graphQueries: number | null;
+```
+
+Add the revive helper beside `reviveSubagents`:
+
+```typescript
+/** `graphQueries` — absent or explicitly null reads as `null` (the writer did
+ *  not carry the field), any non-integer or negative number rejects the whole
+ *  read. Same split `reviveSubagents` takes: degrade for a field an older
+ *  writer never wrote, reject a value this build cannot parse. */
+function reviveGraphQueries(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+    throw new Malformed('graphQueries');
+  }
+  return raw;
+}
+```
+
+And in the `return { ok: true, state: { … } }` literal inside `readHookStateMeasured`, after `subagents,`:
+
+```typescript
+        subagents,
+        graphQueries: reviveGraphQueries(raw['graphQueries']),
+```
+
+- [ ] **Step 8: Run the reader tests**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/hookstate.test.ts`
+Expected: PASS.
+
+- [ ] **Step 9: Add the field to the wire**
+
+In `shared/api.ts`, in the `FleetSession` interface immediately after `subagents`:
+
+```typescript
+  subagents: { name: string; startedAt: number }[] | null;
+  /** How many graph READS this session has made — `hookstate.ts`'s
+   *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
+   *  bump, and an older peer that omits it revives as `null` below.
+   *
+   *  `null` mirrors `hookState`/`subagents`: no fresh hook data, or a hook too
+   *  old to count. `0` is a MEASUREMENT — the session reported and has read
+   *  nothing — and the console shows the two differently (`graph 0` versus no
+   *  chip at all), which is the whole reason this is not a `number`. */
+  graphQueries: number | null;
+```
+
+In `reviveFleetSession`'s `revived` literal, immediately after `subagents: optSubagents(o, 'subagents'),`:
+
+```typescript
+      subagents: optSubagents(o, 'subagents'),
+      // Absent → null, exactly as `optSubagents` degrades: a snapshot written
+      // before this field existed is ignorant of the count, not a witness to
+      // its being zero. Present-but-not-a-finite-number throws inside
+      // `optNum`, which this function's catch turns into "reject the whole
+      // session" — the same rule every other numeric field here follows.
+      graphQueries: optNum(o, 'graphQueries'),
+```
+
+In `server/src/fleet.ts`, in the `const session: FleetSession = {` literal, immediately after `subagents: hs?.subagents ?? null,`:
+
+```typescript
+      subagents: hs?.subagents ?? null,
+      // `?? null` and not `?? 0`: no hook data at all and a hook reporting
+      // zero reads are two conditions, and `hookstate.ts` already keeps them
+      // apart — collapsing them one layer out would undo that on the wire.
+      graphQueries: hs?.graphQueries ?? null,
+```
+
+- [ ] **Step 10: Update every fixture, and PIN the null degrade at the assembly seam**
+
+**(a) The `FleetSession` fixtures.** Two shapes cover all 27 sites (a 28th, `s({ subagents: null })` in `pwa/test/session-line.test.tsx:267`, is a partial override and needs nothing). Run exactly:
+
+```bash
+cd "$CCRC_REPO"
+grep -rl 'subagents: null, held: null' pwa/test server/test \
+  | xargs sed -i 's/subagents: null, held: null/subagents: null, graphQueries: null, held: null/'
+grep -rl 'subagents: null,$' pwa/test server/test \
+  | xargs sed -i 's/subagents: null,$/subagents: null, graphQueries: null,/'
+```
+
+**(b) The `HookState` fixtures — a SECOND shape the two seds above cannot see.** Those seds match `FleetSession` wire literals (`subagents: null`); a `HookState` literal spells it `subagents: [], interrupted: false`, and adding a required field to `HookState` makes each one a tsc error. Measured: exactly three sites, all sharing one substring — `server/test/fleet.test.ts:24` (`mkHookState`), `server/test/bucket.test.ts:298` and `:491`. One sed does all three, and it writes `0` rather than `null` deliberately: these stand for a session whose hook DID report, which is what makes `fleet.test.ts`'s hookless-null test below a real contrast rather than a repetition.
+
+```bash
+cd "$CCRC_REPO"
+grep -rl 'subagents: \[\], interrupted: false' server/test \
+  | xargs sed -i 's/subagents: \[\], interrupted: false/subagents: [], graphQueries: 0, interrupted: false/'
+```
+
+**(c) Pin the null degrade — three one-line assertions, without which Step 15's `?? 0` mutation row is a comment.** (D-1249: three `toBeNull()`s are only HALF the pin — see the extra bullet at the end of this step for the POSITIVE carry, without which the whole assembly seam is deletable.) The seds above only touch *inputs*; nothing yet asserts what an assembled or revived session reports. The analogous field is pinned in all three places already, so put `graphQueries` beside `subagents` in each:
+
+- `server/test/fleet.test.ts` — in `it('a hookless session carries all three fields as null')` (the `expect(s.subagents).toBeNull()` at ~:564), add `expect(s.graphQueries).toBeNull();` and rename the test to **`'a hookless session carries all four fields as null'`**.
+- `server/test/fleetstate.test.ts` — beside `expect(s?.subagents).toBeNull()` (~:112) add `expect(s?.graphQueries).toBeNull();`, and add `'graphQueries'` to the `Object.keys(...)` `arrayContaining` list on the next line. (That list is hand-kept: a field revived as `undefined` instead of `null` would be silently omitted from `Object.keys`, which is the whole point of the assertion.)
+- `server/test/fleet-health.test.ts` — beside `expect(body.sessions[0]?.subagents).toBeNull()` (~:167) add `expect(body.sessions[0]?.graphQueries).toBeNull();`.
+
+**(c2) Pin the POSITIVE carry too — the seam's other half (D-1249).** Every assertion in (c) is
+`toBeNull()`, so all three stay green when `graphQueries: hs?.graphQueries ?? null` (`server/src/fleet.ts`)
+is replaced by a literal `null` — the guard deleted outright, the count silently dropped for every LIVE
+session, which is the one direction the deliverable actually cares about. `assembleFleet` is the only
+seam that puts the counter on the live `/api/fleet` wire (the `reviveFleetSession` path is the
+degraded-mode read), so it needs a test that a hookstate count of N arrives as N:
+
+- `server/test/fleet.test.ts` — in the sibling positive test `it('a fresh hookstate carries hookState,
+  askSummary and subagents onto the session')` (~:531), add `graphQueries: 7` to the `mkHookState({…})`
+  override and `expect(s.graphQueries).toBe(7);` to the assertions, renaming the test to name the
+  fourth field the way its hookless sibling was renamed: **`'a fresh hookstate carries all four fields —
+  hookState, askSummary, subagents and graphQueries — onto the session'`**.
+- …and a second test for the MEASURED ZERO, which `toBe(7)` alone does not cover in the one direction
+  that matters: seed `mkHookState({ state: 'working', graphQueries: 0 })` and assert
+  `expect(s.graphQueries).toBe(0);`. Together the three points (N, 0, hookless-null) leave no collapse
+  at this seam unpinned — `?? 0`, a literal `null`, and `hs ? 0 : null` each redden at least one.
+
+**(d)** Then prove the compiler agrees:
+
+```bash
+cd "$CCRC_REPO"/server && npx tsc --noEmit -p test/tsconfig.tests.json
+cd "$CCRC_REPO"/pwa && npx tsc --noEmit
+```
+Expected: both clean. Any site a sed missed is named by tsc with a file and line — add `graphQueries: null,` beside that literal's `subagents:` entry (or `graphQueries: 0,` if it is a `HookState`).
+
+- [ ] **Step 11: Write the failing PWA chip tests**
+
+In `pwa/test/session-line.test.tsx`, append:
+
+```tsx
+describe('the graph chip', () => {
+  it('renders graph N when the hook counted reads', () => {
+    render(<SessionLine session={s({ graphQueries: 4 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 4')).toBeInTheDocument();
+  });
+
+  it('renders graph 0 — a measured zero is the finding, not the absence of one', () => {
+    render(<SessionLine session={s({ graphQueries: 0 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  it('renders NO chip when the count is null — nothing was measured', () => {
+    render(<SessionLine session={s({ graphQueries: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/^graph /)).toBeNull();
+  });
+});
+```
+
+In `pwa/test/runs-screen.test.tsx`, append. It uses that file's own `r()` / `sess()` / `makeStore()` / `NO_CAPS` helpers exactly as the `unmeasured` test at line ~416 does — `sess()`'s default id is `ccrc-pwa-clear-cove`, which is `r()`'s default `sessionId`, so a one-run/one-session store links them:
+
+```tsx
+describe('the run board worker row carries the graph chip', () => {
+  const board = (over: Partial<FleetSession>): void => {
+    const store = makeStore();
+    act(() => {
+      store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] });
+    });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  };
+
+  it('shows graph N for the run session the hook counted reads for', () => {
+    board({ graphQueries: 3 });
+    expect(screen.getByText('graph 3')).toBeInTheDocument();
+  });
+
+  it('shows graph 0 — the row this chip exists for is the one that read nothing', () => {
+    board({ graphQueries: 0 });
+    expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  it('shows NO chip when nothing was measured', () => {
+    board({ graphQueries: null });
+    expect(screen.queryByText(/^graph /)).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 12: Run them to verify they fail**
+
+Run:
+```bash
+cd pwa && ./node_modules/.bin/vitest run test/session-line.test.tsx
+cd pwa && ./node_modules/.bin/vitest run test/runs-screen.test.tsx
+```
+Expected: FAIL — "Unable to find an element with the text: graph 4".
+
+- [ ] **Step 13: Render the chip**
+
+In `pwa/src/fleet/SessionLine.tsx`, immediately after the `.sess-tally` block and before the subagent disclosure:
+
+```tsx
+          {/* The read counter (R4). `!== null` and NOT a truthiness test: a
+              measured zero is the finding this chip exists to show — a session
+              with a fresh graph in its tree that has queried it not once — and
+              `graphQueries && …` would hide exactly that row. Null is the
+              other answer (no hook data, or a hook too old to count), and it
+              renders nothing at all rather than a `graph 0` nobody measured.
+              A plain cell in .sess-meta, so the shared
+              `.sess-meta > *:not(:first-child)::before` rule punctuates it
+              like every sibling; no disclosure, because there is nothing
+              underneath a count to open. */}
+          {!dead && session.graphQueries !== null && (
+            <span className="sess-graph" title={`${session.graphQueries} graphify read(s) this session`}>
+              graph {session.graphQueries}
+            </span>
+          )}
+```
+
+In `pwa/src/screens/RunsScreen.tsx`, immediately after the `{verdict !== null && (…)}` block:
+
+```tsx
+      {/* The worker's read counter, in the fleet card's own class — the same
+          reuse this row already makes of `.sess-spawn` and `.sess-unmeasured`
+          next door, and for the same reason: a second `.run-…` class for one
+          meaning is two vocabularies over one field. */}
+      {session !== null && session.graphQueries !== null && (
+        <span className="sess-graph" title={`${session.graphQueries} graphify read(s) this session`}>
+          graph {session.graphQueries}
+        </span>
+      )}
+```
+
+In `pwa/src/fleet/fleet.css`, immediately after the `.sess-cleanup-fact { … }` rule:
+
+```css
+/* The hook's graph-read counter — same quiet register as .sess-tally, no
+   colour of its own (it inherits .sess-meta's ink-secondary), so it brings no
+   new contrast pair with it. */
+.sess-graph {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+```
+
+…and add it to the active-row ink override group, beside `.sess-line--active .sess-tally,`:
+
+```css
+.sess-line--active .sess-tally,
+.sess-line--active .sess-graph,
+```
+
+- [ ] **Step 14: Run the PWA suites and typecheck**
+
+Run:
+```bash
+cd pwa && ./node_modules/.bin/vitest run test/session-line.test.tsx
+cd pwa && ./node_modules/.bin/vitest run test/runs-screen.test.tsx
+cd pwa && ./node_modules/.bin/vitest run test/fleet-css.test.ts
+cd pwa && npx tsc --noEmit
+```
+Expected: all PASS, tsc clean.
+
+- [ ] **Step 15: Prove the guards are mechanisms, not comments**
+
+Measure each mutation and record the result in the commit body. For each: apply, run, confirm RED, revert.
+
+| mutation | file | expected red |
+|---|---|---|
+| drop `graphQueries:$graphQueries` from the hook's `jq -cn` object | `ccd/session-hook.sh` | `session-hook` — every `graphQueries` assertion |
+| change `(query\|path\|explain)` to `(query\|path\|explain\|update)` | `ccd/session-hook.sh` | `session-hook` — "does NOT count graphify update…" |
+| delete the `SessionStart && "$src" != resume` reset line | `ccd/session-hook.sh` | `session-hook` — "resets to 0 on SessionStart(startup)…", "…with NO source… (D-1248)", "…a source this build has never heard of" |
+| narrow that reset condition to the allow-list `( "$src" == startup \|\| "$src" == clear )` | `ccd/session-hook.sh` | `session-hook` — "resets to 0 on a SessionStart with NO source… (D-1248)" AND "…a source this build has never heard of" |
+| change that reset condition's `"$src" != resume` to `"$src" != startup` | `ccd/session-hook.sh` | `session-hook` — "is KEPT across resume and across compact…" AND "resets to 0 on SessionStart(startup) and SessionStart(clear)" |
+| change `graphQueries: optNum(o, 'graphQueries')` to a literal `null` in `reviveFleetSession` | `shared/api.ts` | `fleetstate` — "revives a PRESENT graphQueries as the number the snapshot carried" AND "…a persisted graphQueries of 0 as 0" |
+| drop the chip's `!dead &&` conjunct | `pwa/src/fleet/SessionLine.tsx` | `session-line` — "renders NO chip on a dead session, however many reads it made" |
+| delete the `[[ "$src" == compact ]] && exit 0` guard in the `SessionStart` arm | `ccd/session-hook.sh` | `session-hook` — the existing D-306 "writes nothing on compact" tests |
+| make `reviveGraphQueries` return `0` for `undefined` | `server/src/hookstate.ts` | `hookstate` — "ABSENT is null…" |
+| change `graphQueries: hs?.graphQueries ?? null` to `?? 0` | `server/src/fleet.ts` | `fleet` — "a hookless session carries all four fields as null" (Step 10c); `fleet-health`/`fleetstate` red too if the cached-snapshot path is mutated the same way |
+| replace `hs?.graphQueries ?? null` with a literal `null` — the guard DELETED, the direction `?? 0` cannot see (D-1249) | `server/src/fleet.ts` | `fleet` — "a fresh hookstate carries all four fields…" AND "carries a hookstate graphQueries of 0…as 0" (Step 10c2) |
+| change `hs?.graphQueries ?? null` to `hs ? 0 : null` — the seam keeps the hookless distinction and throws the NUMBER away | `server/src/fleet.ts` | `fleet` — "a fresh hookstate carries all four fields…" |
+| reorder the hook's one jq back to `subagents, state, graphQueries` — the unbounded-text field FIRST (D-1249) | `ccd/session-hook.sh` | `session-hook` — "a corrupted multi-line .subagents cannot shift state or the count onto the wrong line (D-1249)" |
+| change the chip's `!== null` to a truthiness test | `pwa/src/fleet/SessionLine.tsx` | `session-line` — "renders graph 0…" |
+
+**Why "add `compact` to the reset condition" is NOT in this table:** it cannot go red in either
+direction. A `SessionStart` whose source is `compact` exits at the arm's own compact guard
+(`ccd/session-hook.sh:123`, D-306) before the counter block is ever reached, so that leg of the
+condition is unreachable code. Compact's carry is **structural** — protected by the early exit, and
+pinned by the D-306 tests the third row above reddens — not by the reset condition. Claiming it here
+would be exactly the guard-that-is-a-comment this table exists to prevent.
+
+- [ ] **Step 16: Commit**
+
+```bash
+cd "$CCRC_REPO"
+git add ccd/session-hook.sh server/src/hookstate.ts server/src/fleet.ts shared/api.ts \
+        pwa/src/fleet/SessionLine.tsx pwa/src/fleet/fleet.css pwa/src/screens/RunsScreen.tsx \
+        server/test pwa/test
+git commit -m "feat(hook): count graphify reads into hookstate and onto the fleet card (R4)"
+```
+
+---
+
+## Task 2: R1 — the `SessionStart` graph card
+
+**Files:**
+- Modify: `ccd/session-hook.sh` (two new functions near `_hook_epoch_ms`; one call inside the `SessionStart` arm)
+- Test: `server/test/session-hook.test.ts`
+
+**Interfaces:**
+- Consumes: from Task 1 — the `src=""` initialisation on the declaration line (the card's arm sets `src` before it runs) and the extended `run()` helper in `server/test/session-hook.test.ts` that returns stdout.
+- Produces:
+  - shell functions **`_hook_emit_context <text>`** and **`_hook_graph_card`** (no arguments; reads the globals `payload`, `id`, `REG`, `HOME`)
+  - the stdout JSON shape, on `SessionStart` only:
+    `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<card>"}}`
+
+---
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `server/test/session-hook.test.ts`:
+
+```typescript
+// ── R1: the graph card ────────────────────────────────────────────────────
+// The ONE printf to stdout in this file, and it lives inside the SessionStart
+// arm. On PreToolUse a stdout JSON is a PERMISSION DECISION, so a card that
+// leaked onto another event would not be noise — it would answer a question
+// nobody asked.
+describe('the SessionStart graph card', () => {
+  /** A tree with a graph in it. `built` is the sha the graph claims; the DECOY
+   *  at the head of graph.json is the mutation this fixture exists to catch —
+   *  `built_at_commit` is the file's LAST key on a real 8 MB graph, and a
+   *  reader that parses from the head answers the decoy. */
+  const plantGraph = (dir: string, opts: {
+    built?: string; nodes?: number; engine?: string; report?: boolean;
+  } = {}): void => {
+    const out = path.join(dir, 'graphify-out');
+    fs.mkdirSync(out, { recursive: true });
+    const built = opts.built ?? 'a'.repeat(40);
+    const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
+    const filler = `  "pad": "${'x'.repeat(9000)}",\n`;
+    fs.writeFileSync(path.join(out, 'graph.json'),
+      `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+    if (opts.report !== false) {
+      fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'),
+        `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
+        + `- ${opts.nodes ?? 7662} nodes · 15645 edges · 423 communities\n`);
+    }
+    fs.writeFileSync(path.join(out, '.graphify_engine'), `${opts.engine ?? '0.9.9'}\n`);
+  };
+
+  /** A git repo whose HEAD is returned. `-c` on every commit so the box's own
+   *  identity is never needed and never used. */
+  const gitTree = (dir: string, commits = 1): string => {
+    fs.mkdirSync(dir, { recursive: true });
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
+        '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
+    git('init', '-q');
+    const shas: string[] = [];
+    for (let i = 0; i < commits; i++) {
+      git('commit', '-q', '--allow-empty', '-m', `c${i}`);
+      shas.push(git('rev-parse', 'HEAD'));
+    }
+    return shas[0]!;
+  };
+
+  const card = (stdout: string): string => {
+    expect(stdout.trim(), 'the hook printed nothing').not.toBe('');
+    const lines = stdout.trim().split('\n');
+    expect(lines, 'the hook printed more than one line on stdout').toHaveLength(1);
+    const j = JSON.parse(lines[0]!);
+    expect(j.hookSpecificOutput.hookEventName).toBe('SessionStart');
+    return String(j.hookSpecificOutput.additionalContext);
+  };
+
+  it('prints a card naming the graph, its node count, its engine and the pin', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, nodes: 4242, engine: '0.9.9' });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+    const text = card(run({ hook_event_name: 'SessionStart', source: 'startup', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text).toContain('4242 nodes');
+    expect(text).toContain(first.slice(0, 8));
+    expect(text).toContain('fresh');
+    expect(text).toContain('engine 0.9.9');
+    expect(text).toContain('pin 0.9.9');
+    expect(text).toContain('graphify query');
+    expect(text).toContain('graphify path');
+    expect(text).toContain('graphify explain');
+    expect(text, 'the card must forbid a session-side build').toContain('graphify update');
+  });
+
+  it('reads built_at_commit from the TAIL — a decoy at the head must not win', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'the head decoy was read instead of the real last key')
+      .not.toContain('00000000');
+    expect(text).toContain(first.slice(0, 8));
+  });
+
+  it('says how far behind HEAD the graph is, in commits', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 3);
+    plantGraph(tree, { built: first });
+    expect(card(run({ hook_event_name: 'SessionStart', cwd: tree })))
+      .toContain('2 commits behind HEAD');
+  });
+
+  it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree })).toBe('');
+  });
+
+  it('prints the sweep\'s own reason when the census says why there is no graph', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
+      passes: [
+        { started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [] },
+        { started: 'y', finished: 'y', pin: '0.9.9', status: 'ok', trees: [
+          { path: tree, outcome: 'refused-by-guard',
+            reason: 'untracked paths entered the corpus: a.py b.py', duration_ms: 12 },
+        ] },
+      ],
+    }));
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('refused-by-guard');
+    expect(text).toContain('untracked paths entered the corpus');
+  });
+
+  it('is printed for compact too — compaction is when a session loses what it knew', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    // the state write stays skipped for compact (D-306); the card does not
+    run({ hook_event_name: 'PreCompact' });
+    const out = run({ hook_event_name: 'SessionStart', source: 'compact', cwd: tree });
+    expect(card(out)).toContain('graphify-out/');
+    expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
+  });
+
+  it('prints NOTHING on every other event, even with a graph right there', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    for (const payload of [
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
+      { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
+      { hook_event_name: 'Stop', cwd: tree },
+      { hook_event_name: 'UserPromptSubmit', cwd: tree },
+      { hook_event_name: 'PreCompact', cwd: tree },
+      { hook_event_name: 'PostCompact', trigger: 'auto', cwd: tree },
+      { hook_event_name: 'SubagentStart', agent_name: 'reviewer', cwd: tree },
+    ]) {
+      expect(run(payload), `${payload.hook_event_name} printed on stdout`).toBe('');
+    }
+  });
+
+  it('falls back to $REG/<id>.workdir when the payload carries no cwd', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.workdir'), `${tree}\n`);
+    expect(card(run({ hook_event_name: 'SessionStart' }))).toContain('graphify-out/');
+  });
+
+  it('exits 0 and prints nothing when cwd does not exist', () => {
+    // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
+    // assertion — the contract this whole file lives under.
+    //
+    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
+    // nothing seeded, deleting that guard is invisible: the no-graph branch is
+    // taken anyway, the census read finds no file, and the card stays silent —
+    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
+    // directory check would print the sweep's line about a directory that is
+    // not there, and this assertion goes red.
+    const gone = path.join(home, 'gone');
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
+    expect(readState().state).toBe('done');
+  });
+
+  it('exits 0 and still prints a card when the tree is not a git repo', () => {
+    const tree = path.join(home, 'notarepo');
+    fs.mkdirSync(tree, { recursive: true });
+    plantGraph(tree, { built: 'b'.repeat(40) });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text, 'freshness was claimed with no git to measure it against')
+      .not.toContain('behind HEAD');
+    expect(text).not.toContain('fresh');
+  });
+
+  it('omits the node count rather than inventing one when GRAPH_REPORT.md is absent', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, report: false });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('graphify-out/');
+    expect(text).not.toContain('nodes');
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts`
+Expected: FAIL — "the hook printed nothing" on every card test. The "prints NOTHING on every other event" test passes vacuously; it becomes a real guard once the card exists.
+
+- [ ] **Step 3: Implement the card**
+
+In `ccd/session-hook.sh`, insert these two functions immediately after `_hook_epoch_ms`'s closing brace and before the `[[ -n "${HOME:-}" ]] || exit 0` line:
+
+```bash
+# ── THE GRAPH CARD (R1) — the only printf to stdout in this file ─────────
+# Claude Code reads a hook's stdout as a PER-EVENT CONTRACT, and on PreToolUse
+# that contract is a permission decision. A card that leaked onto another event
+# would not be noise; it would be an answer to a question nobody asked. So the
+# emitter is called from inside the SessionStart arm and nowhere else, and
+# every failure path in here prints NOTHING and returns 0 — this file's
+# standing contract (exit 0 on every path, no network, no locks, no waiting) is
+# unchanged. Every read below is a local file or a git ref.
+_hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
+  local j=""
+  j=$(jq -cn --arg c "$1" \
+    '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
+    || return 0
+  printf '%s\n' "$j"
+}
+
+# Measured for THIS session's tree, never for the fleet in general — the block
+# this replaces asserted "this project has a knowledge graph" of every project
+# the account ever opened, including the trees the sweep refuses.
+#
+# COST. `built_at_commit` is the LAST key of graph.json, which is 8 MB on this
+# repo, so it is read with `tail -c 4096` and never by parsing the file. The
+# node count comes off the head of GRAPH_REPORT.md's summary line (`head -c
+# 4096`) — the sweep census carries no node count and manifest.json is a
+# per-file hash map, so neither of the design's two named sources actually
+# holds the number (D-1246). `git rev-parse` and `git rev-list --count` are ref
+# reads. Any failure omits its clause; a total failure prints nothing.
+_hook_graph_card() {
+  local cwd="" row="" nodes="" built="" tip="" behind="" engine="" pin="" fresh="" line=""
+  cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
+  # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
+  # for a harness whose SessionStart payload carries no cwd at all.
+  [ -n "$cwd" ] || cwd=$(cat "$REG/$id.workdir" 2>/dev/null) || cwd=""
+  [ -n "$cwd" ] || return 0
+  [ -d "$cwd" ] || return 0
+
+  if [ ! -f "$cwd/graphify-out/graph.json" ]; then
+    # SILENCE IS THE TRUE ANSWER for a tree the sweep has not reached: a card
+    # asserting a graph that is not there is worse than no card. The one thing
+    # worth saying instead is the sweep's OWN last word about this tree, when
+    # its census carries one — a session that knows the tree was REFUSED does
+    # not go hunting for a graph that is never going to appear. The census is
+    # `{passes:[…]}`, last 10, newest LAST.
+    row=$(jq -r --arg p "$cwd" \
+      '(.passes // []) | last | (.trees // [])
+       | map(select(.path == $p and ((.reason // "") != "")))
+       | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
+      "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
+    [ -n "$row" ] || return 0
+    _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
+    return 0
+  fi
+
+  built=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
+    | grep -oE '"built_at_commit"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' | tail -n1) || built=""
+  built="${built##*:}"; built="${built//\"/}"; built="${built// /}"
+  [[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""
+
+  nodes=$(head -c 4096 "$cwd/graphify-out/GRAPH_REPORT.md" 2>/dev/null \
+    | grep -oE '[0-9]+ nodes' | head -n1) || nodes=""
+  nodes="${nodes% nodes}"
+  [[ "$nodes" =~ ^[0-9]+$ ]] || nodes=""
+
+  engine=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || engine=""
+  pin=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || pin=""
+
+  # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
+  # rev-list that will not answer, gets no freshness clause rather than a
+  # "fresh" nobody checked — a session querying a graph 97 commits stale gets
+  # confident wrong answers, which is the whole reason this clause exists.
+  tip=$(git -C "$cwd" rev-parse HEAD 2>/dev/null) || tip=""
+  if [ -n "$built" ] && [ -n "$tip" ]; then
+    if [ "$tip" = "$built" ]; then
+      fresh="fresh"
+    else
+      behind=$(git -C "$cwd" rev-list --count "$built..HEAD" 2>/dev/null) || behind=""
+      case "$behind" in
+        ''|*[!0-9]*) fresh="" ;;
+        0)           fresh="fresh" ;;
+        1)           fresh="1 commit behind HEAD" ;;
+        *)           fresh="$behind commits behind HEAD" ;;
+      esac
+    fi
+  fi
+
+  line="graphify: this tree has a knowledge graph — graphify-out/"
+  [ -z "$nodes" ]  || line="$line, $nodes nodes"
+  [ -z "$built" ]  || line="$line, built at ${built:0:8}"
+  [ -z "$fresh" ]  || line="$line ($fresh)"
+  # The engine/pin pair earns its place: sessions were measured running an
+  # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
+  # invisible until a query fails strangely.
+  [ -z "$engine" ] || line="$line, engine $engine"
+  [ -z "$pin" ]    || line="$line (pin $pin)"
+  # Single-quoted: the sentence carries backticks and double quotes verbatim.
+  line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
+  _hook_emit_context "$line"
+  return 0
+}
+```
+
+Then, in the `SessionStart)` arm, put the call between the `src=` read and the compact exit:
+
+```bash
+    src=$(jq -r '.source // empty' <<<"$payload" 2>/dev/null) || src=""
+    # BEFORE the compact exit, deliberately: the hookstate write stays skipped
+    # for compact (D-306 — PreCompact/PostCompact own that transition), and the
+    # card is independent of it. Compaction is precisely when a session loses
+    # what it knew, so it is the source that most needs the card.
+    _hook_graph_card || true
+    [[ "$src" == compact ]] && exit 0
+    state="done" ;;
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run:
+```bash
+bash -n ccd/session-hook.sh
+cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts
+cd server && ./node_modules/.bin/vitest run test/install-session-hooks.test.ts
+cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
+```
+Expected: all PASS. If `session-hook`'s p95 budget test is the only red, re-run it in isolation first — it is on the known-flake list; if it is genuinely over 150 ms, the cause is a fork added to the PostToolUse path, not this task's SessionStart work.
+
+- [ ] **Step 5: Prove the guards are mechanisms**
+
+| mutation | expected red |
+|---|---|
+| move `_hook_graph_card \|\| true` out of the `SessionStart` arm to just before `f="$REG/$id.hookstate.json"` | "prints NOTHING on every other event, even with a graph right there" |
+| change `tail -c 4096` to `head -c 4096` in the `built` read | "reads built_at_commit from the TAIL — a decoy at the head must not win" |
+| delete `| tail -n1` from the `built` read (D-1361) | "takes the LAST built_at_commit when the decoy is INSIDE the byte window" — and only once the field split takes the FIRST colon; while it took the last, this mutation was green |
+| delete the `[ ! -f "$cwd/graphify-out/graph.json" ]` early return and emit unconditionally | "prints NOTHING when the tree has no graph and the sweep never mentioned it" |
+| move the card call below `[[ "$src" == compact ]] && exit 0` | "is printed for compact too…" |
+| replace `fresh="freshness unmeasured"` in the `''\|*[!0-9]*` case with `fresh="fresh"` | "says the graph is undatable when rev-list will not answer for the built sha (D-1252, D-1336)" — **not** "…not a git repo", which cannot reach that `case` at all (no `tip`, so the whole block is skipped) and stayed green under the mutation |
+| make `[ -z "$engine" ] \|\| line="$line, engine $engine"` unconditional | "omits engine and pin when the graph is unstamped and the box has no pin" (D-1334) — the row Task 2 never had, because `plantGraph` stamped `.graphify_engine` unconditionally and nothing could reach the empty arm |
+| make `[ -z "$pin" ] \|\| line="$line (pin $pin)"` unconditional | same test (D-1334) — a box with no `~/.ccrc/graphify.pin` is every box `ccrc install` has not run on |
+| delete `row="${row:0:400}"` from the no-graph arm | "clips a pathological census reason instead of injecting it whole" (D-1335) — `expected 100140 to be less than 600` |
+| replace the `''\|*[!0-9]*` arm's `fresh="freshness unmeasured"` with `fresh=""`, merging it back onto the no-git silence | "says the graph is undatable when rev-list will not answer for the built sha (D-1252, D-1336)" |
+| in `ccd/ccd-graph-sweep`'s `_gs_row`, rename the census field `reason` to `why` | BOTH census tests, in `session-hook.test.ts` (D-1337) — the hook goes silent, `the hook printed nothing` |
+| in `ccd/ccd-graph-sweep`, rename `_gs_row()` itself | the same two, at the lift's own assertion: `ccd-graph-sweep no longer defines _gs_row()` |
+| plant a FOURTH bash file under `ccd/` whose code spells `$HOME/.ccrc/graph-sweep.json` | `single-definition.test.ts`'s "the census path '.ccrc/graph-sweep.json' is spelled by writers/readers…" (D-1333) — the widened list is still exact-match |
+| delete `[ -d "$cwd" ] \|\| return 0` and let the census read run on a missing dir | "exits 0 and prints nothing when cwd does not exist" — the card prints the sweep's row for a directory that is not there (this is why that test now seeds a census row for `$home/gone`; without it the mutation is invisible and the row would be a comment) |
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd "$CCRC_REPO"
+git add ccd/session-hook.sh server/test/session-hook.test.ts
+git commit -m "feat(hook): print one measured graph card on SessionStart (R1)"
+```
+
+---
+
+## Task 3: R2 — worker skill clause 12
+
+**Files:**
+- Modify: `ccd/worker-skill/SKILL.md` (two "eleven" occurrences, one new numbered clause)
+- Modify: `server/test/worker-skill.test.ts` (the `CONTRACT` array, the comment above it, the test name)
+- Modify: `ccd/coordinator-skill/references/wave-lifecycle.md` (§2, one paragraph)
+- Modify: `CLAUDE.md:181`, `README.md:1142`, `README.md:1326`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: clause 12's exact text, pinned verbatim by `server/test/worker-skill.test.ts`'s `CONTRACT[11]`. Nothing later in this plan reads it.
+
+---
+
+- [ ] **Step 1: Write the failing pin**
+
+In `server/test/worker-skill.test.ts`, append this entry to the end of the `CONTRACT` array (after the clause-11 string). **Straight apostrophes only, and no `"` character anywhere in a clause** — D-104's standing constraint, which is why these literals are double-quoted:
+
+```typescript
+  "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
+```
+
+Rename the test and update the comment above the array:
+
+```typescript
+// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
+```
+
+```typescript
+  it('carries all twelve clauses verbatim', () => {
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts`
+Expected: FAIL — "missing contract clause: When your workspace carries `graphify…".
+
+- [ ] **Step 3: Add the clause to the skill**
+
+In `ccd/worker-skill/SKILL.md`, append after clause 11 (byte-identical to the pin above):
+
+```markdown
+12. When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.
+```
+
+In the same file's `## The contract` section, change both counts:
+
+```markdown
+These twelve clauses are the boundary between "a wave worker" and "an agent with
+a shell on the fleet host". They are not advice.
+
+**Editing note (D-104):** these twelve lines are pinned verbatim by
+```
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts`
+Expected: PASS — including the destructive-verb census (clause 12 names none of the five verbs) and the `references/` census (unchanged).
+
+- [ ] **Step 5: Add the coordinator's one sentence**
+
+In `ccd/coordinator-skill/references/wave-lifecycle.md`, §2, insert a new paragraph immediately after the "**The execution skill is the one list item that is not merely useful.**" paragraph and before the "**One sentence from the protocol goes in every brief anyway…**" paragraph. It must sit AFTER the block the coordinator suite's `A brief carries what only THIS wave knows:[\s\S]{0,320}deviations already ledgered` window covers, which is why it goes here rather than inside that list:
+
+```markdown
+**A brief may quote the worker's graph card.** Every session's `SessionStart`
+prints one line for its own tree — node count, the commit the graph was built
+at, and whether that is fresh or N commits behind HEAD. Quoting the freshness
+half in the brief tells the worker what it is querying before it queries it: a
+graph 97 commits stale answers confidently and wrongly, and worker clause 12
+sends the worker to `graphify query` first. The card is measured per tree, so a
+brief that quotes it is quoting THAT workspace, not the fleet.
+```
+
+- [ ] **Step 6: Verify the coordinator pins still hold**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
+Expected: PASS — the new paragraph sits outside the 320-character window the brief-block pin measures, and adds no refusal code.
+
+- [ ] **Step 7: Update the three prose counts**
+
+`CLAUDE.md`, in the worker-skill bullet:
+
+```markdown
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twelve clauses pinned by
+```
+
+`README.md:1142` and `README.md:1326`: change `eleven clauses` to `twelve clauses` in both. Prove there is nothing left:
+
+```bash
+cd "$CCRC_REPO" && git grep -n "eleven clauses"
+```
+Expected: no output.
+
+- [ ] **Step 8: Prove the guard is a mechanism**
+
+| mutation | expected red |
+|---|---|
+| soften "Never run `graphify update`" to "Prefer not to run `graphify update`" in `SKILL.md` | `worker-skill` — "carries all twelve clauses verbatim" |
+| delete clause 12 from `SKILL.md` | same |
+| replace a straight apostrophe in clause 12 with a curly one | same (this is why D-104 exists) |
+
+- [ ] **Step 9: Commit**
+
+```bash
+cd "$CCRC_REPO"
+git add ccd/worker-skill/SKILL.md ccd/coordinator-skill/references/wave-lifecycle.md \
+        server/test/worker-skill.test.ts CLAUDE.md README.md
+git commit -m "feat(worker-skill): clause 12 sends a codebase question to the graph first (R2)"
+```
+
+---
+
+## Task 4: R0 — retire the account-wide block, keep its census as the remover
+
+**Files:**
+- Modify: `ccd/ccrc` — delete `_inst_graph_always_on` (its header comment block and body); add `_inst_graph_always_on_off` in the same position; rename the entry in `cmd_install`'s sequence
+- Modify: `server/test/ccrc-install.test.ts` — the pinned step-sequence array
+- Modify: `server/test/ccrc-install-graphify.test.ts` — delete the two converge describes, add the remover's
+- Modify: `README.md` — replace the "Reading the graph…" paragraph
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: the install step function **`_inst_graph_always_on_off`**, called from `cmd_install` where `_inst_graph_always_on` used to be (between `_inst_graphify_skill` and `_inst_graph_noise`). Task 6 rewrites the README section around it.
+- Markers, verbatim, whole lines: `<!-- ccrc:graphify-always-on:start -->` and `<!-- ccrc:graphify-always-on:end -->`.
+
+---
+
+- [ ] **Step 1: Write the failing remover tests**
+
+In `server/test/ccrc-install-graphify.test.ts`:
+
+1. **Delete** the describe `'ccrc install: the read rule refuses malformed files rather than splicing (D-1244)'` (line ~552) in full.
+2. **Delete** the describe `'ccrc install: the always-on READ rule (_inst_graph_always_on, D-1243)'` (line ~737) in full — **except one `it`, which MOVES into the new describe below rather than dying with it.** That describe holds the structural source scan `it('splices with line-addressed sed and no awk at all — the BSD -v hazard is retired, not guarded')` (~:883–908), which is the tree's ONLY defence against `awk` returning to this splice; `macos-platform.test.ts`'s corpora do not ban `awk` at all. The remover reuses the very same `sed -n "1,$((…-1))p"` construction, so retiring the guard while keeping the code it guards would leave the hazard uncovered. Carry it over with two edits and nothing else — the anchor and the addressed variable:
+
+```typescript
+    const at = src.indexOf('_inst_graph_always_on_off() {');
+```
+```typescript
+    expect(body, 'the sed splice went missing').toMatch(/sed -n "1,\$\(\(lb-1\)\)p"/);
+```
+
+  Its executable-line scrape (`.filter((l) => l && !l.startsWith('#'))`) and its `not.toMatch(/(^|[^a-z])awk\s/m)` assertion apply unchanged — the remover's comments discuss `awk` by name for the same reason the converge's did.
+3. **Keep** the engine, noise-list, exclude-writer and hooks-off describes untouched, and keep the `'README: the graphify step enumeration is DERIVED, not remembered (D-1243)'` describe (line ~685) for now — Task 6 retargets it. Its `it('the README documents the READ side, not only the write side')` asserts `toMatch(/graphify query/)` against the README, and README.md:1515 — the single occurrence of that string in the whole file — sits inside the paragraph Step 4 below replaces. **Step 4's replacement paragraph therefore carries `graphify query` deliberately**, so this describe stays green in the commit that invalidates the text around it. Do not drop that token from the paragraph "to tighten it".
+4. Add this describe in their place:
+
+```typescript
+// ── R0: the block ccrc should never have written, removed ─────────────────
+// D-1243 put a PROJECT-scoped instruction ("This project has a knowledge graph
+// at graphify-out/") into an ACCOUNT-WIDE file — every rostered home's
+// `~/.claude*/CLAUDE.md`, which Claude Code loads for every session under that
+// account in every project, including the trees the sweep refuses. And that
+// file is the OPERATOR's, not ccrc's: every one of D-1244's six data-loss
+// classes existed only because ccrc was rewriting a file it does not own.
+//
+// The remover is D-1244's own hardened census doing its last job — same
+// whole-line marker census, same exactly-one-ordered-pair rule, same symlink
+// resolution, same mode preservation, same "left in place; remove by hand"
+// for anything that is not provably wholly ccrc's — deleting lines ls..le
+// instead of splicing a block in. `_inst_graph_hooks_off` is the idiom: ccrc
+// already has a step whose whole job is removing what an earlier layer
+// planted.
+describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_off, D-1245)', () => {
+  const START = '<!-- ccrc:graphify-always-on:start -->';
+  const END = '<!-- ccrc:graphify-always-on:end -->';
+  const BLOCK = `${START}\n## graphify\n\n- first run \`graphify query\`\n${END}`;
+  const claudeMd = (home: string) => join(home, '.claude', 'CLAUDE.md');
+  const seed = (home: string, text: string, mode = 0o644): string => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(claudeMd(home), text, { mode });
+    return claudeMd(home);
+  };
+  const backupDirs = (home: string): string[] => {
+    const d = join(home, 'ccrc-backups');
+    return existsSync(d) ? readdirSync(d) : [];
+  };
+
+  it('removes a well-formed block from mid-file, byte-identically around it', () => {
+    const home = freshBox('ccrc-inst-gfx-off-mid-');
+    plantFakeVenv(home);
+    const f = seed(home, `# head\n\n- operator line\n\n${BLOCK}\n\n## OPERATOR TAIL\n- keep me\n`);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    // The block AND the one separating blank line the append path wrote.
+    expect(readFileSync(f, 'utf8')).toBe('# head\n\n- operator line\n\n## OPERATOR TAIL\n- keep me\n');
+    expect(r.stdout).toMatch(/always-on read rule — 1 home\(s\) cleared/);
+  });
+
+  it('removes a block that sits at LINE 1 without eating the line after it', () => {
+    // `sed -n "1,0p"` does NOT print nothing — an addr2 at or below addr1 makes
+    // sed match the ONE line at addr1 — and line 1 is exactly where the append
+    // path put the block for a home that had no CLAUDE.md at all.
+    //
+    // NO BLANK LINE AFTER THE BLOCK, and that is the fixture being faithful
+    // rather than convenient: the append path (`ccd/ccrc:5321-5326`) writes the
+    // block LAST, `printf '%s\n' "$want"` with nothing after it, so a trailing
+    // blank is never a shape the converge produced. `lb` only ever absorbs the
+    // ONE blank line the append path wrote BEFORE a block, and at line 1 there
+    // is none — the remover must not learn to eat a trailing blank, because
+    // that whitespace would be the operator's, not ccrc's.
+    const home = freshBox('ccrc-inst-gfx-off-line1-');
+    plantFakeVenv(home);
+    const f = seed(home, `${BLOCK}\n## OPERATOR\n- keep me\n`);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('## OPERATOR\n- keep me\n');
+  });
+
+  it('removes a block that ends the file, leaving the operator text intact', () => {
+    const home = freshBox('ccrc-inst-gfx-off-eof-');
+    plantFakeVenv(home);
+    const f = seed(home, `# head\n\n- keep me\n\n${BLOCK}\n`);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# head\n\n- keep me\n');
+  });
+
+  it('leaves a HALF block in place, reports it, and degrades the install', () => {
+    const home = freshBox('ccrc-inst-gfx-off-half-');
+    plantFakeVenv(home);
+    const text = `# head\n\n${START}\nstale\n\n## OPERATOR TAIL\n- keep me\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8'), 'a half block was deleted instead of reported').toBe(text);
+    // SEMICOLON, not an em dash: the tree's own idiom for this refusal is
+    // `— left in place; remove by hand` (`_inst_graph_hooks_off`, ccd/ccrc:5411,
+    // and the unmarked-section refusal at :5249). The spec quotes the phrase
+    // with a second em dash; the tree is what ships, and D-1247 records the
+    // divergence rather than making this file the odd one out.
+    expect(r.stderr).toMatch(/left in place; remove by hand/);
+    expect(r.stdout).not.toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
+  it('leaves TWO blocks in place rather than guessing which one is ccrc\'s', () => {
+    const home = freshBox('ccrc-inst-gfx-off-two-');
+    plantFakeVenv(home);
+    const text = `# head\n\n${BLOCK}\n\n${BLOCK}\n\n# tail\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(text);
+    expect(r.stderr).toMatch(/2 start and 2 end markers/);
+  });
+
+  it('leaves a CHAINED file — end marker before start — in place', () => {
+    const home = freshBox('ccrc-inst-gfx-off-chained-');
+    plantFakeVenv(home);
+    const text = `# head\n${END}\nsomething\n${START}\n# tail\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(text);
+    expect(r.stderr).toMatch(/end marker before its start marker/);
+  });
+
+  it('treats markers QUOTED in the operator\'s prose as prose, not as markers', () => {
+    const home = freshBox('ccrc-inst-gfx-off-quoted-');
+    plantFakeVenv(home);
+    const text = `# head\n\nccrc wrote between ${START} and ${END} in this file.\n\n- keep\n`;
+    const f = seed(home, text);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8'), 'a sentence mentioning the markers was cut').toBe(text);
+    // THE POSITIVE HALF, and the census mutation's only red. Byte-identity
+    // alone is satisfied by a substring census too: with `grep -cF` the prose
+    // line makes ns=1/ne=1, `grep -nxF` then finds no line, `ls`/`le` come back
+    // EMPTY, every `[` on them errors non-zero (this file runs `set -uo
+    // pipefail`, never `-e`), the splice fails and the `if !` arm leaves the
+    // file untouched — the same bytes, arrived at by accident. What that path
+    // cannot fake is the count: it takes the refusal branch, so `kept` is 1.
+    expect(r.stdout, 'the census matched a marker QUOTED in prose')
+      .toMatch(/always-on read rule — 0 home\(s\) cleared, 0 left in place/);
+  });
+
+  it('SKIPS a symlink this box cannot resolve — never writes through one', () => {
+    const home = freshBox('ccrc-inst-gfx-off-badlink-');
+    plantFakeVenv(home);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    symlinkSync(join(home, 'not-cloned-yet', 'CLAUDE.md'), claudeMd(home));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(claudeMd(home)).isSymbolicLink(), 'the unresolvable link was replaced').toBe(true);
+    expect(existsSync(claudeMd(home)), 'a file was created at the link target').toBe(false);
+    expect(r.stderr).toMatch(/symlink this box cannot resolve/);
+  });
+
+  it('writes through a RESOLVABLE symlink to the TARGET, and the link stays a link', () => {
+    const home = freshBox('ccrc-inst-gfx-off-link-');
+    plantFakeVenv(home);
+    const target = join(home, 'dotfiles', 'CLAUDE.md');
+    mkdirSync(join(home, 'dotfiles'), { recursive: true });
+    writeFileSync(target, `# shared\n\n${BLOCK}\n`);
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    symlinkSync(target, claudeMd(home));
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(lstatSync(claudeMd(home)).isSymbolicLink(), 'the link was replaced by a file').toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('# shared\n');
+  });
+
+  it('preserves the file\'s own mode instead of widening it to 644', () => {
+    const home = freshBox('ccrc-inst-gfx-off-mode-');
+    plantFakeVenv(home);
+    const f = seed(home, `# private\n\n${BLOCK}\n`, 0o600);
+    expect(runInstall(home, ['install']).code).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# private\n');
+    expect(statSync(f).mode & 0o777, 'a 0600 CLAUDE.md was silently widened').toBe(0o600);
+  });
+
+  it('leaves no CLAUDE.md.tmp.<pid> behind, on the write path or the refusal path', () => {
+    const home = freshBox('ccrc-inst-gfx-off-notmp-');
+    plantFakeVenv(home);
+    seed(home, `# head\n\n${BLOCK}\n`);
+    runInstall(home, ['install']);
+    expect(readdirSync(join(home, '.claude')).filter((n) => n.includes('CLAUDE.md.tmp')),
+      'a temp file was left in the operator\'s config directory').toEqual([]);
+  });
+
+  it('is idempotent: the second run removes nothing and cuts no backup', () => {
+    const home = freshBox('ccrc-inst-gfx-off-idem-');
+    plantFakeVenv(home);
+    const f = seed(home, `# head\n\n${BLOCK}\n`);
+    const first = runInstall(home, ['install']);
+    expect(first.code, first.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# head\n');
+    const after = backupDirs(home).length;
+    expect(after, 'the first run cut no backup of the file it rewrote').toBeGreaterThan(0);
+    const second = runInstall(home, ['install']);
+    expect(second.code, second.stderr).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe('# head\n');
+    expect(second.stdout).toMatch(/always-on read rule — 0 home\(s\) cleared/);
+    expect(backupDirs(home).length, 'a second run cut a backup of a file it did not touch')
+      .toBe(after);
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-off-server-');
+    plantFakeVenv(home);
+    const f = seed(home, `# head\n\n${BLOCK}\n`);
+    runInstall(home, ['install', '--role', 'server']);
+    expect(readFileSync(f, 'utf8'), 'a server box has no rostered homes to clear')
+      .toContain(START);
+  });
+});
+```
+
+In `server/test/ccrc-install.test.ts`, change the pinned sequence entry and its comment:
+
+```typescript
+      // D-1245. The READ side moved OUT of the operator's account-wide
+      // CLAUDE.md and into the artifacts ccrc owns outright (the session
+      // hook's SessionStart card, worker clause 12, the PATH converge, and
+      // the `graphQueries` counter the hook already writes). What
+      // is left here is the REMOVER, in `_inst_graph_hooks_off`'s own shape:
+      // a step whose whole job is taking back what an earlier layer planted.
+      '_inst_graph_always_on_off',
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run:
+```bash
+cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts
+```
+Expected: FAIL — the sequence pin reports `_inst_graph_always_on` where `_inst_graph_always_on_off` is expected, and every remover test finds the block still present (the converge is still writing it).
+
+- [ ] **Step 3: Replace the step in `ccd/ccrc`**
+
+Delete the whole `# ── _inst_graph_always_on — the READ side, which had no mechanism ───` comment block and the `_inst_graph_always_on() { … }` body, and put this in its place (same file position — between `_inst_graphify_skill` and `_inst_graph_noise`):
+
+```bash
+# ── _inst_graph_always_on_off — take back the account-wide block (D-1245) ─
+# D-1243 installed graphify's `always_on/claude-md.md` into every rostered
+# home's config-dir `CLAUDE.md`. Two things were wrong with that, and neither is
+# a wording problem:
+#
+#   1. The block is written for a PROJECT file. Its first sentence is "This
+#      project has a knowledge graph at graphify-out/". Planted account-wide it
+#      asserts that of every project the account ever opens, including the trees
+#      the sweep refuses.
+#   2. That file is the OPERATOR's, not ccrc's. Every one of D-1244's six
+#      data-loss classes — substring markers, a lost end marker, two blocks, the
+#      line-1 splice, the unchecked `&&` chain, the symlink fallback — existed
+#      ONLY because ccrc was rewriting a file it does not own.
+#
+# MEASURED EFFECT, which is what settled it: graphify's own query log over the
+# one day since it was deployed (2026-09-01, measured 2026-09-02) showed 109
+# query/path/explain calls across 4 corpora, 103 of them in the one repository
+# whose PROJECT CLAUDE.md had carried graphify's block, committed, since July.
+# Zero in ccrc-pwa, the busiest project on the fleet, with five fresh graphs.
+# The design's other row is the WEEK one — 265 calls across 11 corpora over the
+# last 7 days, ccrc-pwa zero in both — and the two are named apart here because
+# this comment once paired that row's window word with this row's figures
+# (D-1357/D-1362). "5/5 homes converged" was shape; that is effect.
+# The read side now lives in `ccd/session-hook.sh`'s SessionStart card (R1),
+# worker clause 12 (R2), `_inst_graphify_engine`'s PATH converge (R3), and the
+# `graphQueries` counter in the hookstate the hook already writes (R4) —
+# artifacts ccrc installs and owns outright.
+#
+# THIS IS D-1244'S CENSUS DOING ITS LAST JOB, not a second implementation of it:
+# the same whole-line marker count, the same exactly-one-well-ordered-pair rule,
+# the same symlink resolution that SKIPS rather than falling back to the link,
+# the same `_plat_mode` preservation, the same backup-before-write. It deletes
+# lines ls..le (plus the one separating blank line the append path wrote) where
+# the converge spliced a block in.
+#
+# `_inst_graph_hooks_off` IS THE IDIOM, not a wart: ccrc already has a step
+# whose whole job is removing what an earlier layer planted, and it states the
+# rule this one follows — anything not provably WHOLLY ccrc's own is "left in
+# place; remove by hand", counted, and reported. That is the TREE's spelling of
+# the phrase (ccd/ccrc:5411 and :5249), not the spec's em-dashed one; D-1247
+# records the divergence, and the half-block test asserts the semicolon. This
+# step stays in the tree afterwards exactly as that one does.
+_inst_graph_always_on_off() {
+  [ "$INST_ROLE" = server ] && return 0
+  local n=0 kept=0 ts backups
+  if ! source "$HOME/.ccrc/accounts.sh" 2>/dev/null || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
+    # DEGRADES, NEVER DIES — `_inst_enable`'s rule for the sweep timer, and it
+    # binds harder here: a block ccrc failed to REMOVE is a stale instruction,
+    # not a broken box, and taking the whole install down over it would be a
+    # fix worse than the thing being fixed.
+    echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule not cleared"
+    INST_DEGRADED+=(graphify-read-rule)
+    return 0
+  fi
+  ts=$(date +%Y%m%d-%H%M%S); backups="$HOME/ccrc-backups/$ts"
+  local a dir f start end phys ns ne ls le lb mode tmp
+  start='<!-- ccrc:graphify-always-on:start -->'
+  end='<!-- ccrc:graphify-always-on:end -->'
+  for a in "${CCRC_ACCOUNTS[@]}"; do
+    dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" || continue
+    [ -n "$dir" ] || continue
+    f="$dir/CLAUDE.md"
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    # A SYMLINK IS RESOLVED, OR THE HOME IS SKIPPED (D-1244). `readlink -f`
+    # answers empty for a link whose target's parent does not exist yet, and
+    # falling back to the LINK path collapses "resolved" and "could not
+    # resolve" into one value — the overloaded null this codebase forbids at a
+    # seam, and here it would delete lines out of a file nobody identified.
+    # Two homes on this fleet ARE symlinks to a third's file, so this is the
+    # ordinary case, not the exotic one.
+    if [ -L "$f" ]; then
+      phys="$(readlink -f "$f" 2>/dev/null)" || phys=""
+      if [ -z "$phys" ]; then
+        echo "install: graphify: $f is a symlink this box cannot resolve — left in place; remove the block by hand" >&2
+        kept=$((kept+1)); continue
+      fi
+      f="$phys"
+    fi
+    [ -f "$f" ] || continue
+    # THE MARKER CENSUS, ON WHOLE LINES, EXACTLY ONE ORDERED PAIR OR NOTHING.
+    # A substring match would cut a file at the operator's own MENTION of the
+    # markers; a missing end marker would delete everything after the start.
+    ns="$(grep -cxF "$start" "$f" 2>/dev/null || true)"; ns="${ns:-0}"
+    ne="$(grep -cxF "$end" "$f" 2>/dev/null || true)"; ne="${ne:-0}"
+    if [ "$ns" -eq 0 ] && [ "$ne" -eq 0 ]; then
+      continue   # nothing of ours here; idempotence lives on this line
+    fi
+    if [ "$ns" -ne 1 ] || [ "$ne" -ne 1 ]; then
+      echo "install: graphify: $f carries $ns start and $ne end markers, and exactly one pair is required — left in place; remove by hand" >&2
+      kept=$((kept+1)); continue
+    fi
+    ls="$(grep -nxF "$start" "$f" | head -n1 | cut -d: -f1)"
+    le="$(grep -nxF "$end" "$f" | head -n1 | cut -d: -f1)"
+    if [ "$ls" -ge "$le" ]; then
+      echo "install: graphify: $f carries ccrc's end marker before its start marker — malformed, left in place; remove by hand" >&2
+      kept=$((kept+1)); continue
+    fi
+    # THE ONE SEPARATING BLANK LINE the append path wrote before the block
+    # (`printf '%s\n\n' "$cur"`), and only when it really is blank and really
+    # is ours to take: without this, removal leaves a growing run of blank
+    # lines behind on a home the converge had appended to.
+    lb="$ls"
+    if [ "$ls" -gt 1 ] && [ -z "$(sed -n "$((ls-1))p" "$f")" ]; then lb=$((ls-1)); fi
+    # PRESERVE THE FILE'S OWN MODE (D-1244): a symlink was resolved first, so
+    # the file being rewritten may not even sit inside a ccrc home, and forcing
+    # 644 would widen a CLAUDE.md an operator had restricted. `_plat_mode`, not
+    # a bare `stat -c %a` — this file ships to macOS and `macos-platform.test.ts`
+    # refuses a GNU-only call outside the platform block.
+    mode="$(_plat_mode "$f" 2>/dev/null || true)"
+    [ -n "$mode" ] || mode=644
+    if ! { mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"; }; then
+      echo "install: graphify: cannot back up $f — left in place rather than rewritten unbacked" >&2
+      kept=$((kept+1)); continue
+    fi
+    tmp="$f.tmp.$$"
+    # EVERY PIECE'S STATUS, NOT JUST THE LAST (D-1244): a `{ a; b; } > tmp`
+    # group carries only b's status, and b writes NOTHING when the block ends
+    # the file — the layout the append path itself creates. The `&&` chain makes
+    # the group's status the FIRST failure.
+    #
+    # `[ "$lb" -le 1 ] ||` GUARDS AN EMPTY PREFIX and is not padding: `sed -n
+    # "1,0p"` does not print nothing — an addr2 at or below addr1 makes sed
+    # match the ONE line at addr1, so a block at line 1 would have its own
+    # start marker re-emitted. That layout is what the append path produced for
+    # a home that had no CLAUDE.md at all.
+    if ! { { [ "$lb" -le 1 ] || sed -n "1,$((lb-1))p" "$f"; } &&
+           sed -n "$((le+1)),\$p" "$f"; } > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      echo "install: graphify: could not rewrite $f — left in place" >&2
+      kept=$((kept+1)); continue
+    fi
+    if ! { chmod "$mode" "$tmp" && mv -f "$tmp" "$f"; }; then
+      rm -f "$tmp"
+      echo "install: graphify: could not replace $f — left in place" >&2
+      kept=$((kept+1)); continue
+    fi
+    n=$((n+1))
+  done
+  [ "$kept" -eq 0 ] || INST_DEGRADED+=(graphify-read-rule)
+  echo "install: graphify: always-on read rule — $n home(s) cleared, $kept left in place"
+}
+```
+
+Rename the call in `cmd_install`'s sequence:
+
+```bash
+  _inst_graphify_skill
+  _inst_graph_always_on_off
+  _inst_graph_noise
+```
+
+- [ ] **Step 4: Replace the README's read-side paragraph**
+
+In `README.md`, replace the whole "**Reading the graph, which is a separate problem from keeping it fresh.**" paragraph (README.md:1513–1526) with:
+
+```markdown
+**Reading the graph, which is a separate problem from keeping it fresh.** Everything above serves
+the WRITE path, and for three deviations nothing served the read path at all: measured across the
+five rostered homes, the rule "for codebase questions, run `graphify query` first" appeared in
+**none** of them. D-1243's answer was graphify's own packaged block, `always_on/claude-md.md`,
+appended to every rostered home's config-dir `CLAUDE.md` between ccrc's markers — and **D-1245
+retired it**, because it was wrong on two counts. That block is written for a PROJECT file ("This
+project has a knowledge graph at graphify-out/"), so account-wide it asserted that of every project
+the account opens, including the trees the sweep refuses; and the file is the *operator's*, not
+ccrc's, which is the sole reason every one of D-1244's six data-loss classes existed at all.
+Measured over the one day since it was deployed (2026-09-01, measured 2026-09-02): 109
+`query`/`path`/`explain` calls across 4 corpora, 103 of them in the one repository whose *project*
+`CLAUDE.md` had carried graphify's block since July, and zero in ccrc-pwa — the busiest project on
+the fleet, with five fresh graphs. (The block's own week-shaped window is a different row of the
+spec's table — 265 calls across 11 corpora over the last 7 days, ccrc-pwa **zero** in both.)
+`_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census:
+whole-line markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and
+SKIPPED when they cannot be), the file's own mode preserved, backed up before every write. Anything
+else is *left in place; remove by hand*, counted, and reported as a degraded step. It is
+`_inst_graph_hooks_off`'s shape and stays in the tree the same way. What replaced it — starting with
+the `SessionStart` card that tells a session to run `graphify query` before it greps — is below.
+```
+
+**Two constraints on any rewording of this paragraph, both of them mechanised:**
+
+1. It **must** contain the literal `graphify query`. README.md:1515 is the file's only occurrence, it
+   lives inside the text being replaced, and `it('the README documents the READ side, not only the
+   write side')` (kept by Step 1 item 3, retargeted only in Task 6) asserts `toMatch(/graphify query/)`.
+   Drop the token and this task's own Step 5 goes red.
+2. It **must not** put a present-tense `converges`/`writes`/`installs`/`plants`/`puts` in front of
+   `block`/`read rule` … `CLAUDE.md`, or in front of `always_on/claude-md.md` — Task 6's derived guard
+   forbids exactly that, and only that. Saying what D-1243 **did** is allowed and is the point of the
+   paragraph; saying ccrc **does** it is what the guard catches. (The earlier draft of this paragraph
+   read "converging graphify's packaged `always_on/claude-md.md` into every rostered home's…", which
+   the guard's first spelling matched on the bare path-then-`into` sequence; both halves were fixed —
+   the paragraph now separates the path from `into`, and the guard now requires a present-tense verb.)
+
+- [ ] **Step 5: Run the suites**
+
+Run:
+```bash
+bash -n ccd/ccrc
+cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts
+cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
+cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
+```
+Expected: all PASS.
+
+- [ ] **Step 6: Prove the guards are mechanisms**
+
+| mutation | expected red |
+|---|---|
+| change `grep -cxF` to `grep -cF` (substring census) | "treats markers QUOTED in the operator's prose as prose" — on its `0 cleared, 0 left in place` assertion, NOT on its byte-identity one. Measured: the substring census makes `ns`/`ne` 1, `grep -nxF` still finds no line, `ls`/`le` are empty, the `[` comparisons error non-zero, the splice fails and the `if !` arm leaves the file alone — byte-identical by accident, but `kept` is 1 and stdout reads `0 home(s) cleared, 1 left in place` |
+| relax `[ "$ns" -ne 1 ] \|\| [ "$ne" -ne 1 ]` to `[ "$ns" -lt 1 ]` | "leaves a HALF block in place…" and "leaves TWO blocks in place…" |
+| drop the `[ -z "$phys" ]` skip and fall back to the link path | "SKIPS a symlink this box cannot resolve" |
+| replace `chmod "$mode"` with `chmod 644` | "preserves the file's own mode…" |
+| replace `[ "$lb" -le 1 ] \|\|` with an unconditional `sed -n "1,$((lb-1))p"` | "removes a block that sits at LINE 1…" |
+| delete the `lb=$((ls-1))` blank-line adjustment | "removes a well-formed block from mid-file, byte-identically around it" |
+| move `mkdir -p "$backups"` above the `ns`/`ne` census | "is idempotent: the second run removes nothing and cuts no backup" |
+| delete `[ "$kept" -eq 0 ] \|\| INST_DEGRADED+=(graphify-read-rule)` | "leaves a HALF block in place, reports it, and degrades the install" |
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd "$CCRC_REPO"
+git add ccd/ccrc README.md server/test/ccrc-install.test.ts server/test/ccrc-install-graphify.test.ts
+git commit -m "feat(install): retire the account-wide read block; its census becomes the remover (R0, D-1245)"
+```
+
+---
+
+## Task 5: R3 — the engine sessions run is the engine ccrc pins
+
+**Files:**
+- Modify: `ccd/ccrc` — `_inst_graphify_engine` gains the `~/.local/bin/graphify` converge
+- Modify: `ccd/ccrc-doctor-checks` — `CCRC_DOCTOR_CHECKS` gains `graphify-path`; `_check_graphify` loses its PATH-shadow bucket; `_check_graphify-path` added
+- Test: `server/test/ccrc-install-graphify.test.ts`, `server/test/ccrc-doctor-graphify.test.ts`, `server/test/ccrc-doctor.test.ts` (fixture only)
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces:
+  - the doctor check id **`graphify-path`** (table entry `graphify-path`, function `_check_graphify-path`; a hyphen is legal in a bash function name and `cmd_doctor` calls `"_check_$name"`). Its verdict lines MUST be printed under that exact id — `cmd_doctor` counts `"PASS $name: "` and reports "the check printed no verdict line of its own" otherwise.
+  - the converged path **`$HOME/.local/bin/graphify`** → symlink to `$HOME/.ccrc/graphify-venv/bin/graphify`.
+
+---
+
+- [ ] **Step 1: Write the failing install tests**
+
+Append to `server/test/ccrc-install-graphify.test.ts`:
+
+```typescript
+// ── R3: what a session runs when it types `graphify` ──────────────────────
+// MEASURED on the reference fleet: `command -v graphify` resolved to
+// `~/.local/bin/graphify`, a pip console-script shim importing a July copy of
+// the package with no dist-info and no `__version__`, while the venv the sweep
+// builds every graph with is pinned at 0.9.9. The WRITE side resolves the
+// engine by absolute path everywhere; the READ side was never given a path at
+// all, so it ran whatever was on PATH.
+describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3)', () => {
+  const link = (home: string) => join(home, '.local', 'bin', 'graphify');
+  const venv = (home: string) => join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify');
+  const SHIM = '#!/usr/bin/python3\n# -*- coding: utf-8 -*-\nimport sys\n'
+    + 'from graphify.__main__ import main\nsys.exit(main())\n';
+
+  it('WRITES the link when nothing is there', () => {
+    const home = freshBox('ccrc-inst-gfx-path-new-');
+    plantFakeVenv(home);
+    rmSync(link(home), { force: true });
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(link(home)).isSymbolicLink()).toBe(true);
+    expect(realpathSync(link(home))).toBe(realpathSync(venv(home)));
+  });
+
+  it('REPLACES a pip console-script shim — detected by content, not assumed', () => {
+    const home = freshBox('ccrc-inst-gfx-path-shim-');
+    plantFakeVenv(home);
+    writeFileSync(link(home), SHIM, { mode: 0o755 });
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(link(home)).isSymbolicLink(), 'the stale pip shim survived').toBe(true);
+    expect(realpathSync(link(home))).toBe(realpathSync(venv(home)));
+  });
+
+  it('is a NO-OP on a link that already points into the venv, and cuts no backup', () => {
+    const home = freshBox('ccrc-inst-gfx-path-noop-');
+    plantFakeVenv(home);
+    rmSync(link(home), { force: true });
+    symlinkSync(venv(home), link(home));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/graphify on \$PATH already points at the pinned venv/);
+  });
+
+  it('REFUSES a hand-written launcher with a remedy, and does not fail the install', () => {
+    // A launcher ccrc did not write is the operator's, and this verb has no
+    // --force: the `cmd_wrappers` rule, which refuses rather than destroying
+    // something on the strength of a judgement it never made.
+    const home = freshBox('ccrc-inst-gfx-path-hand-');
+    plantFakeVenv(home);
+    const hand = '#!/bin/bash\n# my own launcher\nexec /opt/graphify/bin/graphify "$@"\n';
+    writeFileSync(link(home), hand, { mode: 0o755 });
+    const r = runInstall(home, ['install']);
+    expect(readFileSync(link(home), 'utf8'), 'a hand-written launcher was overwritten').toBe(hand);
+    expect(r.stderr).toMatch(/ccrc did not write it/);
+    expect(r.stderr).toMatch(/move it aside/);
+    expect(r.stdout).toMatch(/degraded step/);
+  });
+
+  it('never touches /usr/local/bin/graphify', () => {
+    // THE SLICE STARTS AT THE SIGNATURE, so the function's HEADER comment —
+    // which does name that path, and should, since it is the reason the write
+    // side resolves the engine absolutely — is outside it. Everything from
+    // `_inst_graphify_engine() {` to the closing brace is in, comments
+    // included, so no sentence inside the body may spell the path either.
+    // `ccd/ccrc` carries three other mentions of `_inst_graphify_engine`
+    // (the pin's single-definition comment, `cmd_install`'s sequence, and the
+    // hooks-off header), none of them followed by `() {`, so the anchor is
+    // unambiguous.
+    const home = freshBox('ccrc-inst-gfx-path-root-');
+    plantFakeVenv(home);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    const src = readFileSync(join(treeRoot(home), 'ccd', 'ccrc'), 'utf8');
+    const at = src.indexOf('_inst_graphify_engine() {');
+    expect(at, 'the function scan went vacuous').toBeGreaterThan(-1);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    expect(body, 'the converge names a path outside $HOME').not.toMatch(/\/usr\/local\/bin/);
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-inst-gfx-path-server-');
+    plantFakeVenv(home);
+    rmSync(link(home), { force: true });
+    runInstall(home, ['install', '--role', 'server']);
+    expect(existsSync(link(home)), 'a server box runs no graphify').toBe(false);
+  });
+});
+```
+
+Add `realpathSync` to that file's `node:fs` import list.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts`
+Expected: FAIL — `lstatSync` throws ENOENT: no link is ever written.
+
+- [ ] **Step 3: Implement the converge**
+
+In `ccd/ccrc`, append to `_inst_graphify_engine`, after the `printf '%s\n' "$GRAPHIFY_PIN" > "$HOME/.ccrc/graphify.pin"` line and before its closing `echo`:
+
+```bash
+  # ── R3: the engine SESSIONS run is the engine ccrc pins ────────────────
+  # The write side resolves this engine by ABSOLUTE PATH everywhere. The read
+  # side was never given a path at all: a session types `graphify`, PATH answers
+  # `~/.local/bin/graphify`, and on this fleet that was a pip console-script
+  # shim importing a July copy of the package with no dist-info and no
+  # `__version__`, while every graph on the box was built by the 0.9.9 venv.
+  # The drift is invisible until a query fails strangely.
+  #
+  # `cmd_wrappers`' DISCIPLINE, and no flags: write when absent; replace when
+  # the file is already a link into the venv, or is a pip/pipx console-script
+  # shim (matched BY CONTENT — a `#!` first line and a `from graphify.__main__
+  # import main` line, the shape measured on this fleet, never assumed);
+  # REFUSE anything else, because a hand-written launcher is the operator's and
+  # this step has no `--force` for anyone to type.
+  #
+  # ONE PATH ONLY: `$HOME/.local/bin`. The root-owned copy a shared box may
+  # carry higher up the system tree is an unprivileged install's business
+  # nowhere — the header above this function already says why — and it is not
+  # spelled out anywhere inside this body, because the guard
+  # `it('never touches /usr/local/bin/graphify')` slices this function from
+  # `_inst_graphify_engine() {` to its closing brace and refuses that literal.
+  # The slice starts AT the signature, so the header comment is outside it;
+  # a sentence like this one is inside. Name the path in the header, never here.
+  local gpath="$HOME/.local/bin/graphify" gvenv="$venv/bin/graphify" gcur=""
+  if ! mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+    echo "install: graphify: cannot create \$HOME/.local/bin — bare 'graphify' still resolves to whatever is on PATH" >&2
+    INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && [ "$(readlink -f "$gpath" 2>/dev/null)" = "$(readlink -f "$gvenv" 2>/dev/null)" ]; then
+    echo "install: graphify: graphify on \$PATH already points at the pinned venv"
+  elif [ ! -e "$gpath" ] && [ ! -L "$gpath" ]; then
+    ln -sfn "$gvenv" "$gpath" \
+      && echo "install: graphify: \$HOME/.local/bin/graphify -> the pinned venv engine (written)" \
+      || { echo "install: graphify: cannot write $gpath" >&2; INST_DEGRADED+=(graphify-path); }
+  else
+    gcur=""
+    [ -f "$gpath" ] && [ -r "$gpath" ] && gcur="$(head -c 4096 "$gpath" 2>/dev/null)"
+    if [ -n "$gcur" ] \
+       && printf '%s' "$gcur" | head -n1 | grep -q '^#!' \
+       && printf '%s' "$gcur" | grep -qxF 'from graphify.__main__ import main'; then
+      ln -sfn "$gvenv" "$gpath" \
+        && echo "install: graphify: \$HOME/.local/bin/graphify was a pip console-script shim -> repointed at the pinned venv" \
+        || { echo "install: graphify: cannot replace $gpath" >&2; INST_DEGRADED+=(graphify-path); }
+    else
+      echo "install: graphify: $gpath is not a pip shim and ccrc did not write it — left in place. Remedy: inspect it (ls -l \"$gpath\"), and if you want ccrc's pinned engine on PATH, move it aside and re-run; nothing here overrides that." >&2
+      INST_DEGRADED+=(graphify-path)
+    fi
+  fi
+```
+
+- [ ] **Step 4: Run the install tests**
+
+Run:
+```bash
+bash -n ccd/ccrc
+cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts
+cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
+```
+Expected: PASS.
+
+- [ ] **Step 5: Write the failing doctor tests**
+
+In `server/test/ccrc-doctor-graphify.test.ts` — first add `readFileSync` to its `node:fs` import list (it currently imports `writeFileSync, mkdirSync, symlinkSync, rmSync, utimesSync` only), then:
+
+1. **Delete** the `it('WARNs when PATH resolves graphify outside the pinned venv', …)` test — the question moves to its own check, and a WARN there is exactly the verdict R3 replaces.
+2. Extend `graphifyHealthy()` so a healthy box has the converged link (a fixture that does not have it would make the new check FAIL on every other test in the file):
+
+```typescript
+  writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  // R3: a converged box has `graphify` on PATH resolving into the pinned venv.
+  // `<home>/.local/bin` is the head of every contained PATH in this fixture, so
+  // this is what `command -v graphify` answers.
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+  symlinkSync(join(venvBin, 'graphify'), join(home, '.local', 'bin', 'graphify'));
+```
+
+3. Append:
+
+```typescript
+describe('ccrc doctor: graphify-path', () => {
+  it('PASSes when bare graphify resolves into the pinned venv', () => {
+    const home = healthy('ccrc-doctor-gfxpath-ok-'); graphifyHealthy(home);
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^PASS graphify-path:/);
+  });
+
+  it('FAILs when PATH resolves graphify outside the venv — a WARN understates it', () => {
+    // The session runs the wrong build silently, and every answer it gets from
+    // it looks exactly like an answer from the right one.
+    const home = healthy('ccrc-doctor-gfxpath-shadow-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    stub(home, 'graphify', 'echo "shadow graphify"; exit 0');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
+  });
+
+  it('FAILs when there is no graphify on PATH at all', () => {
+    const home = healthy('ccrc-doctor-gfxpath-none-'); graphifyHealthy(home);
+    rmSync(join(home, '.local', 'bin', 'graphify'), { force: true });
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^FAIL graphify-path:/);
+  });
+
+  it('SKIPs on a server-role box, like every other graphify condition', () => {
+    const home = healthy('ccrc-doctor-gfxpath-srv-'); graphifyHealthy(home);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    expect(lineFor(runDoctor(home).stdout, 'graphify-path')).toMatch(/^SKIP graphify-path:/);
+  });
+
+  it('the graphify check no longer answers the PATH question, and its wrong remedy is gone', () => {
+    // Two checks answering one question is two vocabularies over one field, and
+    // the old remedy was FACTUALLY WRONG: "only the operator can clear a
+    // root-owned link outside $HOME" describes neither a user-owned file inside
+    // $HOME (the measured case) nor anything a session can act on.
+    const checks = readFileSync(CHECKS_SRC, 'utf8');
+    expect(checks, 'the old, factually wrong remedy is still in the tree')
+      .not.toContain('root-owned link outside');
+    expect(checks).not.toContain('gfx_shadow_warn');
+  });
+
+  it('the table and the functions agree about graphify-path', () => {
+    const names = execFileSync(BASH, ['-c',
+      `set -uo pipefail; . ${JSON.stringify(CHECKS_SRC)}; printf '%s\\n' "\${CCRC_DOCTOR_CHECKS[@]}"`],
+    { encoding: 'utf8' }).trim().split('\n');
+    expect(names).toContain('graphify-path');
+  });
+});
+```
+
+In `server/test/ccrc-doctor.test.ts`'s `healthy()` fixture, after the graphify venv/pin writes (~line 997), add the link **and a real `realpath`** so every summary-count test keeps its "every check PASSES" contract:
+
+```typescript
+  writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  // R3: `graphify-path` is a check, and healthy()'s contract is that every
+  // check PASSES. `<home>/.local/bin` is already the head of the contained
+  // PATH (`ghContainedEnv` -> `harnessBin`, which also creates the directory),
+  // so the link is what `command -v graphify` finds.
+  //
+  // `linkReal(home, 'realpath')` IS LOAD-BEARING, not tidiness. This file's
+  // contained PATH is `<home>/.local/bin:<home>/stub-bin` and NO system
+  // directory — it links in only jq, timeout, stat and date. `_check_graphify-path`
+  // resolves both sides with `realpath` and falls back to the UNRESOLVED path
+  // when it is unavailable; without a real one on PATH the two sides are the
+  // link path and the engine path, they differ, and the check FAILs on a box
+  // whose whole contract is that nothing fails. Measured: with `realpath` on
+  // PATH the check PASSes; without it, `FAIL graphify-path` and rc=1, which
+  // reds `runDoctor(healthy(...)).code === 0`, the `fail === 0` assertion and
+  // the `"… 1 warned, 1 failed"` summary pin. (`ccrc-doctor-graphify.test.ts`
+  // already links a real `realpath` in its own `healthy()`, which is why the
+  // new check is green there and would not have been here.)
+  linkReal(home, 'realpath');
+  symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
+    join(home, '.local', 'bin', 'graphify'));
+```
+
+- [ ] **Step 6: Run them to verify they fail**
+
+Run:
+```bash
+cd server && ./node_modules/.bin/vitest run test/ccrc-doctor-graphify.test.ts
+```
+Expected: FAIL — `lineFor(out, 'graphify-path')` is `undefined` (no such check), and the "wrong remedy is gone" test finds it still there.
+
+- [ ] **Step 7: Implement the doctor check**
+
+In `ccd/ccrc-doctor-checks`:
+
+(a) Add the table entry, immediately after `graphify`:
+
+```bash
+  graphify
+  graphify-path
+```
+
+(b) In `_check_graphify`'s header, replace the numbered item 3 with:
+
+```bash
+#   3. PATH         — MOVED OUT to its own check, `graphify-path`: what a
+#                     session runs when it types `graphify` is a FAIL, not a
+#                     warning, and its remedy is a different verb from this
+#                     check's (this file's own "grouped by remedy" rule).
+```
+
+(c) Delete `gfx_shadow_warn=()` from the `local -a` declaration, delete the whole "── (3) PATH shadow" block (`local shadow` through the `gfx_shadow_warn+=(…)` fi), and delete its verdict block at the bottom (the `if [ "${#gfx_shadow_warn[@]}" -gt 0 ]` arm and its `root-owned link outside \$HOME` remedy).
+
+(d) Add the new check immediately after `_check_graphify`'s closing brace:
+
+```bash
+# ── graphify-path: what a session runs when it types `graphify` (R3) ──────
+# ITS OWN CHECK, not a bucket inside `graphify`, for this file's own stated
+# reason: a condition whose fix is a DIFFERENT verb gets its own bucket and its
+# own line, and this one's remedy is neither `ccrc install` alone nor anything
+# the sweep can do. A FAIL rather than a WARN, because the failure mode is
+# silent: the wrong build answers, and its answers look exactly like the right
+# build's. Measured on the reference fleet — `~/.local/bin/graphify` was a pip
+# console-script shim importing a July copy with no dist-info and no
+# `__version__`, while every graph on the box was built by the pinned 0.9.9 venv.
+#
+# The hyphen in the name is deliberate and legal: `cmd_doctor` calls
+# `"_check_$name"` and counts verdict lines matching `"PASS $name: "`, so the
+# printed id and the table entry must be the same string, and bash permits a
+# hyphen in a function name defined this way.
+_check_graphify-path() {
+  # The server-role SKIP, in `_check_graphify`'s own shape and for its own
+  # reason: a server box runs no sessions that would type `graphify`.
+  local role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  if [ "$role" = server ]; then
+    _dr_skip graphify-path "this box's role is server — no fleet session runs here, so nothing types graphify"
+    return 3
+  fi
+
+  local engine="$HOME/.ccrc/graphify-venv/bin/graphify"
+  local found="" resolved="" want=""
+  found="$(command -v graphify 2>/dev/null)"
+  if [ -z "$found" ]; then
+    _dr_fail graphify-path "nothing on \$PATH answers 'graphify' — the pinned engine at $engine is reachable only by absolute path, so every bare invocation a session makes fails" \
+      "run: ccrc install — it links \$HOME/.local/bin/graphify at the pinned venv"
+    return 1
+  fi
+  # `realpath` is explicitly ALLOWED by `macos-platform.test.ts` (so is
+  # `readlink -f`), and both sides are resolved with the SAME tool so a box
+  # without it degrades symmetrically: each side falls back to its own
+  # unresolved path. That fallback is honest but blunt — the link path and the
+  # engine path are never equal — so any FIXTURE that expects a PASS here must
+  # carry a real `realpath` on its contained PATH. Both doctor suites do; see
+  # the `linkReal(home, 'realpath')` note in Step 5.
+  resolved="$(realpath "$found" 2>/dev/null)" || resolved=""
+  [ -n "$resolved" ] || resolved="$found"
+  want="$(realpath "$engine" 2>/dev/null)" || want=""
+  [ -n "$want" ] || want="$engine"
+  if [ "$resolved" = "$want" ]; then
+    _dr_pass graphify-path "graphify resolves to $found -> the pinned venv engine"
+    return 0
+  fi
+  _dr_fail graphify-path "\$PATH resolves graphify to $found (-> $resolved), which is not the pinned engine at $engine — a session that types graphify runs a build this box does not pin, and its answers are indistinguishable from the right one's" \
+    "run: ccrc install — it links \$HOME/.local/bin/graphify at the venv and refuses rather than replacing a launcher it did not write; if $found is one ccrc will not touch, move it aside, or put \$HOME/.local/bin ahead of it on \$PATH"
+  return 1
+}
+```
+
+- [ ] **Step 8: Run the doctor suites**
+
+Run:
+```bash
+bash -n ccd/ccrc-doctor-checks
+cd server && ./node_modules/.bin/vitest run test/ccrc-doctor-graphify.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts
+cd server && ./node_modules/.bin/vitest run test/macos-platform.test.ts
+```
+Expected: all PASS — including `ccrc-doctor`'s "every name in the table has a `_check_<name>` function, and vice versa" and its summary-count tests.
+
+- [ ] **Step 9: Prove the guards are mechanisms**
+
+| mutation | expected red |
+|---|---|
+| change `_dr_fail graphify-path` to `_dr_pass graphify-path` in the mismatch arm | "FAILs when PATH resolves graphify outside the venv…" |
+| delete the `[ -z "$found" ]` arm and PASS on an empty resolution | "FAILs when there is no graphify on PATH at all" |
+| restore the old remedy string in `_check_graphify` | "the graphify check no longer answers the PATH question, and its wrong remedy is gone" |
+| remove `graphify-path` from `CCRC_DOCTOR_CHECKS` | `ccrc-doctor` — "every name in the table has a `_check_<name>` function, and vice versa" (ORPHAN) |
+| widen the shim detector to accept any `#!` file | "REFUSES a hand-written launcher with a remedy…" |
+| drop the `[ -L "$gpath" ] && …readlink -f…` no-op arm | "is a NO-OP on a link that already points into the venv…" |
+
+- [ ] **Step 10: Commit**
+
+```bash
+cd "$CCRC_REPO"
+git add ccd/ccrc ccd/ccrc-doctor-checks server/test/ccrc-install-graphify.test.ts \
+        server/test/ccrc-doctor-graphify.test.ts server/test/ccrc-doctor.test.ts
+git commit -m "feat(install,doctor): converge PATH onto the pinned graphify venv, and FAIL when it drifts (R3)"
+```
+
+---
+
+## Task 6: README, the derived guards, the ledger, and the whole-suite pass
+
+**Files:**
+- Modify: `README.md` (the graphify section's step enumeration and a new read-side subsection)
+- Modify: `server/test/ccrc-install-graphify.test.ts` (retarget the README-derived describe; add the new guard)
+- Modify: `docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md` (this file's `## Deviations found`, if the re-check moves the numbers)
+
+**Interfaces:**
+- Consumes: `_inst_graph_always_on_off` (Task 4), the `graphify-path` check id (Task 5), clause 12 (Task 3), the `graphQueries` field name and the `graph N` chip (Task 1), the `SessionStart` card (Task 2).
+- Produces: nothing later reads.
+
+**Two prose items this task was carrying, both already shipped — checked, not redone:**
+
+- `CLAUDE.md`'s "eleven clauses" → **"twelve clauses"** (the File Structure table above): shipped with
+  clause 12 itself in `c1955022` (R2). Verified at Task 6: `CLAUDE.md:181` reads "twelve clauses
+  pinned by", and `server/test/worker-skill.test.ts` is the mechanism behind the number.
+- the comment above `INST_DEGRADED+=(linger)` in `ccd/ccrc`, which claimed that step was the array's
+  **only** writer — false since the graphify steps landed, and deferred to this task by Task 5's
+  reviewers: shipped in `119dec11` (D-1347..D-1350). Verified at Task 6 (`ccd/ccrc:4975`): the comment
+  now says the "only" sentence "stopped being true the day the graphify steps landed" and names both
+  other writers, `graphify-read-rule` (`_inst_graph_always_on_off`) and `graphify-path`
+  (`_inst_graphify_engine`), as a census rather than a claim.
+
+---
+
+- [x] **Step 1: Write the failing README guards** — done ahead of this task by **D-1355** and
+**D-1356** (`c6d38193`), which found the branch's one standing README guard passing by SUBSTRING and
+replaced it with exactly these two `it()` blocks. Not a deviation; the shipped guards are the text
+below plus what that round measured on top of it — the token list gained `additionalContext` and
+`graphReadCount`, because `SessionStart` and `graphQueries` alone left R1's and R4's bullets
+deletable with the loop still green, and the `PreToolUse` decline gained an assertion of its own.
+
+In `server/test/ccrc-install-graphify.test.ts`, replace the `it('the README documents the READ side, not only the write side', …)` test with:
+
+```typescript
+  it('the README documents the read side as it now is — hook, skill, PATH, counter', () => {
+    // The whole point of this plan, and the thing the canonical overview would
+    // otherwise still describe as a block in somebody else's CLAUDE.md.
+    expect(readme, 'the canonical overview never mentions querying the graph')
+      .toMatch(/graphify query/);
+    for (const token of [
+      '_inst_graph_always_on_off',   // R0, the remover
+      'SessionStart',                // R1, the card
+      'clause 12',                   // R2, the worker skill
+      'graphify-path',               // R3, the doctor check
+      'graphQueries',                // R4, the counter
+    ]) {
+      expect(readme, `the README never mentions ${token}`).toContain(token);
+    }
+  });
+
+  it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {
+    // THE RULE THIS GUARD ENFORCES, in one sentence, so the next editor of
+    // README.md does not trip it by accident: the README may say what D-1243
+    // DID — past tense, and that history is the whole point of the paragraph
+    // above — and may say that `_inst_graph_always_on_off` TAKES a block back;
+    // what it may never say again is that ccrc, in the PRESENT tense, puts one
+    // into a `CLAUDE.md`. Both patterns therefore hinge on a present-tense
+    // verb, and neither fires on `converged`/`wrote`/`appended`/`planted`.
+    //
+    // DERIVED, not a spelling test. The second pattern was once written as a
+    // bare `always_on/claude-md\.md`? into` — no verb at all — and it matched
+    // the honest history sentence in the paragraph above, forcing a choice
+    // between the guard and the record. A guard that forbids the truth is a
+    // guard nobody can keep.
+    const flat = readme.replace(/\s+/g, ' ');
+    const NOW = /\b(converges|writes|installs|plants|puts)\b/.source;
+    expect(flat, 'the README describes ccrc writing a read rule into a CLAUDE.md again')
+      .not.toMatch(new RegExp(`${NOW}[^.]{0,140}\\b(block|read rule)\\b[^.]{0,140}CLAUDE\\.md`, 'i'));
+    expect(flat, "the README says ccrc installs graphify's packaged block again")
+      .not.toMatch(new RegExp(`${NOW}[^.]{0,140}always_on/claude-md\\.md`, 'i'));
+  });
+```
+
+- [x] **Step 2: Run it to verify it fails** — moot as written, and honestly so: **D-1355**
+(`c6d38193`) wrote the guard against the README as it then stood, and MEASURED the red this step
+asks for from the other direction — the pre-D-1355 guard was GREEN on a README that documented none
+of the read side, which is spec §4's last mutation row in its mutated state. Step 6 below re-measures
+the shipped guard's red on the shipped tree.
+
+Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts`
+Expected: FAIL — the README mentions none of `SessionStart`, `clause 12`, `graphify-path`, `graphQueries`.
+
+- [x] **Step 3: Rewrite the README's step enumeration** — done ahead of this task by **D-1355**
+(`c6d38193`); the count is still **six** and the enumeration guard is green (Step 5). Not a
+deviation.
+
+In `README.md`, in the "### Graph layer (graphify)" opening paragraph, change the one clause naming the retired step (the count stays **six** — `_inst_graph_always_on_off` is still one step in `cmd_install`'s sequence, and the enumeration guard derives it):
+
+```markdown
+skills, it has no vendored tree — into every rostered account's skills directory; the **read-rule
+removal** (below), which takes back what D-1243 wrote into each rostered home's `CLAUDE.md`; the
+**default noise list**, ccrc's own footprint converged to
+```
+
+- [x] **Step 4: Add the read-side subsection** — done ahead of this task by **D-1356**
+(`c6d38193`), which is why the shipped section is NOT the draft below: this text was written before
+Tasks 1–5 shipped, and transcribing it verbatim would have put five stale claims into the canonical
+overview (the freshness vocabulary of D-1353/D-1336, the converge arms of D-1348/D-1351/D-1352, the
+doctor's SKIP of D-1350, `graphReadCount` from D-1251, the card's clipping from D-1335). Not a
+deviation — read the shipped section, not this draft.
+
+Immediately after the "**Reading the graph…**" paragraph Task 4 wrote, insert:
+
+```markdown
+**What replaced it: four mechanisms, each in an artifact ccrc owns outright.** The rule D-1245 states
+is that the read side lives only where ccrc owns the file it is written in, and that its effect is
+*measured* rather than asserted.
+
+- **The graph card.** On `SessionStart` — every source, `compact` included, because compaction is
+  exactly when a session loses what it knew — `ccd/session-hook.sh` prints one JSON object on stdout:
+  `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`. The card is
+  measured for *that session's tree* (`cwd` from the payload, `$REG/<id>.workdir` as the fallback):
+  node count, the commit the graph was built at, whether that is **fresh** or *N commits behind
+  HEAD*, and the engine/pin pair — sessions were measured querying 0.9.9 graphs with an unversioned
+  July build, and that drift is otherwise invisible until a query fails strangely. No `graph.json`
+  prints **nothing**, except that when `~/.ccrc/graph-sweep.json` carries a row for the tree the
+  sweep's own refusal reason is printed instead. `built_at_commit` is the last key of an 8 MB
+  `graph.json`, so it is read with `tail -c 4096`, never by parsing the file; the freshness pair are
+  git ref reads. **Stdout stays empty on every other event** — on `PreToolUse` a stdout JSON is a
+  permission decision — and that is pinned in both directions by `server/test/session-hook.test.ts`.
+- **Worker clause 12.** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+  workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
+  `grep`, and never runs `graphify update` or any build in the workspace — a session-side build holds
+  the worker at `working` for minutes and wedges the next dispatch `worker-busy`.
+- **The engine on `PATH`.** `_inst_graphify_engine` converges `~/.local/bin/graphify` onto
+  `~/.ccrc/graphify-venv/bin/graphify`: written when absent, repointed when the file is already a link
+  into the venv or a pip console-script shim (matched by content), and **refused with a remedy** for
+  anything else — a hand-written launcher is the operator's. `/usr/local/bin/graphify` is never
+  touched. Doctor's `graphify-path` check FAILs (it does not warn) when `command -v graphify` resolves
+  anywhere but the pinned venv, because the wrong build's answers are indistinguishable from the right
+  build's.
+- **The number.** The hook increments `graphQueries` in the hookstate it already writes, on a
+  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`. Builds do not count — this
+  measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
+  `resume` (D-1248) and kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader and keeps **`null`
+  (no field — an older hook) apart from `0` (measured none)**; it rides `FleetSession.graphQueries`
+  additively (no `FLEET_PROTO` bump) and renders as a `graph N` chip on the fleet card and on the run
+  board's worker row. The server never reads `~/.cache/graphify-queries.log`: it is not under the agent
+  whitelist and this design adds no read root.
+
+The `PreToolUse` speed bump — one deny on a session's first `Grep` in a tree with a fresh graph and a
+`graphQueries` of 0 — was considered and **declined**: `PreToolUse` fires for subagents, which never
+saw the card; a deny path would be the first thing in the hook that can wedge a turn; and the counter
+above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
+```
+
+- [x] **Step 5: Run the README guards and the whole graphify story**
+
+Run:
+```bash
+cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts
+```
+Expected: PASS — including "the README's count matches the number of steps that actually run" (still six).
+
+MEASURED (2026-09-02, on the shipped tree at `da4ded09`):
+
+```
+test/ccrc-install-graphify.test.ts   Tests  43 passed (43)
+test/ccrc-install.test.ts            Tests  103 passed | 18 skipped (121)
+```
+
+- [x] **Step 6: Prove the new guard is a mechanism**
+
+Each mutation was applied to `README.md` on the shipped tree at `da4ded09`,
+`ccrc-install-graphify` was run, and the file was restored from a scratchpad copy before the next
+one. The bullet the first row deletes is R4's — "**The number (R4).**" through the end of that list
+item.
+
+| mutation | expected red | MEASURED |
+|---|---|---|
+| delete the `graphQueries` bullet from the README | "the README documents the read side as it now is…" | `Tests  1 failed \| 42 passed (43)` — red on the `graphReadCount` token, which D-1355 added *because* `graphQueries` survives this very deletion in the R5 decline paragraph below it ("a `graphQueries` of 0"). This row is why: the draft token list above would have stayed GREEN on it |
+| re-insert the sentence "`_inst_graph_always_on` converges graphify's own packaged block into every rostered home's `CLAUDE.md`" | "never again describes the read side…" — measured red on the FIRST pattern | `Tests  1 failed \| 42 passed (43)` — `the README describes ccrc writing a read rule into a CLAUDE.md again` |
+| re-insert the sentence "`_inst_graph_always_on` installs graphify's packaged `always_on/claude-md.md` in each rostered home" | "never again describes the read side…" — measured red on the SECOND pattern (one row per pattern: a table row that only ever reddens one of two assertions leaves the other unmeasured) | `Tests  1 failed \| 42 passed (43)` — `the README says ccrc installs graphify's packaged block again`, the OTHER assertion of the same `it()`, so neither pattern is left unmeasured |
+| replace Task 4's paragraph with the earlier draft ("converging graphify's packaged `always_on/claude-md.md` into every rostered home's…") | **stays GREEN, and must** — this is the history the README is there to record, and the guard's job is to forbid the present-tense claim, not the past-tense one. If this mutation goes red, the guard was re-widened and the paragraph and the guard are fighting again | `Tests  43 passed (43)` — GREEN, as required: `converging` is not one of the five present-tense verbs, so the honest history sentence survives the guard that forbids the present-tense claim |
+
+- [x] **Step 7: Re-check the deviation number against `origin/main`**
+
+The ledger allocation rule: grep `origin/main` across BOTH `docs/` and source, take the next number. `origin/main` carries `D-1244` today (PR #44, merged as `651f40c5`; re-measured at plan-review time and still `D-1244`), so this plan's three entries are `D-1245`, `D-1246` and `D-1247` — but re-measure at commit time, because another branch may have landed in between:
+
+```bash
+cd "$CCRC_REPO"
+git fetch origin main --quiet
+git grep -ohE 'D-1[0-9]{3}' origin/main -- docs/ ccd/ server/ agent/ pwa/ shared/ deploy/ README.md CLAUDE.md \
+  | sort -u | tail -5
+```
+MEASURED (2026-09-02, at Task 6): `origin/main` is `5e9f650d`, which CARRIES `651f40c5` (PR #44,
+this branch's cut point), and its highest defined number is **D-1332** — not D-1244. That re-check
+was first taken and acted on mid-branch; see the NUMBERING note at the head of the D-1333 block
+below. Nothing renumbers now: `D-1245`–`D-1252` are still unused on `origin/main` (0 hits each
+across `docs/ ccd/ server/ agent/ pwa/ shared/ deploy/ README.md CLAUDE.md`), main skipped the
+1245–1293 range entirely, and every later entry on this branch already allocates above D-1332.
+
+Expected: `…D-1242 D-1243 D-1244`. If the highest is **not** D-1244, renumber `D-1245`/`D-1246`/`D-1247` in this plan AND in every source comment and test name Tasks 4, 5 and 6 wrote (`git grep -n 'D-1245\|D-1246\|D-1247'` finds them all) to the next three free numbers, then re-run `server/test/deviation-refs.test.ts`.
+
+- [x] **Step 8: Run the whole suite, in the foreground**
+
+Run each in the FOREGROUND with `timeout` ≥ 600000 ms:
+```bash
+cd "$CCRC_REPO"/server && npm run test
+cd "$CCRC_REPO"/agent  && npm run test
+cd "$CCRC_REPO"/pwa    && npm run test
+```
+Expected: all green. Anything red among `ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state` is a KNOWN LOAD FLAKE — re-run that one suite IN ISOLATION before calling it a real break, and remember that a single green isolated run of `ccd-session-state` is not proof it was the load.
+
+Then the typecheck gates:
+```bash
+cd "$CCRC_REPO"/server && npx tsc --noEmit -p tsconfig.json
+cd "$CCRC_REPO"/server && npx tsc --noEmit -p test/tsconfig.tests.json   # the tests, which the project above excludes
+cd "$CCRC_REPO"/pwa    && npx tsc --noEmit
+cd "$CCRC_REPO" && bash -n ccd/ccrc && bash -n ccd/session-hook.sh && bash -n ccd/ccrc-doctor-checks
+```
+
+MEASURED (2026-09-02, on the shipped tree at `da4ded09` plus this task's plan edits — no source
+file changed in Task 6, so the suites are measuring Tasks 1–5 and the branch-review rounds):
+
+```
+server   Test Files  248 passed (248)     Tests  6346 passed | 56 skipped (6402)
+agent    Test Files   18 passed (18)      Tests   281 passed (281)
+pwa      Test Files   77 passed (77)      Tests  2116 passed (2116)     Type Errors  no errors
+```
+
+All green on the FIRST run — none of the five known load flakes (`ccd-ws-gc`, `pr-sweep`,
+`session-hook`, `typecheck-tests`, `ccd-session-state`) fired, so nothing needed an isolated re-run.
+The four typecheck/`bash -n` gates above are clean: `tsc -p tsconfig.json`, `tsc -p
+test/tsconfig.tests.json`, the PWA project (also reported inline by its own suite), and all three
+shell files.
+
+- [x] **Step 9: Commit**
+
+```bash
+cd "$CCRC_REPO"
+git add README.md server/test/ccrc-install-graphify.test.ts docs/superpowers/plans
+git commit -m "docs(readme): the read side is the hook, the skill, the PATH and the number (D-1245)"
+```
+
+AS RUN: `README.md` and `server/test/ccrc-install-graphify.test.ts` were already committed at
+`c6d38193` under exactly that message and its two D-numbers (D-1355, D-1356), so this task's commit
+carries **only** `docs/superpowers/plans/` — the ticks above, Step 6's measured table, and the two
+stale ledger cells re-measured. Committing the two source files again would be an empty diff.
+
+---
+
+## Deviations found
+
+- **D-1245** (2026-09-02) — D-1243 put a project-scoped instruction into an account-wide file ccrc
+  does not own: graphify's `always_on/claude-md.md` opens "This project has a knowledge graph at
+  `graphify-out/`" and was converged into every rostered home's config-dir `CLAUDE.md`, which Claude
+  Code loads for every session under that account in every project — including the trees the sweep
+  refuses. Measured effect over the one day since it was deployed (2026-09-01, measured 2026-09-02):
+  109 `query`/`path`/`explain` calls across 4 corpora, 103 of them in the one repository whose
+  *project* `CLAUDE.md` had carried graphify's block,
+  committed, since 2026-07-08; **zero** in ccrc-pwa, the busiest project on the fleet, with five fresh
+  graphs. Every one of D-1244's six data-loss classes existed only because ccrc was rewriting a file
+  it does not own. Retired for R0–R4: the read side now lives only in artifacts ccrc installs and owns
+  outright — `ccd/session-hook.sh`'s `SessionStart` card, worker clause 12, the `~/.local/bin/graphify`
+  converge, and the `graphQueries` counter in the hookstate the hook already writes.
+
+- **D-1246** (2026-09-02) — the design named two sources for the card's node count and **neither
+  carries one**. Measured on this box: `~/.ccrc/graph-sweep.json` is `{"passes":[{started, finished,
+  pin, status, trees:[{path, outcome, reason, duration_ms}]}]}` — a rolling window of the last ten
+  passes (newest LAST, not a single top-level object as the spec's §2 R1 states), and a tree's row
+  carries no node count at all; `graphify-out/manifest.json` (122,918 bytes) is a per-FILE map of
+  `{mtime, ast_hash, semantic_hash}`, so its only count is of files. The number the card wants is on
+  `GRAPH_REPORT.md`'s summary line (`- 7662 nodes · 15645 edges · 423 communities`), which is inside
+  the file's first 4 KB and therefore just as cheap a read as the two the spec named. The card reads
+  it with `head -c 4096` and omits the clause when it is absent — the spec's own "else is omitted"
+  arm, reached by a different route. The census is still read, for the refusal reason on a tree with
+  no graph, and the reader now takes `.passes | last` rather than the top level.
+
+- **D-1247** (2026-09-02) — the spec quotes the remover's refusal phrase as *"left
+  in place — remove by hand"* (§2 R0, spec line 75), with an em dash before the remedy. **The tree
+  spells it with a semicolon**, in both places that already say it: `_inst_graph_hooks_off`'s chained-
+  content refusal (`ccd/ccrc:5411`, "— left in place; remove by hand") and the converge's unmarked-
+  section refusal (`ccd/ccrc:5249`, "— left in place; remove it by hand"). The remover is explicitly
+  built as `_inst_graph_hooks_off`'s idiom, so it follows the tree: every `_inst_graph_always_on_off`
+  refusal ends `— left in place; remove by hand`, and Task 4's half-block test asserts
+  `/left in place; remove by hand/`. Recorded because the mismatch was live for one review cycle in
+  the opposite direction — the plan's test regex carried the spec's em dash against messages that
+  never had one, which no message in the function could ever have satisfied.
+
+  *(Snapshot note, added by D-1343: the two line numbers above — `ccd/ccrc:5411` and `:5249` — are
+  as-of-authoring and are BOTH wrong in the shipped tree. `:5249` was the converge's
+  unmarked-`## graphify` refusal, which Task 4's own commit deletes, so it names no site at all any
+  more. The entry is kept as written because a ledger entry is a snapshot; the SHIPPED comments cite
+  `_inst_graph_hooks_off` by name instead.)*
+
+- **D-1248** (2026-09-02, Task 1 review) — the plan spelled the counter's reset as the ALLOW-LIST
+  `SessionStart && ( "$src" == startup || "$src" == clear )`, which makes one file give two different
+  answers to one payload. Ten lines above it, the `SessionStart` arm reads an ABSENT `source` by
+  absence-permits — "startup, resume, clear, or ABSENT on an older harness — is a real idle boundary
+  … the pre-`source` payload was the F1 startup" (`ccd/session-hook.sh:146-147`), pinned by
+  `session-hook.test.ts`'s "SessionStart(startup) is done — and so is a payload with no source at
+  all". Under the allow-list, that same source-less payload was a NEW session for `state` and the SAME
+  session for `graphQueries`. MEASURED against a fixture HOME (never the live `$HOME`): two counted
+  `graphify` reads then `{"hook_event_name":"SessionStart"}` with no `source` left
+  `{"graphQueries":2,"state":"done","event":"SessionStart"}` — state re-stamped as a new session, the
+  count kept. Because the hookstate file is keyed `cc-<id>`, which survives a restart of the same tmux
+  session name, the count would accumulate across sessions forever on a harness that sends no
+  `source`, and the card would report previous sessions' reads as this one's — the exact way this
+  counter can lie about the number the whole plan exists to produce. **Shipped as
+  `SessionStart && "$src" != resume`**: `resume` is the only source that is genuinely the same session
+  still going (`compact` never reaches the line — the arm exits at the D-306 guard, so its carry is
+  structural), and everything else, absent or unknown to this build, resets. The degrade points the
+  safe way: an unrecognised boundary costs a count rather than inventing one. Two new tests pin both
+  polarities and the allow-list spelling is now a measured RED row in Step 15's mutation table.
+
+- **D-1249 — the plan pinned only the NULL half of the assembly seam, and read the hook's three fields
+  in an order that let one of them shift the other two.** Two findings, one commit, both from the
+  second review round.
+
+  **(a) The positive carry was unpinned.** Step 10(c) asked for three `toBeNull()` assertions and
+  Step 15's table named one mutation on `server/src/fleet.ts` (`?? 0`). Both look at the ABSENCE half.
+  Nothing anywhere asserted that a hookstate count of N reaches `FleetSession.graphQueries` as N —
+  `grep -rn graphQueries server/test pwa/test` found no non-null assertion downstream of
+  `assembleFleet` — so the seam `graphQueries: hs?.graphQueries ?? null` could be replaced by a literal
+  `null`, deleting the guard and dropping the count for every live session, with the full server suite
+  still green (MEASURED by the reviewer: 248 files / 6286 tests, zero failures). That is lens-(d)
+  exactly, and the identical class the first review round blocked on for `shared/api.ts`'s `optNum` —
+  fixed there, left open here, because `assembleFleet` is the LIVE `/api/fleet` path and
+  `reviveFleetSession` is only the degraded-mode read. Fixed by extending the sibling positive test in
+  `server/test/fleet.test.ts` (seed `graphQueries: 7`, assert `7`, rename to "all four fields") and
+  adding a measured-zero test beside it (`graphQueries: 0` → `0`), which also closes `hs ? 0 : null`.
+  Three rows added to Step 15's table, all measured RED.
+
+  **(b) The hook's one-fork three-field read was positionally fragile.** The fork-merge that put
+  `graphQueries` into `subs`/`prev_state`'s existing jq kept the original field order, so the filter
+  read `(.subagents | tostring), (.state), (.graphQueries)` over a LINE-delimited channel with the one
+  field that can carry arbitrary text FIRST. The comment was right that `tostring` escapes a newline
+  inside an ARRAY, but on a JSON *string* `tostring` returns the text raw: an externally-corrupted
+  `.subagents` that is a string containing a newline emits four lines and shifts `prev_state` and `gq`
+  onto the wrong ones. `subs` self-heals through its `\[*` guard and `gq` through `^[0-9]+$`, but
+  `prev_state` has NO guard and is written into the file as `state` on the SubagentStart/Stop path — a
+  robustness regression against the pre-merge code, which read `.state` with its own jq and could not
+  be shifted at all. It degrades rather than lies (an out-of-set `state` reaches
+  `server/src/hookstate.ts:233` and returns `NO_STATE`) and it needs an externally-corrupted file, but
+  the fix is free: the order is now `(.state), (.graphQueries), (.subagents | tostring)` with the three
+  `read -r` names swapped to match, so a shift can only corrupt `subs`, which was already caught. Same
+  one fork, same hot-path budget. Pinned by a new `session-hook` test that seeds
+  `subagents: "evil\nline"` and asserts `state` and the count survive; measured RED against the old
+  order.
+
+- **D-1250** (2026-09-02, whole-branch review) — **the branch's 91 new lines of shell landed in the
+  one hot-path ccd file the standing GNU sweep did not scan.** `macos-platform.test.ts`'s "THE SWEEP,
+  STANDING" exists, by its own header, so that "anything main adds later merges cleanly with nothing
+  prompting a BSD-compatibility review" is caught by a mechanism — but its corpus was a hand-kept list
+  of the four files the macOS port itself had touched (`ccd/ccd`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`,
+  `ccd/ccrc-api`; this plan enumerates them at line 23 and cites the suite at its own verification
+  step, line 318). `ccd/session-hook.sh` was in none of them. MEASURED: five GNU-only spellings
+  planted in Task 1's new block at `ccd/session-hook.sh:194` — `stat -c %Y`, `date +%s%3N`,
+  `sha256sum`, `uuidgen`, a bare `timeout` — passed `bash -n` and left the suite byte-identically
+  green (`Tests  25 passed | 10 skipped (35)`). That is the file whose own header (:12-27) names a BSD
+  `date` answering `…3N` as the worst way it can fail: `jq` rejects the non-number, `|| exit 0`
+  swallows it, THE HOOK WRITES NOTHING, and every session on the box reads as unsupervised while
+  looking healthy from the inside. Nothing on the branch is actually broken — re-running the suite's
+  own ten `gnuOnly` regexes over the hook finds exactly one hit, the VALIDATED `date +%s%3N` fallback
+  inside `_hook_epoch_ms` — which is why the fix is a guard, not a code change, and why a bare append
+  to `corpora` does not work (measured: it fails on that one legitimate line).
+  **Shipped:** the corpus is now DERIVED from `ccd/`'s shebang'd files rather than listed, so the next
+  file added there is a decision someone records in this suite instead of a gap nobody sees; the
+  hook's `_hook_epoch_ms` is cut out of its scanned text the way the platform block is cut out of ccd
+  and ccrc, exempt because the body-equality pin already ties it byte-for-byte to ccd's
+  `_plat_epoch_ms` inside ccd's own scanned block. Three files carry named `unowned` exemptions with
+  the spellings they still use (`ccclip`, `ccd-graph-sweep`, `ccrc-adopt` — 10 hits between them,
+  measured; porting them is out of this branch's scope), each under a RATCHET that goes red once its
+  GNU-only calls are gone, and the census refuses a shebang'd file that is in neither list. Seven
+  previously-unscanned clean files (`ccd-cap-scopes`, `ccrc-wrapper-shape`, the four `install-*.sh`,
+  `statusline-command.sh`) come into the corpus for free. Three mutations measured RED: the five
+  planted calls in the hook (`Tests  1 failed | 37 passed`), dropping the hook back out of the corpus
+  (2 failed — the census and the ratchet), and widening the epoch exemption to swallow the event
+  dispatch (1 failed — the three body anchors).
+
+- **D-1251** (2026-09-02, whole-branch review) — **the branch took the additive-wire compatibility and
+  did not honour it on the read side.** `graphQueries` ships ADDITIVE with `FLEET_PROTO` deliberately
+  held at 1 (Task 2's own interfaces block, and the field's docstring at `shared/api.ts`), which is a
+  promise that a server predating it keeps talking to a newer client. Absence-permits, though, was
+  implemented on the REVIVE path only (`optNum(o, 'graphQueries')` inside `reviveFleetSession`, whose
+  one consumer is `loadFleetSnapshot`), and the tree already states twice — `pwa/src/lib/offline.ts`
+  and `unmeasuredFields`' docstring — that a LIVE `fleet` frame never revives: `asFleetMsg` validates
+  `Array.isArray(sessions)` and returns `m as FleetMsg`. Both new chips read the field raw
+  (`session.graphQueries !== null`, `pwa/src/fleet/SessionLine.tsx` and
+  `pwa/src/screens/RunsScreen.tsx`), so on a row from an older server `undefined !== null` is true.
+  MEASURED on BOTH surfaces, by rendering a session with the key `delete`d — the shape such a server
+  actually sends: `<span class="sess-graph" title="undefined graphify read(s) this session">graph
+  </span>`. That is the exact inversion of the contract the chip exists to carry: `null` means nothing
+  measured and must render NO chip, `0` means measured-and-read-nothing; the numberless chip paints an
+  ignorant row as one that reported. It is also CLAUDE.md's wire rule broken in its own words — a
+  newer peer tolerates an older peer's omission "through a SINGLE reader per field", and here there
+  were two inline readers and no tolerant one. Scenario reachability is not hypothetical in this repo:
+  `unmeasuredFields`' docstring already enumerates the causes (a rollback, a `dist-pwa` deployed
+  before the process restarts, a cached client shell reconnecting to an old process) and records that
+  reading such a field directly was measured as a TypeError that killed the renderer.
+  **Shipped:** `graphReadCount` in `shared/api.ts`, beside `unmeasuredFields`/`substrateFault` and in
+  their idiom — the ONE place both surfaces read the field, so they cannot drift onto two fallbacks.
+  Absence degrades to `null`, the OPPOSITE direction from `unmeasuredFields`' `[]` and deliberately
+  so: an older server is ignorant of the count, never a witness that the session read nothing. A
+  present-but-unusable value (a string, `NaN`, `Infinity`) degrades to `null` too, matching `optNum`'s
+  rule on the revival path. Three mutations measured RED: reverting `SessionLine` to the raw read
+  (`Tests  2 failed | 87 passed (89)` — the omitted-key row and the non-number row, the first failing
+  with the finding's own `title="undefined graphify read(s) this session"` byte-for-byte), reverting
+  `RunsScreen` to the raw read (`Tests  1 failed | 82 passed (83)`), and gutting `graphReadCount` to
+  `return s.graphQueries as number | null` (`Tests  3 failed | 169 passed (172)` across both suites);
+  the weaker mutation `return s.graphQueries ?? null` still reds the non-number pin (`Tests  1 failed
+  | 171 passed (172)`), so the finite check is pinned separately from the absence check. The two
+  surfaces carry their own tests rather than sharing one: a single reader is what stops them drifting,
+  and a pin on only one of them cannot see the other drift. Both assert on the `.sess-graph` CLASS,
+  not the text — RTL's matcher trims, so `graph ` normalises to `graph` and a text query would miss
+  the very chip the test forbids.
+
+- **D-1252** (2026-09-02, Task 2) — **Task 2's Step 5 row 5 named a mutation its test cannot see.**
+  The table pins `''|*[!0-9]*) fresh=""` — the freshness arm's "a `rev-list` that will not answer gets
+  no clause" degrade — with *"exits 0 and still prints a card when the tree is not a git repo"*. That
+  test's tree has no git at all, so `tip` is empty and the whole `[ -n "$built" ] && [ -n "$tip" ]`
+  block is SKIPPED: the `case` the mutation edits is never reached. MEASURED against a fixture HOME:
+  flipping that arm to `fresh="fresh"` left the suite **`Tests  45 passed (45)`**, byte-identically
+  green — the guard the comment calls the whole reason the clause exists was a comment, not a
+  mechanism. The arm's own condition is a tree that HAS a HEAD but carries a `built` sha git will not
+  measure against (`git rev-list --count <unknown-sha>..HEAD` exits 128, `behind=""`), which is
+  reachable in a fixture and is the live shape too — a graph built before a force-push, or copied in
+  from another checkout. **Shipped:** one added test, "omits freshness when rev-list will not answer
+  for the built sha", planting `built: 'c'.repeat(40)` in a one-commit repo and asserting the card
+  still names `built at cccccccc` while claiming neither `fresh` nor `behind HEAD`. Re-measured with
+  it in place, the same mutation is RED (`Tests  1 failed | 45 passed (46)`). No shell changed: the
+  guard was already right, only unpinned.
+
+> **NUMBERING, RE-MEASURED AT COMMIT TIME (and the reason these jump).** The Task-2 review sheet said
+> the next free number was **D-1253**. It is not: that measurement read this branch and this plan
+> only. `origin/main` has moved from `651f40c5` (the commit this branch was cut from, carrying
+> `D-1244`) to `5e9f650d` — **corrected at Task 6**, where Step 7 re-took this measurement: the sha
+> first written here, `551a6cb6`, is PR #42's merge, an ANCESTOR of the cut point rather than
+> anywhere main had moved TO. The move is real (`5e9f650d` is PR #43's merge and carries
+> `651f40c5`); only the sha was mis-transcribed. The wave-7 program-leverage plan that landed in
+> between allocated
+> **D-1294..D-1332** from `POST /api/ledger/deviations`. Grepping BOTH trees, as the ledger rule
+> says, the highest defined number anywhere is **D-1332**, so this round takes **D-1333..D-1337**.
+> The branch's own earlier entries (D-1245..D-1252) collide with nothing — main skipped the 1245-1293
+> range entirely — so they are left exactly as they are rather than renumbered under a rewritten
+> commit. Re-measure again before the next allocation; main moves.
+
+- **D-1333** (2026-09-02, Task 2 review) — **the card's census read left a standing single-source-of-
+  truth guard RED on the branch.** `single-definition.test.ts` pins the files that may spell
+  `graph-sweep.json` as exactly `['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']` — "the sweep WRITES
+  it, doctor READS it". `_hook_graph_card`'s no-graph arm reads the same census, which makes
+  `ccd/session-hook.sh` a third holder, and Task 2's Step 4 named only `session-hook` /
+  `install-session-hooks` / `macos-platform`, so the suite that guard lives in was never run: MEASURED
+  at `888124ef` on a clean tree, `npm run test` was `Test Files  1 failed | 247 passed (248)` with the
+  single failure `+ "ccd/session-hook.sh"`. **Shipped: the pin widened, not the read removed.** What
+  the guard forbids is a SECOND DEFINITION — a `CENSUS=`-shaped copy nothing derives from — and the
+  hook cannot derive: it is installed on its own into `~/.cc-sessions` and runs as Claude Code's hook
+  with no ccd around to source, so spelling the path is the only thing available to it. The list stays
+  exact-match, so a fourth holder still reddens it (MEASURED: a planted fourth bash file under `ccd/`
+  gives `Tests  1 failed | 98 passed (99)`).
+
+- **D-1334** (2026-09-02, Task 2 review) — **two shipped guards had no fixture that could reach them.**
+  `[ -z "$engine" ] || …` and `[ -z "$pin" ] || …` were both unmeasurable: `plantGraph` wrote
+  `.graphify_engine` UNCONDITIONALLY (`${opts.engine ?? '0.9.9'}` — and `??` cannot express absence,
+  it would keep `''`), and no test asserted the card is silent about a pin. MEASURED before the fix,
+  making either clause unconditional left the suite byte-identically green at `Tests  46 passed (46)`
+  while the shipped card would read `…, built at deadbeef, engine  (pin )`. Both absences are LIVE, not
+  hypothetical: the fleet-integration design states outright that an unstamped graph is legal
+  ("`unstamped` is not an outcome"), and `~/.ccrc/graphify.pin` exists only after `ccrc install`'s
+  `_inst_graphify_engine` has run on that box. **Shipped:** `plantGraph` takes `engine: null` on its own
+  branch, plus one test — "omits engine and pin when the graph is unstamped and the box has no pin" —
+  that plants neither stamp nor pin. Both mutations are now RED at `Tests  1 failed | 47 passed (48)`.
+  No shell changed; the guards were right, only unpinned.
+
+- **D-1335** (2026-09-02, Task 2 review) — **the card was the one payload this file emitted with no
+  cap.** `$row` is `graph-sweep.json`'s `.reason`, which `ccd-graph-sweep` fills from ONE LINE of the
+  engine's stderr (`BUILD_REASON="$first"`, a bare `head -n1`) or from a whole matched refusal line —
+  repo-controlled, unbounded — and it lands verbatim in `additionalContext` on every subsequent
+  SessionStart for that tree. The same file already clips everything else it produces (`.[0:200]` on
+  the approval summary, the 64KB envelope cap), so this was an omission and not a policy. **Shipped:**
+  `row="${row:0:400}"` before the interpolation, pinned by "clips a pathological census reason instead
+  of injecting it whole" (a 100 000-character reason; the emitted context must stay under 600).
+  MEASURED: deleting the clip gives `expected 100140 to be less than 600`, `Tests  1 failed | 47
+  passed (48)`. The other arm needs no cap — each of its fields is bounded at the read (a validated
+  7–40 hex sha sliced to 8, digits off a 4096-byte head, `head -c 64` on engine and pin).
+
+- **D-1336** (2026-09-02, Task 2 review) — **`fresh` was an overloaded null at the card's seam.** With
+  a `built` sha in hand and a `tip` in hand but `rev-list --count "$built..HEAD"` exiting 128, the arm
+  set `fresh=""` and the card emitted `…, built at cccccccc` with no clause — byte-identical to the
+  card for a tree with no git at all, which names no sha and has nothing to measure against. Two
+  conditions a reading session handles differently collapsed onto one value, which this repo's own
+  conventions call a defect and not a style; and a card that names a sha and then says nothing about
+  it reads as NEUTRAL rather than as undatable, which is the opposite of what the clause exists for.
+  D-1252's new test pinned the SILENCE, so it pinned the collapse. **Shipped:** that arm now says
+  `freshness unmeasured`; the D-1252 test asserts the words, and the not-a-git-repo test asserts their
+  ABSENCE, so the two silences can no longer be merged. MEASURED: merging them back (`fresh=""`) is
+  RED at `Tests  1 failed | 47 passed (48)`.
+
+- **D-1337** (2026-09-02, Task 2 review) — **the hook became a second, hand-rolled reader of the sweep
+  census schema with nothing coupling it to the writer** — the D-306 shape. `_gs_row` in
+  `ccd/ccd-graph-sweep` builds `{path, outcome, reason, duration_ms}`; `_hook_graph_card` re-spells
+  that shape in its own jq filter, `graph-sweep.test.ts` reads the census through its own TS helper and
+  never feeds a real census to the hook, and `session-hook.test.ts` hand-wrote its census fixture.
+  Renaming `reason` to `why` in the sweep would have left every suite green while the shipped card went
+  permanently silent on the no-graph path. **Shipped:** the hook suite now BUILDS its census with the
+  sweep's own writer — `_gs_row` and `_gs_finish` lifted verbatim out of `ccd/ccd-graph-sweep` and run
+  in a bash subshell against the fixture HOME (`install-session-hooks.test.ts` derives its event list
+  from the hook's own `case` block for the same reason). MEASURED: the `reason` -> `why` rename now
+  reds both census tests with `the hook printed nothing` (`Tests  2 failed | 46 passed (48)`), and
+  renaming `_gs_row()` itself reds them at the lift's own assertion, `ccd-graph-sweep no longer defines
+  _gs_row()`.
+
+- **D-1338** (2026-09-02, Task 3) — **Step 7's proof command can never print nothing.** The step ends
+  `git grep -n "eleven clauses"` with *Expected: no output*, but `git grep` scans the whole tree,
+  including `docs/`, and the phrase lives there for reasons no edit to the skill can remove: this very
+  plan spells it three times (its own File Structure row and Step 7's two lines), the spec it
+  implements spells it once (`…-design.md:56`, an artifact table describing the skill as it stood when
+  the spec was written), and two shipped plans record it as history
+  (`2026-08-24-build9b-peers-claims-allocator.md`, five hits from the ten→eleven change; a plan's
+  ledger is authoritative history and is not edited backwards). MEASURED after Step 7's three edits:
+  the bare command prints 10 lines, all of them in `docs/`. The proof that actually holds is the one
+  scoped to shipped source — `git grep -n "eleven clauses" -- . ':!docs/'` — which exits 1 with no
+  output, and the broader `git grep -nE "\b(11|eleven) (clause|line)" -- ccd/ server/ pwa/ shared/
+  README.md CLAUDE.md` finds a single unrelated hit (`ccd/ccd:5801`, "the close is eleven lines").
+  Recorded because a verification step whose expected output is unreachable teaches the next reader to
+  ignore it, which is the same failure mode as a comment standing in for a mechanism.
+
+- **D-1339** (2026-09-02, Task 3) — **Step 8's third mutation row names an edit clause 12 cannot
+  carry.** The row is *"replace a straight apostrophe in clause 12 with a curly one"*, cited as the
+  reason D-104 exists. Clause 12 contains **zero** apostrophes of either kind (MEASURED:
+  `sed -n 69p ccd/worker-skill/SKILL.md | grep -o "'" | wc -l` → 0), so the mutation as written cannot
+  be applied and the row would have been reported as measured without anything having been measured.
+  The row's real content is two separate claims, and both were measured on their own terms.
+  (a) *A curly apostrophe reds the pin* — applied to clause 2's `workspace's`, the nearest clause that
+  has one: RED at `Tests  1 failed | 10 passed (11)`, failing on clause 2's own literal. (b) *An
+  invisible lookalike byte inside clause 12 reds the pin* — the ASCII hyphen in `session-side` swapped
+  for U+2011: RED at `Tests  1 failed | 10 passed (11)`, failing on clause 12's literal with the
+  file rendering identically in every editor. Recorded rather than silently substituted, because the
+  substitution changes which clause the row proves anything about.
+
+  A second, sharper note from the same step: **`git checkout -- <file>` is the wrong revert for a
+  mutation applied to a file whose task edits are still unstaged.** Following the standing rule
+  literally after mutation 1 discarded the whole of clause 12 along with the mutation — Step 3's work,
+  silently, with the suite then green for the wrong reason had it not been re-run. The mutation loop
+  here keeps a pristine copy of the edited file outside the tree and restores from that, verifying
+  with `diff` and a re-run before moving on. Any task that measures a mutation table before its commit
+  needs the same, or must stage first.
+
+- **D-1340** (2026-09-02, Task 3, R2 review fix) — **Step 5's paragraph describes a `SessionStart`
+  card the hook does not print.** The block was authored before Task 2's own fix commit landed
+  (`2e77f98e`, D-1333..D-1337) and collapses precisely the distinctions that commit exists to
+  preserve. (a) It opens *"Every session's `SessionStart` prints one line for its own tree"*, but
+  `_hook_graph_card` returns SILENTLY for a tree with no `graphify-out/graph.json` and no sweep-census
+  row (`ccd/session-hook.sh:78-103`, `[ -n "$row" ] || return 0`) and prints a DIFFERENT sentence —
+  `graphify: this tree has no knowledge graph — the ccrc sweep's last pass says …` — for a tree the
+  sweep refused. (b) It states freshness as *"fresh or N commits behind HEAD"*, two values, where the
+  hook emits four states plus absence: `fresh`, `1 commit behind HEAD`, `<n> commits behind HEAD`, and
+  D-1336's `freshness unmeasured` (`:130-140`), whose own comment in the hook calls the two-value
+  collapse "a defect and not a style ('no overloaded null at a seam')" — and node count, built-sha and
+  freshness are each omitted individually when their measurement fails (`:148-152`). A coordinator
+  following the paragraph as written quotes a clause that is not there, or reports a missing card as a
+  fault. THE TREE GOVERNS: the paragraph is restated from the hook as shipped.
+  And because nothing under `server/test/` read that paragraph, the drift could never go red — so it
+  is now BOUND, in the idiom `coordinator-skill.test.ts` already uses to cross-check SKILL.md's
+  refusal codes against `wave-lifecycle.md`. A new describe harvests every `fresh="…"` assignment out
+  of `ccd/session-hook.sh` (the count placeholder normalised away, leaving `fresh`,
+  `behind HEAD`, `freshness unmeasured`) and requires each in the paragraph; harvests the refused-tree
+  sentence from the hook's own `_hook_emit_context` call and requires it quoted; and requires the
+  paragraph to say a tree can get NOTHING. MEASURED — renaming the hook's `freshness unmeasured` to
+  `freshness unknown` reds BOTH suites (`Tests  2 failed | 77 passed (79)` across the pair), and
+  deleting the paragraph's absence half reds the coordinator suite
+  (`Tests  1 failed | 64 passed (65)`).
+
+- **D-1341** (2026-09-02, Task 3, R2 review fix) — **Clause 12 as Steps 1/3 spell it consumes nothing
+  of the card Task 2 built, and the clause COUNT was pinned nowhere.** Two holes, both cardinality-
+  or decision-shaped, both closed in the same commit.
+  (a) **The branch.** The plan's clause 12 is unconditional — a codebase question goes to
+  `graphify query` before `grep` or a file read, conditioned only on `graphify-out/graph.json`
+  existing — while the coordinator paragraph three files away exists to hand the worker a freshness
+  figure and says *"a graph 97 commits stale answers confidently and wrongly"*. A worker whose own
+  card reads `97 commits behind HEAD` was told by its contract to prefer that graph's answer over
+  reading the file: information delivered with no decision rule attached, the same shape as a comment
+  standing in for a mechanism. Clause 12 now carries the rule the card was built to feed — *"only
+  `fresh` licenses taking it as read, while `N commits behind HEAD`, `freshness unmeasured`, or no
+  freshness clause at all makes every query answer a LEAD to verify by opening the file it names"* —
+  and `CONTRACT[11]` in `server/test/worker-skill.test.ts` was updated byte-identically in the same
+  edit. Its vocabulary is bound to the hook by the same harvest as D-1340, so a card word the hook
+  stops printing reds the clause that branches on it.
+  (b) **The count.** After Step 7 the number `twelve` was hand-maintained in five places
+  (`SKILL.md:49`, `SKILL.md:52`, `CLAUDE.md:181`, `README.md:1142`, `README.md:1326`) and asserted in
+  none — no test anywhere contained the string. MEASURED at the review: reverting any one of them to
+  `eleven` left the suite GREEN, and so did APPENDING a 13th clause to `SKILL.md`, because the
+  `CONTRACT` pin is a subset check with no cardinality — the contract could be extended with no pin,
+  which is the one thing "pinned verbatim" exists to prevent. D-1338 exists only because proving the
+  old count gone had to be done by `git grep`; a mechanism makes that step unnecessary. Two derived
+  assertions close both: the `^\d+\. ` clause numbering must equal `1..CONTRACT.length` exactly, and
+  the spelled-out count — `WORDS[CONTRACT.length]`, `box-token-census.test.ts`'s index-addressed idiom
+  — is harvested out of `SKILL.md`'s own prose and out of the window following each
+  `ccd/worker-skill/SKILL.md` mention in `README.md` and `CLAUDE.md`, so the sites are DERIVED rather
+  than listed by line number.
+  **Step 8's table gains four rows, all MEASURED** (pristine-copy revert per D-1339, `git diff --stat`
+  and `md5sum -c` clean after each):
+
+  | mutation | measured red |
+  |---|---|
+  | drop clause 12's freshness branch (back to the plan's own wording) | `worker-skill` — `Tests  1 failed / 13 passed (14)`, "carries all twelve clauses verbatim" |
+  | `These twelve clauses` → `These eleven clauses` in `SKILL.md` | `worker-skill` — "spells that same count…": `SKILL.md says eleven where the CONTRACT pins 12` |
+  | `twelve clauses` → `eleven clauses` at `README.md:1142` | `worker-skill` — same test: `README.md says eleven clauses where the CONTRACT pins 12` |
+  | append a 13th clause to `SKILL.md` | `worker-skill` — "numbers exactly as many clauses as the CONTRACT pins": `[1..13]` vs `[1..12]` |
+
+  The three rows the plan already had were re-measured against the new clause text and all still red
+  at `Tests  1 failed | 13 passed (14)` on "carries all twelve clauses verbatim": delete clause 12
+  (which now reds the numbering pin too, `2 failed | 12 passed`), soften "Never run `graphify update`",
+  and the U+2011 lookalike-byte swap in `session-side` (D-1339's substitute for the impossible
+  apostrophe row — clause 12 still carries zero apostrophes).
+
+- **D-1342** (2026-09-02, Task 3, second R2 review fix) — **D-1340/D-1341's two harvest bindings were
+  VACUOUS on `fresh`, the one state that licenses trusting the graph.** Both describes compared with
+  `toContain`, and the harvest yields `['fresh', 'freshness unmeasured', 'behind HEAD']`: `fresh` is a
+  SUBSTRING of `freshness unmeasured`, so its arm was satisfied by the longer word's mere presence and
+  could never fail. That is precisely the failure the describes were written to prevent — "a clause
+  that branches on a word the hook stopped printing is a rule that can never fire" — landing on the
+  most load-bearing word in the card, and on the wave-lifecycle paragraph, which carries NO verbatim
+  pin and so had that harvest as its ONLY binding. Both now match on a word BOUNDARY
+  (`new RegExp('\\b' + escape(word) + '\\b')`, `.toMatch`) instead of a raw substring: `\bfresh\b` is
+  false on `freshness unmeasured` and true on both docs' own backticked `` `fresh` ``, so all three
+  arms stay green today and all three became mechanisms. The backticked-form alternative was rejected
+  because the harvest normalises the count away to a bare `behind HEAD`, which neither doc backticks
+  in that form.
+
+  Measured, on top of `5bcbc881` (baseline `Test Files  2 passed (2)` / `Tests  79 passed (79)`):
+
+  | mutation | red |
+  | --- | --- |
+  | clause 12 + its `CONTRACT` literal: ``only `fresh` licenses`` → ``only `up to date` licenses`` | `worker-skill` — `Tests  1 failed \| 13 passed (14)`, "clause 12 branches on no card word matching `fresh`" — the review's own probe, GREEN before this fix |
+  | `wave-lifecycle.md`: BOTH of the paragraph's `` `fresh` `` → `` `up to date` `` | `coordinator-skill` — `Tests  1 failed \| 64 passed (65)`, "the graph-card paragraph never names the `fresh` state the hook prints" — GREEN before this fix |
+  | clause 12 + `CONTRACT`: `` `N commits behind HEAD` `` → `` `N commits stale` `` | `worker-skill` — `Tests  1 failed \| 13 passed (14)`, "…no card word matching `behind HEAD`" |
+  | `ccd/session-hook.sh`: `fresh="freshness unmeasured"` → `fresh="freshness unknown"` (re-measured) | BOTH — `Test Files  2 failed (2)` / `Tests  2 failed \| 77 passed (79)`, each now naming the regex: `expected … to match /\bfreshness unknown\b/` |
+
+  One measurement worth keeping: replacing only the FIRST of the paragraph's two `` `fresh` ``
+  occurrences left `coordinator-skill` green at `Tests  65 passed (65)`, correctly — the paragraph
+  still named the state once. The binding is "this doc names the word", not "names it twice"; the
+  review's probe had to edit both, and so did the mutation row above.
+
+
+- **D-1343** (2026-09-02, Task 4 review fix) — **two defects the R0 step shipped with, both in the
+  half of the work that is supposed to prove the other half.**
+
+  **(a) The backup guard had no mutation test.** `_inst_graph_always_on_off`'s backup is the ONLY
+  copy of the operator's `CLAUDE.md` that exists before a destructive delete, and its
+  `if ! { mkdir -p "$backups" && cp -a …; }` refusal shipped with no row that goes red when it is
+  deleted: no fixture ever made the backup fail, so replacing the whole chain with an unconditional
+  `mkdir -p …; cp -a … || true` left all 28 rows green (measured). The positive half was loose in the
+  same way — `expect(backupDirs(home).length).toBeGreaterThan(0)` counts `~/ccrc-backups/<ts>`
+  DIRECTORIES and says nothing about which file was copied, which is exactly the assertion
+  `_inst_graph_hooks_off`'s own backup row had already refused one function over ("NOT a global
+  `readdirSync(ccrc-backups).length === 1` count … the assertion should not depend on that staying
+  true"). Both halves are now bound: the idempotence row asserts some backup dir holds an entry
+  ending `_CLAUDE.md`, and a new row plants `$HOME/ccrc-backups` as a REGULAR FILE so `mkdir -p`
+  fails, then asserts the file is byte-identical, `stderr` says `left in place rather than rewritten
+  unbacked`, and the install degrades. That fixture is safe in this suite because the only other
+  install step writing there (`_inst_graph_hooks_off`) backs up solely what it finds pre-existing,
+  which a `freshBox` has none of.
+
+  **(b) The step's header comment cited two line numbers, and the same commit deleted one of the
+  sites.** The plan prescribed `(ccd/ccrc:5411 and :5249)` verbatim (plan line 1481, authored before
+  Task 4 existed), and Task 4 copied it into `ccd/ccrc` and into the half-block test. Both numbers
+  were wrong the moment the commit landed: `sed -n '5249p;5411p'` prints unrelated prose, and `:5249`
+  had been the converge's unmarked-`## graphify` refusal, which R0 removes. Per the standing rule the
+  TREE wins over the plan, so both comments now cite `_inst_graph_hooks_off`'s chained-content
+  refusal BY NAME — the one other place the tree says the phrase — and drop the deleted site. Line
+  numbers into a 6 000-line file that every future edit shifts are not citations; this codebase asks
+  readers to follow its `D-N` comments as authoritative history, and a citation that resolves to
+  unrelated prose teaches them to stop.
+
+  Measured, on top of `8589a0c4` (baseline `Tests  29 passed (29)` with the two test edits in place):
+
+  | mutation | red |
+  | --- | --- |
+  | `ccd/ccrc`: the whole backup guard → `mkdir -p "$backups" 2>/dev/null; cp -a … 2>/dev/null \|\| true` (the review's own probe, GREEN against the 28-row suite) | `Tests  1 failed \| 28 passed (29)` — 'REFUSES to rewrite a file it could not back up, and degrades the install': the block was deleted with no backup of the file taken |
+  | `ccd/ccrc`: drop only the `cp -a` from the guard, keep `mkdir -p` (the mutation a bare directory COUNT cannot see) | `Tests  1 failed \| 28 passed (29)` — 'is idempotent…': "no backup dir holds a copy of the CLAUDE.md the first run rewrote", `expected true, received false` |
+
+  The second row is the point of the scoping change: with `mkdir -p` still running, the timestamp
+  directory exists and empty, so the old `backupDirs(home).length > 0` assertion stayed GREEN while
+  the operator's file was rewritten with nothing kept.
+
+
+- **D-1344** (2026-09-02, Task 5) — **Task 5 Step 3's own comment block violated the guard it was
+  citing.** The step prescribes a `_inst_graphify_engine` body comment that explains the guard by
+  quoting its test name in full — `` `it('never touches /usr/local/bin/graphify')` `` — while that
+  guard slices the function from `_inst_graphify_engine() {` to its closing brace and refuses the
+  literal `/usr/local/bin` *anywhere inside*, comments included. The comment is inside the slice, so
+  the paragraph asserting "it is not spelled out anywhere inside this body" spelled it. MEASURED, with
+  the converge implemented exactly as Step 3 writes it: `Tests  1 failed | 34 passed (35)` —
+  'never touches /usr/local/bin/graphify': `the converge names a path outside $HOME`, the offending
+  text being the citation itself. Per the standing rule the TREE (here, the guard) wins over the plan:
+  the comment now cites the guard by FILE and by the words its name *begins* with, never the path, and
+  says out loud that citing it in full is itself a violation. Nothing about the guard or the converge
+  changed — this is the plan's prose, not its mechanism.
+
+- **D-1345** (2026-09-02, Task 5) — **the doctor's output-contract test pinned an alphabet nobody had
+  chosen, and R3's check id is outside it.** `ccrc-doctor.test.ts`'s "every line is exactly
+  PASS|WARN|FAIL|SKIP <name>: <detail>" asserted `/^(PASS|WARN|FAIL|SKIP) [a-z0-9_]+: \S/`. The
+  charset was never a stated rule — it is simply the alphabet the 26 pre-existing check ids happened
+  to use — but `graphify-path`, whose hyphen the spec (§R3), the plan's own Interfaces block and
+  `_check_graphify-path`'s header all choose deliberately (bash permits it in a function name defined
+  as `name() {`, and `cmd_doctor` matches the printed id against the table entry byte-for-byte), made
+  it report a SHAPE violation for a line that has exactly the shape the test is named for. MEASURED
+  before the fix: `Tests  1 failed | 313 passed | 3 skipped (317)` — `expected 'PASS graphify-path:
+  graphify resolves…' to match /^(PASS|WARN|FAIL|SKIP) [a-z0-9_]+: \S/`. Neither renaming the check
+  (the spec names the id) nor widening the class to `[a-z0-9_-]+` (a second guess at an alphabet) is
+  right: the name half is now DERIVED from `CCRC_DOCTOR_CHECKS` via the file's existing
+  `tableNames()`, this project's "enumerate once, derive" rule, and the result is STRICTER than the
+  old regex — a verdict line printed under a name the table does not carry used to pass the shape
+  assertion and is now red. The plan listed this file as "fixture only" for Task 5; it is not.
+
+- **D-1346** (2026-09-02, Task 5) — **R3 adds a fifth entry to `~/.local/bin` and a standing census
+  said there were four.** `ccrc-install.test.ts`'s "runs the wrapper converger with no flags…" ends
+  with an exact-set assertion over everything in `$HOME/.local/bin` that the FIXTURE did not plant —
+  the four executables `_inst_bins` installs — as its proof that the default roster generates no
+  wrapper and the verb leaves no temp file or staged leftover behind. The R3 converge writes a fifth
+  name there deliberately, so the census had to learn it. MEASURED before the fix: `Tests  1 failed |
+  102 passed | 18 skipped (121)` — `expected [ 'ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc',
+  'graphify' ] to deeply equal [ 'ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc' ]`. `graphify` is
+  added to BOTH platform arms, unlike the two entries above it: `_inst_bins` gates `ccd-cap-scopes` on
+  cgroups and `ccd-graph-sweep` on a systemd timer, while `_inst_graphify_engine` is gated only on the
+  server role. The assertion stays an exact set — it is not loosened to "contains".
+
+- **D-1347** (2026-09-02, Task 5 fix round) — **R3 grew a fifth name in `~/.local/bin` and the
+  uninstall's census of that directory is HAND-KEPT, so it still knew four.** `_inst_graphify_engine`
+  converges `$HOME/.local/bin/graphify` onto the pinned venv; `_uninst_tree_bins` removes `ccd`,
+  `ccrc`, `ccd-cap-scopes` and `ccd-graph-sweep` and named the four in its own closing sentence.
+  `ccrc uninstall` therefore STRANDED the link, and `--purge` — which removes `~/.ccrc` whole a few
+  lines later — turned it into a **dangling `graphify` first on every session's PATH**: strictly worse
+  than the box was before ccrc, because the pip shim that used to answer there was copied aside by the
+  install (D-1349) and never put back. This is the same defect class as D-1346 one verb over: a census
+  that is a sentence rather than a derivation. Removed ONLY WHEN IT IS OURS, which is `_uninst_wrappers`'
+  rule in its own words ("everything ccrc could not prove it wrote was left in place") — proof is the
+  link's own target, read with a ONE-HOP `readlink` (no `-f`, so no box is asked for a tool it may not
+  have — D-1348's lesson on the install side) against the exact literal the install writes. A regular
+  file (the hand-written launcher the install REFUSES to touch) and a symlink pointing anywhere else
+  are both reported and kept, because an uninstall that removed one would be destroying an operator's
+  launcher on the strength of a judgement the install had already declined to make.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `if [ -L "$glink" ]` → `if false` in `_uninst_tree_bins` (the whole census deleted) | `ccrc-uninstall` — "the tree and the executables go…" AND "graphify: a launcher ccrc did not write SURVIVES uninstall…" | `Tests  2 failed \| 19 passed \| 4 skipped (25)` |
+  | `[ "$gtgt" = "$HOME/.ccrc/graphify-venv/bin/graphify" ]` → `[ -n "$gtgt" ]` (remove ANY symlink) | `ccrc-uninstall` — "graphify: a launcher ccrc did not write SURVIVES uninstall…" | `Tests  1 failed \| 20 passed \| 4 skipped (25)` |
+  | add `rm -f -- "$glink"` to the regular-file arm that only reports | same test | `Tests  1 failed \| 20 passed \| 4 skipped (25)` |
+
+- **D-1348** (2026-09-02, Task 5 fix round) — **the converge's no-op arm compared two `readlink -f`
+  substitutions inline, and EMPTY = EMPTY is TRUE.** The arm shipped as
+  `elif [ -L "$gpath" ] && [ "$(readlink -f "$gpath")" = "$(readlink -f "$gvenv")" ]`. On a box whose
+  `readlink` has no `-f` — macOS below 12.3, a floor this repo ACCEPTS rather than enforces
+  (`macos-platform.test.ts`) — both substitutions answer empty, the test passes, and **any** symlink,
+  including one pointing at a completely different engine, was declared "already points at the pinned
+  venv" and left alone. That is the overloaded null this codebase bans at a seam, in exactly the shape
+  D-1244 named one step below. Fixed the way `_inst_graph_always_on_off` fixed it: both sides resolved
+  ONCE into locals, both required non-empty before any equality is claimed, and an unresolvable link
+  LEFT IN PLACE, said out loud with a remedy, and counted `INST_DEGRADED+=(graphify-path)` — degraded,
+  never acted on unmeasured. Also recorded here: this step resolves with `readlink -f` while
+  `_check_graphify-path` resolves with `realpath`; both are allowed by `macos-platform.test.ts` and
+  neither is preferred, but the two halves must agree that EMPTY means "unmeasured" and never
+  "unequal" — the install degrades, the doctor SKIPs (D-1350), and both files now say so in a comment.
+  The review that found this named the measurement nobody had taken: **no fixture in the suite ever
+  planted a link pointing OUTSIDE the venv**, so the whole resolution comparison could be deleted with
+  all six R3 tests still green. Two new cases plant it — one resolvable, one with a `readlink` stub
+  whose `-f` fails the way that userland's does.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | reduce the no-op arm to `elif [ -L "$gpath" ]; then` — the mutation nobody had measured | `ccrc-install-graphify` — "REFUSES a symlink at a NON-SHIM engine — the state the no-op arm used to swallow" | `Tests  2 failed \| 41 passed (43)`, RE-MEASURED at Task 6 on `da4ded09`. The row shipped citing "REFUSES a symlink that resolves OUTSIDE the venv…" at `Tests  1 failed \| 36 passed (37)`: honest when it was taken, stale twice over since. `6ae35e56` **renamed** that test to the title above (D-1351 narrowed it to what its `#!/bin/sh` fixture ever pinned) and added the pipx case, which this mutation reddens too — hence 2, not 1 — and D-1358/D-1360 then took the file from 39 tests to 43 |
+  | `elif [ -L "$gpath" ] && { [ -z "$gnow" ] \|\| [ -z "$gwant" ]; }` → `elif false` (the unresolvable arm deleted) | `ccrc-install-graphify` — "LEAVES a link this box cannot resolve in place, degraded — empty is not \"equal\"" | `Tests  1 failed \| 36 passed (37)` |
+
+- **D-1349** (2026-09-02, Task 5 fix round) — **the pip-shim arm destroyed a file ccrc did not write,
+  with no backup and no atomic swap, while its own header claimed `cmd_wrappers`' discipline.** The
+  arm was one `ln -sfn "$gvenv" "$gpath"`. `cmd_wrappers`' discipline is a `cp -p` copy to
+  `<name>.pre-ccrc-<UTC>` BEFORE the overwrite, and `ln -sfn` over a live path is unlink+symlink — a
+  session that types `graphify` in that window gets ENOENT. A pip console-script shim is replaceable
+  because its CONTENT proves what it is, not because it is ccrc's, so it earns the keep-aside rather
+  than losing it. Shipped: `cp -p` first, a failed backup **degrades instead of replacing unbacked**
+  (`_inst_graph_always_on_off`'s own "left in place rather than rewritten unbacked"), and the swap is
+  `ln` to a dot-prefixed temp name then one `mv -f`. The "." in both names is load-bearing for the
+  reason `cmd_wrappers` gives — no legal wrapper id carries one, so neither copy nor leftover is
+  visible to `ccrc adopt`'s scan, to `_check_wrappers`, or to the `*` glob `_uninst_wrappers` walks.
+  `_uninst_keep_asides` gains the THIRD glob, `$HOME/.local/bin/graphify.pre-ccrc-*`: it runs after
+  `_uninst_tree_bins` has freed that path (D-1347), so the `mv` it prints is the difference between
+  "off ccrc" and "off ccrc with a hole where your graphify used to be".
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `if ! cp -p -- "$gpath" "$gbak"` → `if false` (the backup deleted, the swap kept) | `ccrc-install-graphify` — "REPLACES a pip console-script shim…" (its D-1349 backup assertions) | `Tests  1 failed \| 36 passed (37)` |
+  | drop `"$HOME/.local/bin/graphify.pre-ccrc-"*` from `_uninst_keep_asides`' glob list | `ccrc-uninstall` — "keep-asides: the restore commands are PRINTED and the files untouched" | `Tests  1 failed \| 20 passed \| 4 skipped (25)` |
+
+- **D-1350** (2026-09-02, Task 5 fix round) — **the doctor check folded "could not resolve either
+  side" into "the wrong engine is on PATH".** Step 7(d) shipped `[ -n "$resolved" ] || resolved="$found"`
+  and `[ -n "$want" ] || want="$engine"`, and a link path is never equal to an engine path — so a
+  fully CONVERGED box that simply has no `realpath` was told `FAIL graphify-path: … which is not the
+  pinned engine …`: a mismatch verdict on a comparison nobody made, carrying a remedy (`ccrc install`)
+  that cannot put coreutils on the box. An adapter may not narrow a distinction it received, and
+  unmeasurable is this file's stated FOURTH OUTCOME. Now a SKIP naming the missing tool, in
+  `_check_scopes`' own shape (no remedy line, by contract — the fact goes in the detail). The
+  genuinely-missing ENGINE is a different condition and keeps its FAIL: it is measured directly with
+  `-e` and answered before the resolution question is asked, so it is never folded into the skip. The
+  plan's own Step 7(d) comment ("that fallback is honest but blunt") described the defect and shipped
+  it anyway; the shipped comment now says what the arm must not do instead. Both new arms have a
+  fixture: one removes `realpath` from the contained PATH of an otherwise-converged box, one plants a
+  foreign `graphify` with the venv deleted.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | replace the `[ -z "$resolved" ] \|\| [ -z "$want" ]` SKIP arm with the old `\|\| resolved="$found"` / `\|\| want="$engine"` fallback | `ccrc-doctor-graphify` — "SKIPs — never FAILs — when the box has no usable realpath…" | `Tests  1 failed \| 23 passed (24)` |
+  | delete the `[ ! -e "$engine" ]` FAIL arm, letting a missing engine fall into the skip | `ccrc-doctor-graphify` — "FAILs when something answers graphify but there is NO pinned engine…" | `Tests  1 failed \| 23 passed (24)` |
+
+- **D-1351** (2026-09-02, Task 5 review round) — **a symlink whose TARGET is a console-script shim —
+  the commonest real state this step exists to fix — took the replace arm by accident, pinned by
+  nothing.** `pipx install graphify` leaves `~/.local/bin/graphify -> ~/.local/pipx/venvs/graphify/bin/graphify`.
+  That link resolves fine and is not the venv, so no link arm answers it: `[ -f ]` and both content
+  probes FOLLOW the link, it reads as a shim, and it is replaced. That verdict is defensible — content
+  proves what the thing is, and being reached through a link does not make it the operator's
+  hand-written launcher — but no fixture planted the state, so the behaviour was unspecified and could
+  have flipped silently in either direction, while the header comment's "REFUSE anything else" and the
+  neighbouring test title read as though no foreign symlink is ever touched. Shipped: a fixture that
+  plants exactly that pipx shape and asserts the verdict, including the two surprising consequences —
+  `cp -p` DEREFERENCES, so the keep-aside is a regular-file copy of the shim rather than a copy of the
+  link, and the pipx-owned file at the far end is left untouched. The header comment now states the
+  rule ("content decides, and it decides through a link too") and the sibling test's title is narrowed
+  to `REFUSES a symlink at a NON-SHIM engine`, which is all its `#!/bin/sh` fixture ever pinned.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `if [ -f "$gpath" ] && [ -r "$gpath" ]` → `if [ ! -L "$gpath" ] && [ -f "$gpath" ] && [ -r "$gpath" ]` (links refused instead of judged by content) | `ccrc-install-graphify` — "REPLACES a shim reached THROUGH a symlink, and orphans nothing (D-1351)" | `Tests  1 failed \| 42 passed (43)`, RE-MEASURED at Task 6 on `da4ded09`. The row shipped as `Tests  2 failed \| 37 passed (39)` "(the second is D-1352's case, measured on the same run before its arm was re-applied)" — which is not a mutation table entry at all but a MEASUREMENT SLIP: the number was copied off a run whose tree was carrying a SECOND mutation, so it reported another mutation's collateral as this one's red. A mutation table's count is the count for the mutation in its own row, on an otherwise-shipped tree, or the row proves less than it looks like it proves |
+
+- **D-1352** (2026-09-02, Task 5 review round) — **the arm that stopped overloading EMPTY then printed
+  a cause it never measured.** D-1348's new arm said `is a symlink this box cannot resolve (its
+  readlink has no -f)`. EMPTY from `readlink -f` is itself overloaded across at least two conditions:
+  a userland without `-f`, and a chain the tool cannot walk. Measured with GNU coreutils 9.4 on the
+  box this was written on: `ln -s /gone/deeper/bin/graphify x; readlink -f x` exits 1 printing
+  nothing, because `-f` requires every component but the last to exist. So an operator whose coreutils
+  is perfectly capable — after an ordinary `pipx uninstall graphify` — was told their readlink was the
+  problem. Same defect class as the commit it shipped in, one message over. Shipped: the
+  distinguishable half is MEASURED FIRST, mirroring what `_check_graphify-path` does with
+  `[ ! -e "$engine" ]` — `elif [ -L "$gpath" ] && [ ! -e "$gpath" ]` gets its own sentence naming the
+  target it read with a plain one-hop `readlink` — and what remains states only what it measured, the
+  way `_inst_graph_always_on_off` (`ccd/ccrc`) has always said it, with no cause claimed. The new arm
+  also catches the shape whose parents DO exist, which resolved non-empty and used to fall through to
+  the not-a-shim refusal; both routes are planted by the fixture.
+
+  | mutation | expected red | MEASURED |
+  |---|---|---|
+  | `elif [ -L "$gpath" ] && [ ! -e "$gpath" ]` → `elif false` (the broken-link arm deleted) | `ccrc-install-graphify` — "names a BROKEN link for what it measured — not for a cause it guessed (D-1352)" | `Tests  1 failed \| 38 passed (39)` |
+  | `elif [ -L "$gpath" ] && { [ -z "$gnow" ] \|\| [ -z "$gwant" ]; }` → `elif false` (D-1348's arm, re-measured after the message change) | `ccrc-install-graphify` — "LEAVES a link this box cannot resolve in place, degraded — empty is not \"equal\"" | `Tests  1 failed \| 38 passed (39)` |
+
+
+- **D-1353** (2026-09-02, whole-branch review) — **`fresh` was overloaded a SECOND time, on the arm
+  D-1336 left standing.** D-1336 fixed the silence at this seam and kept the measurement that feeds
+  it: `behind=$(git rev-list --count "$built..HEAD")`, whose `0` arm said `fresh`. That count is a
+  ONE-SIDED question — how many commits HEAD carries that the graph's commit cannot reach — and it
+  answers `0` for two conditions the card must not collapse. The legitimate one is the only way to
+  reach the arm at all: `built` is an ABBREVIATED sha of this very HEAD, so the string equality above
+  missed it. The illegitimate one is a graph built at a commit HEAD cannot reach FORWARD to — a
+  descendant of HEAD, the shape the sweep produces routinely (`_gs_trees` sweeps
+  `$PROJECTS_ROOT/*/`, so it builds at a feature-branch tip and the session then `git checkout main`).
+  That graph describes a tree the session is not on, and it was announced as `fresh`. The severity is
+  not the label: `ccd/worker-skill/SKILL.md` clause 12, pinned verbatim at
+  `server/test/worker-skill.test.ts:61`, says *only `fresh` licenses taking it as read* — so the false
+  word is exactly the token that switches a dispatched worker's verification duty OFF over a graph of
+  a tree it is not reading. This is the collapse the block's own D-1336 comment names two lines below
+  ("no overloaded null at a seam"), landing on the state that comment was written to protect.
+  A second, more reachable case rode the same one-sidedness: on a DIVERGED branch (`ws/<slug>` cut
+  from a main the sweep later built at) the count is not "behind" at all, and the card said
+  `1 commit behind HEAD` for a graph that also carried a commit the tree has never had.
+  **Shipped:** ancestry is asked on BOTH sides — `git rev-list --left-right --count "$built...HEAD"`,
+  three dots — and the pair is matched WHOLE (`^([0-9]+)[[:space:]]+([0-9]+)$`) so a half-read number
+  can never stand in for both. Any left-hand count at all means the graph carries commits this tree
+  does not, and the card says `not an ancestor of HEAD`. Descendant and divergence share that ONE word
+  deliberately: a reading session does the same thing in both (the graph is not of this tree, so every
+  answer is a lead), and the rule forbids collapsing conditions a caller handles DIFFERENTLY, not
+  naming one condition once. `0 0` keeps `fresh`, which is what preserves the abbreviated-sha arm.
+  The new word is a fifth `fresh="…"` assignment, so D-1340/D-1341/D-1342's harvests demanded it in
+  both consumers or went red: clause 12 (and `CONTRACT[11]`, byte-identically) and the
+  `wave-lifecycle.md` graph-card paragraph now carry it with the rule attached — the harvest working
+  exactly as designed, not scope creep.
+
+  Measured, on top of `6ae35e56` (baseline `Test Files  3 passed (3)` / `Tests  130 passed (130)`
+  across `session-hook`, `worker-skill`, `coordinator-skill`; pristine-copy revert per D-1339, all
+  five `md5sum -c` clean afterwards):
+
+  | mutation | red |
+  | --- | --- |
+  | the hook's measurement back to the one-sided `rev-list --count "$built..HEAD"` (left side forced to `0`, the pre-fix behaviour exactly) | `session-hook` — `Tests  2 failed \| 49 passed (51)`: "refuses to call a graph built at a DESCENDANT of HEAD fresh" and "…on a DIVERGED branch merely behind HEAD". The abbreviated-sha control stayed GREEN, so the two reds are the defect and not the rewrite |
+  | `fresh="not an ancestor of HEAD"` → `fresh="fresh"` (the collapse itself, restored) | `session-hook` — `Tests  2 failed \| 128 passed (130)`, same two tests |
+  | `fresh="not an ancestor of HEAD"` → `fresh="built off this HEAD"` in the hook | BOTH doc suites — `Test Files  2 failed (2)` / `Tests  2 failed \| 77 passed (79)`: `expected … to match /\bbuilt off this HEAD\b/` in clause 12 and in the paragraph |
+  | drop the new phrase from clause 12 **and** its `CONTRACT` literal | `worker-skill` — `Tests  1 failed \| 13 passed (14)`, "clause 12 branches on no card word matching `not an ancestor of HEAD`" |
+  | drop the new phrase from `wave-lifecycle.md`'s paragraph | `coordinator-skill` — `Tests  1 failed \| 64 passed (65)`, "the graph-card paragraph never names the `not an ancestor of HEAD` state the hook prints" |
+
+  **Stale anchor, corrected here rather than silently:** this plan's Task 2 mutation table (`:1058`,
+  `:1062`) names the `''|*[!0-9]*` `case` arm as the site of `fresh="freshness unmeasured"`. That
+  `case` block is gone — the arm is now the `else` of the pair match — and the two mutations it
+  describes are still available, one branch over.
+
+
+- **D-1354** (2026-09-02, whole-branch review) — **a `Measured:` sentence outlived the code it
+  measured: the fixture comment that justifies `healthy()`'s `realpath` link went on describing the
+  arm D-1350 deleted.** R3 (`464c2a65`) added `linkReal(home, 'realpath')` to
+  `server/test/ccrc-doctor.test.ts`'s `healthy()` and wrote the reason above it: `_check_graphify-path`
+  "resolves both sides with `realpath` and falls back to the UNRESOLVED path when it is unavailable",
+  so without the link the check "FAILs on a box whose whole contract is that nothing fails —
+  *Measured:* … `FAIL graphify-path` and rc=1, which reds `runDoctor(healthy(...)).code === 0`, the
+  `fail === 0` assertion and the `"… 1 warned, 1 failed"` summary pin". One commit later `119dec11`
+  (D-1350) removed exactly that fallback — `resolved=""` / `want=""` and a `_dr_skip` — and touched
+  neither this file nor its paragraph (`git show --name-only 119dec11` lists `ccd/ccrc`,
+  `ccd/ccrc-doctor-checks` and three other suites). So the branch shipped its own refutation: the arm's
+  header says verbatim "WHAT THIS ARM MUST NOT DO is fall back to the UNRESOLVED paths when it cannot
+  answer (D-1350)", `ccrc-doctor-graphify.test.ts` pins `/^SKIP graphify-path:/` for that condition,
+  and the biggest doctor suite's fixture still taught the guessing arm as current. No shipped
+  behaviour is wrong here; what is wrong is the recorded history, which this repo's own rule says to
+  read as authoritative — and it is the WHOLE recorded justification for a line that is still needed,
+  so the next reader either trusts a defect or deletes a load-bearing link.
+  **Shipped:** the paragraph now states the mechanism that actually holds — an unreachable `realpath`
+  is a SKIP, so the missing link is a COUNTING defect (`HEALTHY_SKIPS`, and every summary pin that
+  reads it), never a failing one — with the re-measurement below quoted in it. And because a comment
+  cannot be enforced by being careful, `ccrc-doctor-graphify.test.ts` gained a test that binds its two
+  ends: the shipped arm must emit the SKIP and carry no unresolved-path fallback, and the sibling
+  fixture's paragraph (read between its opening claim and the `linkReal` line it justifies) must not
+  say `falls back to the UNRESOLVED` / `rc=1` / `FAIL graphify-path`, and must name both `SKIP` and
+  `HEALTHY_SKIPS`.
+
+  Re-measured 2026-09-02 on top of `e1b0d782`, since the old sentence's numbers were the thing in
+  doubt (baselines: `ccrc-doctor` `Tests  314 passed | 3 skipped (317)`; `ccrc-doctor-graphify`
+  `Tests  25 passed (25)` with the new test, 24 before it):
+
+  | mutation | red |
+  | --- | --- |
+  | delete `linkReal(home, 'realpath');` from `healthy()` (the line the paragraph justifies) | `ccrc-doctor` — `Tests  7 failed \| 307 passed \| 3 skipped (317)`, doctor printing `SKIP graphify-path: this box has no usable realpath …`. All seven are skip/verdict COUNTS: three `(N skipped)` summary pins (tmux_skew, config fleet-role, fleet local), both `expect(skipped).toBe(HEALTHY_SKIPS)`, the `1 warned, 1 failed` pin (red on `(0 skipped)`, its verdict half unchanged) and `expect(verdicts).toBe(total - HEALTHY_SKIPS)` (27 vs 28). **rc stayed 0 and `fail === 0` never red** — the three consequences R3's sentence claimed to have measured are all false |
+  | restore R3's stale paragraph verbatim (`git checkout --` the fixture) | `ccrc-doctor-graphify` — `Tests  1 failed \| 24 passed (25)`, the D-1354 test on "it still describes the pre-D-1350 arm, which guessed from the unresolved paths" |
+  | re-add the fallback to the shipped arm (`[ -n "$resolved" ] \|\| resolved="$found"`, `[ -n "$want" ] \|\| want="$engine"`) | `ccrc-doctor-graphify` — `Tests  2 failed \| 23 passed (25)`: the new D-1354 test **and** D-1350's own `SKIPs — never FAILs …` case, i.e. the binding reds from either end |
+
+- **D-1355** (2026-09-02, whole-branch review) — **the one README guard the branch left standing
+  passed by SUBSTRING, so the canonical overview documented none of the read side and nothing said
+  so.** Spec §4's last mutation row is "README describes the read side as a `CLAUDE.md` block →
+  derived README guard", and README.md was in exactly that mutated state while
+  `it('the README documents the READ side, not only the write side')` stayed green. Its two
+  assertions were `toMatch(/graphify query/)` and `toMatch(/_inst_graph_always_on/)`; after Task 4
+  the README's ONLY occurrence of the second is inside `_inst_graph_always_on_off` — the name of the
+  step that REMOVES the block — so the assertion matched as a prefix of its own refutation, and both
+  assertions were satisfiable by a README describing nothing but the retired writer (reproduced
+  against a synthetic README that said ccrc "converges graphify's packaged `always_on/claude-md.md`
+  into every rostered home's `CLAUDE.md`": green). MEASURED on the shipped file: `grep -c
+  'graphify-path' README.md` → 0, no `graphQueries`, no `graphReadCount`, no `clause 12` — four of
+  the five mechanisms this branch shipped were absent from the file `CLAUDE.md` designates the
+  canonical system overview, as was the R5 decline the spec asks to be "Recorded so it is not
+  re-derived". Worse than an omission: `8589a0c4`, already on this branch, ended the read-side
+  paragraph with "What replaced it — starting with the `SessionStart` card … — is below" while
+  nothing below described any replacement (the next paragraph is "**The sweep.**"), so the branch
+  shipped a dangling forward reference into the overview and the guard could not see it.
+  **Shipped:** Task 6 Steps 1, 3 and 4 — the read-side subsection, the enumeration clause, and the
+  guard replaced by two: a token census matched with `toContain` (whole tokens, never prefixes) plus
+  the derived present-tense pattern pair that forbids re-describing the read side as something ccrc
+  writes into a `CLAUDE.md` while still permitting the history sentence that says D-1243 did.
+
+  **Two of the plan's five tokens do not bind what they name, MEASURED, and the fix is two more
+  tokens.** `SessionStart` appears twice in the README outside this section (the D-1245 history
+  sentence and the presence hook) and `graphQueries` appears in the R5 decline paragraph
+  legitimately, so deleting the card bullet or the counter bullet outright left the loop GREEN
+  (measured, both). The census now also carries `additionalContext` (the one field the card emits,
+  named nowhere else in the file) and `graphReadCount` (D-1251's single tolerant reader, likewise
+  unique) — one token per mechanism that only that mechanism's own text can satisfy. The plan's own
+  Task 6 Step 2 is wrong for the same reason and is corrected here rather than in place: its
+  "Expected: FAIL — the README mentions none of `SessionStart` …" was already false when written.
+
+  | mutation | red |
+  | --- | --- |
+  | delete the R4 counter bullet from the README | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README never mentions graphReadCount". With the plan's five tokens only, this mutation was **green** (`graphQueries` survives in the R5 paragraph) — which is why the sixth token exists |
+  | delete the R1 card bullet from the README | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README never mentions additionalContext". Green under `SessionStart` alone, same reason |
+  | spell `_inst_graph_always_on_off` as `_inst_graph_always_on` throughout the README (the retired WRITER named where the remover belongs) | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README never mentions `_inst_graph_always_on_off`". This is the substring hole itself: the ancestor assertion was green on this exact text |
+  | delete the R5 decline paragraph | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README does not record the DECLINED PreToolUse speed bump" |
+  | re-insert "`_inst_graph_always_on` converges graphify's own packaged block into every rostered home's `CLAUDE.md`" | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README describes ccrc writing a read rule into a CLAUDE.md again" (FIRST pattern) |
+  | re-insert "`_inst_graph_always_on` installs graphify's packaged `always_on/claude-md.md` in each rostered home" | `Tests  1 failed \| 3 passed \| 36 skipped (40)` — "the README says ccrc installs graphify's packaged block again" (SECOND pattern; one row per pattern, or one of the two stays unmeasured) |
+  | rewrite the history sentence in the earlier draft's words ("D-1243's answer was converging graphify's packaged `always_on/claude-md.md` into every rostered home's config-dir file") | **GREEN, and must be** — `Tests  4 passed \| 36 skipped (40)`. The guard forbids the present-tense claim, never the past-tense record; a guard that forbids the truth is one nobody keeps |
+
+- **D-1356** (2026-09-02, whole-branch review) — **Task 6's draft README text describes a card, a
+  check and a chip the branch had already moved past, and Task 5 left a sentence in the same section
+  saying doctor still measures what it no longer measures.** The plan's Step 4 was written before
+  Tasks 1–5 shipped and before six deviations landed on top of them, so transcribing it verbatim
+  would have put five stale claims into the canonical overview: the card's freshness vocabulary is
+  not "fresh or *N* commits behind" but the four words D-1353 and D-1336 shipped (`fresh`, `N commits
+  behind HEAD`, `not an ancestor of HEAD`, `freshness unmeasured` — ancestry, not distance, and the
+  unmeasured case said out loud rather than left silent); the node count comes off `GRAPH_REPORT.md`,
+  not the census or `manifest.json`, neither of which carries one (D-1246); the no-graph arm's
+  census row is clipped to 400 characters because it is repo-controlled text (D-1335); the PATH
+  converge judges a shim BY CONTENT through a link too and backs it up before an atomic rename
+  (D-1349, D-1351), and its refusals and the doctor check agree that an unresolvable pair is
+  *unmeasured* — the doctor **SKIPs** there, which the draft's flat "FAILs when `command -v graphify`
+  resolves anywhere but the pinned venv" would have contradicted (D-1348, D-1350, D-1352); and both
+  chips read the field through `graphReadCount`, not raw (D-1251). Separately, the section's doctor
+  paragraph still listed "PATH shadows" among what `_check_graphify` reads — Task 5 MOVED that
+  question out to `graphify-path` (the function's own header now says so at item 3) and no plan step
+  touched the README, so the overview described a bucket that no longer exists. All six corrected
+  against the shipped tree; the tree governs, and this entry is the record that the plan's Step 4
+  text is a snapshot rather than the specification of what the README should say.
+
+  One file outside the plan's list moves with it, and a guard is why: `oss-metadata.test.ts`'s
+  "CLAUDE.md's README size claim is still true" holds `CLAUDE.md`'s `~N lines` within 10% of the real
+  file, and the read-side subsection took README.md from 2102 to 2165 lines — 1931 was 8.1% off before
+  and 10.8% after, MEASURED as `Tests  1 failed | 21 passed (22)` (`expected 0.108… to be less than
+  0.1`). The claim is now `~2165 lines`. Noted rather than silently fixed because it is the same class
+  this whole entry is about: a number in prose that only a mechanism keeps honest.
+
+- **D-1357** (2026-09-02, whole-branch review) — **the one sentence carrying the evidence for
+  retiring D-1243 stated a week-shaped window over a one-day row's numbers.** The design spec's §0
+  table reports the query log over TWO windows — `| last 7 days | 265 | 11 | 0 |` and
+  `| since D-1243 deployed (2026-09-01) | 109 | 4 | 0 |`, measured 2026-09-02 — and the README, this
+  plan's Step 4 draft text, and the permanent D-1245 ledger entry above all said "Measured over the
+  **week** it was deployed: 109 … across 4 corpora": the week row's window word with the since-deploy
+  row's figures. The block shipped 2026-09-01 (`git log -S'_inst_graph_always_on' -- ccd/ccrc` →
+  `551a6cb6`, 2026-09-02 01:37), so 109/4 spans one day, and no calendar-week reading rescues it —
+  the seven-day span is the OTHER row. The conclusion is untouched (ccrc-pwa measures **zero** in
+  both rows, and 103/109 in MekWarLive is the load-bearing fact), which is exactly why it survived
+  three copies: nothing about it was wrong except the thing this repo says a measurement may never
+  get wrong. All three now read "the one day since it was deployed (2026-09-01, measured 2026-09-02)"
+  and the README additionally names the week row so the two are not confusable again.
+
+  The guard is DERIVED, not a spelling test (`ccrc-install-graphify.test.ts`, "README: the
+  retirement's evidence sentence names the window its numbers came from"): it parses the spec's §0
+  table, looks the README's quoted figures up IN it, and holds the sentence to the row it actually
+  quotes — week-shaped window word iff week-shaped row, plus the row's anchor date if it has one.
+  Re-measure over a different window and it stays green; cross the rows either way and it reddens.
+
+  | mutation | measured |
+  | --- | --- |
+  | restore "Measured over the week it was deployed: 109 … across 4 corpora" in README.md | `Tests  1 failed \| 1 passed \| 40 skipped (42)` — `expected true to be false` at the WEEKISH equality |
+  | keep the one-day window but drop its anchor date ("the one day since it was deployed") | `Tests  1 failed \| 1 passed \| 40 skipped (42)` — `Received: "the one day since it was deployed"`, does not contain `2026-09-01` |
+  | keep the dated one-day window, swap in the week row's figures (265 across 11 corpora) | `Tests  1 failed \| 1 passed \| 40 skipped (42)` — same WEEKISH equality, reddening in the OTHER direction |
+  | unmutated | `Tests  42 passed (42)` (whole file) |
+
+
+- **D-1358** (2026-09-02, whole-branch review) — **the remover's backup was never read back, so an
+  EMPTY backup kept the whole suite green.** R0 deletes lines out of the operator's own `CLAUDE.md` —
+  the file this plan's own R0 header calls "the OPERATOR's, not ccrc's" — and
+  `cp -a "$f" "$backups/$(echo "$f" | tr / _)"` (`ccd/ccrc`, `_inst_graph_always_on_off`) is the ONLY
+  copy of it that exists before the delete. It is also the only copy anywhere: `ccrc update`'s
+  pre-install backup covers dists, `ccd`, `session-hook.sh`, `notify.sh`, units and a `coord.db`
+  snapshot, never a wrapper HOME's `CLAUDE.md`. Nothing on the branch read that copy back. The
+  idempotence row asserted `readdirSync(...).some(b => b.endsWith('_CLAUDE.md'))` — a predicate over
+  FILENAMES — and the row beside it ('REFUSES to rewrite a file it could not back up') plants
+  `~/ccrc-backups` as a regular file so `mkdir -p` fails, which binds the NEGATIVE arm only: it proves
+  the refusal fires, not that the copy holds anything. MEASURED: one line, same name, same success
+  status, the whole `if !` refusal chain intact —
+  `cp -a "$f" "$backups/…"` → `: > "$backups/…"`, `bash -n` clean — and the file's rows stayed green
+  while the operator's `CLAUDE.md` was still rewritten and its only surviving copy was zero bytes.
+  This is the repo's own "tests pin shape, not effect" in its purest form, and the suite already used
+  the stronger idiom two describes down (the `.local/bin` shim rows compare `readFileSync(...)` to
+  `SHIM`), which made R0's name-only check the outlier.
+  **`_inst_graph_hooks_off` had the identical gap** — `cp -a "$h" … && rm -f "$h"` under a
+  `.some(f => f.endsWith('_post-commit'))` name predicate — and is fixed in the same commit, because
+  R0 is explicitly built as that function's idiom and a fix to one of two identical sites teaches the
+  next reader the wrong lesson.
+
+  Severity is a GUARD LEFT UNBOUND on a data-loss path, not live loss: the shipped `cp -a` is correct
+  today and the delete is bounded by the whole-line one-ordered-pair census, so no operator loses
+  bytes now. The backup is the net for a splice bug — the class D-1244 found six of — and that net was
+  what nothing held. **Shipped:** both rows now locate EXACTLY ONE backup copy (`flatMap` +
+  `toBe(1)`, not `some` — two copies under one run would mean the remover visited one physical path
+  twice, which the symlink arm makes reachable) and compare its bytes to the pre-removal file.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/ccrc` `_inst_graph_always_on_off`: `cp -a "$f" "$backups/…"` → `: > "$backups/…"` | `Tests  1 failed \| 41 passed (42)` — `the backup does not hold the pre-removal bytes`, `expected '' to be '# head\n\n<!-- ccrc:graphify-always-o…'` |
+  | `ccd/ccrc` `_inst_graph_hooks_off`: `cp -a "$h" "$backups/…"` → `: > "$backups/…"` | `Tests  1 failed \| 41 passed (42)` — `the backup does not hold the removed hook's bytes`, `expected '' to be '#!/bin/sh\n# graphify-hook-start…'` |
+  | unmutated | `Tests  42 passed (42)` (whole file) |
+
+
+- **D-1359** (2026-09-02, whole-branch review) — **half of R4's counting rule was deletable with the
+  suite green: the trailing word boundary that keeps the read counter from over-counting.**
+  `GRAPH_QUERY_RE` (`ccd/session-hook.sh:194`) carries two boundary classes and its comment gives each
+  a separate job — the leading one stops `mygraphify query` and prose, the trailing one stops
+  `graphify querying-something-else`. The leading half was bound ("does NOT count a command that
+  merely contains the word"); the trailing half was bound by nothing. Both of that test's fixtures are
+  stopped by the LEADING class, and all four fixtures in "does NOT count graphify update, a build, or
+  a bare graphify" die on the VERB alternation, so no fixture anywhere planted a
+  `graphify query…`-prefixed word and the clause could be deleted with `Tests  48 passed (48)`
+  unchanged (measured on the branch before this fix).
+
+  Behaviour today is correct — nothing miscounts on a live box — so this is an unpinned guard, not a
+  wrong number. It is worth a ledger entry anyway because of WHICH number it guards: R4 exists so the
+  sentence the whole R0 removal rests on ("the account-wide block measured zero effect") stays
+  honest, and over-counting is the one failure direction that would manufacture adoption out of
+  commands that are not reads at all. Fix is test-only — no behaviour change, `ccd/session-hook.sh`
+  untouched — a fifth negative case, "does NOT count a verb that is merely the prefix of a longer
+  word", spelling out all three verbs so a boundary that holds for `query` and not for `explain` is
+  still caught.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/session-hook.sh:194`: delete the trailing `([[:space:]]\|$)` from `GRAPH_QUERY_RE` (`bash -n` clean) | `Tests  1 failed \| 51 passed (52)` — `expected 4 to be +0`, i.e. all four prefix-extended words counted |
+  | unmutated | `Tests  52 passed (52)` (whole file) |
+
+
+- **D-1360** (2026-09-02, whole-branch review) — **the row titled "leaves no `CLAUDE.md.tmp.<pid>`
+  behind, on the write path or the refusal path" never exercised the refusal path, so BOTH
+  `rm -f "$tmp"` lines were deletable with the suite green.** The fixture seeded a well-formed block
+  and ran one successful install, and on THAT path the temp file is consumed by
+  `mv -f "$tmp" "$f"` (`ccd/ccrc`, `_inst_graph_always_on_off`) — never by either cleanup line. Every
+  other refusal fixture in that describe (the marker census, the two/half-marker rows, the chained
+  file, the unresolvable symlink, the failed backup) takes its `continue` BEFORE
+  `tmp="$f.tmp.$$"` is ever assigned, so nothing in the branch could leak a tmp, let alone clean one.
+  The title asserted a guard the file did not hold — the same "tests pin shape, not effect" shape
+  D-1358 records one entry up, and the deviation from this plan is that the plan prescribes that row
+  verbatim (`docs/…-graphify-read-side-ccrc-level.md:1385`) with the two-path title.
+
+  Behaviour today is correct — nothing leaks on a live box — so this is an unpinned guard, not a
+  live defect, and the cost of it being unpinned is a stray temp file beside the operator's own
+  `CLAUDE.md`, not lost bytes (the file is untouched on both refusal arms and a backup was already
+  cut). **Fix is test-only; `ccd/ccrc` is untouched.** The old row is retitled to name the WRITE path
+  it actually walks, and a second row drives the splice arm: a `sed` shim planted through
+  `runInstall`'s existing `opts.stubs` door refuses the ONE two-address read
+  (`sed -n "1,Np" <CLAUDE.md>`) that runs inside `> "$tmp"` and delegates every other call to the
+  real `sed`. `> "$tmp"` is opened before the group runs, so the temp file exists when the splice
+  fails — which is the honest, reachable shape of this arm (the home filesystem filling between the
+  redirection and the last byte of the block's tail), and `ccd/ccrc` has exactly one two-address
+  `sed` in the whole file, so the shim changes no other step.
+
+  **The `chmod`/`mv` arm's `rm -f` (`ccd/ccrc:5422`) stays unbound, deliberately.** `$tmp` sits in the
+  directory the process just created it in, so chmod-on-our-own-file and a same-directory rename do
+  not fail without something exotic (an immutable directory), and a fixture for it would be a
+  contrivance that teaches the next reader the wrong lesson. Recorded here so it is not re-derived.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/ccrc`: delete BOTH `      rm -f "$tmp"` lines in `_inst_graph_always_on_off` (`:5417`, `:5422`; `bash -n` clean) | `Tests  1 failed \| 42 passed (43)` — `a half-written temp file was left in the operator's config directory: expected [ 'CLAUDE.md.tmp.2549620' ] to deeply equal []` |
+  | `ccd/ccrc`: delete the splice arm's line ALONE (`:5417`; `bash -n` clean) | `Tests  1 failed \| 42 passed (43)` — same assertion, so the new row binds THAT line and not the other |
+  | unmutated | `Tests  43 passed (43)` (whole file) |
+
+
+- **D-1361** (2026-09-02, whole-branch review) — **the card's decoy defence answered the right sha
+  through TWO mechanisms for one decision, and so one of them was deletable with the suite green.**
+  The `built` read (`ccd/session-hook.sh`) is `tail -c 4096 … | grep -oE … | tail -n1`, and the line
+  under it was `built="${built##*:}"`. The whole-branch review's counter-evidence finding credited
+  the card with a "combined decoy defence"; measured, the combination was the problem. `plantGraph`'s
+  9000-byte pad puts the head decoy OUTSIDE the byte window, so "reads built_at_commit from the TAIL"
+  binds `tail -c 4096` (swap it for `head -c` and 8 of the file's tests go red) and can say nothing
+  about `| tail -n1`: one match reaches the pipe either way. And a fixture small enough to put both
+  matches inside the window still could not bind it, because `##*:` strips through the LAST colon of
+  a two-line grep result and therefore re-implemented last-wins by itself — `| tail -n1` deleted,
+  `bash -n` clean, `Tests  53 passed (53)`.
+
+  Behaviour today is correct — every live read has one match in the window — so this is a redundant
+  mechanism, not a wrong sha, and the reason it is worth a change rather than a note is which word it
+  guards: the sha the card names is what `fresh` is computed from, and `fresh` is the word clause 12
+  of the worker skill says licenses taking a query answer as read (D-1353's entry above). **The
+  deviation from the plan is a shipped line**: Task 2 prescribes `built="${built##*:}"` verbatim
+  (`docs/…-graphify-read-side-ccrc-level.md:980`) and the tree now spells it `built="${built#*:}"`.
+  The key being stripped carries no colon, so on the single match `| tail -n1` always yields, the two
+  spellings are byte-identical; what changes is that a two-match read no longer resolves to a sha at
+  all, which is what makes the pipeline clause a mechanism a test can redden. The new case, "takes the LAST
+  built_at_commit when the decoy is INSIDE the byte window", plants a `pad: 0` graph.json and asserts
+  its own premise (`size < 4096`) so a pad that grows back stops the test rather than silently
+  stopping the measurement.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/session-hook.sh`: delete `\| tail -n1` from the `built` read, with `##*:` still in place (`bash -n` clean) | `Tests  53 passed (53)` — the gap this entry records |
+  | `ccd/session-hook.sh`: the same deletion, with `#*:` shipped (`bash -n` clean) | `Tests  1 failed \| 52 passed (53)` — `the card named no sha at all …: expected 'graphify: this tree has a knowledge g…' to contain 'ebc1d529'` |
+  | `ccd/session-hook.sh`: `tail -c 4096` -> `head -c 4096` in the `built` read (`bash -n` clean) | `Tests  8 failed \| 45 passed (53)`, the byte bound's own row among them — `the head decoy was read instead of the real last key` — so the pair now has one row each |
+  | unmutated | `Tests  53 passed (53)` (whole file) |
+
+- **D-1362** (2026-09-02, whole-branch review) — **D-1357 fixed the sentence and bound the file, and
+  the copy that mattered most was in neither.** The evidence for retiring D-1243 lives in three
+  places: `README.md`, this plan's Task 4 draft, and — the one this repo's own conventions call
+  authoritative history — `_inst_graph_always_on_off`'s header comment in `ccd/ccrc`. D-1357
+  enumerated the README and the ledger entry; the shipped comment still read *"graphify's own query
+  log over the **week** after D-1243 deployed showed 109 query/path/explain calls across 4 corpora"*,
+  the exact week-word/one-day-figures pairing D-1357 names as the defect, and it cost nothing:
+  D-1357's guard is `readFileSync(path.resolve(REPO, 'README.md'))` and both its `it()`s parse that
+  one file, MEASURED on the shipped unmutated tree as `Tests  43 passed (43)`. A guard whose corpus
+  is one copy of a duplicated sentence is a guard for the copy, not for the claim.
+
+  The same comment's closing census had the second half of it: *"the read side now lives in
+  `ccd/session-hook.sh`'s SessionStart card, worker clause 12, and `_inst_graphify_engine`'s PATH
+  converge"* — THREE artifacts where spec §1 and the permanent D-1245 entry above both name FOUR. The
+  missing one is R4, the `graphQueries` counter, which is the mechanism that makes adoption
+  *measurable*: the census dropped precisely the item that answers "did any of this work?". A short
+  census reads as complete, which is how it survived a whole-branch review.
+
+  Fixed in the shipped comment and in the Task 4 step text that prescribes it (both now state *"the
+  one day since it was deployed (2026-09-01, measured 2026-09-02)"* and name the week row explicitly
+  so the two rows cannot be confused again, and both list all four artifacts, R-tagged). The
+  identical three-item parenthetical in `server/test/ccrc-install.test.ts`'s sequence-pin comment —
+  and its copy in this plan's Task 4 — got the counter too.
+
+  The guard is now DERIVED IN BOTH DIMENSIONS (`ccrc-install-graphify.test.ts`, "the retirement's
+  evidence sentence names the window its numbers came from (D-1357, D-1362)"). Its corpus is a
+  `CORPORA` list — `README.md` and `ccd/ccrc`, comment leaders stripped before the whitespace
+  collapse — and each file gets the same spec-row lookup: parse §0's table, look that file's quoted
+  figures up IN it, hold its window phrase to the row it actually quotes (week-shaped word iff
+  week-shaped row, plus the row's anchor date), and require the count of windowed statements to equal
+  the count of bare ones, so a copy that states the figures and names no window reddens too. A third
+  file is one row. The census check derives its R-numbers from the README's own replacement bullets
+  rather than a hard-coded list, so adding an R5 mechanism to the README and not to the shipped
+  comment reddens it.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/ccrc`: restore "over the week after D-1243 deployed showed 109 … across 4 corpora" (`bash -n` clean) | `Tests  1 failed \| 1 passed \| 43 skipped (45)` — `ccd/ccrc states the window as "the week after D-1243 deployed" but quotes the "since D-1243 deployed (2026-09-01)" row's figures … expected true to be false` |
+  | `ccd/ccrc`: drop the `graphQueries` counter (R4) from the census, leaving the three-item list (`bash -n` clean) | `Tests  1 failed \| 44 skipped (45)` — census names `R[1,2,3]`, README's bullets are `R[1,2,3,4]`; `- "4"` in the diff |
+  | `README.md`: restore "Measured over the week it was deployed: 109 …" (D-1357's own row, re-measured against the new corpus loop) | `Tests  1 failed \| 1 passed \| 43 skipped (45)` — same assertion, `README.md` row |
+  | unmutated | `Tests  45 passed (45)` (whole file) |
+
+
+- **D-1363** (2026-09-03, completeness pass) — **the harvest idiom reached both skill docs and not the
+  canonical overview.** D-1340 and D-1342 established this branch's binding rule for R1's freshness
+  vocabulary: a doc that quotes the card's words is HARVESTED against `ccd/session-hook.sh`'s own
+  `fresh="…"` assignments, word-boundary matched (never `toContain` — `fresh` is a substring of
+  `freshness unmeasured`), so a word the hook stops printing reddens the doc that branches on it. It
+  was applied in exactly two places: `coordinator-skill.test.ts` against `wave-lifecycle.md`'s
+  graph-card paragraph, and `worker-skill.test.ts` against clause 12. Neither reads `README.md` —
+  which `CLAUDE.md` designates *the canonical system overview*, and whose R1 bullet quotes all four
+  states. The one README-side guard that touches this section is a TOKEN census
+  (`_inst_graph_always_on_off`, `SessionStart`, `additionalContext`, `clause 12`, `graphify-path`,
+  `graphQueries`, `graphReadCount`) and says nothing about card words.
+
+  MEASURED as the gap, before the fix: replacing the README's `not an ancestor of HEAD` with `built
+  off a commit HEAD cannot reach` and `freshness unmeasured` with `freshness unknowable` — two cards
+  the hook never prints — and running `ccrc-install-graphify`, `coordinator-skill`, `worker-skill`,
+  `oss-metadata` and `session-hook` gave `Test Files  5 passed (5)` / `Tests  197 passed (197)`. So
+  the canonical overview could describe a card that does not exist, in the one direction this branch
+  had already closed twice for the two skill docs.
+
+  Closed in `server/test/ccrc-install-graphify.test.ts` (which already reads `README.md`), as the
+  third instance of the same harvest — copied deliberately rather than extracted, for the reason the
+  new block's own comment states: the two skill suites pin their own docs and neither exports it, and
+  a shared helper would put the vocabulary one indirection away from the file that WRITES it. The
+  corpus is the **R1 bullet alone**, sliced from `**The graph card (R1).**` to the next `- **` list
+  item, whitespace-collapsed (the bullet wraps `freshness\n  unmeasured` across two lines, and
+  `behind HEAD` occurs elsewhere in a 1900-line README — a whole-file match would go green on a
+  bullet that had lost the words entirely).
+
+  A second `it()` binds the RULE and not only the nouns, because the four words can all be present in
+  a bullet that describes freshness as a distance: the hook decides the `$ahead` arm BEFORE the
+  `$behind` arms, so a graph at zero distance on an unreachable commit is `not an ancestor of HEAD`
+  and not `fresh` (D-1353). That arm order is derived from the `if/elif` chain's own sequence rather
+  than from the spelling of `-gt 0`, so an editor who writes `-ge 1` does not get a red suite for a
+  rule they did not change.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/session-hook.sh`: `fresh="not an ancestor of HEAD"` -> `fresh="built on a commit HEAD cannot reach"` (`bash -n` clean) | `Tests  1 failed \| 46 passed (47)` — *the canonical overview's graph-card bullet never names the `built on a commit HEAD cannot reach` state the hook prints*. Across the three harvest suites: `Test Files  3 failed (3)` / `Tests  3 failed \| 123 passed (126)` — one row each, where the README had none |
+  | `README.md`: `freshness unmeasured` -> `freshness unknowable` in the R1 bullet (the gap's own mutation) | `Tests  1 failed \| 46 passed (47)` — *never names the `freshness unmeasured` state the hook prints*; previously `197 passed (197)` |
+  | `README.md`: `Freshness is **ancestry, not distance**` -> `Freshness is **a distance from HEAD**` | `Tests  1 failed \| 46 passed (47)` — *the R1 bullet quotes the card words but not the ancestry rule that picks them* |
+  | `ccd/session-hook.sh`: decide `[ "$behind" -eq 0 ]` before `[ "$ahead" -gt 0 ]` (`bash -n` clean) | `Tests  1 failed \| 46 passed (47)` — *decides `behind` before `ahead`, so a graph at zero distance on an unreachable commit now reads `fresh` — D-1353 was reversed: expected 'behind' to be 'ahead'* |
+  | unmutated | `Tests  47 passed (47)` (whole file) |
+
+
+- **D-1364** (2026-09-03, completeness pass) — **the one read-side artifact whose text ccrc neither
+  owned nor pinned.** Spec §1's artifact table lists five artifacts the read side is allowed to live
+  in, and row 3 is the graphify skill: it "reaches every session — its description **already** says
+  *'especially when graphify-out/ exists, where the question should be treated as a graphify query
+  first'*". That sentence is the whole of the row's claim, and nothing in the tree measured it.
+  `install-graphify-skill.sh:40` is `cp -a "$PKG/skill.md" "$STAGE/SKILL.md"` — the text is the pip
+  package's, copied verbatim — `install-graphify-skill.test.ts` said nothing about it (no `description`
+  and no `graphify query` in the file), and doctor's `_check_graphify` compares `.graphify_version`
+  stamps against `GRAPHIFY_PIN` only, never content (`ccd/ccrc-doctor-checks:2747-2753`). So a
+  `GRAPHIFY_PIN` bump whose packaged `skill.md` reworded the clause away would delete a fifth of the
+  read side with every suite green — the class of D-1355, a guard passing on a README that documented
+  none of the read side.
+
+  **The guard could not go in the suite alone**, which is the deviation worth recording: the suite's
+  package is a FIXTURE the test itself writes, so an assertion over the assembled `SKILL.md` would only
+  measure the fixture. Only the installer ever sees the REAL package. So the check went into
+  `ccd/install-graphify-skill.sh` — extract the frontmatter `description` (folded continuations
+  included, the value ending at the next top-level key), and when it lacks either `graphify-out/` or
+  `graphify query`, print one WARNING to stderr naming the pin. It **reports, never refuses**: a skill
+  whose description drifted is still worth installing, and the point is to make the rewording a
+  decision someone records at the pin bump rather than a silent loss. It matches the two load-bearing
+  tokens, not the whole sentence, so a harmless rewording stays quiet. The report is not swallowed —
+  `_inst_graphify_skill` (`ccd/ccrc:5262`) and deploy.sh's box-side run (`deploy/deploy.sh:744`) both
+  invoke it with no redirection, so the line lands in the operator's install output.
+
+  The suite pins BOTH arms. The fixture package's `skill.md` now carries the real 0.9.9 frontmatter
+  (read from the installed skill, 2026-09-02) instead of `# graphify skill body`, and its BODY says
+  both tokens too — as the real package's does — so a guard that read the whole file instead of the
+  description could not go green on a body mention. `execFileSync` became `spawnSync` because the
+  report is a stderr line on an exit-0 run. Two drifted descriptions, one per token (one keeps the tree
+  and loses the instruction, one keeps the instruction and loses the tree it applies to), so neither
+  half of the match can be dropped and the `||` cannot become `&&` without a red row.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/install-graphify-skill.sh`: delete the report block entirely (`bash -n` clean) | `Tests  2 failed \| 5 passed (7)` — both drift rows: *expected '' to match /graphify query/* |
+  | the condition's `\|\|` -> `&&`, i.e. report only when BOTH tokens are gone (`bash -n` clean) | `Tests  2 failed \| 5 passed (7)` |
+  | drop the `graphify query` half of the match (`!= *graphify-out/*` alone) | `Tests  1 failed \| 6 passed (7)` — the "keeps the tree, loses the instruction" row |
+  | drop the `graphify-out/` half of the match (`!= *"graphify query"*` alone) | `Tests  1 failed \| 6 passed (7)` — the "keeps the instruction, loses the tree it applies to" row |
+  | read the whole `SKILL.md` instead of the frontmatter description (`_gfx_desc="$(cat "$STAGE/SKILL.md")"`) | `Tests  2 failed \| 5 passed (7)` — the body's own `graphify query` masked both drifted descriptions |
+  | unmutated | `Tests  7 passed (7)` (whole file) |
+
+- **D-1365** (2026-09-03, completeness pass) — **R5's decline is conditional on a number nobody was
+  told to take, and nothing in the tree retains it.** §2 R5 declines the `PreToolUse` speed bump on
+  three grounds, and the third is a measurement: *"R4 makes adoption measurable. Gate **after** the
+  number says the card and the clause did not move it — not before there is a number… Revisit with
+  one week of R4 data."* The DECLINE was recorded and pinned (README's R5 paragraph;
+  `ccrc-install-graphify.test.ts`'s `/PreToolUse[\s\S]{0,240}?declined/i`). The DATA it defers to had
+  no retention mechanism of any kind: `graphQueries` exists in `~/.cc-sessions/<id>.hookstate.json`,
+  which the hook rewrites on every event, and on the live `FleetSession` / `~/.ccrc/state-cache.json`
+  snapshot — **MEASURED**: the whole of `server/src` names it in exactly two files, `hookstate.ts`
+  (the reader) and `fleet.ts:435` (the projection), and nothing writes it to `coord.db`, to a run
+  row, to the ledger or to any series. It also resets on every `SessionStart` that is not a `resume`
+  (`ccd/session-hook.sh`, D-1248), and dispatch `/clear`s a worker on every wave >= 2 (worker clause
+  1), so a dispatched worker's count is per-wave, not per-week. "One week of R4 data" was therefore
+  obtainable only by somebody sampling chips before each reset, and no surface scheduled or recorded
+  that act — the same shape as the pre-R4 state §0 criticises ("5/5 homes converged was shape; this
+  is effect").
+
+  **Shipped: (a), the cheap arm — the criterion now names the act.** Both R5 texts (README's decline
+  paragraph and spec §2 R5) say that the figure is a **sample somebody takes, not a series the tree
+  keeps**, why (live-state only, reset on every non-`resume` `SessionStart`, per-wave for a
+  dispatched worker), what is read (R4's own `graph N` chips across the live fleet, on one dated
+  day, a week or more after deploy) and where the reading is recorded (this file's
+  `## Deviations found`, the way §0's table recorded the retired block's own effect). The spec also
+  names arm (b) — stamping a worker's `graphQueries` into its run row at wave close, which would make
+  the week's figure re-derivable — and puts it out of this round's scope; spec §4 gains the mutation
+  row. **No reading is taken here:** sampling the live fleet means reading `~/.cc-sessions` and the
+  live `~/.ccrc` state, which this branch's work is forbidden to touch. The act is the operator's,
+  and it is now written down.
+
+  **The guard is derived three ways, not a spelling test** (`ccrc-install-graphify.test.ts`, new
+  describe): the PREMISE is a census of `graphQueries` over all of `server/src`, so the day arm (b)
+  ships it reddens first and both texts get re-derived against a series that then exists; the
+  DESTINATION is extracted from each text by pattern and checked on disk, `## Deviations found`
+  heading and all; the RESET WORD is harvested from the hook's own `!= resume` condition (the D-1363
+  idiom). Both texts are SLICED to their R5 sections — each file names `graphQueries` and the plans
+  directory elsewhere, so a whole-file assertion would stay green with the criterion deleted, which
+  is the hole D-1355 measured twice.
+
+  | mutation | measured |
+  | --- | --- |
+  | delete the added revisit criterion from README's R5 paragraph | `Tests  2 failed \| 49 passed (51)` — "README.md: the revisit criterion names an act…" plus the harvest case, which the same deletion takes with it |
+  | delete the added revisit criterion from spec §2 R5 | `Tests  2 failed \| 49 passed (51)` — "spec §2 R5: the revisit criterion names an act…" plus the harvest case; one row per file, or one of the two texts stays unguarded |
+  | `ccd/session-hook.sh`: reset condition `"$src" != resume` -> `!= resumed` (`bash -n` clean) | `Tests  1 failed \| 50 passed (51)` — the harvest case alone: both texts explain the sampling by a source the hook no longer exempts |
+  | a third `server/src` file names `graphQueries` (one comment in `coord/routes.ts`) | `Tests  1 failed \| 50 passed (51)` — the premise case: *expected [ 'coord/routes.ts', 'fleet.ts', …(1) ] to deeply equal [ 'fleet.ts', 'hookstate.ts' ]* |
+  | unmutated | `Tests  51 passed (51)` (whole file) |
+
+
+- **D-1366** (2026-09-03, whole-suite pass after the completeness fixes) — **D-1364's guard shipped
+  red against the install suites' own fixtures.** The guard warns, correctly, when the packaged
+  skill's frontmatter description no longer carries the query-first sentence — and two install
+  suites (`ccrc-install.test.ts`, `ccrc-install-graphify.test.ts`) planted `skill.md` as a one-line
+  stub with no frontmatter at all, so the warning fired on the FIXTURE, not the package, and
+  `ccrc install: a fresh box › finishes clean: exit 0, nothing on stderr` went red deterministically
+  (re-run twice in isolation; not a load flake). The fixer had run only its own suite. The shipped
+  description now lives in ONE place, `server/test/graphifySkillFixture.ts` (`PKG_DESCRIPTION`,
+  `skillMd`), imported by all three install suites — a fixture plants the shipped artifact, never a
+  paraphrase of it ([[a-green-test-can-go-stale-untouched]]'s rule, applied to the fixture the
+  guard's own author did not look at). The guard's negative case in
+  `install-graphify-skill.test.ts` is unchanged and still the one that pins the warning.
+
+### Corrections to the brief's facts, recorded so nobody re-derives them
+
+- The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
+- The graphify doctor check does not live in `ccd/ccrc` at all: it is **`_check_graphify` in
+  `ccd/ccrc-doctor-checks`**, driven by the `CCRC_DOCTOR_CHECKS` data table, and the wrong remedy
+  ("only the operator can clear a root-owned link outside `$HOME`") is its `gfx_shadow_warn` bucket's.
+  `cmd_doctor` counts verdict lines matching `"PASS $name: "`, so the spec's `graphify-path` has to be
+  a real table entry with a matching `_check_graphify-path` function — a verdict printed under an id
+  that is not in the table is reported as "the check printed no verdict line of its own".
+- **PR #44 is already merged**: `origin/main` is `651f40c5` and its tree is identical to
+  `origin/fix/graphify-read-rule-hardening` (`8951f2d8`). `feat/graphify-read-side-ccrc-level` is cut
+  from `origin/main` directly; nothing needs to be cherry-picked.
+- `ccd/install-session-hooks.sh`'s `EVENTS_JSON` already wires both `SessionStart` and `PostToolUse`,
+  so **no installer change is needed**. Its guard derives the expected set from
+  `/^\s{2}([A-Za-z|]+)\)/` over the hook's `case` block, which is why Task 1 may split
+  `UserPromptSubmit|PostToolUse)` into two two-space-indented arms without changing what is wired.
+- **`server/test/ccrc-doctor.test.ts`'s contained PATH carries no `realpath`.** It is
+  `<home>/.local/bin:<home>/stub-bin` and no system directory, and that file `linkReal`s only `jq`,
+  `timeout`/`gtimeout`, `stat` and `date` at fixture level. `ccrc-doctor-graphify.test.ts` DOES link a
+  real `realpath` in its own `healthy()`, which is why R3's new check is green there and would have
+  been red in the other file on a fixture whose contract is that every check PASSES. Task 5 Step 5
+  adds `linkReal(home, 'realpath')` for exactly this reason; do not drop it as redundant.
+- **`optNum` is not an integer guard.** `shared/api.ts:1700` rejects only non-numbers and non-finite
+  values, so the WIRE accepts `1.5` and `-1` while `server/src/hookstate.ts` — the one reader the spec
+  names — rejects them. That asymmetry is deliberate and is now stated in Task 1's Interfaces block;
+  the plan's earlier wording ("revived by `optNum` under an integer guard") described a guard that
+  does not exist in that function.
+- **The counter's fixtures come in TWO shapes.** `FleetSession` literals spell it `subagents: null`;
+  `HookState` literals spell it `subagents: [], interrupted: false`. The two `FleetSession` seds reach
+  27 sites and cannot see the three `HookState` ones (`server/test/fleet.test.ts:24`,
+  `server/test/bucket.test.ts:298` and `:491`) — measured as `TS2769`/`TS2322` with tsc otherwise
+  clean. Task 1 Step 10 carries a third sed for them.
+- **`ccd/session-hook.sh` runs `set -uo pipefail` and NOT `set -e`** (`ccd/session-hook.sh:10`), which
+  is what makes Task 1's folded three-value `read` safe: a `read` that hits EOF because `jq` failed is
+  inert, and each variable falls back to the degrade it already had.

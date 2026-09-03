@@ -701,6 +701,72 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
   });
 });
 
+describe('the graph-card paragraph describes the card ccd/session-hook.sh actually prints', () => {
+  // NOTHING under `server/test` read this paragraph when it landed, so it could
+  // — and did — describe a two-state freshness the hook has not had since
+  // D-1336, and a card that every session prints when the hook prints nothing at
+  // all for a tree with no graph and no census row. That is the same class the
+  // refusal-code cross-check above closes for SKILL.md: a doc that quotes
+  // another file's vocabulary and is bound to nothing drifts silently. Every
+  // word quoted here is HARVESTED from the writer, so the next hook change reds
+  // this doc instead of orphaning it.
+  const hook = readFileSync(path.join(root, 'ccd/session-hook.sh'), 'utf8');
+
+  /** The paragraph itself, by its own opening — one blank-line-delimited block. */
+  const para = (): string => {
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf("**A brief may quote the worker's graph card");
+    expect(start, 'wave-lifecycle.md carries no graph-card paragraph at all')
+      .toBeGreaterThanOrEqual(0);
+    const end = wl.indexOf('\n\n', start);
+    return flat(wl.slice(start, end === -1 ? undefined : end));
+  };
+
+  /** Every freshness word the card can carry, harvested from the hook's own
+   *  assignments, normalised over the count. Four arms, three words: `fresh`,
+   *  `<n> commit(s) behind HEAD`, and D-1336's `freshness unmeasured` — the one
+   *  the paragraph collapsed. */
+  const FRESHNESS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
+      'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
+      'looking at the wrong file');
+    return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
+  })();
+
+  /** Word-BOUNDARY match, never a raw substring — the same hole as the worker
+   *  suite's twin harvest (D-1342). `fresh` is a substring of `freshness
+   *  unmeasured`, so a `toContain` arm for it passes on the longer word alone
+   *  and can never fail; this paragraph carries NO verbatim pin, so that
+   *  harvest is its only binding and a vacuous arm leaves it unbound. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  it('names every freshness state the hook can print, including the unmeasured one', () => {
+    for (const word of FRESHNESS) {
+      expect(para(), `the graph-card paragraph never names the \`${word}\` state the hook prints`)
+        .toMatch(wordRe(word));
+    }
+  });
+
+  it('does not promise a card for every session — the hook prints nothing for most trees', () => {
+    // The no-graph arm returns SILENTLY unless the sweep census carries a row
+    // for the tree, and prints a DIFFERENT sentence when it does. A coordinator
+    // told every session prints a card reads a missing one as a fault.
+    const m = /_hook_emit_context "graphify: ([^"$]+?) —/.exec(hook);
+    expect(m, 'ccd/session-hook.sh emits no no-graph sentence — this pin is looking at the ' +
+      'wrong file, or the refused-tree arm lost its one quotable line').not.toBeNull();
+    expect(para(), 'the paragraph never quotes the line a refused tree gets instead of a card')
+      .toContain(m![1]!);
+    expect(para(), 'the paragraph does not say a tree can get NO card at all')
+      .toMatch(/gets NOTHING/);
+    // The regression itself, spelled: the sentence that made this paragraph
+    // wrong is the one that generalised over every session.
+    expect(para(), 'the paragraph is back to claiming every session prints a card')
+      .not.toMatch(/Every session's `SessionStart` prints one line/);
+  });
+});
+
 describe('the coordinator docs state the oversize ceiling the brief writer actually has', () => {
   // T3 review ⚠2. Since dispatch composes `WORKER_KICKOFF_PREFIX + brief` and
   // caps the COMPOSED body, a brief in (cap - prefix, cap] is refused without
