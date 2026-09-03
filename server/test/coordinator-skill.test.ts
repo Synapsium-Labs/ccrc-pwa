@@ -983,6 +983,28 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(pp()).not.toContain('"fromUuid":"$uuid"');
   });
 
+  it('the allocate fence names byId, in the spelling the claim fence already uses', () => {
+    // The route takes `byId` optionally and stores `byId ?? ''`, so an omitted
+    // field lands as no holder at all — measured 2026-09-02, at least 101 of
+    // this project's allocations are in that state. This fence is the only
+    // documented allocate body in either corpus, so it is where that started.
+    // What makes it about THIS fence is ORDER, measured: both existing
+    // `"byId":"$id"` spellings (`:42` and `:68` — the claims bodies `:980`
+    // pins, ~80 lines above the allocator section) sit BEFORE `ledger
+    // allocate`, so with this fence's byId deleted even an unbounded
+    // `[\s\S]*` fails to match. The 220 bound is the FORWARD guard: it stops a
+    // `byId` added in some later section from satisfying this from a distance.
+    expect(pp()).toMatch(/ledger allocate[\s\S]{0,220}"byId":"\$id"/);
+  });
+
+  it('carries no ${resp expansion — the client returns the body, and there is no second stream', () => {
+    // A curl-era leftover: `resp` is assigned nowhere in either corpus, so the
+    // line overwrote the captured body with the empty expansion of an unset
+    // variable. A coordinator copying that fence lost the whole 409 answer —
+    // the ADDRESS this section's own prose (`:79`) teaches reading.
+    expect(pp()).not.toContain('${resp');
+  });
+
   it('tells the truth about which layer refuses a bad claim path (fix, post-9b review)', () => {
     // An empty path never reaches the store: route shape validation answers
     // 400 bad-request first (`routes.ts` POST /api/claims). `bad-path` is
