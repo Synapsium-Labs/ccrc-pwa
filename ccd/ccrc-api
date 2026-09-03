@@ -283,10 +283,24 @@ main() {
   # same as `"byId":""`), and it errs toward not touching the body — the safe
   # direction, since duplicate keys resolve last-wins and a splice would silently
   # change precedence. A blank one is REFUSED rather than passed through: that is
-  # exactly what a derivation that failed on the caller's side produces. The
-  # textual test's limit, stated rather than hidden: a title whose own text
-  # carries an escaped `"byId":` either suppresses the fill (safe) or trips the
-  # blank refusal (loud). Neither is silent, which is the property that matters.
+  # exactly what a derivation that failed on the caller's side produces.
+  #
+  # THE TEXTUAL TEST'S LIMITS, STATED RATHER THAN HIDDEN. A substring is not a
+  # JSON key, and three bodies show where the two part company — each measured
+  # 2026-09-03 against a loopback server, each re-permitting this block's own
+  # defect for that one body. A NESTED key (`{"project":"p","meta":{"byId":"x"}}`)
+  # and a WHITESPACE-PADDED one (`{"byId ":"sneaky",...}`) both read as "the
+  # caller has spoken", so the fill is SILENTLY suppressed and a body with no
+  # top-level `byId` goes on the wire. A `\u`-ESCAPED key (`{"\u0062yId":"",...}`)
+  # reads the other way, as absent: the splice fires and the wire body
+  # last-wins-parses to `{"byId":""}`, which is the blank refusal bypassed.
+  # None of the three is a forgery door — the caller already owns the body it
+  # hands us, and identity here is attribution — so the cost is an unattributed
+  # or blank row, the same one this block exists to stop, for that body only.
+  # Where the escaping runs the other way the test holds: a `\"byId\":` inside a
+  # title fills normally (the backslashes survive the strip and break both
+  # substrings), and the same text UNESCAPED is an invalid body that trips the
+  # blank refusal loudly.
   #
   # THE SPLICE IS SAFE BECAUSE OF SAFE_RE. Both `$by` and the derived id admit no
   # quote and no backslash, so neither can escape the JSON string it lands in.

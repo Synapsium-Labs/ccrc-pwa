@@ -465,6 +465,24 @@ describe('ledger allocate carries an identity, or refuses', () => {
       .toEqual({ byId: 'demo-ws', project: 'p', count: 2, title: 't' });
   });
 
+  it('an EMPTY object body gets a whole object back, not a trailing comma', async () => {
+    // The splice's OTHER arm, and the one no other case here reaches: every
+    // body above has at least one key, so the general form `{"byId":"x",<rest>`
+    // is always well-formed and the empty-object branch could be deleted with
+    // the whole file green — while `{"byId":"demo-ws",}` went on the wire as
+    // something no JSON parser accepts.
+    for (const body of ['{}', '{ }']) {
+      seen.length = 0;
+      plantPane('demo-ws');
+      const r = await run(['ledger', 'allocate', '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(r.status, `an empty object body (${body}) refused`).toBe(0);
+      expect(seen).toHaveLength(1);
+      expect(() => JSON.parse(seen[0]!.body), `${body} spliced into invalid JSON`)
+        .not.toThrow();
+      expect(seen[0]!.body).toBe('{"byId":"demo-ws"}');
+    }
+  });
+
   it('sends NOTHING when there is a body and no derivable identity', async () => {
     plantPane('someone-else');                       // tmux WOULD answer
     const r = await run(['ledger', 'allocate', '--json', '-'], BODY,
@@ -486,6 +504,18 @@ describe('ledger allocate carries an identity, or refuses', () => {
     expect(r.stdout).toContain('bad-body');
   });
 
+  it('the SPACED spelling of that blank is the same refusal', async () => {
+    // What the whitespace-stripped copy buys, measured rather than asserted in
+    // a comment: `{"byId" : ""}` is one keystroke away from the case above and
+    // reaches the wire without the strip, splice and all.
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'],
+      '{"byId" : "","project":"p"}', { TMUX_PANE: '%7' });
+    expect(seen, 'a spaced blank byId reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
   it('refuses a body that is not a JSON object rather than splicing into it', async () => {
     plantPane('demo-ws');
     const r = await run(['ledger', 'allocate', '--json', '-'], '[1,2]', { TMUX_PANE: '%7' });
@@ -494,11 +524,36 @@ describe('ledger allocate carries an identity, or refuses', () => {
     expect(r.stdout).toContain('bad-body');
   });
 
+  it('leading whitespace is not what "not a JSON object" means', async () => {
+    // A heredoc or a pretty-printer indents; the object-check has to look past
+    // that or it refuses a body that is fine. Pinned because the refusal it
+    // would produce is `bad-body` — the same word a real non-object gets, so
+    // the case above cannot tell the two apart.
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'],
+      '\n  {"project":"p"}', { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', project: 'p' });
+  });
+
   it('--by is the door for a caller with no pane', async () => {
     await run(['ledger', 'allocate', '--by', 'ci-runner', '--json', '-'], BODY,
       { TMUX_PANE: undefined, TMUX: undefined });
     expect(seen).toHaveLength(1);
     expect(JSON.parse(seen[0]!.body).byId).toBe('ci-runner');
+  });
+
+  it('--by outranks the pane it is standing next to', async () => {
+    // The case above runs --by with NO pane, so it measures the door and not
+    // the precedence: with both present, either order satisfies it. An explicit
+    // flag has to win, because the caller who typed it is the one who knows the
+    // pane is the wrong answer — a coordinator allocating on a worker's behalf.
+    plantPane('demo-ws');
+    await run(['ledger', 'allocate', '--by', 'ci-runner', '--json', '-'], BODY,
+      { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]!.body).byId, 'the pane outranked an explicit --by')
+      .toBe('ci-runner');
   });
 
   it('--by is refused on every other row, and its value must be a plain id', async () => {
@@ -524,7 +579,8 @@ describe('ledger allocate carries an identity, or refuses', () => {
   it('a BODYLESS allocate is untouched — there is nothing to attribute', async () => {
     // The scope decision, pinned: the rule is about a body THIS CLIENT SENDS,
     // and the closed-table row above already exercises the path with none.
-    // Without this case that row would stay green for a reason nobody stated.
+    // That row reds under Step 5's (v) too, so it is a real pin and not a
+    // silent one; this case is what states the reason it holds.
     const r = await run(['ledger', 'allocate'], undefined,
       { TMUX_PANE: undefined, TMUX: undefined });
     expect(r.status).toBe(0);
