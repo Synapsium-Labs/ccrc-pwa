@@ -3316,6 +3316,49 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | unmutated | `Tests  47 passed (47)` (whole file) |
 
 
+- **D-1364** (2026-09-03, completeness pass) — **the one read-side artifact whose text ccrc neither
+  owned nor pinned.** Spec §1's artifact table lists five artifacts the read side is allowed to live
+  in, and row 3 is the graphify skill: it "reaches every session — its description **already** says
+  *'especially when graphify-out/ exists, where the question should be treated as a graphify query
+  first'*". That sentence is the whole of the row's claim, and nothing in the tree measured it.
+  `install-graphify-skill.sh:40` is `cp -a "$PKG/skill.md" "$STAGE/SKILL.md"` — the text is the pip
+  package's, copied verbatim — `install-graphify-skill.test.ts` said nothing about it (no `description`
+  and no `graphify query` in the file), and doctor's `_check_graphify` compares `.graphify_version`
+  stamps against `GRAPHIFY_PIN` only, never content (`ccd/ccrc-doctor-checks:2747-2753`). So a
+  `GRAPHIFY_PIN` bump whose packaged `skill.md` reworded the clause away would delete a fifth of the
+  read side with every suite green — the class of D-1355, a guard passing on a README that documented
+  none of the read side.
+
+  **The guard could not go in the suite alone**, which is the deviation worth recording: the suite's
+  package is a FIXTURE the test itself writes, so an assertion over the assembled `SKILL.md` would only
+  measure the fixture. Only the installer ever sees the REAL package. So the check went into
+  `ccd/install-graphify-skill.sh` — extract the frontmatter `description` (folded continuations
+  included, the value ending at the next top-level key), and when it lacks either `graphify-out/` or
+  `graphify query`, print one WARNING to stderr naming the pin. It **reports, never refuses**: a skill
+  whose description drifted is still worth installing, and the point is to make the rewording a
+  decision someone records at the pin bump rather than a silent loss. It matches the two load-bearing
+  tokens, not the whole sentence, so a harmless rewording stays quiet. The report is not swallowed —
+  `_inst_graphify_skill` (`ccd/ccrc:5262`) and deploy.sh's box-side run (`deploy/deploy.sh:744`) both
+  invoke it with no redirection, so the line lands in the operator's install output.
+
+  The suite pins BOTH arms. The fixture package's `skill.md` now carries the real 0.9.9 frontmatter
+  (read from the installed skill, 2026-09-02) instead of `# graphify skill body`, and its BODY says
+  both tokens too — as the real package's does — so a guard that read the whole file instead of the
+  description could not go green on a body mention. `execFileSync` became `spawnSync` because the
+  report is a stderr line on an exit-0 run. Two drifted descriptions, one per token (one keeps the tree
+  and loses the instruction, one keeps the instruction and loses the tree it applies to), so neither
+  half of the match can be dropped and the `||` cannot become `&&` without a red row.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/install-graphify-skill.sh`: delete the report block entirely (`bash -n` clean) | `Tests  2 failed \| 5 passed (7)` — both drift rows: *expected '' to match /graphify query/* |
+  | the condition's `\|\|` -> `&&`, i.e. report only when BOTH tokens are gone (`bash -n` clean) | `Tests  2 failed \| 5 passed (7)` |
+  | drop the `graphify query` half of the match (`!= *graphify-out/*` alone) | `Tests  1 failed \| 6 passed (7)` — the "keeps the tree, loses the instruction" row |
+  | drop the `graphify-out/` half of the match (`!= *"graphify query"*` alone) | `Tests  1 failed \| 6 passed (7)` — the "keeps the instruction, loses the tree it applies to" row |
+  | read the whole `SKILL.md` instead of the frontmatter description (`_gfx_desc="$(cat "$STAGE/SKILL.md")"`) | `Tests  2 failed \| 5 passed (7)` — the body's own `graphify query` masked both drifted descriptions |
+  | unmutated | `Tests  7 passed (7)` (whole file) |
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
