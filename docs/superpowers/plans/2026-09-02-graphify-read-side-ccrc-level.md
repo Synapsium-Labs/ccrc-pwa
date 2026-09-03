@@ -3272,6 +3272,50 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | unmutated | `Tests  45 passed (45)` (whole file) |
 
 
+- **D-1363** (2026-09-03, completeness pass) — **the harvest idiom reached both skill docs and not the
+  canonical overview.** D-1340 and D-1342 established this branch's binding rule for R1's freshness
+  vocabulary: a doc that quotes the card's words is HARVESTED against `ccd/session-hook.sh`'s own
+  `fresh="…"` assignments, word-boundary matched (never `toContain` — `fresh` is a substring of
+  `freshness unmeasured`), so a word the hook stops printing reddens the doc that branches on it. It
+  was applied in exactly two places: `coordinator-skill.test.ts` against `wave-lifecycle.md`'s
+  graph-card paragraph, and `worker-skill.test.ts` against clause 12. Neither reads `README.md` —
+  which `CLAUDE.md` designates *the canonical system overview*, and whose R1 bullet quotes all four
+  states. The one README-side guard that touches this section is a TOKEN census
+  (`_inst_graph_always_on_off`, `SessionStart`, `additionalContext`, `clause 12`, `graphify-path`,
+  `graphQueries`, `graphReadCount`) and says nothing about card words.
+
+  MEASURED as the gap, before the fix: replacing the README's `not an ancestor of HEAD` with `built
+  off a commit HEAD cannot reach` and `freshness unmeasured` with `freshness unknowable` — two cards
+  the hook never prints — and running `ccrc-install-graphify`, `coordinator-skill`, `worker-skill`,
+  `oss-metadata` and `session-hook` gave `Test Files  5 passed (5)` / `Tests  197 passed (197)`. So
+  the canonical overview could describe a card that does not exist, in the one direction this branch
+  had already closed twice for the two skill docs.
+
+  Closed in `server/test/ccrc-install-graphify.test.ts` (which already reads `README.md`), as the
+  third instance of the same harvest — copied deliberately rather than extracted, for the reason the
+  new block's own comment states: the two skill suites pin their own docs and neither exports it, and
+  a shared helper would put the vocabulary one indirection away from the file that WRITES it. The
+  corpus is the **R1 bullet alone**, sliced from `**The graph card (R1).**` to the next `- **` list
+  item, whitespace-collapsed (the bullet wraps `freshness\n  unmeasured` across two lines, and
+  `behind HEAD` occurs elsewhere in a 1900-line README — a whole-file match would go green on a
+  bullet that had lost the words entirely).
+
+  A second `it()` binds the RULE and not only the nouns, because the four words can all be present in
+  a bullet that describes freshness as a distance: the hook decides the `$ahead` arm BEFORE the
+  `$behind` arms, so a graph at zero distance on an unreachable commit is `not an ancestor of HEAD`
+  and not `fresh` (D-1353). That arm order is derived from the `if/elif` chain's own sequence rather
+  than from the spelling of `-gt 0`, so an editor who writes `-ge 1` does not get a red suite for a
+  rule they did not change.
+
+  | mutation | measured |
+  | --- | --- |
+  | `ccd/session-hook.sh`: `fresh="not an ancestor of HEAD"` -> `fresh="built on a commit HEAD cannot reach"` (`bash -n` clean) | `Tests  1 failed \| 46 passed (47)` — *the canonical overview's graph-card bullet never names the `built on a commit HEAD cannot reach` state the hook prints*. Across the three harvest suites: `Test Files  3 failed (3)` / `Tests  3 failed \| 123 passed (126)` — one row each, where the README had none |
+  | `README.md`: `freshness unmeasured` -> `freshness unknowable` in the R1 bullet (the gap's own mutation) | `Tests  1 failed \| 46 passed (47)` — *never names the `freshness unmeasured` state the hook prints*; previously `197 passed (197)` |
+  | `README.md`: `Freshness is **ancestry, not distance**` -> `Freshness is **a distance from HEAD**` | `Tests  1 failed \| 46 passed (47)` — *the R1 bullet quotes the card words but not the ancestry rule that picks them* |
+  | `ccd/session-hook.sh`: decide `[ "$behind" -eq 0 ]` before `[ "$ahead" -gt 0 ]` (`bash -n` clean) | `Tests  1 failed \| 46 passed (47)` — *decides `behind` before `ahead`, so a graph at zero distance on an unreachable commit now reads `fresh` — D-1353 was reversed: expected 'behind' to be 'ahead'* |
+  | unmutated | `Tests  47 passed (47)` (whole file) |
+
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

@@ -672,6 +672,95 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
+describe("README R1's freshness vocabulary is HARVESTED from the hook, not remembered (D-1363)", () => {
+  // THE GAP THIS CLOSES. D-1340/D-1342 established the binding idiom for the
+  // read side: a doc that quotes the card's words is harvested against
+  // `ccd/session-hook.sh`'s own `fresh="…"` assignments, so a word the hook
+  // stops printing reddens the doc that branches on it. That idiom was applied
+  // to exactly two docs — `wave-lifecycle.md`'s graph-card paragraph
+  // (`coordinator-skill.test.ts`) and worker clause 12
+  // (`worker-skill.test.ts`) — and NOT to README.md, which CLAUDE.md
+  // designates the canonical system overview and which quotes all four states
+  // in its R1 bullet.
+  //
+  // MEASURED before it was written: replacing the README's `not an ancestor of
+  // HEAD` with `built off a commit HEAD cannot reach`, and `freshness
+  // unmeasured` with `freshness unknowable` — two cards the hook never prints
+  // — left all five graphify-adjacent suites green (197/197). The README-side
+  // guard above is a TOKEN census (`SessionStart`, `additionalContext`,
+  // `clause 12`, …) and says nothing about card words, so the canonical
+  // overview could describe a card that does not exist in the one direction
+  // this branch had already fixed twice elsewhere.
+  const hook = readFileSync(path.resolve(REPO, 'ccd/session-hook.sh'), 'utf8');
+  const readme = readFileSync(path.resolve(REPO, 'README.md'), 'utf8');
+
+  /** Every freshness word the card can carry, harvested from the hook's own
+   *  assignments and normalised over the count (`$behind commits behind HEAD`
+   *  / `1 commit behind HEAD` → `behind HEAD`) — the twin of the harvests in
+   *  `coordinator-skill.test.ts` and `worker-skill.test.ts`, deliberately
+   *  copied rather than shared: those files pin their own docs and neither
+   *  exports it, and a helper module extracted for three call sites would put
+   *  the vocabulary one indirection away from the file that WRITES it. */
+  const FRESHNESS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
+      'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
+      'looking at the wrong file');
+    return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
+  })();
+
+  /** Word-BOUNDARY match, never a raw substring (D-1342). `fresh` is a
+   *  substring of `freshness unmeasured`, so a `toContain` arm for the one
+   *  state that licenses trusting the graph passes on the longer word alone
+   *  and can never fail. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  /** The R1 bullet alone, by its own opener, ending at the next list item —
+   *  scoping matters: `fresh` and `behind HEAD` appear elsewhere in a 1900-line
+   *  README, and a whole-file match would go green on a bullet that had lost
+   *  the words entirely. Whitespace is collapsed because the bullet wraps
+   *  `freshness\n  unmeasured` across two lines, and re-flowing identical prose
+   *  must not redden a guard that exists to keep that prose correct. */
+  const card = (): string => {
+    const start = readme.indexOf('**The graph card (R1).**');
+    expect(start, 'README.md carries no `**The graph card (R1).**` bullet at all — the read-side ' +
+      'section moved or was reworded, and this guard must be re-derived against it')
+      .toBeGreaterThanOrEqual(0);
+    const rest = readme.slice(start);
+    const end = rest.search(/\n- \*\*/);
+    return rest.slice(0, end === -1 ? undefined : end).replace(/\s+/g, ' ');
+  };
+
+  it('names every freshness state the hook can print, in the R1 bullet itself', () => {
+    for (const word of FRESHNESS) {
+      expect(card(), `the canonical overview's graph-card bullet never names the \`${word}\` ` +
+        'state the hook prints').toMatch(wordRe(word));
+    }
+  });
+
+  it('states the ancestry rule, not a distance-only reading of the pair (D-1353)', () => {
+    // The vocabulary alone is not the claim. `ahead > 0` is checked BEFORE
+    // `behind === 0` (`ccd/session-hook.sh`), so a graph built on a commit HEAD
+    // cannot reach is `not an ancestor of HEAD` even at zero distance — the
+    // README saying the four words while describing freshness as a distance
+    // would be right in its nouns and wrong in its rule.
+    //
+    // DERIVED FROM ORDER, not from a spelling: the arms are listed in the order
+    // the `if/elif` chain decides them, and the claim is only that the `ahead`
+    // arm is first. `-gt 0` could become `-ge 1` without changing the rule, and
+    // a guard that reddens on that teaches the next editor to delete it.
+    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then fresh=/g)]
+      .map((m) => m[1]!);
+    expect(arms.length, 'ccd/session-hook.sh no longer decides freshness on an `ahead`/`behind` ' +
+      'chain — this pin is looking at the wrong file').toBeGreaterThan(1);
+    expect(arms[0], 'ccd/session-hook.sh decides `behind` before `ahead`, so a graph at zero ' +
+      'distance on an unreachable commit now reads `fresh` — D-1353 was reversed').toBe('ahead');
+    expect(card(), 'the R1 bullet quotes the card words but not the ancestry rule that picks them')
+      .toMatch(/ancestry, not distance/);
+  });
+});
+
 describe("the retirement's evidence sentence names the window its numbers came from (D-1357, D-1362)", () => {
   // THE DEFECT THIS EXISTS FOR. The justification for retiring D-1243 is one
   // measurement, and the design spec that measured it reports TWO windows over
