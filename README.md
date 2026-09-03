@@ -1590,6 +1590,17 @@ The `PreToolUse` speed bump — one deny on a session's first `Grep` in a tree w
 `graphQueries` of 0 — was considered and **declined**: `PreToolUse` fires for subagents, which never
 saw the card; a deny path would be the first thing in the hook that can wedge a turn; and the counter
 above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
+**And that number is a sample somebody takes, not a series the tree keeps** (D-1365). `graphQueries`
+is live state only: the hook rewrites it in `~/.cc-sessions/<id>.hookstate.json` on every event and
+the server carries it onto `FleetSession` and the `~/.ccrc/state-cache.json` snapshot — nothing
+writes it to `coord.db`, to a run row or to any log, and it resets on every `SessionStart` that is
+not a `resume`, which for a dispatched worker means per-wave (dispatch `/clear`s the worker from
+wave 2 on). So *"revisit with one week of R4 data"* names an act somebody performs: a week or more
+after this branch deploys, read the `graph N` chips across the live fleet on one dated day — how
+many sessions carry a chip, how many read `graph 0`, and the total — and record that reading in
+`docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s `## Deviations found`, the
+way §0 of the design recorded the retired block's own effect. Until that entry exists the revisit
+has no number, and a decline whose condition nobody can evaluate is re-derived rather than revisited.
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its

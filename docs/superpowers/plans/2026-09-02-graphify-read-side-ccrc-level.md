@@ -3358,6 +3358,52 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | read the whole `SKILL.md` instead of the frontmatter description (`_gfx_desc="$(cat "$STAGE/SKILL.md")"`) | `Tests  2 failed \| 5 passed (7)` — the body's own `graphify query` masked both drifted descriptions |
   | unmutated | `Tests  7 passed (7)` (whole file) |
 
+- **D-1365** (2026-09-03, completeness pass) — **R5's decline is conditional on a number nobody was
+  told to take, and nothing in the tree retains it.** §2 R5 declines the `PreToolUse` speed bump on
+  three grounds, and the third is a measurement: *"R4 makes adoption measurable. Gate **after** the
+  number says the card and the clause did not move it — not before there is a number… Revisit with
+  one week of R4 data."* The DECLINE was recorded and pinned (README's R5 paragraph;
+  `ccrc-install-graphify.test.ts`'s `/PreToolUse[\s\S]{0,240}?declined/i`). The DATA it defers to had
+  no retention mechanism of any kind: `graphQueries` exists in `~/.cc-sessions/<id>.hookstate.json`,
+  which the hook rewrites on every event, and on the live `FleetSession` / `~/.ccrc/state-cache.json`
+  snapshot — **MEASURED**: the whole of `server/src` names it in exactly two files, `hookstate.ts`
+  (the reader) and `fleet.ts:435` (the projection), and nothing writes it to `coord.db`, to a run
+  row, to the ledger or to any series. It also resets on every `SessionStart` that is not a `resume`
+  (`ccd/session-hook.sh`, D-1248), and dispatch `/clear`s a worker on every wave >= 2 (worker clause
+  1), so a dispatched worker's count is per-wave, not per-week. "One week of R4 data" was therefore
+  obtainable only by somebody sampling chips before each reset, and no surface scheduled or recorded
+  that act — the same shape as the pre-R4 state §0 criticises ("5/5 homes converged was shape; this
+  is effect").
+
+  **Shipped: (a), the cheap arm — the criterion now names the act.** Both R5 texts (README's decline
+  paragraph and spec §2 R5) say that the figure is a **sample somebody takes, not a series the tree
+  keeps**, why (live-state only, reset on every non-`resume` `SessionStart`, per-wave for a
+  dispatched worker), what is read (R4's own `graph N` chips across the live fleet, on one dated
+  day, a week or more after deploy) and where the reading is recorded (this file's
+  `## Deviations found`, the way §0's table recorded the retired block's own effect). The spec also
+  names arm (b) — stamping a worker's `graphQueries` into its run row at wave close, which would make
+  the week's figure re-derivable — and puts it out of this round's scope; spec §4 gains the mutation
+  row. **No reading is taken here:** sampling the live fleet means reading `~/.cc-sessions` and the
+  live `~/.ccrc` state, which this branch's work is forbidden to touch. The act is the operator's,
+  and it is now written down.
+
+  **The guard is derived three ways, not a spelling test** (`ccrc-install-graphify.test.ts`, new
+  describe): the PREMISE is a census of `graphQueries` over all of `server/src`, so the day arm (b)
+  ships it reddens first and both texts get re-derived against a series that then exists; the
+  DESTINATION is extracted from each text by pattern and checked on disk, `## Deviations found`
+  heading and all; the RESET WORD is harvested from the hook's own `!= resume` condition (the D-1363
+  idiom). Both texts are SLICED to their R5 sections — each file names `graphQueries` and the plans
+  directory elsewhere, so a whole-file assertion would stay green with the criterion deleted, which
+  is the hole D-1355 measured twice.
+
+  | mutation | measured |
+  | --- | --- |
+  | delete the added revisit criterion from README's R5 paragraph | `Tests  2 failed \| 49 passed (51)` — "README.md: the revisit criterion names an act…" plus the harvest case, which the same deletion takes with it |
+  | delete the added revisit criterion from spec §2 R5 | `Tests  2 failed \| 49 passed (51)` — "spec §2 R5: the revisit criterion names an act…" plus the harvest case; one row per file, or one of the two texts stays unguarded |
+  | `ccd/session-hook.sh`: reset condition `"$src" != resume` -> `!= resumed` (`bash -n` clean) | `Tests  1 failed \| 50 passed (51)` — the harvest case alone: both texts explain the sampling by a source the hook no longer exempts |
+  | a third `server/src` file names `graphQueries` (one comment in `coord/routes.ts`) | `Tests  1 failed \| 50 passed (51)` — the premise case: *expected [ 'coord/routes.ts', 'fleet.ts', …(1) ] to deeply equal [ 'fleet.ts', 'hookstate.ts' ]* |
+  | unmutated | `Tests  51 passed (51)` (whole file) |
+
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

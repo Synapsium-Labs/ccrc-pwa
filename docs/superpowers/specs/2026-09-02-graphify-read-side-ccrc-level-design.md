@@ -172,7 +172,17 @@ grounds:
 3. R4 makes adoption measurable. Gate **after** the number says the card and the clause did not move it —
    not before there is a number.
 
-Recorded so it is not re-derived. Revisit with one week of R4 data.
+Recorded so it is not re-derived. Revisit with one week of R4 data — **which is a sample somebody
+takes, not a series the tree keeps** (D-1365). R4 projects the count into the hookstate the hook
+rewrites on every event and onto the `FleetSession` / `~/.ccrc/state-cache.json` snapshot; nothing
+persists it to `coord.db`, to a run row or to any log, and it resets on every `SessionStart` that is
+not a `resume`, which for a dispatched worker means per-wave (dispatch `/clear`s the worker from wave
+2 on). The revisit is therefore an act: a week or more after deploy, read the `graph N` chips across
+the live fleet on one dated day — sessions carrying a chip, chips reading `graph 0`, the total — and
+record that reading in `docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s
+`## Deviations found`, the way §0's table recorded the block's own effect. Persisting the counter
+instead (stamping a worker's `graphQueries` into its run row at wave close, so the week's figure is
+re-derivable rather than sampled) is the alternative, and is not in this round's scope.
 
 ## 3. Rings and invariants
 
@@ -198,6 +208,7 @@ Recorded so it is not re-derived. Revisit with one week of R4 data.
 | reader folds an absent `graphQueries` to 0 | null-vs-0 test |
 | clause 12 softened or removed | verbatim pin |
 | `_inst_graph_always_on_off` deletes a chained or malformed block | left-in-place + reported test |
+| R5's revisit criterion names no act that takes the number (and nothing persists it) | derived doc guard over both R5 sections |
 | `_inst_graph_always_on_off` writes through an unresolvable link | skip test |
 | `~/.local/bin/graphify` replaced when it is a hand-written script | refused test |
 | doctor passes with `graphify` resolving outside the venv | FAIL test |

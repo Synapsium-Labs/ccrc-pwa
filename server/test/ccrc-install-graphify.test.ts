@@ -672,6 +672,127 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
+describe("R5's decline defers to a number nobody was told to take (D-1365)", () => {
+  // THE GAP THIS CLOSES. §2 R5 declines the `PreToolUse` speed bump on three
+  // grounds, and the third is CONDITIONAL ON A MEASUREMENT: "R4 makes adoption
+  // measurable. Gate **after** the number says the card and the clause did not
+  // move it — not before there is a number… Revisit with one week of R4 data."
+  // The decline itself was recorded and pinned (the `PreToolUse …declined`
+  // assertion above). The DATA it defers to had no retention mechanism at all:
+  // `graphQueries` exists in `~/.cc-sessions/<id>.hookstate.json`, which the
+  // hook rewrites on every event, and on the live `FleetSession` /
+  // `~/.ccrc/state-cache.json` snapshot — nothing writes it to `coord.db`, to a
+  // run row, to the ledger or to any series — and the hook resets it on every
+  // `SessionStart` that is not a `resume` (D-1248), which for a dispatched
+  // worker means per-wave, since dispatch `/clear`s the worker from wave 2 on.
+  // "One week of R4 data" was therefore obtainable only by somebody sampling
+  // chips before each reset, and no surface scheduled or recorded that act: a
+  // criterion nobody can evaluate is the same shape as the state the spec
+  // criticises three sections earlier ("5/5 homes converged was shape; this is
+  // effect"). Both R5 texts now say how the figure is actually taken.
+  //
+  // DERIVED THREE WAYS, so this is not a spelling test:
+  //  1. THE PREMISE is measured off the tree. If somebody later persists the
+  //     counter (the alternative the spec names — stamping a worker's
+  //     `graphQueries` into its run row at wave close), the census case below
+  //     reddens first and both R5 texts get re-derived against a series that
+  //     then exists, instead of a sample.
+  //  2. THE DESTINATION is EXTRACTED from each text and checked on disk,
+  //     ledger heading and all — naming no file, a file that does not exist, or
+  //     one with no `## Deviations found` to record the reading in, is red.
+  //  3. THE RESET WORD is HARVESTED from the hook's own reset condition (the
+  //     D-1363 idiom), so the day the hook exempts a different `SessionStart`
+  //     source, a text still explaining the sample by `resume` goes red.
+  //
+  // SLICED, not whole-file. Both files name `graphQueries` and the plans
+  // directory elsewhere, so a whole-file assertion would stay green with the
+  // revisit criterion deleted — the hole D-1355 measured twice already.
+  const readme = readFileSync(path.resolve(REPO, 'README.md'), 'utf8');
+  const spec = readFileSync(path.resolve(
+    REPO, 'docs/superpowers/specs/2026-09-02-graphify-read-side-ccrc-level-design.md'), 'utf8');
+  const hook = readFileSync(path.resolve(REPO, 'ccd/session-hook.sh'), 'utf8');
+
+  /** Every doc carrying the R5 decline, with the bounds of the decline itself.
+   *  Both `end` patterns are newline-anchored rather than `^…`/m so neither can
+   *  match at offset 0 — on a slice that starts at its own heading, `/^## /m`
+   *  matches the heading it was meant to stop at. */
+  const R5: { label: string; text: string; start: RegExp; end: RegExp }[] = [
+    {
+      label: 'README.md', text: readme,
+      start: /The `PreToolUse` speed bump/, end: /\n\*\*The sweep\.\*\*/,
+    },
+    {
+      label: 'spec §2 R5', text: spec,
+      start: /^### R5 —/m, end: /\n## /,
+    },
+  ];
+
+  const sliceOf = (c: (typeof R5)[number]): string => {
+    const at = c.text.search(c.start);
+    expect(at, `${c.label} no longer carries the R5 decline where this guard looks — re-derive it`)
+      .toBeGreaterThan(-1);
+    const rest = c.text.slice(at);
+    const end = rest.search(c.end);
+    const body = end === -1 ? rest : rest.slice(0, end);
+    expect(body.length, `${c.label}'s R5 section sliced to nothing — re-derive this guard`)
+      .toBeGreaterThan(200);
+    return body;
+  };
+
+  it('graphQueries lives only in the two live-state sites — the premise both texts state', () => {
+    const root = path.resolve(REPO, 'server/src');
+    const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts'))
+      .filter((f) => readFileSync(path.join(root, f), 'utf8').includes('graphQueries'))
+      .map((f) => f.split(path.sep).join('/'))
+      .sort();
+    expect(hits,
+      'a third server-side site now names graphQueries — if it PERSISTS the count (a run row, ' +
+      "coord.db, a log), R5's revisit reads a series rather than a sample and both R5 texts " +
+      'must be re-derived against it')
+      .toEqual(['fleet.ts', 'hookstate.ts']);
+  });
+
+  for (const c of R5) {
+    it(`${c.label}: the revisit criterion names an act, and the ledger it is recorded in exists`, () => {
+      const body = sliceOf(c);
+      const flat = body.replace(/\s+/g, ' ');
+      expect(flat, `${c.label} no longer records the decline at all — re-derive this guard`)
+        .toMatch(/declined/i);
+      // WHAT is read: R4's own chip, the only rendered surface the count has.
+      expect(flat,
+        `${c.label} defers the gate to a number and names nothing to read it off — the ` +
+        'act has no object')
+        .toMatch(/`graph N` chips?/);
+      // WHERE the reading is recorded, extracted and checked on disk.
+      const dest = body.match(/docs\/superpowers\/plans\/[A-Za-z0-9._-]+\.md/);
+      expect(dest,
+        `${c.label} defers to "one week of R4 data" and names no file the reading is written ` +
+        'into — the criterion states no act anybody performs, which is the gap D-1365 closed')
+        .not.toBeNull();
+      const destPath = path.resolve(REPO, dest![0]);
+      expect(existsSync(destPath),
+        `${c.label} says the reading is recorded in ${dest![0]}, which does not exist`).toBe(true);
+      expect(readFileSync(destPath, 'utf8'),
+        `${dest![0]} carries no "## Deviations found" ledger for the reading to land in`)
+        .toContain('## Deviations found');
+    });
+  }
+
+  it('both R5 texts explain the sampling by the source the hook actually exempts (harvested)', () => {
+    const m = hook.match(
+      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0; fi/);
+    expect(m, "the hook's graphQueries reset moved or was rewritten — re-derive this guard")
+      .not.toBeNull();
+    for (const c of R5) {
+      expect(sliceOf(c).replace(/\s+/g, ' '),
+        `${c.label} explains why the number has to be sampled without naming \`${m![1]}\`, the ` +
+        'one SessionStart source the hook does NOT reset the counter on')
+        .toContain(m![1]!);
+    }
+  });
+});
+
 describe("README R1's freshness vocabulary is HARVESTED from the hook, not remembered (D-1363)", () => {
   // THE GAP THIS CLOSES. D-1340/D-1342 established the binding idiom for the
   // read side: a doc that quotes the card's words is harvested against
