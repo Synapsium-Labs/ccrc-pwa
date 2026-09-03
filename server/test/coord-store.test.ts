@@ -543,11 +543,11 @@ describe('CoordStore: programs', () => {
     expect(s.setDeliveryEnvelope(d.id, '<mail>stamped</mail>')).toEqual({ ok: true });
     expect(s.deliveryEnvelope(d.id)?.envelope).toBe('<mail>stamped</mail>');
 
-    // `markAcked` carries its own terminality guard and ANSWERS `false` when it
-    // declines. Both halves are asserted — its boolean AND the row's state —
-    // because the boolean alone is the setter's report of what it did, not a
-    // reading of the row this test then hands to the method under test.
-    expect(s.markAcked(d.id, Date.now())).toBe(true);
+    // `markAcked` carries its own terminality guard and NAMES its refusal when
+    // it declines (D-1410). Both halves are asserted — its answer AND the row's
+    // state — because the answer alone is the setter's report of what it did,
+    // not a reading of the row this test then hands to the method under test.
+    expect(s.markAcked(d.id, Date.now())).toEqual({ ok: true, state: 'acked' });
     expect(s.delivery(d.id)?.state).toBe('acked');
 
     expect(s.setDeliveryEnvelope(d.id, '<mail>too late</mail>'))
@@ -942,9 +942,11 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', ackedAt: null });
 
     // The late ack lands after the park — `markAcked` must refuse it and say
-    // so honestly (`landed === false`, the same signal a double-ack gives).
+    // so honestly, and since D-1410 say WHICH refusal it is: `why: 'parked'`,
+    // carrying the park's own reason, NOT the `'already-acked'` a double ack
+    // gives. The two used to be one `false`.
     const landed = s.markAcked(d.id, Date.now());
-    expect(landed).toBe(false);
+    expect(landed).toEqual({ ok: false, why: 'parked', state: 'rejected', lastError: MAIL_RUN_CLOSED_ERROR });
     expect(row()).toMatchObject({ state: 'rejected', rejectCode: 'undeliverable', ackedAt: null });
   });
 
@@ -966,7 +968,7 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
 
     const at = Date.now();
     const landed = s.markAcked(d.id, at);
-    expect(landed).toBe(true);
+    expect(landed).toEqual({ ok: true, state: 'acked' });
     // The park history survives IN the now-acked row (I2(b)'s own text: "the
     // resulting row … is the honest record") — `lastError` is untouched,
     // only `state`/`ackedAt` move.
@@ -974,9 +976,11 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
       .get(d.id)).toEqual({ state: 'acked', rejectCode: 'undeliverable',
         lastError: 'replayed without ack past the replay ceiling', ackedAt: at });
 
-    // Idempotent the same way an ordinary ack is: a second call answers
-    // `false` (already acked), never re-applies.
-    expect(s.markAcked(d.id, at + 1)).toBe(false);
+    // Idempotent the same way an ordinary ack is: a second call refuses with
+    // `why: 'already-acked'`, never re-applies. Note the row it reads is now
+    // `state:'acked'` — the park it was is spent, so this refusal is the
+    // ordinary double-ack one and not `'parked'` (D-1410).
+    expect(s.markAcked(d.id, at + 1)).toEqual({ ok: false, why: 'already-acked', state: 'acked' });
   });
 
   // The exception is NARROW — exact match on BOTH `rejectCode` AND
@@ -994,9 +998,18 @@ describe('CoordStore: mail delivery replay (spec:174-180)', () => {
     const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>go</mail>');
     s.rejectDelivery(d.id, 'undeliverable', 'enter-ignored');   // same code, different reason
 
-    expect(s.markAcked(d.id, Date.now())).toBe(false);
+    expect(s.markAcked(d.id, Date.now())).toEqual({ ok: false, why: 'parked', state: 'rejected', lastError: 'enter-ignored' });
     expect(s.db.prepare('SELECT state, ackedAt FROM mail_deliveries WHERE id = ?').get(d.id))
       .toEqual({ state: 'rejected', ackedAt: null });
+  });
+
+  it('markAcked tells an id that names no row apart from one it refuses', () => {
+    // D-1410. Unreachable through `POST /api/mail/:id/ack` — `coord.delivery(id)`
+    // 404s `unknown-recipient` first, and nothing in this tree DELETEs a
+    // delivery row — so the store is the only place this arm can be measured.
+    // It exists because the store may not assume its caller pre-checked.
+    const s = store();
+    expect(s.markAcked(999_999, Date.now())).toEqual({ ok: false, why: 'absent' });
   });
 
   // D-1407. The guard on `cancelOutstandingDeliveries`
@@ -1781,7 +1794,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const ids = waves(s);
     const acked = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
     const parked = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
-    expect(s.markAcked(acked, 1_776_000_000_000)).toBe(true);
+    expect(s.markAcked(acked, 1_776_000_000_000)).toEqual({ ok: true, state: 'acked' });
     s.rejectDelivery(parked, 'undeliverable', 'recipient session is stopped');
     // …and one live row beside them, so a mutation that drops the state clause
     // cannot pass by moving nothing at all.

@@ -233,6 +233,21 @@ export type SetEnvelopeResult =
   | { ok: false; why: 'absent' }
   | { ok: false; why: 'terminal'; state: MailDeliveryState };
 
+/** `markAcked`'s answer. The boolean it replaces collapsed the store's refusal
+ *  reasons into one value, and at the HTTP seam collapsed ALREADY-ACKED with
+ *  PARKED — `already: !landed` said the same thing about "somebody already
+ *  acked this" and "this delivery was parked and your ack changed nothing".
+ *  Worker-skill clause 3 is "Ack before you act", so the second one, read as
+ *  the first, is a worker starting a wave on a brief the lane has abandoned.
+ *  Same remedy as `bumpReplayCount`'s union below and `SetWorkItemResult`
+ *  above: the union is the fix; the guard alone is not
+ *  (D-1410). */
+export type MarkAckedResult =
+  | { ok: true; state: 'acked' }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'already-acked'; state: MailDeliveryState }
+  | { ok: false; why: 'parked'; state: MailDeliveryState; lastError: string | null };
+
 /** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
  *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
  *  where a value would slip into the statement text. One home, and it can emit
@@ -2298,14 +2313,16 @@ export class CoordStore {
     ).run(at, id);
   }
 
-  /** false when already acked, absent, or PARKED — an ack is idempotent, but
-   *  the CALLER (the ack route) needs to know whether ITS call was the one
-   *  that landed, so a double-ack (or a late ack racing a park) answers
-   *  honestly rather than reporting success twice. `'rejected'` joins
-   *  `'acked'` in the refusal (fix — scoped-verify H2): a park is a DECISION
-   *  that this delivery is done — undeliverable, and terminal — the same
-   *  reason `markDelivered` above and `rejectDelivery` below both refuse to
-   *  reopen a `'rejected'` row; an ack landing after `POST /api/runs/:id/close` ->
+  /** Refuses — and NAMES the refusal — when already acked, absent, or PARKED
+   *  (D-1410). An ack is idempotent, but the CALLER (the ack route) needs to
+   *  know whether ITS call was the one that landed, so a double-ack (or a late
+   *  ack racing a park) answers honestly rather than reporting success twice;
+   *  and it needs the two refusals APART, which one boolean could not give it.
+   *  `'rejected'` joins `'acked'` in the refusal (fix — scoped-verify H2): a
+   *  park is a DECISION that this delivery is done — undeliverable, and
+   *  terminal — the same reason `markDelivered` above and `rejectDelivery`
+   *  below both refuse to reopen a `'rejected'` row; an ack landing after
+   *  `POST /api/runs/:id/close` ->
    *  `cancelOutstandingDeliveries` (or a replay-ceiling/reaped-recipient
    *  park) already committed had no such guard, so it flipped the row to
    *  `{state:'acked', rejectCode:'undeliverable'}` — self-contradictory, and
@@ -2331,18 +2348,37 @@ export class CoordStore {
    *  (both columns, not merely `state='rejected'`) so no OTHER park —
    *  `cancelOutstandingDeliveries`'s `'run closed'`, the never-delivered
    *  `MAIL_MAX_ATTEMPTS` park, an `enter-ignored` park — is ever let back in
-   *  through this door; every one of those stays refused, unchanged. */
-  markAcked(id: number, at: number): boolean {
-    const row = this.db.prepare('SELECT state, rejectCode, lastError FROM mail_deliveries WHERE id = ?')
-      .get(id) as { state: string; rejectCode: string | null; lastError: string | null } | undefined;
-    if (!row || row.state === 'acked') return false;
-    const isAbandonedReplayPark = row.state === 'rejected'
-      && row.rejectCode === 'undeliverable' && row.lastError === MAIL_REPLAY_CEILING_ERROR;
-    if (row.state === 'rejected' && !isAbandonedReplayPark) return false;
-    this.db.prepare('UPDATE mail_deliveries SET state = ?, ackedAt = ?, '
-      + 'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ?')
-      .run('acked', at, id);
-    return true;
+   *  through this door; every one of those stays refused, unchanged.
+   *
+   *  THE GUARD IS NOW IN THE `WHERE`, not in the two `if`s that used to precede
+   *  the write, and the I2(b) exception rides in the same clause as an `OR` on
+   *  both columns. The SELECT no longer DECIDES — it only LABELS a refusal the
+   *  UPDATE already made, which closes the read-then-write window this method
+   *  carried: in-process it was airtight (synchronous `DatabaseSync`, no
+   *  `await` between the two statements), but that safety was a property of the
+   *  runtime, not of the row, and one added `await` would have removed it
+   *  silently. An out-of-vocabulary `state` token still passes — the negative
+   *  form is true of anything that is not in `TERMINAL_DELIVERY_STATES` — which
+   *  is exactly the behaviour this method had before and is deliberately NOT
+   *  changed here: whether an unnameable state is terminal is an open design
+   *  question (D-1406), and answering it inside a refactor
+   *  would be deciding it by accident. */
+  markAcked(id: number, at: number): MarkAckedResult {
+    // UPDATE FIRST, then label. One statement decides; the read that follows is
+    // only there to say WHICH refusal it was.
+    const res = this.db.prepare(
+      'UPDATE mail_deliveries SET state = ?, ackedAt = ?, '
+      + 'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL '
+      + `WHERE id = ? AND (state NOT IN ${TERMINAL_DELIVERY_SQL} `
+      + "OR (state = 'rejected' AND rejectCode = 'undeliverable' AND lastError = ?))",
+    ).run('acked', at, id, MAIL_REPLAY_CEILING_ERROR);
+    if (Number(res.changes) > 0) return { ok: true, state: 'acked' };
+    const row = this.db.prepare('SELECT state, lastError FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string; lastError: string | null } | undefined;
+    if (!row) return { ok: false, why: 'absent' };
+    const state: MailDeliveryState = isMailDeliveryState(row.state) ? row.state : 'unknown';
+    if (row.state === 'acked') return { ok: false, why: 'already-acked', state };
+    return { ok: false, why: 'parked', state, lastError: row.lastError };
   }
 
   /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — scoped-verify H1, the

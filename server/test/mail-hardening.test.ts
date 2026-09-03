@@ -170,7 +170,7 @@ describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)',
   it('markIngested leaves an ACKED row alone', () => {
     const s = store();
     const d = deliveredRow(s);
-    expect(s.markAcked(d.id, now + 1)).toBe(true);
+    expect(s.markAcked(d.id, now + 1)).toEqual({ ok: true, state: 'acked' });
     s.markIngested(d.id, now + 100);
     expect(s.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(d.id))
       .toEqual({ ingestedAt: null });
@@ -204,7 +204,7 @@ describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)',
       .toEqual({ replayCount: 0 });
 
     const acked = deliveredRow(s);
-    expect(s.markAcked(acked.id, now + 1)).toBe(true);
+    expect(s.markAcked(acked.id, now + 1)).toEqual({ ok: true, state: 'acked' });
     expect(s.bumpReplayCount(acked.id)).toEqual({ state: 'terminal' });
     expect(s.db.prepare('SELECT replayCount FROM mail_deliveries WHERE id = ?').get(acked.id))
       .toEqual({ replayCount: 0 });
@@ -247,7 +247,7 @@ describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)',
   it('noteGate leaves an ACKED row\'s gate columns alone', () => {
     const s = store();
     const d = deliveredRow(s);
-    expect(s.markAcked(d.id, now + 1)).toBe(true);
+    expect(s.markAcked(d.id, now + 1)).toEqual({ ok: true, state: 'acked' });
     expect(stateOf(s, d.id)).toBe('acked');
     expect(gates(s, d.id)).toEqual({ lastGate: null, gateAt: null, gateCount: 0, gateSince: null });
     s.noteGate(d.id, 'not-idle', now + 100, false, null);
