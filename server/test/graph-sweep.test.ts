@@ -237,6 +237,52 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
     const hits = paths().filter((p) => fs.realpathSync(p) === real);
     expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
   });
+
+  // D-1370 — WHICH of the two names survives the dedupe, not merely how many.
+  // The case above symlinks WITHIN `projects/`, where both names are equally
+  // arbitrary and only the count is a claim. Across the two roots the names
+  // are NOT equal: one is the tree's real path, the one a session's
+  // `$REG/<id>.workdir` and the card's `cwd` actually carry, and the census
+  // row is compared against those VERBATIM by both readers. Glob order alone
+  // handed the row to `$PROJECTS_ROOT` — the alias — measured: the pass
+  // carried one row and it was `…/projects/foo`, with the real workspace path
+  // absent from the pass entirely.
+  it('keeps the REAL path, not the alias, when the two names live under different roots', () => {
+    const realTree = makeWorktreeRoot('foo'); plantEngine();
+    fs.mkdirSync(j('projects'), { recursive: true });         // no makeRepo() here to make it
+    fs.symlinkSync(realTree, j('projects', 'foo'));          // an alias, globbed FIRST
+    expect(runSweep().status).toBe(0);
+    const canonical = fs.realpathSync(realTree);
+    const hits = paths().filter((p) => fs.realpathSync(p) === canonical);
+    expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
+    expect(hits[0], 'the census carries the ALIAS — every reader that matches the row by string ' +
+      '(the idle gate, the card) is unmatched for a session recorded under the real path')
+      .toBe(realTree);
+  });
+
+  // The EFFECT the row's spelling decides, not just the spelling. `_gs_busy`
+  // matches a session by raw string compare of `$REG/<id>.workdir` against the
+  // as-globbed path, so an alias row means the idle gate never fires and the
+  // sweep builds under a working session — the one thing that gate exists to
+  // prevent.
+  it('an alias row would unmatch the idle gate — a session on the real path still defers it', () => {
+    seedAccountsSh(home);
+    const realTree = makeWorktreeRoot('foo'); plantEngine();
+    fs.mkdirSync(j('projects'), { recursive: true });
+    fs.symlinkSync(realTree, j('projects', 'foo'));
+    const reg = j('.cc-sessions'); fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, 'foo-ws1.workdir'), realTree + '\n');   // the REAL name
+    fs.writeFileSync(path.join(reg, 'foo-ws1.wrapper'), 'claude\n');
+    fs.writeFileSync(path.join(reg, 'foo-ws1.hookstate.json'),
+      JSON.stringify({ pid: 4242, state: { state: 'working' } }));
+    const cfg = j('.claude'); fs.mkdirSync(path.join(cfg, 'sessions'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'sessions', '4242.json'), JSON.stringify({ state: 'working' }));
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(realTree), 'the sweep built a graph under a WORKING session because its ' +
+      'census row named the alias and the idle gate matches by string').toBe('skipped-busy');
+    expect(fs.existsSync(j('engine-calls')),
+      'the engine ran on a tree the idle gate should have deferred').toBe(false);
+  });
 });
 
 describe('graph-sweep: build discriminators (Task 7)', () => {
@@ -740,6 +786,26 @@ describe('graph-sweep: freshness is CONTENT, not commit identity (D-1368)', () =
     expect(outcomeOf(repo), 'a tree whose content could not be measured at all was called fresh')
       .toBe('stale-rebuilt');
     expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+  });
+
+  // D-1369 — the mirror image. `built_at_commit` is repo-controlled text, and
+  // D-1368 made the sweep spend it as a git REVISION for the first time. A rev
+  // NAME peels on both sides of the equality and compares trivially equal, so
+  // the tree reads `fresh` for ever and is never rebuilt again — where the old
+  // string compare simply failed for a rev name and the tree rebuilt every
+  // pass. `fresh` is what the census reports, so nothing surfaces it.
+  it('a built_at_commit that is a rev NAME is not a sha, and never resolves to "fresh"', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                   // seed a graph + stamp
+    expect(engineCalls()).toBe(1);
+    fs.writeFileSync(path.join(repo, 'graphify-out', 'graph.json'),
+      JSON.stringify({ nodes: [], links: [], built_at_commit: 'HEAD' }));
+    bump(repo);                                                   // real content, genuinely stale
+    runSweep();
+    expect(outcomeOf(repo), 'a self-referential revision compared equal to itself and a genuinely '
+      + 'stale graph was declared fresh').toBe('stale-rebuilt');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+    expect(engineCalls(), 'the sweep never rebuilt the stale tree at all').toBe(2);
   });
 
   it('a GARBAGE-COLLECTED built commit is unmeasurable, and falls through to stale/head', () => {

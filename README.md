@@ -1543,11 +1543,17 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   node count, the commit the graph was built at, how that commit stands to `HEAD`, and the
   engine/pin pair — sessions were measured querying 0.9.9 graphs with an unversioned July build, and
   that drift is otherwise invisible until a query fails strangely. Every clause is omitted rather than
-  guessed when its read does not answer. Freshness is **ancestry, not distance** (D-1353): the card
-  says `fresh`, `N commits behind HEAD`, `not an ancestor of HEAD` — the graph was built on a tree
-  this session cannot reach, so it describes code the session does not have — or `freshness
-  unmeasured`, which is said out loud rather than left silent, because a card that names a sha and
-  then says nothing about it reads as neutral. No `graph.json` prints **nothing**, except that when
+  guessed when its read does not answer. Freshness is **content first, then ancestry** (D-1368,
+  D-1353). CONTENT decides first: a graph whose `built^{tree}` equals `HEAD^{tree}` describes this
+  tree exactly, so it is `fresh` however its commit stands to `HEAD` — a squash merge rewrites the
+  commit and keeps every byte — and that is printed as `fresh — same content as HEAD` when the
+  built commit is not `HEAD` itself, a qualifier on the state rather than a state of its own, so a
+  reader can tell "built here" from "built elsewhere, same bytes" while still branching on the one
+  word. Only when the trees DIFFER does ancestry decide, and there it is **ancestry, not
+  distance**: the card says `fresh`, `N commits behind HEAD`, `not an ancestor of HEAD` — the graph
+  was built on a tree this session cannot reach, so it describes code the session does not have —
+  or `freshness unmeasured`, which is said out loud rather than left silent, because a card that
+  names a sha and then says nothing about it reads as neutral. No `graph.json` prints **nothing**, except that when
   `~/.ccrc/graph-sweep.json` carries a row for the tree the sweep's own refusal reason is printed
   instead, clipped to 400 characters (it is repo-controlled text off an engine's stderr).
   `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never

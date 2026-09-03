@@ -76,16 +76,34 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # The question a candidate has to answer is not "are you inside a tree" but
 # "ARE YOU A TREE": the realpath of its own `--show-toplevel` is the realpath
 # of itself. `$WORKTREES_ROOT`/*/ joins the glob so the depth-1 shape is asked
-# at all, and the two worktree globs now overlap — so candidates are deduped by
-# realpath, which also collapses two names (a symlink and its target) that
-# reach one tree and would otherwise be built twice.
+# at all.
 #
-# The row keeps the path AS GLOBBED, not the canonical one: `$REG/<id>.workdir`
-# and the hook's `cwd` are compared against it verbatim, and canonicalising the
-# census would silently unmatch every reader.
+# D-1370 — WHAT THE DEDUPE IS ACTUALLY FOR, AND WHICH NAME SURVIVES IT. The
+# three globs are DISJOINT as paths: `~/worktrees/a/b` is never `~/worktrees/c`
+# and never `~/projects/c`, so no candidate is ever globbed twice and the
+# "the two worktree globs now overlap" rationale this comment used to carry was
+# false. The one thing that does collapse two candidates onto one tree is a
+# SYMLINK — an alias under one root pointing at a real tree under another —
+# and there the survivor must be a DECISION, because glob order alone hands it
+# to whichever root is listed first ($PROJECTS_ROOT), i.e. to the alias.
+#
+# That matters because of the contract in the next paragraph: the row keeps the
+# path AS GLOBBED, not the canonical one — `$REG/<id>.workdir` and the hook's
+# `cwd` are compared against it VERBATIM (`_gs_busy`'s string compare;
+# `ccd/session-hook.sh`'s `.path == $p` census lookup), and canonicalising the
+# census would silently unmatch every reader. A census carrying the ALIAS
+# unmatches them just as silently for a session recorded under the real name:
+# no idle-gate match (the sweep builds while that session is `working`, the one
+# thing the gate exists to prevent) and no "the sweep refused this tree" card.
+# MEASURED: with a real tree at `~/worktrees/foo` and `~/projects/foo` a
+# symlink to it, the pass carried exactly one row and it was the alias.
+#
+# So: prefer the candidate that is its OWN realpath — the tree named by its
+# real path — and fall back to first-seen when neither name is (two symlinks,
+# where the names are equally arbitrary and only the count matters).
 _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
-  local d top real s dup
-  local -a seen=()
+  local d top real i dup
+  local -a seen=() named=()
   for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
@@ -94,14 +112,22 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
     top="$(_gs_realpath "$top")" || continue
     real="$(_gs_realpath "$d")" || continue
     [ "$top" = "$real" ] || continue
-    dup=0
-    for s in ${seen[@]+"${seen[@]}"}; do
-      [ "$s" = "$real" ] && { dup=1; break; }
-    done
-    [ "$dup" -eq 1 ] && continue
-    seen+=("$real")
-    printf '%s\n' "$d"
+    dup=-1
+    if [ "${#seen[@]}" -gt 0 ]; then
+      for i in "${!seen[@]}"; do
+        if [ "${seen[$i]}" = "$real" ]; then dup="$i"; break; fi
+      done
+    fi
+    if [ "$dup" -ge 0 ]; then
+      # already censused under another name: the real name displaces an alias,
+      # nothing displaces the real name.
+      [ "$d" = "$real" ] && named["$dup"]="$d"
+      continue
+    fi
+    seen+=("$real"); named+=("$d")
   done
+  [ "${#named[@]}" -gt 0 ] && printf '%s\n' "${named[@]}"
+  return 0
 }
 
 # D-1368 — FRESHNESS IS CONTENT, NOT COMMIT IDENTITY. This file's ONE spelling
@@ -123,6 +149,20 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
 # clause states ("staleness is measured or it is not claimed").
 _gs_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
   local t="$1" bt ht
+  # D-1369 — THE BUILT SHA IS REPO-CONTROLLED TEXT, AND THIS IS THE FIRST PLACE
+  # THE SWEEP SPENDS IT AS A GIT REVISION. `built_at_commit` comes out of a
+  # graph.json any tree can write; the old `[ "$built" = "$head" ]` compared it
+  # as a STRING, where a rev NAME is simply unequal and the tree rebuilds. A
+  # peel resolves it: `HEAD^{tree}` on both sides of an equality is trivially
+  # equal, so a graph stamped `"built_at_commit":"HEAD"` (or `@`, or a branch
+  # name) would read `fresh` for ever and never be rebuilt again — the mirror
+  # image of the wedge D-1368 was written to fix, and invisible in the census
+  # because `fresh` is what it reports. The card already holds this contract
+  # one line earlier than its own peel (`ccd/session-hook.sh`:
+  # `[[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""`); the sweep holds it here.
+  # MEASURED against the shipped script with a fixture HOME: `built_at_commit`
+  # `HEAD` plus a real content commit read `fresh`, engine calls 1.
+  [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || return 1
   bt="$(git -C "$t" rev-parse --verify -q "$2^{tree}" 2>/dev/null)" || bt=""
   ht="$(git -C "$t" rev-parse --verify -q 'HEAD^{tree}' 2>/dev/null)" || ht=""
   [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
