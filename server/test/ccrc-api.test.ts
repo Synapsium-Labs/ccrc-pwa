@@ -453,3 +453,82 @@ describe('whoami: the pane is the proof', () => {
     expect(r.stdout).toContain('no-uuid');
   });
 });
+
+describe('ledger allocate carries an identity, or refuses', () => {
+  const BODY = '{"project":"p","count":2,"title":"t"}';
+
+  it('fills byId from this pane when the body names none', async () => {
+    plantPane('demo-ws');
+    await run(['ledger', 'allocate', '--json', '-'], BODY, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]!.body))
+      .toEqual({ byId: 'demo-ws', project: 'p', count: 2, title: 't' });
+  });
+
+  it('sends NOTHING when there is a body and no derivable identity', async () => {
+    plantPane('someone-else');                       // tmux WOULD answer
+    const r = await run(['ledger', 'allocate', '--json', '-'], BODY,
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen, 'an unattributed allocate reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+  });
+
+  it('refuses a present-but-BLANK byId rather than laundering it into the column', async () => {
+    // What a derivation that failed on the caller's side produces. The route
+    // stores '' with the same confidence as a real id, so the refusal has to
+    // happen here or not at all.
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'],
+      '{"byId":"","project":"p"}', { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('refuses a body that is not a JSON object rather than splicing into it', async () => {
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'], '[1,2]', { TMUX_PANE: '%7' });
+    expect(seen, 'a spliced non-object reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('--by is the door for a caller with no pane', async () => {
+    await run(['ledger', 'allocate', '--by', 'ci-runner', '--json', '-'], BODY,
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]!.body).byId).toBe('ci-runner');
+  });
+
+  it('--by is refused on every other row, and its value must be a plain id', async () => {
+    const a = await run(['claims', 'take', '--by', 'x', '--json', '-'], '{}');
+    expect(a.status).not.toBe(0);
+    expect(seen).toHaveLength(0);
+    const b = await run(['ledger', 'allocate', '--by', 'a b', '--json', '-'], BODY);
+    expect(b.status).not.toBe(0);
+    expect(b.stdout).toContain('bad-by');
+    expect(seen).toHaveLength(0);
+  });
+
+  // GREEN BEFORE AND AFTER — pins on the new code's restraint, reddable only by
+  // Step 5's mutations (ii) and (v). Written down because without them the two
+  // decisions they record would be true by accident.
+  it('leaves a caller-supplied byId exactly as written', async () => {
+    plantPane('demo-ws');
+    await run(['ledger', 'allocate', '--json', '-'],
+      '{"byId":"chosen","project":"p"}', { TMUX_PANE: '%7' });
+    expect(seen[0]!.body).toBe('{"byId":"chosen","project":"p"}');
+  });
+
+  it('a BODYLESS allocate is untouched — there is nothing to attribute', async () => {
+    // The scope decision, pinned: the rule is about a body THIS CLIENT SENDS,
+    // and the closed-table row above already exercises the path with none.
+    // Without this case that row would stay green for a reason nobody stated.
+    const r = await run(['ledger', 'allocate'], undefined,
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
+  });
+});

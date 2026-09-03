@@ -114,6 +114,7 @@ usage() {
       printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
     done
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+    printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
   } >&2
 }
 
@@ -167,6 +168,14 @@ read_token() {
 # (your TMUX_PANE is not a pane id) are different facts to whoever reads them —
 # "run me inside a session" against "your environment is lying" — and collapsing
 # them is the overloaded value this repo forbids at a seam.
+#
+# THERE IS ONE FLAG, AND IT DECLARES RATHER THAN FORGES. `--by <id>`, on the
+# `ledger allocate` row alone, names a caller that HAS no pane — a contributor at
+# a shell or in CI, whom CONTRIBUTING.md sends to this allocator and for whom
+# auth/gate.ts's EXEMPT entry keeps the door open. It is refused on every other
+# row, and a session in a pane is filled from its pane. What is still
+# deliberately absent is any way to answer AS another session on a route that
+# checks attribution.
 DERIVED_ID=''
 DERIVED_UUID=''
 derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call it
@@ -225,12 +234,17 @@ main() {
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
   fi
 
-  local body_src='' query=''
+  local body_src='' query='' by=''
   while (( $# )); do
     case "$1" in
       --json)
         [[ $# -ge 2 ]] || refuse 'bad-args' '--json needs a file or -'
         body_src="$2"; shift 2 ;;
+      --by)
+        [[ $# -ge 2 ]] || refuse 'bad-args' '--by needs a value'
+        [[ "$key" == 'ledger.allocate' ]] || refuse 'bad-args' "$group $verb takes no --by"
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-by' '--by value is not a plain session id'
+        by="$2"; shift 2 ;;
       --*)
         local k="${1#--}" v
         [[ $# -ge 2 ]] || refuse 'bad-args' "--$k needs a value"
@@ -252,6 +266,50 @@ main() {
       [[ -r "$body_src" ]] || refuse 'no-body' "cannot read $body_src"
       body=$(cat -- "$body_src")
     fi
+  fi
+
+  # THE ONE BODY THIS CLIENT REWRITES, and the first in its history. Measured
+  # 2026-09-02: at least 101 of this project's allocations already carry an empty
+  # holder, because the documented body omits `byId` and the route stores
+  # `byId ?? ''` — an omitted field and an explicit empty string reaching one
+  # column. That 101 is a FLOOR that can only grow, which is why it may stand
+  # here: nothing in the tree UPDATEs `allocatedTo`, and `LedgerLog.append` has
+  # already put each of those lines in the append-only log, so no repair can
+  # lower it. The route may not change (operator ruling), so the fill happens
+  # here: from the pane, or from `--by`, or not at all.
+  #
+  # NEVER AN OVERRIDE. If the body already names `byId` it is left alone. The
+  # test is TEXTUAL, over a whitespace-stripped COPY (so `"byId" : ""` reads the
+  # same as `"byId":""`), and it errs toward not touching the body — the safe
+  # direction, since duplicate keys resolve last-wins and a splice would silently
+  # change precedence. A blank one is REFUSED rather than passed through: that is
+  # exactly what a derivation that failed on the caller's side produces. The
+  # textual test's limit, stated rather than hidden: a title whose own text
+  # carries an escaped `"byId":` either suppresses the fill (safe) or trips the
+  # blank refusal (loud). Neither is silent, which is the property that matters.
+  #
+  # THE SPLICE IS SAFE BECAUSE OF SAFE_RE. Both `$by` and the derived id admit no
+  # quote and no backslash, so neither can escape the JSON string it lands in.
+  if [[ "$key" == 'ledger.allocate' && -n "$body" ]]; then
+    local nb="${body//[[:space:]]/}"
+    case "$nb" in
+      *'"byId":""'*)
+        refuse 'bad-body' 'the body names an EMPTY byId; the allocator would store it as no holder at all' ;;
+    esac
+    case "$nb" in
+      *'"byId":'*) : ;;                      # the caller has spoken
+      *)
+        local who lead rest restnb
+        if [[ -n "$by" ]]; then who="$by"; else derive_identity; who="$DERIVED_ID"; fi
+        lead="${body%%[![:space:]]*}"
+        rest="${body#"$lead"}"
+        [[ "$rest" == '{'* ]] \
+          || refuse 'bad-body' 'the allocate body is not a JSON object; byId cannot be added'
+        rest="${rest#\{}"
+        restnb="${rest//[[:space:]]/}"
+        if [[ "$restnb" == '}' ]]; then body="{\"byId\":\"$who\"}"
+        else body="{\"byId\":\"$who\",$rest"; fi ;;
+    esac
   fi
 
   local base token path url
