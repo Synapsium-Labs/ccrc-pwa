@@ -3444,8 +3444,11 @@ to `UPDATE mail_deliveries_x`. Expect RED on the floor test with
 a scan that quietly stops finding things. `\b` is load-bearing here and was measured: `/UPDATE mail_deliveries\b/`
 does NOT match `UPDATE mail_deliveries_x` (there is no word boundary between `s` and `_`), while an
 unanchored `/UPDATE mail_deliveries/` still would and the mutation would be completely inert.
-`mail-hardening.test.ts` reds ONLY on the floor test under this mutation; on the full suite it also breaks the
-reclaim behaviour in `coord-store.test.ts`, which is expected and is not the measurement.
+`mail-hardening.test.ts` reds TWO tests under this mutation, not one (corrected in review round 1, measured):
+the floor test, and the CLAUDE.md census — renaming the table also drops `cancelKickoffsTo` from the derived
+void set, so `CLAUDE.md and store.ts disagree about which delivery writers return void` fires alongside. Both
+are the same drift seen from two angles. On the full suite it also breaks the reclaim behaviour in
+`coord-store.test.ts`, which is expected and is not the measurement.
 
 **(c) The CLAUDE.md census:** delete `` `noteGate` `` from the void-writer list in `CLAUDE.md`. Expect RED on
 `CLAUDE.md names exactly the delivery-row writers that still return void` with

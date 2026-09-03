@@ -286,6 +286,22 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
   const storeSrc = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
   const srcLines = storeSrc.split('\n');
 
+  /** Comment lines BLANKED rather than removed, so a line index into the result
+   *  still names the real line of the source. ONE strip for both text scans in
+   *  this describe — the guard scan below and the D-1409 call-site scan — so
+   *  that a fix to either is a fix to both. Task 20's SQL scan in
+   *  `single-definition.test.ts` does the same thing for the same reason: a
+   *  docstring that MENTIONS a fragment would otherwise satisfy a scan looking
+   *  for the fragment.
+   *
+   *  LIMIT, stated rather than implied: it strips whole comment LINES only. A
+   *  trailing `// …` after code on the same line survives, because removing
+   *  those correctly needs to know where string literals end (`'https://…'`
+   *  truncates at the wrong place otherwise) and neither scan is defending
+   *  against that shape. */
+  const blankComments = (src: string): string[] =>
+    src.split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l));
+
   /** A single-line method signature at class-member indent, e.g.
    *  `  markIngested(id: number, at: number): void {`. Single-line ON PURPOSE:
    *  the walk-back below names the writer by finding the nearest one above the
@@ -297,9 +313,17 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
    *  from `this.db.prepare(` to the call that executes it, and tagged with the
    *  method it lives in. Anchored on `prepare(` rather than on the SQL verb so
    *  that PROSE naming the table — a docstring explaining one of these guards —
-   *  can never be counted as a twelfth statement. */
-  const writers = (): { line: number; method: string; returns: string; text: string }[] => {
-    const out: { line: number; method: string; returns: string; text: string }[] = [];
+   *  can never be counted as a twelfth statement.
+   *
+   *  `text` is the RAW window — the runaway/docstring check below needs it raw,
+   *  since a blanked comment-close cannot be caught. `code` is the same with
+   *  comment lines blanked, and it is what the guard test reads: MEASURED, a
+   *  twelfth writer carrying `// … names OUTSTANDING_STATES_SQL` and no guard
+   *  in its SQL passed the guard test against `text` (D-1411 review round 1). */
+  const writers = (): { line: number; method: string; returns: string;
+                        text: string; code: string }[] => {
+    const out: { line: number; method: string; returns: string;
+                 text: string; code: string }[] = [];
     const EXEC = /\.(?:run|get|all|iterate)\(/;
     for (const m of storeSrc.matchAll(/this\.db\.prepare\(/g)) {
       const at = m.index!;
@@ -320,7 +344,8 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
         `the walk-back from store.ts:${line} crossed a method close — its signature is not single-line`)
         .toBe(false);
       const sig = SIG.exec(srcLines[sigLine - 1]!)!;
-      out.push({ line, method: sig[1]!, returns: sig[2]!, text });
+      out.push({ line, method: sig[1]!, returns: sig[2]!, text,
+                 code: blankComments(text).join('\n') });
     }
     return out;
   };
@@ -347,8 +372,11 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
   });
 
   it('names OUTSTANDING_STATES_SQL or TERMINAL_DELIVERY_SQL, never a hand-written state list', () => {
+    // `w.code`, not `w.text`: the raw window includes the statement's own
+    // comments, so a writer whose only mention of a fragment is an inline
+    // comment used to pass with no guard in its SQL at all.
     for (const w of writers()) {
-      expect(/OUTSTANDING_STATES_SQL|TERMINAL_DELIVERY_SQL/.test(w.text),
+      expect(/OUTSTANDING_STATES_SQL|TERMINAL_DELIVERY_SQL/.test(w.code),
         `store.ts:${w.line} (${w.method}) writes a delivery row with no shared terminality guard`).toBe(true);
     }
   });
@@ -371,7 +399,11 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     const named = [...listed.matchAll(/`([A-Za-z_$][\w$]*)`/g)].map((m) => m[1]!);
     expect(named, 'the void-writer list in CLAUDE.md came out empty — was the sentence reworded?')
       .not.toEqual([]);
-    const voids = writers().filter((w) => w.returns === 'void').map((w) => w.method);
+    // De-duplicated: a legitimate method holding two delivery writes is a
+    // real shape, and it must red the duplicate-name check above — which is
+    // the honest report — not this one with "CLAUDE.md and store.ts disagree"
+    // naming a method CLAUDE.md does in fact list.
+    const voids = [...new Set(writers().filter((w) => w.returns === 'void').map((w) => w.method))];
     expect([...named].sort(), 'CLAUDE.md and store.ts disagree about which delivery writers return void')
       .toEqual([...voids].sort());
   });
@@ -394,7 +426,13 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
   //     to this scan, while a loose scan costs the guarantee.
   //   • It sees `server/src` only, and only files ending `.ts`.
   //   • Comment lines are blanked before matching, so prose mentioning the
-  //     method is not a call site — proved on this file's own corpus below.
+  //     method is not a call site. What pins that is the strip's OWN premise
+  //     below — a shape pin, not an effect pin. MEASURED (review round 1):
+  //     neutering `blankComments` to an identity map leaves this scan AND the
+  //     guard scan above 18/18 green, because no comment anywhere in
+  //     `server/src` writes a `<ident>.` receiver before this method's name.
+  //     The strip is correct defence against a shape the tree does not
+  //     contain today; it is not load-bearing on the current corpus.
   //   • It cannot see whether the `.ok` branch does anything USEFUL; the
   //     behavioural half is `coord-store.test.ts`'s refusal tests.
   it('every setDeliveryEnvelope call site consumes the result and checks it (D-1409)', () => {
@@ -408,6 +446,13 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     expect(CALL.test('  setDeliveryEnvelope(id: number, envelope: string): SetEnvelopeResult {')).toBe(false);
     expect(BOUND.exec('    const stamped = coord.setDeliveryEnvelope(a, b);')?.[1]).toBe('stamped');
     expect(BOUND.exec('    coord.setDeliveryEnvelope(a, b);')).toBeNull();
+    // The strip's own premise, asserted rather than inferred from an outcome:
+    // all three comment openers blank, code passes through, and the line COUNT
+    // is preserved so an index into the result still names the real line. This
+    // is what goes red if the strip is ever neutered — the corpus, as the
+    // scope limits above record, would not.
+    expect(blankComments('  // a\n   * b\n  /* c\n  const s = coord.setDeliveryEnvelope(a, b);'))
+      .toEqual(['', '', '', '  const s = coord.setDeliveryEnvelope(a, b);']);
 
     const files: string[] = [];
     const walk = (dir: string): void => {
@@ -422,15 +467,31 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
 
     const sites: { at: string; bound: string | null; checked: boolean }[] = [];
     for (const f of files) {
-      // Comment lines are BLANKED rather than removed, so the index below
-      // still names the real line of the file. Same idiom, and the same
-      // stated cost, as `single-definition.test.ts`'s literal scans.
-      const code = readFileSync(f, 'utf8').split('\n')
-        .map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l));
+      // The SAME strip the guard scan above uses, so the index below still
+      // names the real line of the file and there is one comment-strip in
+      // this describe rather than two that can drift apart.
+      const code = blankComments(readFileSync(f, 'utf8'));
       for (let i = 0; i < code.length; i++) {
         if (!CALL.test(code[i]!)) continue;
         const name = BOUND.exec(code[i]!)?.[1] ?? null;
-        const after = code.slice(i + 1, i + 41).join('\n');
+        // The window STOPS at a redeclaration of the same name. This scan is
+        // name-matched, not scope-aware, so without the cut a call site whose
+        // result is never read passes on the strength of a LATER, unrelated
+        // binding that happens to share the name. Both existing sites bind
+        // `stamped` and Task 61 adds a third, so that collision is the
+        // ordinary shape here, not a contrived one. MEASURED: a shadowing
+        // `if (envelope === '') { const stamped = coord.setDeliveryEnvelope(…); }`
+        // planted above the real call in `rundefs.ts` built clean and left
+        // this scan 18/18 green, with the planted site never checked (D-1409
+        // review round 1); with the cut it reds by name.
+        // LIMIT: `const`/`let`/`var` only — a parameter, a catch binding or a
+        // destructured rebinding of the same name is not a redeclaration this
+        // can see, and the cut is a line index, so a redeclaration sharing a
+        // line with the check it should follow would still cut too early.
+        const span = code.slice(i + 1, i + 41);
+        const shadow = name === null ? -1
+          : span.findIndex((l) => new RegExp(`\\b(?:const|let|var)\\s+${name}\\b`).test(l));
+        const after = (shadow < 0 ? span : span.slice(0, shadow)).join('\n');
         sites.push({
           at: `${path.relative(ccrcRoot, f)}:${i + 1}`,
           bound: name,
@@ -447,8 +508,11 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     // more than once.
     expect(sites.length, 'no setDeliveryEnvelope call site found in server/src at all')
       .toBeGreaterThanOrEqual(2);
-    // …and the comment strip really did strip: `store.ts` and `routes.ts` both
-    // discuss this method in prose, and prose is not a call site.
+    // …and no prose mention was counted as a call site. `store.ts` and
+    // `routes.ts` both discuss this method at length, so this is the corpus
+    // where a receiver-less mention could go wrong — but it holds with the
+    // strip neutered too (measured above), so read it as a SHAPE pin on
+    // `CALL` requiring a receiver, not as the strip's proof.
     expect(sites.map((s) => s.at).filter((a) => a.startsWith('server/src/coord/store.ts')),
       'a mention of setDeliveryEnvelope inside store.ts was counted as a call site').toEqual([]);
 
