@@ -2110,10 +2110,21 @@ export class FleetWatcher {
         project, ['plans'], SWEEP_POLICY);
       if (read.files.length === 0 && !read.complete) continue;
       const files = read.files;
+      // ONE NOTION OF "THIS PLAN CARRIES D-N" (D-1420), shared by both halves
+      // of this sweep. Until now the landing half matched a bare `\bD-<n>\b`
+      // over the whole file text while the orphan half below used
+      // `definitionsIn` — two standards over the same corpus, eleven lines
+      // apart, in the same loop. It fired: on 2026-09-02 a BLOCKQUOTE citing an
+      // allocation range stamped two numbers `landed` (terminally — markLanded's
+      // `state = 'allocated'` guard never re-evaluates a landed row) against a
+      // plan that DEFINES neither and sits on no merged ref. `definitionsIn`
+      // reads that same line as no definition at all, which is why SHARING the
+      // predicate is the fix rather than adding a second regex. Computed once
+      // and used twice, so the two halves cannot drift apart again.
+      const defs = definitionsIn(files);
       for (const a of openByProject.get(project) ?? []) {
-        const re = new RegExp(`\\bD-${a.n}\\b`);
-        const hit = files.find((f) => re.test(f.text));
-        if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
+        const hit = defs.find((d) => d.n === a.n);
+        if (hit !== undefined) store.markLanded(project, a.n, hit.file, now);
       }
       // The INVERSE of `markLanded`, and the half nothing has ever measured: a
       // plan that DEFINES an allocator-era number the allocator never issued.
@@ -2121,8 +2132,7 @@ export class FleetWatcher {
       // standing to refuse anything (D13's own stance on `stale`, one block
       // down). See `unallocatedDefinitions` for what this deliberately does NOT
       // claim, and why batch scatter is not reported here.
-      const orphans = unallocatedDefinitions(
-        definitionsIn(files), store.ledgerIssued(project));
+      const orphans = unallocatedDefinitions(defs, store.ledgerIssued(project));
       const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
       if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
         this.lastOrphanReport.set(project, oJson);

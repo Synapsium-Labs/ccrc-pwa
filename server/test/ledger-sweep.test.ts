@@ -185,6 +185,42 @@ describe('sweepLedgerReconcile', () => {
     expect(rows[1]).toMatchObject({ n: 262, state: 'allocated' });
   });
 
+  it('lands on the file that DEFINES the number, not on one that merely cites it', async () => {
+    // BOTH DIRECTIONS IN ONE MEASUREMENT, because the fixture corpus here is a
+    // bare directory tree with no repository at all (`fixture()`:33 is a mkTmp,
+    // and readLedgerDocs reads it through FleetIO): "on the served ref" and "not
+    // on it" are the same state, so a ref-based fixture is not constructible and
+    // every existing green assertion in this file is compatible with the defect.
+    // The SHAPE is constructible, and it is the live one — copied from the
+    // blockquote that stamped two numbers against an unmerged file on 2026-09-02.
+    //
+    // The citing file sorts FIRST (`ledgerseed.ts:182` walks `[...names].sort()`),
+    // so under the old matcher `files.find` returns it — which is what makes this
+    // a measurement rather than a coin toss.
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261
+    h.plantDoc('demo', 'plans', 'a-cites.md',
+      `> **D-${261}..D-${299}** from \`POST /api/ledger/deviations\`.`);
+    h.plantDoc('demo', 'plans', 'b-defines.md', `- **D-${261}** — the real entry`);
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(h.coord.ledgerAllocations('demo')[0]).toMatchObject({
+      n: 261, state: 'landed',
+      landedIn: 'docs/superpowers/plans/b-defines.md',
+    });
+  });
+
+  it('a citation ALONE lands nothing — the live shape, with no definition anywhere', async () => {
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261
+    h.plantDoc('demo', 'plans', 'cite.md',
+      `> **D-${261}..D-${299}** from \`POST /api/ledger/deviations\`.`);
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(h.coord.ledgerAllocations('demo')[0])
+      .toMatchObject({ n: 261, state: 'allocated', landedIn: null, landedAt: null });
+  });
+
   it('REPORTS a number a plan defines that the allocator never issued (F7)', async () => {
     // The inverse of markLanded, and the half nothing has ever measured. Live
     // instance on main while this was written: D-1066..1069, defined in
@@ -264,7 +300,14 @@ describe('sweepLedgerReconcile', () => {
   it(`D-${261} does not land D-${2611} — the boundary is a word boundary`, async () => {
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261
-    h.plantDoc('demo', 'plans', 'p.md', `only D-${2611} appears here`);
+    // A REAL DEFINITION, not a bare mention (D-1421). A bare mention cannot
+    // land under the shared `definitionsIn` predicate for a reason that has
+    // nothing to do with the word boundary this case is about, so the old
+    // fixture would have passed with the boundary deleted. The warn spy is
+    // here because the definition below is an unissued number, which the
+    // orphan half now reports.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.plantDoc('demo', 'plans', 'p.md', `### D-${2611} — a different number, defined`);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
@@ -289,7 +332,10 @@ describe('sweepLedgerReconcile', () => {
     await seedAndAllocate(h, 1);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
-    h.plantDoc('demo', 'plans', 'p.md', `D-${261}`);
+    // A REAL DEFINITION (D-1421): under the shared `definitionsIn` predicate a
+    // bare `D-261` can never land whatever the clock says, so the old fixture
+    // was compatible with the 15-minute gate being deleted outright.
+    h.plantDoc('demo', 'plans', 'p.md', `### D-${261} — would land, but for the clock`);
     at(NOW + 5 * 60_000);
     await h.watcher.sweepLedgerReconcile();               // inside the interval
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
