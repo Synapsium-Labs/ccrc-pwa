@@ -1823,13 +1823,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     } catch {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const b64 = await deps.io.readFileB64(file);
-    if (b64 === null) return reply.code(404).send({ ok: false, error: 'not-found' });
+    const r = await deps.io.readFileB64Measured(file);
+    if (!r.ok) {
+      // THREE facts, three answers. 404 asserts the clip does not exist and is
+      // now said only when the read PROVED it. An over-cap clip is a real file
+      // this transport cannot carry — 413, the same status the upload route
+      // gives the same ceiling (`MAX_UPLOAD_BYTES`, server.ts:1803-1804), with
+      // the measured size when the agent sent one. Everything else — a dropped
+      // agent round trip, a whitelist refusal, an EACCES — is 502, matching
+      // `GET /api/peers?of=`'s `registry-unmeasurable` rather than
+      // manufacturing an absence out of a failure to look (D-114).
+      if (r.reason === 'absent') return reply.code(404).send({ ok: false, error: 'not-found' });
+      if (r.reason === 'too-large') {
+        return reply.code(413).send({ ok: false, error: 'too-large', ...(r.size !== null ? { bytes: r.size } : {}) });
+      }
+      return reply.code(502).send({ ok: false, error: 'clip-unmeasurable' });
+    }
     const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
     return reply
       .type(CLIP_MIME[ext] ?? 'application/octet-stream')
       .header('cache-control', 'private, max-age=31536000, immutable')
-      .send(Buffer.from(b64, 'base64'));
+      .send(Buffer.from(r.dataB64, 'base64'));
   });
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {

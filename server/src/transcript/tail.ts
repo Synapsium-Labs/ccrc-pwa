@@ -39,8 +39,16 @@ export async function readBacklog(io: FleetIO, file: string, lastN: number): Pro
   if (!st.ok) return { events: [], offset: 0, missing: true, measured: st.reason === 'absent' };
   if (st.size === 0) return { events: [], offset: 0, missing: false, measured: true };
   const start = Math.max(0, st.size - BACKLOG_TAIL_BYTES);
-  const res = await io.readFileFrom(file, start);
-  if (res === null) return { events: [], offset: st.size, missing: false, measured: true };
+  const res = await io.readFileFromMeasured(file, start);
+  if (!res.ok) {
+    // Absent HERE is a real race — the file was stat'd and then unlinked — and
+    // it is a MEASUREMENT, so it reports as missing-and-measured. Unreadable
+    // is the opposite: the file is still there and its bytes never came, so
+    // `missing` stays false and `measured` goes false, which is what stops the
+    // PWA rendering an empty chat over a transcript nobody could read.
+    const absent = res.reason === 'absent';
+    return { events: [], offset: st.size, missing: absent, measured: absent };
+  }
   let text = res.data;
   // A non-zero start almost certainly lands mid-line — drop the partial head so
   // we never hand half a JSON object to the parser.

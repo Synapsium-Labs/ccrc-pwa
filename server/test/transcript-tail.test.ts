@@ -3,7 +3,7 @@ import { writeFileSync, appendFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { readBacklog, TranscriptTailer } from '../src/transcript/tail.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import type { ChatEvent } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedStatIO } from './ioDoubles.js';
@@ -58,6 +58,28 @@ describe('readBacklog', () => {
     writeFileSync(file, userLine('u1', 'one'));
     const io = degradedStatIO((p) => p === file);
     expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: 0, missing: true, measured: false });
+  });
+
+  it('a transcript whose BYTES cannot be read is not an empty chat — present, but unmeasured', async () => {
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one'));
+    const size = statSync(file).size;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async () => ({ ok: false, reason: 'unreadable' }),
+    };
+    expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: false, measured: false });
+  });
+
+  it('a transcript unlinked between the stat and the read is a MEASURED absence', async () => {
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one'));
+    const size = statSync(file).size;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async () => ({ ok: false, reason: 'absent' }),
+    };
+    expect(await readBacklog(io, file, 50)).toEqual({ events: [], offset: size, missing: true, measured: true });
   });
 
   it('reads only the file TAIL for a huge transcript (last N events, EOF offset, no partial head)', async () => {
