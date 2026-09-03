@@ -4840,8 +4840,11 @@ Expected: FAIL —
       // standards over the same corpus, eleven lines apart, in the same loop. It
       // fired: on 2026-09-02 a BLOCKQUOTE citing an allocation range stamped two
       // numbers `landed` (terminally — markLanded's `state = 'allocated'` guard
-      // never re-evaluates a landed row) against a plan that DEFINES neither and
-      // sits on no merged ref. `definitionsIn` reads that same line as no
+      // never re-evaluates a landed row) against a plan that DEFINES neither.
+      // (That plan was on no merged ref when it stamped; it merged 2026-09-03,
+      // which changes nothing — the stamp was wrong because the file CITES the
+      // range, not because it was unmerged.)
+      // `definitionsIn` reads that same line as no
       // definition at all, which is why SHARING the predicate is the fix rather
       // than adding a second regex. Computed once and used twice, so the two
       // halves cannot drift apart again.
@@ -8240,7 +8243,8 @@ and the draft was wrong.
 - **D-1420** (Task 46): the reconcile sweep applied two different notions of "this plan carries D-N" to the
   same corpus eleven lines apart (a bare `\bD-<n>\b` over the whole file text for landing, the definition
   shape for orphans), and on 2026-09-02 a blockquote citing an allocation range terminally stamped two numbers
-  `landed` against a plan that defines neither and sits on no merged ref; both halves now share
+  `landed` against a plan that defines neither (it sat on no merged ref when stamped and merged
+  2026-09-03; the stamp was wrong for the citation, not for the merge status); both halves now share
   `definitionsIn`, computed once.
 - **D-1421** (Task 46): two existing reconcile cases (the word-boundary case and the own-clock case) planted a
   BARE MENTION, so under the corrected matcher each would have passed with its own mechanism deleted; both

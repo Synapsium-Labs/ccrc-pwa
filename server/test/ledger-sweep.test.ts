@@ -396,7 +396,9 @@ describe('what `landed` is allowed to claim', () => {
   it('no site claims a merge the reader never performs', () => {
     // The read is io.readdir/io.readFile under ${projectsRoot}/${project}, on
     // whatever branch that checkout is on, uncommitted edits included — measured
-    // 2026-09-02, when it stamped landedIn with a path on no merged ref.
+    // 2026-09-02, when it stamped landedIn with a path that was then on no
+    // merged ref (it merged 2026-09-03; the stamp was wrong for the citation,
+    // not for the merge status).
     for (const rel of SITES) {
       expect(flat(read(rel)), `${rel} still says landed means merged`)
         .not.toMatch(/genuinely means merged|genuinely merged|in a merged plan|in a plan in the MAIN/);

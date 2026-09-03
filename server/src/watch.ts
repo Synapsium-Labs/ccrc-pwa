@@ -2137,7 +2137,10 @@ export class FleetWatcher {
       // apart, in the same loop. It fired: on 2026-09-02 a BLOCKQUOTE citing an
       // allocation range stamped two numbers `landed` (terminally — markLanded's
       // `state = 'allocated'` guard never re-evaluates a landed row) against a
-      // plan that DEFINES neither and sits on no merged ref. `definitionsIn`
+      // plan that DEFINES neither. (That plan was on no merged ref when it
+      // stamped; it merged 2026-09-03, which changes nothing — the stamp was
+      // wrong because the file CITES the range, not because it was unmerged.)
+      // `definitionsIn`
       // reads that same line as no definition at all, which is why SHARING the
       // predicate is the fix rather than adding a second regex. Computed once
       // and used twice, so the two halves cannot drift apart again.
