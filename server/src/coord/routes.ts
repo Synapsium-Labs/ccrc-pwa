@@ -673,7 +673,14 @@ export function registerCoordRoutes(
         program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
         kind, subject, body: msgBody, artifacts: artifactPaths,
       });
-      coord.setDeliveryEnvelope(delivery.id, envelope);
+      const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
+      // Structurally impossible inside this transaction — the row was inserted
+      // six lines up and nothing else can see it. THROWN rather than ignored
+      // because `tx` rolls back on throw and rethrows: if the impossible
+      // happens, the whole mail is withdrawn rather than accepted with the
+      // placeholder envelope, which carries no `ack:` line and so names no
+      // delivery id for any recipient to ack against.
+      if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
       return inserted;
     });
 

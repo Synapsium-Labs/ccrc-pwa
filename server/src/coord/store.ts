@@ -223,6 +223,16 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  (D-1406). */
 const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
 
+/** `setDeliveryEnvelope`'s answer — `SetWorkItemResult`'s shape, for
+ *  `SetWorkItemResult`'s reason. `'absent'` and `'terminal'` are kept apart
+ *  because the first says this transaction has already lost the row it just
+ *  inserted and the second says another writer finished the delivery: no
+ *  overloaded null at a seam (D-1409). */
+export type SetEnvelopeResult =
+  | { ok: true }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'terminal'; state: MailDeliveryState };
+
 /** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
  *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
  *  where a value would slip into the statement text. One home, and it can emit
@@ -2074,9 +2084,37 @@ export class CoordStore {
    * re-render: `renderEnvelope` itself still runs exactly once, at queue
    * time (spec:176-177, "verbatim, never re-rendered"), and this method
    * never re-derives its argument — it only stores what the caller already
-   * computed. */
-  setDeliveryEnvelope(id: number, envelope: string): void {
-    this.db.prepare('UPDATE mail_deliveries SET envelope = ? WHERE id = ?').run(envelope, id);
+   * computed.
+   *
+   * GUARDED, and the guard is a no-op on every reachable path — deliberately.
+   * EVERY call site runs inside the SAME `tx()` as the `queueDelivery` above
+   * it, and `tx` is `BEGIN IMMEDIATE` over a synchronous `DatabaseSync`, so
+   * the row this stamps is provably `'queued'` and no concurrent writer can see
+   * it. The clause is here anyway because a writer whose safety rests on its
+   * callers' shape is a writer that breaks silently the day a third one
+   * appears — and one does, in Task 61 of this same wave — and because an
+   * audit with one exception in it is an audit nobody
+   * finishes. DO NOT "simplify" it away: it costs one `AND`, and it is what
+   * lets `mail-hardening.test.ts`'s writer scan say EVERY with no carve-out
+   * (D-1409).
+   *
+   * The result is a union rather than `void` for the reason `bumpReplayCount`
+   * states below — "the union is the fix; the guard alone is not". Adding a
+   * guard and keeping `void` would have put a caller-invisible refusal into one
+   * of the very methods this wave exists to fix. `'absent'` and `'terminal'`
+   * are separated because they are two conditions a caller handles differently:
+   * the first means the row this transaction just inserted is gone, the second
+   * means someone else finished this delivery. */
+  setDeliveryEnvelope(id: number, envelope: string): SetEnvelopeResult {
+    const res = this.db.prepare(
+      `UPDATE mail_deliveries SET envelope = ? WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
+    ).run(envelope, id);
+    if (Number(res.changes) > 0) return { ok: true };
+    const row = this.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string } | undefined;
+    if (!row) return { ok: false, why: 'absent' };
+    return { ok: false, why: 'terminal',
+             state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
   }
 
   /**

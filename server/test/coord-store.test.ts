@@ -481,6 +481,79 @@ describe('CoordStore: programs', () => {
     expect(row).toMatchObject({ id: d.id, mailId: mail.id, envelope: `<mail>id ${d.id}</mail>` });
     expect(s.delivery(d.id)).toMatchObject({ toId: 'ccrc-pwa-quiet-mesa', state: 'queued' });
   });
+
+  // D-1409. The last delivery-row writer with a bare `WHERE id = ?`.
+  // Unreachable on a terminal row today — both call sites run inside the same
+  // `tx()` as the `queueDelivery` that created the row, and `tx` is
+  // BEGIN IMMEDIATE over a synchronous DatabaseSync — so this test drives the
+  // method DIRECTLY, which is the only way the refusal arms can be reached at
+  // all. That is the point: the guard is free here, and a free guard that is
+  // also measured is one fewer exception in the audit.
+  //
+  // Split into TWO `it`s, one per member of the terminal pair, rather than one
+  // test asserting both. The guard excludes a TWO-member list, so narrowing it
+  // to either single member leaves the OTHER arm's refusal working — and inside
+  // a single `it` vitest aborts at the first failing assertion, which makes the
+  // two narrowings indistinguishable from each other and from a wholly broken
+  // method. One `it` per arm makes each narrowing red exactly one test and
+  // leave the other GREEN as its own positive control. Measured, not assumed
+  // (Step 5); it is the hole Task 22 shipped and had to fix in a second round.
+  it('setDeliveryEnvelope refuses a REJECTED row, and says which refusal it is', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>original</mail>');
+
+    // The positive control FIRST, so the refusals below cannot pass on a method
+    // that writes nothing.
+    expect(s.setDeliveryEnvelope(d.id, '<mail>stamped</mail>')).toEqual({ ok: true });
+    expect(s.deliveryEnvelope(d.id)?.envelope).toBe('<mail>stamped</mail>');
+
+    s.rejectDelivery(d.id, 'undeliverable', MAIL_RUN_CLOSED_ERROR);
+    // `rejectDelivery` returns `void` and carries a terminality guard of its
+    // own, so a park it DECLINED is invisible at this call site. Assert the
+    // fixture reached the state it names — without this line a declined park
+    // degrades the test below into a second copy of the `queued` positive
+    // control above, silently.
+    expect(s.delivery(d.id)?.state).toBe('rejected');
+
+    expect(s.setDeliveryEnvelope(d.id, '<mail>too late</mail>'))
+      .toEqual({ ok: false, why: 'terminal', state: 'rejected' });
+    expect(s.deliveryEnvelope(d.id)?.envelope).toBe('<mail>stamped</mail>');
+
+    // …and an id that names no row is a DIFFERENT answer, not the same one:
+    // "there is nothing here" and "there is something here and it is finished"
+    // are two conditions a caller handles differently.
+    expect(s.setDeliveryEnvelope(999_999, '<mail>nowhere</mail>'))
+      .toEqual({ ok: false, why: 'absent' });
+  });
+
+  it('setDeliveryEnvelope refuses an ACKED row too — the terminal pair\'s OTHER member', () => {
+    const s = store();
+    const r = openRun(s) as { id: number };
+    const mail = s.insertMail({ fromId: 'coordinator', fromUuid: 'u1', toId: 'ccrc-pwa-quiet-mesa',
+                                runId: r.id, kind: 'status', subject: 'wave-brief', body: 'go',
+                                artifacts: [] });
+    const d = s.queueDelivery(mail.id, 'ccrc-pwa-quiet-mesa', '<mail>original</mail>');
+
+    // This arm's own positive control, so its refusal below cannot pass on a
+    // method that writes nothing.
+    expect(s.setDeliveryEnvelope(d.id, '<mail>stamped</mail>')).toEqual({ ok: true });
+    expect(s.deliveryEnvelope(d.id)?.envelope).toBe('<mail>stamped</mail>');
+
+    // `markAcked` carries its own terminality guard and ANSWERS `false` when it
+    // declines. Both halves are asserted — its boolean AND the row's state —
+    // because the boolean alone is the setter's report of what it did, not a
+    // reading of the row this test then hands to the method under test.
+    expect(s.markAcked(d.id, Date.now())).toBe(true);
+    expect(s.delivery(d.id)?.state).toBe('acked');
+
+    expect(s.setDeliveryEnvelope(d.id, '<mail>too late</mail>'))
+      .toEqual({ ok: false, why: 'terminal', state: 'acked' });
+    expect(s.deliveryEnvelope(d.id)?.envelope).toBe('<mail>stamped</mail>');
+  });
 });
 
 describe('the disaster-recovery path (spec:82-85)', () => {

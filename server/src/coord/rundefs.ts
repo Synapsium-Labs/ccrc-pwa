@@ -199,7 +199,18 @@ export function queueSystemMail(
     const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
       program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
       kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    coord.setDeliveryEnvelope(delivery.id, envelope);
+    const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
+    // Structurally impossible inside this transaction — the row was inserted
+    // six lines up and nothing else can see it. THROWN rather than ignored
+    // because `tx` rolls back on throw and rethrows: if the impossible
+    // happens, the whole mail is withdrawn rather than accepted with the
+    // placeholder envelope, which carries no `ack:` line and so names no
+    // delivery id for any recipient to ack against. The throw ESCAPES
+    // `queueSystemMail` — callers `close.ts:248`, `dispatch.ts:661`,
+    // `kickoff.ts:156`, `routes.ts:1204` — deliberately: `{ queued: false }`
+    // already means "the dedupe guard suppressed it", a different and true
+    // statement this must not borrow.
+    if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
     out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
   });
   return out;
