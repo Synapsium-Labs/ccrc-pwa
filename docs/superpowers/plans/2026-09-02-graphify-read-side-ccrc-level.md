@@ -3458,6 +3458,71 @@ stale ledger cells re-measured. Committing the two source files again would be a
   which is the only way to make the shim's failure arm reachable at all; without it the empty-skip
   clause was a guard no test could redden.
 
+- **D-1368** (2026-09-03, live-fleet measurement after the read-side deploy) — **freshness was keyed
+  on COMMIT IDENTITY, so a squash merge made a tree permanently stale to the sweep and permanently
+  suspect to the card, both about a graph whose content IS HEAD's.** `_gs_stale` said stale when
+  `built_at_commit != HEAD`. After a squash merge — or any history rewrite that keeps the tree —
+  HEAD's tree is byte-identical to the built commit's, so `graphify update` writes nothing, the stamp
+  keeps the old sha, and EVERY pass records `stale-rebuilt` for that tree, for ever. MEASURED on the
+  live fleet 2026-09-03: `graph.json` mtime 01:18, census `stale-rebuilt … head` at 16:09, built
+  `0281e084` vs HEAD `6a26a9a3`, and `git rev-parse 0281e084^{tree} 6a26a9a3^{tree}` identical.
+  Three places shared the root, one spelling of the predicate each:
+
+  1. **The sweep** (`_gs_stale`) rebuilt on every pass, burning the whole per-pass budget on a tree
+     that needed nothing.
+  2. **The card** (`_hook_graph_card`) reported `not an ancestor of HEAD` for a graph whose content is
+     HEAD's. That is the D-1353 direction spent the other way and it costs the same trust: `fresh` is
+     the one word clause 12 of the worker skill says licenses taking a query answer as read
+     (D-1341/D-1342), so the wrong answer here switches a dispatched worker's verification duty ON
+     over a graph that needs none.
+  3. **`_gs_busy`'s O3 escape hatch** counted `rev-list --count "$built..HEAD"`, which for a
+     NON-ANCESTOR counts everything since the merge-base — so a squashed history could fire the
+     `build anyway` escape against a busy session over commits that changed nothing at all.
+
+  The fix, once per file: if `git rev-parse "$built^{tree}"` equals `git rev-parse "HEAD^{tree}"`
+  and both are non-empty, the graph is FRESH — the sweep does not rebuild (outcome `fresh`, reason
+  empty), the card says `fresh`, and the hatch treats the distance as 0. When the trees DIFFER,
+  today's ancestry/distance logic is untouched. **Either side answering empty is not a match**: a
+  garbage-collected built commit, or a HEAD whose tree cannot be peeled, falls through to today's
+  behaviour (`freshness unmeasured` in the card, stale with reason `head` in the sweep) rather than to
+  a freshness nobody measured. `git rev-parse X^{tree}` is git, not GNU userland, so
+  `macos-platform.test.ts` is unaffected.
+
+  **The card's new text is a QUALIFIER, not a fifth state.** It reads `fresh` and appends
+  `— same content as HEAD` only when the built commit is not HEAD itself (an abbreviated sha naming
+  this very HEAD resolves to the tip and keeps the bare word). That is a decision about the contract:
+  `fresh` stays the word both skill docs harvest out of this file's freshness assignments
+  (D-1340/D-1342), because a reader does exactly the same thing in both cases, and a new STATE would
+  have to be named by both docs and by clause 12 for a branch that does not exist.
+
+  **The 8 stray `graphify-out/` directories D-1367 records on the live fleet are the operator's to
+  delete.** Neither fix deletes anything: D-1367 stops the sweep creating them, and this one stops it
+  rebuilding into the tree it should have left alone.
+
+  **Fixture shape changed with the semantics.** Every "make it stale again" step in
+  `graph-sweep.test.ts` was `git commit --allow-empty`, and `session-hook.test.ts`'s `gitTree` built
+  its whole distance ladder out of empty commits — all of which leave `HEAD^{tree}` byte-identical to
+  the built commit's, i.e. the exact shape this entry makes FRESH. Those fixtures now commit real
+  content (`bump()` in the sweep suite, one file per commit in `gitTree`), so the distance and
+  ancestry rows still measure the arm they were written for.
+
+  Measured (baselines `graph-sweep` `Tests  47 passed | 2 skipped (49)`, `session-hook`
+  `Tests  56 passed (56)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | `ccd/ccd-graph-sweep`: `_gs_stale` back to `[ "$built" = "$head" ] \|\| { REASON=head; return 0; }` | `graph-sweep` — `Tests  2 failed \| 44 passed \| 2 skipped (48)`: the empty-commit and the SQUASH rows, both *expected 'stale-rebuilt' to be 'fresh'* |
+  | `ccd/ccd-graph-sweep`: the escape hatch back to the bare `rev-list --count "$built..HEAD"` | `graph-sweep` — `Tests  1 failed \| 45 passed \| 2 skipped (48)`: *the one-sided distance count fired the build-anyway escape over 20 commits that changed nothing at all: expected 'stale-rebuilt' to be 'skipped-busy'* |
+  | `ccd/ccd-graph-sweep`: `_gs_same_tree` drops its non-empty guards (`[ "$bt" = "$ht" ]` alone) | `graph-sweep` — `Tests  1 failed \| 46 passed \| 2 skipped (49)`: *a tree whose content could not be measured at all was called fresh: expected 'fresh' to be 'stale-rebuilt'* |
+  | `ccd/session-hook.sh`: delete the whole `elif _hook_same_tree …` arm | `session-hook` — `Tests  2 failed \| 54 passed (56)`: *…reported as behind HEAD* and *…was called off this tree's history* (`not an ancestor`) |
+  | `ccd/session-hook.sh`: append the qualifier unconditionally (drop the `bcommit` test) | `session-hook` — `Tests  1 failed \| 55 passed (56)`: *an abbreviated sha of HEAD stopped reading as fresh: expected … to contain '(fresh)'* |
+  | `ccd/session-hook.sh`: `_hook_same_tree` drops its non-empty guards | `session-hook` — `Tests  1 failed \| 55 passed (56)`: *a graph whose content could not be measured at all was announced as fresh: expected … not to match /\bfresh\b/* |
+
+  The last row of each pair needed a fixture that could reach the failure arm at all: a branch ref
+  overwritten with a sha no object answers to, where `git rev-parse HEAD` still exits 0 with the raw
+  sha while `HEAD^{tree}` cannot be peeled — so BOTH sides of the comparison come back empty. Without
+  it, "never compare two empties as equal" was a guard no test could redden.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

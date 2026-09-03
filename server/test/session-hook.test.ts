@@ -438,7 +438,13 @@ describe('the SessionStart graph card', () => {
     git('init', '-q');
     const shas: string[] = [];
     for (let i = 0; i < commits; i++) {
-      git('commit', '-q', '--allow-empty', '-m', `c${i}`);
+      // EACH COMMIT CHANGES THE TREE (D-1368). `--allow-empty` moves HEAD and
+      // leaves `HEAD^{tree}` byte-identical to every other commit's, which is
+      // now the definition of FRESH — so a distance fixture built out of empty
+      // commits would be measuring the arm it means to leave alone.
+      fs.writeFileSync(path.join(dir, `c${i}.txt`), `${i}\n`);
+      git('add', '-A');
+      git('commit', '-q', '-m', `c${i}`);
       shas.push(git('rev-parse', 'HEAD'));
     }
     return shas[0]!;
@@ -622,6 +628,79 @@ describe('the SessionStart graph card', () => {
     expect(text, 'an abbreviated sha of HEAD stopped reading as fresh').toContain('(fresh)');
     expect(text).not.toContain('behind HEAD');
     expect(text).not.toContain('not an ancestor');
+  });
+
+  // ── D-1368: freshness is CONTENT, not commit identity ───────────────────
+  //
+  // `built != HEAD` was spent as "the graph is of another commit", which after
+  // a squash merge (or any rewrite that keeps the tree) is false: HEAD's tree
+  // is byte-identical to the built commit's, so the graph describes THIS tree
+  // exactly. The card said `not an ancestor of HEAD` about a graph whose
+  // content IS HEAD's, and `fresh` is the one word clause 12 of the worker
+  // skill says licenses taking a query answer as read — so the card was
+  // switching a worker's verification duty ON over a graph that needed none,
+  // which costs the same trust the D-1353 direction costs, spent the other way.
+  // The suffix, not a fifth state word: `fresh` stays the word both skill docs
+  // harvest (D-1340/D-1342), and `— same content as HEAD` is appended only
+  // when the built commit is not HEAD itself, so a reader can still tell the
+  // two cases apart.
+
+  it('calls a graph fresh when HEAD carries the built commit\'s tree byte-for-byte', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    git(tree, 'commit', '-q', '--allow-empty', '-m', 'empty');   // same tree, HEAD moved
+    // the premise: one commit of distance, zero bytes of difference
+    expect(git(tree, 'rev-list', '--count', `${first}..HEAD`)).toBe('1');
+    expect(git(tree, 'rev-parse', `${first}^{tree}`))
+      .toBe(git(tree, 'rev-parse', 'HEAD^{tree}'));
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'a graph of exactly this tree was reported as behind HEAD')
+      .not.toContain('behind HEAD');
+    expect(text).toMatch(/\bfresh\b/);
+    expect(text, 'the card does not distinguish the same-content case from a graph built AT HEAD')
+      .toContain('fresh — same content as HEAD');
+  });
+
+  it('calls a SQUASHED history fresh — same tree, and NOT an ancestor of HEAD', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    const main = git(tree, 'rev-parse', '--abbrev-ref', 'HEAD');
+    git(tree, 'checkout', '-q', '-b', 'side');
+    fs.writeFileSync(path.join(tree, 'w.txt'), 'w\n');
+    git(tree, 'add', '-A'); git(tree, 'commit', '-q', '-m', 'work');
+    const sideTip = git(tree, 'rev-parse', 'HEAD');
+    git(tree, 'checkout', '-q', main);
+    git(tree, 'merge', '--squash', '-q', 'side');
+    git(tree, 'commit', '-q', '-m', 'squashed');
+    plantGraph(tree, { built: sideTip });
+    // the premise, both halves: identical trees, diverged commits. This is the
+    // exact shape measured on the live fleet 2026-09-03 — built 0281e084 vs
+    // HEAD 6a26a9a3, `rev-parse X^{tree}` identical for both.
+    expect(git(tree, 'rev-parse', `${sideTip}^{tree}`))
+      .toBe(git(tree, 'rev-parse', 'HEAD^{tree}'));
+    expect(git(tree, 'rev-list', '--left-right', '--count', `${sideTip}...HEAD`))
+      .toMatch(/^1\s+1$/);
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'a graph whose content IS HEAD\'s was called off this tree\'s history')
+      .not.toContain('not an ancestor');
+    expect(text).toContain('fresh — same content as HEAD');
+  });
+
+  it('BOTH sides unmeasurable is NOT a match — the card still says freshness unmeasured', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    const br = git(tree, 'rev-parse', '--abbrev-ref', 'HEAD');
+    // A ref pointing at an object that is not there: `rev-parse HEAD` answers
+    // (exit 0, the raw sha) and `HEAD^{tree}` cannot be peeled, so both sides
+    // of the content comparison come back empty.
+    fs.writeFileSync(path.join(tree, '.git', 'refs', 'heads', br), 'd'.repeat(40) + '\n');
+    plantGraph(tree, { built: 'c'.repeat(40) });
+    expect(git(tree, 'rev-parse', 'HEAD')).toBe('d'.repeat(40));
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text, 'a graph whose content could not be measured at all was announced as fresh')
+      .not.toMatch(/\bfresh\b/);
+    expect(text).toContain('freshness unmeasured');
   });
 
   it('prints NOTHING when the tree has no graph and the sweep never mentioned it', () => {

@@ -104,6 +104,30 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
   done
 }
 
+# D-1368 — FRESHNESS IS CONTENT, NOT COMMIT IDENTITY. This file's ONE spelling
+# of that predicate; `_gs_stale` and `_gs_busy` both ask it here.
+#
+# `built_at_commit != HEAD` was spent as "the graph is of another commit", and
+# after a squash merge — or any rewrite that keeps the tree — that is false:
+# HEAD's tree is byte-identical to the built commit's, so the graph describes
+# THIS tree exactly. graphify's own `update` then writes nothing, the stamp
+# keeps the old sha, and every pass records `stale-rebuilt` for that tree for
+# ever. MEASURED on the live fleet 2026-09-03: graph.json mtime 01:18, census
+# "stale-rebuilt … head" at 16:09, built 0281e084 vs HEAD 6a26a9a3, and
+# `git rev-parse 0281e084^{tree} 6a26a9a3^{tree}` identical.
+#
+# EITHER SIDE ANSWERING EMPTY IS NOT A MATCH. The built commit may have been
+# garbage-collected, in which case the content cannot be compared at all and
+# the tree falls through to today's behaviour (stale, reason `head`) rather
+# than to a freshness nobody measured — the same rule the card's own freshness
+# clause states ("staleness is measured or it is not claimed").
+_gs_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
+  local t="$1" bt ht
+  bt="$(git -C "$t" rev-parse --verify -q "$2^{tree}" 2>/dev/null)" || bt=""
+  ht="$(git -C "$t" rev-parse --verify -q 'HEAD^{tree}' 2>/dev/null)" || ht=""
+  [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
+}
+
 _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
   local tree="$1" head built stamp
   head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || { REASON=unreadable-head; return 0; }
@@ -111,7 +135,9 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
   built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
   stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
   [ "$stamp" = "$PIN" ] || { REASON=engine; return 0; }
-  [ "$built" = "$head" ] || { REASON=head; return 0; }
+  if [ "$built" != "$head" ]; then
+    _gs_same_tree "$tree" "$built" || { REASON=head; return 0; }
+  fi
   return 1
 }
 
@@ -145,7 +171,15 @@ _gs_busy() {
   local built commits stamp_age
   built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
   if [ -n "$built" ]; then
-    commits="$(git -C "$tree" rev-list --count "$built..HEAD" 2>/dev/null || echo 0)"
+    # D-1368: the same predicate, once more and spelled once — `rev-list
+    # --count "$built..HEAD"` for a NON-ANCESTOR counts everything since the
+    # merge-base, so a squashed history could fire the build-anyway escape
+    # against a graph that is already of HEAD's content.
+    if _gs_same_tree "$tree" "$built"; then
+      commits=0
+    else
+      commits="$(git -C "$tree" rev-list --count "$built..HEAD" 2>/dev/null || echo 0)"
+    fi
     stamp_age=$(( now - $(stat -c %Y "$tree/graphify-out/.graphify_engine" 2>/dev/null || echo "$now") ))
     if [ "$commits" -ge "$CCRC_GRAPH_STALE_ESCAPE_COMMITS" ] \
        || [ "$stamp_age" -ge "$CCRC_GRAPH_STALE_ESCAPE_SECS" ]; then

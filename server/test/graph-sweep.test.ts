@@ -30,6 +30,17 @@ function makeRepo(name: string): string {
   fs.appendFileSync(path.join(d, '.git', 'info', 'exclude'), 'graphify-out/\n.graphifyignore\n');
   return d;
 }
+// D-1368 — A FIXTURE THAT WANTS A TREE TO READ STALE HAS TO CHANGE THE TREE.
+// `--allow-empty` moves HEAD and leaves `HEAD^{tree}` byte-identical to the
+// built commit's, which is now the definition of FRESH — so every "make it
+// stale again" step below commits real content. The counter keeps the names
+// unique across a file that reuses one repo name in most of its cases.
+let bumps = 0;
+function bump(repo: string, msg = 'move'): void {
+  bumps += 1;
+  fs.writeFileSync(path.join(repo, `bump${bumps}.py`), `z${bumps} = ${bumps}\n`);
+  git(repo, 'add', '-A'); git(repo, 'commit', '-qm', msg);
+}
 function plantEngine(behavior = ''): void {
   const bin = j('.ccrc', 'graphify-venv', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -240,7 +251,7 @@ describe('graph-sweep: build discriminators (Task 7)', () => {
   it('row 17 — a shrink refusal is refused-shrink, never failed', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                                // seed a graph + stamp
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');       // make it stale again
+    bump(repo);                                                // make it stale again
     plantEngine('echo "refusing to write: node count shrank" >&2; exit 1\n# no graph write:');
     // the fake above must NOT rewrite graph.json — remove the trailing writer lines for this plant:
     const enginePath = j('.ccrc', 'graphify-venv', 'bin', 'graphify');
@@ -284,7 +295,7 @@ exit 1
   it('skipped-locked — a held .rebuild.lock defers the tree without waiting', async () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                            // seed + stamp
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');   // stale again
+    bump(repo);                                            // stale again
     const lock = path.join(repo, 'graphify-out', '.rebuild.lock');
     fs.writeFileSync(lock, '');
     const holder = spawn('flock', [lock, 'sleep', '30']);
@@ -303,7 +314,7 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
     const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
     runSweep();                                                     // seed a good graph
     const seeded = fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs;
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');
+    bump(repo);
     fs.writeFileSync(path.join(repo, 'poison.py'), 'x');            // untracked, would enter corpus
     fs.writeFileSync(j('fixture-corpus'), 'a.py\npoison.py\n');
     runSweep();
@@ -668,6 +679,83 @@ describe('graph-sweep: D-1161 — the default yields, the operator instructs', (
   });
 });
 
+describe('graph-sweep: freshness is CONTENT, not commit identity (D-1368)', () => {
+  /** How many times the fake engine ran across every pass so far — the effect,
+   *  not merely the census word. A tree the sweep calls fresh is a tree it did
+   *  not build. */
+  const engineCalls = (): number =>
+    (fs.readFileSync(j('engine-calls'), 'utf8').match(/^cwd=/gm) ?? []).length;
+
+  it('an empty commit moves HEAD and the graph stays fresh — no rebuild, no reason', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    expect(engineCalls()).toBe(1);
+    const seeded = fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs;
+    git(repo, 'commit', '-qm', 'empty', '--allow-empty');       // HEAD moves, tree does not
+    runSweep();
+    expect(outcomeOf(repo)).toBe('fresh');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('');
+    expect(engineCalls(), 'the sweep rebuilt a graph whose content is already HEAD\'s').toBe(1);
+    expect(fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs).toBe(seeded);
+  });
+
+  it('the SQUASH shape — HEAD is a commit carrying the built tree that does not descend from it', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const main = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+    git(repo, 'checkout', '-q', '-b', 'side');
+    fs.writeFileSync(path.join(repo, 'w.py'), 'k = 9\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'work');
+    runSweep();                                                 // the graph is built HERE
+    expect(outcomeOf(repo)).toBe('never-built');
+    const sideTip = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'checkout', '-q', main);
+    git(repo, 'merge', '--squash', '-q', 'side');
+    git(repo, 'commit', '-qm', 'squashed');
+    // the premise, both halves — this is the live-fleet shape of 2026-09-03:
+    // built 0281e084 vs HEAD 6a26a9a3, `rev-parse X^{tree}` identical.
+    expect(git(repo, 'rev-parse', `${sideTip}^{tree}`))
+      .toBe(git(repo, 'rev-parse', 'HEAD^{tree}'));
+    expect(git(repo, 'rev-list', '--left-right', '--count', `${sideTip}...HEAD`))
+      .toMatch(/^1\s+1$/);
+    runSweep();
+    expect(outcomeOf(repo), 'every pass rebuilds a graph that is already of HEAD\'s content')
+      .toBe('fresh');
+    expect(engineCalls()).toBe(1);
+  });
+
+  it('BOTH sides unmeasurable is NOT a match — two empties never compare fresh', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                   // seed a graph + stamp
+    fs.writeFileSync(path.join(repo, 'graphify-out', 'graph.json'),
+      JSON.stringify({ nodes: [], links: [], built_at_commit: 'c'.repeat(40) }));
+    // A ref pointing at an object that is not there: `rev-parse HEAD` still
+    // answers (exit 0, the raw sha), while `HEAD^{tree}` cannot be peeled — so
+    // BOTH sides of the content comparison come back empty, and an equality
+    // that spends them is an equality that calls an unmeasurable tree fresh.
+    const br = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+    fs.writeFileSync(path.join(repo, '.git', 'refs', 'heads', br), 'd'.repeat(40) + '\n');
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe('d'.repeat(40));
+    runSweep();
+    expect(outcomeOf(repo), 'a tree whose content could not be measured at all was called fresh')
+      .toBe('stale-rebuilt');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+  });
+
+  it('a GARBAGE-COLLECTED built commit is unmeasurable, and falls through to stale/head', () => {
+    // Either `rev-parse` answering empty is the one case that keeps today's
+    // behaviour: the sweep cannot prove the content matches, so it rebuilds.
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();
+    const graph = path.join(repo, 'graphify-out', 'graph.json');
+    fs.writeFileSync(graph, JSON.stringify({ nodes: [], links: [],
+      built_at_commit: 'c'.repeat(40) }));                       // no such commit here
+    runSweep();
+    expect(outcomeOf(repo)).toBe('stale-rebuilt');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+  });
+});
+
 describe('graph-sweep: idle gate (Task 9)', () => {
   // seedAccountsSh gives the fixture HOME a real ~/.ccrc/accounts.sh so the
   // sweep's `source "$HOME/.ccrc/accounts.sh"` + `_ccrc_cfg_dir` resolve.
@@ -704,11 +792,26 @@ describe('graph-sweep: idle gate (Task 9)', () => {
   it('O3 — the escape hatch overrides busy at >=20 commits behind', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                                    // seed
-    for (let i = 0; i < 20; i++) git(repo, 'commit', '-qm', `c${i}`, '--allow-empty');
+    for (let i = 0; i < 20; i++) bump(repo, `c${i}`);
     plantSession(repo, 'working');
     runSweep();
     expect(outcomeOf(repo)).toBe('stale-rebuilt');
   });
+  it('O3 (D-1368) — a same-content HEAD counts as ZERO commits, so the escape never fires', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                    // seed
+    for (let i = 0; i < 20; i++) git(repo, 'commit', '-qm', `e${i}`, '--allow-empty');
+    // The hatch is only ASKED on a tree that is stale AND busy, and D-1368
+    // makes the head dimension fresh here — so the tree is kept stale by the
+    // OTHER dimension, a pin bump (row 13's mechanism). Without that this case
+    // would never reach `_gs_busy` at all and would measure nothing.
+    fs.writeFileSync(j('.ccrc', 'graphify.pin'), '0.9.50\n');
+    plantSession(repo, 'working');
+    runSweep();
+    expect(outcomeOf(repo), 'the one-sided distance count fired the build-anyway escape over '
+      + '20 commits that changed nothing at all').toBe('skipped-busy');
+  });
+
   // finding 3b — only the COMMITS arm above was ever tested; the SECONDS arm
   // (CCRC_GRAPH_STALE_ESCAPE_SECS, checked against the engine stamp's own
   // mtime) had no coverage at all. One commit keeps the commits-arm well
@@ -717,7 +820,7 @@ describe('graph-sweep: idle gate (Task 9)', () => {
   it('O3 — the escape hatch overrides busy once the engine stamp itself is old enough (SECONDS arm)', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                                    // seed a fresh build + stamp
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');            // stale again; 1 commit behind
+    bump(repo);                                                     // stale again; 1 commit behind
     const stampPath = path.join(repo, 'graphify-out', '.graphify_engine');
     const old = Date.now() / 1000 - 10;                             // age the stamp 10s
     fs.utimesSync(stampPath, old, old);
@@ -728,7 +831,7 @@ describe('graph-sweep: idle gate (Task 9)', () => {
   it('O3 — a LARGE escape-secs threshold still defers a busy stale tree (SECONDS arm, negative case)', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');
+    bump(repo);
     const stampPath = path.join(repo, 'graphify-out', '.graphify_engine');
     const old = Date.now() / 1000 - 10;
     fs.utimesSync(stampPath, old, old);
