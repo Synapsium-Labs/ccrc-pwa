@@ -283,6 +283,32 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
     expect(fs.existsSync(j('engine-calls')),
       'the engine ran on a tree the idle gate should have deferred').toBe(false);
   });
+
+  // D-1371 — THE SHAPE THE FLEET ACTUALLY HAS, not the one /tmp has. Both
+  // cases above build their roots as REAL directories, which is the only shape
+  // where "is this candidate spelled as its own realpath" is ever true — so
+  // D-1370's guard measured green there while being INERT on the live box,
+  // where `$HOME/projects` is ITSELF a symlink (`~/projects -> /data/projects`,
+  // `/data -> /mnt/…`). Under a symlinked root no candidate can equal its own
+  // realpath, nothing is preferred, the survivor falls back to glob order and
+  // the ALIAS wins: exactly the failure D-1370 was written to stop. MEASURED
+  // on this fixture against the D-1370 spelling — the pass carried one row and
+  // it was `…/projects/alpha`, the real name absent from the pass entirely.
+  it('prefers the real name when the ROOT ITSELF is a symlink (the live fleet shape)', () => {
+    const realRoot = j('real-projects');
+    fs.mkdirSync(realRoot, { recursive: true });
+    fs.symlinkSync(realRoot, j('projects'));            // the root, reached through a link
+    const zeta = makeRepo('zeta');                      // the real tree, under that root
+    fs.symlinkSync('zeta', j('projects', 'alpha'));     // the alias, globbed FIRST
+    plantEngine();
+    expect(runSweep().status).toBe(0);
+    const canonical = fs.realpathSync(zeta);
+    const hits = paths().filter((p) => fs.realpathSync(p) === canonical);
+    expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
+    expect(hits[0], 'the census carries the ALIAS under a symlinked root — the survivor rule asks ' +
+      'about ANCESTRY when the only thing that distinguishes the two names is the last component')
+      .toBe(j('projects', 'zeta'));
+  });
 });
 
 describe('graph-sweep: build discriminators (Task 7)', () => {

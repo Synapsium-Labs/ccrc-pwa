@@ -98,9 +98,20 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # MEASURED: with a real tree at `~/worktrees/foo` and `~/projects/foo` a
 # symlink to it, the pass carried exactly one row and it was the alias.
 #
-# So: prefer the candidate that is its OWN realpath — the tree named by its
-# real path — and fall back to first-seen when neither name is (two symlinks,
-# where the names are equally arbitrary and only the count matters).
+# D-1371 — AND THE PREDICATE THAT ASKS IT. The first spelling of that decision
+# was `[ "$d" = "$real" ]` — "is this candidate spelled as its own realpath" —
+# which is INERT on the shape the fleet actually has. `$PROJECTS_ROOT` on the
+# live box is itself a symlink (`~/projects -> /data/projects`, `/data ->
+# /mnt/…`), so NO candidate under it can ever equal its own realpath, nothing
+# is ever preferred, the survivor falls back to glob order, and the alias wins:
+# exactly the failure this entry was written to stop. It measured green only
+# because the fixture roots are real directories under /tmp.
+#
+# The question is about the candidate's OWN last component, not its ancestry:
+# prefer the name that is not ITSELF a symlink, and displace only an entry that
+# IS one. Two aliases (or two names under symlinked ancestors) leave the
+# first-seen standing — there the names are equally arbitrary and only the
+# count matters.
 _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
   local d top real i dup
   local -a seen=() named=()
@@ -120,8 +131,8 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
     fi
     if [ "$dup" -ge 0 ]; then
       # already censused under another name: the real name displaces an alias,
-      # nothing displaces the real name.
-      [ "$d" = "$real" ] && named["$dup"]="$d"
+      # nothing displaces the real name (D-1371).
+      if [ ! -L "$d" ] && [ -L "${named[$dup]}" ]; then named["$dup"]="$d"; fi
       continue
     fi
     seen+=("$real"); named+=("$d")

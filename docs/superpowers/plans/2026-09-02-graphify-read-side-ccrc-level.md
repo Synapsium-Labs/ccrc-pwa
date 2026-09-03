@@ -3607,6 +3607,76 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | new tests against the un-fixed `ccd/ccd-graph-sweep` (red-first) | `graph-sweep` — `Tests  3 failed \| 47 passed \| 2 skipped (52)`, incl. *the census carries the ALIAS …: expected '…/projects/foo' to be '…/worktrees/foo'* and *the sweep built a graph under a WORKING session …: expected undefined to be 'skipped-busy'* |
   | `ccd/ccd-graph-sweep`: drop `[ "$d" = "$real" ] && named["$dup"]="$d"` (survivor back to glob order) | `graph-sweep` — `Tests  2 failed \| 48 passed \| 2 skipped (52)`: *keeps the REAL path, not the alias, when the two names live under different roots* and *an alias row would unmatch the idle gate — a session on the real path still defers it* |
 
+- **D-1371** (2026-09-03, review of the D-1369/D-1370 diff) — **D-1370's survivor rule was INERT on
+  the path shape the fleet actually has, and measured green only because the fixture roots are real
+  directories.** The predicate shipped was `[ "$d" = "$real" ]` — *is this candidate spelled as its
+  own realpath* — which is a question about the WHOLE path, ancestry included. MEASURED on the live
+  box: `~/projects` is itself a symlink (`~/projects -> /data/projects`, `/data -> /mnt/…`), so
+  `realpath ~/projects/<x>` lands under the mounted volume `/data` points at, and **no** candidate under
+  `$PROJECTS_ROOT` can ever equal its own realpath. Nothing is preferred, the survivor falls back to
+  glob order, and the ALIAS wins — exactly the failure D-1370 was written to stop. MEASURED with a
+  fixture HOME reproducing that shape (`$HOME/projects` a symlink to a real directory, the real tree
+  at `$HOME/projects/zeta`, the alias `$HOME/projects/alpha -> zeta`): the pass carried exactly one
+  row and it was `…/projects/alpha`, the real name absent from the pass entirely. D-1370's two new
+  tests stayed GREEN throughout — `makeRepo`/`makeWorktreeRoot` build under a real `/tmp`, which is
+  the one shape where the shipped predicate happens to be true of the real name.
+
+  **Fix:** ask about the candidate's OWN last component, which is the only thing that distinguishes
+  the two names — `if [ ! -L "$d" ] && [ -L "${named[$dup]}" ]`. The real name displaces an alias;
+  nothing displaces a real name; two aliases (or two names that differ only in a symlinked ancestor)
+  leave the first-seen standing, where the names are equally arbitrary and only the count is a claim.
+  This is correct regardless of ancestor symlinks. A third fixture pins it on the shape the fleet has
+  rather than the one `/tmp` has; the two cross-root fixtures from D-1370 stay green under either
+  spelling, which is why they could not catch this.
+
+  Measured (baseline `graph-sweep` `Tests  51 passed | 2 skipped (53)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | `ccd/ccd-graph-sweep`: survivor back to D-1370's `[ "$d" = "$real" ]` | `graph-sweep` — `Tests  1 failed \| 50 passed \| 2 skipped (53)`: *prefers the real name when the ROOT ITSELF is a symlink (the live fleet shape)* — `expected '…/projects/alpha' to be '…/projects/zeta'` |
+  | `ccd/ccd-graph-sweep`: drop the survivor rule entirely (glob order) | `graph-sweep` — `Tests  3 failed \| 48 passed \| 2 skipped (53)`: the two D-1370 fixtures *and* the new one |
+
+- **D-1372** (2026-09-03, review of the D-1369/D-1370 diff) — **D-1369 fixed the freshness drift in
+  `README.md` and left the identical drift standing in the sibling doc a coordinator quotes into
+  briefs.** `ccd/coordinator-skill/references/wave-lifecycle.md`'s graph-card paragraph enumerated the
+  clause as exactly `fresh` / `1 commit behind HEAD` / `N commits behind HEAD` / `not an ancestor of
+  HEAD` / `freshness unmeasured`, and explained the third as firing when the graph was built at a
+  commit the tree cannot reach *"(a branch tip the session has since checked away from, or a diverged
+  branch)"*. After D-1368 a diverged branch whose TREE is identical reads `fresh — same content as
+  HEAD`, so both the enumeration and its explanation are falsified for that case — and
+  `server/test/session-hook.test.ts`'s *calls a SQUASHED history fresh* pins exactly that shape
+  (`rev-list --left-right --count` = `1 1`, a diverged branch) as reading `fresh — same content as
+  HEAD` and NOT `not an ancestor`.
+
+  The guard was blind to it in precisely the way D-1369 records for the README:
+  `coordinator-skill.test.ts`'s FRESHNESS harvest de-dupes `/\bfresh="([^"]+)"/`, so D-1368's new
+  `fresh="fresh"` assignment left the vocabulary SET identical, and the qualifier is APPENDED with
+  `fresh+=`, which that regex never matches. `coordinator-skill` measured GREEN over the drifted
+  paragraph in the baseline run (`Tests  66 passed (66)`) — the same vacuous pass D-1369 recorded.
+
+  **Fix:** the paragraph is scoped the way the README bullet now is — content decides first, the card
+  APPENDS ` — same content as HEAD`, and the enumerated ancestry words apply *only* when the two trees
+  differ — and `ccrc-install-graphify.test.ts`'s `QUALIFIERS` harvest (same `fresh\+="([^"]+)"`
+  collection, same throw-on-empty) is mirrored into `coordinator-skill.test.ts` so the sibling doc is
+  bound by mechanism rather than by an author remembering it. The order arm is DERIVED from the hook's
+  own call sites (`_hook_same_tree` before `rev-list --left-right --count`), pinning which predicate
+  decides first and no spelling of either.
+
+  **`ccd/worker-skill/SKILL.md` clause 12 is deliberately left alone**, recorded here rather than
+  implied: its parenthetical fires on `not an ancestor of HEAD`, and that word is still reached only
+  when the trees genuinely differ, so the sentence is true post-D-1368. Clause 12 is pinned VERBATIM
+  by `worker-skill.test.ts`, so touching it for tidiness would cost a verbatim re-pin for no
+  correctness gain. `worker-skill` measured green.
+
+  Measured (baseline `coordinator-skill` `Tests  66 passed (66)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | `wave-lifecycle.md`: the graph-card paragraph back to its enumeration-only wording | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *the graph-card paragraph never names the `same content as HEAD` qualifier the hook appends…* |
+  | `wave-lifecycle.md`: keep the qualifier named, drop only the `CONTENT decides that clause first` scoping | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *…enumerates the ancestry words without saying that CONTENT is asked first* |
+  | `ccd/session-hook.sh`: delete the `fresh+=" — same content as HEAD"` append entirely | `coordinator-skill` — `Test Files  1 failed (1)`, `Tests  no tests`: *Error: ccd/session-hook.sh appends no freshness qualifier at all — … the graph-card paragraph that names one has to be re-derived against it* |
+  | `ccd/session-hook.sh`: reword the qualifier to `" — identical bytes to HEAD"` without touching the doc | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *the graph-card paragraph never names the `identical bytes to HEAD` qualifier the hook appends…* |
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

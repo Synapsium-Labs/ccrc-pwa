@@ -734,6 +734,28 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
     return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
   })();
 
+  /** Every QUALIFIER the card APPENDS to a freshness word, harvested from the
+   *  hook's own `fresh+=` sites — the twin of `ccrc-install-graphify.test.ts`'s
+   *  (D-1369), mirrored here for the reason D-1372 records: the harvest above
+   *  COULD NOT SEE D-1368 LAND. That change made a squash-merged graph read
+   *  `fresh — same content as HEAD`, which is exactly the case this paragraph
+   *  went on promising would read `not an ancestor of HEAD`, and the pin stayed
+   *  green over the drift twice over — the new `fresh="fresh"` assignment left
+   *  the vocabulary SET identical after the de-dupe, and the qualifier is
+   *  APPENDED, so `/\bfresh="([^"]+)"/` never matched it at all. A qualifier is
+   *  deliberately not a state (nothing branches on it, which is why the
+   *  FRESHNESS harvest is the right shape for the states), but it IS card text
+   *  a coordinator quotes into a brief. Leading punctuation is stripped so the
+   *  pin is on the words, not on the em dash that joins them. */
+  const QUALIFIERS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+      .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
+    if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
+      'all — the card was rewritten, and the graph-card paragraph that names one has to be ' +
+      're-derived against it rather than left standing');
+    return [...new Set(vals)];
+  })();
+
   /** Word-BOUNDARY match, never a raw substring — the same hole as the worker
    *  suite's twin harvest (D-1342). `fresh` is a substring of `freshness
    *  unmeasured`, so a `toContain` arm for it passes on the longer word alone
@@ -741,6 +763,32 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
    *  harvest is its only binding and a vacuous arm leaves it unbound. */
   const wordRe = (w: string): RegExp =>
     new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  it('names the qualifier the hook APPENDS, and scopes the ancestry words to a differing tree (D-1372)', () => {
+    // DERIVED FROM ORDER, the same way the README's twin arm is: the card asks
+    // a CONTENT predicate before it asks ancestry at all, so a graph whose
+    // bytes are HEAD's reads `fresh` and never reaches the `not an ancestor of
+    // HEAD` arm — which is what this paragraph promised for that very case
+    // until D-1372. Nothing here pins a spelling of either predicate, only
+    // which one decides first.
+    const content = hook.indexOf('_hook_same_tree "$cwd"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
+      'looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
+      'is looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(content, 'ccd/session-hook.sh decides ancestry before content, so a graph whose tree ' +
+      "IS HEAD's reads `not an ancestor of HEAD` again — D-1368 was reversed")
+      .toBeLessThan(ancestry);
+    for (const q of QUALIFIERS) {
+      expect(para(), `the graph-card paragraph never names the \`${q}\` qualifier the hook ` +
+        'appends to a freshness word — a coordinator quoting the card into a brief meets text ' +
+        'this paragraph says the card cannot carry').toMatch(wordRe(q));
+    }
+    expect(para(), 'the graph-card paragraph enumerates the ancestry words without saying that ' +
+      'CONTENT is asked first — a squash-merged graph reads `fresh` where this paragraph ' +
+      'promises `not an ancestor of HEAD`').toMatch(/CONTENT decides that clause first/);
+  });
 
   it('names every freshness state the hook can print, including the unmeasured one', () => {
     for (const word of FRESHNESS) {
