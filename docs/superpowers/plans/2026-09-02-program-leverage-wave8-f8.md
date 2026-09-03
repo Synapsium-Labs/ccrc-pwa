@@ -3879,8 +3879,9 @@ describe('ledger allocate carries an identity, or refuses', () => {
 
   it('a BODYLESS allocate is untouched — there is nothing to attribute', async () => {
     // The scope decision, pinned: the rule is about a body THIS CLIENT SENDS,
-    // and the closed-table row at :126 already exercises the path with none.
-    // Without this case that row would stay green for a reason nobody stated.
+    // and the closed-table row above already exercises the path with none.
+    // That row reds under Step 5's (v) too, so it is a real pin and not a
+    // silent one; this case is what states the reason it holds.
     const r = await run(['ledger', 'allocate'], undefined,
       { TMUX_PANE: undefined, TMUX: undefined });
     expect(r.status).toBe(0);
@@ -4034,6 +4035,16 @@ JSON, the two `byId`-bearing forms are untouched or refused, and `[1,2]` refuses
   - **(iv) delete the `[[ "$rest" == '{'* ]] || refuse` line**: expect RED on *refuses a body that
     is not a JSON object* — `a spliced non-object reached the wire: expected [ { … } ] to have a
     length of 0 but got 1`, the wire body being `{"byId":"demo-ws",[1,2]`.
+  - **(v) drop the `-n "$body"` half of the outer guard** (so `[[ "$key" == 'ledger.allocate' ]]`
+    alone admits a bodyless call): expect RED on *a BODYLESS allocate is untouched* —
+    `expected 2 to be +0` — because the empty body is now spliced into `{"byId":"…"}` and sent.
+    **This row was MISSING from the drafted plan** while Step 1's dictated comment already cited
+    "(ii) and (v)", so the comment referenced a mutation the table did not carry; supplied and
+    measured during execution (Task 41).
+    RIGHT REASON, with a correction to Step 1's own wording: the plan said the pre-existing
+    closed-table row "would stay green for a reason nobody stated", implying it is unaffected here.
+    It is NOT — under (v) that row reds too. The row is a real if accidental pin; the new case makes
+    its reason explicit rather than supplying the only coverage.
 
   Revert each.
 
