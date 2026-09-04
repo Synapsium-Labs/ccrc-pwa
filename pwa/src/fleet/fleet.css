@@ -562,7 +562,7 @@
 }
 .proj-row {
   display: grid;
-  grid-template-columns: 14px 1fr;
+  grid-template-columns: 14px 1fr auto;
   column-gap: var(--sp-2);
   row-gap: 2px;
   align-items: center;
@@ -590,11 +590,50 @@
   color: var(--accent);
 }
 .proj-name {
+  /* EXPLICIT column, not auto-placement (F3). The track gained a third column
+   * for the readiness badge, and the badge is not always rendered — a server
+   * too old to send `readiness` renders no span at all. With nothing occupying
+   * column 3, auto-placement would put `.proj-dir` at row 1 column 3, beside
+   * the name instead of under it, on exactly those servers. Pinning both to
+   * column 2 makes the layout independent of whether the badge is there. */
+  grid-column: 2;
   font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-mono);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+/* F3 — the program-ready badge. `.proj-row` is `background: none`, so its
+ * ground comes from `.sheet-panel` (`background: var(--bg-sheet)`, in
+ * components/primitives.css). Naming that ancestor in the selector does NOT
+ * ground it for the auditor: the descendant route resolves a ground only
+ * against a SELF-GROUNDED host — one setting a colour AND a ground — and
+ * `.sheet-panel` paints without setting a colour of its own. All four rules
+ * therefore sat in the uncovered census, scoped and unmeasured, until their
+ * INHERITED_GROUNDS entries existed (D-1030, mechanism corrected in fix
+ * round 1). Explicitly placed in column 3 spanning both rows.
+ * Inert by contract — no glow, no animation, no box-shadow. */
+.sheet-panel .proj-ready {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  align-self: center;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+/* The reason line: column 2 like the name and dir above it, on its own row.
+ * Inert, and ink-tertiary rather than a hue — the badge beside it already
+ * carries the colour cue, and repeating it here would be two shouts. */
+.sheet-panel .proj-ready-why {
+  grid-column: 2;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-tertiary);
+  overflow-wrap: anywhere;
+}
+.sheet-panel .proj-ready[data-verdict='ready'] { color: var(--status-busy-text); }
+.sheet-panel .proj-ready[data-verdict='blocked'] { color: var(--status-dead-text); }
+
 .proj-dir {
+  grid-column: 2;   /* see .proj-name above */
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
@@ -770,6 +809,7 @@
 .sess-line--active .sess-meta,
 .sess-line--active .sess-state,
 .sess-line--active .sess-tally,
+.sess-line--active .sess-graph,
 .sess-line--active .sess-subagents,
 .sess-line--active .sess-warn,
 .sess-line--active .sess-acct,
@@ -1037,6 +1077,15 @@
    quiet register as .sess-tally, no colour of its own (inherits .sess-meta's
    ink-secondary), so it needs no new contrast pair. */
 .sess-cleanup-fact {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* The hook's graph-read counter — same quiet register as .sess-tally, no
+   colour of its own (it inherits .sess-meta's ink-secondary), so it brings no
+   new contrast pair with it. */
+.sess-graph {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -1947,6 +1996,37 @@ button.sess-held {
    IS worth a second look is told apart by its WORDS ("resumed, not cleared"),
    the board's standing two-cue rule, never by a hue. Self-grounded under
    `.run-row` exactly as its neighbours are; no new token pair. */
+/* F7's compact warn row. Its OWN wrapped line inside the existing `.run-row`
+   (`flex-basis: 100%` against that row's `flex-wrap: wrap`), so a wedge reads as
+   a sentence about the run rather than as one more cell competing for phone
+   width. Scoped under `.run-row` — that is what grounds it for design/audit.mjs,
+   whose rule is that every colour sits on a declared background.
+
+   NO --glow, NO animation, NO box-shadow: runs are not living panes, and
+   `pwa/test/fleet-css.test.ts`'s selector loop holds this class to that. The ink
+   is `--status-attention-text`, already declared and already priced by
+   contrast-check.mjs — the amber warn register `.pr-warn` and
+   `.program-start-warn` use, not a new pair. */
+.run-row .run-warn {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--status-attention-text);
+}
+.run-row .run-warn-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.run-row .run-warn-glyph { color: var(--ink-tertiary); }
+
 .run-row .run-resumed {
   font-size: var(--text-2xs); color: var(--ink-tertiary);
 }
@@ -1957,8 +2037,19 @@ button.sess-held {
    `.run-row .run-glyph`/`.run-row .run-state` a few lines up — a run row is
    a record of a lifecycle position, not a living pane, so this control gets
    no --glow/animation/box-shadow either (`fleet-css.test.ts`'s "runs are not
-   living panes"). */
-.run-row .run-abandon {
+   living panes").
+   `.run-resume` (the resume door, program-leverage wave 5, D-1129) is GROUPED
+   here rather than given a rule of its own: it is the same object — a
+   `flex: none` control sitting beside `.run-open` on the row — and the
+   grouping is what keeps it MEASURED by `design/audit.mjs` (it inherits
+   `.run-row`'s recovered ground) and floored on `var(--tap-min)` by the one
+   declaration, instead of a second copy that drifts. `flex: none` is
+   load-bearing on BOTH: `.run-open` deliberately declares no `width` (above,
+   pinned) precisely so its siblings can share the line; a THIRD control that
+   claimed flexible width would push both onto their own rows at phone widths,
+   which jsdom cannot see and only the stylesheet can prevent. */
+.run-row .run-abandon,
+.run-row .run-resume {
   flex: none;
   min-height: var(--tap-min);
   min-width: var(--tap-min);
@@ -1971,7 +2062,8 @@ button.sess-held {
   cursor: pointer;
   transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
 }
-.run-row .run-abandon:active { transform: scale(0.94); color: var(--ink-secondary); }
+.run-row .run-abandon:active,
+.run-row .run-resume:active { transform: scale(0.94); color: var(--ink-secondary); }
 
 /* ------------------------------------------------------------------ *
  *  Coord banner — the pause readout and its toggle (Task 11, spec      *
@@ -2020,6 +2112,98 @@ button.sess-held {
    selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
    5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
    until this selector named its ancestor). */
+/* Wave 6, spec §8: the caps dial, beside the pause banner and grounded the same
+   way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
+   recover a ground and measure the contrast — a colourless rule lands in
+   `uncovered` and the gate cannot see it at all. */
+.caps-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  /* Anchors the empty live region's out-of-flow box (see `.caps-note:empty`). */
+  position: relative;
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+
+.caps-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.caps-control .caps-label {
+  color: var(--ink-secondary);
+}
+
+.caps-input {
+  width: 4.5rem;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-1);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-primary);
+  /* `--text-input`, not `--text-2xs`: iOS Safari zooms the viewport on focus
+     for any text entry under 16px, and this is the only text entry on the runs
+     board. Every other input in the app is already on this token. */
+  font: var(--weight-regular) var(--text-input) / 1 var(--font-mono);
+}
+
+/* The reading an operator acts on: usage against the cap. Dimmer than the
+   input, because it is a measurement and not a control. */
+.caps-control .caps-usage {
+  color: var(--ink-tertiary);
+}
+
+.caps-save {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+
+.caps-save:active { transform: scale(0.97); }
+
+/* Named-ancestor descendant for the same reason `.coord-error` is one. */
+.caps-control .caps-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-dead-text);
+}
+
+/* The note is a live region that is always mounted, so it is empty most of the
+   time. It must collapse WITHOUT `display: none`, which would remove it from the
+   accessibility tree and defeat the reason it is always mounted (D-1222).
+
+   OUT OF FLOW, not merely zero-height (D-1236). `height: 0` alone left it a flex
+   item with `flex-basis: 100%`, so it still formed a second flex LINE and the
+   container's 8px `row-gap` was still paid — the strip sat permanently taller
+   than before the note existed, while the rule's own comment claimed it collapsed
+   to nothing. An absolutely-positioned child is taken out of the flex flow
+   entirely, so no line and no gap; it stays in the accessibility tree, and the
+   `:empty` selector stops applying the instant it has something to say, which
+   puts it straight back in flow. */
+.caps-control .caps-note:empty {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;
@@ -2143,9 +2327,10 @@ button.sess-held {
 /* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
    `.coord-banner .coord-error`/`.abandon-sheet .abandon-error` already use
    (6.80:1 DARK / 5.73:1 LIGHT), reused rather than a fifth rule re-deriving
-   the same ratio. Three genuine refusals share this register: D-292 (was D-B4-19) (a
-   session already running), D-284 (was D-B4-11) (nothing placeable) and an ordinary
-   create failure. */
+   the same ratio. Four genuine refusals share this register: D-292 (was D-B4-19) (a
+   session already running), D-1130 (a project the run board already shows a run
+   in, or has not answered about yet), D-284 (was D-B4-11) (nothing placeable)
+   and an ordinary create failure. The order is the render chain's own. */
 .program-start-sheet .program-start-existing,
 .program-start-sheet .program-start-refuse,
 .program-start-sheet .program-start-error {

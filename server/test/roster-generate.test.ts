@@ -98,7 +98,7 @@ describe('generateAccountsSh', () => {
     const hostileAccount = {
       id: 'hostile', label: 'Hostile', configDirSuffix: hostileSuffix,
       exec: { kind: 'upstream' as const }, homeAble: true,
-      hue: 'cyan' as const, telemetry: 'anthropic' as const,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false,
     };
     const hostileRoster = {
       version: 1 as const,

@@ -1,19 +1,24 @@
 // The run board's own door onto a NEW program (Task 13, spec §4.4). This is
 // a COMPOSITION, not a compound route: `POST /api/runs` is the coordinator's
 // own (it demands a live `claimedBy` and refuses a second claimant,
-// `routes.ts:660-709`) and this build does not add a route that both spawns
+// `server/src/coord/routes.ts:872`, refusing a second claimant in
+// `server/src/coord/store.ts:363-371`) and this build does not add a route that both spawns
 // a session and opens a run. The flow is three EXISTING calls —
-// `api.projects`, `api.createSession`, `api.prompt` — plus `useProjectedHome`
+// `api.projects`, `api.createSession`, `api.kickoff` — plus `useProjectedHome`
 // for the account name, composed here and nowhere else.
 //
 // D-291 (was D-B4-18) and D-292 (was D-B4-19) (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both load-bearing for this file and
-// are why it is not the simple "create, then prompt the id it returns" shape
-// the brief's own interface list reads as:
+// are why it is not the simple "create, then kick off the id it returns" shape
+// the brief's own interface list reads as. (Wave 4 changed WHAT is sent — the
+// kickoff is durable mail queued through the idle-gated lane now, not
+// keystrokes typed into the pane — and changed nothing about WHO it is sent to:
+// the addressing argument below is why this file exists, and it is unaffected.)
 //
 //   * `POST /api/sessions`'s success body is the literal `{ok:true}`
-//     (`server/src/server.ts:593-596`, `runCcdOr502`) — no id. `ccd`
-//     computes the id as `${wrapper}-${project}` (`ccd/ccd:185`, `_id()`)
+//     (`server/src/server.ts:1510-1513`, `runCcdOr502`; the route itself is
+//     `:1517-1530`) — no id. `ccd`
+//     computes the id as `${wrapper}-${project}` (`ccd/ccd:1091`, `_id()`)
 //     and only echoes it to stdout, which that route discards. Recomputing
 //     the same formula here was REJECTED — a second implementation of a rule
 //     ccd owns is exactly what `useProjectedHome.ts`'s own docstring refuses
@@ -24,48 +29,42 @@
 //     that is the point — see `liveMainCheckoutIn`/`startedSessionFor`, whose
 //     own docstrings carry the argument; do not fold them back into one
 //     predicate.
-//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:7192-7203`): a second `start` whose
+//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:12117`): a second `start` whose
 //     `_id()` is already `_alive` is a no-op that attaches to the session
-//     already there. A blind kickoff would inject a coordinator brief into a
-//     session that may be mid-task, so this sheet checks for that collision
+//     already there. A blind kickoff would hand this program to a session
+//     started for something else — the queue does not interrupt it, but it
+//     does address it — so this sheet checks for that collision
 //     BEFORE the tap — same posture as the projection naming the account
 //     before the tap rather than guessing — and refuses with no confirm
 //     button at all when it finds one.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import type { FleetSession, ProjectRow } from '../../../shared/api';
+import { ledgerPath } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
 import { accountLabel } from '../lib/accounts';
 import { markerState } from './coordWords';
-import { ApiError, api, apiErrorText } from '../lib/api';
+import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useProjectedHome } from './useProjectedHome';
+import {
+  READY_GLYPH, READY_PENDING_GLYPH, missingPreconditions, readinessTitle, readinessWord,
+} from './readinessWords';
 import './fleet.css';
 
-interface Project {
-  name: string;
-  workdir: string;
-}
 
-/** The one standing kickoff. It names three things and asserts nothing:
- *  the program slug, the ledger path the operator is expected to have
- *  committed, and the skill to run. THE SERVER NEVER VALIDATES THE LEDGER
- *  (`coord/routes.ts`'s open route: "PARSED BY NOTHING") and this sheet must
- *  not pretend to either — naming the path is exactly what that route already
- *  does in its own response, and this stops there. */
-const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;
-
-// Review fix round 1, Minor 3: `kickoff` used to build this path a second
-// time inline rather than calling `ledgerPath` — this file's own header
-// cites "Two implementations of one rule drift" as the reason it exists at
-// all, and had drifted into being an example of the thing it warns against.
-export const kickoff = (slug: string, title: string): string =>
-  `You are the coordinator for program \`${slug}\` (${title}).\n` +
-  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
-  `Run the ccrc-coordinator skill and open the run for wave 1.`;
+// The kickoff sentence and the ledger path both live in `shared/api.ts` since
+// wave 4 (D-1043). They moved because they gained a SECOND speaker — the server
+// composes the kickoff body now that it is queued as mail rather than typed here
+// — and this file's own header cites "Two implementations of one rule drift" as
+// the reason it exists at all. The sheet still renders the path (it is the one
+// thing the operator has to have committed before starting), and still never
+// opens it; only the sending moved.
+//
+// Review fix round 1, Minor 3, carried with them: `programKickoff` builds the
+// path by calling `ledgerPath`, never by spelling it a second time inline.
 
 /** D-291: how long the sheet waits for the freshly created session to
  *  appear in a `/ws/fleet` snapshot before giving up. Tied to the fleet
@@ -80,7 +79,8 @@ export const START_PROGRAM_WAIT_MS = 20_000;
 /** A MAIN CHECKOUT of `project` — not one of its workspaces. The shared half
  *  of both arms below, and the one C1 was about: `wrapper`+`project` alone is
  *  not a main checkout, because `cmd_ws_add` writes BOTH fields onto every
- *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:1164+`) that
+ *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:3530`, called
+ *  at `ccd/ccd:3707`) that
  *  `useProjectedHome` mirrors exactly (`server/src/limits.ts:96`) — so a
  *  two-field match hits live workers on a box in its normal state.
  *  `FleetSession.workspace` is server-reported and documented "null for a
@@ -93,9 +93,10 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *
  *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
  *  of the C1 fix). `cmd_swap` rewrites the registry's `wrapper` field and
- *  KEEPS the id (`ccd/ccd:7307`, `_reg_set "$id" wrapper "$target"`), while
+ *  KEEPS the id (`ccd/ccd:13125`, `_reg_set "$id" wrapper "$target"`), while
  *  `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"`
- *  (`ccd/ccd:7202-7203`) — keyed on the ID, which a swap does not move. On the
+ *  (`ccd/ccd:12144` and `ccd/ccd:12182`) — keyed on the ID, which a swap does
+ *  not move. On the
  *  live fleet 5 of 10 main checkouts already report a `wrapper` that differs
  *  from their own id prefix (an id reading `<wrapper>-<project>` whose registry
  *  row reports a DIFFERENT wrapper — the count is the evidence, the particular
@@ -152,11 +153,11 @@ function liveMainCheckoutIn(
  *
  *  Why liveness is needed: project + wrapper + `workspace === null` is NOT a
  *  unique key, by the same `cmd_swap` fact that widened the refusal arm
- *  (`ccd/ccd:7307` moves the wrapper, keeps the id). A main checkout
+ *  (`ccd/ccd:13125` moves the wrapper, keeps the id). A main checkout
  *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
  *  refusal (`status !== 'dead'`), so Start is offered; the projection says
  *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
- *  carries both in registry-id sort order (`registry.ts:375`), where
+ *  carries both in registry-id sort order (`registry.ts:793`), where
  *  `'claude-'` sorts before `'claude2'` (`-` 0x2D < `2` 0x32). Without
  *  liveness `.find()` returns the DEAD swapped row — it satisfies project,
  *  `workspace === null` and `wrapper === 'claude2'` — and the kickoff goes to
@@ -215,9 +216,61 @@ function startErrorText(err: unknown): string {
   return apiErrorText(err);
 }
 
+/** "Is a program already running in this project?" — THREE answers, and the
+ *  third is why this is a function instead of a `.has()` at the call site.
+ *
+ *  `openRunProjects === null` is NOT MEASURED: the run board has had neither a
+ *  `runs` frame nor a finished cold read. A `(openRunProjects ?? new Set()).has()`
+ *  answers `false` there, which is indistinguishable from a measured empty board
+ *  — the sheet would offer Start on the strength of a question nobody answered.
+ *  That fold is the single failure this arm exists to prevent, so the state gets
+ *  its own word and the render gets its own sentence.
+ *
+ *  The set carries PROJECT NAMES and nothing else, so the copy below can name
+ *  the project and cannot name the program. That is a limit, not an omission: a
+ *  set of names is not a run row, and naming a program would be a claim this
+ *  measurement never made.
+ *
+ *  The match is EXACT. `RunSummary.project` is whatever string the coordinator
+ *  passed to `POST /api/runs`, which validates it as a non-empty string and
+ *  nothing more (`server/src/coord/routes.ts:889-897`); `ProjectRow.name` comes
+ *  from the projects listing. Nothing joins the two but convention, so a run
+ *  naming a project this picker never lists is a run this sheet cannot speak
+ *  about — loosening to a prefix would refuse real projects over a lookalike.
+ *
+ *  EXPORTED for its own unit test, on `startedSessionFor`'s precedent above. */
+export type OpenRunVerdict = 'clear' | 'open-run' | 'unmeasured';
+
+export function openRunVerdict(
+  openRunProjects: ReadonlySet<string> | null,
+  project: string,
+): OpenRunVerdict {
+  if (openRunProjects === null) return 'unmeasured';
+  return openRunProjects.has(project) ? 'open-run' : 'clear';
+}
+
 export interface StartProgramSheetProps {
   open: boolean;
   onClose: () => void;
+  /** The projects that already carry a NON-CLOSED run, measured by the run
+   *  board from its own combined live+cold `active` list
+   *  (`screens/RunsScreen.tsx`) and handed down. THE SHEET DOES NOT FETCH
+   *  IT: `start-program.test.tsx`'s `expect(urls).toHaveLength(2)` pins this
+   *  composition at exactly two network calls, so a third fetch here reds a
+   *  suite rather than merely costing a request.
+   *
+   *  `null` is NOT MEASURED, and it is a third state on purpose — the board has
+   *  neither a `runs` frame nor a finished cold read (`noSignalYet`,
+   *  `RunsScreen.tsx`): a deep link straight to `/runs`, or a server too old
+   *  to send the frame at all, in the window before `api.runs(true)` answers.
+   *  Both of those paths END in a measured set; `null` is the window, not the
+   *  outcome, and in it this sheet refuses rather than guesses.
+   *
+   *  REQUIRED, not defaulted. `new Set()` as a default would be a fold-to-permit
+   *  written into the type; `null` as a default would silently refuse every
+   *  caller that forgot. A compile error is the same discipline
+   *  `reviveFleetSession` uses for a new wire field — every path computes it. */
+  openRunProjects: ReadonlySet<string> | null;
   /** Injectable for tests; defaults to the app-wide fleet store — same shape
    *  every other sheet in this file uses. */
   fleet?: FleetStore;
@@ -225,16 +278,31 @@ export interface StartProgramSheetProps {
    *  the production mount exercises the same calls `pwa/test/api.test.ts`
    *  pins the URL/method/body of. */
   createSession?: (b: { wrapper: string; project: string; workdir?: string }) => Promise<void>;
-  prompt?: (id: string, text: string) => Promise<void>;
-  loadProjects?: () => Promise<{ roots: string[]; projects: Project[] }>;
+  /** Program-leverage wave 4: the kickoff is QUEUED as durable system mail, not
+   *  typed into the pane. Named `queueKickoff` rather than `kickoff` because the
+   *  standing sentence itself is `programKickoff` in L0 and this file's tests
+   *  import it — one name for the text, another for the act.
+   *
+   *  Wave 5 changed the RETURN, not the call. `api.kickoff` answers `{queued}`
+   *  now (D-1133), and `Promise<{queued: boolean}>` is not assignable to
+   *  `Promise<void>` (D-1137, `TS2322` — `npm run build` runs `tsc --noEmit`
+   *  before it builds anything, and vitest strips types, so the suite could
+   *  never have caught this), so the default on the line below forces this type.
+   *  THE SHEET STILL READS NO FIELD: "one was already waiting" is a distinction
+   *  only the revive path renders. Ignoring a field is a rendering decision;
+   *  declaring the shape an injected fake has to have is a contract one, and
+   *  only the second is worth spending a type on. */
+  queueKickoff?: (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
+  loadProjects?: () => Promise<{ roots: string[]; projects: ProjectRow[] }>;
 }
 
 export function StartProgramSheet({
   open,
   onClose,
+  openRunProjects,
   fleet = useFleetStore,
   createSession = api.createSession,
-  prompt = api.prompt,
+  queueKickoff = api.kickoff,
   loadProjects = api.projects,
 }: StartProgramSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
@@ -249,13 +317,32 @@ export function StartProgramSheet({
 
   const [slug, setSlug] = useState('');
   const [title, setTitle] = useState('');
-  const [project, setProject] = useState<Project | null>(null);
+  const [project, setProject] = useState<ProjectRow | null>(null);
   const [query, setQuery] = useState('');
-  const [list, setList] = useState<Project[] | null>(null);
+  const [list, setList] = useState<ProjectRow[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * A kickoff that could not be QUEUED, held until the operator does something
+   * about it (program-leverage wave 4).
+   *
+   * This is state, not a toast, and the difference is the wave's whole point.
+   * The injection this replaces failed synchronously and left nothing behind, so
+   * a transient message was all there was to say; a failed QUEUE leaves nothing
+   * behind EITHER — no mail row, no delivery, nothing the lane will retry — and
+   * unlike the injection there is now a cheap, correct act that fixes it, so the
+   * sheet has to still be offering it when the operator looks up. `Toast.tsx`
+   * also drops every toast once the 401 auth-lost signal is raised, which is
+   * exactly the failure most likely to eat a kickoff on an armed box.
+   *
+   * `sessionId` is the id `startedSessionFor` MEASURED, carried verbatim: a
+   * retry must not re-open the addressing question D-291/D-292 already settled.
+   */
+  const [kickoffFailed, setKickoffFailed] =
+    useState<{ sessionId: string; slug: string; title: string; why: string } | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   // Fetch the project list the moment the sheet opens — same idiom
   // NewSessionSheet already uses for the same call.
@@ -276,7 +363,7 @@ export function StartProgramSheet({
   // Sheet's own visibility — the component keeps running underneath, the
   // same shape ReapSheet/AbandonSheet's own fix rounds already litigated. It
   // holds async state across the D-291 wait, so closing mid-flight must
-  // retire everything outstanding: `gen` is bumped so a create/prompt/match
+  // retire everything outstanding: `gen` is bumped so a create/kickoff/match
   // that resolves AFTER a close cannot write into whatever the sheet shows
   // next, the timer is cleared so it cannot fire into a retired attempt, and
   // the wait target is dropped so a LATER `sessions` frame cannot resurrect
@@ -294,7 +381,7 @@ export function StartProgramSheet({
   // session it JUST started itself, which is neither running anyone else's
   // work nor true. `myAttemptRef` outlives the timeout (unlike `waitRef`,
   // which `finish()` still nulls the instant a match is found, so a second
-  // `/ws/fleet` frame arriving mid-`prompt()` cannot fire a duplicate
+  // `/ws/fleet` frame arriving mid-`queueKickoff()` cannot fire a duplicate
   // kickoff) — it is cleared only on close or by a NEWER attempt overwriting
   // it, so the false-collision suppression below holds for the entire
   // window from a successful `createSession` through navigation, not merely
@@ -305,7 +392,7 @@ export function StartProgramSheet({
   // wrapper-scoped. Now that `liveMainCheckoutIn` is wrapper-independent the
   // two must agree, or the suppression stops covering its own case:
   // `cmd_swap` moves a live session's `wrapper` while keeping its id
-  // (`ccd/ccd:7307`), so a session this sheet started at `W` can be reported
+  // (`ccd/ccd:13125`), so a session this sheet started at `W` can be reported
   // at `Y` on any later frame — a wrapper-comparing ownership test then fails
   // and the sheet renders "…is already running… may be mid-task" for the
   // session it started ITSELF. That is the Important-2 defect exactly,
@@ -343,6 +430,8 @@ export function StartProgramSheet({
     setStarting(false);
     setTimedOut(false);
     setError(null);
+    setKickoffFailed(null);
+    setRetrying(false);
   }, [open]);
 
   useEffect(() => () => clearTimer(), []);
@@ -363,26 +452,69 @@ export function StartProgramSheet({
     setTimedOut(false);
   }, [project?.workdir, projected?.wrapper]);
 
-  // Sends the kickoff and navigates — the ONLY place either happens. `w.mine`
-  // is checked again after the prompt call settles: a close during the
-  // (short) prompt round-trip must not navigate a screen the operator is no
-  // longer looking at.
+  // Queues the kickoff and navigates — the ONLY place either happens. `w.mine`
+  // is checked again after the queue call settles: a close during that
+  // round-trip must not navigate a screen the operator is no longer looking at.
+  // The call is a QUEUE, not a keystroke (wave 4): what it resolves means the
+  // mail row exists, not that the coordinator has read anything.
   const finish = (session: FleetSession, w: { mine: number; slug: string; title: string }): void => {
     clearTimer();
     waitRef.current = null;
-    void prompt(session.id, kickoff(w.slug, w.title))
-      .catch((err: unknown) => {
-        // The session is real and the create already succeeded — only the
-        // nudge failed to land. Said once, non-blocking: the operator can
-        // finish the kickoff by hand from inside the session this still
-        // navigates to below.
-        toast(`Started, but the kickoff prompt failed to send — ${apiErrorText(err)}`, 'error');
-      })
+    void queueKickoff(session.id, { slug: w.slug, title: w.title })
       .then(() => {
         if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
         setStarting(false);
         navigate(`/s/${encodeURIComponent(session.id)}`);
+      })
+      .catch((err: unknown) => {
+        if (gen.current !== w.mine) return; // superseded — a later close/open owns the phase now
+        setStarting(false);
+        // NOTE THE ORDER. This used to be `.catch(toast).then(navigate)`, which
+        // navigated on BOTH arms — defensible for an injection, where the
+        // session is real either way and the operator could finish the kickoff
+        // by hand from inside it. It is not defensible for a queue: nothing
+        // durable exists, so walking the operator into a session whose
+        // coordinator will never be briefed hides the one fact they need.
+        setKickoffFailed({ sessionId: session.id, slug: w.slug, title: w.title, why: kickoffErrorText(apiErrorText(err)) });
       });
+  };
+
+  /** Re-post the kickoff for a session that is already running — the door the
+   *  durable queue makes possible for the first time.
+   *
+   *  It re-uses `kickoffFailed.sessionId` and never re-measures the fleet: the
+   *  target was chosen once by `startedSessionFor` under D-291/D-292's whole
+   *  apparatus, and a retry that re-opened that question could land the kickoff
+   *  somewhere else entirely.
+   *
+   *  GENERATION-GUARDED ON EVERY ARM (wave-4 review, MAJOR 1, D-1046). It
+   *  shipped guarding none, which was the same defect `finish()` carries two
+   *  guards against — and worse here, because this call settles later than
+   *  anything else in the file: the operator has already read a failure and
+   *  tapped a button before the round trip even starts, which is exactly when a
+   *  close is likely. A late SUCCESS navigated to the old session under
+   *  whatever the operator had opened next; a late REJECTION re-planted the
+   *  block the close had just cleared, so the next program's sheet opened
+   *  showing the previous attempt's retry door aimed at the previous attempt's
+   *  session. The `finally` is guarded too, and for a third reason: a newer
+   *  retry owns `retrying` once `gen` has moved, and clearing it from here
+   *  would re-enable a button whose call is still outstanding. */
+  const retryKickoff = async (): Promise<void> => {
+    const k = kickoffFailed;
+    if (k === null || retrying) return;
+    const mine = gen.current;
+    setRetrying(true);
+    try {
+      await queueKickoff(k.sessionId, { slug: k.slug, title: k.title });
+      if (gen.current !== mine) return; // superseded — a later close/open owns the phase now
+      setKickoffFailed(null);
+      navigate(`/s/${encodeURIComponent(k.sessionId)}`);
+    } catch (err: unknown) {
+      if (gen.current !== mine) return; // superseded — the block this would re-plant is retired
+      setKickoffFailed({ ...k, why: kickoffErrorText(apiErrorText(err)) });
+    } finally {
+      if (gen.current === mine) setRetrying(false);
+    }
   };
 
   const checkForMatch = (): void => {
@@ -432,10 +564,29 @@ export function StartProgramSheet({
     && myAttemptRef.current !== null
     && existing.project === myAttemptRef.current.project;
 
+  // Computed from `project` ALONE, and deliberately NOT written into
+  // `existing`'s expression above. That one carries a `projected != null`
+  // conjunct, which is harmless for D-292 only because the D-284 arm renders
+  // directly beneath it — a run-based refusal riding the same conjunct would be
+  // silently replaced by "Nothing is placeable" on exactly the fleet where
+  // nothing is placeable: a state that has nothing to do with whether this
+  // project already has a coordinator, and one the operator fixes by enabling an
+  // account and walking straight into the collision. Two independent facts, two
+  // independent measurements.
+  const runVerdict: OpenRunVerdict | null =
+    project === null ? null : openRunVerdict(openRunProjects, project.name);
+
   const start = async (): Promise<void> => {
     if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
     if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
+    // …and the run-board arm above it in the same `? :` chain withholds the
+    // button on the same terms, so `runVerdict` needs no return of its own here.
+    // Deliberate: React dispatches the handler attached by the render that
+    // decided to draw the control, so no tap can carry a stale verdict — and a
+    // guard no test can reach is exactly what `startedSessionFor`'s own
+    // docstring refuses to ship. If a later change ever demotes either refusal
+    // to a `disabled` term, BOTH need a return here.
 
     const wrapper = projected.wrapper;
     const projectName = project.name;
@@ -443,16 +594,33 @@ export function StartProgramSheet({
     setStarting(true);
     setTimedOut(false);
     setError(null);
+    // Wave-4 review, MINOR 4 (D-1121). Same withdrawal as `timedOut`'s above,
+    // and for the same reason one line further on: `kickoffFailed` is a
+    // statement about ONE attempt's target, and a new attempt makes it a red
+    // block ABOVE a Start button aimed somewhere else. Unlike `timedOut` it
+    // carries an act — the door navigates to the previous attempt's session,
+    // stranding the create being started right now.
+    //
+    // RETIRED, NOT RE-KEYED, and this costs something: the door is the only
+    // control that can re-post for that session, so a kickoff that failed and
+    // was then walked away from is not recoverable from this sheet. That is
+    // the trade taken deliberately — the operator has the door on screen, in
+    // red, directly above the Start they are choosing to tap instead, and a
+    // second attempt is a clear statement of what they want the sheet to be
+    // about. Bumping `gen` above already retired any retry in flight (D-1046),
+    // so this cannot race one back into existence.
+    setKickoffFailed(null);
+    setRetrying(false);
 
     // B-1: armed BEFORE the await, not after. `myAttemptRef` records the
     // sheet's INTENT TO CREATE, not a receipt for a completed one — and the
     // window it has to cover starts the moment `ccd` is asked, not the moment
     // it answers. `cmd_start` writes `$REG/<id>.uuid` and the rest of the
-    // fields, THEN `_spawn`s (`ccd/ccd:7203-7208`); the server lists a session
-    // on its `.uuid` file alone (`registry.ts:375` — `started` does not gate
+    // fields, THEN `_spawn`s (`ccd/ccd:12206-12208`); the server lists a session
+    // on its `.uuid` file alone (`registry.ts:793` — `started` does not gate
     // listing, and is written after `_spawn` anyway) and reports `status:
-    // 'idle'` as soon as tmux has the id (`fleet.ts:186-190`); the watcher
-    // ticks every 2 s (`watch.ts:424`) while the HTTP call is still blocked in
+    // 'idle'` as soon as tmux has the id (`fleet.ts:236-237`); the watcher
+    // ticks every 2 s (`watch.ts:533`) while the HTTP call is still blocked in
     // `_accept_first_run_prompts`/`_inject_spawn_effort`. So a frame carrying
     // the new session arrives MANY SECONDS before `createSession` resolves.
     // Armed after the await, `isOwnAttempt` was false for that entire window
@@ -507,6 +675,84 @@ export function StartProgramSheet({
     checkForMatch();
   };
 
+  /** The standing kickoff-failure recovery — the statement, plus the two acts
+   *  that finish it — as ONE node, rather than a run of JSX buried in the last
+   *  arm of the chain below.
+   *
+   *  Program-leverage wave 4 minted it: a standing statement with an act beside
+   *  it, not a toast (see `kickoffFailed`'s own declaration for why), and both
+   *  controls reuse classes that are already grounded and pinned
+   *  (`program-start-error`, `program-start-go`) rather than introducing a
+   *  coloured rule the contrast census has never seen.
+   *
+   *  WAVE-5 REVIEW, MINOR 6 (D-1149) is why it is a node. It lived inside the
+   *  confirm fragment, which is the LAST arm of that chain, so EVERY arm above
+   *  it retired the recovery by rendering instead of it — and one of those arms
+   *  is now driven by a prop the run board rebuilds every ~2 s
+   *  (`openRunProjects`, `screens/RunsScreen.tsx`). A run opening in this
+   *  project while a queue failure was standing therefore replaced a live retry
+   *  door and an open-anyway door with a sentence about a collision, on a poll
+   *  tick the operator never touched — and the retry door is the ONLY control
+   *  that can re-post for that session (`retryKickoff`). A recovery that
+   *  vanishes mid-recovery is worse than one never offered: nothing durable
+   *  exists to retry from anywhere else.
+   *
+   *  HOISTING, deliberately, and not the other available fix — carving the
+   *  standing-failure case out of the run arm's own condition. That one renders
+   *  the CONFIRM fragment while a failure stands, whose Start is withheld only
+   *  by `existing !== null`; and `existing` goes null the moment the operator
+   *  picks a DIFFERENT project, which is exactly the move D-1121 exists to
+   *  support. D-1130's refusal would then have to be re-derived as a sixth
+   *  `disabled` term — and, by `start()`'s own note, a matching early return —
+   *  demoting a structural no-button refusal to a disabled control for a case
+   *  that is ordinary rather than rare. This way the refusal keeps its slot,
+   *  its copy and its posture, and simply stops eating something that was never
+   *  its business.
+   *
+   *  KNOWN INCOMPLETE, and measured rather than assumed. The two OTHER arms
+   *  above the confirm fragment still retire this node, and both were measured
+   *  doing it while this fix was written: the D-284 arm swallows it when the
+   *  accounts poll turns `projected` null twenty seconds later — no operator act
+   *  at all, the same poll-tick shape the run arm had — and the D-292 arm
+   *  swallows it when the operator picks a DIFFERENT project that already has a
+   *  live main checkout. Both interactions predate this wave (the recovery is
+   *  wave 4's; both arms are older) and both were out of this review's scope.
+   *  They are named here so the next reader MEASURES the rest of the chain
+   *  rather than reading this fix as having cleaned it.
+   *
+   *  `null` when no failure is standing, so an arm that renders it says nothing
+   *  extra in the ordinary case. */
+  const recovery = kickoffFailed === null ? null : (
+    <>
+      <p className="program-start-error">
+        {/* Wave-4 review, MINOR 3 (D-1120). This used to open
+            "<id> is running, but…", which on a 404 asserts the exact
+            fact the registry had just denied — above a retry that
+            cannot succeed. What the sheet KNOWS is that it started
+            the session and that nothing was queued for it; the
+            reason comes last, where a `why` with no trailing period
+            (the `err.message` floor) does not read as a typo. */}
+        {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
+          + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
+      </p>
+      <button
+        type="button"
+        className="program-start-go"
+        disabled={retrying}
+        onClick={() => void retryKickoff()}
+      >
+        {retrying ? 'Queueing…' : 'Queue the kickoff again'}
+      </button>
+      <button
+        type="button"
+        className="program-start-go"
+        onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
+      >
+        Open it without a brief
+      </button>
+    </>
+  );
+
   return (
     <Sheet open={open} onClose={onClose} eyebrow="new program" title="Start a program">
       <div className="program-start-sheet">
@@ -558,6 +804,36 @@ export function StartProgramSheet({
                   <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
                   <span className="proj-name">{p.name}</span>
                   <span className="proj-dir">{p.workdir}</span>
+                  {/* F3 — THREE arms, because the wire has three
+                      (`ProjectRow` in shared/api.ts): the key ABSENT is a
+                      server too old to measure readiness and renders nothing;
+                      `null` is this server, not swept yet; an object is the
+                      answer. Folding the first two together would erase the
+                      difference between "upgrade the server" and "wait a
+                      moment", so the check is `=== undefined` and never a
+                      truthiness test. */}
+                  {p.readiness === undefined ? null : p.readiness === null ? (
+                    <span className="proj-ready" data-verdict="pending"
+                      title="measuring program readiness">
+                      {READY_PENDING_GLYPH} checking
+                    </span>
+                  ) : (
+                    <span className="proj-ready" data-verdict={p.readiness.verdict}
+                      title={readinessTitle(p.readiness)}>
+                      {READY_GLYPH[p.readiness.verdict]} {readinessWord(p.readiness)}
+                    </span>
+                  )}
+                  {/* The reasons, VISIBLY. `title=` is unreachable on a phone,
+                      and "which precondition" is the half an operator acts on
+                      — the verdict word alone only says that something is
+                      wrong. Nothing is rendered when the project is ready:
+                      there is no list to show. */}
+                  {p.readiness !== undefined && p.readiness !== null
+                    && p.readiness.verdict !== 'ready' && (
+                    <span className="proj-ready-why">
+                      {missingPreconditions(p.readiness).join(' · ')}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -577,9 +853,22 @@ export function StartProgramSheet({
             // the ordinary branch below lets `timedOut`/`checkForMatch`
             // finish the job instead of lying that it belongs to someone
             // else's mid-task session.
+            // Wave-4 review, MINOR 6 (D-1044's own instruction, finally
+            // obeyed): the old half said the kickoff would land in a session
+            // "which is running mid-task". `liveMainCheckoutIn` matches any
+            // row whose status is not `dead` — an idle one included — so that
+            // was a busy state this arm never measured, and the mail lane
+            // removed the hazard anyway: a queued kickoff waits for the
+            // session's next quiet boundary and interrupts nothing. `main`
+            // hedged it as "may be"; this wave hardened a hedge into a false
+            // factual claim, which is the wrong direction. What survives is
+            // the ADDRESSING hazard, true whether the session is busy or
+            // idle: it was started for something else, and either it becomes
+            // this program's coordinator or the project ends up with two.
+            //
             // The copy names the SESSION, never the account: this arm is
             // wrapper-independent, so the matched row's own `wrapper` may
-            // differ from the projected one (a swap moves it, `ccd/ccd:7307`)
+            // differ from the projected one (a swap moves it, `ccd/ccd:13125`)
             // and naming an account here would state a fact the match never
             // established. Both outcomes are covered rather than the one the
             // wrapper-scoped version could assume: if this IS the row
@@ -589,9 +878,70 @@ export function StartProgramSheet({
             // arm cannot tell them apart without recomputing the id.
             <p className="program-start-existing">
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
-                + 'Starting here would either send the kickoff into that session, which may be '
-                + 'mid-task, or leave the project running two coordinators.'}
+                + 'Starting here would either make that session the coordinator for this program, '
+                + 'whatever it was started for, or leave the project running two coordinators.'}
             </p>
+          ) : runVerdict === 'open-run' || runVerdict === 'unmeasured' ? (
+            // The run-board arm: BELOW D-292, ABOVE D-284, and the order is the
+            // argument rather than an accident of where it was pasted.
+            //
+            // Below D-292 because when both are true both sentences are true, and
+            // that one names a SESSION the operator can open right now; this one
+            // names only a project, because a set of project names is all it was
+            // given. The more actionable sentence wins the single slot.
+            //
+            // Above D-284 because "this project already has a run" holds whether
+            // or not anything is placeable, while "nothing is placeable" is fixed
+            // by enabling an account — which would then walk the operator into
+            // this collision with the refusal never shown.
+            //
+            // NO CONFIRM BUTTON — the D-292 posture, not a disabled control and
+            // not a warning beside a live Start: there is nothing to render here
+            // that could open a second run. The five-term `disabled` below is left
+            // alone deliberately; a sixth term there would be dead code, since
+            // this arm means the button was never rendered.
+            //
+            // KNOWN NARROWER THAN THE HARM, and the copy is written to that limit
+            // (D-1131). `resolveCoordinator(null)` needs exactly one program in
+            // `state='active'` BOX-WIDE (`server/src/coord/store.ts`, its
+            // "no single active program: ambiguous or absent" guard), so a second
+            // program in a DIFFERENT project wedges run-less coordinator mail just
+            // as hard and this arm cannot see it; and `POST /api/runs` applies no
+            // project predicate at all (`server/src/coord/routes.ts:889-897`), so
+            // nothing behind this catches what it misses. The sentence claims a
+            // consequence of THIS start and never that the fleet is otherwise
+            // clean.
+            //
+            // The `unmeasured` sentence does not say a run exists. It says the
+            // board has not answered, which is the only fact held, and it is a
+            // WAIT — the cold read resolves it within one round trip and this
+            // recomputes on the next render.
+            //
+            // AND IT NO LONGER RETIRES A STANDING RECOVERY (wave-5 review,
+            // MINOR 6, D-1149) — the THIRD reason this arm needed, which the two
+            // above could not supply because the thing it displaces lives
+            // further DOWN the chain rather than beside it. Wave 4's
+            // kickoff-failure recovery renders in the last arm; this one
+            // rendering instead of that one took the retry door away from an
+            // operator mid-recovery, on a poll tick, because `openRunProjects`
+            // is rebuilt every ~2 s. The refusal keeps its slot and its copy —
+            // ordering is an argument about which SENTENCE wins the one slot,
+            // and never was an argument for withdrawing an ACT the operator
+            // still needs — and `recovery` (non-null only while a failure is
+            // actually standing, see its own docstring) rides beneath it.
+            <>
+              <p className="program-start-refuse">
+                {runVerdict === 'open-run'
+                  ? `${project.name} already has a run open — open it from the run board, or pick `
+                    + 'another project. A second program here leaves the project with two coordinators, '
+                    + 'and coordinator mail that carries no run id then has more than one active '
+                    + 'program to choose from, which the server refuses rather than guesses.'
+                  : 'The run board has not answered yet, so this sheet cannot tell whether '
+                    + `${project.name} already has a program running. It will know in a moment — or `
+                    + 'open the run board and look.'}
+              </p>
+              {recovery}
+            </>
           ) : projected === null ? (
             // D-284: the server's own "nothing is placeable" — refuse with
             // copy rather than guessing a wrapper.
@@ -618,15 +968,18 @@ export function StartProgramSheet({
                 <p className="program-start-warn">
                   {markerState(coord.pause) === 'set'
                     ? 'The fleet is paused — the coordinator will be refused at its first dispatch until it is resumed.'
-                    : 'The registry could not be read — dispatch fails shut on that, so the coordinator '
-                      + 'would be refused at its first dispatch just as a pause refuses it.'}
+                    : 'The registry could not be read — the mail sweep fails shut on that, so the '
+                      + 'kickoff itself would not be delivered, and dispatch would refuse the '
+                      + 'coordinator afterwards just as a pause refuses it.'}
                 </p>
               )}
               <p className="program-start-ledger">
                 {`Its ledger: ${ledgerPath(slug.trim() === '' ? '…' : slug.trim())}`}
               </p>
               <p className="program-start-note">
-                The run row arrives later, once the coordinator opens it — not from this sheet.
+                The kickoff is queued as mail and lands at the session&rsquo;s next quiet moment,
+                usually a minute or two. The run row arrives after that, once the coordinator
+                opens it — not from this sheet.
               </p>
               {timedOut && (
                 <p className="program-start-timeout">
@@ -634,6 +987,12 @@ export function StartProgramSheet({
                 </p>
               )}
               {error !== null && <p className="program-start-error">{error}</p>}
+              {/* Program-leverage wave 4's kickoff-failure recovery, which is
+                  no longer written out here: it is `recovery` above (D-1149),
+                  because the run arm renders it too. Rendered in the same slot
+                  it has always occupied — under the ledger note, over the
+                  confirm control. */}
+              {recovery}
               {/* B-3: `existing !== null` reaches this branch only when
                   `isOwnAttempt` suppressed the refusal above — the sheet's own
                   session has appeared and `finish()` is sending its kickoff.
@@ -641,8 +1000,9 @@ export function StartProgramSheet({
                   null`), so without this the control was permanently inert
                   with no feedback: the same dead-tap class review round 1
                   fixed for the placement-pending case, reopened by the
-                  suppression. Reachable whenever `prompt()` is slow after a
-                  D-291 timeout has already set `starting` back to false. */}
+                  suppression. Reachable whenever `queueKickoff()` is slow
+                  after a D-291 timeout has already set `starting` back to
+                  false. */}
               <button
                 type="button"
                 className="program-start-go"

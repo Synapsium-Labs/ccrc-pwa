@@ -28,7 +28,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 
 const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
 
-const fixture = () => {
+const fixture = (overIo?: (base: FleetIO) => FleetIO) => {
   const home = mkTmp('ccrc-ledger-sweep-');
   const projectsRoot = mkTmp('ccrc-ledger-docs-');
   seedRoster(home);
@@ -36,10 +36,11 @@ const fixture = () => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot } as never);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const reads: string[] = [];
-  const io: FleetIO = {
+  const counted: FleetIO = {
     ...localIO,
     readdir: async (p: string) => { reads.push(p); return localIO.readdir(p); },
   };
+  const io: FleetIO = overIo ? overIo(counted) : counted;
   const watcher = new FleetWatcher({ ...testDeps(home), cfg, io, coord } as never, new Bus(), 10_000);
   const plantDoc = (project: string, dir: 'plans' | 'specs', name: string, text: string): void => {
     const d = path.join(projectsRoot, project, 'docs', 'superpowers', dir);
@@ -92,6 +93,53 @@ describe('sweepLedgerFloor', () => {
     expect(h.coord.ledgerFloor('demo')!.floor).toBe(261);
   });
 
+  it('SEEDS FROM specs WHEN plans WILL NOT LIST — the sweep takes what it got', async () => {
+    // wave 2 review, the major finding. This lane must TOLERATE a partial scan
+    // and keep walking: it mints nothing, so a floor it under-measures costs a
+    // delay and the next hourly pass raises it. The synchronous seed is the
+    // opposite and refuses — that asymmetry is the whole point of the split
+    // policy, and NOTHING pinned this half before, which is why the abort
+    // semantics slipped in under a green suite (D-1021).
+    //
+    // MUTATION: give the sweep call site SEED_POLICY (abort + budget) and this
+    // reds — the project is skipped entirely and the floor stays null.
+    const h = fixture((base) => ({
+      ...base,
+      readdir: async (p: string) => (p.endsWith(`${path.sep}plans`) ? null : base.readdir(p)),
+    }));
+    h.plantRecord('demo-quiet-basin', 'demo');
+    // plans/ must EXIST so the parent listing names it — otherwise the reader
+    // skips it as genuinely absent and the readdir override never fires.
+    h.plantDoc('demo', 'plans', 'p.md', `### ${'D-' + '100'} unreachable`);
+    h.plantDoc('demo', 'specs', 's.md', `### ${'D-' + '211'} in specs`);
+    at(NOW);
+    await h.watcher.sweepLedgerFloor(await h.records());
+    // Old behaviour, restored: plans/ contributed nothing, specs/ still seeded.
+    expect(h.coord.ledgerFloor('demo')?.floor).toBe(211 + 50);
+  });
+
+  it('SEEDS FROM the readable files when ONE file will not read', async () => {
+    // The file-level half of the same tolerance. The unreadable file is the
+    // one with the HIGHER ref, so a tolerant sweep genuinely under-measures
+    // here — and that is accepted on THIS lane precisely because nothing
+    // downstream of it mints a number.
+    const h = fixture((base) => ({
+      ...base,
+      readFile: async (p: string) => (p.endsWith('a-high.md') ? null : base.readFile(p)),
+    }));
+    h.plantRecord('demo-quiet-basin', 'demo');
+    // The unreadable file sorts FIRST, deliberately. An aborting reader
+    // returns the prefix it had — which here is EMPTY, so the project is
+    // skipped and the floor stays null. Had it sorted last, the abort would
+    // have returned a usable prefix and this test would pass either way,
+    // proving nothing (measured: it did).
+    h.plantDoc('demo', 'plans', 'a-high.md', `### ${'D-' + '9000'} high`);
+    h.plantDoc('demo', 'plans', 'b-low.md', `### ${'D-' + '211'} low`);
+    at(NOW);
+    await h.watcher.sweepLedgerFloor(await h.records());
+    expect(h.coord.ledgerFloor('demo')?.floor).toBe(211 + 50);
+  });
+
   it('a project with NO docs seeds nothing — allocation stays 409 not-seeded, which is the fail-shut arm', async () => {
     const h = fixture();
     h.plantRecord('demo-quiet-basin', 'demo');
@@ -135,6 +183,82 @@ describe('sweepLedgerReconcile', () => {
     expect(rows[0]).toMatchObject({ n: 261, state: 'landed',
       landedIn: 'docs/superpowers/plans/2026-08-24-plan.md' });
     expect(rows[1]).toMatchObject({ n: 262, state: 'allocated' });
+  });
+
+  it('REPORTS a number a plan defines that the allocator never issued (F7)', async () => {
+    // The inverse of markLanded, and the half nothing has ever measured. Live
+    // instance on main while this was written: D-1066..1069, defined in
+    // 2026-08-30-d1066-dead-recipient-parks.md with no allocation row.
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261 IS issued
+    h.plantDoc('demo', 'plans', 'p.md',
+      `### D-${261} — issued and landed\n- **D-${299}** — never asked for`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const said = warn.mock.calls[0]![0] as string;
+    expect(said, 'the orphan is not named').toContain(`D-${299}`);
+    expect(said, 'the file that defines it is not named').toContain('p.md');
+    // The issued one must NOT be reported — otherwise the warning says nothing.
+    expect(said).not.toContain(`D-${261} `);
+  });
+
+  it('says nothing once every defined number IS issued — silence is the healthy state', async () => {
+    const h = fixture();
+    const ns = await seedAndAllocate(h, 2);               // 261, 262
+    h.plantDoc('demo', 'plans', 'p.md',
+      `### D-${ns[0]!} — one\n### D-${ns[1]!} — two`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'a healthy ledger produced a warning').not.toHaveBeenCalled();
+  });
+
+  it('reports an unchanged orphan set ONCE, not on every sweep — the stale side is pinned, this was not', async () => {
+    // Measured GREEN in review: deleting the `oJson !== lastOrphanReport.get(project)`
+    // condition changed nothing, in any suite. The mirrored guard on the STALE side
+    // has had a test since D13 ("reported (once per changing set)"), which is what
+    // makes the omission on this side an omission rather than a policy.
+    //
+    // The live case it protects is on main right now: D-1066..1069 have no
+    // allocation row, so without the dedupe every ccrc-server on the fleet logs
+    // that line every 15 minutes, forever.
+    const h = fixture();
+    await seedAndAllocate(h, 1);
+    h.plantDoc('demo', 'plans', 'p.md', `- **D-${299}** — never asked for`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    at(NOW + 1000 + 15 * 60_000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'an unchanged orphan set was reported twice').toHaveBeenCalledTimes(1);
+    // …and a CHANGED set speaks again, so the memo is a dedupe and not a mute.
+    h.plantDoc('demo', 'plans', 'q.md', `- **D-${298}** — also never asked for`);
+    at(NOW + 1000 + 30 * 60_000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'a CHANGED orphan set was swallowed by the memo').toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]![0] as string).toContain(`D-${298}`);
+  });
+
+  it('audits a project whose numbers have ALL landed — the corpus the old list could not reach', async () => {
+    // The behaviour change stated in the sweep: the project list used to come
+    // from OPEN allocations, so a project working correctly — everything landed,
+    // nothing open — was never audited at all, which is precisely backwards.
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261
+    h.plantDoc('demo', 'plans', 'p.md', `### D-${261} — landed`);
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(h.coord.openAllocations(), 'the fixture still has an open row').toEqual([]);
+    // Now add an orphan. With no open allocations left, the old loop would not
+    // have read this project's plans at all.
+    h.plantDoc('demo', 'plans', 'q.md', `- **D-${299}** — never asked for`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(NOW + 2 * 15 * 60_000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(warn, 'a fully-landed project is never audited').toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0] as string).toContain(`D-${299}`);
   });
 
   it(`D-${261} does not land D-${2611} — the boundary is a word boundary`, async () => {

@@ -27,6 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
+  symlinkSync, rmSync, lstatSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -117,12 +118,33 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccrc'), '#!/bin/sh\n# the launcher\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
+  // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
+  writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
+  // ── the FIFTH name in ~/.local/bin, and the only one that is not a ccrc
+  // binary (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
+  // pinned venv's own engine. The venv is planted too, because the proof this
+  // link is ccrc's is its TARGET — the uninstall reads it with a one-hop
+  // `readlink` and compares it against the exact literal the install writes.
+  const venvBin = join(home, '.ccrc', 'graphify-venv', 'bin');
+  mkdirSync(venvBin, { recursive: true });
+  writeFileSync(join(venvBin, 'graphify'),
+    '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
+  symlinkSync(join(venvBin, 'graphify'), join(bin, 'graphify'));
+  // …and the pip console-script shim the install copied aside before it
+  // repointed that path (D-1349). `_uninst_keep_asides` must name it, for the
+  // same reason it names the tmux conf: after `_uninst_tree_bins` removes
+  // ccrc's link, this file is the operator's own graphify and the printed `mv`
+  // is how they get it back.
+  writeFileSync(join(bin, 'graphify.pre-ccrc-20260101T000000Z'),
+    '#!/usr/bin/python3\nfrom graphify.__main__ import main\n', { mode: 0o755 });
   // The units, both drop-in dirs and the slice escape (its literal \x2d name).
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(join(units, 'claude-session@.service.d'), { recursive: true });
   mkdirSync(join(units, 'app-claude\\x2dsession.slice.d'), { recursive: true });
   for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-    'ccd-cap-scopes.service', 'ccd-cap-scopes.timer']) {
+    'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+    // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
+    'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -168,6 +190,9 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(reg, 'notify.sh'), '#!/bin/sh\n# notify\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  // installers, the same lane `_uninst_cc_sessions` must remove it from.
+  writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   // Two account homes. claude2: one managed entry per event shape the
@@ -288,7 +313,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     const units = join(home, '.config', 'systemd', 'user');
     for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
-      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer']) {
+      'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+      // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
+      'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -298,6 +325,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc.service');
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
+    expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).
@@ -393,7 +421,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh',
-      'install-coordinator-skill.sh', 'install-worker-skill.sh',
+      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-graphify-skill.sh',
       'coordinator-skill', 'worker-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
@@ -402,21 +430,100 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
   });
 
+  it('graphify skills: skills/graphify is removed from every rostered home, while OTHER skills there survive', () => {
+    // `_uninst_graphify_skills` (graphify Task 3) — beside `_uninst_cc_sessions`
+    // in the sweep, but a DIFFERENT lane: the assembled skill lives one level
+    // down, in each rostered home's own `skills/graphify`, never under
+    // `~/.cc-sessions`. A dummy `skills/ccrc-worker` in the same directory is
+    // the proof the sweep is scoped to the one name, not a directory wipe.
+    const home = mkTmp('ccrc-uninst-graphify-skills-');
+    plantInstalledBox(home);
+    for (const acct of ['claude2', 'claude3']) {
+      const skills = join(home, `.claude-${acct}`, 'skills');
+      mkdirSync(join(skills, 'graphify', 'references'), { recursive: true });
+      writeFileSync(join(skills, 'graphify', 'SKILL.md'), '# the graphify skill\n');
+      writeFileSync(join(skills, 'graphify', '.graphify_version'), '0.9.9');
+      mkdirSync(join(skills, 'ccrc-worker'), { recursive: true });
+      writeFileSync(join(skills, 'ccrc-worker', 'SKILL.md'), '# the worker skill (dummy)\n');
+    }
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    for (const acct of ['claude2', 'claude3']) {
+      const skills = join(home, `.claude-${acct}`, 'skills');
+      expect(existsSync(join(skills, 'graphify')), `${acct}: graphify survived`).toBe(false);
+      expect(existsSync(join(skills, 'ccrc-worker', 'SKILL.md')),
+        `${acct}: an unrelated skill was swept too`).toBe(true);
+    }
+    expect(r.stdout).toMatch(/^uninstall: graphify skills: removed from 2 account home\(s\)/m);
+  });
+
   it('the tree and the executables go; ~/.ccrc, worktrees and backups are PRESERVED without --purge', () => {
     const home = mkTmp('ccrc-uninst-preserve-');
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, 'ccrc'))).toBe(false);
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes']) {
+    // graphify Task 10/fix-round F2: `ccd-graph-sweep` joins the set — an
+    // uninstall that removed its units (`_uninst_units`) and left the binary
+    // orphaned it on PATH forever, exactly the defect this test already
+    // existed to catch for the other three.
+    // D-1347: `graphify` joins the set for a reason strictly worse than the
+    // other four's. It is not a ccrc binary — it is ccrc's LINK into the
+    // pinned venv — and `--purge` takes `~/.ccrc` whole a few lines later, so
+    // an uninstall that left it behind would leave a DANGLING `graphify` first
+    // on every session's PATH: worse than the box was before ccrc, because the
+    // pip shim that used to answer there was copied aside by the install and
+    // never put back.
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
+    expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
     // The preserve set, whole.
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
     expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd'))).toBe(true);
     expect(existsSync(join(home, '.tmux.conf'))).toBe(true);
+  });
+
+  // The other half of D-1347, and the half that makes the removal safe: the
+  // install REFUSES to touch a `graphify` it did not write (`ccrc did not
+  // write it — left in place`), so the uninstall may not remove one either.
+  // `_uninst_wrappers`' rule one function up, in this file's own words:
+  // everything ccrc could not prove it wrote is left in place. Proof is the
+  // link's own one-hop target against the literal the install writes — nothing
+  // else.
+  it('graphify: a launcher ccrc did not write SURVIVES uninstall — file and foreign symlink alike', () => {
+    const home = mkTmp('ccrc-uninst-gfx-foreign-');
+    plantInstalledBox(home);
+    const bin = join(home, '.local', 'bin');
+    // (a) a hand-written launcher — a regular file, exactly what
+    // `_inst_graphify_engine` refuses to replace.
+    rmSync(join(bin, 'graphify'), { force: true });
+    const hand = '#!/bin/bash\n# my own launcher\nexec /opt/graphify/bin/graphify "$@"\n';
+    writeFileSync(join(bin, 'graphify'), hand, { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(bin, 'graphify'), 'utf8'),
+      'a launcher ccrc never wrote was removed by the uninstall').toBe(hand);
+    expect(r.stdout).toMatch(/uninstall: tree: kept .*graphify.*ccrc never wrote it/);
+
+    // (b) a symlink at a DIFFERENT engine — a pipx install, a moved venv, an
+    // older layout's link. It is a symlink, so the arm that judges symlinks is
+    // the one that answers, and its target is not the literal ccrc writes.
+    const home2 = mkTmp('ccrc-uninst-gfx-foreignlink-');
+    plantInstalledBox(home2);
+    const bin2 = join(home2, '.local', 'bin');
+    const other = join(home2, 'opt', 'graphify', 'bin');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, 'graphify'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    rmSync(join(bin2, 'graphify'), { force: true });
+    symlinkSync(join(other, 'graphify'), join(bin2, 'graphify'));
+    const r2 = runVerb(home2, 'uninstall');
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(lstatSync(join(bin2, 'graphify')).isSymbolicLink(),
+      'a link at somebody else\'s engine was removed').toBe(true);
+    expect(r2.stdout).toMatch(/uninstall: tree: kept .*graphify — it is a symlink to /);
   });
 
   it('keep-asides: the restore commands are PRINTED and the files untouched', () => {
@@ -428,6 +535,15 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.stdout).toContain(`mv ${saved} ${join(home, '.tmux.conf')}`);
     expect(readFileSync(saved, 'utf8')).toBe('# the operator\'s own\n');
     expect(readFileSync(join(home, '.tmux.conf'), 'utf8')).toBe('# the shipped tmux.conf\n');
+    // THE THIRD GLOB (D-1349): the pip console-script shim the graphify
+    // converge copied aside before repointing `~/.local/bin/graphify`. Without
+    // it in the loop the operator is off ccrc with a HOLE where their graphify
+    // used to be — the aside sits there unnamed and nothing tells them it is
+    // the file to move back. `_uninst_tree_bins` has already removed ccrc's
+    // link by the time this prints, so the destination path is free.
+    const gsaved = join(home, '.local', 'bin', 'graphify.pre-ccrc-20260101T000000Z');
+    expect(r.stdout).toContain(`mv ${gsaved} ${join(home, '.local', 'bin', 'graphify')}`);
+    expect(existsSync(gsaved), 'the graphify aside was consumed rather than named').toBe(true);
   });
 
   it('--purge removes ~/.ccrc and ~/ccrc-backups — and NEVER worktrees', () => {

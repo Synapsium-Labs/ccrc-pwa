@@ -248,6 +248,45 @@ describe('install.sh: the node floor, before anything is built', () => {
 // (`latest/download/<asset>`, `download/<tag>/<asset>`). The checkout-mode
 // tests above stay byte-identical — release mode is a branch taken before
 // the node probe, not a rewrite of it.
+describe('install.sh: it builds every artifact the staged verb refuses without (D-1159)', () => {
+  it('every package `ccrc install` preflights is a package install.sh builds', () => {
+    // THE CROSS-FILE INVARIANT, DERIVED FROM BOTH FILES rather than restated in
+    // this one. `ccrc install` refuses to place a tree that is missing a built
+    // artifact; `install.sh` exists to produce exactly those. The two lists were
+    // kept in step by nothing at all, and they fell out of step: the agent
+    // preflight did not exist, install.sh did not build `agent/`, and
+    // `ccrc install --role fleet` on a source checkout therefore placed the tree
+    // and restarted a LIVE fleet's agent onto a directory with no entry point —
+    // MODULE_NOT_FOUND, and the server lost its only path to the box.
+    //
+    // Scanning both sides means a preflight added tomorrow without a build (or a
+    // build removed from under a preflight) reddens here rather than on a fleet.
+    const preflighted = [...new Set(
+      [...readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8')
+        .matchAll(/\[ -f "\$src\/([a-z][a-z-]*)\/dist[^"]*" \]/g)].map((m) => m[1]!),
+    )];
+    expect(preflighted, 'the preflight scan went vacuous — this guard would pass on nothing')
+      .toEqual(expect.arrayContaining(['server', 'agent']));
+
+    const built = [...new Set(
+      [...readFileSync(join(REPO, 'install.sh'), 'utf8')
+        .matchAll(/\(\s*cd "\$ROOT\/([a-z][a-z-]*)"[^)]*npm run build/g)].map((m) => m[1]!),
+    )];
+    expect(built, 'the build scan went vacuous — this guard would pass on nothing')
+      .toEqual(expect.arrayContaining(['server', 'pwa', 'agent']));
+
+    for (const pkg of preflighted) {
+      expect(built,
+        `ccrc install refuses a tree without ${pkg}/dist, so install.sh must build ${pkg}/`)
+        .toContain(pkg);
+    }
+    // KNOWN LIMIT, stated rather than hidden: `server/dist-pwa` is preflighted
+    // under `server/` but BUILT in `pwa/`, so the path alone cannot name its
+    // builder. `pwa` is asserted directly above for that reason; the loop covers
+    // every package whose preflight path and build directory do agree.
+  });
+});
+
 describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () => {
   const REAL_TAR = realPath('tar');
   const REAL_GZIP = realPath('gzip');

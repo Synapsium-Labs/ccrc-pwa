@@ -1364,6 +1364,37 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
   });
 });
 
+// ── F3's program-ready badge (program-leverage wave 3) ─────────────────────
+describe("the program-ready badge is measured, not left in the blind spot", () => {
+  it.each([
+    ['fleet.css .sheet-panel .proj-ready', 'var(--ink-tertiary)'],
+    ["fleet.css .sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
+    ["fleet.css .sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
+    ['fleet.css .sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
+  ])('%s is grounded on the sheet it sits in', (key, ink) => {
+    // The badge sits inside `.sheet-panel`, which paints
+    // `background: var(--bg-sheet)`. Its selector NAMES that ancestor — which
+    // is what made this one look safe and is why it needs saying: naming a
+    // painter is not enough. The descendant route grounds a rule only against
+    // a SELF-GROUNDED host, i.e. one setting a colour AND a ground
+    // (`audit.mjs`'s `selfGrounded`), and `.sheet-panel` sets a background
+    // with no colour of its own. So all three rules sat in the uncovered
+    // census, scoped and unmeasured, until these entries existed.
+    //
+    // All three are pinned, not just the base: the two coloured arms are the
+    // ones that actually carry a hue, and grounding only the base would leave
+    // the report LOOKING covered — the trap the spawn-chip variant entry above
+    // spells out.
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);                    // dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 // ── D-161's two new coloured children on the sign-in card ───────────────────
 describe("the sign-in block's ink is measured, not asserted in a comment", () => {
   it.each([
@@ -1401,6 +1432,29 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
         expect(ratio('var(--ink-secondary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
         expect(ratio('var(--ink-primary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+});
+
+// ── the resume door's ink (program-leverage wave 5, D-1129) ─────────────────
+describe('the resume door is measured, not left in the blind spot', () => {
+  it('rides .run-abandon’s grouped rule, so both themes and both states are measured', () => {
+    // No GROUNDS/INHERITED_GROUNDS entry, and that is the point: the class was
+    // added to a rule whose ancestor `.run-row` is already self-grounded, so
+    // the descendant route recovers the ground on its own. A rule of its own
+    // would have needed a registry entry — or, forgotten, would have joined
+    // the uncovered census with the report still LOOKING complete.
+    // A BOUNDARY, not `includes`: `.run-row .run-resumed` (the resumed-wave
+    // note, two rules up in fleet.css) is a strict prefix-extension of this
+    // class, so a substring filter silently harvests its two rows as well —
+    // measured, this assertion read `got 2` before the class existed at all
+    // and would have read 6 after. The negative lookahead keeps `:active` (the
+    // row this pin exists to catch) and drops the neighbour.
+    const rows = report.measured.filter((m) => /\.run-row \.run-resume(?![\w-])/.test(m.label));
+    expect(rows).toHaveLength(4);            // base + :active, dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('on var(--bg-surface)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

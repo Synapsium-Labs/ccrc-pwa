@@ -21,21 +21,16 @@ import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { useNow } from '../lib/useNow';
+import { elapsedWords } from '../lib/elapsed';
 import './fleet.css';
 
 const POLL_MS = 15_000;
 
-/** "5m ago" / "2h 10m ago" / "moments ago" — elapsed time since `downSince`. */
-function elapsedSince(downSince: number, nowMs: number): string {
-  const s = Math.max(0, Math.floor((nowMs - downSince) / 1000));
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return h > 0 ? `${d}d ${h}h ago` : `${d}d ago`;
-  if (h > 0) return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
-  if (m > 0) return `${m}m ago`;
-  return 'moments ago';
-}
+/** "5m ago" / "2h 10m ago" / "moments ago" — elapsed time since `downSince`.
+ *  The span comes from `elapsedWords`; the preposition is this banner's own,
+ *  which is the whole reason the split is where it is (lib/elapsed.ts). */
+const elapsedSince = (downSince: number, nowMs: number): string =>
+  `${elapsedWords(nowMs - downSince)} ago`;
 
 export function FleetHostBanner(): ReactNode {
   const [health, setHealth] = useState<FleetHealth | null>(null);

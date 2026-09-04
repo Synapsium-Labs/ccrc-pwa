@@ -52,14 +52,24 @@ fi
 # previously-good install — so a source that lost its references/ mid-rsync
 # (`deploy/deploy.sh`'s `rsync -az --delete`, interrupted; SKILL.md sorts
 # before `references/`) does not fail closed, it REPLACES a good install with
-# the fragment, exit 0, no stderr. SKILL.md's own text points a live
-# coordinator at the first three of these by name ("Read it before the first
-# dispatch of a program"), and the WORKER skill points across at the fourth
-# (`../ccrc-coordinator/references/peer-protocol.md` — Build 9 wave 8, D-214:
-# it ships here because a skill's references install as one unit and the
-# worker ships none of its own) — every one of them missing is exactly the
-# half-installed shape the comment above already says is worse than none.
-REQUIRED_REFS=(ledger-template.md mail-envelope.md peer-protocol.md wave-lifecycle.md)
+# the fragment, exit 0, no stderr. Every file below is named by something a
+# live session reads: SKILL.md points at wave-lifecycle.md ("Read it before
+# the first dispatch of a program"), at ledger-template.md and
+# mail-envelope.md in the lifecycle steps, and at resume.md in the paragraph
+# on what survives this session's death; the WORKER skill points across at
+# peer-protocol.md (`../ccrc-coordinator/references/peer-protocol.md` — Build
+# 9 wave 8, D-214: it ships here because a skill's references install as one
+# unit and the worker ships none of its own). Every one of them missing is
+# exactly the half-installed shape the comment above already says is worse
+# than none.
+#
+# This array is a PROJECTION of the references directory and nothing in bash
+# can derive it — a glob of $SRC cannot detect a file the rsync dropped, which
+# is the whole failure this guard exists for. What keeps it honest is
+# `wrapper-roster-fixture.test.ts`'s I8 row, which compares it against the real
+# directory in both directions; a fifth entry landed here in
+# program-leverage wave 1 only because that row went red first.
+REQUIRED_REFS=(ledger-template.md mail-envelope.md peer-protocol.md resume.md wave-lifecycle.md)
 [[ -f "$SRC/SKILL.md" ]] || { echo "install-coordinator-skill: no SKILL.md under $SRC — refusing" >&2; exit 1; }
 for ref in "${REQUIRED_REFS[@]}"; do
   [[ -f "$SRC/references/$ref" ]] \

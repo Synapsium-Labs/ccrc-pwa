@@ -671,8 +671,47 @@ describe('sweepDivergences feeds the build-9 arms from what it has already read'
     const body = src.slice(from, src.indexOf('\n  }\n', from));
     expect(body.length, 'the slice collapsed — this assertion would pass vacuously')
       .toBeGreaterThan(2000);
-    expect(body).toContain('supervisedAt: r.supervisedAt');
-    expect(body.match(/readRegistry\(/g) ?? []).toHaveLength(0);
+    // D-1157 REWROTE THIS ASSERTION. It used to read
+    // `expect(body).toContain('supervisedAt: r.supervisedAt')` — a SPELLING
+    // guard wearing a mechanism guard's clothes. When the seam was corrected to
+    // convert the registry's epoch SECONDS to the milliseconds this census
+    // compares against — a change that adds no read of any kind — this went red,
+    // so the fix for a real defect looked like a regression in the very test
+    // meant to protect the property the fix preserved.
+    //
+    // It now pins what it always meant: the heartbeat is fed FROM the records
+    // this sweep was handed, by whatever transformation, and nothing in the body
+    // reads the registry a second time. `field(` joins `readRegistry(` because a
+    // per-field re-read — the exact thing the docstring above warns about — goes
+    // through it, and pinning only the whole-registry helper left that door open.
+    expect(body).toMatch(/supervisedAtMs:[^\n]*\br\.supervisedAt\b/);
+    // THE FORBIDDEN READERS ARE DERIVED FROM `registry.ts`'S OWN EXPORTS, never
+    // hand-listed (D-1158's sibling lesson, caught in review before merge). The
+    // first draft of this rewrite hand-listed `field(` and claimed it closed the
+    // per-field-re-read door. It closed nothing: `field` is module-private to
+    // `registry.ts` and can never appear in `watch.ts` under any edit — an
+    // assertion that cannot fail, advertised as a mechanism. Worse, the two
+    // readers `watch.ts` ACTUALLY imports and could re-read with —
+    // `readRegistryMeasured(` and `readSessionRecord(` — were named by neither
+    // the old guard nor that draft, and `/readRegistry\(/` does not match
+    // `readRegistryMeasured(` (the `\(` demands the paren immediately).
+    //
+    // Deriving the list means a reader added to `registry.ts` tomorrow is
+    // forbidden here automatically, and a reader RENAMED cannot silently fall
+    // out of the set.
+    const registrySrc = readFileSync(path.join(ccrcRoot, 'server/src/registry.ts'), 'utf8');
+    const readers = [...registrySrc.matchAll(/^export\s+(?:async\s+)?function\s+(read\w+)/gm)]
+      .map((m) => m[1]!);
+    expect(readers, 'the reader scan went vacuous — this whole guard would pass on nothing')
+      .toEqual(expect.arrayContaining(['readRegistry', 'readRegistryMeasured', 'readSessionRecord']));
+    for (const r of readers) {
+      expect(body.match(new RegExp(`\\b${r}\\(`, 'g')) ?? [],
+        `sweepDivergences must not call ${r}() — it is handed its records`).toHaveLength(0);
+    }
+    // …and not a raw per-field read either. `io.readdir` stays legitimate: the
+    // sweep takes ONE registry listing for `registryNames`. `io.readFile` is the
+    // per-row door, and nothing in this method has any business opening it.
+    expect(body).not.toMatch(/io\.readFile/);
   });
 
   it('supplies an EMPTY provenance list when the coordination database refuses, never a stale one', async () => {
@@ -684,5 +723,51 @@ describe('sweepDivergences feeds the build-9 arms from what it has already read'
     await expect(sweep(h)).resolves.toBeUndefined();
     expect(seen.at(-1) ?? []).not.toContainEqual(
       expect.objectContaining({ kind: 'provenance-mismatch' }));
+  });
+});
+
+// ── D-1157 — THE UNITS AT THE SEAM, MEASURED THROUGH THE SEAM ─────────────
+// `divergence.ts` is pure and correct given milliseconds. `registry.ts` reads
+// `.supervised` as epoch SECONDS (`ccd`'s own `date +%s`; the field's own
+// docstring says "Epoch SECONDS, registry-native"). `sweepDivergences` handed
+// the seconds straight to a census that compares them against `Date.now()`.
+//
+// No unit test over `divergences()` can catch that: the function is right, and
+// `divergence.test.ts` supplies the millisecond fixtures production never
+// produces. Only a test that drives the REAL producer with a REAL registry row
+// can, which is what this one does.
+describe('sweepDivergences: archived-but-live, driven through the registry (D-1157)', () => {
+  it('fires for a row whose `.supervised` stamp is registry-native epoch SECONDS', async () => {
+    const h = await watcherFixture();
+    // A heartbeat written the way the supervisor writes it: `date +%s`.
+    const nowSec = Math.floor(Date.now() / 1000);
+    h.plantRecord('demo-archived-live', {
+      archived: String(nowSec - 3_600),   // stamped archived an hour ago
+      supervised: String(nowSec),         // …and a supervisor is beating RIGHT NOW
+    });
+    const seen: Divergence[][] = [];
+    h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
+    await sweep(h);
+    expect(seen.at(-1) ?? [], 'the supervisor heartbeat IS the evidence — build 9 D9')
+      .toContainEqual(expect.objectContaining({
+        kind: 'archived-but-live', id: 'demo-archived-live',
+      }));
+  });
+
+  it('still does NOT fire for a stale heartbeat, in the same registry-native units', async () => {
+    // The other half: converting the units must not turn the census into one
+    // that flags every archived row it ever sees. An hour-old heartbeat is
+    // stale by SUPERVISED_FRESH_MS and must stay silent.
+    const h = await watcherFixture();
+    const nowSec = Math.floor(Date.now() / 1000);
+    h.plantRecord('demo-archived-cold', {
+      archived: String(nowSec - 7_200),
+      supervised: String(nowSec - 3_600),
+    });
+    const seen: Divergence[][] = [];
+    h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
+    await sweep(h);
+    expect(seen.at(-1) ?? []).not.toContainEqual(
+      expect.objectContaining({ kind: 'archived-but-live' }));
   });
 });

@@ -113,6 +113,15 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number; description: string | null }[] | null;
+  /** How many graph READS this session has made — `hookstate.ts`'s
+   *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
+   *  bump, and an older peer that omits it revives as `null` below.
+   *
+   *  `null` mirrors `hookState`/`subagents`: no fresh hook data, or a hook too
+   *  old to count. `0` is a MEASUREMENT — the session reported and has read
+   *  nothing — and the console shows the two differently (`graph 0` versus no
+   *  chip at all), which is the whole reason this is not a `number`. */
+  graphQueries: number | null;
   bucket: SessionBucket;
   /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
    *  record — never a watcher's memory of when it noticed, which would reset on
@@ -273,6 +282,35 @@ export function substrateFault(
     at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : 0,
     text: typeof raw.text === 'string' && raw.text !== '' ? raw.text : 'substrate fault (reason unreadable)',
   };
+}
+
+/**
+ * Tolerant read of `FleetSession.graphQueries` for a value that has NOT been
+ * through `reviveFleetSession` — the live `fleet` WS frame, cast on arrival
+ * by `pwa/src/stores/fleet.ts`'s `asFleetMsg` (`unmeasuredFields` above
+ * records the whole argument). The ONE place every PWA surface reads this
+ * field, so the fleet card and the run board cannot drift onto two different
+ * fallbacks — CLAUDE.md's wire rule, "a SINGLE reader per field".
+ *
+ * ABSENCE READS AS NULL, i.e. as "nothing measured" — the opposite degrade
+ * from `unmeasuredFields`, and deliberately so. This field is ADDITIVE with
+ * `FLEET_PROTO` held at 1 (see its docstring above), which is a promise that
+ * a server predating it keeps talking to a newer client; such a server omits
+ * the key, and a row from it is IGNORANT of the count, never a witness that
+ * the session read nothing. Read raw, `undefined !== null` is true and the
+ * chip renders `graph ` with no number under a `title` reading `undefined
+ * graphify read(s) this session` — a numberless chip on the one row the
+ * chip's whole `0`-versus-`null` split exists to keep apart (D-1251,
+ * MEASURED on both surfaces before this reader existed).
+ *
+ * A present-but-unusable value (a string, `NaN`, `Infinity` — shapes the wire
+ * type forbids and only a broken or hostile peer sends) degrades to `null`
+ * too: unmeasured is the honest answer for a count nobody can read, and it is
+ * the same rule `optNum` applies on the revival path.
+ */
+export function graphReadCount(s: { graphQueries?: number | null }): number | null {
+  const v = s.graphQueries ?? null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1173,6 +1211,237 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
   return typeof v === 'string' && (SPAWN_VERDICTS as readonly string[]).includes(v);
 }
 
+/**
+ * What a MEASUREMENT of one skill's presence in one config dir found
+ * (program-leverage wave 2, F2).
+ *
+ *  - `present`      — the skill's `SKILL.md` was read.
+ *  - `absent`       — a PROVEN ENOENT. The installer has not run on this home,
+ *                     which is ordinary rather than alarming:
+ *                     `install-worker-skill.sh` skips a rostered account whose
+ *                     config dir does not exist on that box.
+ *  - `unmeasurable` — no answer was obtained. Either there was no path to read
+ *                     (the wrapper is not in this box's roster, or the session
+ *                     has no registry row), or the read itself failed — EACCES,
+ *                     EISDIR, an agent whitelist refusal, a remote timeout, a
+ *                     dropped socket.
+ *
+ * `absent` and `unmeasurable` are DIFFERENT ANSWERS and this declaration is
+ * where they stay different: `absent` is evidence about the fleet,
+ * `unmeasurable` is an admission about the measurement. Folding them would
+ * claim an installation fact nobody measured — the overloaded-null defect this
+ * codebase bans by name, and the one a reader acts on wrongly in both
+ * directions (going to install a skill that is already there, or trusting a
+ * home nothing ever looked at).
+ *
+ * DELIBERATELY NOT spelled with the read-failure pair that `ReadFailure`
+ * declares in `server/src/io.ts`. That vocabulary describes ONE read's failure;
+ * this one describes a conclusion drawn from a read that may never have
+ * happened, and `unmeasurable` is the wider word on purpose.
+ * `single-definition.test.ts` pins that pair to `server/src/io.ts` alone — and
+ * pins it as TEXT, so even naming it in a docstring here reds the build
+ * (measured, while this comment was being written). Say `ReadFailure`, not its
+ * members.
+ */
+export type SkillState = 'present' | 'absent' | 'unmeasurable';
+
+/** Presentational only, and keyed BY the type so the compiler keeps it total —
+ *  a member added to the union with no key here is a compile error, which is
+ *  what makes the derived list below trustworthy. */
+export const SKILL_STATE_MAP: Record<SkillState, string> = {
+  present: 'installed',
+  absent: 'not installed',
+  unmeasurable: 'could not be measured',
+};
+
+export const SKILL_STATES: readonly SkillState[] =
+  Object.keys(SKILL_STATE_MAP) as SkillState[];
+
+export function isSkillState(v: unknown): v is SkillState {
+  return typeof v === 'string' && (SKILL_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * program-leverage wave 3 (F3) — the program-ready preconditions, as four
+ * small closed vocabularies plus the pure folds that turn them into one word.
+ *
+ * Each is three-valued for the SAME reason `SkillState` is: absence of
+ * evidence is not evidence of absence, and a badge that cannot tell the two
+ * apart sends an operator to go fix something that may be fine. The third
+ * member is never a synonym for the second.
+ *
+ * `SkillState` above is REUSED for both skills rather than copied — this block
+ * adds no fifth word for a question wave 2 already gave a vocabulary.
+ */
+export type FloorState = 'seeded' | 'not-seeded' | 'unmeasurable';
+
+/** Presentational only, and keyed BY the type so the compiler keeps it total —
+ *  a member added to the union with no key here is a compile error, which is
+ *  what makes the derived list below trustworthy. */
+export const FLOOR_STATE_MAP: Record<FloorState, string> = {
+  seeded: 'deviation floor seeded',
+  'not-seeded': 'no deviation floor yet',
+  unmeasurable: 'could not be measured',
+};
+
+export const FLOOR_STATES: readonly FloorState[] =
+  Object.keys(FLOOR_STATE_MAP) as FloorState[];
+
+export function isFloorState(v: unknown): v is FloorState {
+  return typeof v === 'string' && (FLOOR_STATES as readonly string[]).includes(v);
+}
+
+/** `absent` is a PROVEN ENOENT on the token path; `unmeasurable` is any other
+ *  read failure. The BOOT read (`coord/token.ts`) cannot produce the third
+ *  member at all — it throws and the server never starts — which is why the
+ *  readiness sweep re-measures the path rather than reporting the token the
+ *  composition root already holds (D-1025). */
+export type TokenState = 'configured' | 'absent' | 'unmeasurable';
+
+export const TOKEN_STATE_MAP: Record<TokenState, string> = {
+  configured: 'box token configured',
+  absent: 'no box token on this box',
+  unmeasurable: 'could not be measured',
+};
+
+export const TOKEN_STATES: readonly TokenState[] =
+  Object.keys(TOKEN_STATE_MAP) as TokenState[];
+
+export function isTokenState(v: unknown): v is TokenState {
+  return typeof v === 'string' && (TOKEN_STATES as readonly string[]).includes(v);
+}
+
+/** Three conditions, three words, and NO `unmeasurable` member on purpose:
+ *  every one of these is proven. `available` = a trivial read answered;
+ *  `degraded` = the store is there and a read THREW (a full disk, another
+ *  connection holding the write lock — the two causes the server's own swallow
+ *  site names); `not-configured` = there is no store at all. The shipped
+ *  process cannot reach the third (D-1024) — the boot refuses rather than
+ *  opening empty — and it is carried anyway, because a build that omitted the
+ *  arm could never report the day that changes. */
+export type CoordDbState = 'available' | 'degraded' | 'not-configured';
+
+export const COORD_DB_STATE_MAP: Record<CoordDbState, string> = {
+  available: 'coordination database available',
+  degraded: 'coordination database not answering',
+  'not-configured': 'no coordination database',
+};
+
+export const COORD_DB_STATES: readonly CoordDbState[] =
+  Object.keys(COORD_DB_STATE_MAP) as CoordDbState[];
+
+export function isCoordDbState(v: unknown): v is CoordDbState {
+  return typeof v === 'string' && (COORD_DB_STATES as readonly string[]).includes(v);
+}
+
+/** The aggregate. NOT a boolean, deliberately: `ready:false` would fold "we
+ *  proved a precondition missing" into "we could not tell", which is the exact
+ *  overloaded value this feature exists to refuse. `blocked` outranks
+ *  `unknown` — a proven failure is worth reporting even while something else
+ *  is unmeasurable (D-1026). */
+export type ReadyVerdict = 'ready' | 'blocked' | 'unknown';
+
+export const READY_VERDICT_MAP: Record<ReadyVerdict, string> = {
+  ready: 'program-ready',
+  blocked: 'not ready',
+  unknown: 'readiness unknown',
+};
+
+export const READY_VERDICTS: readonly ReadyVerdict[] =
+  Object.keys(READY_VERDICT_MAP) as ReadyVerdict[];
+
+export function isReadyVerdict(v: unknown): v is ReadyVerdict {
+  return typeof v === 'string' && (READY_VERDICTS as readonly string[]).includes(v);
+}
+
+/** The five measured preconditions, without the derived verdict or the stamp. */
+export interface ReadinessFacts {
+  readonly worker: SkillState;
+  readonly coordinator: SkillState;
+  readonly floor: FloorState;
+  readonly boxToken: TokenState;
+  readonly coordDb: CoordDbState;
+}
+
+/** One project's answer, as the wire carries it. */
+export interface ProjectReadiness extends ReadinessFacts {
+  readonly verdict: ReadyVerdict;
+  /** When the fleet-wide half was swept. */
+  readonly at: number;
+}
+
+/**
+ * One row of `GET /api/projects`.
+ *
+ * `readiness` is THREE-VALUED and each value is a different fact:
+ *   - the key ABSENT: this server does not measure readiness (an older build);
+ *   - `null`: it measures, and has not swept yet;
+ *   - an object: measured.
+ * A reader that folds the first two together has thrown away the difference
+ * between "upgrade the server" and "wait two seconds".
+ */
+export interface ProjectRow {
+  name: string;
+  workdir: string;
+  readiness?: ProjectReadiness | null;
+}
+
+/** Fold one skill's answer across every rostered HOME. A proven absence
+ *  anywhere dominates; a home we could not read downgrades a clean sweep to an
+ *  unknown; measuring NOTHING is an unknown, never a vacuous `present`. */
+export function foldSkillStates(states: readonly SkillState[]): SkillState {
+  if (states.length === 0) return 'unmeasurable';
+  if (states.includes('absent')) return 'absent';
+  if (states.includes('unmeasurable')) return 'unmeasurable';
+  return 'present';
+}
+
+/** What one precondition contributes to the aggregate. */
+export type PreconditionCell = 'ok' | 'blocked' | 'unknown';
+
+/**
+ * THE per-precondition predicate, once (fix round 1, minor 5).
+ *
+ * Keyed BY `ReadinessFacts` so the compiler keeps it total — a precondition
+ * added to that interface with no entry here is a compile error. Every
+ * consumer that needs to know whether a cell is ok reads THIS: `readyVerdict`
+ * below folds it, and the PWA's badge derives its "what is missing" list from
+ * it. Before this existed the ok-member of each vocabulary was spelled twice
+ * — here and in `readinessWords.ts` — with nothing making the two agree, so
+ * narrowing one of them survived a green suite.
+ */
+export const READINESS_CELL: {
+  readonly [K in keyof ReadinessFacts]: (v: ReadinessFacts[K]) => PreconditionCell
+} = {
+  worker: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
+  coordinator: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
+  floor: (v) => (v === 'seeded' ? 'ok' : v === 'not-seeded' ? 'blocked' : 'unknown'),
+  boxToken: (v) => (v === 'configured' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
+  // No `unknown` arm: every member of `CoordDbState` is a proven condition.
+  coordDb: (v) => (v === 'available' ? 'ok' : 'blocked'),
+};
+
+/** The preconditions in the order a reader should hear about them. Derived
+ *  from the predicate table, never hand-listed beside it. */
+export const READINESS_KEYS: readonly (keyof ReadinessFacts)[] =
+  Object.keys(READINESS_CELL) as (keyof ReadinessFacts)[];
+
+/** One precondition's contribution, looked up through the single table. */
+export function preconditionCell<K extends keyof ReadinessFacts>(
+  f: ReadinessFacts, k: K,
+): PreconditionCell {
+  return (READINESS_CELL[k] as (v: ReadinessFacts[K]) => PreconditionCell)(f[k]);
+}
+
+/** The ONE derivation of the aggregate verdict. L0 and pure so the PWA renders
+ *  the server's answer instead of folding the five fields a second time. */
+export function readyVerdict(f: ReadinessFacts): ReadyVerdict {
+  const cells = READINESS_KEYS.map((k) => preconditionCell(f, k));
+  if (cells.includes('blocked')) return 'blocked';
+  if (cells.includes('unknown')) return 'unknown';
+  return 'ready';
+}
+
 /** The word for `spawnVerdict(...) === null` wherever a verdict has to be
  *  RENDERED as text rather than carried as a value — today, `dispatch.ts`'s
  *  `spawn-adopted:<verdict>` run event.
@@ -1416,6 +1685,54 @@ export function sessionLifecycle(input: LifecycleInput): SessionLifecycle {
   if (supervised) return 'restarting';
   return input.started ? 'orphan' : 'never-started';
 }
+
+/**
+ * WHICH lifecycles mean "this session is not coming back on its own".
+ *
+ * D-1066. D-309 made a delivery whose recipient's tmux pane is gone wait FOREVER,
+ * silently, on the stated ground that "the mail waits for the session to come
+ * back". That is right for a swap, a restart or a reboot — and it is simply
+ * false for a session somebody archived. Measured on the live fleet: a
+ * delivery to an ARCHIVED workspace sat `queued` for 22.5 hours and was
+ * refused 6,769 times, once per sweep, with no terminal state and no way for
+ * the sender to learn. `ws-archive` unsupervises through `_ws_unsupervise`,
+ * which writes the stop stamp, so an archived workspace reads `stopped` here —
+ * the registry knew the whole time.
+ *
+ * So the distinction the ladder needs is not "is the pane gone" but "is it
+ * coming back", and `sessionLifecycle` above already draws it: with
+ * `alive: false`, a stop stamp gives `stopped`, a fresh supervisor heartbeat
+ * gives `restarting`, and the remainder split on whether the row ever started.
+ * The three words below are the ones that never resolve on their own.
+ *
+ * TOTAL, so a ninth `SessionLifecycle` member is a TS2739 here rather than a
+ * silent `false` — the `LIFECYCLE_RUNG` shape, and for its reason.
+ *
+ * NOT A SECOND COPY OF `LIFECYCLE_RUNG`, though it answers about the same
+ * three words: that table maps a lifecycle to a PEER's deliverability
+ * (`pass`/`no`/`unknown`, where `unmeasurable` is a third answer), and this one
+ * asks a narrower yes/no about the WORD itself. They must agree on which three
+ * are dead, and `peers.ts`'s own test pins that they do — a red suite rather
+ * than this paragraph.
+ */
+const LIFECYCLE_DEAD: Record<SessionLifecycle, boolean> = {
+  running: false, unsupervised: false, unclaimed: false, restarting: false,
+  stopped: true, orphan: true, 'never-started': true,
+  // NOT dead. Doubt is not evidence — the same line `registry-unmeasurable`
+  // draws one rung up, and the reason a degraded read must never park a row.
+  unmeasurable: false,
+};
+
+/** Is this lifecycle one that never resolves on its own? See `LIFECYCLE_DEAD`. */
+export function lifecycleIsDead(lc: SessionLifecycle): boolean {
+  return LIFECYCLE_DEAD[lc];
+}
+
+/** The dead words, derived — never hand-listed a second time. Exported so a
+ *  test can compare this set against `peers.ts`'s rung rather than trusting a
+ *  comment that says they agree. */
+export const DEAD_LIFECYCLES: readonly SessionLifecycle[] =
+  (Object.keys(LIFECYCLE_DEAD) as SessionLifecycle[]).filter((k) => LIFECYCLE_DEAD[k]);
 
 type RawObj = Record<string, unknown>;
 
@@ -1781,6 +2098,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
+      // Absent → null, exactly as `optSubagents` degrades: a snapshot written
+      // before this field existed is ignorant of the count, not a witness to
+      // its being zero. Present-but-not-a-finite-number throws inside
+      // `optNum`, which this function's catch turns into "reject the whole
+      // session" — the same rule every other numeric field here follows.
+      graphQueries: optNum(o, 'graphQueries'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
       statusUnmeasured: optBool(o, 'statusUnmeasured', false),
       // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the
@@ -2290,6 +2613,16 @@ export interface RosterWire {
   hue: Hue;
   /** Whether ccd's least-loaded picker may land a fresh session here. */
   homeAble: boolean;
+  /** True when the roster declares this entry PLUMBING rather than an account —
+   *  see `AccountDef.hidden` (`shared/roster.ts`) for what that means and why
+   *  no predicate over the other fields can derive it.
+   *
+   *  ADDITIVE, and `FLEET_PROTO` is deliberately not bumped for it. A reader
+   *  must test `=== true` and never truthiness: a server built before this
+   *  field omits it, and ABSENCE MEANS "an account", so an older payload must
+   *  keep rendering every entry exactly as it did. `rosterWrapperIds`
+   *  (`pwa/src/lib/accounts.ts`) is the single reader that applies it. */
+  hidden: boolean;
 }
 
 /**
@@ -2562,8 +2895,16 @@ export interface NotifyEvent {
    *  this union was closed and unvalidated — a bare `getJson<CatchUp>`
    *  (`pwa/src/lib/api.ts`) hands a browser's JSON straight to a renderer that
    *  switches on three members, so a fourth arrived typed as one of the three
-   *  it is not. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'unknown';
+   *  it is not.
+   *
+   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or
+   *  lowered — and it is a seventh member rather than a reuse of `run` because
+   *  there is no run: `recordRunEvent` writes `fromState === toState` and
+   *  `pushNewRuns` skips exactly those rows, so an attribution row would land
+   *  in `run_events` and be seen by nobody (D-1163). Additive: an older client
+   *  degrades it to `unknown` through `reviveNotifyEvent`, which is the
+   *  degradation this union was given `unknown` for. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
   sessionId: string; title: string; body: string;
 }
 
@@ -2576,7 +2917,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -2813,6 +3154,65 @@ export const MAIL_MAX_ATTEMPTS = 6;
 export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
+
+/** The path a program's ledger is expected to live at. It NAMES the path the
+ *  operator is expected to have committed and asserts nothing about it: the
+ *  open route parses no ledger ("PARSED BY NOTHING", `coord/routes.ts`), and
+ *  neither speaker of this sentence may pretend to either.
+ *
+ *  L0 since wave 4 (D-1043) because it now has TWO speakers: the start-program
+ *  sheet renders it for the operator before any run exists, and `coord/kickoff.ts`
+ *  builds the kickoff body from it. It lived in `StartProgramSheet.tsx` while the
+ *  browser was its only speaker, and a browser has no filesystem to read a ledger
+ *  off of in the first place — which is still the reason naming it here is safe. */
+export const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;
+
+/**
+ * The one standing kickoff. It names three things and asserts nothing: the
+ * program slug, the ledger path, and the skill to run.
+ *
+ * This is the coordinator's half of the pair whose worker half is
+ * `dispatch.ts`'s `WORKER_KICKOFF_PREFIX` — a skill invoked BY NAME, in the
+ * MAIL, never as a second thing typed at a pane beside it. Since wave 4 the
+ * kickoff is queued by `coord/kickoff.ts` rather than typed by the sheet, so
+ * the server composes this text and the request body carries only `{slug,
+ * title}`: the route can queue a program kickoff and nothing else, which makes
+ * it strictly narrower than `POST /api/sessions/:id/prompt`, and wave 5's
+ * re-kickoff can compose the same sentence with no browser in the loop.
+ */
+export const programKickoff = (slug: string, title: string): string =>
+  `You are the coordinator for program \`${slug}\` (${title}).\n` +
+  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
+  `Run the ccrc-coordinator skill and open the run for wave 1.`;
+
+/** The wave-N re-kickoff. Sibling of `programKickoff`, NOT a replacement: that one is
+ *  right exactly once — a program being STARTED — and wrong for every revive after
+ *  it, which is what `ccd/coordinator-skill/references/resume.md` §4 exists to say.
+ *  Same three facts (slug, ledger, skill) plus the two sentences §4 calls its
+ *  load-bearing half: an open run does not need re-opening, and re-opening is not a
+ *  harmless no-op — `openRun` dedupes ONLY a retry naming the same program, wave and
+ *  `claimedBy` against a row that is still `planned`, so re-opening a `working` wave
+ *  writes a SECOND row and an open-run count the program never gets back to zero.
+ *
+ *  L0 for the reason `programKickoff` is: the runbook says this text and the server
+ *  now composes it, and a template with two speakers and no home is the drift this
+ *  file's own header warns about. `resume-reclaim-l0.test.ts` checks the two against
+ *  each other rather than each against itself (D-1126). */
+export const programResumeKickoff = (
+  slug: string, title: string, runId: number, wave: number,
+): string =>
+  `You are the coordinator for program \`${slug}\` (${title}).\n` +
+  `Its ledger is \`${ledgerPath(slug)}\`.\n` +
+  `Run the ccrc-coordinator skill. Its run is ALREADY OPEN: read \`GET /api/runs\`,\n` +
+  `find run ${runId} at wave ${wave}, and pick that wave up where the ledger says it\n` +
+  `stands. Do not open the run for wave ${wave} again, and do not open wave 1 again.`;
+
+/** The kickoff's mail subject. Defined HERE, beside the body it labels, rather
+ *  than in `coord/kickoff.ts`: one home for the two halves of one message, and
+ *  no hyphenated literal under `server/src/coord` for `mail-routes.test.ts`'s
+ *  scanner to arbitrate — that scanner exists to keep REFUSAL CODES declared,
+ *  and a subject is not a refusal code. */
+export const PROGRAM_KICKOFF_SUBJECT = 'program-kickoff';
 
 /**
  * Peer-mail producer bounds (Build 9b wave 0, spec D10 hole 2) —
@@ -3140,6 +3540,36 @@ export const MAIL_REJECT_CODES = [
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
+ * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
+ * a forward advance can be refused with, as distinct from the ingress, peer-bound
+ * and delivery families above.
+ *
+ * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
+ * one: the ARRAY is the single definition and the type follows it, because wave
+ * 7's per-run health read needs the members at RUNTIME for a SQL `IN (...)` and a
+ * hand-kept fourth copy is exactly what this replaces. It was spelled three times
+ * — here, and as an identical `Extract<MailRejectCode, ...>` in both
+ * `coord/close.ts` and `coord/fingerprint.ts` (D-1296).
+ *
+ * `satisfies readonly MailRejectCode[]` is the load-bearing clause: a typo, or a
+ * member that leaves the parent union, is a compile error here — which a bare
+ * `as const` could not catch.
+ */
+export const DONE_AUTHORITY_CODES = [
+  'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
+  'pr-unmeasurable', 'no-handoff-commit',
+] as const satisfies readonly MailRejectCode[];
+export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+// NO `isDoneRejectCode` PREDICATE, deliberately. Every sibling vocabulary here
+// exports one because something reads a raw string back through it; nothing does
+// for this family — `mail_rejections.code` is read back UNTYPED on purpose
+// (`CoordStore.rejections`), and the list's only consumer is a SQL `IN (...)`
+// bind. A predicate with no caller is a guard that guards nothing and a second
+// place for the members to be spelled. It shipped in this wave's first draft with
+// zero callers and zero tests, and was deleted in review.
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT
@@ -3204,6 +3634,52 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
+/**
+ * WHAT REFUSED A DELIVERY, when the refusal was ordinary.
+ *
+ * D-792. `sweepMail`'s ladder has ten refusal paths and two of them record
+ * anything. The silence is correct as a SCHEDULING decision — those gates are
+ * expected to hold indefinitely for a session that is merely busy, and
+ * charging them toward `MAIL_MAX_ATTEMPTS` would park the mail of every busy
+ * worker. But "must not park" was implemented as "must not be written down",
+ * and those are two different requirements: a delivery sat `delivered` with
+ * `attempts: 0` for ELEVEN HOURS, re-selected and refused on every
+ * `MAIL_SWEEP_MS` tick — on the order of 4,000 times — while `GET /api/peers`
+ * called the session `deliverable: 'yes'`, the run showed a tidy
+ * `unreadMail: 1`, and nothing anywhere named the gate.
+ *
+ * ONE MEMBER PER CONDITION, not per `continue`. `if (!pid || !cfgDir)` folds
+ * two an operator acts on completely differently — the pane is gone, versus
+ * this wrapper resolves to no config dir, which is a ROSTER problem — so they
+ * are `no-pane` and `no-config-dir` here and the ladder splits to match.
+ *
+ * NOT A SCHEDULING INPUT. Nothing reads this to decide whether, when or how
+ * often to deliver; it is written after the decision has already been made and
+ * exists so a human can tell "waiting" from "wedged".
+ */
+export type MailGate =
+  | 'same-sweep' | 'in-flight' | 'cooldown'
+  | 'registry-absent' | 'registry-unmeasurable'
+  | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
+  | 'pending-ask' | 'no-pane' | 'no-config-dir'
+  | 'not-idle' | 'not-quiet';
+
+/** Total, so a refusal path added to `sweepMail` without a member here is a
+ *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
+ *  reason `single-definition.test.ts` forbids a second hand-written copy. */
+const MAIL_GATE_MAP: Record<MailGate, true> = {
+  'same-sweep': true, 'in-flight': true, cooldown: true,
+  'registry-absent': true, 'registry-unmeasurable': true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
+  'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
+  'not-idle': true, 'not-quiet': true,
+};
+export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
+
+export function isMailGate(v: unknown): v is MailGate {
+  return typeof v === 'string' && (MAIL_GATES as readonly string[]).includes(v);
+}
+
 /** The validator that goes with the list — `isPrReason`'s own shape and the
  *  same reason: `unknown` in, so nothing is smuggled past by claiming it is
  *  already a code, and the CONSTANT is cast rather than the input. */
@@ -3248,12 +3724,114 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
   return typeof v === 'string' && (CLAIM_REFUSE_CODES as readonly string[]).includes(v);
 }
 
+/** SIXTH typed refusal union, admitted to `mail-routes.test.ts`'s kebab scanner
+ *  through its own exported guard exactly as `isLifecycleGapReason`,
+ *  `isClaimRefuseCode` and `isSessionLifecycle` were (`:474-493`) — a guard, never
+ *  a `NOT_CODES` entry, for the reason that file already states: an allowlist
+ *  accepts one spelling for ever, a guard accepts a member added later and still
+ *  rejects a typo'd one.
+ *
+ *  NOT A `RunRefuseCode`, and the exclusion is load-bearing rather than tidy:
+ *  `server/test/coordinator-skill.test.ts` loops every member of THAT union and
+ *  requires each to be named somewhere in the coordinator corpus. This door's whole
+ *  obligation is the opposite — the corpus must not teach a coordinator to reach for
+ *  it, because it is the OPERATOR's act on a coordinator that is already dead, and a
+ *  live coordinator reading about it has found a recovery for a problem it does not
+ *  have. Membership here would drag the word into that corpus by force of a passing
+ *  test, which is exactly backwards: the census would be satisfied and the design
+ *  broken. (D-1127.)
+ *
+ *    claimant-alive — the run's current claimant was MEASURED and answers alive.
+ *                     Refused, 409, and the answer carries `by` plus the sentence
+ *                     that reached it: a live tmux pane and a gone-but-restarting
+ *                     lifecycle are the same ANSWER told apart by evidence, not by
+ *                     a fourth code nobody would branch on
+ *    no-claimant    — the run names nobody. Distinct from `unknown-run` (there is no
+ *                     such run) and from `unknown-session` (the NEW claimant has no
+ *                     registry row): three different things to fix, never one code */
+export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant';
+const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> = { 'claimant-alive': true, 'no-claimant': true };
+export const RECLAIM_REFUSE_CODES: readonly ReclaimRefuseCode[] =
+  Object.keys(RECLAIM_REFUSE_CODE_MAP) as ReclaimRefuseCode[];
+/** `hasOwnProperty`, not `in` and not `MAP[v]`: `'toString' in RECLAIM_REFUSE_CODE_MAP`
+ *  is TRUE, and a refusal vocabulary that answers yes to half of `Object.prototype`
+ *  is a 409 body naming `constructor` as a code. The four sibling guards spell
+ *  `.includes(v)` over their array and are safe for the same reason by a different
+ *  route; this one takes the map it already has. */
+export function isReclaimRefuseCode(v: unknown): v is ReclaimRefuseCode {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(RECLAIM_REFUSE_CODE_MAP, v);
+}
+
 /** Work-item counts for one run. `items`, never `tasks` (D-7). */
 export interface RunItemTally { done: number; total: number }
 
 /** One run, as `/ws/fleet`'s `runs` frame and `GET /api/runs` carry it.
  *  Deliberately flat and deliberately small: this rides the fleet socket
  *  alongside a full session snapshot on every change. */
+/**
+ * Per-run health facts the `/runs` board renders as a compact warn row (F7).
+ * Every wedge below was previously discoverable only by reading /mail or the
+ * database by hand: a parked delivery, a replay count climbing toward the
+ * 20-attempt ceiling, a repeated done-claim refusal, a dispatch whose brief was
+ * never queued, and a coordinator that was never briefed at all.
+ *
+ * ADDITIVE; `FLEET_PROTO` is deliberately NOT bumped. An older server omits the
+ * whole object and the PWA renders NOTHING — never "no wedge here", which is a
+ * claim this build would be making on that server's behalf.
+ *
+ * EVERY MEMBER IS A COUNT, A CODE OR A STORED TIMESTAMP — never an age, and that
+ * is a hard constraint rather than a preference. The WS `runs` frame is dropped
+ * from the broadcast when its JSON is unchanged (`server/test/fleetws.test.ts`),
+ * so a field carrying a clock would differ on every tick, defeat that dedupe and
+ * turn an idle fleet into a broadcast storm — a performance regression shaped
+ * exactly like a feature. The thresholds therefore live in the renderer, which is
+ * the `SPAWN_STALL_MS` precedent (D-1300).
+ */
+export interface RunHealth {
+  /** Deliveries of this run's mail still `queued` or `delivered`. */
+  readonly mailOutstanding: number;
+  /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
+   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
+   *  working as designed and is excluded, because reporting it would announce a
+   *  chair that has already changed hands. */
+  readonly mailParked: number;
+  /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
+   *  delivery attempts and mail 129 reached 911, each arriving after the work it
+   *  was meant to steer; this is the number that was climbing the whole time
+   *  while nothing on any surface showed it. MAX and not SUM: one message nearing
+   *  the ceiling is the signal, and quiet siblings must not dilute it. */
+  readonly mailReplayMax: number;
+  /** How many done-authority refusals this run has collected
+   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+  readonly doneRejects: number;
+  /** The newest one's code, or null when there are none. FREE TEXT on the wire in
+   *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
+   *  unvalidated and read back as a raw string, so a client may DISPLAY this and
+   *  must never key a total `Record<..., ...>` off it. */
+  readonly lastRejectCode: string | null;
+  /** What this run's last committed dispatch DECIDED about the brief.
+   *  `null` is a THIRD condition and not a flavour of `false`: no dispatch has
+   *  committed, or the row predates migration 7. `false` means a dispatch ran and
+   *  queued no brief — the state that previously left no trace at all (D-1298). */
+  readonly briefQueued: boolean | null;
+  /** The `sendPrompt` refusal code that made `briefQueued` false, or null. Free
+   *  text, on `lastError`'s terms. */
+  readonly clearError: string | null;
+  /** When the OLDEST unacked `program-kickoff` addressed to this run's
+   *  `claimedBy` was first sent, or null when there is none. A timestamp, never a
+   *  verdict — the renderer owns the threshold.
+   *
+   *  "UNACKED" AND NOT "STILL BEING RETRIED" (D-1318). A kickoff that parked —
+   *  the replay ceiling, a recipient the registry no longer lists — is still a
+   *  kickoff nobody ever acked, and the first version of this field went null the
+   *  moment the lane gave up, which is the one moment the wedge became permanent.
+   *  Null here means acked, or no coordinator, or a park the store treats as a
+   *  DECISION (a reclaim cancelling the dead chair's kickoff before mailing the
+   *  new one) — three conditions a caller renders identically, and deliberately:
+   *  none of them is "somebody is stuck". */
+  readonly coordKickoffPendingSince: number | null;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -3266,13 +3844,25 @@ export interface RunSummary {
   branch: string | null;
   state: RunState;
   /** The ONE coordinator that owns this run: the tmux-derived session id of
-   *  the session that opened it, fixed at `POST /api/runs` and rewritten by no
-   *  route afterwards. That immutability is the mechanism behind the
-   *  `claimed-by-another` refusal — a second coordinator, in a fresh
-   *  workspace, naming a programme this one already claimed is refused
-   *  FOREVER, because nothing lowers this flag; recovering from it means
-   *  reaching the original session or opening a new programme, never
-   *  reassigning the run.
+   *  the session that opened it, stamped at `POST /api/runs`. That stamp is the
+   *  mechanism behind the `claimed-by-another` refusal — a second coordinator,
+   *  in a fresh workspace, naming a programme this one already claimed is
+   *  refused AT OPEN TIME, and no amount of retrying the open lowers the flag.
+   *
+   *  THAT IS THE WHOLE OF WHAT THE REFUSAL PROMISES, and it used to promise more
+   *  (D-1125). Until this build the paragraph above went on to say the column is
+   *  written once and by one route, that the second coordinator is turned away
+   *  permanently, and that recovery never moves a run to a different session.
+   *  All three were true of the tree that shipped them and none is true now: an
+   *  operator door MEASURES the current claimant and, on a dead answer, moves
+   *  every run of that programme — terminal rows included, because both readers
+   *  of this column select the lowest-id claimed row with no state predicate, so
+   *  a wave-1 `done` row left naming a corpse answers for the whole programme —
+   *  to the named session inside one transaction. A LIVE claimant is still
+   *  refused. What changed is not that a claim can be taken; it is that a corpse
+   *  can be succeeded. The door is left unnamed here on purpose: nothing that
+   *  reads this field calls it, and a wire type that teaches a call its own
+   *  readers do not make is where a doc lie starts.
    *
    *  THE PWA READS IT AS THE PROGRAMME-OWNERSHIP EDGE: this field (the
    *  parent) paired with `sessionId` (the child, the worker this run
@@ -3286,7 +3876,9 @@ export interface RunSummary {
    *  before the column had a writer, or a hand-inserted recovery row. Absence
    *  permits: a renderer brackets nothing under a `null`, which is the honest
    *  answer, where a fabricated owner would nest a run under a coordinator
-   *  that never claimed it. */
+   *  that never claimed it. A succession leaves these rows exactly as it found
+   *  them — it moves the rows that name somebody and never the rows that name
+   *  nobody — so a reconstructed row cannot acquire an owner it never had. */
   claimedBy: string | null;
   /** Deviation D-1: wave >= 2 resumes its session (no ccd verb can spawn
    *  fresh into an existing workspace) and the dispatch route then injects
@@ -3330,6 +3922,19 @@ export interface RunSummary {
   items: RunItemTally;
   /** Unacked mail addressed to this run's session. */
   unreadMail: number;
+
+  /**
+   * F7's per-run health facts — the wedges this program spent six waves finding
+   * forensically, as measured values. See `RunHealth`.
+   *
+   * REQUIRED here because `hydrateRun` returns a literal and must therefore
+   * compute it, and OPTIONAL at every PWA reader, because an older SERVER omits
+   * it. The one tolerant reader is `runWarnings()` in `pwa/src/fleet/runWords.ts`
+   * — NOT `runHealth`, which is the SERVER store method that measures this
+   * object; naming that one here pointed a maintainer at the wrong ring for the
+   * tolerance guarantee. No JSX reads a member directly.
+   */
+  health: RunHealth;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
@@ -3343,6 +3948,65 @@ export interface RunSummary {
  *  does NOT silently move what the console calls stalled — that is a
  *  deliberate edit here, made with this paragraph's inequality in hand. */
 export const SPAWN_STALL_MS = 360_000;
+
+/** F7. A `RunHealth.mailReplayMax` at or above this is a delivery climbing toward
+ *  `MAIL_REPLAY_MAX_ATTEMPTS` (20, `server/src/watch.ts`), and the board says so.
+ *
+ *  A RENDERING threshold on `SPAWN_STALL_MS`'s terms — nothing server-side reads
+ *  it, and it is deliberately NOT derived from the ceiling it watches. Half is
+ *  the point: a warning that fires only AT the ceiling arrives with the message
+ *  already parked, which is precisely how mail 120 and mail 129 were discovered
+ *  (722 and 911 attempts, both after the work they were meant to steer). */
+export const MAIL_REPLAY_WARN_COUNT = 10;
+
+/** F7. An unacked `program-kickoff` older than this is a coordinator that was
+ *  never briefed — an open run whose chair nobody ever sat in.
+ *
+ *  A RENDERING threshold, same argument. Fifteen minutes is the `MAIL_GATE_HELD_MS`
+ *  register rather than a copy of any lane number: it clears a full server suite
+ *  (~9 min) with room, so a coordinator that is merely busy stays silent. */
+export const KICKOFF_UNACKED_MS = 900_000;
+
+/** D-792, §6. WHEN the console is allowed to name the gate holding a delivery.
+ *
+ *  Three conditions, all of which must hold, and they are here for the same
+ *  reason `SPAWN_STALL_MS` is: a threshold the console DRAWS ON must not be a
+ *  copy of a number the lane ENFORCES. Nothing in `sweepMail` reads any of
+ *  these — reading one would make a gate column a scheduling input, which the
+ *  design forbids by name.
+ *
+ *  `MAIL_GATE_HELD_MS` — how long ONE gate must have held a delivery unbroken
+ *  (`now - gateSince`) before that is worth saying out loud. Deliberately far
+ *  above a busy worker's ordinary turn: fifteen minutes clears a full server
+ *  suite (~9 min) with room, so `not-idle` on a session doing real work stays
+ *  silent. Below it the row renders exactly as it did before this field
+ *  existed — a worker busy for ninety seconds is not a fault, and drawing it
+ *  as one would re-introduce the very lie this design was written against.
+ *
+ *  `MAIL_GATE_HELD_COUNT` — how many consecutive refusals at that same gate.
+ *  `gateSince` alone is not enough: a sweep that ran once, recorded a gate and
+ *  then stopped leaves an ageing `gateSince` behind it, and one observation is
+ *  not a pattern.
+ *
+ *  `MAIL_GATE_FRESH_MS` — how recently the most recent refusal was observed
+ *  (`now - gateAt`). This is the whole reason `gateAt` is a separate column
+ *  from `gateSince`: a sweep that has STOPPED leaves `gateSince` looking
+ *  exactly like a sweep that is running and still refusing. Five minutes, not
+ *  a small multiple of the sweep cadence, because `gateAt` is stamped by the
+ *  SERVER's clock and compared against the VIEWER's — a phone minutes off UTC
+ *  must not silence the line.
+ *
+ *  THE TEST IS ONE-SIDED, deliberately, and this sentence used to claim
+ *  otherwise. Only a `gateAt` too far in the PAST silences the line; one in the
+ *  FUTURE — which is what a viewer clock running behind the server's produces —
+ *  passes, and is pinned that way. The asymmetry is the safe one: a future
+ *  stamp means the refusal is at most as old as the skew, so the line is if
+ *  anything under-stating the hold. A past-side miss costs a warning nobody
+ *  sees; a two-sided test would cost the warning AND make a viewer's wrong
+ *  clock look like a wedged sweep. */
+export const MAIL_GATE_HELD_MS = 900_000;
+export const MAIL_GATE_HELD_COUNT = 3;
+export const MAIL_GATE_FRESH_MS = 300_000;
 
 /** One mail row, for the feed and the session strip (both PR J). */
 export interface MailSummary {
@@ -3399,11 +4063,87 @@ export interface MailSummary {
    * one: it is the shape of a delivery that has never been attempted.
    */
   lastError: string | null;
+  /**
+   * D-792, and the four fields answer four different questions on purpose.
+   *
+   * `lastGate` — WHICH ordinary gate refused this delivery most recently, or
+   * `null` for "none has", which is a fresh row or one that moved. It is a
+   * CLOSED union (`MailGate`), the exact opposite of `lastError` above, so a
+   * client MAY key a total `Record<MailGate, …>` off it — while still
+   * rendering an unrecognised token raw rather than `undefined`, because an
+   * older client can meet a newer server's member.
+   *
+   * `gateCount` — consecutive refusals at that same gate; `gateSince` — when
+   * that gate first refused this row unbroken; `gateAt` — when the most recent
+   * refusal was observed. The last two are not redundant: a sweep that has
+   * STOPPED leaves `gateSince` looking exactly like one still refusing, and
+   * `now - gateAt` is the only thing that separates them.
+   *
+   * ADDITIVE; `FLEET_PROTO` is deliberately not bumped. An older server omits
+   * all four, and absence means "nothing to say about a gate" — never "no gate
+   * is holding it", which is a claim this build would be making on that
+   * server's behalf.
+   *
+   * NONE OF THEM IS A SCHEDULING INPUT. They are written after every decision
+   * is made, and exist so a reader can tell a delivery that is WAITING from one
+   * that is WEDGED — a distinction that previously existed nowhere, and cost
+   * eleven hours of an unread nudge to notice.
+   */
+  lastGate: MailGate | null;
+  gateCount: number;
+  gateSince: number | null;
+  gateAt: number | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
  *  `runs`, never stored beside these — see `CoordStore.capsUsage`. */
 export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: number }
+
+/** The two counts `CoordStore.capsUsage` DERIVES from `runs` — never stored
+ *  beside the limits, for the reason that method's own docstring gives (a
+ *  stored counter is a second copy of what `runs` already knows, and the copy
+ *  is always the one that drifts).
+ *
+ *  Named here only since the operator dial shipped (D-1209): before that the
+ *  shape existed solely as an inline structural type on one method, because
+ *  `dispatchRun` was its only reader and never had to name it. */
+export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
+
+/** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
+ *  TOGETHER, in one shape and one round trip: a cap without its usage is a
+ *  number an operator cannot act on, and a usage without its cap is a number
+ *  they cannot read. */
+export interface CoordCapsView {
+  caps: CoordCaps;
+  usage: CoordCapsUsage;
+  /** When the caps were last written, or `null` if they never have been (D-1169).
+   *
+   *  ADDITIVE, and on the VIEW rather than on `CoordCaps`: the view is the
+   *  read-side shape, while `CoordCaps` is the stored value that `decideCaps`
+   *  merges and `setCaps` writes — a timestamp is not a cap, and widening the
+   *  stored type for a display fact is what wave 6 declined to do.
+   *
+   *  `null` is not "the epoch": migration 1 seeds `updatedAt = 0`, and a dial
+   *  that rendered 1970 for a box nobody has ever tuned would be inventing an
+   *  event. An older server omits the field entirely, which reads the same way
+   *  through whatever reads it.
+   *
+   *  NO CLIENT READS THIS YET, and saying so is the point — the sentence here used
+   *  to claim absence "reads the same way through the one reader that consumes it",
+   *  and there is no such reader (`CapsControl` takes a `CoordCapsView` and touches
+   *  only `caps` and `usage`). A wire type that teaches a call its own readers do
+   *  not make is where a doc lie starts, which `RunSummary.claimedBy` says in as
+   *  many words two hundred lines up.
+   *
+   *  D-1169 IS closed by this field, both halves as that deviation states them —
+   *  "the column already exists and only the read is missing", plus `setCaps`
+   *  reading its own clock. The read is here and the clock is the caller's. The
+   *  dial is a further thing D-1169 names as motivation rather than as a
+   *  deliverable, and whoever builds it must treat absent (an older server) and
+   *  `null` (a box nobody has tuned) alike — which is why both are spelled out
+   *  here rather than discovered then. */
+  updatedAt?: number | null;
+}
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */

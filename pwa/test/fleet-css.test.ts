@@ -570,11 +570,55 @@ describe('runs are not living panes', () => {
     // row is a record of a lifecycle position; the pane it names may be alive,
     // and THAT row (the fleet line) is where the lamp belongs.
     for (const sel of ['.run-row', '.run-row .run-glyph', '.run-row .run-state', '.runs-group', '.fleet-runs-row',
+      // F7's warn row joins the list rather than getting an exemption: it is the
+      // one new class on this row that carries an attention hue, which is exactly
+      // the shape that tends to acquire a glow next.
+      '.run-row .run-warn', '.run-row .run-warn-item', '.run-row .run-warn-glyph',
       '.run-row .run-abandon']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+});
+
+// program-leverage wave 3 (F3): a readiness badge is a MEASUREMENT of a box,
+// not a living pane — the same discipline as the two describes around it, and
+// it gets its own rather than being filed under "runs", which it is not.
+describe('the program-ready badge is not a living pane', () => {
+  it('no readiness rule glows, breathes or animates', () => {
+    for (const sel of ['.sheet-panel .proj-ready',
+      ".sheet-panel .proj-ready[data-verdict='ready']",
+      ".sheet-panel .proj-ready[data-verdict='blocked']",
+      '.sheet-panel .proj-ready-why']) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+
+  it('the project row does not re-flow when the badge is absent', () => {
+    // The badge added a third grid column, and it is NOT always rendered: a
+    // server too old to send `readiness` renders no span at all. With column 3
+    // empty, auto-placement would put .proj-dir at row 1 column 3 — beside the
+    // name instead of under it — on exactly those servers. Both cells are
+    // therefore pinned to column 2 explicitly, and the badge to column 3.
+    expect(norm(stripComments(ruleIn(css, '.proj-name')))).toContain('grid-column: 2');
+    expect(norm(stripComments(ruleIn(css, '.proj-dir')))).toContain('grid-column: 2');
+    expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready')))).toContain('grid-column: 3');
+    // The reason line rejoins column 2, under the dir — not a fourth column.
+    expect(norm(stripComments(ruleIn(css, '.sheet-panel .proj-ready-why')))).toContain('grid-column: 2');
+  });
+
+  it('carries a word, not colour alone — the variants only RESTATE a data-verdict the markup already sets', () => {
+    // The two-cue rule lives in the component (glyph + word in the span's own
+    // text); what CSS must not do is become the only carrier. Both coloured
+    // arms are attribute-keyed, so the DOM says the verdict even with the
+    // stylesheet stripped.
+    for (const verdict of ['ready', 'blocked']) {
+      expect(css).toContain(`.proj-ready[data-verdict='${verdict}']`);
     }
   });
 });
@@ -649,6 +693,36 @@ describe('the abandon sheet is not a living pane, and its own control is a real 
   // assertion no test in this suite can make.
   it('.run-open does not claim width: 100% — .run-abandon needs room on the same line', () => {
     expect(declValue(ruleFor('.run-row .run-open'), 'width')).toBeNull();
+  });
+
+  // program-leverage wave 5 (D-1129). The resume door's tap floor, its
+  // `flex: none` and its no-glow discipline are all the SAME declarations
+  // `.run-abandon` is already held to — which is only true while the two share
+  // one rule. Read the grouping back, so a well-meaning split into a second
+  // rule (which would silently drop all three and leave the class in
+  // `design/audit.mjs`'s uncovered census) reds here.
+  it('.run-resume shares .run-abandon’s rule — that grouping IS its floor and its ground', () => {
+    expect(selectorsOf(css, '.run-row .run-abandon'))
+      .toEqual(['.run-row .run-abandon', '.run-row .run-resume']);
+    expect(declValue(ruleFor('.run-row .run-resume'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.run-row .run-resume'), 'min-width')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.run-row .run-resume'), 'flex')).toBe('none');
+    const rule = norm(stripComments(ruleFor('.run-row .run-resume')));
+    expect(rule).not.toContain('--glow');
+    expect(rule).not.toContain('animation');
+    expect(rule).not.toContain('box-shadow');
+  });
+
+  // The board's row has three controls now, not two, and `.run-open` must still
+  // decline to claim the width — the measurement above (a full-width
+  // `.run-open` roughly doubled every row's height) gets worse with a third
+  // sibling, not better. The `flex` half is the assertion the width pin above
+  // does NOT make: `1 1 auto` is what lets the row's opener yield the space the
+  // other two need, and a `flex: none` here would push them onto their own line
+  // just as surely as `width: 100%` would.
+  it('.run-open still claims no width and still yields the line, now that a THIRD control shares it', () => {
+    expect(declValue(ruleFor('.run-row .run-open'), 'width')).toBeNull();
+    expect(declValue(ruleFor('.run-row .run-open'), 'flex')).toBe('1 1 auto');
   });
 
   it('.abandon-sheet is self-grounded — it declares its own color AND background', () => {

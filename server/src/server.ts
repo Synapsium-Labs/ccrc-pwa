@@ -37,6 +37,7 @@ import { answerAsk, type AskDeps } from './inject/ask.js';
 import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
+import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
@@ -45,6 +46,7 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -65,6 +67,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
+  type FloorState,
 } from '../../shared/api.js';
 
 /**
@@ -1183,7 +1186,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       accounts,
       projected: projectHome(deps.cfg.roster, limits),
       roster: deps.cfg.roster.accounts.map((a) => ({
-        id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble,
+        id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
       })),
     };
   });
@@ -1451,6 +1454,138 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? res : reply.code(409).send(res);
   });
 
+  /**
+   * The program kickoff, as MAIL (program-leverage wave 4, F4). The sibling
+   * above types into a pane, synchronously, with no idle gate — right for the
+   * operator's own keystrokes, and until this wave it was also how a brand-new
+   * coordinator was briefed: the start-program sheet fired `api.prompt` the
+   * instant the new session's row appeared in a `/ws/fleet` frame, racing ccd's
+   * own cold-start prompt clearing, and a failure was a toast with no retry and
+   * no durable record. That was the last machine injection in the tree that
+   * bypassed the delivery lane, which wave briefs have refused since Build 4.
+   *
+   * WHY A SIBLING ROUTE AND NOT A FIELD ON `POST /api/sessions` (D-1039): that
+   * handler's success body is the literal `{ok:true}` and `ccd`'s stdout id is
+   * discarded, so it never learns who to mail; recomputing `${wrapper}-${project}`
+   * is the second implementation of ccd's own rule that D-291 refused; and
+   * `cmd_start` is idempotent, so the id it would print can name a session that
+   * was ALREADY RUNNING and may be mid-task — the exact hijack D-292 exists to
+   * prevent, relocated to a place where the only guard against it (the sheet's
+   * pre-tap refusal) is not in the loop. The id belongs in the path, measured
+   * from a real fleet frame, which is where D-291/D-292 already do their work.
+   *
+   * WHY IT DECIDES NOTHING: the queueing is `coord/kickoff.ts`'s
+   * `queueProgramKickoff`, so wave 5's coordinator-reclaim door can re-kickoff a
+   * revived coordinator without a sheet. This handler is a union->status map, as
+   * the ring requires of L4.
+   *
+   * The body carries `{slug, title}` and — since wave 5 — an optional
+   * `{runId, wave}` pair, never prose: the server composes the sentence from one
+   * of TWO L0 constants, so the route stays strictly NARROWER than the one above.
+   * It can queue a program kickoff and nothing else; the pair chooses WHICH
+   * kickoff, never what it says. Both fields or neither: see the guard below for
+   * why a half-present pair is a 400 rather than a wave-1 kickoff.
+   */
+  app.post('/api/sessions/:id/kickoff', async (req, reply) => {
+    // 501 `{ok:false,error:'not-configured'}` — `server.ts` has no
+    // `notConfigured` helper (`coord/routes.ts`'s is a local const inside
+    // `registerCoordRoutes`), and this is the shape this file's own comment
+    // above already names. NOT the push routes' bare `{error:…}` without
+    // `ok:false`. And unlike `/api/fleet` or `/api/sessions/:id`, which degrade
+    // without a store because they must work on a box that does no
+    // coordination, this route cannot: no coord, no durable mail, so a 200 here
+    // would be a promise nothing kept.
+    if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const coord = deps.coord;
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    const body = (req.body ?? {}) as
+      { slug?: unknown; title?: unknown; runId?: unknown; wave?: unknown };
+    if (typeof body.slug !== 'string' || body.slug.trim() === ''
+      || typeof body.title !== 'string' || body.title.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // ONE reader for the new pair (the wire rule), computed once and handed on as
+    // a value that CANNOT be half-formed — the refusal below is the only place a
+    // half-formed pair can reach. Shape borrowed from `coord/routes.ts`'s own
+    // integer body checks: `typeof === 'number'` AND `Number.isInteger`, because
+    // `NaN` and 1.5 are both numbers and neither is a wave.
+    //
+    // …AND THE LOWER BOUND THAT SHIPS IN THE SAME CONJUNCTION THERE (D-1151,
+    // wave-5 review MINOR 8). The borrow was one term short: `POST /api/runs`
+    // reads `!Number.isInteger(wave) || wave < 1` (`coord/routes.ts:894`), and
+    // only the integer half made the trip. Written positively here to fit the
+    // ternary, the missing term is `>= 1`, and it belongs on BOTH fields: a run
+    // id is `INTEGER PRIMARY KEY AUTOINCREMENT` (`coord/schema.ts:66`) and a wave
+    // is refused below 1 at open, so the smallest either can be is 1. Without it
+    // `{runId:-5, wave:0}` IS a pair — it composes `programResumeKickoff(…, -5, 0)`
+    // and durably queues a brief telling a revived coordinator to find run -5 at
+    // wave 0 in `GET /api/runs` and pick that wave up. Nothing downstream catches
+    // it: the composer interpolates, `queueSystemMail` writes, and the recipient
+    // is a session reading prose.
+    //
+    // The expensive half is not the false sentence, it is the DEDUPE KEY. That
+    // key is `(operator, null, toId, PROGRAM_KICKOFF_SUBJECT)` — one outstanding
+    // kickoff per session whatever program it names — so the nonsense brief takes
+    // the slot, and the operator's corrected re-kickoff a second later answers
+    // `queued:false`, which the sheet renders as "one is already waiting". True,
+    // and useless: the one waiting names run -5. A refusal writes nothing, so it
+    // cannot occupy anything, which is why the range test lives HERE, before the
+    // queue, and not as a repair downstream.
+    //
+    // Failing the range makes `resume` `undefined` — the same value an ABSENT
+    // pair produces — so this term alone would demote `{runId:-5, wave:0}` to
+    // wave 4's kickoff rather than refusing it. It does not, because the
+    // both-or-neither guard below tests the RAW body keys and not the computed
+    // value; the two are one mechanism and `kickoff-route.test.ts` reds on either
+    // half being removed.
+    const resume = typeof body.runId === 'number' && Number.isInteger(body.runId) && body.runId >= 1
+      && typeof body.wave === 'number' && Number.isInteger(body.wave) && body.wave >= 1
+      ? { runId: body.runId, wave: body.wave }
+      : undefined;
+    // BOTH OR NEITHER (D-1126). Absent-both is wave 4's kickoff, byte for byte —
+    // absence permits. Half-present is refused rather than completed: no build
+    // ever sent a lone field, so it is a caller that meant something, and the
+    // default that would complete it (wave 1) is the one instruction a REVIVED
+    // coordinator must not be given. A silent fallback would answer `queued:true`
+    // to an operator whose revive had just been briefed to open a second run.
+    //
+    // It reads the RAW body keys, not `resume`, which is what lets it carry a
+    // second duty for free (D-1151): an OUT-OF-RANGE pair also arrives here as
+    // `undefined` with its keys present, so it is refused on the same line and by
+    // the same argument — a caller that meant something, and a default that would
+    // complete it into the one instruction a revived coordinator must not get.
+    if (resume === undefined && (body.runId !== undefined || body.wave !== undefined)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // Deliberately NOT `knownId` (above), whose `names !== null &&` folds an
+    // unlistable registry into "unknown" — right for a keystroke route that
+    // should fail shut, wrong here: it would tell the sheet "that session does
+    // not exist" when the truth is "this box could not read its registry", and
+    // the sheet's only remaining act would be to give up. Same split, and the
+    // same two bodies, as `POST /api/sessions/:id/stop` below.
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (!read.found) {
+      return reply.code(read.reason === 'unlistable' ? 503 : 404).send({
+        ok: false,
+        error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session',
+      });
+    }
+    const out = queueProgramKickoff({ coord }, id,
+      { slug: body.slug.trim(), title: body.title.trim() }, resume);
+    // 413 in the shape every other cap on this server answers in (claims paths,
+    // claim intent, ledger title, and `POST /api/mail` itself). The seam
+    // MEASURED it and named it; this maps, and decides nothing — `out.kind` is
+    // carried rather than re-spelled here, so the code has one definition.
+    if (!out.ok) {
+      return reply.code(413).send({ ok: false, error: out.kind, limit: out.limit, detail: out.detail });
+    }
+    // `queued: false` is not a failure — a kickoff IS waiting for this session —
+    // but it is not the same fact as "queued just now", so it rides the body
+    // rather than collapsing into one 200 the caller cannot read.
+    return { ok: true, queued: out.queued };
+  });
+
   app.post('/api/sessions/:id/dialog', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -1514,7 +1649,49 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   };
 
-  app.get('/api/projects', async () => listProjects(deps.io, deps.cfg));
+  // F3 — the program-ready readiness join (program-leverage wave 3). Read ONCE
+  // off the watcher, exactly the way `/api/fleet` above reads
+  // `watcher?.currentPending()`: the expensive half (two skill files per
+  // rostered HOME plus the box token, an agent round trip each in remote fleet
+  // mode) is swept on a ten-minute clock, and this handler must never
+  // re-measure it.
+  //
+  // THREE outcomes reach the wire and they are three different facts: no key
+  // at all (a build without this feature), `null` (this build, nothing swept
+  // yet), an object (measured). Folding the first two together would erase the
+  // difference between "upgrade the server" and "wait a moment".
+  //
+  // `null` also covers "this process has no watcher", which `index.ts` never
+  // produces — it constructs one unconditionally — so in the shipped server
+  // that arm means "not swept yet" and nothing else. Same shape of reasoning
+  // as D-1024: the arm is kept because a build that could not express it could
+  // never report the day it becomes reachable.
+  app.get('/api/projects', async () => {
+    const listed = await listProjects(deps.io, deps.cfg);
+    const fleet = watcher?.currentReadiness();
+    if (fleet === undefined) {
+      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null })) };
+    }
+    const coord = deps.coord;
+    return {
+      ...listed,
+      projects: listed.projects.map((p) => {
+        // Caught PER PROJECT: one unreadable row must not blank the rest.
+        // `ledgerFloor` has no result type — a sick store throws — and a
+        // failed read is `unmeasurable`, never `not-seeded`, which would send
+        // an operator to seed a floor that may already exist.
+        let floor: FloorState;
+        try {
+          floor = coord === undefined
+            ? 'unmeasurable'
+            : coord.ledgerFloor(p.name) === null ? 'not-seeded' : 'seeded';
+        } catch {
+          floor = 'unmeasurable';
+        }
+        return { ...p, readiness: projectReadiness(fleet, floor) };
+      }),
+    };
+  });
 
   app.post('/api/sessions', async (req, reply) => {
     const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown };

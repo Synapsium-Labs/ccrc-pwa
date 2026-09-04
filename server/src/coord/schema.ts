@@ -48,6 +48,15 @@
  * to `'unknown'` — the same guard `isRunState`/`isProgramState`/
  * `isMailDeliveryState` already give the other five, never a cast.
  *
+ * That column's own comment inside migration 1 spells the vocabulary out
+ * (`ask|done|merged|mail|run`). Read it as a SNAPSHOT of what the union held
+ * when v1 was written, not as the authority: migration 1 is frozen, so its
+ * bytes are history and are not edited when the union grows — `shared/api.ts`'s
+ * `NotifyEvent['kind']` and `NOTIFY_KINDS` are the live list, and they have
+ * since gained `coord` (D-1163). What the comment says that REMAINS true of
+ * every generation is the part that matters: the server never writes
+ * `'unknown'`.
+ *
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.
  */
@@ -633,6 +642,81 @@ export const MIGRATIONS: readonly string[] = [
   // nothing is rebuilt, renamed or repurposed.
   `
   ALTER TABLE runs ADD COLUMN dispatchStartedAt INTEGER;
+  `,
+
+  // ── 6: user_version 5 -> 6 ────────────────────────────────────────────────
+  // D-792: WHAT REFUSED THIS DELIVERY, and for how long.
+  //
+  // `sweepMail`'s ladder has ten refusal paths; two of them write `lastError`
+  // via `backOff` and the rest `continue` in silence. That silence is right as
+  // a SCHEDULING decision — those gates hold indefinitely for a session that is
+  // merely busy, and charging them toward `MAIL_MAX_ATTEMPTS` would park every
+  // busy worker's mail. But "must not park" got implemented as "must not be
+  // written down", and a delivery then sat `delivered`/`attempts: 0` for ELEVEN
+  // HOURS, refused ~4,000 times, while every surface reported health.
+  //
+  // FOUR COLUMNS, NOT ONE, because they answer four different questions and
+  // collapsing any pair re-creates the defect:
+  //   lastGate   — WHICH gate (a closed `MailGate`, shared/api.ts)
+  //   gateCount  — how many CONSECUTIVE refusals at that same gate
+  //   gateSince  — when THIS gate first refused this row, unbroken
+  //   gateAt     — when the most recent refusal was OBSERVED
+  // `gateSince` and `gateAt` are not redundant: a sweep that has STOPPED
+  // running leaves `gateSince` looking exactly like one still refusing, and
+  // `now - gateAt` is the only thing that separates them.
+  //
+  // NOT A SCHEDULING INPUT, and that is the load-bearing constraint rather than
+  // a nicety. Nothing reads these to decide whether, when or how often to
+  // deliver — hence NO INDEX, deliberately: an index exists to serve a query,
+  // a query here would be a scheduling read, and the absence is the evidence
+  // there is none. `attempts` remains SEND-FAILURE budget alone and is
+  // untouched by every gate below.
+  //
+  // ADDITIVE AND ITS OWN MIGRATION, for the reason 2..5 each restate: `db.ts`
+  // runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so editing an
+  // applied entry never runs again. MIGRATIONS[0..4] are FROZEN.
+  //
+  // NULLABLE, EXCEPT THE COUNT. NULL `lastGate` means "no ordinary gate has
+  // refused this row" — a fresh delivery, or one that moved — and a default
+  // would collapse that into "refused by something at the epoch", which is the
+  // overloaded null this column exists to remove. `gateCount` defaults 0
+  // because a count of refusals genuinely starts at none.
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN lastGate TEXT;
+  ALTER TABLE mail_deliveries ADD COLUMN gateCount INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE mail_deliveries ADD COLUMN gateSince INTEGER;
+  ALTER TABLE mail_deliveries ADD COLUMN gateAt INTEGER;
+  `,
+
+  // ── 7: user_version 6 -> 7 ────────────────────────────────────────────────
+  // Two columns recording what a dispatch DECIDED, as opposed to what it did
+  // (D-1298). MIGRATIONS[0..5] ARE FROZEN, for the reason every entry above
+  // states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`,
+  // so an amendment to an applied entry never runs again.
+  //
+  // `briefQueued` is `!resumed || clearedAt !== null` (coord/dispatch.ts) — the
+  // answer to "did this dispatch actually queue a wave-brief". Its TRUE branch
+  // already leaves a durable artefact, the brief mail row itself. Its FALSE branch
+  // — a resume whose `/clear` was refused — left NOTHING, and absence there is
+  // indistinguishable from "no dispatch ever happened", which is the one state an
+  // operator most needs told apart from it. A reader could re-derive the formula
+  // from `resumed`/`clearedAt`, but that is a re-derivation of a RULE, not a
+  // record of a DECISION, and it silently changes meaning the day anything else
+  // writes `clearedAt`.
+  //
+  // `clearError` is the `sendPrompt` refusal code that made it false. Today it
+  // survives only as `run_events.detail`'s `clear-refused:<code>` — a table no
+  // HTTP route serves — written through a MUTUALLY EXCLUSIVE ternary
+  // (coord/dispatch.ts) that already drops it whenever `adopted` wins.
+  //
+  // NULLABLE, NO DEFAULT, both. NULL means "an older build wrote this row, or no
+  // dispatch has committed for it". `briefQueued = 0` means "this dispatch queued
+  // no brief". A `DEFAULT 0` would make those one value — the overloaded null this
+  // file's own additive-only rule forbids at a new seam, and the exact defect the
+  // dispatchStartedAt and gate-column entries above each argued through.
+  `
+  ALTER TABLE runs ADD COLUMN briefQueued INTEGER;
+  ALTER TABLE runs ADD COLUMN clearError  TEXT;
   `,
 ];
 

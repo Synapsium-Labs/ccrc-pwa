@@ -1,0 +1,38 @@
+# The DEFAULT graph-sweep noise list — ccrc's own footprint, and nothing else.
+#
+# D-1160. `_gs_guard` refuses a build when any path `detect()` picks up is not
+# git-tracked, because an untracked file entering the corpus would silently
+# change a graph nobody can reproduce. That guard is right. What was wrong is
+# that ccrc's OWN tooling writes untracked files into every repo a session
+# touches — `.remember/` transcripts, `.superpowers/` specs, `.claude/`
+# settings, a `CLAUDE.local.md` — and those files were then held against the
+# repo, refusing its build for ever.
+#
+# Measured on the reference fleet before this list existed: 14 of 57 trees
+# refused, 304 breach paths, of which 186 were these four. Five repos were
+# blocked by NOTHING BUT ccrc's own artifacts.
+#
+# THE LINE THIS FILE DRAWS — and D-1161 is the deviation that made the line a
+# MECHANISM instead of this paragraph. Only what ccrc and its skills create is
+# noise. A repo's own files are not, and `.graphifyignore` cannot tell the
+# difference: it is a pure path filter that knows nothing about git. So the
+# sweep asks git instead — `git ls-files -c -i -X` names the TRACKED files a
+# pattern would hide — and WITHHOLDS any pattern from this file that would hide
+# tracked content, logging what it withheld. Seven repos on the reference fleet
+# commit `.claude/` or `.superpowers/` content, three of them among the five
+# this list was written to unblock; without the withholding rule the sweep
+# dropped their tracked nodes from the corpus, graphify's shrink guard saw an
+# unaccounted net loss and refused the write, and the tree wedged at
+# `refused-shrink` on every pass — worse than the staleness being fixed.
+#
+# So a pattern here is advice that yields. A pattern in `<repo>.list` beside it
+# is the operator's instruction about one repo and is honoured as written,
+# tracked content included — that is the escape hatch, and it is the only one,
+# because a '!' line anywhere refuses every build on the box.
+#
+# ccrc OWNS this file and rewrites it on install; operator additions belong in
+# `<repo>.list`, which is unioned with this one.
+.claude/
+.remember/
+.superpowers/
+CLAUDE.local.md

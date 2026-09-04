@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
@@ -143,25 +143,121 @@ describe('no call site outside the platform block runs a GNU-only command bare',
       .join('\n');
   }
 
-  const corpora: Array<[string, string]> = [
-    ['ccd/ccd', ccd],
-    ['ccd/ccrc', ccrc],
-    ['ccd/ccrc-doctor-checks', readFileSync(path.join(ccdRoot, 'ccrc-doctor-checks'), 'utf8')],
-    ['ccd/ccrc-api', readFileSync(path.join(ccdRoot, 'ccrc-api'), 'utf8')],
-  ];
+  const HOOK = 'session-hook.sh';
 
-  for (const [file, src] of corpora) {
-    it(`${file} carries no un-shimmed GNU call`, () => {
-      const text = executableText(src);
-      const hits: string[] = [];
-      for (const [label, re] of gnuOnly) {
-        for (const line of text.split('\n')) {
-          if (re.test(line)) hits.push(`${label}: ${line.trim()}`);
-        }
+  /** `session-hook.sh`'s ONE legitimate GNU spelling, cut the way the platform
+   *  block is cut out of ccd and ccrc. The hook is installed ALONE into
+   *  ~/.cc-sessions with no ccd to source, so it carries a local copy of
+   *  `_plat_epoch_ms` named `_hook_epoch_ms` — and that copy legitimately
+   *  spells both arms, including the `date +%s%3N` fallback this table
+   *  otherwise refuses. It is exempt because it is ALREADY pinned elsewhere:
+   *  the body-equality test below ties it byte-for-byte to ccd's
+   *  `_plat_epoch_ms`, which lives inside ccd's platform block. Nothing else
+   *  in the file is exempt. The cut is a FUNCTION, not a region a later edit
+   *  can grow into (pinned below), and a renamed function makes the cut MISS —
+   *  which surfaces as a `GNU date %N` hit rather than a silently wider
+   *  exemption. */
+  const HOOK_EPOCH_COPY = /^_hook_epoch_ms\(\) \{\n[\s\S]*?\n\}\n/m;
+
+  /** THE CORPUS IS THE DIRECTORY, not a hand-kept list of four. It WAS four —
+   *  the files the port itself had touched — which quietly made this sweep an
+   *  audit of the past instead of a guard over the present. MEASURED
+   *  (D-1250): the graphify read-side branch added 91 lines of shell to
+   *  `ccd/session-hook.sh`, and five GNU-only spellings planted in them
+   *  (`stat -c %Y`, `date +%s%3N`, `sha256sum`, `uuidgen`, a bare `timeout`)
+   *  left this file green, because the hook was in no corpus — the hot-path
+   *  file whose own header (:12-27) names a BSD `date` answering `…3N` as the
+   *  worst way it can fail: jq rejects the non-number, `|| exit 0` swallows
+   *  it, THE HOOK WRITES NOTHING, and every session on the box reads as
+   *  unsupervised while looking healthy from the inside. Deriving the list
+   *  makes the next file added to `ccd/` a decision someone records here
+   *  rather than a gap nobody sees. */
+  const shebangged = readdirSync(ccdRoot, { withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => e.name)
+    .filter((n) => readFileSync(path.join(ccdRoot, n), 'utf8').startsWith('#!'))
+    .sort();
+
+  /** The shell ccd/ ships that this sweep does NOT own yet, each named with
+   *  what it still spells (measured 2026-09-02). Sitting outside the corpus is
+   *  a recorded decision, not an omission: the census below refuses a
+   *  shebang'd file that is in neither list, and the ratchet below refuses a
+   *  name kept here after its GNU-only calls are gone. */
+  const unowned: Record<string, string> = {
+    'ccclip': 'a template-less `mktemp -t ccclip`',
+    'ccd-graph-sweep': '`stat -c %Y`/`stat -c %s`, `date +%s%3N`, a bare `timeout` and a template-less `mktemp`',
+    'ccrc-adopt': 'a template-less `mktemp`',
+  };
+
+  /** One file's scanned text: the platform block cut where the file carries
+   *  one, and the pinned epoch copy cut out of the hook. */
+  function scannedText(name: string): string {
+    const src = readFileSync(path.join(ccdRoot, name), 'utf8');
+    return executableText(name === HOOK ? src.replace(HOOK_EPOCH_COPY, '') : src);
+  }
+
+  function gnuHits(text: string): string[] {
+    const hits: string[] = [];
+    for (const [label, re] of gnuOnly) {
+      for (const line of text.split('\n')) {
+        if (re.test(line)) hits.push(`${label}: ${line.trim()}`);
       }
-      expect(hits, `${file} runs a GNU-only command outside the platform block — route it through the _plat_ shim (or an explicit template, for a file that cannot source the block)`).toEqual([]);
+    }
+    return hits;
+  }
+
+  const corpora = shebangged.filter((n) => !(n in unowned));
+
+  it('the corpus is derived, and still holds every file the port touched', () => {
+    // The list generates the `it`s below, so a wrong `ccdRoot` or a broken
+    // filter would emit ZERO of them and leave this describe silently green.
+    // This is the floor under the derivation: the four the sweep shipped with,
+    // plus the hook the derivation was written to catch.
+    expect(corpora).toEqual(expect.arrayContaining(
+      ['ccd', 'ccrc', 'ccrc-doctor-checks', 'ccrc-api', HOOK]));
+    for (const name of Object.keys(unowned)) {
+      expect(shebangged, `ccd/${name} is exempted but no longer ships — drop its \`unowned\` entry`)
+        .toContain(name);
+    }
+  });
+
+  for (const name of corpora) {
+    it(`ccd/${name} carries no un-shimmed GNU call`, () => {
+      const hits = gnuHits(scannedText(name));
+      expect(hits, `ccd/${name} runs a GNU-only command outside the platform block — route it through the _plat_ shim (or an explicit template, for a file that cannot source the block)`).toEqual([]);
     });
   }
+
+  for (const [name, spells] of Object.entries(unowned)) {
+    it(`ccd/${name} is exempt on the record, and still needs to be`, () => {
+      // A ratchet, not a permanent pass. The day this file's GNU-only calls
+      // are ported, the exemption is a lie about the tree and the sweep should
+      // be scanning the file instead.
+      expect(gnuHits(scannedText(name)).length,
+        `ccd/${name} no longer spells ${spells} — delete its \`unowned\` entry so the sweep owns the file`)
+        .toBeGreaterThan(0);
+    });
+  }
+
+  it(`ccd/${HOOK}'s exemption is the epoch copy, and nothing else`, () => {
+    // The anti-widening half. The cut is what lets the hook into the corpus at
+    // all; unbounded, it would be a second way for the file to go unscanned.
+    const src = readFileSync(path.join(ccdRoot, HOOK), 'utf8');
+    const m = HOOK_EPOCH_COPY.exec(src);
+    expect(m, '_hook_epoch_ms must be findable — the exemption is meant to be exact').not.toBeNull();
+    const cut = m![0]!;
+    expect(cut.match(/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/gm),
+      'the exemption must be ONE function, not a region that grew').toEqual(['_hook_epoch_ms() {']);
+    expect(gnuHits(executableText(cut)),
+      'the exemption buys exactly one spelling: the VALIDATED `date +%s%3N` fallback')
+      .toEqual(['GNU date %N: local t; t=$(date +%s%3N 2>/dev/null)']);
+    // … and the rest of the file really is scanned: one anchor from the event
+    // dispatch, one from the read counter, one from the write.
+    const text = scannedText(HOOK);
+    for (const anchor of ['case "$event" in', 'GRAPH_QUERY_RE=', 'out=$(jq -cn']) {
+      expect(text, `the cut swallowed the hook's body around \`${anchor}\``).toContain(anchor);
+    }
+  });
 });
 
 describe('the Linux arms are the original GNU commands', () => {

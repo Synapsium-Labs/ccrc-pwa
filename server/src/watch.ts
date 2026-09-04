@@ -1,6 +1,6 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
-import { assembleFleet } from './fleet.js';
+import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
@@ -14,23 +14,27 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, FleetSession, LifecycleHealth, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
+  CoordStatus, FleetSession, LifecycleHealth, MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
 } from '../../shared/api.js';
-import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR } from '../../shared/api.js';
+// ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
+// arriving from shared/api on a single import line, and a prettier multi-line
+// form is invisible to it.
+import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
-import { COORDINATOR_PAUSE_MARKER } from './coord/rundefs.js';
+import { COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
-import { floorFromScan } from './coord/ledger.js';
+import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
+import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
@@ -48,6 +52,8 @@ import { readAiTitle } from './transcript/title.js';
 import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
+import { localIO } from './io.js';
+import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 
@@ -98,6 +104,19 @@ const CLAIM_SWEEP_MS = 60_000;
  *  the signal a coordinator watches for. */
 const LEDGER_FLOOR_SWEEP_MS = 3_600_000;
 const LEDGER_RECONCILE_SWEEP_MS = 900_000;
+
+/** F3's lane. Ten minutes: slower than the divergence census because the
+ *  answer only changes when someone installs a skill or edits a token, and
+ *  faster than the ledger floor's hour because an operator waiting to start a
+ *  program is watching this one. EXPORTED so its own suite advances by the
+ *  real constant rather than a copy that can drift from it. */
+export const READINESS_SWEEP_MS = 600_000;
+
+/** The name the coord probe asks the store about. `isSafeProjectSegment`
+ *  REJECTS it (a leading space), so it can never collide with a real
+ *  project's `ledger_floor` row — the probe is a liveness question, not a
+ *  lookup, and must not be answerable by accident. */
+const READINESS_PROBE_PROJECT = ' readiness-probe';
 
 /** How far back the census weighs provenance pairs. One hour, not the whole
  *  table: a divergence the operator has already dealt with must stop being
@@ -195,6 +214,29 @@ const MAIL_QUIET_MS = 60_000;
  *  queued for it. A fan-out of six findings arriving as six prompts in ninety
  *  seconds is a denial of service dressed as coordination. */
 const MAIL_COOLDOWN_MS = 120_000;
+
+/** The same two questions the pair above asks, asked of a COORDINATOR — a
+ *  session whose id is the `claimedBy` of a non-terminal run.
+ *
+ *  The pair above is sized for a worker mid-thought: a minute of measured idle
+ *  before the lane may interrupt, and no second injection inside two. A
+ *  coordinator at a wave boundary is not mid-anything. Its own contract
+ *  (clause 7, `ccd/coordinator-skill/SKILL.md`) MANDATES that it end its turn
+ *  and wait, so the state the worker floor exists to protect is the state the
+ *  coordinator is required to be in, and the floor becomes a delay with nothing
+ *  behind it — on the one session every other session in a program is waiting
+ *  for.
+ *
+ *  Fifteen seconds is still an idle floor and not the absence of one: it is read
+ *  off the same `statusUpdatedAt` and answers the same question, so a
+ *  coordinator genuinely mid-turn is still not interrupted. Thirty seconds keeps
+ *  `MAIL_COOLDOWN_MS`'s own promise — no fan-out arriving as a burst of prompts
+ *  — at a boundary where two messages are a handoff rather than a denial of
+ *  service.
+ *
+ *  Workers and every other session read the pair above, untouched. */
+const COORD_QUIET_MS = 15_000;
+const COORD_COOLDOWN_MS = 30_000;
 
 /** How long an UNACKED delivery waits before it is replayed. Dated from the
  *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
@@ -366,10 +408,21 @@ export class FleetWatcher {
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
+  /** The readiness lane's clock and its cache (program-leverage wave 3, F3).
+   *  `undefined` until the first sweep lands — the same contract every other
+   *  `currentX()` on this class already has, and the route turns it into a
+   *  `readiness: null` on the wire rather than omitting the key. */
+  private lastReadinessSweep = 0;
+  private readiness: FleetReadiness | undefined;
   /** The stale set last reported, as JSON — one warn per CHANGING set, the
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
    *  line every 15 minutes forever. */
   private lastStaleReport: string | null = null;
+
+  /** Per project, the last orphan set this sweep reported — `lastStaleReport`'s
+   *  once-per-changing-set idiom, keyed because the reconcile sweep now walks
+   *  every project the allocator has issued for rather than a subset of them. */
+  private readonly lastOrphanReport = new Map<string, string>();
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -612,6 +665,16 @@ export class FleetWatcher {
    *  came back unreadable. Same reasoning as currentPending(). */
   currentCoord(): CoordStatus | null {
     return this.coord;
+  }
+
+  /** The last swept program-readiness (F3), for `GET /api/projects`.
+   *  `undefined` means THIS PROCESS HAS NEVER SWEPT — the same shape, and the
+   *  same reasoning, as `currentCoord()`'s `null` just above: inventing a
+   *  clean bill for a box nothing has looked at is worse than saying so. The
+   *  route publishes that as `readiness: null`, which is a different fact
+   *  again from a server too old to carry the field at all. */
+  currentReadiness(): FleetReadiness | undefined {
+    return this.readiness;
   }
 
   async tick(): Promise<void> {
@@ -863,6 +926,7 @@ export class FleetWatcher {
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepLedgerReconcile().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepReadiness().catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // C0.4: `connected` alone is not "this read was complete" — a
@@ -1096,7 +1160,13 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     for (const r of coord.runEventsSince(this.lastRunNotifyId)) {
-      if (r.sessionId !== null) {
+      // A row whose state did not change is an OBSERVATION, not a transition —
+      // every `recordRunEvent` row is one by construction. Pushing it would
+      // title and tag off `toState` alone, so it arrives as a duplicate of the
+      // transition that actually happened, carrying none of the fact it was
+      // written to record (wave 2, F2 — the skill preflight is the first such
+      // row on a bound run). The watermark still advances past it below.
+      if (r.sessionId !== null && r.fromState !== r.toState) {
         this.pushOne({
           kind: 'run', sessionId: r.sessionId, project: r.project,
           title: `▸ ${r.toState} › ${r.workspace ?? r.project}`,
@@ -1838,7 +1908,11 @@ export class FleetWatcher {
         // already measured `.supervised` for every row (`registry.ts:185`), and
         // a re-read here would be a whole-fleet field sweep a minute for a
         // number sitting in scope.
-        supervisedAt: r.supervisedAt,
+        // D-1157. `r.supervisedAt` is epoch SECONDS and this seam is compared
+        // against `nowMs`; `registrySecondsToMs` is the one place that
+        // conversion lives, and `supervisedAtMs` is what the field is called
+        // so a raw stamp assigned here reads wrong on sight.
+        supervisedAtMs: registrySecondsToMs(r.supervisedAt),
       })),
       worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
@@ -1995,41 +2069,6 @@ export class FleetWatcher {
   }
 
   /**
-   * `docs/superpowers/<dirs>/*.md` of one project's MAIN checkout, through
-   * the already-granted `io.readdir`/`io.readFile` (D13 — zero new grants,
-   * zero new frames). POSIX joins by template, matching every other fleet
-   * path this file builds. Names are SORTED before reading — `floorFromScan`
-   * breaks a max tie by first-file-wins, and its own docstring hands the
-   * determinism duty to this caller.
-   *
-   * A dir whose `readdir` answers null contributes NOTHING — `absent` and
-   * `unreadable` collapse in that call (D-114), and here BOTH are the safe
-   * direction: a floor that fails to seed leaves allocation refusing
-   * (`not-seeded`), and a partial scan can only ever UNDER-seed inside the
-   * 50-number gap, which the next successful sweep raises. `null` return =
-   * NEITHER dir listed — the caller seeds nothing at all.
-   */
-  private async readLedgerDocs(
-    project: string, dirs: readonly string[],
-  ): Promise<{ path: string; text: string }[] | null> {
-    const out: { path: string; text: string }[] = [];
-    let listedAny = false;
-    for (const d of dirs) {
-      const dir = `${this.deps.cfg.projectsRoot}/${project}/docs/superpowers/${d}`;
-      const names = await this.deps.io.readdir(dir);
-      if (names === null) continue;
-      listedAny = true;
-      for (const n of [...names].sort()) {
-        if (!n.endsWith('.md')) continue;
-        const text = await this.deps.io.readFile(`${dir}/${n}`);
-        if (text === null) continue;
-        out.push({ path: `docs/superpowers/${d}/${n}`, text });
-      }
-    }
-    return listedAny ? out : null;
-  }
-
-  /**
    * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
    * same bound `sweepDivergences` states: the fleet's active projects, never
    * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
@@ -2049,12 +2088,87 @@ export class FleetWatcher {
     const store = this.deps.coord;
     if (!store) return;
     for (const project of [...new Set(records.map((r) => r.project))]) {
-      const files = await this.readLedgerDocs(project, ['plans', 'specs']);
-      if (files === null) continue;
-      const scan = floorFromScan(files);
+      // SWEEP_POLICY, named at the call site rather than defaulted: take what
+      // you got, over the whole corpus, unbounded. A dir that will not list or
+      // a file that will not read contributes nothing and the walk CONTINUES,
+      // so a project whose plans/ is unreachable still seeds from specs/.
+      //
+      // Safe on this lane for one reason, and it is a property of this caller
+      // rather than of the read: nothing downstream of here mints a number, so
+      // a floor measured low costs a delay and the next pass raises it.
+      // `read.complete` is therefore ignored ON PURPOSE — and D-1018 records
+      // that the 50-number gap does NOT bound the under-seed, so "it can only
+      // ever under-seed inside the gap" is not the reason; "it mints nothing"
+      // is.
+      const read = await readLedgerDocs(
+        { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot },
+        project, LEDGER_FLOOR_DIRS, SWEEP_POLICY);
+      if (read.files.length === 0 && !read.complete) continue;
+      const scan = floorFromScan(read.files);
       if (scan === null) continue;      // no global D-ref anywhere: nothing to seed, fail shut
       store.raiseLedgerFloor(project, scan.floor, scan.evidence, now);
     }
+  }
+
+  /**
+   * F3: the program-ready preconditions, measured once per lane tick and
+   * cached for `GET /api/projects`.
+   *
+   * On this lane rather than on the route because of what it costs: two skill
+   * reads per rostered HOME plus the box token, and in remote fleet mode every
+   * one of those is an agent round trip with its own 15 s ceiling and no batch
+   * op to fold them into. A request-time measurement would put that on a route
+   * that today performs no fleet I/O at all.
+   *
+   * PUBLIC for the reason `sweepLedgerFloor` is: `tick()` dispatches it with
+   * `void`, so a test that awaits `tick()` has not awaited this.
+   */
+  async sweepReadiness(): Promise<void> {
+    const now = Date.now();
+    // The `!== 0` half is INERT and is kept only for symmetry with the two
+    // ledger lanes that spell it the same way (D-1031, measured): with
+    // `lastReadinessSweep` at 0 and a real epoch clock, `now - 0` already
+    // dwarfs the interval, so the first call falls through on the arithmetic
+    // alone. Deleting it kills no test in this suite or theirs. What enforces
+    // "measure on the first tick" is the arithmetic, not this conjunct.
+    if (this.lastReadinessSweep !== 0 && now - this.lastReadinessSweep < READINESS_SWEEP_MS) return;
+    this.lastReadinessSweep = now;
+    const cfg = this.deps.cfg;
+    // `homeAble` only: an account with no HOME on this box cannot have a skill
+    // installed in one, so asking would manufacture an `unmeasurable` that
+    // says nothing about the fleet.
+    const homes = cfg.roster.homeAble.map((a) => ({
+      wrapper: a.id, configDir: configDirFor(cfg, a.id),
+    }));
+    this.readiness = await measureFleetReadiness({
+      io: this.deps.io,
+      // SERVER-LOCAL, never `this.deps.io` (fix round 1, MAJOR 1). In remote
+      // fleet mode that io is the agent, and `cfg.mailTokenPath` names a file
+      // on THIS box, not the fleet host. See `ReadinessDeps.localIo` for what
+      // asking the wrong box costs: not a degraded answer but a permanent
+      // `unmeasurable`, which kept the verdict from ever reading `ready`.
+      localIo: localIO,
+      homes,
+      mailTokenPath: cfg.mailTokenPath,
+      // A REAL read, not a null check: `deps.coord` being set proves a handle
+      // was constructed, not that it answers. `ledgerFloor` on a name no
+      // project can have is the cheapest statement that exercises the path —
+      // `null` on a healthy store, a throw on a sick one — which is exactly
+      // the distinction `degraded` carries. `emitRuns` and the socket cold
+      // start both learn this same fact and drop it on the floor; this is
+      // where it gets recorded.
+      coordProbe: () => {
+        const store = this.deps.coord;
+        if (!store) return 'not-configured';
+        try {
+          store.ledgerFloor(READINESS_PROBE_PROJECT);
+          return 'available';
+        } catch {
+          return 'degraded';
+        }
+      },
+      now: () => now,
+    });
   }
 
   /**
@@ -2072,20 +2186,49 @@ export class FleetWatcher {
     const store = this.deps.coord;
     if (!store) return;
     const open = store.openAllocations();
-    if (open.length > 0) {
-      const byProject = new Map<string, typeof open>();
-      for (const a of open) {
-        const list = byProject.get(a.project);
-        if (list === undefined) byProject.set(a.project, [a]); else list.push(a);
+    const openByProject = new Map<string, typeof open>();
+    for (const a of open) {
+      const list = openByProject.get(a.project);
+      if (list === undefined) openByProject.set(a.project, [a]); else list.push(a);
+    }
+    // BEHAVIOUR CHANGE, STATED (F7). The project list is now every project the
+    // allocator has issued for, not only those with OPEN allocations. That is a
+    // widening, and the reason is that the second question below cannot be asked
+    // of the old corpus: a project whose numbers have all landed has no open rows
+    // and would never be audited, which is exactly the state a project reaches
+    // once it is working correctly. The plan read is still ONE per project per
+    // sweep — both questions are answered from the same `files`, so this costs a
+    // read only for projects that previously had none, and still nothing per row.
+    for (const project of store.ledgerProjects()) {
+      // Reconcile reads plans ALONE — a different question (did this number
+      // land in a plan?), not a narrower copy of the floor's dir list. Same
+      // SWEEP_POLICY: a file it cannot read simply is not evidence that a
+      // number landed, and the next pass looks again.
+      const read = await readLedgerDocs(
+        { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot },
+        project, ['plans'], SWEEP_POLICY);
+      if (read.files.length === 0 && !read.complete) continue;
+      const files = read.files;
+      for (const a of openByProject.get(project) ?? []) {
+        const re = new RegExp(`\\bD-${a.n}\\b`);
+        const hit = files.find((f) => re.test(f.text));
+        if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
       }
-      for (const [project, rows] of byProject) {
-        const files = await this.readLedgerDocs(project, ['plans']);
-        if (files === null) continue;
-        for (const a of rows) {
-          const re = new RegExp(`\\bD-${a.n}\\b`);
-          const hit = files.find((f) => re.test(f.text));
-          if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
-        }
+      // The INVERSE of `markLanded`, and the half nothing has ever measured: a
+      // plan that DEFINES an allocator-era number the allocator never issued.
+      // Reported, never enforced — the ledger is prose and this sweep has no
+      // standing to refuse anything (D13's own stance on `stale`, one block
+      // down). See `unallocatedDefinitions` for what this deliberately does NOT
+      // claim, and why batch scatter is not reported here.
+      const orphans = unallocatedDefinitions(
+        definitionsIn(files), store.ledgerIssued(project));
+      const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
+      if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
+        this.lastOrphanReport.set(project, oJson);
+        console.warn(
+          `ccrc-server: ${orphans.length} deviation number(s) defined in ${project}'s plans were ` +
+          'never allocated: ' + orphans.map((o) => `D-${o.n} (${o.files.join(', ')})`).join('; ') +
+          ' — allocate through POST /api/ledger/deviations and define in the same act');
       }
     }
     const stale = store.staleAllocations(now - LEDGER_STALE_MS);
@@ -2305,10 +2448,31 @@ export class FleetWatcher {
     // identical query would only cost, never correct, anything.
     const due = unacked.length === 0 ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (due.length === 0) return;
+    // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
+    // every row in it. The same bargain `hsCache` strikes one field over
+    // (`:2246`), legitimate for the same reason: a second read would carry this
+    // same `now`, so a cached answer is exactly as fresh as a fresh one.
+    //
+    // Placed AFTER the `due.length === 0` return, so an idle box pays nothing:
+    // no mail, no query. And shaped into a `Set` HERE rather than in the store,
+    // matching how `uuidByToId` and `sessionProjects` are built from `records`
+    // — the store returns rows, the sweep shapes them into what it will ask.
+    const coordinators = new Set(store.openCoordinatorIds());
+    // D-792's ONE WRITER. Every ordinary gate below calls this and then
+    // `continue`s; nothing reads it back. It records WHAT refused the row and
+    // for how long, and changes nothing about whether, when or how often the
+    // row is tried again — `nextAttemptAt` and `attempts` are both untouched
+    // here, so a busy session's mail keeps its place in the queue exactly as
+    // before. The two gates that ALSO back off call this IN ADDITION: "when
+    // may this be retried" and "what refused it" are different questions.
+    const gated = (d: { id: number; lastGate: string | null; gateSince: number | null },
+                   gate: MailGate): void => {
+      store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince);
+    };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
-      if (seen.has(d.toId)) continue;
-      if (this.mailInFlight.has(d.toId)) continue;   // CHECK — review findings 1/5, see this method's docstring
+      if (seen.has(d.toId)) { gated(d, 'same-sweep'); continue; }
+      if (this.mailInFlight.has(d.toId)) { gated(d, 'in-flight'); continue; }   // CHECK — review findings 1/5, see this method's docstring
       // CLAIM — immediately after the check, with NO await in between, so the
       // check-then-act is atomic with respect to the event loop: nothing can
       // run between "is it claimed" and "claim it" that would let a second
@@ -2320,8 +2484,13 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
+        // THE ONE FACT THIS RUNG ADDS, read once per row from the per-sweep set
+        // above and consumed by exactly two gates: this one and `not-quiet`
+        // below. Neither condition changes — only the threshold each is measured
+        // against.
+        const isCoordinator = coordinators.has(d.toId);
         const last = this.mailCooldown.get(d.toId) ?? 0;
-        if (now - last < MAIL_COOLDOWN_MS) continue;
+        if (now - last < (isCoordinator ? COORD_COOLDOWN_MS : MAIL_COOLDOWN_MS)) { gated(d, 'cooldown'); continue; }
         const rec = records.find((r) => r.id === d.toId);
         // registry ladder: `records` came from `readRegistryMeasured` above,
         // with `!listed` already refused (fix — blocking review findings
@@ -2364,7 +2533,16 @@ export class FleetWatcher {
         // before this loop is ever reached) and never "we just couldn't read
         // one field this pass" (that is the degraded branch, not this one).
         const identity = rec !== undefined ? measuredIdentity(rec) : null;
-        if (identity === null) {
+        // `rec === undefined` is spelled OUT here rather than left implied by
+        // `identity === null`, and the two are equivalent by construction (the
+        // line above returns null for exactly that case) — so this changes no
+        // behaviour and `unmeasurable` below still reads the same fact. What it
+        // buys is the narrowing: every rung after this block now has `rec` as a
+        // SessionRecord rather than `SessionRecord | undefined`, so the
+        // lifecycle read at the tmux rung needs no non-null assertion — an
+        // assertion being a claim nothing checks, which is the shape this tree
+        // asks a guard not to be.
+        if (rec === undefined || identity === null) {
           const unmeasurable = rec !== undefined;
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
@@ -2416,9 +2594,45 @@ export class FleetWatcher {
           // typed column — so the word itself rides along in the message
           // below, not just in this comment, for whoever greps the ROW rather
           // than the source.
+          gated(d, unmeasurable ? 'registry-unmeasurable' : 'registry-absent');
           const attempts = d.attempts + 1;
+          // D-1069 — THE PARK STAYS, and a DELIVERED row now says why it parked.
+          //
+          // An earlier draft of this change (D-1067, withdrawn before merge)
+          // added `&& d.deliveredAt === null` here, mirroring the SEND-failure
+          // park ~250 lines below. That was wrong, and `store.ts`'s own
+          // OUTSTANDING_OR_ABANDONED_SQL comment says why: a `rejected` row
+          // stays visible to a HUMAN ("is this worth a human's attention")
+          // while staying terminal for the LANE ("should the delivery lane act
+          // on this again"). This park is the ONLY thing that ends the lane for
+          // a delivered row whose recipient's registry row was PURGED.
+          // `cancelOutstandingDeliveries` is runId-scoped, so peer mail
+          // (`runId IS NULL`) is out of its reach, and `MAIL_REPLAY_MAX_ATTEMPTS`
+          // counts SUCCESSFUL replays, which a row gated HERE never gets.
+          // Without the park the row stays due at the 15-minute ceiling for
+          // ever — and `_ws_slug_new` recycles a purged slug (`ccd/ccd:3516`,
+          // and ccd's own comment: "144 per project, recycled by ws-reap"), so
+          // that id can be re-minted for an unrelated workspace and the lane
+          // will then type this stale envelope into it. `mail_deliveries`
+          // carries no recipient uuid, so nothing downstream can tell the two
+          // recipients apart. The hazard is bounded today only because this
+          // park ends the row ~26 minutes after the purge.
+          //
+          // What WAS wrong is the sentence. `'recipient not in registry'` beside
+          // `rejectCode: 'undeliverable'` reads as "this never arrived", and for
+          // a delivered row that is false. `lastError` is free text a maintainer
+          // greps, so the row itself now says what actually happened. The ack
+          // door stays shut either way (`markAcked` admits only the replay-
+          // ceiling park) and that is correct here: a PURGE is permanent —
+          // `ws-restore` restores an ARCHIVED workspace, which keeps its
+          // registry row and so lands on the session-dead rung, not this one —
+          // so the only party that could ever walk through that door is a
+          // re-minted stranger wearing the same id.
           if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
-            store.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+            store.rejectDelivery(d.id, 'undeliverable',
+              d.deliveredAt === null
+                ? 'recipient not in registry'
+                : 'recipient purged after this message was delivered, and never acked');
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
             store.backOff(d.id,
@@ -2442,8 +2656,84 @@ export class FleetWatcher {
         // the herd valve: without it every due row re-spawns a doomed tmux
         // client each sweep against a component that is already unwell.
         const sv = await this.deps.tmux.sessionVerdict(d.toId);
-        if (sv.verdict === 'gone') continue;
+        if (sv.verdict === 'gone') {
+          // D-1066 — D-309 REFINED, not reversed (operator ruling 2026-08-30). Its
+          // premise — "the mail waits for the session to come back" — is right
+          // for a swap, a restart or a reboot, and false for a session somebody
+          // archived. Measured on the live fleet before this line was written:
+          // a delivery to an archived workspace sat `queued` 22.5 hours and was
+          // refused 6,769 times, once per sweep, with no terminal state and
+          // nothing telling the sender. D-792's gate columns are what made it
+          // visible; this is the half that acts on it.
+          //
+          // The question is NOT "is the pane gone" — `sv.verdict` already
+          // answered that — but "is it coming back", and `sessionLifecycle`
+          // draws exactly that line from facts this loop already holds. With
+          // `alive: false` (which `gone` IS), a stop stamp reads `stopped`, a
+          // fresh supervisor heartbeat reads `restarting`, and an unreadable
+          // lifecycle field reads `unmeasurable`. Only the three words
+          // `lifecycleIsDead` names never resolve on their own.
+          //
+          // A dead recipient then takes the REGISTRY-ABSENT rung's terms
+          // exactly — back off, count toward the ceiling, park at it — because
+          // it is the same kind of fact: a recipient this build can PROVE is
+          // gone. Everything else keeps D-309's bare silent wait, including
+          // `unmeasurable`: doubt is not evidence, in either direction.
+          const lc = sessionLifecycle(lifecycleInputFor(rec, false, now));
+          if (!lifecycleIsDead(lc)) { gated(d, 'tmux-gone'); continue; }
+          gated(d, 'session-dead');
+          // `deliveredAt === null` GATES THE PARK, and this guard is not
+          // belt-and-braces — `MAIL_MAX_ATTEMPTS`'s own docstring states the
+          // contract it keeps: the budget "applies ONLY while a delivery's own
+          // `deliveredAt` is still null … The instant `deliveredAt` is set,
+          // this budget stops applying: the row's own history already disproves
+          // 'undeliverable'". The send-failure park 160 lines below takes the
+          // same guard for the same reason, in the same words.
+          //
+          // Two things go wrong without it, both measured in review:
+          //   (a) a message that DEMONSTRABLY reached the recipient is recorded
+          //       `undeliverable`, and `markAcked` refuses every rejected row
+          //       but the replay-ceiling one — so a session brought back by
+          //       `ccd start` or `ws-restore` (both `rm -f $REG/<id>.stopped`)
+          //       could never ack it;
+          //   (b) `attempts` is ONE CUMULATIVE COLUMN and a delivered row's is
+          //       deliberately uncapped, so a row already at 5 from earlier
+          //       replay backoffs would park on the FIRST session-dead
+          //       observation, with no backoff at all — terminally discarding a
+          //       message on one sweep that happened to land inside a transient
+          //       post-reboot `orphan` window.
+          //
+          // A DELIVERED row still records the gate above (the console must say
+          // what is holding it) and still backs off — on the ORDINARY ratcheting
+          // terms, identical to the registry-absent rung's own `else` arm.
+          //
+          // D-1068 CORRECTS D-1066 here. This arm first shipped with
+          // `countsAsAttempt: false`, reasoning that a delivered row must not
+          // ratchet toward a park it does not own. That was right about the park
+          // and wrong about the clock: `attempts` is also what `step` is
+          // computed FROM, so freezing it pinned every step at
+          // MAIL_BACKOFF_BASE_MS and `Math.min` never bound. Measured on the
+          // shipped build: 40 re-examinations in 30 minutes, for ever, against a
+          // recipient the registry proves is never coming back — no ceiling of
+          // any kind, because `MAIL_REPLAY_MAX_ATTEMPTS` counts SUCCESSFUL
+          // replays and a row gated HERE never gets one. That is the same
+          // every-tick-for-ever shape D-1066 was written to end, wearing a gate
+          // label. `MAIL_MAX_ATTEMPTS`'s own docstring had already said what to
+          // do instead — "`attempts` keeps counting on a delivered row too …
+          // just without a ceiling that turns a failing SEND into a park" — and
+          // that an uncapped counter is exactly what makes MAIL_BACKOFF_MAX_MS
+          // reachable rather than decorative.
+          const attempts = d.attempts + 1;
+          const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+          if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
+            store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
+          } else {
+            store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
+          }
+          continue;
+        }
         if (sv.verdict === 'unknown') {
+          gated(d, 'tmux-unknown');
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
           store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
           continue;
@@ -2458,13 +2748,32 @@ export class FleetWatcher {
         // this is not a new read). Block only when a FRESH hs affirmatively
         // carries an unanswered question — `hs.state` is no longer read here
         // at all.
-        if (hs !== null && hs.ask !== null) continue;
+        if (hs !== null && hs.ask !== null) { gated(d, 'pending-ask'); continue; }
         const pid = await this.deps.tmux.panePid(d.toId);
+        // SPLIT, not one `continue` for both (D-792). "tmux reports no pane pid
+        // for this session" and "this session's wrapper resolves to no config
+        // dir" are conditions an operator acts on completely differently — the
+        // first is a session that is gone or starting, the second is a ROSTER
+        // problem that will hold this delivery for ever and that no amount of
+        // waiting fixes. Folding them into one silent exit is the
+        // overloaded-collapse this tree bans by name.
+        if (!pid) { gated(d, 'no-pane'); continue; }
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
-        if (!pid || !cfgDir) continue;
+        if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (!live || liveSessionStatus(live.status) !== 'idle') continue;
-        if (live.statusUpdatedAt === null || now - live.statusUpdatedAt < MAIL_QUIET_MS) continue;
+        if (!live || liveSessionStatus(live.status) !== 'idle') { gated(d, 'not-idle'); continue; }
+        // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
+        // docstring sets the rule — one member per CONDITION, not per `continue`
+        // — and `no-pane`/`no-config-dir` were split because an operator acts on
+        // them differently. Here the condition is the same one ("this session has
+        // not been quiet long enough") and so is the act (wait). The union is
+        // also explicitly NOT a scheduling input: it exists so a human can tell
+        // waiting from wedged, and both thresholds are waiting. A
+        // `coord-not-quiet` member would cost a union entry, a total-map entry in
+        // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
+        // nobody acts on.
+        if (live.statusUpdatedAt === null ||
+            now - live.statusUpdatedAt < (isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS)) { gated(d, 'not-quiet'); continue; }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per
@@ -2569,12 +2878,28 @@ export class FleetWatcher {
         const tellSender = (why: string, tag: string): void => {
           const origin = store.mailOrigin(d.mailId);
           if (!origin) return;
-          const senderId = origin.fromId === 'coordinator'
-            ? store.resolveCoordinator(origin.runId)
-            : origin.fromId;
-          // Degrade, never guess: an unresolvable 'coordinator' ROLE has no
-          // session to notify, and inventing one would tag and presence-gate
-          // against an id no registry row carries.
+          // A ROLE is not a session id, and until wave 4 this knew that about
+          // exactly one role (D-1040). `'coordinator'` is the only role that can
+          // ever be resolved to a session, and only through the RUN it names:
+          // the run's `claimedBy` is the fact, and a mail that names no run
+          // carries no such fact. `resolveCoordinator(null)`'s answer — whichever
+          // program happens to be the single active one — is exactly right on the
+          // ADDRESSING side, where `toId:'coordinator'` with no run is the
+          // documented recovery for a retired program, and is a guess here: a
+          // message that belongs to no run cannot be inferred to belong to the one
+          // program that happens to be open. Every other role (`'operator'`, wave
+          // 4's program kickoff) has no session behind it at all — the operator
+          // taps a button in a browser.
+          //
+          // Degrade, never guess, on all three arms: inventing a session id would
+          // tag and presence-gate against an id no registry row carries, and
+          // naming the wrong live one is worse — it tells a coordinator running an
+          // unrelated program about a message it never sent and cannot act on.
+          const senderId = !MAIL_ROLE_IDS.has(origin.fromId)
+            ? origin.fromId
+            : origin.fromId === 'coordinator' && origin.runId !== null
+              ? store.resolveCoordinator(origin.runId)
+              : null;
           if (senderId === null) return;
           this.pushOne({
             kind: 'mail', sessionId: senderId,

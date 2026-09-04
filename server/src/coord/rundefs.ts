@@ -104,27 +104,81 @@ export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
   openSiblings.length === 0;
 
 /**
- * The coordinator's OWN mail — the wave brief (dispatch) and a done-claim
- * rejection mailed back (close, advance) — queued DIRECTLY rather than
- * through `POST /api/mail`'s ingress. The ingress exists to police
- * attribution for a message this server did not originate (spec:136-148: a
+ * The two SYSTEM MAIL senders. Neither is a registry row: both are fixed ROLE
+ * identities, the same way `resolveCoordinator`'s own docstring already treats
+ * `toId:'coordinator'`. Enumerated once, here, and DERIVED into `MAIL_ROLE_IDS`
+ * below rather than hand-listed twice — `watch.ts` is the second reader and a
+ * second copy is exactly the drift `single-definition.test.ts` exists to refuse.
+ *
+ * `'operator'` joined the vocabulary in program-leverage wave 4 (D-1040) for the
+ * program kickoff. It is not a coinage: `coord/schema.ts`'s `run_events.causedBy`
+ * has read `'coordinator' | 'operator' | <session id>` since Build 4, and
+ * `closeRun` takes exactly that pair. The kickoff needed it because the message
+ * is sent BY the operator TO the session that is about to become the
+ * coordinator — a mail from `'coordinator'` to the coordinator-to-be would be a
+ * false statement on the face of its own envelope, and, worse, would send
+ * `tellSender` through `resolveCoordinator(null)`, whose answer is whichever
+ * program happens to be the single active one.
+ */
+const SYSTEM_MAIL_SENDER_MAP = {
+  coordinator: "the program's own coordinator session, speaking as the role",
+  operator: 'the operator, through a PWA-surface route — no session sent it',
+} as const;
+
+export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;
+
+/** Sender ids that are ROLES, not registry rows. Anything that would read a
+ *  `mail.fromId` AS a session id — push targets, presence gates, tags — must
+ *  consult this first; see `watch.ts`'s `tellSender`, which pushed at whatever
+ *  `fromId` said before wave 4 taught it the difference. */
+export const MAIL_ROLE_IDS: ReadonlySet<string> = new Set(Object.keys(SYSTEM_MAIL_SENDER_MAP));
+
+/**
+ * What `queueSystemMail` did, said out loud (D-1042). It used to return `void`
+ * and short-circuit its dedupe with a bare `return`, so "queued just now" and
+ * "an identical one is already outstanding" reached every caller as the same
+ * non-answer — the overloaded seam this codebase treats as a defect class. The
+ * three run-mail callers can live without the distinction (each has at most one
+ * instance in flight per run by construction); a route that must answer an
+ * operator cannot, and wave 5's re-kickoff — which most often targets a session
+ * that still has an unacked kickoff — least of all.
+ *
+ * The false arm carries no reason string on purpose: there is exactly ONE
+ * condition under which this function declines, and a vocabulary with a single
+ * member is a distinction pretending to exist.
+ */
+export type SystemMailQueued =
+  | { queued: true; mailId: number; deliveryId: number }
+  | { queued: false };
+
+/**
+ * The SERVER's OWN mail — the wave brief (dispatch), a done-claim rejection
+ * mailed back (close, advance), and the program kickoff (kickoff.ts) — queued
+ * DIRECTLY rather than through `POST /api/mail`'s ingress. The ingress exists to
+ * police attribution for a message this server did not originate (spec:136-148: a
  * box token authenticates the box, `{fromId,fromUuid}` is verified against
  * the registry); a message the SERVER itself is sending has no sender
  * session to be stale about, so re-entering that gate would be checking a
- * fact that cannot fail against itself. `'coordinator'` is used as both
- * `fromId` and `fromUuid` — a fixed ROLE identity, not a registry row, the
- * same role `resolveCoordinator`'s own docstring already treats
- * `toId:'coordinator'` as. Mirrors the ingress route's own tx shape exactly
- * (insert mail, insert delivery so its own id exists, render the envelope
- * AGAINST THE DELIVERY ID, land it) — see that route's comment on
- * `setDeliveryEnvelope` for why the two ids cannot be assumed to walk
- * together.
+ * fact that cannot fail against itself. The sender is used as both `fromId` and
+ * `fromUuid` — a fixed ROLE identity, not a registry row. Mirrors the ingress
+ * route's own tx shape exactly (insert mail, insert delivery so its own id
+ * exists, render the envelope AGAINST THE DELIVERY ID, land it) — see that
+ * route's comment on `setDeliveryEnvelope` for why the two ids cannot be assumed
+ * to walk together.
+ *
+ * `run` and `m.runId` are nullable since wave 4 (D-1039/D-1040): the program
+ * kickoff is sent BEFORE run 1 exists, because opening run 1 is the first thing
+ * it asks its recipient to do. The alternative — synthesising a
+ * `{program: slug, wave: 0, waveOf: null}` at the call site — compiles and even
+ * works, since `renderEnvelope` skips all three fields when `runId === null`, but
+ * it asserts a run that does not exist. The type expresses the condition instead.
  */
 export function queueSystemMail(
   coord: CoordStore,
-  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'>,
-  m: { toId: string; runId: number; kind: MailKind; subject: string; body: string },
-): void {
+  run: Pick<RunRow, 'program' | 'wave' | 'waveOf'> | null,
+  m: { fromId: SystemMailSender; toId: string; runId: number | null;
+       kind: MailKind; subject: string; body: string },
+): SystemMailQueued {
   // Review finding 33: don't requeue an identical outstanding system mail.
   // The calls in this file — `wave-brief` (dispatch), `wave-done-rejected`
   // (close, on a re-measurement refusal) and `wave-advance-rejected`
@@ -136,14 +190,17 @@ export function queueSystemMail(
   // (spec:236-237) and a fresh `feed_events` row — on EVERY retry, unbounded.
   // `recordRejection` (the caller's own audit log) is unaffected: this only
   // guards the MAIL queue, never the record of the refusal itself.
-  if (coord.hasOutstandingMail(m.runId, m.toId, m.subject)) return;
+  if (coord.hasOutstandingMail(m.fromId, m.runId, m.toId, m.subject)) return { queued: false };
+  let out: SystemMailQueued = { queued: false };
   tx(coord.db, () => {
-    const inserted = coord.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: m.toId,
+    const inserted = coord.insertMail({ fromId: m.fromId, fromUuid: m.fromId, toId: m.toId,
       runId: m.runId, kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
     const delivery = coord.queueDelivery(inserted.id, m.toId, '');
-    const envelope = renderEnvelope({ id: delivery.id, fromId: 'coordinator', toId: m.toId, runId: m.runId,
-      program: run.program, wave: run.wave, waveOf: run.waveOf,
+    const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
+      program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
       kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
     coord.setDeliveryEnvelope(delivery.id, envelope);
+    out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
   });
+  return out;
 }

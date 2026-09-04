@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -174,6 +174,21 @@ export const HOLD_EMPTY_REASON_TEXT = 'empty reason — say which program holds 
  */
 const API_ERROR_TEXT: Record<string, string> = {
   unsupported: UNSUPPORTED_VERB_TEXT,
+  // Two of the kickoff route's four codes (program-leverage wave 4). Without
+  // these the operator reads a bare slug at the one moment the sheet has stopped
+  // being able to retry for them — and a box with no `coord.db` is an ordinary,
+  // silent state, not an error anybody has seen before.
+  //
+  // The other two — `unknown-session` and `bad-session-id` — are DELIBERATELY
+  // absent, and the tree said so before this comment did: `uploadErrorText`
+  // consumes THIS function's output as a KEY, so a code it owns must survive
+  // `apiErrorText` unchanged or the upload translator gets a sentence to look up
+  // and finds nothing. Adding `unknown-session` here reds
+  // "does not shadow any code the UPLOAD translator owns", measured. The
+  // start-program sheet says what it needs to about those two in its own
+  // sentence, where the session id is in scope anyway.
+  'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
+  'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
 };
 
 /** Human-readable failure text for a caught error.
@@ -194,6 +209,34 @@ export function apiErrorText(err: unknown): string {
   }
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * `POST /api/sessions/:id/kickoff`'s own refusals (wave-4 review, MINOR 3,
+ * D-1120). The fourth per-surface map in this file, composed exactly as
+ * `useAttachImage.ts` composes the upload one: `kickoffErrorText(apiErrorText(err))`.
+ *
+ * WHY IT IS NOT MORE ENTRIES IN `API_ERROR_TEXT`. Three of the five codes that
+ * route can answer with are OWNED by `uploadErrorText`, which consumes
+ * `apiErrorText`'s OUTPUT as a KEY — so a sentence there hands the upload
+ * translator a sentence to look up instead of a code, and its own upload
+ * wording is lost. The suite says so in both directions, for all three
+ * translators. Everything `API_ERROR_TEXT` already turns into a sentence passes
+ * through here untouched, because a sentence matches no key.
+ *
+ * These are the sentences a phone shows above a retry button, so each says what
+ * the box actually established and, where the answer is terminal, stops short of
+ * implying a retry will help. `unknown-session` in particular used to reach the
+ * operator as a bare slug inside a sentence that ALSO asserted the session was
+ * running — the exact fact the registry had just denied.
+ */
+const KICKOFF_ERROR_TEXT: Record<string, string> = {
+  'unknown-session': 'That session is no longer in the registry — nothing can be queued for it.',
+  'bad-session-id': 'That session id is not one this box will accept.',
+  'bad-request': 'The program name and title did not arrive with the request.',
+  oversize: 'That program title is too long to send as mail — shorten it and start again.',
+};
+
+export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
 
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
@@ -240,20 +283,49 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     );
   };
 
+  /** The init a JSON-answering POST sends, spelled ONCE for the two helpers
+   *  below. `accept: application/json` on both arms, and no `content-type` at
+   *  all when there is nothing to send — the byte-identical request every
+   *  `postJson` caller has always made (`reclaimRun`'s own header pin measures
+   *  exactly this pair, so a second copy of this shape would be a second thing
+   *  to keep in step with it). */
+  const jsonInit = (body?: unknown): RequestInit =>
+    body === undefined
+      ? { method: 'POST', headers: { accept: 'application/json' } }
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(body),
+        };
+
   /** A POST whose RESPONSE is JSON — the passkey ceremonies' shape, where `post`
    *  (which resolves to `void`) would throw the answer away. Same funnel, so a
    *  401 still raises the one login screen. */
   const postJson = async <T>(path: string, body?: unknown): Promise<T> =>
-    (await request(
-      path,
-      body === undefined
-        ? { method: 'POST', headers: { accept: 'application/json' } }
-        : {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify(body),
-          },
-    )).json() as Promise<T>;
+    (await request(path, jsonInit(body))).json() as Promise<T>;
+
+  /** `postJson`'s DEGRADING twin (wave-5 review, MINOR 7, D-1150): the same
+   *  send, the same funnel, but an answer that cannot be READ resolves to
+   *  `unreadable` instead of rejecting.
+   *
+   *  THE RESPONSE IS IN HAND BEFORE THE PARSE, and that ordering is the whole
+   *  design rather than an accident of expression. By the time `.json()` is
+   *  attempted, `request` has already established that the exchange completed
+   *  and answered 2xx — so "the answer came back unreadable" is a measured,
+   *  separate condition from "the request never happened". A `.catch` wrapped
+   *  around `postJson` instead cannot separate them: a connection dropped
+   *  before the request left, and a payload truncated after a 200, both arrive
+   *  as a TypeError, and folding those together would tell a caller its write
+   *  landed when nothing was ever sent. Non-2xx still rejects through the same
+   *  funnel, 401 included, so the one login screen still rises.
+   *
+   *  NOT a default on `postJson` itself, and not an optional argument to it:
+   *  the passkey ceremonies and `reclaimRun` all read fields off their answers,
+   *  where a silent `{}` is an overloaded null at the seam. Only a caller that
+   *  can state a SAFE reading of "no answer" may have this, and it states that
+   *  reading in the call. */
+  const postJsonOr = async <T>(path: string, unreadable: T, body?: unknown): Promise<T> =>
+    (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
@@ -354,8 +426,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // field added in Stage 2a is exactly the kind of addition that lands in two
     // of three copies. The generic is the contract now.
     accounts: () => getJson<AccountsResponse>('/api/accounts'),
-    projects: () =>
-      getJson<{ roots: string[]; projects: { name: string; workdir: string }[] }>('/api/projects'),
+    // `ProjectRow`, not a hand-written twin — the comment two lines up names
+    // this exact failure mode, and F3's `readiness` is the field it predicted:
+    // spelled inline here, this generic would have gone on declaring a shape
+    // the server had already stopped sending (D-1028).
+    projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
     createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
       post('/api/sessions', b),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
@@ -406,6 +481,61 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),
+    /** `POST /api/sessions/:id/kickoff` — queues the coordinator kickoff as
+     *  DURABLE system mail instead of typing it into the pane (program-leverage
+     *  wave 4). Deliberately adjacent to `prompt`, because the pair is the
+     *  point: `prompt` is the operator's own keystrokes and stays exactly as it
+     *  is; this is the machine's, and machines go through the idle-gated
+     *  delivery lane like every wave brief since Build 4.
+     *
+     *  `{slug, title}`, never prose. The server composes the sentence from an
+     *  L0 constant, which makes this route strictly NARROWER than `prompt` — it
+     *  can queue a program kickoff and nothing else. `{runId, wave}` chooses
+     *  WHICH sentence: absent is a program being STARTED, present is a wave-N
+     *  revive of a run that is already open, and the two say opposite things
+     *  about re-opening it. Absence-permits, so every wave-4 call site sends a
+     *  byte-identical request; the server refuses a HALF pair with 400
+     *  `bad-request`, a pairing this signature does not model.
+     *
+     *  IT READS THE ANSWER NOW (D-1133), and the paragraph this replaces argued
+     *  it never should: "reading one here would ship a distinction nothing
+     *  consumes." Wave 5 is the consumer that sentence said did not exist. On
+     *  the START path both answers still mean "a kickoff is on its way"; on the
+     *  REVIVE path "one was already waiting, unread" is the likelier answer and
+     *  a different thing to tell the operator, so `ResumeSheet` renders them
+     *  apart. Hence the `postJson` family (:301-303), whose own docstring names
+     *  exactly what `post` was doing to this value — this method takes the
+     *  degrading member of it, for the reason the next paragraph gives.
+     *
+     *  An absent `queued` reads TRUE — `abandonRun`'s degrade direction, for
+     *  its reason. No deployed server can produce it; it covers a truncated or
+     *  proxy-rewritten body, where claiming a kickoff was already waiting that
+     *  never was is the unsafe half.
+     *
+     *  AND SO DOES AN UNREADABLE ONE (wave-5 review, MINOR 7, D-1150). The
+     *  paragraph above shipped one edit ahead of the code that honours it:
+     *  through plain `postJson` — `(await request(…)).json()`, no `.catch` — the
+     *  parse THREW, so the sentence describing the degrade named the exact input
+     *  that could not reach it. And it was a REGRESSION, not merely an
+     *  unimplemented nicety: on `main` this method read no answer at all, so
+     *  wave 5 turned a 200 that really did queue the kickoff into "nothing was
+     *  sent, and it has no brief yet" on the sheet, above a retry that would
+     *  queue a second one. `postJsonOr` above is the shape that makes the
+     *  promise true; its docstring carries why the Response has to be in hand
+     *  first — a failure to READ an answer is degradable, a request that never
+     *  completed is not, and only that ordering can tell them apart. */
+    kickoff: async (
+      id: string, b: { slug: string; title: string; runId?: number; wave?: number },
+    ): Promise<{ queued: boolean }> => {
+      const answer = await postJsonOr<{ queued?: unknown }>(`${sid(id)}/kickoff`, {}, b);
+      // The local is `answer` on purpose. This method's structural pin proves it
+      // sends no prose key by scanning the whole method for the two words such a
+      // payload would use, and a local named after either of them would blind it.
+      // The pin is worth more than naming symmetry with `abandonRun` three doors
+      // down — and it is also why the degrade is reached through a named helper
+      // rather than spelled inline the way that door spells it (D-1150).
+      return { queued: answer.queued !== false };
+    },
     answerDialog: (id: string, dialogId: string, optionIndex: number) =>
       post(`${sid(id)}/dialog`, { dialogId, optionIndex }),
     /** Answer a hook-reported question by option index. `askKey` is minted
@@ -466,6 +596,34 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const body = (await res.json().catch(() => ({}))) as { released?: unknown };
       return { released: body.released !== false };
     },
+    /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING
+     *  coordinator after the one they name has died. The wedge it opens is the
+     *  one two readers create between them by answering the lowest-id
+     *  `claimedBy` with no state predicate: while that name is a corpse, a
+     *  second coordinator is refused at open time and `toId:'coordinator'` mail
+     *  resolves to nobody at all.
+     *
+     *  UNGATED — no box token on this call — and NOT for `abandonRun`'s reason
+     *  (:502-503), which is that the wedged session is still holding the key.
+     *  Here the key-holder is the thing that DIED. A door whose only opener is
+     *  the credential of a dead session is a door with no opener, which is
+     *  where D-282 arrived from the other direction.
+     *
+     *  `claimedBy` is the only field it sends: the event trail's `causedBy` is
+     *  a hardcoded literal on the server, so no body of this client's can
+     *  attribute an operator act to somebody else.
+     *
+     *  `postJson`, because a render depends on `runIds` — the same test
+     *  `abandonRun` passes and `kickoff` used to fail. Note that the
+     *  `claimant-alive` 409 names its code in `refused`, not `error`, so
+     *  `apiErrorText` cannot turn it into a sentence (D-1139); the sheet reads
+     *  `err.body` itself, which is why `ResumeSheet` owns a status-first
+     *  translator rather than borrowing this file's — and why it renders
+     *  `detail`, the only thing telling `registry-unmeasurable`'s two
+     *  producers apart. */
+    reclaimRun: (id: number, claimedBy: string): Promise<{ program: string; runIds: number[]; from: string; to: string }> =>
+      postJson<{ program: string; runIds: number[]; from: string; to: string }>(
+        `/api/runs/${id}/reclaim`, { claimedBy }),
     /** The DURABLE feed. `catchUp` is the live tail and is volatile by
      *  construction (notifymark.ts advances the mark at receipt); this is the
      *  read that still has bodies after a deploy. */
@@ -499,6 +657,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Ungated (no box token): the route is deliberately open, the same way
      *  every other same-origin PWA write is. */
     coordPause: (paused: boolean) => post('/api/coord/pause', { paused }),
+    /** `GET /api/coord/caps` — the two limits AND the two derived counts, in one
+     *  shape and one round trip. They travel together because a cap without its
+     *  usage is a number an operator cannot act on. 501 `not-configured` on a
+     *  box with no coordination database, which `CapsControl` renders as
+     *  nothing at all rather than as zeroes. */
+    coordCaps: () => getJson<CoordCapsView>('/api/coord/caps'),
+    /** `POST /api/coord/caps` — a PARTIAL; an omitted field keeps its stored
+     *  value, so moving one dial cannot clobber the other with a stale reading.
+     *  Session-gated when armed, open dark; NOT box-token (an operator dial is
+     *  not a machine lane) and NOT one of the D-282 release valves — see the
+     *  route's own docstring for both arguments (D-1240).
+     *
+     *  `postJsonOr`, not `postJson` (D-1150): after a caps WRITE, "the answer
+     *  could not be read" and "the request never happened" are different states
+     *  — the first may well have stored the value — and the control says
+     *  "unconfirmed" for the one rather than reporting the other. The safe
+     *  reading of "no answer" is stated here, at the call, as that helper's own
+     *  docstring requires. */
+    setCoordCaps: (next: Partial<CoordCaps>) =>
+      postJsonOr<CoordCapsView | 'unreadable'>('/api/coord/caps', 'unreadable', next),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

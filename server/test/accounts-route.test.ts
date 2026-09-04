@@ -157,12 +157,18 @@ describe('GET /api/accounts', () => {
     const { accounts, roster } = await getPayload(home);
 
     expect(accounts.map((a) => a.wrapper)).toEqual(['claude']);
+    // `hidden: false` on every entry is part of the contract, not noise: the
+    // PWA's single reader tests `=== true`, so the field has to actually
+    // ARRIVE for a declared-plumbing entry to be distinguishable from an
+    // account. A handler that forgot to copy it would ship a wire on which
+    // every entry looks like an account — exactly the silent loss this file
+    // exists to catch.
     expect(roster).toEqual([
-      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true },
-      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true },
-      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true },
-      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false },
-      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true },
+      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false },
+      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false },
+      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false },
+      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false },
     ]);
   });
 
@@ -174,7 +180,7 @@ describe('GET /api/accounts', () => {
   it('ships no launch or secrets detail to the browser', async () => {
     const { roster } = await getPayload(seedLimits({ claude: { five: 2, seven: 3 } }));
     for (const entry of roster) {
-      expect(Object.keys(entry).sort()).toEqual(['homeAble', 'hue', 'id', 'label']);
+      expect(Object.keys(entry).sort()).toEqual(['hidden', 'homeAble', 'hue', 'id', 'label']);
     }
   });
 

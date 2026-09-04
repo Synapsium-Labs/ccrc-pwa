@@ -264,6 +264,16 @@ describe('the reconstruction drill', () => {
                                          // programme, and the recovery is a human saying so, not a parse.
       'programTitle',                    // TEMPLATE.md's header carries a slug only, no title line
       'unreadMail',                      // a live count over acked/queued mail; the DB alone tracks delivery state
+      'health',                          // F7's per-run health facts. Every one of the eight is a
+                                         // measurement over `mail_deliveries`, `mail_rejections` or
+                                         // migration 7's dispatch columns — three tables no artifact
+                                         // mirrors. `.prhistory` carries PR lineage, the ledger carries
+                                         // wave order and the registry carries a hold; none of them has
+                                         // ever recorded a delivery, a refusal or what a dispatch
+                                         // decided about its brief. So a DB loss forgets every wedge the
+                                         // board can draw, which is the honest answer and not a gap to
+                                         // close: the facts are about the coordination lane's own
+                                         // history, and that history lives only here.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
@@ -281,14 +291,15 @@ describe('the reconstruction drill', () => {
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
+      health: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(20);
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(21);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(14);
+    expect(UNRECOVERABLE.length).toBe(15);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

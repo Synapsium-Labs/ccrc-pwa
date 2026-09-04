@@ -343,6 +343,69 @@ describe('Build 7 nouns', () => {
     expect(hits.map(rel)).toEqual(['shared/api.ts']);
   });
 
+  // D-1296: the done-authority six were spelled THREE times — inside
+  // MAIL_REJECT_CODES, and as an identical `Extract<MailRejectCode, ...>` in both
+  // close.ts and fingerprint.ts. Wave 7's health read needs them at RUNTIME for a
+  // SQL `IN (...)`, which would have been a fourth. One array, and the two Extract
+  // copies deleted.
+  it('enumerates the done-authority family exactly once, and the Extract copies are gone', () => {
+    const DEF = /^\s*export const DONE_AUTHORITY_CODES\b/m;
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel))
+      .toEqual(['shared/api.ts']);
+    // Not "no Extract anywhere" — an Extract over a different union is ordinary.
+    // This is the one hand-typed copy of THIS list, anchored on its first member
+    // so a reorder cannot slip past.
+    const COPY = /Extract<\s*MailRejectCode\s*,[^>]*'stale-tip'/;
+    expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
+  // D-1319. `runHealth`'s statement (1) reuses `DELIBERATE_CANCEL_ERRORS_SQL`
+  // "rather than respelling the two literals", and said in the same breath that
+  // `single-definition.test.ts` forbids the second copy. IT DID NOT — this file
+  // had never mentioned the pair. Measured before this test existed: a
+  // hand-respelled `NOT IN ('run closed','coordinator reclaimed')` in that very
+  // query shipped GREEN through the whole suite. A comment is a request; this is
+  // the mechanism it claimed to be standing on.
+  //
+  // Same shape as the terminal-trio scan below, and for the same reason: the
+  // shipped list is BUILT by interpolation from the two exported constants, so
+  // this scanner sees no literal at all in the real source, and any hand-written
+  // SQL list of the pair scores a hit. Either order, because a copy written from
+  // memory is as likely to be the other way round.
+  //
+  // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
+  // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
+  // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
+  // explaining the constant is a guard someone deletes.
+  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
+    const PAIR = new RegExp(
+      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
+    // The premise, established inside the test rather than assumed: this pattern
+    // really does recognise the copy it forbids, in both orders. Without these
+    // two lines the assertion below is satisfied by a regex that matches nothing.
+    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+
+    // …and the one definition is still built from the two named constants, so
+    // "no literal anywhere" cannot be satisfied by deleting the exclusion.
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      const defs = ALL.filter((f) =>
+        new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
+      expect(defs, name).toEqual(['server/src/coord/store.ts']);
+    }
+    // The two readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from both.
+    expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
+      .toBeGreaterThanOrEqual(2);
+  });
+
   // D-7: `tasks` is Claude Code's TodoWrite vocabulary and belongs to it. A
   // coordination type that spells itself Task is the collision spec:40-44
   // exists to prevent, and it would land in the same union, the same store and
@@ -616,12 +679,17 @@ describe('the program ledger is parsed by nothing', () => {
     // coord/routes.ts:692 — POST /api/runs's response names where a
     // coordinator should commit the ledger; the route never opens it.
     'ledgerPath: `docs/superpowers/programs/${program}.md`,',
-    // pwa/src/fleet/StartProgramSheet.tsx:55 — the same category as the
-    // entry above, one layer client-side: the sheet NAMES the path the
-    // operator is expected to have committed, before `POST /api/runs` is
-    // ever composed, and never opens it — a browser has no filesystem to
-    // read one off of in the first place.
-    'const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;',
+    // shared/api.ts's `ledgerPath` — the same category as the entry above,
+    // one ring down: it NAMES the path the operator is expected to have
+    // committed, before `POST /api/runs` is ever composed, and never opens it.
+    // It lived in `pwa/src/fleet/StartProgramSheet.tsx` while the browser was
+    // its only speaker — and a browser has no filesystem to read one off of in
+    // the first place, which is still why naming it is safe. Wave 4 (D-1043)
+    // gave it a second speaker, `server/src/coord/kickoff.ts`, which builds the
+    // kickoff BODY from it and likewise never opens it; the `export` keyword
+    // below is the whole diff, and this entry matches on line TEXT, so the move
+    // cost nothing and the rename cost exactly this line.
+    'export const ledgerPath = (slug: string): string => `docs/superpowers/programs/${slug}.md`;',
   ];
 
   const isCommentLine = (line: string): boolean => {
@@ -1116,7 +1184,13 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // Not just "no second literal" — that is satisfied by deleting the emitter.
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
     expect(src).toContain('COORDINATOR_PAUSE_MARKER');
-    expect(src).toMatch(/import \{ COORDINATOR_PAUSE_MARKER \} from '\.\/coord\/rundefs\.js'/);
+    // The property is "reached through the shared constant, FROM that module",
+    // not "that import line names exactly one symbol". Widened in
+    // program-leverage wave 4, which imports `MAIL_ROLE_IDS` from the same
+    // place: the alternative was a second import line from one module purely to
+    // satisfy a regex, which is a contortion, not a guard. The `\b` anchors keep
+    // it from matching a longer name that merely contains this one.
+    expect(src).toMatch(/import \{[^}]*\bCOORDINATOR_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
   });
 });
 
@@ -1286,6 +1360,108 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     const dispatch = readFileSync(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'), 'utf8');
     expect(api).toContain('spawnstate');       // in the SpawnVerdict docstring
     expect(dispatch).toContain('spawnstate');  // in the run_events detail comment
+  });
+
+  // program-leverage wave 2 (F2). `SkillState` joins this family on the same
+  // terms: one type, one presentational `Record` keyed BY the type (which the
+  // compiler keeps total), and a runtime list DERIVED from that map's keys.
+  // The fold ruling for this wave is what makes single-definition load-bearing
+  // here rather than merely tidy — the adjacent graphify lane is building its
+  // own skill-presence machinery, and the two lanes converge on this
+  // vocabulary. A second spelling anywhere is the drift that ruling forbids.
+  it('defines SkillState, SKILL_STATE_MAP and SKILL_STATES exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type SkillState\b/m, 'SkillState');
+    oneDefinition(/^\s*export const SKILL_STATE_MAP\b/m, 'SKILL_STATE_MAP');
+    oneDefinition(/^\s*export const SKILL_STATES\b/m, 'SKILL_STATES');
+  });
+
+  it('DERIVES SKILL_STATES from its map — never a hand-written array beside the type', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const SKILL_STATES: readonly SkillState\[\] =\s*\n?\s*Object\.keys\(SKILL_STATE_MAP\)/);
+    expect(api, 'SKILL_STATES is hand-typed as a literal array — derive it from SKILL_STATE_MAP')
+      .not.toMatch(/SKILL_STATES[^=]*=\s*\[/);
+  });
+
+  it('spells the three skill-state members nowhere else — no second copy of the words', () => {
+    // A free-standing list is how a PWA badge or an agent-side probe silently
+    // drifts from the wire. The Record in shared/api.ts is keyed by the type,
+    // so it is not an enumeration and is not matched here.
+    const LIST = /\[\s*'present',\s*'absent',\s*'unmeasurable'\s*\]/;
+    expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
+  it('does not respell io.ts read-failure pair as the skill vocabulary', () => {
+    // SkillState deliberately says `unmeasurable`, not `unreadable`. The two
+    // vocabularies answer different questions — one read's failure vs a
+    // conclusion drawn from a read that may never have happened — and the
+    // bespoke assertion below already pins the PAIR to server/src/io.ts alone.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).not.toMatch(/'absent'\s*\|\s*'unreadable'|'unreadable'\s*\|\s*'absent'/);
+  });
+
+  // program-leverage wave 3 (F3). Four readiness vocabularies join this family
+  // on the same terms `SkillState` did: one type, one presentational `Record`
+  // keyed BY the type, a runtime list DERIVED from that map's keys. They are
+  // pinned here rather than in a describe of their own because the family is
+  // the thing being protected — a fifth vocabulary added next to these should
+  // trip the same three assertions without anyone remembering to write them.
+  it('defines the four readiness vocabularies exactly once, in shared/', () => {
+    oneDefinition(/^\s*export type FloorState\b/m, 'FloorState');
+    oneDefinition(/^\s*export const FLOOR_STATE_MAP\b/m, 'FLOOR_STATE_MAP');
+    oneDefinition(/^\s*export type TokenState\b/m, 'TokenState');
+    oneDefinition(/^\s*export const TOKEN_STATE_MAP\b/m, 'TOKEN_STATE_MAP');
+    oneDefinition(/^\s*export type CoordDbState\b/m, 'CoordDbState');
+    oneDefinition(/^\s*export const COORD_DB_STATE_MAP\b/m, 'COORD_DB_STATE_MAP');
+    oneDefinition(/^\s*export type ReadyVerdict\b/m, 'ReadyVerdict');
+    oneDefinition(/^\s*export const READY_VERDICT_MAP\b/m, 'READY_VERDICT_MAP');
+  });
+
+  it('DERIVES every readiness member list from its map', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    for (const [list, map] of [
+      ['FLOOR_STATES', 'FLOOR_STATE_MAP'], ['TOKEN_STATES', 'TOKEN_STATE_MAP'],
+      ['COORD_DB_STATES', 'COORD_DB_STATE_MAP'], ['READY_VERDICTS', 'READY_VERDICT_MAP'],
+    ] as const) {
+      expect(api, `${list} is not derived from ${map}`).toMatch(
+        new RegExp(`export const ${list}[^=]*=\\s*\\n?\\s*Object\\.keys\\(${map}\\)`));
+      expect(api, `${list} is hand-typed as a literal array — derive it from ${map}`)
+        .not.toMatch(new RegExp(`${list}[^=]*=\\s*\\[`));
+    }
+  });
+
+  it('the projects wire row is declared once, and no inline twin survives', () => {
+    // D-1028, and then D-1028's own gap. The shape was spelled THREE times —
+    // `lifecycle.ts`'s return type, a local `interface Project` in the sheet,
+    // and this generic in `pwa/src/lib/api.ts` — the last of which sits two
+    // lines under a comment warning that "a field added in Stage 2a is exactly
+    // the kind of addition that lands in two of three copies". F3's
+    // `readiness` was that field: it typechecks against the twin (the property
+    // is optional), so nothing failed — the declared type simply went on
+    // denying a field the server was already sending. Caught in self-review,
+    // not by a test, which is why this one exists.
+    oneDefinition(/^\s*export interface ProjectRow\b/m, 'ProjectRow');
+    // PREFIX-LESS, deliberately (fix round 1, minor 3). The first version of
+    // this scan keyed on the INLINE GENERIC spelling (`projects: { name:
+    // string; workdir: string }[]`) and so was blind to the other way the twin
+    // is written — a local `interface Project { name; workdir }` — which was
+    // LIVE in the tree at the time, in NewSessionSheet.tsx, with this suite
+    // green. A fingerprint that only catches the copy you already fixed is not
+    // a guard. This matches the FIELD PAIR however it is spelled, and the one
+    // legal holder is the declaration itself.
+    const TWIN = /\bname:\s*string;\s*\n?\s*workdir:\s*string\b/;
+    expect(
+      ALL.filter((f) => TWIN.test(readFileSync(f, 'utf8'))).map(rel),
+      'a twin of the projects row — import ProjectRow from shared/api instead',
+    ).toEqual(['shared/api.ts']);
+  });
+
+  it('the readiness verdict is DERIVED in one place, never recomputed by a consumer', () => {
+    // `readyVerdict` is L0 and pure so the PWA renders the server's answer
+    // rather than folding five fields a second time. A second fold is how the
+    // badge and the board come to disagree about the same box.
+    oneDefinition(/^\s*export function readyVerdict\b/m, 'readyVerdict');
+    oneDefinition(/^\s*export function foldSkillStates\b/m, 'foldSkillStates');
   });
 });
 
@@ -1670,5 +1846,28 @@ describe('one LEDGER_STALE_MS — the stale horizon has one home', () => {
       expect(src, f)
         .toMatch(/import\s*\{[^}]*\bLEDGER_STALE_MS\b[^}]*\}\s*from\s*'[^']*shared\/api\.js'/);
     }
+  });
+});
+
+describe('graphify — one pin, one census path', () => {
+  it("the pip pin literal 'graphifyy==' lives in exactly one bash file, ccd/ccrc", () => {
+    expect(holdersOf('graphifyy==')).toEqual(['ccd/ccrc']);
+  });
+  it('GRAPHIFY_PIN is assigned in exactly one bash file, ccd/ccrc', () => {
+    const holders = BASH.filter((f) =>
+      codeLines(f).some((l) => /^\s*GRAPHIFY_PIN=/.test(l))).map(rel).sort();
+    expect(holders).toEqual(['ccd/ccrc']);
+  });
+  it("the census path '.ccrc/graph-sweep.json' is spelled by writers/readers, not duplicated as a second constant", () => {
+    // The sweep WRITES it; doctor and the session hook READ it. Spelling a
+    // path you read is not duplicating a constant — what this guard forbids is
+    // a SECOND definition, a `CENSUS=`-shaped copy nothing derives from. The
+    // hook is a legitimate third holder (D-1333): it is installed on its own
+    // into ~/.cc-sessions and runs as Claude Code's hook with no ccd around to
+    // source, so it can only spell the path. The list stays exact-match, so a
+    // FOURTH holder still reddens this.
+    const holders = holdersOf('graph-sweep.json');
+    expect(holders).toEqual(
+      ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
   });
 });

@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the graph sweep every 15 minutes (O3)
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

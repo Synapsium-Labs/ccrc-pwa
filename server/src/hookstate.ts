@@ -44,6 +44,18 @@ export interface HookState {
    *  a session's subagents, from two sources, and `reviveSubagents` below
    *  always reads `description: null` because the file never carries one. */
   subagents: { name: string; startedAt: number; id: string | null; description: string | null }[];
+  /** How many `graphify query` / `path` / `explain` calls this session has
+   *  made since it last started or cleared, as the hook counted them
+   *  (`ccd/session-hook.sh`'s `GRAPH_QUERY_RE`). R4 of the read-side design:
+   *  the whole case for retiring the account-wide block is that its effect
+   *  measured zero, and this is the number that keeps that claim honest.
+   *
+   *  `null` is NO FIELD — a hookstate written by a hook that predates the
+   *  counter. `0` is a MEASUREMENT: this session reported, and it has read
+   *  nothing. Folding the first into the second is exactly the narrowing an
+   *  adapter may not do, and it would make an un-upgraded fleet box look like
+   *  a fleet that ignores its graphs. */
+  graphQueries: number | null;
   interrupted: boolean;
 }
 
@@ -141,6 +153,18 @@ function reviveSubagents(raw: unknown): { name: string; startedAt: number; id: s
       description: null,
     };
   });
+}
+
+/** `graphQueries` — absent or explicitly null reads as `null` (the writer did
+ *  not carry the field), any non-integer or negative number rejects the whole
+ *  read. Same split `reviveSubagents` takes: degrade for a field an older
+ *  writer never wrote, reject a value this build cannot parse. */
+function reviveGraphQueries(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+    throw new Malformed('graphQueries');
+  }
+  return raw;
 }
 
 /**
@@ -254,6 +278,7 @@ export async function readHookStateMeasured(
         event: typeof eventRaw === 'string' && eventRaw !== '' ? eventRaw : null,
         ask,
         subagents,
+        graphQueries: reviveGraphQueries(raw['graphQueries']),
         interrupted: interruptedRaw === true,
       },
     };

@@ -157,5 +157,13 @@ echo "install.sh: building (server deps, PWA bundle, server dist)…"
 ( cd "$ROOT/server" && npm ci --no-audit --no-fund )
 ( cd "$ROOT/pwa" && npm ci --no-audit --no-fund && npm run build )
 ( cd "$ROOT/server" && npm run build )
+# D-1159: the agent is the FOURTH artifact `ccrc install` refuses without, for
+# every role but `server` — `ccrc-agent.service` runs
+# `agent/dist/agent/src/index.js`. It is built unconditionally here because this
+# script does not know the role: `--role` rides on the staged verb, and for a
+# source install it is not passed at all (the verb's own default is `both`,
+# which needs an agent). Building it for a server-only box costs one tsc run;
+# NOT building it cost a live fleet its agent.
+( cd "$ROOT/agent" && npm ci --no-audit --no-fund && npm run build )
 
 exec bash "$ROOT/ccd/ccrc" install

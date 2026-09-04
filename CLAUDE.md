@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~1931 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~2165 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -120,9 +120,15 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   red-first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; a build-scoped `D-B4-N` series runs alongside).
-  **Allocate the next number by grepping `origin/main` across BOTH `docs/` and source** — source runs ahead of
-  the plans' ledgers, so a number taken from a plan alone collides with shipped refs (it has, twice). Source
-  files carry `D-N` refs in comments; **read them
+  **Allocate from the allocator and DEFINE IN THE SAME ACT** — read the floor from
+  `POST /api/ledger/deviations`, never from a document (a brief once said 1243 while the allocator said 1292,
+  D-1293), and never predict or reuse a number. Source runs ahead of the plans' ledgers, so a number taken
+  from a plan alone collides with shipped refs. The parallel-branch collision (three incidents: D-1157/1158
+  via PR #38, D-1159/1160/1161 via PR #41) is now MEASURED rather than remembered — `git fetch origin main`
+  then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`, which compares this branch's
+  entries against `origin/main`'s **without merging** and reds on any allocator-era number defined in two
+  plans. It fires before the merge that would otherwise decide it; the older one-tree scan could only name the
+  loser afterwards. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Wire discipline — additive-only, absence-permits:** frames are ADDITIVE; do NOT bump `FLEET_PROTO`
@@ -139,10 +145,27 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
-  on missing — **except TWO deliberately ungated operator doors: `POST /api/coord/pause` and `POST
-  /api/runs/:id/abandon`** (D-282 (was D-B4-9): the coordinator holds the box token, so gating a wedged run's release valve
-  behind that key leaves the wedge no door). `coord-pause-route.test.ts`'s `UNGATED` set pins the pair in both
-  directions, and with `CCRC_AUTH` armed both still sit behind the session gate. Don't assume — read the guards.
+  on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
+  /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
+  extended to the third by build 9 D12 and to the fourth by program-leverage wave 5: the party that would be
+  locked out — the coordinator, any session holding a claim, and a program whose coordinator is DEAD and whose
+  box token died with it — is the one holding that token, so gating a wedge's release valve behind that key
+  leaves the wedge no door. Reclaim's guard is a RE-MEASUREMENT, not a credential: it refuses unless the run's
+  current `claimedBy` measures dead or registry-absent, and an unmeasurable registry refuses too — never
+  proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
+  armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
+  "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
+  /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and `GET /api/ledger` all call
+  `requireMailToken` outside both, and `auth/gate.ts`'s EXEMPT reasons — route by route, each with its own
+  argument — are the census, not this bullet. What does need saying here are the coordination WRITES that
+  carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST /api/coord/caps` (wave 6)
+  are session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The
+  first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
+  `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
+  that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
+  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
+  Don't assume — read the guards.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).
@@ -161,7 +184,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, eleven clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twelve clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the

@@ -13,7 +13,7 @@ const rec = (over: Partial<DivergenceInput['records'][number]> = {}) => ({
   id: 'demo-quiet-basin', project: 'demo', workspace: 'quiet-basin',
   workdir: '/home/u/worktrees/demo/quiet-basin', branch: 'ws/quiet-basin',
   held: null as string | null, archivedAt: null as number | null,
-  supervisedAt: null as number | null, ...over,
+  supervisedAtMs: null as number | null, ...over,
 });
 
 /** The registry directory listing for one healthy `demo-quiet-basin`, in
@@ -413,7 +413,7 @@ describe('divergences — archived-but-live', () => {
     // carry a `why` carry a false one. This names the contradiction; it does
     // NOT clear the field, because clearing it destroys the archive record.
     const out = divergences(input({
-      records: [rec({ archivedAt: 1_785_200_000, supervisedAt: NOW - 30_000 })],
+      records: [rec({ archivedAt: 1_785_200_000, supervisedAtMs: NOW - 30_000 })],
       worktrees: [], headBranch: new Map(),
     }));
     expect(out.map((d) => d.kind)).toEqual(['archived-but-live']);
@@ -421,9 +421,9 @@ describe('divergences — archived-but-live', () => {
   });
 
   it('says nothing about an archived row whose supervisor stamp is stale or absent', () => {
-    for (const supervisedAt of [null, NOW - SUPERVISED_FRESH_MS, NOW - 86_400_000]) {
+    for (const supervisedAtMs of [null, NOW - SUPERVISED_FRESH_MS, NOW - 86_400_000]) {
       expect(divergences(input({
-        records: [rec({ archivedAt: 1_785_200_000, supervisedAt })],
+        records: [rec({ archivedAt: 1_785_200_000, supervisedAtMs })],
         worktrees: [], headBranch: new Map(),
       }))).toEqual([]);
     }
@@ -431,13 +431,13 @@ describe('divergences — archived-but-live', () => {
 
   it('does not call a FUTURE-dated heartbeat live', () => {
     expect(divergences(input({
-      records: [rec({ archivedAt: 1_785_200_000, supervisedAt: NOW + 60_000 })],
+      records: [rec({ archivedAt: 1_785_200_000, supervisedAtMs: NOW + 60_000 })],
       worktrees: [], headBranch: new Map(),
     }))).toEqual([]);
   });
 
   it('says nothing about a live row that was never archived', () => {
-    expect(divergences(input({ records: [rec({ supervisedAt: NOW - 1000 })] }))).toEqual([]);
+    expect(divergences(input({ records: [rec({ supervisedAtMs: NOW - 1000 })] }))).toEqual([]);
   });
 });
 

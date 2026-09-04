@@ -150,8 +150,14 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  can never mask a real account. It is the single source for these three
  *  names as a SET — `_inst_bins` (ccd/ccrc) and `deploy.sh` each enumerate what
  *  they install, which is a different question with a different answer the day
- *  one of them installs a fourth thing. */
-const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes']);
+ *  one of them installs a fourth thing.
+ *
+ *  THAT DAY IS graphify Task 10 (O3/O6b): `ccd-graph-sweep` is `_inst_bins`'
+ *  fourth executable, shipped into the same `$HOME/.local/bin` on every role
+ *  (its unit and enable are role-gated; the binary is not). It carries no
+ *  provenance marker today either, same as `ccd-cap-scopes` — this set is the
+ *  defence regardless, exactly as its own header already promised. */
+const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

@@ -68,12 +68,13 @@ lands after a plain resume: nothing was minted, so nothing can be stranded.)
 
 #### An `ok:true` dispatch is no longer proof that the pane is ready
 
-`POST /api/runs/:id/dispatch` answers with two fields beyond the ones above:
+`POST /api/runs/:id/dispatch` answers with three fields beyond the ones above:
 
 | field | meaning |
 |---|---|
 | `adopted` | `true` when the workspace was **adopted from a killed `ws-add`**, not created by a clean one. The HTTP call that made it timed out and the server killed `ccd`; the workspace, the claim and the supervisor all exist, but nothing confirmed the session's TUI came up. |
 | `spawnState` | how the last spawn attempt ended: `ready`, `login`, `vanished`, `expired`, `blocked`, `unrecognised`, or `null` for *not recorded*. `null` is not `ready` and is not a warning — it means no spawn fact was written. |
+| `skillState` | whether the worker session this dispatch bound has the `ccrc-worker` skill installed on the home it is running from: `present`, `absent`, or `unmeasurable`. MEASURED at dispatch, and never a refusal — the preflight never refuses a dispatch, so an `absent` dispatch is a real dispatch. `unmeasurable` is not `absent`: it means no answer was obtained, so nothing was proven about the fleet either way. Three ways that happens — this box's roster does not carry that account; the session has no registry row, so there is no account to look under and no read is attempted; or the read itself would not complete. |
 
 **What to do with them.** On `adopted: true`, or on any `spawnState` other than `ready` or `null`,
 **do not treat the brief as delivered**. Wait for the worker's first mail as usual, but if none
@@ -85,9 +86,18 @@ arrives within the wave's ordinary window, read the session's own screen before 
   cannot fix it. Say so to the operator; do not re-dispatch onto the same lane.
 - `spawnState: 'vanished'` — the tmux session went away mid-poll. The row will classify itself on
   the next sweep.
+- `skillState: 'absent'` — the worker will read your brief without its standing protocol, because
+  the skill installer has not run on that account's home. The dispatch still happened and the brief
+  still works, degraded: it carries the branch-discipline sentence in its own text for exactly this
+  case. **Report it to the operator before you treat the wave as briefed** — running the installer
+  is a human act, and every later wave on that home has the same gap until it happens.
+- `skillState: 'unmeasurable'` — say so as an unknown, not as a problem. Nothing was measured, so
+  do not go hunting for a missing install and do not re-dispatch: the wave is briefed either way.
 
 `adopted: true` is also written to the run's event trail as `spawn-adopted:<spawnState>`, so the
-provenance of the workspace survives the conversation.
+provenance of the workspace survives the conversation. Every dispatch also writes its preflight
+there as `skill-preflight:<skillState>` — on all three answers, so a trail with no such line means
+an older build, never a healthy home.
 
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of
@@ -167,6 +177,35 @@ than improvising one" — it keys on YOUR brief, so a brief that names none
 leaves that clause pointing at nothing and the worker improvising the very
 thing the clause exists to stop. Name it explicitly, every wave, the same way
 you name the plan file.
+
+**A brief may quote the worker's graph card, where that workspace has one.** A
+session whose tree carries `graphify-out/graph.json` gets one `SessionStart`
+line for THAT tree: node count, the commit the graph was built at, and a
+freshness clause. **CONTENT decides that clause first** (D-1368): a graph whose
+built commit carries the same TREE as `HEAD` describes this workspace exactly,
+so it reads `fresh` however the two commits stand to one another — a squash
+merge or a rebase rewrites the commit and keeps every byte — and the card
+APPENDS ` — same content as HEAD` when the built commit is not `HEAD` itself, a
+qualifier on the state rather than a state of its own, so the one word is still
+what you branch on. Only when the two trees DIFFER does ancestry decide, and
+only there does the clause read `1 commit behind HEAD` / `N commits behind
+HEAD`, `not an ancestor of HEAD`, or `freshness unmeasured` — the second when
+the graph was built at a commit this tree cannot reach AND carrying different
+content (a branch tip the session has since checked away from, or a genuinely
+diverged branch), so the graph describes code the tree does not carry rather
+than merely missing code it does, and the last when the graph names a commit
+that git in that tree will not date, which is a different thing again from a
+graph that is merely old. Every half is individually optional: whatever the hook could not
+measure is simply left out, so a card with no freshness clause at all is a
+fourth state and not a fault. A tree the sweep REFUSED gets a different and
+equally quotable line — `this tree has no knowledge graph`, plus the sweep's own
+last reason — and a tree the sweep has not reached gets NOTHING. A missing card
+is never something to report as broken. Quoting the freshness half in the brief
+tells the worker what it is querying before it queries it: a graph 97 commits
+stale answers confidently and wrongly, and worker clause 12 turns anything but
+`fresh` into a lead the worker must verify by reading the file. The card is
+measured per tree, so a brief that quotes it is quoting THAT workspace, not the
+fleet.
 
 **One sentence from the protocol goes in every brief anyway: "commit on this
 workspace's own branch; do not create or switch to a separate feature

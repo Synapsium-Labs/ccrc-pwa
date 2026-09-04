@@ -31,22 +31,49 @@ const skillDir = path.join(root, 'ccd/coordinator-skill');
 const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
 const refs = (name: string): string =>
   readFileSync(path.join(skillDir, 'references', name), 'utf8');
-const allSkillText = [skill, refs('wave-lifecycle.md'), refs('mail-envelope.md'), refs('peer-protocol.md')].join('\n');
-/** SKILL.md + wave-lifecycle.md ONLY — the route-linkage scan's own corpus,
- *  deliberately excluding `mail-envelope.md`. That file's only route-shaped
+/** Every reference this skill ships, FROM THE DIRECTORY — never a hand-typed
+ *  list. `install-coordinator-skill.sh`'s `REQUIRED_REFS` is the other
+ *  projection of this same directory and is pinned against it in
+ *  `wrapper-roster-fixture.test.ts` (I8) for exactly this reason: "a literal
+ *  array is a PROJECTION of something real that a future change can silently
+ *  drift away from, and a comment asking a future author to keep them in sync
+ *  is not a mechanism".
+ *
+ *  The two corpora below WERE that literal array until program-leverage wave 1
+ *  (D-1000). The cost was not hypothetical: the census, the break-door
+ *  prohibition and the untyped-refusal scan all read `allSkillText`, so a
+ *  fifth reference file would have been skipped by every one of them in
+ *  silence — while the spec that added `resume.md` named the census as the
+ *  binding constraint on that very file. MEASURED red before this landed: the
+ *  runbook's own sentence was absent from `allSkillText`. */
+const REFERENCE_NAMES: readonly string[] =
+  readdirSync(path.join(skillDir, 'references'))
+    .filter((n) => n.endsWith('.md'))
+    .sort();
+const allSkillText = [skill, ...REFERENCE_NAMES.map(refs)].join('\n');
+
+/** The route harvest's corpus: SKILL.md + every reference EXCEPT the ones
+ *  named here — today only `mail-envelope.md`. That file's only route-shaped
  *  text is the worked example's `ack: POST /api/mail/<id>/ack` line, and the
  *  byte-identity test below requires it to be `renderEnvelope`'s REAL output
- *  — a concrete delivery id, never the literal `:id` fastify registers. Left
- *  in `allSkillText` (the ws-reap/ws-rm/ws-gc census still scans it — a
+ *  — a concrete delivery id, never the literal `:id` fastify registers. It
+ *  stays in `allSkillText` (the ws-reap/ws-rm/ws-gc census still scans it — a
  *  worked example naming a destructive verb would be exactly as licensing as
- *  prose naming one), pulling it OUT of just the route harvest so a real
+ *  prose naming one) and is pulled OUT of just the route harvest, so a real
  *  numeric id never reads as a route this skill "names" and fails the
  *  literal-match check no server route can ever satisfy.
- *  `peer-protocol.md` (Build 9 wave 8) IS in this corpus: its curl shapes
- *  and headings name real registered routes, so both parity directions
- *  cover it — the reference cannot name a ghost route, and the routes it
- *  is the documented home for cannot silently lose their one mention. */
-const routeSkillText = [skill, refs('wave-lifecycle.md'), refs('peer-protocol.md')].join('\n');
+ *
+ *  Everything else is IN, in both parity directions — the reference cannot
+ *  name a ghost route, and the routes it is the documented home for cannot
+ *  silently lose their one mention. `peer-protocol.md` (Build 9 wave 8) for
+ *  its call shapes and headings; `resume.md` (program-leverage wave 1) for the
+ *  three coordination reads a revived coordinator makes. `resume.md` also
+ *  names the PWA's revive door — deliberately WITHOUT a method, so it is not
+ *  harvested here at all: see the foot-of-file describe and D-1001. */
+const ROUTE_CORPUS_EXCLUDES: ReadonlySet<string> = new Set(['mail-envelope.md']);
+const routeSkillText = [
+  skill, ...REFERENCE_NAMES.filter((n) => !ROUTE_CORPUS_EXCLUDES.has(n)).map(refs),
+].join('\n');
 
 /** Every .ts under server/src, read once — the linkage test's corpus. */
 const serverSources = (): string => {
@@ -210,12 +237,35 @@ describe('the coordinator skill: linkage', () => {
       // claim has stopped coordinating). The claimant's own door is
       // POST /api/claims/:id/release, which IS named.
       'POST /api/claims/:id/break',
+      // F5 (D-1123) — the abandon-door shape, FOURTH instance, and the one with
+      // the sharpest reason to stay unnamed: this door rewrites `claimedBy`. A
+      // coordinator told about it would be told how to reclaim its own program
+      // from itself, which is a no-op it would spend a wave discovering, or how
+      // to take someone else's, which is the thing clause 1 forbids. The
+      // corpus-wide forbid-mention pin (the `/api/claims/:id/break` shape) is
+      // what turns this permission-to-omit into a prohibition.
+      'POST /api/runs/:id/reclaim',
+      // WAVE 6 (D-1240) — the OPERATOR-dial shape, and the `POST
+      // /api/coord/pause` argument one turn sharper. The caps bound how much a
+      // coordinator may dispatch; a coordinator told about this route would be
+      // told how to raise its own limit, which is not a door it is the one to
+      // walk through — it is the cap's own defeat, the way unpausing itself
+      // would be the pause marker's. Neither half is named: the READ is exempt
+      // too, because a coordinator that can read the dial has no use for the
+      // number it is not allowed to change, and naming it would only be the
+      // first half of an invitation.
+      'GET /api/coord/caps',
+      'POST /api/coord/caps',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
       if (EXEMPT.has(r)) continue;
-      expect(named.has(r), `${r} is registered in coord/routes.ts but never named anywhere ` +
-        'in SKILL.md or references/wave-lifecycle.md').toBe(true);
+      // The corpus is DERIVED, so the message names what it actually read
+      // rather than a two-file list that went stale when `peer-protocol.md`
+      // joined and staler again with `resume.md`.
+      expect(named.has(r), `${r} is registered in coord/routes.ts but is named nowhere in the route ` +
+        `corpus (SKILL.md + ${REFERENCE_NAMES.filter((n) => !ROUTE_CORPUS_EXCLUDES.has(n)).join(', ')})`)
+        .toBe(true);
     }
   });
 
@@ -397,6 +447,76 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
   // across SKILL.md and both references — strictly stronger than any check
   // written here, since a weaker duplicate would stay green on an extra
   // mention. It is the mechanism; it must stay green.
+
+  it('names skillState and all three of its answers, and says absent does not refuse', () => {
+    // program-leverage wave 2 (F2). The sibling test above is deliberately not
+    // widened: it pins the TWO fields that shipped with section 1.5, and this
+    // pins the third on its own terms, so deleting either passage reds a test
+    // that names it.
+    const wl = refs('wave-lifecycle.md');
+    expect(wl, 'the dispatch-response table does not name skillState').toContain('skillState');
+
+    // BLOCK-SCOPED: the three words must be inside the response block, not
+    // merely somewhere in a 500-line file.
+    const start = wl.indexOf('#### An `ok:true` dispatch is no longer proof');
+    expect(start, 'the dispatch-response block is gone or renamed').toBeGreaterThan(-1);
+    const block = flat(wl.slice(start, wl.indexOf('\n## ', start)));
+    for (const word of ['present', 'absent', 'unmeasurable']) {
+      expect(block, `the dispatch-response block omits skillState's '${word}' answer`)
+        .toContain(word);
+    }
+
+    // The distinction is the whole feature: a reader who takes `unmeasurable`
+    // for `absent` goes off to install a skill that is already there, and one
+    // who takes `absent` for a refusal re-dispatches a wave that dispatched.
+    expect(block, 'the block does not say unmeasurable is not absent')
+      .toMatch(/unmeasurable[\s\S]{0,240}?(is not|never)[\s\S]{0,40}?absent/i);
+    expect(block, 'the block does not say the preflight never refuses a dispatch')
+      .toMatch(/never refuses|does not refuse|still dispatch/i);
+
+    // ...and the OPERATOR GUIDANCE is pinned separately, scoped to the bullet
+    // list. MEASURED: without this narrower slice, deleting the `unmeasurable`
+    // bullet outright left every assertion above green, because the table row
+    // three lines up satisfies the same regexes. A table entry says what the
+    // value means; only the bullet says what to DO about it, which is the half
+    // a coordinator acts on.
+    const guide = flat(block.slice(block.indexOf('**What to do with them.**')));
+    expect(guide, 'no operator guidance for skillState: absent')
+      .toMatch(/`skillState: 'absent'`/);
+    expect(guide, 'the absent bullet does not tell the coordinator to report it first')
+      .toMatch(/report it to the operator before you treat the wave as briefed/i);
+    expect(guide, 'no operator guidance for skillState: unmeasurable')
+      .toMatch(/`skillState: 'unmeasurable'`/);
+    // ...and its DO-half, not just its label. The absent bullet one line up has
+    // had two assertions from the start; this one shipped with only its
+    // backticked name, so a mutant that kept the label and INVERTED the
+    // guidance — sending the coordinator hunting for an install, or telling it
+    // to re-dispatch — stayed green (review round 1, minor 3).
+    expect(guide, 'the unmeasurable bullet does not tell the coordinator to report it as an unknown')
+      .toMatch(/say so as an unknown/i);
+    expect(guide, 'the unmeasurable bullet does not forbid re-dispatching on an unknown')
+      .toMatch(/do not re-dispatch/i);
+
+    // The count sentence. Nothing else pins it, which is exactly why it became
+    // a lie the moment a third field shipped (D-1014) — pinned both ways so
+    // the NEXT field to land reds a suite instead of drifting.
+    expect(block, 'the lead-in still promises two fields').not.toMatch(/\btwo fields\b/);
+    expect(block, 'the lead-in does not say three fields').toMatch(/\bthree fields\b/);
+
+    // The causes of `unmeasurable` are enumerated, and the enumeration is
+    // COMPLETE. It shipped naming two — no config dir for that account, and a
+    // read that would not complete — and read as exhaustive, while the tree has
+    // a third: dispatch's resume arm tolerates a session absent from a listable
+    // registry, so there is no wrapper to map and no read is attempted at all.
+    // `shared/api.ts`'s own SkillState docstring names all three (review round
+    // 1, minor 4).
+    expect(block, 'the unmeasurable causes omit the session with no registry row')
+      .toMatch(/registry row|no registry|not in the registry/i);
+
+    // The run-event trail, documented the way `adopted` documents its own.
+    expect(flat(wl), 'the run-event detail for the preflight is undocumented')
+      .toContain('skill-preflight:');
+  });
 });
 
 describe('the skill on `final:true` — a release is now conditional', () => {
@@ -581,6 +701,120 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
   });
 });
 
+describe('the graph-card paragraph describes the card ccd/session-hook.sh actually prints', () => {
+  // NOTHING under `server/test` read this paragraph when it landed, so it could
+  // — and did — describe a two-state freshness the hook has not had since
+  // D-1336, and a card that every session prints when the hook prints nothing at
+  // all for a tree with no graph and no census row. That is the same class the
+  // refusal-code cross-check above closes for SKILL.md: a doc that quotes
+  // another file's vocabulary and is bound to nothing drifts silently. Every
+  // word quoted here is HARVESTED from the writer, so the next hook change reds
+  // this doc instead of orphaning it.
+  const hook = readFileSync(path.join(root, 'ccd/session-hook.sh'), 'utf8');
+
+  /** The paragraph itself, by its own opening — one blank-line-delimited block. */
+  const para = (): string => {
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf("**A brief may quote the worker's graph card");
+    expect(start, 'wave-lifecycle.md carries no graph-card paragraph at all')
+      .toBeGreaterThanOrEqual(0);
+    const end = wl.indexOf('\n\n', start);
+    return flat(wl.slice(start, end === -1 ? undefined : end));
+  };
+
+  /** Every freshness word the card can carry, harvested from the hook's own
+   *  assignments, normalised over the count. Four arms, three words: `fresh`,
+   *  `<n> commit(s) behind HEAD`, and D-1336's `freshness unmeasured` — the one
+   *  the paragraph collapsed. */
+  const FRESHNESS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
+      'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
+      'looking at the wrong file');
+    return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
+  })();
+
+  /** Every QUALIFIER the card APPENDS to a freshness word, harvested from the
+   *  hook's own `fresh+=` sites — the twin of `ccrc-install-graphify.test.ts`'s
+   *  (D-1369), mirrored here for the reason D-1372 records: the harvest above
+   *  COULD NOT SEE D-1368 LAND. That change made a squash-merged graph read
+   *  `fresh — same content as HEAD`, which is exactly the case this paragraph
+   *  went on promising would read `not an ancestor of HEAD`, and the pin stayed
+   *  green over the drift twice over — the new `fresh="fresh"` assignment left
+   *  the vocabulary SET identical after the de-dupe, and the qualifier is
+   *  APPENDED, so `/\bfresh="([^"]+)"/` never matched it at all. A qualifier is
+   *  deliberately not a state (nothing branches on it, which is why the
+   *  FRESHNESS harvest is the right shape for the states), but it IS card text
+   *  a coordinator quotes into a brief. Leading punctuation is stripped so the
+   *  pin is on the words, not on the em dash that joins them. */
+  const QUALIFIERS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+      .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
+    if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
+      'all — the card was rewritten, and the graph-card paragraph that names one has to be ' +
+      're-derived against it rather than left standing');
+    return [...new Set(vals)];
+  })();
+
+  /** Word-BOUNDARY match, never a raw substring — the same hole as the worker
+   *  suite's twin harvest (D-1342). `fresh` is a substring of `freshness
+   *  unmeasured`, so a `toContain` arm for it passes on the longer word alone
+   *  and can never fail; this paragraph carries NO verbatim pin, so that
+   *  harvest is its only binding and a vacuous arm leaves it unbound. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  it('names the qualifier the hook APPENDS, and scopes the ancestry words to a differing tree (D-1372)', () => {
+    // DERIVED FROM ORDER, the same way the README's twin arm is: the card asks
+    // a CONTENT predicate before it asks ancestry at all, so a graph whose
+    // bytes are HEAD's reads `fresh` and never reaches the `not an ancestor of
+    // HEAD` arm — which is what this paragraph promised for that very case
+    // until D-1372. Nothing here pins a spelling of either predicate, only
+    // which one decides first.
+    const content = hook.indexOf('_hook_same_tree "$cwd"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
+      'looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
+      'is looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(content, 'ccd/session-hook.sh decides ancestry before content, so a graph whose tree ' +
+      "IS HEAD's reads `not an ancestor of HEAD` again — D-1368 was reversed")
+      .toBeLessThan(ancestry);
+    for (const q of QUALIFIERS) {
+      expect(para(), `the graph-card paragraph never names the \`${q}\` qualifier the hook ` +
+        'appends to a freshness word — a coordinator quoting the card into a brief meets text ' +
+        'this paragraph says the card cannot carry').toMatch(wordRe(q));
+    }
+    expect(para(), 'the graph-card paragraph enumerates the ancestry words without saying that ' +
+      'CONTENT is asked first — a squash-merged graph reads `fresh` where this paragraph ' +
+      'promises `not an ancestor of HEAD`').toMatch(/CONTENT decides that clause first/);
+  });
+
+  it('names every freshness state the hook can print, including the unmeasured one', () => {
+    for (const word of FRESHNESS) {
+      expect(para(), `the graph-card paragraph never names the \`${word}\` state the hook prints`)
+        .toMatch(wordRe(word));
+    }
+  });
+
+  it('does not promise a card for every session — the hook prints nothing for most trees', () => {
+    // The no-graph arm returns SILENTLY unless the sweep census carries a row
+    // for the tree, and prints a DIFFERENT sentence when it does. A coordinator
+    // told every session prints a card reads a missing one as a fault.
+    const m = /_hook_emit_context "graphify: ([^"$]+?) —/.exec(hook);
+    expect(m, 'ccd/session-hook.sh emits no no-graph sentence — this pin is looking at the ' +
+      'wrong file, or the refused-tree arm lost its one quotable line').not.toBeNull();
+    expect(para(), 'the paragraph never quotes the line a refused tree gets instead of a card')
+      .toContain(m![1]!);
+    expect(para(), 'the paragraph does not say a tree can get NO card at all')
+      .toMatch(/gets NOTHING/);
+    // The regression itself, spelled: the sentence that made this paragraph
+    // wrong is the one that generalised over every session.
+    expect(para(), 'the paragraph is back to claiming every session prints a card')
+      .not.toMatch(/Every session's `SessionStart` prints one line/);
+  });
+});
+
 describe('the coordinator docs state the oversize ceiling the brief writer actually has', () => {
   // T3 review ⚠2. Since dispatch composes `WORKER_KICKOFF_PREFIX + brief` and
   // caps the COMPOSED body, a brief in (cap - prefix, cap] is refused without
@@ -746,10 +980,12 @@ describe('the server address is config, never a literal (operator ruling 2026-08
   const corpus: ReadonlyArray<readonly [string, string]> = [
     ['coordinator SKILL.md', skill],
     ['worker SKILL.md', workerSkill],
-    ['wave-lifecycle.md', refs('wave-lifecycle.md')],
-    ['mail-envelope.md', refs('mail-envelope.md')],
-    ['ledger-template.md', refs('ledger-template.md')],
-    ['peer-protocol.md', refs('peer-protocol.md')],
+    // DERIVED, same reason as `REFERENCE_NAMES` above (D-1003): this was the
+    // THIRD hand-typed copy of the references directory in this file, so a new
+    // reference file shipping with a hardcoded server address in it would have
+    // been checked by nothing at all — the live lesson in this describe's own
+    // header, arriving through a door the header did not cover.
+    ...REFERENCE_NAMES.map((n) => [n, refs(n)] as const),
   ];
 
   it('no skill file carries a numeric server-host literal', () => {
@@ -794,6 +1030,26 @@ describe('the server address is config, never a literal (operator ruling 2026-08
 // the capture idiom, the 409-as-address reading, and losing a race.
 describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
   const pp = (): string => refs('peer-protocol.md');
+
+  it('does not send a coordinator away to wait for a sweep that no longer gates it', () => {
+    // wave 2, F2: the first allocation on a fresh project measures the floor
+    // itself. Prose promising an hourly wait would send a coordinator away from
+    // a door that is now open — and that stall was the whole point of the
+    // feature, since a project with no live session was never swept at all.
+    const p = flat(pp());
+    expect(p, 'peer-protocol.md still promises an hourly floor sweep')
+      .not.toMatch(/hourly floor sweep has not yet/);
+    expect(p, 'peer-protocol.md does not say the allocator seeds the floor itself')
+      .toMatch(/seeds? (its own |the )?floor|measures the floor itself/i);
+    // The refusal NARROWED; it did not go away, and its standing instruction is
+    // unchanged. `claims-envelope.test.ts` separately requires the producer.
+    expect(p, 'the report-do-not-invent instruction was lost with the rewrite')
+      .toMatch(/report it, do not invent/i);   // case-insensitive: it now opens a sentence
+    // Both surviving conditions are named, so a reader can tell which one they
+    // are holding.
+    expect(p, 'the two not-seeded conditions are not distinguished for the reader')
+      .toMatch(/could not be measured/i);
+  });
 
   it('teaches reading the body, and invokes no curl at all', () => {
     // Same rule SKILL.md's own "How to call the API" states, in the new terms:
@@ -869,11 +1125,253 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     }
   });
 
+  it('never names the caps dial — a door that would tell a coordinator how to lift its own cap', () => {
+    // Wave 6's accounting, the same shape: EXEMPT above only PERMITS the
+    // omission, and this is what forbids the mention. Both halves, because the
+    // read is the first half of the invitation.
+    expect(allSkillText).not.toContain('/api/coord/caps');
+  });
+
   it('never names the break door — a door the claimant is not the one to walk through', () => {
     // D16's accounting: `POST /api/claims/:id/break` is EXEMPT (the
     // `/api/runs/:id/abandon` shape) and stays unnamed in EVERY corpus file.
     // EXEMPT alone only permits the omission; this is what FORBIDS the
     // mention.
     expect(allSkillText).not.toContain('/api/claims/:id/break');
+  });
+});
+
+// ── program-leverage wave 1 (F1): the coordinator-resume runbook ───────────
+//
+// The runbook ships into a corpus whose whole-file assertions — the
+// destructive-verb census, the break-door prohibition, the untyped-refusal
+// census — read `allSkillText`. That const was a HAND-TYPED list of three
+// reference files, so this file would have been invisible to every one of
+// them: the spec that added it names the census as the binding constraint on
+// this very file, and it would have bound nothing (D-1000). The corpus is
+// derived from the directory now; this describe is what reds if anyone types
+// the list back.
+describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 3)', () => {
+  const rb = (): string => refs('resume.md');
+
+  it('is INSIDE the corpus every whole-file assertion in this suite reads', () => {
+    // Not a tautology: with a hand-maintained `allSkillText` this is exactly
+    // the assertion that fails, and it fails for the right reason.
+    expect(allSkillText, 'references/resume.md is not in allSkillText — the census, the break-door ' +
+      'prohibition and the untyped-refusal scan all skip it')
+      .toContain('`GET /api/runs` is the whole orientation.');
+  });
+
+  it('names the two id-preserving revives, and says whose act they are', () => {
+    // The one-argument form is the whole point: the two-argument form mints a
+    // second id for a live session (ccd:12118-12123, and
+    // SessionActionsSheet.tsx:287-289 names the same operator).
+    expect(rb()).toContain('ccd start <id>');
+    expect(rb()).toContain('/api/sessions/:id/ensure');
+    // Clause 1 survives the runbook: a revive is not a fleet act this session
+    // performs. Without this sentence the file reads as a coordinator's todo.
+    expect(flat(rb())).toContain("Both of these are the OPERATOR's act");
+  });
+
+  it('spells the revive route WITHOUT a method, and keeps the reason attached', () => {
+    // `auth-passkey.test.ts`'s THE SWEEP requires every `METHOD /api/path` in
+    // either skill corpus to be in EXEMPT, and this route deliberately is not
+    // (`auth/gate.ts`) — it is the browser's cookie-bearing call. MEASURED
+    // while this landed: spelling the method reds that suite with exactly
+    // `["POST /api/sessions/:id/ensure"]` in `blocked`. So the method would
+    // both break the build AND teach a call a fleet-host session cannot make.
+    // The negative below is the mechanism; the positive keeps the reason in
+    // the prose, because this repo's own worked example of a doc lie is a
+    // sentence with its qualifier filed off.
+    expect(rb(), 'a method in front of the revive path reads as "a call you make", and reds auth-passkey')
+      .not.toMatch(/(GET|POST|PUT|PATCH|DELETE)\s+`?\/api\/sessions/);
+    expect(flat(rb())).toContain("it is not on the armed gate's exempt list");
+  });
+
+  it('says why a revive under a different id wedges the program until an OPERATOR moves it', () => {
+    expect(rb()).toContain('claimed-by-another');
+    // MOVED, not softened (D-1124). The old literal — `nothing in the HTTP API
+    // ever rewrites claimedBy` — was true the day this runbook shipped and is
+    // false the moment this wave's operator door exists. The replacement is
+    // scoped to what a COORDINATOR can reach, which is the only scope this
+    // runbook was ever entitled to speak in: the door is real, it is the
+    // operator's, and this corpus never names it. That last clause is what
+    // makes the sentence self-maintaining — the UNGATED harvest below and the
+    // corpus-wide forbid this wave adds are what keep "named in this corpus"
+    // true, so the prose cannot rot into a lie without a suite going red first.
+    expect(flat(rb())).toContain('no call named in this corpus ever rewrites `claimedBy`');
+  });
+
+  it('carries no copy of the pre-reclaim absolute, in EITHER corpus file', () => {
+    // `allSkillText`, deliberately, not `rb()`: the same claim stood in TWO
+    // places (resume.md:38 and SKILL.md:31, measured), and a per-file pin would
+    // have let the survivor go on teaching a coordinator that the wedge has no
+    // door at all — the D-1000 shape, one file at a time. Truncated before
+    // `claimedBy` so it catches a re-added absolute in any wording that reaches
+    // for "the HTTP API"; the positives in the test above and in the SKILL.md
+    // describe are what stop a DELETION passing for a fix, which a negative
+    // alone cannot.
+    expect(allSkillText, 'the pre-reclaim absolute is back — "nothing in the HTTP API ever ' +
+      'rewrites `claimedBy`" is false once the operator door exists')
+      .not.toContain('nothing in the HTTP API ever rewrites');
+  });
+
+  it('carries a wave-N re-kickoff template, not the wave-1 text the machine hardcodes', () => {
+    // `kickoff()` in `pwa/src/fleet/StartProgramSheet.tsx` is correct exactly
+    // once per program; a revive briefed with it re-opens wave 1 on a program
+    // at wave N, and `CoordStore.openRun`'s dedupe arm covers only a still-
+    // `planned` row, so the second open is a second row rather than a no-op.
+    // BY SYMBOL, no line numbers: this wave's own comment-only commit shifted
+    // that file and made the first draft of THIS comment stale (review round 1,
+    // M2) — D-1005's argument arriving by the shortest possible route.
+    expect(rb()).toContain('open the run for wave <N>');
+    expect(flat(rb())).toContain('do not open wave 1 again');
+  });
+
+  it('says the console sends the wave-N text, and names that door WITHOUT a method too', () => {
+    // Wave 4 shipped the kickoff route and this wave widened it with
+    // `runId`/`wave`, so "A revive is briefed by hand" was false in this file
+    // one wave before anyone could act on it (D-1126). The path is spelled bare
+    // for exactly the reason `/api/sessions/:id/ensure` is, four sections up:
+    // it is the browser's own cookie-bearing call, it is not an `EXEMPT` key,
+    // and a method in front of it reds `auth-passkey.test.ts`'s THE SWEEP. The
+    // negative that enforces that is `spells the revive route WITHOUT a method`
+    // above — its regex is `/api/sessions`-wide, so it already covers this new
+    // path for free. THIS positive is what stops the mention being deleted to
+    // satisfy it, and the `programResumeKickoff` mention is what makes the
+    // template below checkable against its one source instead of trusted.
+    expect(rb()).toContain('/api/sessions/:id/kickoff');
+    expect(flat(rb())).toContain('the console sends exactly this text');
+    expect(flat(rb())).toContain('`programResumeKickoff`');
+  });
+
+  it('splits the terminal recovery in two — the id that can be handed over, and the row that cannot', () => {
+    // A program whose id can no longer be revived now has an operator door. A
+    // program RE-OPENED under a second id does not: that is a second run row,
+    // a second ledger the board renders, and rewriting `claimedBy` does not
+    // merge rows. Folding the two would send a coordinator to report a fix that
+    // does not exist for its actual case — which is worse than the old absolute,
+    // not better, because it fails at the moment of a real wedge.
+    expect(flat(rb())).toContain('a second run row is a second ledger, and no reassignment merges them');
+    expect(flat(rb())).toContain('naming the run and the id it claims');
+  });
+
+  it('points at the reconstruction drill as the terminal recovery, and at the snapshot first', () => {
+    // Order matters in the prose for the same reason it matters in
+    // `coord/db.ts:145-149`: the newest deploy snapshot is the restore path,
+    // and reconstruct is what is left when there is none.
+    expect(rb()).toContain('CoordStore.reconstruct');
+    expect(rb()).toContain('ccrc-backups');
+  });
+
+  it('tells a LIVE coordinator that the revive door is not its recovery for a dead worker', () => {
+    // The one real hazard of naming a revive door in this corpus: a
+    // coordinator reaching for it on a WORKER instead of re-dispatching.
+    expect(rb()).toContain('A dead WORKER is not this door');
+  });
+
+  it('never names the reclaim door — the release valve for a wedge the coordinator IS', () => {
+    // The fourth ungated door (D-1123), and the same accounting D16 gave the third:
+    // the EXEMPT entry above only PERMITS the omission; this is what FORBIDS the
+    // mention. Wider than the `resume.md` harvest below, which reads one reference
+    // file — a door named in `SKILL.md`, or in any of the other four references,
+    // passes that and fails here.
+    expect(allSkillText).not.toContain('/api/runs/:id/reclaim');
+  });
+
+  it('names none of the ungated operator doors — the list DERIVED, not typed', () => {
+    // `allSkillText` already forbids the break door corpus-wide; the others are
+    // exempt-by-omission with no positive prohibition anywhere, and a
+    // wedge-recovery runbook is the file most likely to reach for one.
+    //
+    // The list is HARVESTED from `coord-pause-route.test.ts`'s `UNGATED`, not
+    // typed here (review round 1, M7). A typed copy would have been the fourth
+    // projection-without-a-mechanism in this wave — the class D-1000 and
+    // D-1003 exist to delete — and it would fail exactly when it matters:
+    // F5 adds a FOURTH ungated door, and a hand-typed triple would go on
+    // passing while the new door drifted straight past this prohibition.
+    // `UNGATED` is the right source because that suite already pins it against
+    // `coord/routes.ts` in BOTH directions, so this reads a literal something
+    // else keeps honest rather than minting a rival copy.
+    const src = readFileSync(path.join(root, 'server/test/coord-pause-route.test.ts'), 'utf8');
+    const m = /UNGATED = new Set\(\[([^\]]*)\]\)/.exec(src);
+    expect(m, "coord-pause-route.test.ts no longer declares `UNGATED = new Set([...])` — this " +
+      'harvest is reading a shape that moved, and a silent empty list would pass everything').not.toBeNull();
+    const doors = [...(m as RegExpExecArray)[1]!.matchAll(/'([^']+)'/g)].map((d) => d[1]!);
+    expect(doors.length, 'the UNGATED harvest came back empty').toBeGreaterThanOrEqual(3);
+    for (const door of doors) {
+      expect(rb(), `resume.md names ${door} — a door the coordinator is not the one to walk through`)
+        .not.toContain(door);
+    }
+  });
+});
+
+// ── program-leverage wave 1 (F1): the trigger names the RUN RECORD ─────────
+//
+// `ccd ws-hold` hard-refuses a non-workspace, and `isMainCheckoutOf`
+// (`pwa/src/fleet/StartProgramSheet.tsx`) is how a PWA-started coordinator is
+// matched — `workspace === null` — so the hold arm of the old trigger described a
+// state half the coordinators this skill runs in can never reach. The WORKER's
+// identical-looking arm is CORRECT and stays: dispatch places `program:` holds on
+// worker workspaces. Not ALWAYS, though — a workspace-resident coordinator can be
+// given one by hand, and `ledger-template.md` still tells an orchestrator to. That
+// contradiction is D-1004, measured and deferred, and it is why the skill's own
+// prose was softened in review round 1 (M5) rather than left as an absolute. The
+// run record is the one fact both kinds of coordinator share, and `GET /api/runs`
+// is EXEMPT-BUT-AUTHENTICATED (`auth/gate.ts`, D-149) precisely so a cookieless
+// fleet-host session can read it. Anchors by SYMBOL — see M2 above.
+describe('the coordinator skill triggers and resumes on the RUN RECORD, not a hold', () => {
+  const fm = (): string => skill.slice(4, skill.indexOf('\n---', 4));
+
+  it('triggers on the run record and KEEPS the operator-designation arm', () => {
+    expect(fm()).toContain('the operator said so');
+    expect(fm()).toContain('`GET /api/runs` names this session id as the `claimedBy` of an open run');
+    // The mutation this exists for: restoring the hold arm. Scoped to the
+    // frontmatter, because the BODY legitimately discusses holds — the
+    // worker's, placed at dispatch — and a whole-file negative would forbid
+    // the true statements alongside the false one.
+    expect(fm(), 'the frontmatter trigger describes a hold again').not.toMatch(/hold reads/);
+  });
+
+  it('does not over-correct into asserting the coordinator is a main checkout', () => {
+    // The other way to get this wrong, and the reason the fix is a rewrite
+    // rather than a swap: an operator-designated coordinator MAY be
+    // workspace-resident (program-leverage's own is), so a trigger that says
+    // "main checkout" excludes the live case exactly as the hold arm excluded
+    // the PWA-started one. A regression guard on the fix, not a red-first
+    // driver — the pre-fix text did not say it either.
+    expect(fm()).not.toMatch(/main checkout/i);
+  });
+
+  it('states the resume constraint as the SESSION ID, not the workspace', () => {
+    expect(flat(skill)).toContain('and it is the SESSION ID, not the workspace');
+    // WHITESPACE-COLLAPSED like every sibling here, and for the reason `flat`
+    // exists at all: SKILL.md wraps mid-sentence, so a re-added `same
+    // workspace,\nsame id` reads as two lines and walks straight past a raw
+    // `toContain`. A negative that the mutation it names can evade is not a
+    // guard (review round 1, M1).
+    expect(flat(skill), 'the workspace framing is back').not.toContain('same workspace, same id');
+  });
+
+  it('states the wedge as a stop for THIS session, not as a door that does not exist', () => {
+    // The SKILL.md half of the same correction (D-1124), and the one the
+    // corpus-wide negative alone would leave unbacked. `flat()` for the reason
+    // every sibling in this describe uses it: SKILL.md hard-wraps mid-sentence,
+    // so a raw `toContain` on a sentence this long can only match by accident
+    // (review round 1, M1 — a negative its own mutation can evade is not a guard).
+    expect(flat(skill)).toContain('no call named in this corpus ever rewrites `claimedBy`');
+    expect(flat(skill)).toContain('Handing the program to a different session is an operator act');
+  });
+
+  it('does not count the hold among the things a fresh coordinator resumes from', () => {
+    // D-1002 — the third site, and the most load-bearing of the three: this is
+    // what a LIVE coordinator reads before deciding what it must write down.
+    expect(flat(skill)).toContain('The hold is NOT one of them');
+    expect(flat(skill), 'the three-things sentence lists the hold again')
+      .not.toMatch(/Everything you know lives in the program ledger[\s\S]{0,200}the workspace's hold/);
+  });
+
+  it('points a dying coordinator at the runbook, by the path the skill installs it at', () => {
+    expect(skill).toContain('`references/resume.md`');
   });
 });

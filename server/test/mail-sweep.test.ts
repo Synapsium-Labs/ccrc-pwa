@@ -10,8 +10,9 @@
 // controllable so the gate arithmetic is deterministic, while real timers
 // keep flowing underneath so sendPrompt's echo/submit polls actually settle.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import type { Deps } from '../src/server.js';
@@ -26,6 +27,9 @@ import type { PushPayload } from '../src/push.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
+import { MAIL_GATES } from '../../shared/api.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const ID = 'demo-coordinator';
 const UUID = 'a'.repeat(36);
@@ -41,6 +45,12 @@ const NOW = 1_800_000_000_000; // arbitrary fixed epoch ms, no relation to real 
 const MAIL_SWEEP_MS = 10_000;
 const MAIL_QUIET_MS = 60_000;
 const MAIL_COOLDOWN_MS = 120_000;
+// The COORDINATOR pair, mirrored the same way and for the same reason. Both
+// are deliberately a fraction of the two above: every test below asserts a
+// window BETWEEN them, so a mirror that drifted into agreement with the
+// worker pair would make those assertions unsatisfiable rather than wrong.
+const COORD_QUIET_MS = 15_000;
+const COORD_COOLDOWN_MS = 30_000;
 const MAIL_REPLAY_MS = 600_000;
 const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
@@ -73,6 +83,37 @@ const seedRegistry = (home: string, id: string, uuid = UUID): void => {
   mkdirSync(reg, { recursive: true });
   const fields = { wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid, started: '1' };
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+};
+
+/**
+ * A FRESH supervisor heartbeat — which is what makes a session with a dead pane
+ * `restarting` rather than `orphan`, and therefore recoverable.
+ *
+ * It matters because `seedRegistry` alone writes `started` with no stop stamp
+ * and no heartbeat, and `sessionLifecycle` reads that plus a dead pane as
+ * `orphan` — one of the three words D-309's refinement treats as gone for good.
+ * Every test below whose SUBJECT is "an ordinary gate holds indefinitely" means
+ * the recoverable case, so it says so here rather than relying on a fixture
+ * default that now decides the opposite.
+ *
+ * Epoch SECONDS, matching ccd's own `date +%s` writer and the `^[0-9]+$` guard
+ * on both readers — milliseconds here would land ~55 years in the future, which
+ * `sessionLifecycle`'s `>= 0` guard reads as NOT fresh, quietly giving `orphan`
+ * again and making this helper a no-op.
+ */
+const seedSupervised = (home: string, id: string, nowMs = NOW): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(path.join(reg, `${id}.supervised`), String(Math.floor(nowMs / 1000)));
+};
+
+/** The stop stamp `ws-archive` leaves behind (`_ws_unsupervise` writes it), so a
+ *  test can build the exact row the live fleet had: archived, pane gone, mail
+ *  still queued. `<epoch> <surface>`, seconds. */
+const seedStopped = (home: string, id: string, surface = 'ccd', nowMs = NOW): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(path.join(reg, `${id}.stopped`), `${Math.floor(nowMs / 1000)} ${surface}`);
 };
 
 /** A fresh, `done`, ask-free hookstate — the gate's own idle. Every field a
@@ -158,10 +199,15 @@ const queueTestDelivery = (coord: CoordStore, toId: string, envelope: string): {
   return { mailId: mail.id, id: delivery.id };
 };
 
-const deliveryRow = (coord: CoordStore, id: number):
-  { state: string; attempts: number; nextAttemptAt: number; lastError: string | null; rejectCode: string | null } =>
-  coord.db.prepare('SELECT state, attempts, nextAttemptAt, lastError, rejectCode FROM mail_deliveries WHERE id = ?')
-    .get(id) as { state: string; attempts: number; nextAttemptAt: number; lastError: string | null; rejectCode: string | null };
+interface DeliveryRow {
+  state: string; attempts: number; nextAttemptAt: number;
+  lastError: string | null; rejectCode: string | null;
+  lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
+}
+const deliveryRow = (coord: CoordStore, id: number): DeliveryRow =>
+  coord.db.prepare('SELECT state, attempts, nextAttemptAt, lastError, rejectCode, '
+    + 'lastGate, gateCount, gateSince, gateAt FROM mail_deliveries WHERE id = ?')
+    .get(id) as unknown as DeliveryRow;
 
 interface Harness { home: string; calls: string[][]; run: Runner }
 
@@ -1165,6 +1211,73 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(mailId).toEqual(expect.any(Number));
   });
 
+  it('a DELIVERED row STILL parks here — the lane must end, and the record says why (D-1069)', async () => {
+    // The park at this rung is load-bearing in a way the send-failure park is
+    // not, and an earlier draft of this change (D-1067) removed it before
+    // adversarial review caught what that costs. `store.ts`'s own
+    // OUTSTANDING_OR_ABANDONED_SQL comment draws the line the draft missed: a
+    // `rejected` row stays visible to a HUMAN while staying terminal for the
+    // LANE. Nothing else ends the lane for this row — `cancelOutstandingDeliveries`
+    // is runId-scoped, and MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays,
+    // which a row gated here never gets. Left unparked it stays due at the
+    // 15-minute ceiling for ever, and `_ws_slug_new` recycles a purged slug
+    // ("144 per project, recycled by ws-reap", ccd/ccd:3489), so the id can be
+    // re-minted for an unrelated workspace and the lane will type THIS envelope
+    // into it — `mail_deliveries` carries no recipient uuid, so nothing
+    // downstream can tell the two recipients apart.
+    const h = harness();
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      const before = deliveryRow(coord, id);
+      if (before.state === 'rejected') break;
+      // A delivered row is due only once BOTH clocks agree: its own backoff,
+      // and `dueDeliveries`' replay arm dated off `deliveredAt`.
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'the lane must END for a recipient the registry proves was purged').toBe('rejected');
+    // …and the record must not read as though the message never arrived. That
+    // half of the withdrawn D-1067 was right: `'recipient not in registry'`
+    // beside `rejectCode: 'undeliverable'` is false for a row that WAS
+    // delivered, and `lastError` is free text a maintainer greps.
+    expect(row.lastError, 'a delivered row says what actually happened to it')
+      .toBe('recipient purged after this message was delivered, and never acked');
+    expect(row.rejectCode).toBe('undeliverable');
+  });
+
+  it('the lane really is over once it parks — no further sweep touches the row (D-1069)', async () => {
+    // The point of the park is not the row's state word, it is that
+    // `dueDeliveries` stops selecting it. This is the assertion that would have
+    // gone red under D-1067, and the one that matters if the id is ever
+    // re-minted: a parked row cannot be typed into whoever next wears it.
+    const h = harness();
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      const before = deliveryRow(coord, id);
+      if (before.state === 'rejected') break;
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+    }
+    expect(deliveryRow(coord, id).state).toBe('rejected');
+    // Now the recipient's id EXISTS again — the re-minted-slug world exactly.
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const before = h.calls.length;
+    for (let i = 0; i < 4; i++) { advance(MAIL_REPLAY_MS + MAIL_BACKOFF_MAX_MS + 1_000); await w.sweepMail(); }
+    expect(coord.dueDeliveries(Date.now(), MAIL_REPLAY_MS).map((r) => r.id),
+      'a parked row is never selected again, whoever wears that id now').not.toContain(id);
+    expect(h.calls.length, 'and nothing is typed into the session now wearing it').toBe(before);
+  });
+
   it('a recipient LISTED but with one unreadable registry field keeps backing off, never parks, and NEVER ' +
      'ratchets attempts (registry ladder: the row is now DEGRADED, not dropped, and `countsAsAttempt: false`' +
      ' keeps this branch off the park-eligible counter entirely)', async () => {
@@ -1263,14 +1376,22 @@ describe('sweepMail: a dead recipient eventually parks (review finding 30)', () 
     expect(row.attempts, 'a whole-fleet read failure must never ratchet attempts').toBe(0);
   });
 
-  it('an ORDINARY gate (busy, on cooldown, no tmux session) never accrues an attempt', async () => {
-    // Only the registry-absent gate backs off; every other gate must stay
-    // free to hold indefinitely without ever parking a legitimately busy
-    // session's mail.
+  it('an ORDINARY gate (busy, on cooldown, a pane that may come back) never accrues an attempt', async () => {
+    // Only the STRUCTURAL gates back off — `registry-absent`, and since D-309's
+    // refinement `session-dead`. Every other gate must stay free to hold
+    // indefinitely without ever parking a legitimately busy session's mail.
+    //
+    // `seedSupervised` is what keeps this fixture's tmux-gone ORDINARY: with a
+    // fresh heartbeat the session reads `restarting`, which is the case D-309
+    // was written to protect. Without it the same fixture is `orphan`, and the
+    // test would be asserting the invariant about a gate that is no longer an
+    // instance of it — passing for the wrong reason, or failing for the right
+    // one, depending on which way the ladder moved.
     const h = harness({ hasSession: false });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
+    seedSupervised(h.home, ID);
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
@@ -1328,14 +1449,16 @@ describe('sweepMail: a tmux that did not answer is not a silent skip (D-309)', (
     expect(row.attempts).toBe(0);
   });
 
-  it('a recipient tmux PROVED gone stays the ordinary silent gate — queued, no error, no backoff', async () => {
-    // The `gone` half of the pair keeps its exact old meaning: the session is
-    // not up, the mail simply waits for it, and nothing is recorded — same as
-    // busy or on-cooldown. Only the CANNOT-ASK answer earns a lastError.
+  it('a recipient tmux proved gone but COMING BACK stays the ordinary silent gate — queued, no error, no backoff', async () => {
+    // The `gone` half of the pair keeps its old meaning for the case D-309 was
+    // written about: the session is not up RIGHT NOW, a supervisor is still
+    // watching it, the mail simply waits — same as busy or on-cooldown. Only
+    // the CANNOT-ASK answer earns a lastError.
     const h = harness({ hasSession: false, panes: HAPPY_PANES });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
     seedRegistry(h.home, ID);
+    seedSupervised(h.home, ID);   // fresh heartbeat -> `restarting`
     seedHookState(h.home, ID);
     seedLiveState(h.home);
     const { id } = queueTestDelivery(coord, ID, ENVELOPE);
@@ -1346,6 +1469,210 @@ describe('sweepMail: a tmux that did not answer is not a silent skip (D-309)', (
     expect(row.state).toBe('queued');
     expect(row.attempts).toBe(0);
     expect(row.lastError).toBeNull();
+    expect(row.lastGate).toBe('tmux-gone');
+  });
+});
+
+// D-1066 — D-309 REFINED, operator ruling 2026-08-30, on measured evidence rather than
+// argument: a delivery to an ARCHIVED workspace sat `queued` for 22.5 hours on
+// the live fleet and was refused 6,769 times, once per sweep, with no terminal
+// state and nothing telling the sender. D-792's gate columns are what made that
+// visible; this is the half that acts on it.
+//
+// The premise D-309 rests on — "the mail waits for the session to come back" —
+// is true for a swap, a restart or a reboot, and false for a session somebody
+// archived. `sessionLifecycle` already draws that line from facts the sweep
+// holds, so the rung asks "is it coming back", not "is the pane gone".
+describe('sweepMail: a recipient that is gone FOR GOOD parks (D-309 refined)', () => {
+  // `ws-archive` unsupervises through `_ws_unsupervise`, which writes the stop
+  // stamp — so an archived workspace reads `stopped`. This is the live row.
+  const seedArchived = (home: string, id: string): void => {
+    seedRegistry(home, id);
+    seedStopped(home, id);
+  };
+
+  it('records `session-dead`, not `tmux-gone` — the two are different operator actions', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate, 'the registry proves this one is not coming back').toBe('session-dead');
+  });
+
+  it('accrues an attempt and backs off — the registry-absent rung\'s exact terms', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.attempts, 'a proven-gone recipient counts toward the ceiling').toBe(1);
+    expect(row.lastError, 'greppable, and it names the lifecycle word').toBe('recipient session is stopped');
+    expect(row.state).toBe('queued');
+  });
+
+  it('parks `rejected(undeliverable)` at the ceiling instead of retrying for ever', async () => {
+    // THE WHOLE POINT. 6,769 refusals became a terminal state a sender can see.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    // Each pass must clear BOTH the lane's own cadence gate and this row's
+    // growing backoff, so advance by the largest of them.
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 1; i++) {
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'terminal at last').toBe('rejected');
+    expect(row.rejectCode).toBe('undeliverable');
+  });
+
+  it('an ORPHAN parks too — started once, no stop stamp, and nothing supervising it', async () => {
+    // The three dead words are not just `stopped`. An orphan's repair is a
+    // PROCESS (`sessionLifecycle`'s own docstring), and until someone runs one
+    // the mail has nowhere to go.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);   // started, no stop stamp, no heartbeat
+    seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate).toBe('session-dead');
+    expect(row.lastError).toBe('recipient session is orphan');
+  });
+
+  it('NEVER parks a row that was already DELIVERED — its own history disproves `undeliverable`', async () => {
+    // `MAIL_MAX_ATTEMPTS`'s own docstring: the budget "applies ONLY while a
+    // delivery's own `deliveredAt` is still null … The instant `deliveredAt` is
+    // set, this budget stops applying". Found by adversarial review before
+    // merge, with two measured consequences: a message that demonstrably
+    // reached the recipient recorded `undeliverable` (and `markAcked` then
+    // refuses it, so a revived session could never ack it), and — because
+    // `attempts` is one cumulative column that a delivered row leaves uncapped
+    // — a row already at 5 parking on its FIRST session-dead observation with
+    // no backoff at all.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, NOW);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 3; i++) {
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'a delivered row must never be called undeliverable by THIS budget').not.toBe('rejected');
+    // D-1068 CORRECTS this line. It used to read `.toBe(0)` — pinning the
+    // frozen counter as though a still clock were the point. `attempts` does
+    // ratchet on a delivered row (`MAIL_MAX_ATTEMPTS`'s own docstring says so,
+    // and it is what makes the backoff climb); what it never does is reach a
+    // park, which is the assertion above. The old form pinned the mechanism's
+    // shape and missed its effect.
+    expect(row.attempts, 'it ratchets — what it must never do is park').toBeGreaterThan(MAIL_MAX_ATTEMPTS);
+    // …while the console still learns what is holding it.
+    expect(row.lastGate).toBe('session-dead');
+  });
+
+  it('backs off on a CLIMBING schedule that reaches the ceiling — not a flat 30 s for ever (D-1068)', async () => {
+    // D-1066 shipped this arm with `countsAsAttempt: false`, reasoning that a
+    // delivered row must not ratchet toward a park it does not own. Right about
+    // the park, wrong about the clock: `attempts` is ALSO what the backoff step
+    // is computed from, so a frozen counter pins every step at
+    // MAIL_BACKOFF_BASE_MS and `Math.min` never binds. Measured on the shipped
+    // build, against a recipient the registry proves is never coming back:
+    // 40 re-examinations in 30 minutes, and no ceiling of any kind — because
+    // MAIL_REPLAY_MAX_ATTEMPTS counts SUCCESSFUL replays, and a row gated here
+    // never gets one. That is the same every-tick-for-ever shape D-1066 itself
+    // was written to end, merely wearing a gate label.
+    //
+    // `MAIL_MAX_ATTEMPTS`'s own docstring had already said what to do instead:
+    // "`attempts` keeps counting on a delivered row too … just without a
+    // ceiling that turns a failing SEND into a park" — and that a delivered
+    // row's uncapped counter is precisely what makes MAIL_BACKOFF_MAX_MS
+    // reachable rather than decorative. The registry-absent rung above has
+    // always done it this way; this one now matches.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedArchived(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.markDelivered(id, Date.now());
+
+    const steps: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const before = deliveryRow(coord, id);
+      advance(Math.max(before.nextAttemptAt - Date.now(), 0) + MAIL_REPLAY_MS + 1_000);
+      await w.sweepMail();
+      // The sweep just ran at `Date.now()`, so what `backOff` wrote is
+      // `now + step` — this reads the step back out, not a wall clock.
+      steps.push(deliveryRow(coord, id).nextAttemptAt - Date.now());
+    }
+    expect(steps.slice(0, 4), 'it doubles from the base')
+      .toEqual([MAIL_BACKOFF_BASE_MS, MAIL_BACKOFF_BASE_MS * 2, MAIL_BACKOFF_BASE_MS * 4,
+                MAIL_BACKOFF_BASE_MS * 8]);
+    expect(steps.at(-1), 'and settles AT the ceiling rather than at 30 s for ever')
+      .toBe(MAIL_BACKOFF_MAX_MS);
+    expect(deliveryRow(coord, id).state, 'all of it without ever parking').toBe('delivered');
+  });
+
+  it('a session merely RESTARTING never parks, however long it takes', async () => {
+    // The case D-309 exists for, and the one this refinement must not break: a
+    // supervisor is watching, so the pane is expected back and the mail waits.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 2; i++) {
+      // Re-stamp each pass: a supervisor really is running, so the heartbeat
+      // stays fresh. A stale stamp would decay to `orphan`, which is a
+      // DIFFERENT fact and has its own test above.
+      seedSupervised(h.home, ID, Date.now());
+      advance(PAST_SWEEP_MS);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, id);
+    expect(row.state, 'still waiting, exactly as D-309 intended').toBe('queued');
+    expect(row.attempts, 'a recoverable gate is not a send failure').toBe(0);
+    expect(row.lastGate).toBe('tmux-gone');
+  });
+
+  it('an UNMEASURABLE lifecycle never parks — doubt is not evidence', async () => {
+    // The rule the registry rung draws one gate up, held here too: a read that
+    // could not measure must never park a live session's mail. `.started`
+    // listed but unreadable is a LIFECYCLE_FIELD, so the answer is
+    // `unmeasurable` rather than a guess at `orphan`.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    // Seed BEFORE the watcher primes, then hand the degraded IO to the deps —
+    // `unreadableField` RETURNS a FleetIO, it does not mutate a home, and the
+    // first cut of this test called it for effect and asserted about a fixture
+    // that was never degraded at all. It passed as `orphan` and would have gone
+    // on "proving" an invariant it never exercised.
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { w } = await primedWatcher(h, coord, { io: unreadableField(ID, 'started') });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 2; i++) { advance(PAST_SWEEP_MS); await w.sweepMail(); }
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.attempts, 'an unmeasured lifecycle must never accrue').toBe(0);
+    expect(row.lastGate).toBe('tmux-gone');
   });
 });
 
@@ -1656,6 +1983,63 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     expect(sent).toEqual([]);
   });
 
+  // D-1040 (program-leverage wave 4). Both arms of one rule: a ROLE is not a
+  // session id, and `tellSender` used to know that about exactly one role.
+  //
+  // Wave 4 queues the first RUN-LESS system mail in this tree — the program
+  // kickoff, sent before run 1 exists because opening run 1 is the first thing
+  // it asks its recipient to do. That broke the old expression in both
+  // directions at once, which is why the sender vocabulary and this resolution
+  // are one change:
+  //
+  //   * sent as `'coordinator'`, it would reach `resolveCoordinator(null)`,
+  //     whose answer is whichever program happens to be the SINGLE active one —
+  //     so an unrelated program's coordinator would be told a kickoff it never
+  //     sent, for a session it has nothing to do with, and could do nothing
+  //     about. "Exactly one active program" is the ordinary steady state: a
+  //     `programs` row only leaves `'active'` when a close route retires it.
+  //   * sent as `'operator'` — the honest sender, and the word
+  //     `run_events.causedBy` has carried since Build 4 — it would fall through
+  //     to the else branch and be pushed at AS IF it were a session id, the
+  //     exact failure the resolution's own comment forbids.
+  it('never pushes a role AS a session: a run-less operator mail notifies nobody', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    // An ACTIVE program with a real claimant, so the wrong-coordinator arm has
+    // something to resolve TO. A fixture with no program could not tell the
+    // guard working from `resolveCoordinator` merely having nothing to say —
+    // the blind spot that made the sibling test above pass for its own reason.
+    openRunClaimedBy(coord, 'demo-the-coordinator');
+    queueFrom(coord, 'operator', null);
+
+    await w.sweepMail();
+    expect(sent.map((p) => p.sessionId)).not.toContain('operator');
+    expect(sent.map((p) => p.sessionId)).not.toContain('demo-the-coordinator');
+    expect(sent).toEqual([]);
+  });
+
+  it('will not name a coordinator for a mail that names no run, even when exactly one program is active', async () => {
+    const h = harness({ panes: BLOCKED_PANES });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h, ID);
+    openRunClaimedBy(coord, 'demo-the-coordinator');
+    queueFrom(coord, 'coordinator', null);
+
+    // `resolveCoordinator(null)` WOULD answer here — that is what it is for, on
+    // the addressing side, where `toId:'coordinator'` with no run is the
+    // documented recovery for a retired program. As SENDER attribution it is a
+    // guess: a mail that belongs to no run cannot be inferred to belong to the
+    // one program that happens to be open. Degrade, never guess — the same
+    // sentence the resolution already carried, applied to both its arms.
+    await w.sweepMail();
+    expect(sent).toEqual([]);
+  });
+
   // THE DEVIATION, pinned in both directions: the park lands in the DURABLE
   // FEED and leaves `run_events` alone.
   it('the park writes a durable feed row and NOT a run_events row', async () => {
@@ -1683,5 +2067,480 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
     // writer of `run_events`.
     const eventsAfter = coord.db.prepare('SELECT COUNT(*) AS n FROM run_events').get() as { n: number };
     expect(eventsAfter.n).toBe(eventsBefore.n);
+  });
+});
+
+// ── D-792: the gate a refusal happened at, recorded ───────────────────────
+//
+// The defect these cover, stated once: `sweepMail`'s ladder has ten refusal
+// paths and two of them recorded anything. That silence is CORRECT as a
+// scheduling decision — an ordinary gate holds indefinitely for a busy session
+// and must never approach `MAIL_MAX_ATTEMPTS` — but it was implemented as "do
+// not write anything down", and a delivery then sat `delivered`/`attempts: 0`
+// for eleven hours, refused on the order of 4,000 times, while `GET /api/peers`
+// called the session `deliverable: 'yes'` and the run showed `unreadMail: 1`.
+//
+// Every assertion below is about OBSERVATION. The scheduling invariants — no
+// attempt, no backoff, no park — are asserted alongside, because a fix that
+// bought visibility by changing when mail is delivered would be worse than the
+// defect.
+describe('sweepMail: what refused this delivery (D-792)', () => {
+  it('records the gate, counts consecutive refusals, and still never accrues an attempt', async () => {
+    // The exact fixture of the invariant test above ("an ORDINARY gate never
+    // accrues an attempt"), now asked the question that had no answer: WHICH
+    // gate, and for how long.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedSupervised(h.home, ID);   // `restarting`, so the gate stays ordinary
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    for (let i = 0; i < 3; i++) { advance(PAST_SWEEP_MS); await w.sweepMail(); }
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate, 'tmux said the pane is gone').toBe('tmux-gone');
+    expect(row.gateCount, 'three sweeps, three refusals at the same gate').toBe(3);
+    expect(row.gateSince).not.toBeNull();
+    expect(row.gateAt).not.toBeNull();
+    // …and the scheduling contract is exactly as it was.
+    expect(row.state).toBe('queued');
+    expect(row.attempts, 'an ordinary gate is not a send failure').toBe(0);
+  });
+
+  it('gateSince holds still while the gate repeats, and gateAt keeps moving', async () => {
+    // The pair is not redundant. A sweep that has STOPPED leaves `gateSince`
+    // reading exactly like one still refusing every 10s; `now - gateAt` is the
+    // only thing that tells them apart, so `gateAt` must advance on each
+    // refusal while `gateSince` does not.
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedSupervised(h.home, ID);
+    seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const first = deliveryRow(coord, id);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    const second = deliveryRow(coord, id);
+
+    expect(second.gateSince, 'the same gate is still holding it').toBe(first.gateSince);
+    expect(second.gateAt!, 'but we observed it again just now').toBeGreaterThan(first.gateAt!);
+    expect(second.gateCount).toBe(2);
+  });
+
+  it('a delivery that SENDS carries no stale gate', async () => {
+    // A row that moved must not still claim something is holding it — the same
+    // lie in the other direction. The clear rides in the same UPDATE as the
+    // state change, so the ack-race guard covers it too.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    // One refusal first, so there is genuinely a gate on the row to clear.
+    coord.noteGate(id, 'not-quiet', Date.now(), false, null);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-quiet');
+
+    advance(PAST_SWEEP_MS);
+    await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('delivered');
+    expect(row.lastGate, 'a delivered row is not being refused by anything').toBeNull();
+    expect(row.gateCount).toBe(0);
+    expect(row.gateSince).toBeNull();
+    expect(row.gateAt).toBeNull();
+  });
+
+  it('a CHANGE of gate restarts the count and the clock', () => {
+    // "How long has THIS gate been holding it", not "how long has it been stuck
+    // at anything" — the question an operator actually asks, and the reason
+    // `noteGate` takes `same` rather than deriving it from the row it is about
+    // to overwrite.
+    const h = harness();
+    const coord = store(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const t0 = 1_000_000;
+    coord.noteGate(id, 'not-idle', t0, false, null);
+    coord.noteGate(id, 'not-idle', t0 + 10_000, true, t0);
+    const held = deliveryRow(coord, id);
+    expect(held.gateCount).toBe(2);
+    expect(held.gateSince).toBe(t0);
+
+    coord.noteGate(id, 'cooldown', t0 + 20_000, false, held.gateSince);
+    const moved = deliveryRow(coord, id);
+    expect(moved.lastGate).toBe('cooldown');
+    expect(moved.gateCount, 'a different gate starts its own count').toBe(1);
+    expect(moved.gateSince, 'and its own clock').toBe(t0 + 20_000);
+  });
+
+  it('writes no scheduling column — nextAttemptAt is untouched by a gate', () => {
+    // The non-goal, as a mechanism. If `noteGate` ever moves the retry clock it
+    // has become a scheduling input, which is the one thing this slice must not
+    // become.
+    const h = harness();
+    const coord = store(h.home);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const before = deliveryRow(coord, id);
+    coord.noteGate(id, 'no-config-dir', Date.now(), false, null);
+    const after = deliveryRow(coord, id);
+    expect(after.nextAttemptAt).toBe(before.nextAttemptAt);
+    expect(after.attempts).toBe(before.attempts);
+    expect(after.state).toBe(before.state);
+    expect(after.lastError).toBe(before.lastError);
+  });
+});
+
+// D-792, THE TWO GUARDS THE COLUMNS' OWN PR STILL OWED (design §8, items 4/5).
+//
+// The behavioural half shipped with the columns: a gate that stops recording, a
+// count that never resets, a `gateSince` that always does, a delivered row that
+// keeps its gate, and a `noteGate` that touches `nextAttemptAt` are all already
+// red in the describes above. These are the STRUCTURAL half.
+//
+// BOTH OF THESE WERE WEAKER IN THEIR FIRST CUT THAN THEIR OWN it()-TITLES SAID,
+// and the review that found it measured the gap rather than arguing it:
+//
+//   - the totality guard compared the VOCABULARY against the CALL SITES, which
+//     catches an orphan member and catches deleting a call — but not a refusal
+//     path added with a bare `continue`, which is the ORIGINAL D-792 BUG. The
+//     mutant `if (d.toId === ' never') continue;` at the top of the loop left
+//     all 57 tests green.
+//   - the non-goal guard scanned SQL only. The gate columns reach the scheduler
+//     as ordinary JavaScript: `dueDeliveries` SELECTs `lastGate, gateSince` into
+//     locals, so `if (d.gateSince !== null && now - d.gateSince > 86_400_000)
+//     continue;` makes a gate column a scheduling input without touching a
+//     single line of SQL — and that mutant, too, left 57 green.
+//
+// Both are fixed below by measuring the thing the title claims. Text scans
+// still, with `single-definition.test.ts`'s stated limit: they catch the version
+// a reasonable person writes, not every version a determined one could.
+describe('D-792 structure: the ladder is total, and nothing schedules on a gate', () => {
+  const srcRoot = path.join(here, '..', 'src');
+  const watchSrc = readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8');
+
+  /** Comments blanked to SPACES rather than removed, so every index into the
+   *  result still addresses the same character of the original. The brace walk
+   *  below needs that; a `.replace(…, '')` would slide every offset. */
+  const blankComments = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, (m) => ' '.repeat(m.length))
+     .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length));
+
+  /** The body of `for (const d of due) { … }` — the delivery ladder itself,
+   *  found by matching braces rather than by line number, so the guard does not
+   *  quietly stop measuring the day someone inserts a method above it. */
+  const dueLoop = (): { body: string; offset: number } => {
+    const src = blankComments(watchSrc);
+    const head = src.indexOf('for (const d of due) {');
+    expect(head, 'the due loop was not found — this guard is measuring nothing').toBeGreaterThan(-1);
+    const open = src.indexOf('{', head);
+    let depth = 0, i = open;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) break;
+    }
+    return { body: src.slice(open + 1, i), offset: open + 1 };
+  };
+
+  it('records a gate at every refusal path the ladder has', () => {
+    // The vocabulary and the call sites, compared in BOTH directions: one
+    // catches a member with no call site (a gate nothing can ever report), the
+    // other a call site naming a token the union does not have. TypeScript
+    // catches the second too — but this suite is not `tsc`, and a guard that
+    // only holds when someone runs the other tool is the "comment, not
+    // mechanism" this repo bans.
+    const ladder = blankComments(watchSrc);
+    const called = new Set([...ladder.matchAll(/\bgated\(\s*\w+\s*,\s*'([a-z-]+)'/g)].map((x) => x[1]!));
+    // The one call site that picks its gate at runtime rather than naming a
+    // literal — `registry-unmeasurable` vs `registry-absent` is a MEASUREMENT,
+    // and folding the two would be the overloaded-null this deviation split
+    // `no-pane`/`no-config-dir` to avoid. Matched on its own shape so the scan
+    // does not have to pretend it is a literal.
+    for (const t of ladder.matchAll(/\bgated\(\s*\w+\s*,\s*\w+\s*\?\s*'([a-z-]+)'\s*:\s*'([a-z-]+)'/g)) {
+      called.add(t[1]!); called.add(t[2]!);
+    }
+    expect([...MAIL_GATES].filter((g) => !called.has(g)),
+      'a MailGate member with no call site in sweepMail — the wire can carry it and nothing can ever write it').toEqual([]);
+    expect([...called].filter((g) => !(MAIL_GATES as readonly string[]).includes(g)),
+      'sweepMail records a gate the wire has no member for').toEqual([]);
+  });
+
+  it('leaves the ladder no SILENT exit: every `continue` before the send names a gate', () => {
+    // THE GUARD THE PREVIOUS ONE ONLY CLAIMED TO BE. A refusal path added with
+    // a bare `continue` is precisely what D-792 was opened about — `MailGate`'s
+    // own docstring: the sweep refused on the order of 4,000 times and "nothing
+    // anywhere named the gate".
+    //
+    // The rule is the ladder's own shape rather than a list of line numbers:
+    // THE WHOLE LADDER PRECEDES THE SEND. Every `continue` above the
+    // `sendPrompt` call is a refusal and must name what refused it; the three
+    // below it are post-send fates (delivered, `enter-ignored` parked, replay
+    // ceiling) whose outcome is recorded in `state`/`lastError`, where a gate
+    // would be the wrong place for it. No exemption list to keep current, and a
+    // new rung added anywhere in the ladder is covered the day it is written.
+    const { body } = dueLoop();
+    const send = body.indexOf('sendPrompt(');
+    expect(send, 'no sendPrompt in the due loop — the before/after rule has nothing to divide').toBeGreaterThan(-1);
+
+    const ungated: string[] = [];
+    for (const m of body.matchAll(/\bcontinue\s*;/g)) {
+      if (m.index! > send) continue;              // post-send fate, not a refusal
+      // Walk back to the brace that opens the block this `continue` sits in,
+      // and require a `gated(` between the two. Scoping it to the enclosing
+      // block is what stops a NEW ungated `continue` borrowing the `gated(` of
+      // the rung above it.
+      let depth = 0, i = m.index! - 1;
+      for (; i >= 0; i--) {
+        if (body[i] === '}') depth++;
+        else if (body[i] === '{') { if (depth === 0) break; depth--; }
+      }
+      const block = body.slice(i + 1, m.index!);
+      if (!block.includes('gated(')) {
+        const line = body.slice(Math.max(0, m.index! - 90), m.index! + 10).split('\n').pop()!.trim();
+        ungated.push(line);
+      }
+    }
+    expect(ungated,
+      'a refusal path in sweepMail exits without naming a gate — that is the D-792 bug itself, returning')
+      .toEqual([]);
+  });
+
+  it('reads no gate column in any WHERE, ORDER BY, GROUP BY or HAVING', () => {
+    // THE NON-GOAL, half one: the SQL. A gate column may be WRITTEN (a SET) and
+    // SELECTED (the console has to get it somehow); what it may never be is a
+    // filter, an ordering or a grouping, because each of those makes the lane's
+    // own diagnostic decide what the lane does next.
+    //
+    // Per-statement, not per-file: the whole-file text has a WHERE somewhere
+    // before nearly every column mention, so a file-wide regex would report
+    // everything. Each `.prepare(...)` argument is extracted by matching
+    // parens, then cut at its first scheduling clause; only the TAIL is scanned.
+    const COLS = ['lastGate', 'gateCount', 'gateSince', 'gateAt'];
+    const bad: string[] = [];
+    let statements = 0;
+
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) return walk(f);
+        return e.name.endsWith('.ts') ? [f] : [];
+      });
+
+    for (const file of walk(srcRoot)) {
+      const text = blankComments(readFileSync(file, 'utf8'));
+      let i = text.indexOf('.prepare(');
+      while (i !== -1) {
+        let depth = 0, j = i + '.prepare'.length;
+        for (; j < text.length; j++) {
+          if (text[j] === '(') depth++;
+          else if (text[j] === ')' && --depth === 0) break;
+        }
+        statements++;
+        // Quote characters and concatenation dropped, so a statement split
+        // across a dozen `+`-joined literals reads as one string.
+        const sql = text.slice(i, j).replace(/['"`+\n]/g, ' ');
+        const cut = /\b(WHERE|ORDER\s+BY|GROUP\s+BY|HAVING)\b/i.exec(sql);
+        if (cut) {
+          const tail = sql.slice(cut.index);
+          for (const c of COLS) {
+            if (new RegExp(`\\b${c}\\b`).test(tail)) {
+              bad.push(`${path.relative(srcRoot, file)}: '${c}' in a ${cut[1]!.toUpperCase()}`);
+            }
+          }
+        }
+        i = text.indexOf('.prepare(', j);
+      }
+    }
+    // A scan that silently reaches ZERO statements passes for ever and guards
+    // nothing — the author's own "tests pin shape, not effect" failure mode.
+    // The floor is deliberately loose: it asserts the extractor still WORKS,
+    // not how much SQL the tree happens to contain this month.
+    expect(statements, 'the .prepare() extractor found no SQL at all — this guard is inert').toBeGreaterThan(20);
+    expect(bad, 'a gate column has become a scheduling input — the one thing D-792 forbids').toEqual([]);
+  });
+
+  it('reads no gate column in the SWEEP itself — the shortest route bypasses SQL entirely', () => {
+    // THE NON-GOAL, half two, and the half the first cut missed. `dueDeliveries`
+    // SELECTs `lastGate, gateSince` into ordinary JavaScript locals, so the
+    // cheapest way to make a gate column a scheduling input never touches a
+    // query at all: `if (d.gateSince !== null && now - d.gateSince > DAY)
+    // continue;` inside the ladder does it in one line, and the SQL scan above
+    // cannot see it.
+    //
+    // So: in watch.ts the four names may appear ONLY inside the `gated` helper,
+    // which is the single reader those two fields were SELECTed for. Every other
+    // mention is a scheduling read until proven otherwise, and proving otherwise
+    // means moving it into the helper or arguing it in review — which is the
+    // point.
+    const src = blankComments(watchSrc);
+    const open = src.indexOf('const gated = (');
+    expect(open, 'the `gated` helper was not found in watch.ts — this guard is measuring nothing').toBeGreaterThan(-1);
+    // The helper ends at the `};` that closes its arrow body.
+    const end = src.indexOf('};', open) + 2;
+    expect(end).toBeGreaterThan(open);
+
+    const outside: string[] = [];
+    for (const c of ['lastGate', 'gateCount', 'gateSince', 'gateAt']) {
+      for (const m of src.matchAll(new RegExp(`\\b${c}\\b`, 'g'))) {
+        if (m.index! >= open && m.index! < end) continue;   // inside the helper
+        outside.push(`${c} at offset ${m.index}: ${src.slice(Math.max(0, m.index! - 60), m.index! + 30).split('\n').pop()!.trim()}`);
+      }
+    }
+    expect(outside,
+      'watch.ts reads a gate column outside the `gated` helper — a diagnostic has become an input to the lane it diagnoses')
+      .toEqual([]);
+  });
+});
+
+// A coordinator idling AT a wave boundary is doing what its own contract clause
+// 7 mandates — end the turn and wait — so the worker-sized floor is a delay with
+// nothing behind it, on the one session every other session is waiting for.
+// Every test here pins a window BETWEEN the two thresholds; the worker half is
+// the guard's mutation direction and the half a careless fixture omits.
+describe('sweepMail: the coordinator quiet window', () => {
+  /** Make ID the `claimedBy` of a NON-terminal run — the one fact the sweep reads. */
+  const seedCoordinatorRun = (coord: CoordStore): void => {
+    coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+      wave: 6, waveOf: 8, claimedBy: ID });
+  };
+
+  /** …and make ID the WORKER of someone else's run instead. */
+  const seedWorkerRun = (coord: CoordStore): void => {
+    const r = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+      wave: 6, waveOf: 8, claimedBy: 'some-other-coordinator' }) as { id: number };
+    coord.markDispatched(r.id, ID, 'demo', 'ws/demo', false, NOW);
+  };
+
+  it('delivers to a COORDINATOR inside MAIL_QUIET_MS, once COORD_QUIET_MS has passed', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    const quietFor = COORD_QUIET_MS + 1_000;
+    // The fixture is IN the window this wave opens — asserted, not assumed, so a
+    // constant that drifted could not quietly make this test about something else.
+    expect(quietFor).toBeGreaterThan(COORD_QUIET_MS);
+    expect(quietFor).toBeLessThan(MAIL_QUIET_MS);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - quietFor });
+    seedCoordinatorRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
+
+  it('does NOT deliver to a WORKER in that same window — the mutation direction', async () => {
+    // Byte-identical to the test above but for the ONE fact: this session is the
+    // run's `sessionId`, not its `claimedBy`. Without this half, a guard that
+    // handed the narrow window to everybody would pass.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - (COORD_QUIET_MS + 1_000) });
+    seedWorkerRun(coord);
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+  });
+
+  it('still holds a COORDINATOR below COORD_QUIET_MS', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - (COORD_QUIET_MS - 5_000) });
+    seedCoordinatorRun(coord);
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+  });
+
+  it('does NOT give the narrow window to a session whose only claimed run is TERMINAL', async () => {
+    // The reclaim trap, at the lane rather than at the store: this pins that the
+    // sweep reads the store's answer and not a looser question of its own.
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - (COORD_QUIET_MS + 1_000) });
+    const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
+      wave: 1, waveOf: 8, claimedBy: ID }) as { id: number };
+    coord.advance(r.id, 'dispatched', 'operator');
+    coord.advance(r.id, 'closing', 'operator');
+    coord.advance(r.id, 'done', 'operator');
+    // The premise, established IN FULL (D-1225). The claimedBy half was checked;
+    // the "just not a live one" half — which is the half the whole case turns on
+    // — was left to the three `advance` calls above, unmeasured. They are not
+    // guaranteed to land: `advance` answers a refusal for a transition the table
+    // forbids, and a refusal here is silent.
+    expect(coord.run(r.id)!.claimedBy).toBe(ID);
+    expect(coord.run(r.id)!.state, 'the run never reached a terminal state — ' +
+      'this case is no longer about a TERMINAL run').toBe('done');
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    // …and gated for the RIGHT reason. A bare "nothing was sent" is satisfied by
+    // any gate at all — a draft, a pane that never went idle, a cooldown — so the
+    // reason is what says the WORKER window was the one applied. (The sibling
+    // case above states its gate for the same reason.)
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+  });
+
+  it('puts a COORDINATOR back on the lane after COORD_COOLDOWN_MS', async () => {
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+    seedCoordinatorRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+    // Past the coordinator cooldown and short of the worker one — the window,
+    // asserted rather than assumed, exactly as above.
+    const waited = COORD_COOLDOWN_MS + 1_000;
+    expect(waited).toBeGreaterThan(COORD_COOLDOWN_MS);
+    expect(waited).toBeLessThan(MAIL_COOLDOWN_MS);
+    expect(waited).toBeGreaterThan(PAST_SWEEP_MS);   // …and past the lane's own re-sweep gate
+    advance(waited);
+    seedLiveState(h.home, { statusUpdatedAt: Date.now() - MAIL_QUIET_MS - 1_000 });
+    queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+  });
+
+  it('holds a WORKER in that same cooldown window — the other mutation direction', async () => {
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home, { statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+    seedWorkerRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+    advance(COORD_COOLDOWN_MS + 1_000);
+    seedLiveState(h.home, { statusUpdatedAt: Date.now() - MAIL_QUIET_MS - 1_000 });
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
   });
 });

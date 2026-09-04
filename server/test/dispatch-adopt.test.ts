@@ -28,7 +28,7 @@ import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
 import type { CcdArgv } from '../src/ccdargv.js';
-import type { CcrcConfig } from '../src/config.js';
+import { configDirFor, type CcrcConfig } from '../src/config.js';
 import { readRegistry } from '../src/registry.js';
 import { localIO } from '../src/io.js';
 import { SPAWN_NOT_RECORDED, isSpawnVerdict, type RunSummary } from '../../shared/api.js';
@@ -124,7 +124,14 @@ const harness = async (cfg: HarnessCfg) => {
   const io = cfg.afterListed === false
     ? { ...localIO, readdir: async (p: string) => (sawWsAdd ? null : localIO.readdir(p)) }
     : localIO;
-  const deps: DispatchRunDeps = { ...base, io, coord, runCcd } as DispatchRunDeps;
+  const deps: DispatchRunDeps = {
+    ...base, io, coord, runCcd,
+    // The one join `configDirFor` owns, supplied through dispatch's
+    // consumer-declared port (wave 2, F2). NOTE: the `as` assertion below does
+    // NOT make this optional — a missing property would pass the compiler here
+    // and throw at the call, which is why it is written out.
+    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w),
+  } as DispatchRunDeps;
 
   return {
     coord,

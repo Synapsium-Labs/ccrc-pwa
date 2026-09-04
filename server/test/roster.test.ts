@@ -113,6 +113,38 @@ describe('parseRoster', () => {
     try { parseRoster(bad); } catch (e) { expect((e as RosterError).message).toMatch(pattern); expect((e as RosterError).remedy).toBeTruthy(); }
   });
 
+  // `hidden` — the operator's "this entry is plumbing, not an account".
+  // OPTIONAL on purpose: the field is additive, so every roster written before
+  // it existed has to keep parsing with the same meaning it always had.
+  it('defaults hidden to false when the key is absent, so a roster predating the field is unchanged', () => {
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] });
+    expect(r.byId.get('claude')!.hidden).toBe(false);
+  });
+
+  it('parses hidden:true — the operator declaring an entry names a binary, not an account', () => {
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'binary', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: false, hue: 'cyan', telemetry: 'anthropic', hidden: true },
+      { id: 'work', label: 'work', configDirSuffix: '.work', exec: { kind: 'generated' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] });
+    expect(r.byId.get('claude')!.hidden).toBe(true);
+    expect(r.byId.get('work')!.hidden).toBe(false);
+  });
+
+  // Leniency here would be the loudest possible mistake: `hidden` is the one
+  // field whose truthy value REMOVES an account from every surface that lists
+  // one, so `"false"` — a truthy string — must be refused, not coerced.
+  it('refuses a non-boolean hidden rather than letting a truthy string erase an account', () => {
+    expect(() => parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'c', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic', hidden: 'false' },
+    ] })).toThrow(/non-boolean hidden/);
+  });
+
   it('warns but does not fail on an unknown field, naming the offending key', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

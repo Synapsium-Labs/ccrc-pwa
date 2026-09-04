@@ -131,9 +131,13 @@ time, never stored.
 `201 {numbers, floor}` — a contiguous block, appended to the flat ledger log
 BEFORE the database commits, so on any doubt a number is SKIPPED, never
 reissued (gaps cost nothing; a reissue once cost 394 rewritten D-ref lines
-across 30 files). `409 not-seeded` means the hourly floor sweep has not yet
-measured this project's plans: report it, do not invent. The coordinator
-allocates the program's whole block at run-open (clause 10) and names it in
+across 30 files). `409 not-seeded` no longer means "wait for the sweep": the
+first allocation on a project seeds the floor itself, measuring that project's
+own docs/superpowers plans and specs inline, and then proceeds. The refusal now
+means one of two things, and the `detail` says which — the documents were read
+and name no `D-<n>` at all, so there is nothing to seed from; or they could not
+be measured, so nothing was proven either way. Report it, do not invent. The
+coordinator allocates the program's whole block at run-open (clause 10) and names it in
 the brief, so a wave in flight never calls the allocator at all. A worker
 that finds an unplanned deviation with no server reachable writes
 `D-TBD-<slug>` and reports — the tree's own red suite refuses to let a

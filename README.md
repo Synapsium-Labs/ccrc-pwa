@@ -525,11 +525,22 @@ procedure and the operator runbooks (lost device, corrupt secret, disarming) are
 step 10 of
 [`docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md`](docs/superpowers/specs/2026-08-19-stage2-vm-gate-runbook.md).
 
+<!-- ORDER-PINNED PASSAGE. `server/test/box-token-census.test.ts` reads the number
+     words in the paragraph below and asserts them IN SEQUENCE, so this paragraph
+     states the TOTAL first and the breakdown second. Rewriting it the other way
+     round is a correct sentence and a red suite: move the expectation in that file
+     in the same change. It also asserts that every exempt-but-authenticated GET is
+     named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
+
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the ten machine lanes the fleet
-host posts to (nine box-token-gated coordination routes plus `/api/notify`,
-which still tolerates an absent token for one deploy generation — none of them
-has a cookie jar), the login and passkey-assertion doors themselves,
+liveness gate reads the shipped sha out of it), the nineteen machine lanes the
+fleet host reaches (eighteen box-token-consulting coordination routes plus
+`/api/notify`, which still tolerates an absent token for one deploy generation —
+the caller is `curl` inside a Claude Code session, with no cookie jar, though the
+exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
+`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
+the token, which is how a coordinator reads its own wave ledger from the fleet
+host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
@@ -1128,7 +1139,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **Both skills ship to every rostered account's config dir.** The
 coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, eleven clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twelve clauses pinned by
 `server/test/worker-skill.test.ts`), which carries no `references/` of its own
 and points at the coordinator's — so it must land *beside* it, never instead of
 it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
@@ -1312,7 +1323,7 @@ replacement for them, and a lost `coord.db` reconstructs from them.
 the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its ten
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), eleven clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twelve clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1396,14 +1407,21 @@ question | answer | status | artifact` — through `POST /api/mail`, attributed
 forgery-proofness) and capped (an 8 KiB body, typed rejection codes, every
 rejection itself recorded, win or lose). A watcher lane (`MAIL_SWEEP_MS`,
 10 s) walks queued deliveries and, once a recipient has been idle-quiet for
-`MAIL_QUIET_MS` (60 s) with no dialog or ask pending, injects the fenced
+`MAIL_QUIET_MS` (60 s) with no dialog or ask pending — or `COORD_QUIET_MS`
+(15 s) when the recipient is a COORDINATOR, i.e. the `claimedBy` of a
+non-terminal run, which its own contract requires to be sitting idle at a wave
+boundary — injects the fenced
 envelope through `sendPrompt`'s full proof discipline — never re-rendered,
-replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`,
-and again every `MAIL_REPLAY_MS`) until the recipient POSTs
+replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`, or
+`COORD_COOLDOWN_MS` for a coordinator, and again every `MAIL_REPLAY_MS`) until
+the recipient POSTs
 `/api/mail/:id/ack`.
 
-`/api/mail` (and its ack route), the run routes (`POST /api/runs`,
-`/:id/dispatch`, `/:id/close`, `/:id/advance`), `GET /api/mail?to=<id>` and
+`/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
+`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`) — but **not** the
+operator doors `/api/runs/:id/abandon` and `/api/runs/:id/reclaim`, which carry
+no box token by design (D-282), any more than `/api/coord/pause` or
+`/api/claims/:id/break` do — `GET /api/mail?to=<id>` and
 `/api/notify` (ccd's swap hook) all require the same **box token** — one
 shared secret per box, read from a file, deliberately never an env var
 (`deploy/ccrc.service` ships no `EnvironmentFile=`, and this build does not
@@ -1420,9 +1438,12 @@ design note argued they were no worse than the pre-existing, also-open
 inverted the intent (`ccd ws-add`, an injected `/clear` and
 `ws-release`/`ws-archive` are strictly more dangerous than inserting a mail
 row, which required the token all along) and closed it: every coordinator
-write route now fails the same way the mail pair always has. None of these
-six routes tolerates a missing token — a request with none is `401
-unauthenticated`, full stop. `/api/notify` alone accepts a request with
+write route that is a MACHINE lane now fails the same way the mail pair always
+has. None of the lanes enumerated above tolerates a missing token — a request
+with none is `401 unauthenticated`, full stop. (The operator doors excepted just
+above are the other half of that sentence, and they are not an oversight in it:
+they are reachable from a phone precisely because the party a wedge locks out is
+the party holding the box token.) `/api/notify` alone accepts a request with
 **no** token header for one deploy generation, logged as `legacy` so the
 swap hook cannot go dark mid-rollout; that tolerance comes out in the deploy
 *after* the one that ships `notify.sh`'s token read — it is a rollout
@@ -1436,10 +1457,17 @@ because that exact placeholder is committed to this public repo.
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
 terminal) and `maxSessionsPerDay` (default 12 — dispatches inside a rolling
 24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. No route in
-this PR changes them; until PR J adds one, an operator edits the row
-directly: `sqlite3 ~/.ccrc/coord.db "UPDATE coordinator_state SET
-maxConcurrentWorkers=…, maxSessionsPerDay=… WHERE id=1"`. Pause is a
+`POST /api/runs/:id/dispatch` before anything else is touched. Both are an
+operator control: `GET`/`POST /api/coord/caps` reads them beside their current
+usage and writes either or both, bounds-checked, and the `/runs` board renders
+the dial. (For a stretch of this build's history there was no route at all and
+an operator edited the row with `sqlite3` — hence `CoordStore.setCaps` having no
+caller in the server for as long as it did.) Like every other same-origin PWA
+write the caps route carries **no box token**; unlike the operator doors named
+above (`/api/coord/pause`, `/api/runs/:id/abandon`, `/api/claims/:id/break`,
+`/api/runs/:id/reclaim`) it is not a release valve, so nothing may rely on it to
+open a wedge.
+Pause is a
 **file**, on ccd's own `*-disabled`-marker convention, read from `$REG`
 (the fleet host's session registry, `~/.cc-sessions`) before every dispatch:
 `touch $REG/coordinator-paused` refuses every dispatch with `409
@@ -1463,6 +1491,175 @@ server-side stops that. The single recorded chokepoint is a contract the
 coordinator's skill honors, not a wall the OS enforces — the same "identity
 is attribution, not authentication" stance the mail bus already states for
 who a message claims to be from.
+
+### Graph layer (graphify)
+
+**graphify** keeps one AST-derived knowledge graph fresh per git tree on the fleet host.
+`ccrc install`/`update` provision it in six role-gated steps (a server box has no rostered wrapper
+homes to graph, so all six skip there): an **engine**, a ccrc-owned venv at
+`~/.ccrc/graphify-venv` (`pip install graphifyy==$GRAPHIFY_PIN`, the single-definition pin in
+`ccd/ccrc`, resolved everywhere by absolute path rather than `command -v` — a shared box's
+`/usr/local/bin/graphify` can be a root-owned symlink an unprivileged install can neither update nor
+remove); a **skill**, assembled from the *installed package* — unlike the coordinator/worker
+skills, it has no vendored tree — into every rostered account's skills directory; the **read-rule
+removal** (below), which takes back what D-1243 wrote into each rostered home's `CLAUDE.md`; the
+**default noise list**, ccrc's own footprint converged to
+`~/.ccrc/graph-noise/_default.list`; **excludes**, `graphify-out/` and `.graphifyignore` converged
+into each tree's common-dir `info/exclude`; and **legacy hooks off** — the old per-repo graphify git
+hooks are removed if wholly graphify-generated, left in place and reported if they chain other
+content. (`server/test/ccrc-install.test.ts` pins that sequence, and
+`ccrc-install-graphify.test.ts` pins this paragraph's count against it — the enumeration went stale
+for two deviations before that guard existed.)
+
+**Reading the graph, which is a separate problem from keeping it fresh.** Everything above serves
+the WRITE path, and for three deviations nothing served the read path at all: measured across the
+five rostered homes, the rule "for codebase questions, run `graphify query` first" appeared in
+**none** of them. D-1243's answer was graphify's own packaged block, `always_on/claude-md.md`,
+appended to every rostered home's config-dir `CLAUDE.md` between ccrc's markers — and **D-1245
+retired it**, because it was wrong on two counts. That block is written for a PROJECT file ("This
+project has a knowledge graph at graphify-out/"), so account-wide it asserted that of every project
+the account opens, including the trees the sweep refuses; and the file is the *operator's*, not
+ccrc's, which is the sole reason every one of D-1244's six data-loss classes existed at all.
+Measured over the one day since it was deployed (2026-09-01, measured 2026-09-02): 109
+`query`/`path`/`explain` calls across 4 corpora, 103 of them in the one repository whose *project*
+`CLAUDE.md` had carried graphify's block since July, and zero in ccrc-pwa — the busiest project on
+the fleet, with five fresh graphs. (The block's own week-shaped window is a different row of the
+spec's table — 265 calls across 11 corpora over the last 7 days, ccrc-pwa **zero** in both.)
+`_inst_graph_always_on_off` now takes the block back, reusing D-1244's own hardened census:
+whole-line markers, exactly one well-ordered pair or the file is left alone, symlinks resolved (and
+SKIPPED when they cannot be), the file's own mode preserved, backed up before every write. Anything
+else is *left in place; remove by hand*, counted, and reported as a degraded step. It is
+`_inst_graph_hooks_off`'s shape and stays in the tree the same way. What replaced it — starting with
+the `SessionStart` card that tells a session to run `graphify query` before it greps — is below.
+
+**What replaced it: four mechanisms, each in an artifact ccrc owns outright.** The rule D-1245 states
+is that the read side lives only where ccrc owns the file it is written in, and that its effect is
+*measured* rather than asserted.
+
+- **The graph card (R1).** On `SessionStart` — every source, `compact` included, because compaction is
+  exactly when a session loses what it knew — `ccd/session-hook.sh` prints one JSON object on stdout:
+  `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}`. The card is
+  measured for *that session's tree* (`cwd` from the payload, `$REG/<id>.workdir` as the fallback):
+  node count, the commit the graph was built at, how that commit stands to `HEAD`, and the
+  engine/pin pair — sessions were measured querying 0.9.9 graphs with an unversioned July build, and
+  that drift is otherwise invisible until a query fails strangely. Every clause is omitted rather than
+  guessed when its read does not answer. Freshness is **content first, then ancestry** (D-1368,
+  D-1353). CONTENT decides first: a graph whose `built^{tree}` equals `HEAD^{tree}` describes this
+  tree exactly, so it is `fresh` however its commit stands to `HEAD` — a squash merge rewrites the
+  commit and keeps every byte — and that is printed as `fresh — same content as HEAD` when the
+  built commit is not `HEAD` itself, a qualifier on the state rather than a state of its own, so a
+  reader can tell "built here" from "built elsewhere, same bytes" while still branching on the one
+  word. Only when the trees DIFFER does ancestry decide, and there it is **ancestry, not
+  distance**: the card says `fresh`, `N commits behind HEAD`, `not an ancestor of HEAD` — the graph
+  was built on a tree this session cannot reach, so it describes code the session does not have —
+  or `freshness unmeasured`, which is said out loud rather than left silent, because a card that
+  names a sha and then says nothing about it reads as neutral. No `graph.json` prints **nothing**, except that when
+  `~/.ccrc/graph-sweep.json` carries a row for the tree the sweep's own refusal reason is printed
+  instead, clipped to 400 characters (it is repo-controlled text off an engine's stderr).
+  `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
+  by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
+  because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
+  reads. **Stdout stays empty on every other event** — on `PreToolUse` a stdout JSON is a permission
+  decision — and that is pinned in both directions by `server/test/session-hook.test.ts`.
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+  workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
+  `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
+  and every other word makes a query answer a lead to verify by opening the file it names — and never
+  runs `graphify update` or any build in the workspace, because a session-side build holds the worker
+  at `working` for minutes and wedges the next dispatch `worker-busy`.
+- **The engine on `PATH` (R3).** `_inst_graphify_engine` converges `~/.local/bin/graphify` onto
+  `~/.ccrc/graphify-venv/bin/graphify`: written when absent, left alone when it already resolves into
+  the venv, and backed up (`.pre-ccrc-<UTC>`, `cmd_wrappers`' own discipline) and repointed by an
+  atomic rename when what is there is a pip console-script shim — matched **by content**, through a
+  symlink as readily as directly, so the `pipx` layout is a shim like any other (D-1351). Anything
+  else is **refused with a remedy** and counted as a degraded step: a hand-written launcher is the
+  operator's, and a link this box cannot resolve is *unmeasured*, never *unequal* (D-1348, D-1352).
+  `/usr/local/bin/graphify` is never touched. Doctor's own `graphify-path` check owns the same
+  question from the other side and **FAILs** (it does not warn) when nothing on `PATH` answers
+  `graphify`, when there is no pinned engine to compare against, or when `command -v graphify`
+  resolves anywhere but the venv — the wrong build's answers are indistinguishable from the right
+  build's. A box with no usable `realpath` **SKIPs**: the two halves must agree that an unresolvable
+  pair is unmeasured, or a box neither of them could measure gets two different verdicts (D-1350).
+- **The number (R4).** The hook increments `graphQueries` in the hookstate it already writes, on a
+  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`. Builds do not count — this
+  measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
+  `resume` (D-1248) and kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader
+  on the server side and keeps **`null` (no field — an older hook) apart from `0` (measured none)**; it
+  rides `FleetSession.graphQueries` additively (no `FLEET_PROTO` bump) and renders as a `graph N` chip
+  on the fleet card and on the run board's worker row, both reading it through the single tolerant
+  reader `graphReadCount` in `shared/api.ts` — an older server omits the field, and a row that reported
+  nothing must not paint as one that reported (D-1251). The server never reads
+  `~/.cache/graphify-queries.log`: it is not under the agent whitelist and this design adds no read
+  root.
+
+The `PreToolUse` speed bump — one deny on a session's first `Grep` in a tree with a fresh graph and a
+`graphQueries` of 0 — was considered and **declined**: `PreToolUse` fires for subagents, which never
+saw the card; a deny path would be the first thing in the hook that can wedge a turn; and the counter
+above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
+**And that number is a sample somebody takes, not a series the tree keeps** (D-1365). `graphQueries`
+is live state only: the hook rewrites it in `~/.cc-sessions/<id>.hookstate.json` on every event and
+the server carries it onto `FleetSession` and the `~/.ccrc/state-cache.json` snapshot — nothing
+writes it to `coord.db`, to a run row or to any log, and it resets on every `SessionStart` that is
+not a `resume`, which for a dispatched worker means per-wave (dispatch `/clear`s the worker from
+wave 2 on). So *"revisit with one week of R4 data"* names an act somebody performs: a week or more
+after this branch deploys, read the `graph N` chips across the live fleet on one dated day — how
+many sessions carry a chip, how many read `graph 0`, and the total — and record that reading in
+`docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s `## Deviations found`, the
+way §0 of the design recorded the retired block's own effect. Until that entry exists the revisit
+has no number, and a decline whose condition nobody can evaluate is re-derived rather than revisited.
+
+**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
+`OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
+own flock, and writes a rolling census to `~/.ccrc/graph-sweep.json` (last 10 passes). A pass status
+is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`; each tree's row
+carries an outcome (`never-built · fresh · stale-rebuilt · refused-no-exclude · skipped-busy ·
+skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink · failed`) and a
+reason. A tree with a live, working session on it is deferred (the idle gate, tmux-free — read off
+the session registry and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape
+hatch. `touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
+operator who needs the fleet host quiet.
+
+**Noise lists.** Two sources, unioned, and they are not the same kind of thing.
+`~/.ccrc/graph-noise/_default.list` is **ccrc's own**, converged by `ccrc install` and shipped on
+the agent deploy lane; it carries only ccrc's own footprint (`.claude/`, `.remember/`,
+`.superpowers/`, `CLAUDE.local.md`), because the artifacts ccrc's skills write into every repo a
+session touches were otherwise held against that repo by the corpus guard and refused its build for
+ever. `~/.ccrc/graph-noise/<repo>.list` beside it is the **operator's**, and ccrc never writes it.
+One path-glob per line; together they become that tree's `.graphifyignore` for the sweep's own
+builds.
+
+The distinction between them decides every case where they would act differently: **a `<repo>.list`
+is an instruction about one repo; the default is hygiene applied to repos that never asked.** So —
+
+- A `!` (negation) line in **either** refuses the build outright. It would re-include something the
+  real `.gitignore` excludes, and the sweep skips the tree rather than silently building past it.
+  This one rule is symmetric: a negation is not an instruction anyone is entitled to.
+- A tree that **commits its own `.graphifyignore`** refuses only when a `<repo>.list` exists (an
+  instruction that cannot be honoured). With just the default in play the sweep stands down and
+  measures anyway — otherwise shipping a default to every box would make that refusal universal.
+- A **default** pattern is **withheld** when git says it would hide tracked content
+  (`git ls-files -c -i -X`), and what was withheld is logged with the remedy named. `.graphifyignore`
+  is a pure path filter that knows nothing about git, so without this a repo that commits `.claude/`
+  or `.superpowers/` content would lose tracked nodes from its corpus — invisibly to the corpus
+  guard, which measures corpus *minus* tracked — and graphify's shrink guard would then refuse the
+  write, wedging the tree at `refused-shrink` on every pass. An **operator** pattern is honoured as
+  written, tracked content included: that is the escape hatch, and the only one.
+
+`ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
+per-home skill drift, per-tree excludes, the census's last pass, and free space on the
+graph root (`~/worktrees`, falling back to `~/projects`) — the same 2 GiB FAIL / 10 GiB WARN floors
+`disk` uses over `$HOME`.
+
+**Reclaiming space (O7).** A graph is regenerable and disposable: `rm -rf <repo>/graphify-out` loses
+nothing durable, and the next sweep pass rebuilds it cold (`shared/lifecycle.ts` carries this as the
+project-graph-store class's own ruling).
+
+**Bumping the pin.** Edit `GRAPHIFY_PIN` in `ccd/ccrc`, run `ccrc install` (or `update`) on the fleet
+box, and expect every tree to re-stamp stale on the next sweep pass — a full-fleet rebuild over
+roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). Re-verify the
+shrink-refusal literal the build discriminator greps for (the comment at its check in
+`ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
+the message has already moved once between minor versions.
 
 ---
 

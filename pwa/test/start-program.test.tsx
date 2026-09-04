@@ -33,8 +33,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import type { CoordStatus, FleetSession } from '../../shared/api';
-import { StartProgramSheet, kickoff, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { programKickoff, readyVerdict } from '../../shared/api';
+import type {
+  CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
+} from '../../shared/api';
+import { StartProgramSheet, openRunVerdict, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -46,7 +50,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: null, name: null, title: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
   // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
   // the correct value here, not merely the one that compiles.
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
@@ -61,6 +65,11 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
 });
+
+/** The measured-and-empty answer — "the board has answered, nothing is open".
+ *  Spelled once so the 45 pre-existing render sites all say the same thing, and
+ *  so the four fixtures that mean something else stand out on the page. */
+const NO_OPEN_RUNS: ReadonlySet<string> = new Set<string>();
 
 const projected = (wrapper = 'claude', score = 5): { accounts: never[]; projected: { wrapper: string; score: number }; roster: never[] } =>
   ({ accounts: [], projected: { wrapper, score }, roster: [] });
@@ -79,22 +88,33 @@ async function fillAndPick(slug = 'build9-demo', title = 'Build 9 demo', rowName
 // sheet mounted once with a fixed `open` prop can never reach "closed while
 // an attempt is outstanding".
 function OpenHarness({
-  createSession, prompt, fleet,
+  createSession, queueKickoff, fleet,
 }: {
   createSession: (b: { wrapper: string; project: string; workdir?: string }) => Promise<void>;
-  prompt: (id: string, text: string) => Promise<void>;
+  queueKickoff: (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
   fleet: FleetStore;
 }): ReactNode {
   const [open, setOpen] = useState(true);
   return (
     <>
       <button type="button" onClick={() => setOpen(false)}>close sheet</button>
+      {/* Wave-4 fix round, MAJOR 1: reopening is the only way to SEE the state a
+          superseded retry may have re-planted. `Sheet` is a vaul `Drawer.Portal`
+          with no `forceMount`, so a closed sheet renders no children at all and
+          a `queryByText` against the closed sheet would report absence whether
+          the guard held or not. */}
+      <button type="button" onClick={() => setOpen(true)}>reopen sheet</button>
+      {/* `openRunProjects` is passed directly rather than threaded through this
+          harness's own props: every case that uses it is about the supersession
+          guard, not about the run board, and the measured-and-empty answer is
+          what all of them want. */}
       <StartProgramSheet
         open={open}
         onClose={() => setOpen(false)}
+        openRunProjects={NO_OPEN_RUNS}
         fleet={fleet}
         createSession={createSession}
-        prompt={prompt}
+        queueKickoff={queueKickoff}
         loadProjects={async () => ({ roots: [], projects: [proj()] })}
       />
     </>
@@ -102,15 +122,15 @@ function OpenHarness({
 }
 
 describe('kickoff — the one standing template, copied from the brief verbatim', () => {
-  // A LITERAL comparison, not `kickoff(...)` compared against itself — the
-  // sheet's own tests below call `kickoff()` to build their expectation too,
+  // A LITERAL comparison, not `programKickoff(...)` compared against itself — the
+  // sheet's own tests below call `programKickoff()` to build their expectation too,
   // which pins that the sheet USES the constant but cannot catch the
   // constant's own text drifting away from the brief (measured: a one-word
   // change inside the template still passed every other test in this file).
   // This is the one place the brief's exact code block is checked against
   // what actually ships.
   it('matches the brief\'s kickoff code block byte for byte', () => {
-    expect(kickoff('build4-conversation-and-controls', 'Build 4: conversation and controls')).toBe(
+    expect(programKickoff('build4-conversation-and-controls', 'Build 4: conversation and controls')).toBe(
       'You are the coordinator for program `build4-conversation-and-controls` (Build 4: conversation and controls).\n'
       + 'Its ledger is `docs/superpowers/programs/build4-conversation-and-controls.md`.\n'
       + 'Run the ccrc-coordinator skill and open the run for wave 1.',
@@ -157,6 +177,39 @@ describe('startedSessionFor — the wait arm, directly (B-2)', () => {
   });
 });
 
+// THREE answers, and the third is the whole reason this is a function rather
+// than a `.has()` at the call site. It follows `startedSessionFor`'s precedent
+// in the same file (`StartProgramSheet.tsx`'s own docstring on it): the
+// `unmeasured` answer is reachable through the component only via a prop
+// fixture, and a pure predicate is the cheapest place to pin all three arms
+// against each other.
+describe('openRunVerdict — the run-board arm, directly (D-1130)', () => {
+  it('answers unmeasured for null — NOT MEASURED is never folded into "no open run"', () => {
+    expect(openRunVerdict(null, 'ccrc-pwa')).toBe('unmeasured');
+  });
+
+  it('answers open-run for a project the measured set names', () => {
+    expect(openRunVerdict(new Set(['ccrc-pwa']), 'ccrc-pwa')).toBe('open-run');
+  });
+
+  it('answers clear for a measured set that does not name it — an EMPTY set included', () => {
+    expect(openRunVerdict(new Set(['other-repo']), 'ccrc-pwa')).toBe('clear');
+    expect(openRunVerdict(new Set<string>(), 'ccrc-pwa')).toBe('clear');
+  });
+
+  // The join between `RunSummary.project` and `ProjectRow.name` is CONVENTION:
+  // `POST /api/runs` validates the field as a non-empty string and nothing more
+  // (`server/src/coord/routes.ts:889-897`), so a run can name a string this
+  // picker never lists. A prefix or case-folded match would refuse a real
+  // project on the strength of a lookalike; an exact one means the sheet simply
+  // has nothing to say about that run, which is the honest answer.
+  it('matches EXACTLY — never by prefix, never case-folded', () => {
+    expect(openRunVerdict(new Set(['ccrc-pwa-brisk-harbor']), 'ccrc-pwa')).toBe('clear');
+    expect(openRunVerdict(new Set(['CCRC-PWA']), 'ccrc-pwa')).toBe('clear');
+    expect(openRunVerdict(new Set(['ccrc']), 'ccrc-pwa')).toBe('clear');
+  });
+});
+
 describe('StartProgramSheet', () => {
   // Coordinator review B-4: nothing pinned `useProjectedHome(open)`. The one
   // test that could have caught its removal was widened to exclude
@@ -168,7 +221,7 @@ describe('StartProgramSheet', () => {
   it('does not poll /api/accounts while the door is closed — the open gate is real (B-4)', async () => {
     const accounts = vi.spyOn(api, 'accounts').mockResolvedValue(projected());
 
-    const { rerender } = render(<StartProgramSheet open={false} onClose={() => {}} fleet={makeStore()}
+    const { rerender } = render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open={false} onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
     // Give the effect (and any immediate `load()`) a chance to run.
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
@@ -176,14 +229,14 @@ describe('StartProgramSheet', () => {
 
     // Opening it is what asks — otherwise this would pass against a hook that
     // never polls at all.
-    rerender(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    rerender(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
     await waitFor(() => expect(accounts).toHaveBeenCalled());
   });
 
   it('collects slug, title and project, and refuses an empty slug', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: 'Build 9 demo' } });
@@ -198,7 +251,7 @@ describe('StartProgramSheet', () => {
 
   it('names the account it will place into BEFORE the tap (the projection, not a guess)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2', 40));
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -209,7 +262,7 @@ describe('StartProgramSheet', () => {
 
   it('refuses with copy when the projection is null: nothing is placeable (D-284 (was D-B4-11))', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -221,7 +274,7 @@ describe('StartProgramSheet', () => {
   it('renders the in-flight state on the session create — the one long call', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn(() => new Promise<void>(() => {})); // never resolves
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={createSession}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -240,7 +293,7 @@ describe('StartProgramSheet', () => {
   // takes ~200ms; a tap inside that window must not be a dead tap.
   it('renders a disabled "checking placement…" control while the projection has not answered yet — no dead tap (Important 1)', async () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {})); // never resolves — the pending window
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -258,10 +311,10 @@ describe('StartProgramSheet', () => {
   it('navigates to the new session on success — matched by wrapper+project once a LATER fleet frame shows it (D-291)', async () => {
     history.pushState(null, '', '/runs');
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -271,31 +324,31 @@ describe('StartProgramSheet', () => {
     // No match yet — the create resolved, but nothing has appeared in the
     // fleet snapshot. Navigation must wait for that, not the create alone.
     expect(location.pathname).toBe('/runs');
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
 
     act(() => { store.setState({ sessions: [sess()] }); });
 
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
-    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(queueKickoff).toHaveBeenCalledTimes(1);
   });
 
   it('says in one line that the run row arrives later, from the coordinator', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
 
-    const note = await screen.findByText(/the run row arrives later/i);
+    const note = await screen.findByText(/the run row arrives after that/i);
     expect(note.textContent).toMatch(/coordinator/i);
   });
 
-  it('sends ONE kickoff prompt naming the slug, the ledger path and the skill', async () => {
+  it('QUEUES one kickoff, naming the program — not the prose', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -303,31 +356,113 @@ describe('StartProgramSheet', () => {
     await screen.findByRole('button', { name: /^starting…$/i });
     act(() => { store.setState({ sessions: [sess()] }); });
 
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    const [id, text] = prompt.mock.calls[0] as [string, string];
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    const [id, body] = queueKickoff.mock.calls[0] as [string, { slug: string; title: string }];
     expect(id).toBe('claude-ccrc-pwa');
-    // Exact equality against the exported constant — the text has one home.
-    expect(text).toBe(kickoff('build9-demo', 'Build 9 demo'));
-    expect(text).toContain('build9-demo');
-    expect(text).toContain('docs/superpowers/programs/build9-demo.md');
-    expect(text).toContain('ccrc-coordinator');
+    expect(body).toEqual({ slug: 'build9-demo', title: 'Build 9 demo' });
+    // Program-leverage wave 4: the SENTENCE is no longer this sheet's to send.
+    // The server composes it from `programKickoff`, and `server/test/
+    // coord-kickoff.test.ts` pins the queued body against both that constant and
+    // the three literal sentences. What is pinned HERE is that the sheet hands
+    // over the program and nothing else — a `text` key reaching this route would
+    // hand back the narrowing that makes it safer than `/prompt`.
+    expect(Object.keys(body).sort()).toEqual(['slug', 'title']);
   });
 
-  // Review fix round 1, Minor 5: `finish()`'s own `.catch` arm — deleting it
-  // loses the toast AND silently kills navigation (the rejection short-
-  // circuits `.then`, and `void` swallows it), with the rest of the suite
-  // staying green because every other test's injected `prompt` resolves.
-  it('a prompt failure toasts once, non-blocking — the session is real, so it still navigates', async () => {
+  // Review fix round 1, Minor 5, rewritten for program-leverage wave 4.
+  //
+  // The old test pinned a TOAST and a navigation-anyway: right for an injection,
+  // where the session is real either way and the operator could finish the
+  // kickoff by hand from inside it. Wrong for a queue. A failed queue leaves
+  // NOTHING durable — no mail row, no delivery, nothing the lane will retry — so
+  // walking the operator into a session whose coordinator will never be briefed
+  // hides the one fact they need. Its old fixture is gone too: a 502
+  // `{stderr:'ccd: prompt: pane busy'}` is a `sendPrompt` shape, and queueing
+  // never touches a pane, so it could not arise on this path at all.
+  it('a failed QUEUE holds the sheet, says nothing was sent, and does NOT navigate', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockRejectedValue(
-      new ApiError(502, { ok: false, stderr: 'ccd: prompt: pane busy' }),
+    const queueKickoff = vi.fn().mockRejectedValue(
+      new ApiError(501, { ok: false, error: 'not-configured' }),
     );
     const store = makeStore();
     render(
       <>
-        <StartProgramSheet open onClose={() => {}} fleet={store}
-          createSession={createSession} prompt={prompt}
+        <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+          createSession={createSession} queueKickoff={queueKickoff}
+          loadProjects={async () => ({ roots: [], projects: [proj()] })} />
+        <ToastHost />
+      </>,
+    );
+
+    await fillAndPick();
+    // PUT THE ROUTER SOMEWHERE THAT IS NOT THE TARGET, explicitly. Nothing in
+    // this file resets it between tests, and the first draft of this test merely
+    // captured `location.pathname` and compared against it — which was
+    // `/s/claude-ccrc-pwa` by the time this test ran, so a mutant that navigated
+    // on the failure arm navigated to the path already there and the assertion
+    // reported green. MEASURED: that mutant survived 64/64. A fixture that
+    // cannot reproduce the topology proves nothing — wave 2's lesson, wave 3's
+    // lesson, and now this wave's.
+    act(() => { history.pushState(null, '', '/runs'); });
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+
+    expect(await screen.findByText(/could not be queued/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing was sent/i)).toBeInTheDocument();
+    // The code becomes a sentence, not a slug: `API_ERROR_TEXT` owns that.
+    expect(screen.getByText(/does not run coordination/i)).toBeInTheDocument();
+    // …and it STAYS on screen. Not a toast: `Toast.tsx` drops every toast once
+    // the 401 auth-lost signal is up, which is exactly the failure most likely
+    // to eat a kickoff on an armed box.
+    expect(location.pathname).toBe('/runs');
+  });
+
+  it('offers a retry that re-posts to the SAME measured session id', async () => {
+    // The addressing question was settled once, by `startedSessionFor` under
+    // D-291/D-292's whole apparatus. A retry that re-measured the fleet could
+    // land the kickoff somewhere else entirely, so it re-uses the id verbatim —
+    // and this is the pin that says so.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockResolvedValueOnce(undefined);
+    const store = makeStore();
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // The fleet has MOVED under the sheet — a different session is now the live
+    // main checkout for this project. A retry that re-measured would find it.
+    act(() => { store.setState({ sessions: [sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' })] }); });
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+    expect(queueKickoff.mock.calls[1]).toEqual([
+      'claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+    ]);
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+  });
+
+  it('the failure survives a dropped toast — it is sheet state, not a notification', async () => {
+    // `Toast.tsx:40` returns before minting an item once `isAuthLost()` is up,
+    // and `api.ts` raises that signal on any 401 BEFORE it throws. So on an
+    // armed box the old toast-only shape said nothing at all about a kickoff
+    // that never landed. Nothing covered that before this wave.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn().mockRejectedValue(new ApiError(401, { ok: false, error: 'unauthenticated' }));
+    const store = makeStore();
+    render(
+      <>
+        <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+          createSession={async () => {}} queueKickoff={queueKickoff}
           loadProjects={async () => ({ roots: [], projects: [proj()] })} />
         <ToastHost />
       </>,
@@ -338,11 +473,78 @@ describe('StartProgramSheet', () => {
     await screen.findByRole('button', { name: /^starting…$/i });
     act(() => { store.setState({ sessions: [sess()] }); });
 
-    expect(await screen.findByText(/kickoff prompt failed to send/i)).toBeInTheDocument();
-    expect(screen.getByText(/ccd: prompt: pane busy/i)).toBeInTheDocument();
-    // The session was really created — the failure is only that the nudge
-    // never landed, so the sheet still takes the operator there.
-    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+    expect(await screen.findByText(/could not be queued/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /queue the kickoff again/i })).toBeInTheDocument();
+  });
+
+  // WAVE-4 REVIEW, MINOR 3 (D-1120). RENDERED TEXT, not slug survival — the
+  // review asked for exactly that, and it is the difference between pinning
+  // that a map exists and pinning that the operator can read the screen.
+  it('a 404 says what the registry actually answered — and stops claiming the session is running', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn().mockRejectedValue(
+      new ApiError(404, { ok: false, error: 'unknown-session' }),
+    );
+    const store = makeStore();
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+
+    const block = await screen.findByText(/could not be queued/i);
+    expect(block.textContent).toMatch(/no longer in the registry/i);
+    // The code never reaches the operator as itself…
+    expect(block.textContent).not.toMatch(/unknown-session/);
+    // …and the sentence stops asserting the ONE fact the registry just denied.
+    // A 404 means the row is gone; "<id> is running" was a claim the sheet had
+    // no measurement for, printed directly above a retry that cannot succeed.
+    expect(block.textContent).not.toMatch(/is running/i);
+  });
+
+  // WAVE-4 REVIEW, MINOR 4 (D-1121). The same class this file already fixed
+  // once, for `timedOut` (review M3): a sentence about ONE attempt's target,
+  // left rendered above a Start button aimed somewhere else. `kickoffFailed` is
+  // worse than `timedOut` was, because it carries an ACT — the door navigates
+  // to the previous attempt's session, stranding the create the operator just
+  // started, and it is `program-start-error` red directly above the control
+  // they are looking at.
+  it('a NEW attempt retires the previous attempt’s failure door', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockRejectedValue(
+      new ApiError(501, { ok: false, error: 'not-configured' }),
+    );
+    const store = makeStore();
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={createSession} queueKickoff={queueKickoff}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj(), proj({ name: 'other-repo', workdir: '/home/u/projects/other-repo' })],
+      })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // The operator moves on: a different program in a DIFFERENT project — the
+    // one shape that reaches a live Start button while A's door is up, since
+    // re-picking A's own project renders the D-292 refusal instead of the
+    // confirm fragment.
+    await fillAndPick('other-program', 'A different program', /other-repo/i);
+    fireEvent.click(await screen.findByRole('button', { name: /^start other-program/i }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText(/could not be queued/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /queue the kickoff again/i })).toBeNull();
+    // The retry is retired, not merely hidden: the door is the only control
+    // that could re-post for A, and B owns the sheet now.
+    expect(screen.queryByRole('button', { name: /open it without a brief/i })).toBeNull();
   });
 
   it('never calls POST /api/runs', async () => {
@@ -354,7 +556,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     // Deliberately no createSession/prompt injection — the REAL api.* default
     // props, so this exercises the production composition, not a fake.
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -371,12 +573,15 @@ describe('StartProgramSheet', () => {
     // with a third, unrelated call mixed in.
     expect(urls).toHaveLength(2);
     expect(urls).toContain('/api/sessions');
-    expect(urls).toContain('/api/sessions/claude-ccrc-pwa/prompt');
+    expect(urls).toContain('/api/sessions/claude-ccrc-pwa/kickoff');
+    // …and NOT the injection route it replaced. `toContain` alone would stay
+    // green if the sheet called both.
+    expect(urls).not.toContain('/api/sessions/claude-ccrc-pwa/prompt');
   });
 
   it('never claims the ledger exists — it names the path the operator committed', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
@@ -390,7 +595,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ coord: { pause: 'set', mail: 'clear' }, coordFrameSeen: true }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -413,7 +618,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ coord: { pause: 'unmeasurable', mail: 'clear' }, coordFrameSeen: true }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -431,7 +636,7 @@ describe('StartProgramSheet', () => {
     const store = makeStore();
     const fromNewerBuild = { pause: 'quarantined', mail: 'clear' } as unknown as CoordStatus;
     act(() => { store.setState({ coord: fromNewerBuild, coordFrameSeen: true }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -447,7 +652,7 @@ describe('StartProgramSheet', () => {
     // !== 'clear'` wrap would warn here — about a fleet nothing has reported
     // anything about yet.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -462,7 +667,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession400 = vi.fn().mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-request' }));
     const { rerender } = render(
-      <StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
         createSession={createSession400}
         loadProjects={async () => ({ roots: [], projects: [proj()] })} />,
     );
@@ -475,7 +680,7 @@ describe('StartProgramSheet', () => {
       new ApiError(502, { ok: false, stderr: 'ccd: start: workdir missing' }),
     );
     rerender(
-      <StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
         createSession={createSession502}
         loadProjects={async () => ({ roots: [], projects: [proj()] })} />,
     );
@@ -487,9 +692,9 @@ describe('StartProgramSheet', () => {
   it('renders honest "not shown yet" copy after the bounded wait — never framed as failure, never navigates (D-291)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockResolvedValue(undefined);
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
-      createSession={createSession} prompt={prompt}
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -508,7 +713,7 @@ describe('StartProgramSheet', () => {
     }
 
     expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe(before);
     // Not stuck disabled either — the operator can watch the fleet screen and
     // still retry from here if it truly never landed.
@@ -523,10 +728,10 @@ describe('StartProgramSheet', () => {
   it('a session that lands AFTER the D-291 timeout is never shown as someone else\'s "mid-task" collision — and still gets its kickoff (Important 2)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={createSession} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -551,12 +756,12 @@ describe('StartProgramSheet', () => {
     // Never told this is someone else's session — the exact false claim
     // the pre-fix shape rendered here.
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
 
     // And the mission still completes, as if the timeout had never fired —
     // the kickoff is sent, once, and the sheet navigates.
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -570,7 +775,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude', project: 'ccrc-pwa' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -583,7 +788,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ id: 'claude-alpha', wrapper: 'claude', project: 'alpha' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({
         roots: [],
         projects: [proj({ name: 'alpha', workdir: '/w/alpha' }), proj({ name: 'beta', workdir: '/w/beta' })],
@@ -596,6 +801,171 @@ describe('StartProgramSheet', () => {
     fireEvent.click(await screen.findByRole('button', { name: /beta/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toBeInTheDocument();
     expect(screen.queryByText(/already running/i)).toBeNull();
+  });
+
+  // — Program-leverage wave 5, D-1130. The run board is a fact this sheet never
+  // had. `POST /api/runs` will happily open a SECOND program in a project that
+  // already has one: it validates `project` as a non-empty string and nothing
+  // else (`server/src/coord/routes.ts:889-897`), and `openRun`'s own refusal is
+  // per-PROGRAM (its one-coordinator guard, `store.ts`), so it never fires for
+  // a different slug. The sheet is the last place the operator can still be
+  // told. —
+  it('refuses when the board already shows a run in that project — no confirm button at all (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  // THE ARM THIS EXISTS FOR. `null` is NOT MEASURED, and the failure it prevents
+  // is fold-to-permit — `(openRunProjects ?? new Set()).has(name)` answers
+  // `false` here, indistinguishable from a measured empty board, and offers
+  // Start on a question nobody answered.
+  it('refuses when the board has NOT answered — null is not "no open run" (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={null}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+    expect(await screen.findByText(/has not answered yet/i)).toBeInTheDocument();
+    // …and it must not claim a run EXISTS. The sheet holds exactly one fact
+    // here — that the board is silent — and the copy states that one.
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+  });
+
+  it('yields to the D-292 sentence when BOTH are true — that one names a session the operator can open (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', project: 'ccrc-pwa' })] }); });
+    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/claude-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  // THE INDEPENDENCE PIN. `existing` is evaluated only when `projected != null`
+  // (its own declaration in `StartProgramSheet.tsx`), so a run refusal written
+  // into THAT expression is invisible on a fleet where nothing is placeable: the
+  // operator reads "Nothing is placeable", enables an account, and walks
+  // straight into the collision. The run arm is computed from `project` alone
+  // and sits ABOVE the D-284 arm for exactly that reason.
+  it('refuses the open run even when NOTHING is placeable — the run arm never depends on the projection (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
+
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it('does NOT refuse for a run naming a project the picker never lists — the join is exact (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['ccrc-pwa-brisk-harbor', 'CCRC-PWA'])}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /^start build9-demo on/i })).not.toBeDisabled();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+  });
+
+  it('re-evaluates the run refusal when the chosen project changes (D-1130)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+      openRunProjects={new Set(['alpha'])}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj({ name: 'alpha', workdir: '/w/alpha' }), proj({ name: 'beta', workdir: '/w/beta' })],
+      })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /alpha/i }));
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /beta/i }));
+    expect(await screen.findByRole('button', { name: /^start/i })).toBeInTheDocument();
+    expect(screen.queryByText(/already has a run open/i)).toBeNull();
+  });
+
+  // — WAVE-5 REVIEW, MINOR 6 (D-1149). The run arm sits ABOVE the confirm
+  // fragment, and wave 4's kickoff-failure recovery — a standing statement with
+  // a retry and an open-anyway door beside it — lives INSIDE that fragment. So a
+  // run appearing in this project while a failure was standing swallowed the
+  // recovery whole: `openRunProjects` is rebuilt by the run board every ~2 s
+  // (`screens/RunsScreen.tsx`), and the operator was left reading a sentence
+  // about a collision with no way to finish the recovery they were in the middle
+  // of — the retry door being the ONLY control that can re-post for that
+  // session (`retryKickoff`'s own docstring).
+  //
+  // THE SEQUENCE IS CONSTRUCTED, not asserted about arm order: the failure is
+  // driven through the real `finish()` path first, and only THEN does the board
+  // answer. An order-only assertion would have stayed green on the shape that
+  // shipped. —
+  it('a run appearing mid-failure never retires the standing kickoff recovery (D-1149)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockResolvedValueOnce({ queued: true });
+    const store = makeStore();
+    // Stable across the rerender: an inline arrow would be a NEW `loadProjects`
+    // identity on the second render, re-firing the sheet's own fetch effect and
+    // blanking the picker mid-assertion — a fixture defect that reads as the
+    // component dropping state.
+    const loadProjects = async (): Promise<{ roots: string[]; projects: ReturnType<typeof proj>[] }> =>
+      ({ roots: [], projects: [proj()] });
+    const { rerender } = render(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={NO_OPEN_RUNS}
+      createSession={async () => {}} queueKickoff={queueKickoff} loadProjects={loadProjects} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // …and NOW the board answers: a run is open in this very project. (On the
+    // live board this is one poll tick later, not a prop the operator touched.)
+    rerender(<StartProgramSheet open onClose={() => {}} fleet={store}
+      openRunProjects={new Set(['ccrc-pwa'])}
+      createSession={async () => {}} queueKickoff={queueKickoff} loadProjects={loadProjects} />);
+
+    // BOTH facts, not one. The collision is stated — it is why no Start is
+    // offered…
+    expect(await screen.findByText(/already has a run open/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start build9-demo/i })).toBeNull();
+    // …and the recovery is still standing, doors and all.
+    expect(screen.getByText(/could not be queued/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open it without a brief/i })).toBeInTheDocument();
+
+    // LIVE, not merely rendered: the retry still re-posts to the id
+    // `startedSessionFor` measured, and still navigates on success. The router
+    // is parked somewhere that is not the target first — this file has measured
+    // once already that a stale `/s/claude-ccrc-pwa` makes a navigation
+    // assertion vacuous.
+    act(() => { history.pushState(null, '', '/runs'); });
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+    expect(queueKickoff.mock.calls[1]).toEqual([
+      'claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+    ]);
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
   // — Whole-branch review, C1: `wrapper`+`project` alone is not the target
@@ -623,14 +993,14 @@ describe('StartProgramSheet', () => {
         id: 'ccrc-pwa-brisk-harbor', wrapper: 'claude', project: 'ccrc-pwa', workspace: 'brisk-harbor',
       })] });
     });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
 
     expect(await screen.findByRole('button', { name: /^start build9-demo on/i })).toBeInTheDocument();
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
   });
 
   it("does NOT refuse for a DEAD session — cmd_start's own idempotency test is `_alive`, and ws-reap is human-only (C1)", async () => {
@@ -641,7 +1011,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     act(() => { store.setState({ sessions: [sess({ status: 'dead' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -661,11 +1031,11 @@ describe('StartProgramSheet', () => {
   // `wrapper` conjunct is dropped (the live `claude3-` row would be taken).
   it('waits for its own row to be LIVE — a dead row does not resolve the wait, and does not end it either (B-2)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -683,7 +1053,7 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     // Frame 2: the same row, now alive. NOT resolving on frame 1 did not end
@@ -695,8 +1065,8 @@ describe('StartProgramSheet', () => {
       ] });
     });
 
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -709,13 +1079,13 @@ describe('StartProgramSheet', () => {
     // `'claude2'` (`-` 0x2D < `2` 0x32). Liveness alone stops this one; the
     // ordering is what made it reachable rather than theoretical.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     const stale = sess({ id: 'claude-ccrc-pwa', wrapper: 'claude2', status: 'dead' });
     act(() => { store.setState({ sessions: [stale] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -732,8 +1102,8 @@ describe('StartProgramSheet', () => {
 
     // The kickoff goes to the session that was actually started, never the
     // dead swapped row that merely satisfies the same three fields.
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude2-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude2-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
   });
 
@@ -745,12 +1115,12 @@ describe('StartProgramSheet', () => {
     // pre-create snapshot — but DEAD, so it is not in `preLive`, and coming
     // alive is precisely "became live as a result of my create".
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'dead' })] }); });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -759,8 +1129,8 @@ describe('StartProgramSheet', () => {
 
     act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', status: 'idle' })] }); });
 
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
     await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
   });
 
@@ -779,11 +1149,11 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     let resolveCreate: (() => void) | null = null;
     const createSession = vi.fn(() => new Promise<void>((r) => { resolveCreate = r; }));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={createSession} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={createSession} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -796,7 +1166,7 @@ describe('StartProgramSheet', () => {
 
     // The refusal must NOT render…
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
     // …and the in-flight indicator must still be there. This is the half that
     // makes it a real pin: the refusal replaces the WHOLE confirm fragment,
     // so "Starting…" vanishing is what the operator actually sees.
@@ -805,8 +1175,8 @@ describe('StartProgramSheet', () => {
 
     // And the attempt still completes once the create finally answers.
     resolveCreate!();
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   it('re-arms nothing when the create FAILS — a genuine refusal is not suppressed by a dead attempt (B-1)', async () => {
@@ -816,7 +1186,7 @@ describe('StartProgramSheet', () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
     const createSession = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'ccd: start: boom' }));
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
@@ -849,7 +1219,7 @@ describe('StartProgramSheet', () => {
         id: 'claude-ccrc-pwa', wrapper: 'claude2', project: 'ccrc-pwa', workspace: null, status: 'idle',
       })] });
     });
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
@@ -869,11 +1239,11 @@ describe('StartProgramSheet', () => {
     // live main checkout in the same project (another wrapper — someone
     // else's, or a swapped one) shows up while the sheet waits.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -887,13 +1257,13 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     // …and the sheet is still waiting for its own, which then lands.
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   // The sibling of the test above, varying `workspace` where that one varies
@@ -908,11 +1278,11 @@ describe('StartProgramSheet', () => {
   // consequence (2), with nothing red to say so.
   it('never sends the kickoff to a WORKSPACE row on the projected wrapper — the WAIT wants a main checkout (C1-workspace)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -928,13 +1298,13 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     // …and the sheet is still waiting for its own main checkout, which lands.
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   // The THIRD conjunct of the same arm, found by the same measurement that
@@ -946,11 +1316,11 @@ describe('StartProgramSheet', () => {
   // wrapper, which on this fleet is simply the operator's other work.
   it('never sends the kickoff to a main checkout of ANOTHER project on the same wrapper (C1-workspace)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
     history.pushState(null, '', '/runs');
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -964,25 +1334,25 @@ describe('StartProgramSheet', () => {
     });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
     expect(location.pathname).toBe('/runs');
 
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
-    expect(prompt).toHaveBeenCalledWith('claude-ccrc-pwa', kickoff('build9-demo', 'Build 9 demo'));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
+    expect(queueKickoff).toHaveBeenCalledWith('claude-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' });
   });
 
   it("does not refuse its OWN attempt after a swap moves its wrapper — ownership is compared on project alone (C1-swap)", async () => {
     // `myAttemptRef` must agree with the (now wrapper-independent) refusal
     // arm. A session this sheet started at `claude` can be reported at
     // `claude2` on any later frame; comparing wrappers there would render
-    // "…already running… may be mid-task" for the sheet's OWN session — the
+    // "…already running… two coordinators" for the sheet's OWN session — the
     // Important-2 defect, arriving through the swap path.
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -1007,7 +1377,7 @@ describe('StartProgramSheet', () => {
     }
 
     expect(screen.queryByText(/already running/i)).toBeNull();
-    expect(screen.queryByText(/may be mid-task/i)).toBeNull();
+    expect(screen.queryByText(/two coordinators/i)).toBeNull();  // the D-292 refusal, by the half of it that survives every rewording
   });
 
   it('still refuses for a project it never started — the ownership suppression is bounded (C1-swap)', async () => {
@@ -1023,7 +1393,7 @@ describe('StartProgramSheet', () => {
       })] });
     });
     const createSession = vi.fn().mockResolvedValue(undefined);
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
       createSession={createSession}
       loadProjects={async () => ({
         roots: [],
@@ -1051,10 +1421,12 @@ describe('StartProgramSheet', () => {
   // after a D-291 timeout has already put `starting` back to false.
   it('never leaves an ENABLED Start while its own started session is being opened — no dead tap (B-3)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
-    const prompt = vi.fn(() => new Promise<void>(() => {})); // hangs — finish() is mid-flight
+    // Wave 5: the type argument follows the prop (D-1137). The promise still
+    // never settles, so nothing about what this measures moved.
+    const queueKickoff = vi.fn(() => new Promise<{ queued: boolean }>(() => {})); // hangs — finish() is mid-flight
     const store = makeStore();
-    render(<StartProgramSheet open onClose={() => {}} fleet={store}
-      createSession={async () => {}} prompt={prompt}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
     await fillAndPick();
@@ -1083,7 +1455,7 @@ describe('StartProgramSheet', () => {
     // that would have done nothing cannot be made.
     expect(screen.queryByText(/already running/i)).toBeNull();
     fireEvent.click(control as Element);
-    expect(prompt).toHaveBeenCalledTimes(1); // no second attempt fired
+    expect(queueKickoff).toHaveBeenCalledTimes(1); // no second attempt fired
   });
 
   // Whole-branch review, M3: `timedOut` described ONE attempt's target, but
@@ -1092,7 +1464,7 @@ describe('StartProgramSheet', () => {
   // button aimed somewhere else entirely.
   it('forgets a timeout when the target changes — "not shown yet" never sits above a Start aimed elsewhere (M3)', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
-    render(<StartProgramSheet open onClose={() => {}} fleet={makeStore()}
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       createSession={async () => {}}
       loadProjects={async () => ({
         roots: [],
@@ -1124,9 +1496,9 @@ describe('StartProgramSheet', () => {
   it('a superseded attempt (sheet closed mid-wait) cannot navigate when a later matching session appears', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    const prompt = vi.fn().mockResolvedValue(undefined);
+    const queueKickoff = vi.fn().mockResolvedValue(undefined);
     const store = makeStore();
-    render(<OpenHarness createSession={createSession} prompt={prompt} fleet={store} />);
+    render(<OpenHarness createSession={createSession} queueKickoff={queueKickoff} fleet={store} />);
 
     await fillAndPick();
     fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
@@ -1145,7 +1517,7 @@ describe('StartProgramSheet', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);
-    expect(prompt).not.toHaveBeenCalled();
+    expect(queueKickoff).not.toHaveBeenCalled();
   });
 
   // A second, narrower race than the one above: here the match is found and
@@ -1157,10 +1529,14 @@ describe('StartProgramSheet', () => {
   it('a superseded prompt response (in flight when the sheet closes) cannot navigate', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const createSession = vi.fn().mockResolvedValue(undefined);
-    let resolvePrompt: (() => void) | null = null;
-    const prompt = vi.fn(() => new Promise<void>((resolve) => { resolvePrompt = resolve; }));
+    // Wave 5: the type argument follows the prop (D-1137). The sheet reads no
+    // field off this answer — it is the SETTLING, after the close, that this
+    // test is about — so the value below is arbitrary and the assertion at the
+    // end is unchanged.
+    let resolveKickoff: ((v: { queued: boolean }) => void) | null = null;
+    const queueKickoff = vi.fn(() => new Promise<{ queued: boolean }>((resolve) => { resolveKickoff = resolve; }));
     const store = makeStore();
-    render(<OpenHarness createSession={createSession} prompt={prompt} fleet={store} />);
+    render(<OpenHarness createSession={createSession} queueKickoff={queueKickoff} fleet={store} />);
 
     await fillAndPick();
     fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
@@ -1169,16 +1545,290 @@ describe('StartProgramSheet', () => {
     // The match arrives while the sheet is still open — this is what fires
     // `finish()` and starts the (deliberately hanging) `prompt()` call.
     act(() => { store.setState({ sessions: [sess()] }); });
-    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(1));
 
     // Close NOW — `prompt()` is still outstanding.
     fireEvent.click(screen.getByRole('button', { name: /close sheet/i, hidden: true }));
     const before = location.pathname;
 
     // The hanging `prompt()` finally resolves, after the close.
-    resolvePrompt!();
+    resolveKickoff!({ queued: true });
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(location.pathname).toBe(before);
+  });
+
+  // WAVE-4 REVIEW, MAJOR 1 (D-1046). The twin of the test above, for the door
+  // this wave added. `finish()` checks `gen.current` on BOTH arms because a
+  // close mid-flight must retire everything outstanding; `retryKickoff` shipped
+  // checking NEITHER, and it settles later than anything else in this file —
+  // the operator has already read a failure and tapped a button before its
+  // round trip even starts, which is exactly when a close is likely.
+  //
+  // Both arms are pinned because they harm differently: a late SUCCESS
+  // navigates to the old session under whatever the operator opened next, and a
+  // late REJECTION re-plants the block the close just cleared, so the next
+  // program's sheet opens showing the previous attempt's retry door aimed at
+  // the previous attempt's session.
+  it('a superseded RETRY response cannot navigate', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    let resolveRetry: (() => void) | null = null;
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveRetry = resolve; }));
+    const store = makeStore();
+    render(<OpenHarness createSession={async () => {}} queueKickoff={queueKickoff} fleet={store} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    // Somewhere that is NOT the target, explicitly — this file's own measured
+    // lesson: a router already sitting on `/s/claude-ccrc-pwa` makes a
+    // navigating mutant indistinguishable from a guarded one.
+    act(() => { history.pushState(null, '', '/runs'); });
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+
+    // Close NOW — the retry is still outstanding.
+    fireEvent.click(screen.getByRole('button', { name: /close sheet/i, hidden: true }));
+    resolveRetry!();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(location.pathname).toBe('/runs');
+  });
+
+  // The THIRD arm of D-1046, and the one my own fix round nearly shipped
+  // unpinned: `retryKickoff`'s `finally` is generation-guarded too. A retry
+  // whose generation has moved on no longer owns `retrying`, and clearing it
+  // from there re-enables a button whose newer call is still outstanding — one
+  // tap away from a duplicate kickoff. The two arms above cannot see this: they
+  // pin what a superseded call must NOT write, and this is about a write it must
+  // not UNDO.
+  it('a superseded retry cannot re-enable the button under a NEWER retry', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const pending: Array<() => void> = [];
+    const hang = (): Promise<void> => new Promise<void>((resolve) => { pending.push(resolve); });
+    const refuse = () => Promise.reject(new ApiError(501, { ok: false, error: 'not-configured' }));
+    const queueKickoff = vi.fn()
+      .mockImplementationOnce(refuse)   // A's kickoff fails      -> door A
+      .mockImplementationOnce(hang)     // retry #1               -> outstanding
+      .mockImplementationOnce(refuse)   // B's kickoff fails      -> door B
+      .mockImplementationOnce(hang);    // retry #2               -> outstanding
+    const store = makeStore();
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({
+        roots: [],
+        projects: [proj(), proj({ name: 'other-repo', workdir: '/home/u/projects/other-repo' })],
+      })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+
+    // A second attempt, in another project — `start()` bumps `gen`, so retry #1
+    // is superseded from here on while its call is still outstanding.
+    await fillAndPick('other-program', 'A different program', /other-repo/i);
+    fireEvent.click(await screen.findByRole('button', { name: /^start other-program/i }));
+    act(() => {
+      store.setState({ sessions: [sess(), sess({ id: 'claude-other-repo', project: 'other-repo' })] });
+    });
+    await screen.findByText(/could not be queued/i);
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(4));
+
+    // Retry #1 finally answers. It owns nothing any more.
+    pending[0]!();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(screen.getByRole('button', { name: /^queueing…$/i })).toBeDisabled();
+  });
+
+  it('a superseded RETRY rejection cannot re-plant the failure the close cleared', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    let rejectRetry: ((e: unknown) => void) | null = null;
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectRetry = reject; }));
+    const store = makeStore();
+    render(<OpenHarness createSession={async () => {}} queueKickoff={queueKickoff} fleet={store} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: /close sheet/i, hidden: true }));
+
+    // The close cleared `kickoffFailed`. The late rejection must not put it back.
+    rejectRetry!(new ApiError(503, { ok: false, error: 'registry-unmeasurable' }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    // The session that was started has since gone — reaped, stopped, or simply
+    // not in this frame. Without that, re-picking the same project renders the
+    // D-292 refusal INSTEAD of the confirm fragment (`myAttemptRef` was cleared
+    // by the close, so `isOwnAttempt` is false), and neither the door nor its
+    // absence is observable at all. MEASURED: the unguarded code failed this
+    // test on the missing Start button rather than on the stale door.
+    act(() => { store.setState({ sessions: [] }); });
+
+    // Reopen for a DIFFERENT program, and pick a project — the confirm
+    // fragment that holds the door is gated on `project !== null`, and the
+    // close reset it, so a `queryByText` against a freshly reopened sheet
+    // reports absence whether the guard held or not. MEASURED: without this
+    // re-pick the unguarded code passed this test.
+    fireEvent.click(screen.getByRole('button', { name: /reopen sheet/i, hidden: true }));
+    expect(await screen.findByLabelText(/program slug/i)).toBeInTheDocument();
+    await fillAndPick('other-program', 'A different program');
+
+    expect(screen.queryByText(/could not be queued/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /queue the kickoff again/i })).toBeNull();
+    // …and the sheet really is showing the fragment that WOULD have held it.
+    expect(screen.getByRole('button', { name: /^start other-program/i })).toBeInTheDocument();
+  });
+});
+
+// program-leverage wave 3 (F3): the program-ready badge.
+//
+// It renders HERE, and only here, because this is the one surface that is
+// genuinely project-keyed — the /runs board itself groups by PROGRAM slug and
+// nothing constrains a program's runs to one project, so a badge on a group
+// header would be a program wearing a project's answer (operator ruling,
+// 2026-08-29). This is also the moment the answer is worth anything: the
+// operator is choosing a project to start a program on.
+describe('the program-ready badge', () => {
+  const READY: ProjectReadiness = {
+    worker: 'present', coordinator: 'present', floor: 'seeded',
+    boxToken: 'configured', coordDb: 'available', verdict: 'ready', at: 1,
+  };
+
+  const withReadiness = (over: Partial<ProjectReadiness> = {}) =>
+    ({ roots: [], projects: [{ ...proj(), readiness: { ...READY, ...over } }] });
+
+  const openSheet = (loadProjects: () => Promise<unknown>) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={loadProjects as never} />);
+  };
+
+  it('renders program-ready with a word AND a glyph, never colour alone', async () => {
+    openSheet(async () => withReadiness());
+    expect(await screen.findByText(/program-ready/)).toBeTruthy();
+    const badge = document.querySelector('.proj-ready[data-verdict="ready"]');
+    expect(badge).toBeTruthy();
+    // The two-cue rule: the glyph is in the text, not carried by colour.
+    expect(badge?.textContent).toMatch(/\S/);
+  });
+
+  it('names the missing preconditions VISIBLY when blocked, not only in a title', async () => {
+    // title= is unreachable on the mobile-first surface this board is built
+    // for: there is no hover on a phone. The run item asks for a badge WITH
+    // the missing-precondition list, and the data is already on the wire.
+    openSheet(async () => withReadiness({ worker: 'absent', verdict: 'blocked' }));
+    const badge = await screen.findByText(/not ready/);
+    expect(badge.getAttribute('title')).toContain('not installed');
+    const why = document.querySelector('.proj-ready-why');
+    expect(why, 'the blocked reason is not rendered anywhere visible').toBeTruthy();
+    expect(why?.textContent).toContain('worker skill not installed');
+  });
+
+  it('names the unmeasurable precondition visibly too — an unknown is not a blank', async () => {
+    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    await screen.findByText(/readiness unknown/);
+    expect(document.querySelector('.proj-ready-why')?.textContent)
+      .toContain('could not be measured');
+  });
+
+  it('renders NO reason line when the project is ready — there is nothing to say', async () => {
+    openSheet(async () => withReadiness());
+    await screen.findByText(/program-ready/);
+    expect(document.querySelector('.proj-ready-why')).toBeNull();
+  });
+
+  it('says unknown — NOT "not ready" — when a precondition could not be measured', async () => {
+    // The whole point of the feature: absence of evidence is not evidence of
+    // absence, and the operator must be able to tell the two apart.
+    openSheet(async () => withReadiness({ floor: 'unmeasurable', verdict: 'unknown' }));
+    expect(await screen.findByText(/readiness unknown/)).toBeTruthy();
+    expect(screen.queryByText(/not ready/)).toBeNull();
+    const badge = document.querySelector('.proj-ready[data-verdict="unknown"]');
+    expect(badge?.getAttribute('title')).toContain('could not be measured');
+  });
+
+  it('an OLDER SERVER omitting the key renders NO badge and no broken row', async () => {
+    openSheet(async () => ({ roots: [], projects: [proj()] }));
+    expect(await screen.findByText('ccrc-pwa')).toBeTruthy();
+    expect(document.querySelector('.proj-ready')).toBeNull();
+  });
+
+  it('readiness: null renders the pending arm — a DIFFERENT arm from the absent key', async () => {
+    // `null` is "this server measures readiness and has not swept yet"; an
+    // absent key is "this server does not measure it at all". A reader that
+    // folds them together throws away the difference between "wait a moment"
+    // and "upgrade the server".
+    openSheet(async () => ({ roots: [], projects: [{ ...proj(), readiness: null }] }));
+    await screen.findByText('ccrc-pwa');
+    expect(document.querySelector('.proj-ready[data-verdict="pending"]')).toBeTruthy();
+  });
+});
+
+// --- fix round 1, minor 5 --------------------------------------------------
+// The badge's "what is missing" list and the server's verdict are two readings
+// of the same five facts. They MUST agree, and before this they were two
+// independent spellings of each vocabulary's ok-member with nothing checking.
+describe('missingPreconditions agrees with readyVerdict, by construction', () => {
+  const READY: ReadinessFacts = {
+    worker: 'present', coordinator: 'present', floor: 'seeded',
+    boxToken: 'configured', coordDb: 'available',
+  };
+  const stamp = (f: ReadinessFacts): ProjectReadiness =>
+    ({ ...f, verdict: readyVerdict(f), at: 1 });
+
+  it('lists nothing exactly when the verdict is ready', () => {
+    expect(missingPreconditions(stamp(READY))).toEqual([]);
+    expect(readyVerdict(READY)).toBe('ready');
+  });
+
+  // Every non-ok member of every vocabulary, one at a time: the list must name
+  // it and the verdict must leave `ready`. Exhaustive over the arms rather
+  // than a sample, because the failure mode minor 5 names is a NARROWED
+  // comparison, which a sample can miss.
+  it.each([
+    ...(['absent', 'unmeasurable'] as const).flatMap((v) =>
+      [['worker', v], ['coordinator', v]] as [keyof ReadinessFacts, string][]),
+    ...(['not-seeded', 'unmeasurable'] as const).map((v) =>
+      ['floor', v] as [keyof ReadinessFacts, string]),
+    ...(['absent', 'unmeasurable'] as const).map((v) =>
+      ['boxToken', v] as [keyof ReadinessFacts, string]),
+    ...(['degraded', 'not-configured'] as const).map((v) =>
+      ['coordDb', v] as [keyof ReadinessFacts, string]),
+  ])('%s = %s is named by the list and leaves the verdict non-ready', (key, value) => {
+    const facts = { ...READY, [key]: value } as ReadinessFacts;
+    const listed = missingPreconditions(stamp(facts));
+    expect(listed, `${key}=${value} is not named`).toHaveLength(1);
+    expect(readyVerdict(facts)).not.toBe('ready');
+  });
+
+  it('an empty list and a non-ready verdict can never coexist', () => {
+    // The corollary stated as its own case: this is the shape an operator
+    // actually hits — a badge saying "not ready" over nothing at all.
+    for (const worker of ['present', 'absent', 'unmeasurable'] as const) {
+      for (const floor of ['seeded', 'not-seeded', 'unmeasurable'] as const) {
+        for (const coordDb of ['available', 'degraded', 'not-configured'] as const) {
+          const facts = { ...READY, worker, floor, coordDb };
+          const empty = missingPreconditions(stamp(facts)).length === 0;
+          expect(empty, JSON.stringify(facts)).toBe(readyVerdict(facts) === 'ready');
+        }
+      }
+    }
   });
 });

@@ -248,6 +248,26 @@ describe('ws-add', () => {
     expect(excludeOf(main)).toContain('.ccrc/');
   });
 
+  // D-996/D' (graphify Task 4): the same common-dir exclude also carries the
+  // graph store and the sweep's ephemeral corpus filter, so `git worktree
+  // remove` collects them WITH the tree instead of wedging ws-rm/ws-reap/ws-gc
+  // on an un-ignored directory. Asked from the WORKTREE, not $main, because
+  // common-dir sharing across worktrees is the property under test.
+  it('ws-add excludes graphify-out/ and .graphifyignore beside .ccrc/', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const excl = excludeOf(main);
+    for (const line of ['.ccrc/', 'graphify-out/', '.graphifyignore']) expect(excl).toContain(line);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    // `graphify-out/` is a directory-only pattern: `check-ignore` (no trailing
+    // slash on the query) lstats the path to decide whether the pattern can
+    // even apply, so the directory has to exist — exactly the state graphify
+    // itself leaves a workspace in the first time it runs there.
+    fs.mkdirSync(path.join(wt, 'graphify-out'));
+    // the gate the sweep uses, asked in the WORKTREE (common-dir sharing is the point):
+    expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
+  });
+
   // ...and the environment does not get to redirect that write. The test above
   // pins the normal path and can only ever pass, because it never runs under a
   // hostile environment: the line it is the control for could be reverted and it

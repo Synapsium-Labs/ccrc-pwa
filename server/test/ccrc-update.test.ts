@@ -248,10 +248,43 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
   plant('rsync',
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  // graphify Task 2: the FULL-flavour happy-path test re-runs the real
+  // `cmd_install` spine (`ccrc update` execs the staged tree's own `ccrc
+  // install`), which now includes `_inst_graphify_engine` — a real
+  // `python3 -m venv` followed by a real network `pip install` on every role
+  // but `server`. Same fix, same reasoning as `ccrc-install.test.ts`'s own
+  // `python3` stub (see its comment): answer only `-m venv <path>` by
+  // building a fake venv locally, refuse anything else loudly.
+  plant('python3', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
+    'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
+    '  bin="$3/bin"; mkdir -p "$bin" || exit 1',
+    '  printf \'#!/bin/sh\\necho "$@" >> "$HOME/venv-python-calls"\\nexit 0\\n\' > "$bin/python"',
+    '  chmod 755 "$bin/python"',
+    '  printf \'#!/bin/sh\\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\\nexit 0\\n\' > "$bin/graphify"',
+    '  chmod 755 "$bin/graphify"',
+    '  exit 0',
+    'fi',
+    'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
+  ].join('\n'));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
+  // graphify Task 3: the same FULL-flavour happy path re-runs the real
+  // `cmd_install` spine, which now includes `_inst_graphify_skill` right
+  // after `_inst_skills`, unconditional on every role but `server`. The fake
+  // venv `bin/python` the `python3` stub above builds answers ANY argv with
+  // exit 0 and no stdout, so the installer's
+  // `"$VENV/bin/python" -c 'import graphify…'` would read PKG="" and refuse —
+  // a fixture reason, not anything this file's update logic is about. Same
+  // fix as `ccrc-install.test.ts`'s own `ccrcEnv`.
+  const gfxPkg = join(home, 'fixture-graphify-pkg');
+  mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
+  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
+  env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
   return env;
 }
 
@@ -360,7 +393,16 @@ function fullTree(home: string, opts: { version: string; sha: string }): string 
   mkdirSync(join(tree, 'server', 'dist-pwa'), { recursive: true });
   writeFileSync(join(tree, 'server', 'dist-pwa', 'index.html'),
     '<!doctype html><title>fixture PWA</title>\n');
-  mkdirSync(join(tree, 'agent', 'dist'), { recursive: true });
+  // D-1159: the shape `ccrc-agent.service` actually runs, and the one
+  // `_inst_tree` now preflights — `agent/dist/agent/src/index.js`, tsc's
+  // rootDir-preserving output, exactly as `server/dist/server/src/index.js`
+  // above. This fixture used to plant a FLAT `agent/dist/index.js`, a release
+  // shape the unit could never have started; nothing measured the difference
+  // until the preflight refused it. The flat file stays beside it because the
+  // backup/replace assertions below name it.
+  mkdirSync(join(tree, 'agent', 'dist', 'agent', 'src'), { recursive: true });
+  writeFileSync(join(tree, 'agent', 'dist', 'agent', 'src', 'index.js'),
+    '// fixture: stands in for the built agent\n');
   writeFileSync(join(tree, 'agent', 'dist', 'index.js'), '// fixture agent build\n');
   writeFileSync(join(tree, 'build.json'), shippedStamp(opts.version, opts.sha));
   writeManifest(tree);

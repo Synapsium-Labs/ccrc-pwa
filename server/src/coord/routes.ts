@@ -4,11 +4,14 @@ import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { assembleFleet } from '../fleet.js';
+import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
+import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore } from './store.js';
 import { renderEnvelope } from './envelope.js';
@@ -17,13 +20,14 @@ import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { holdReason, queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
   isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type ClaimConflict, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
+  type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
   type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
 
@@ -109,7 +113,14 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // answer to "did that pane come up clean?". Dropping either here would be an
       // L4 adapter narrowing a distinction it received — and
       // `coordinator-skill/references/wave-lifecycle.md` documents both by name.
-      adopted: r.adopted, spawnState: r.spawnState,
+      //
+      // `skillState` joins them on the same terms and for the same reason: a
+      // field spread only when it is interesting is indistinguishable, on the
+      // wire, from a field an older build never had. Note the compiler does NOT
+      // catch a field dropped here — the `_exhaustive: never` guard below is
+      // total over the union's MEMBERS, not over one member's fields, so this
+      // body would stay green while the distinction silently never shipped.
+      adopted: r.adopted, spawnState: r.spawnState, skillState: r.skillState,
     });
   }
   switch (r.kind) {
@@ -451,11 +462,26 @@ export function registerCoordRoutes(
     let runId: number | null;
     if (runIdRaw === undefined || runIdRaw === null) {
       runId = null;
-    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+    // THE LOWER BOUND, and the convention is now the same across all three
+    // `runId` body readers (D-1165). Wave 5 restored it on the kickoff route
+    // (D-1151, `server.ts:1540`) and left this reader and the claims one
+    // accepting `0` and negatives.
+    //
+    // This is NOT the free win that one was. There, nothing downstream caught
+    // the bad pair and a nonsense brief was actually composed; here the value
+    // IS caught, as a 404 `unknown-run` from the existence check below. So the
+    // change is a change: a malformed `runId` now answers 400 rather than 404,
+    // and on THIS route the durable rejection row records the shape code
+    // instead of the unknown-run one. That is the accurate pair — a shape error
+    // is a 400, a missing row is a 404 — and collapsing them is the overloaded
+    // seam this tree bans by name. Both directions are pinned in
+    // `mail-routes.test.ts`: a negative refuses 400, and a well-formed 4242
+    // still reaches the existence check and refuses 404.
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
       return refuse(reply, 400, 'bad-kind', { fromId, toId, subject },
-        'runId must be an integer when given');
+        'runId must be a positive integer when given');
     }
 
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
@@ -943,7 +969,13 @@ export function registerCoordRoutes(
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue };
+      fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
+      // The one place a wrapper becomes a directory, called from L4 where the
+      // config already lives. `dispatch.ts` declares the port instead of
+      // importing `configDirFor` itself, because `config.ts` imports
+      // `./coord/db.js` and a value import would drag the store's module graph
+      // into a policy module (D-1015).
+      configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
     const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
     return sendDispatchOutcome(reply, outcome);
   });
@@ -1003,6 +1035,91 @@ export function registerCoordRoutes(
       fleetState: deps.fleetState };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
     return sendCloseOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/runs/:id/reclaim` — the FOURTH route in this file that is
+   * UNGATED, and the one the other three implied. `POST /api/coord/pause`
+   * lifts a marker a stuck coordinator cannot lift for itself;
+   * `POST /api/runs/:id/abandon` releases the run that coordinator wedged;
+   * `POST /api/claims/:id/break` frees the claim a dead holder still holds.
+   * None of them can hand a LIVE program to a new session once the old
+   * claimant is a corpse — `openRun`'s one-coordinator guard and
+   * `resolveCoordinator` both read the same lowest-id `claimedBy` with no
+   * state predicate, so until this door existed the dead name answered both
+   * for ever and every later wave opened onto a grave.
+   *
+   * Deliberately NOT behind `requireMailToken`, for D-282's argument
+   * unchanged: the box token authenticates the FLEET HOST and the coordinator
+   * holds it by design, so putting a wedge's release valve behind that key
+   * leaves the wedge no door. With `CCRC_AUTH` armed this still sits behind
+   * the session gate, exactly as the other three do — ungated means "no box
+   * token", never "no authentication".
+   *
+   * THE BODY IS READ, and that is where this door parts company with the
+   * abandon and break handlers above. `claimedBy` — which session takes the
+   * program over — is a fact only the operator has, so it arrives in the body
+   * and is validated here as a non-empty string. What does NOT arrive in the
+   * body is the ATTRIBUTION: `causedBy` is the hardcoded literal `operator`
+   * at the store call site (`reclaimProgram`), so a caller may name the heir
+   * and can never forge who did the naming. Reading one field is not the
+   * same licence as reading the act's own provenance.
+   *
+   * UNNAMED IN BOTH SKILL CORPORA, the abandon-door shape again: a
+   * coordinator that reclaims its own program has learned nothing, and one
+   * that reclaims someone else's has stopped coordinating. The operator with
+   * a phone is the only caller this door has.
+   */
+  app.post('/api/runs/:id/reclaim', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const { id: idParam } = req.params as { id: string };
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // Read BEFORE the mutex, not inside it: a malformed body is decided by this
+    // request alone, and queueing it behind a live dispatch would make the
+    // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
+    // probe — no payload, a `:id` of `x` — deterministic on a busy box.
+    const body = (req.body ?? {}) as { claimedBy?: unknown };
+    if (typeof body.claimedBy !== 'string' || body.claimedBy.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const to = body.claimedBy.trim();
+
+    const reclaimDeps: ReclaimDeps = { coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux };
+    // Inside the mutex for abandon's reason (`CoordMutex`'s docstring,
+    // routes.ts:32-64): the measurement of the old claimant and the UPDATE that
+    // replaces it are separated by awaits over live fleet acts, and a concurrent
+    // dispatch reading `claimedBy` between them would read a name that is
+    // already being retired.
+    const r = await coordMutex.run(() => reclaimRun(reclaimDeps, id, to));
+    if (r.ok) {
+      return reply.code(200).send({
+        ok: true, program: r.program, runIds: r.runIds, from: r.from, to: r.to,
+      });
+    }
+    switch (r.kind) {
+      case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
+      // 502, the coord-route family's status for this condition
+      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
+      // server.ts's own vocabulary. `detail` rides along because it is a
+      // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
+      // this layer cannot recompute it.
+      case 'registry-unmeasurable':
+        return reply.code(502).send({ ok: false, error: 'registry-unmeasurable', detail: r.detail });
+      // `by` and `detail` both: the first is who still holds it, the second is
+      // HOW that was measured — a live pane and a restarting supervisor are one
+      // answer told apart by this sentence, and collapsing it would leave the
+      // operator with a refusal and no next move.
+      case 'claimant-alive':
+        return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      default: {
+        const _exhaustive: never = r;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
+      }
+    }
   });
 
   /**
@@ -1084,8 +1201,8 @@ export function registerCoordRoutes(
       );
       if (!verdict.ok) {
         coord.recordRejection({ code: verdict.code, runId: id, toId: run.sessionId, detail: verdict.detail });
-        queueSystemMail(coord, run, { toId: run.sessionId, runId: id, kind: 'status',
-          subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
+        queueSystemMail(coord, run, { fromId: 'coordinator', toId: run.sessionId, runId: id,
+          kind: 'status', subject: 'wave-advance-rejected', body: `${verdict.code}: ${verdict.detail}` });
         return reply.code(409).send({ ok: false, reject: { code: verdict.code, detail: verdict.detail } });
       }
     }
@@ -1130,13 +1247,21 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/coord/pause` — the OPERATOR's door, and one of the THREE routes
+   * `POST /api/coord/pause` — the OPERATOR's door, and one of the FOUR routes
    * in this file that are UNGATED: deliberately NOT behind `requireMailToken`
-   * (D-282). The others are `POST /api/runs/:id/abandon` above and
-   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape).
-   * Among them they are the WHOLE unauthenticated write surface of this file —
-   * a claim `coord-pause-route.test.ts`'s `UNGATED` set holds to exactly these
-   * three names, in both directions.
+   * (D-282). The others are `POST /api/runs/:id/abandon` above,
+   * `POST /api/claims/:id/break` (build 9 D12 — the same abandon-door shape)
+   * and `POST /api/runs/:id/reclaim` (program-leverage wave 5 — that shape once
+   * more, for a program whose coordinator is dead and whose copy of the box
+   * token died on the box with it). Among them they are the WHOLE
+   * unauthenticated write surface of this file, and
+   * `coord-pause-route.test.ts`'s `UNGATED` set now holds that claim in BOTH
+   * directions: no route outside the set reaches its first `await` without a
+   * token check, and no route inside it may quietly acquire one. The second
+   * half arrived with the fourth door — the sentence had been claiming both
+   * directions while only the first was ever measured, so a listed door that
+   * had since been gated would have gone on being described here as ungated
+   * with nothing in the suite to say otherwise.
    *
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
@@ -1169,6 +1294,148 @@ export function registerCoordRoutes(
     // marker. The authoritative answer is the `{type:'coord'}` frame (Task 8),
     // and the toggle settles on that — never on this response (spec §4.2).
     return reply.code(200).send({ ok: true, requested: body.paused });
+  });
+
+  /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
+   *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
+   *  `server/src`: the only way to change `maxConcurrentWorkers` or
+   *  `maxSessionsPerDay` was to hand-edit `coord.db` (D-1164).
+   *
+   *  NOT BOX-TOKEN, AND NOT `UNGATED` EITHER — two different facts, and this is
+   *  the first route in the tree that needs them apart (D-1240). The box token
+   *  gates MACHINE lanes: callers on the fleet host with no cookie jar, which is
+   *  why every one of them is `requireMailToken`. An operator turning a dial in
+   *  the PWA is not one, and gating a phone control on the fleet's shared secret
+   *  would put it behind a secret the phone does not hold. Nor is this a release
+   *  valve: `UNGATED`'s whole argument (D-282) is that the party locked out is
+   *  the party holding the key, so a wedge's valve must not sit behind it — and
+   *  raising a cap releases no wedge. It is an ordinary same-origin PWA write:
+   *  session-gated when armed (deliberately absent from `auth/gate.ts`'s EXEMPT
+   *  table), open dark, like every other write the console makes.
+   *  `coord-pause-route.test.ts`'s `SESSION_ONLY` holds both halves against the
+   *  source, in both directions.
+   *
+   *  THE `notConfigured` ARM THE PAUSE ROUTE ABOVE DELIBERATELY OMITS (D-1166).
+   *  A pause is a marker file on the fleet host, so a box with no coordination
+   *  database can still be paused and answering 501 there would be a lie about
+   *  what the act needs. Caps are rows in `coord.db`, and `caps()` casts an
+   *  undefined row rather than returning null — copying that handler's opening
+   *  verbatim, the natural move since it is the only other `/api/coord/*` route,
+   *  ships a route that throws on such a box.
+   *
+   *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
+   *  `capsUsage` is computed server-side and reaches the PWA nowhere;
+   *  `CoordStatus` carries `pause` and `mail` and no numbers at all. Caps are
+   *  deliberately NOT added to that frame: `emitCoord` states it needs no
+   *  try/catch precisely because it touches no `node:sqlite`, and
+   *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard
+   *  would let it re-emit on nearly every two-second tick.
+   *
+   *  THE REPLY IS THE CONFIRMATION, unlike the pause toggle one door up. That
+   *  toggle refuses to be optimistic because a `{type:'coord'}` frame exists to
+   *  settle it. No frame carries caps, so the honest answer is the stored value
+   *  RE-READ after the write — never the value the caller sent, which is what
+   *  they asked for and not what is now true. */
+  /** The answer shape, defined ONCE and shared by both halves (coordinator
+   *  ruling on wave 6, item 1): the read must not carry a copy of what the
+   *  write answers. Typed as `CoordCapsView` so the two cannot drift silently —
+   *  an inline object literal in either half would satisfy the compiler while
+   *  saying something the other does not. */
+  const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
+    ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
+
+  app.get('/api/coord/caps', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    return reply.code(200).send({ ok: true, ...capsView(deps.coord) });
+  });
+
+  app.post('/api/coord/caps', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    // SHAPE FIRST, AND OUTSIDE THE MUTEX: a malformed body is decided by this
+    // request alone, and queueing it behind a live dispatch would make the
+    // answer depend on the fleet's weather (the reclaim route's own rule).
+    // This is a shape probe only — the merge that is actually written is
+    // recomputed under the lock below, so the caps it reads here do not matter.
+    const shape = decideCaps(coord.caps(), req.body ?? {});
+    if (!shape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
+    }
+    // THE READ-MODIFY-WRITE IS ONE CRITICAL SECTION, and that is the whole
+    // reason the mutex is here (self-review MAJOR). A partial body means the
+    // value written is `{...before, ...asked}`, so a merge base read OUTSIDE
+    // the lock is a lost update rather than a style point: with a dispatch
+    // holding the mutex across seconds of real ccd/tmux I/O, two operator saves
+    // of DISJOINT dials both read `{3, 12}`, and the second thunk writes back
+    // the first's field unchanged. `CoordMutex`'s own docstring names exactly
+    // this hazard — "two dispatches can no longer both read the count before
+    // either writes it" — and `POST /api/runs` puts its whole body inside for
+    // the same reason.
+    //
+    // `before` is therefore read HERE, under the lock, and is what the feed
+    // event reports: the "3 → 5" it prints is the transition that actually
+    // happened rather than one composed from a reading taken before the wait.
+    //
+    // The thunk is `async` because `CoordMutex.run` takes `() => Promise<T>`;
+    // the work inside it is synchronous, because `node:sqlite` is and this
+    // store's synchrony is a stated concurrency invariant, not an accident to
+    // be wrapped away.
+    const { before, view } = await coordMutex.run(async () => {
+      const current = coord.caps();
+      const merged = decideCaps(current, req.body ?? {});
+      // Unreachable: the same body passed the identical shape check above, and
+      // `decideCaps`'s verdict depends on the BODY alone — `current` only
+      // supplies the untouched fields. Thrown rather than swallowed, so if that
+      // ever stops being true it is a 500 that says so and not a silent 200.
+      if (!merged.ok) throw new Error(`caps decision changed under the lock: ${merged.detail}`);
+      // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
+      // timestamp belongs to the write that actually won the lock.
+      coord.setCaps(merged.next, Date.now());
+      return { before: current, view: capsView(coord) };
+    });
+    // A `run_events` row would be WRONG here: there is no run, and
+    // `recordRunEvent` writes `fromState === toState`, which `pushNewRuns`
+    // skips outright — the row would land and be seen by nobody. The durable
+    // feed is where a coordination change with no run belongs.
+    //
+    // A missing `NotifyLog` degrades the RECORD and never the write; and
+    // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
+    // here exactly the way `watch.ts:1225-1228` catches it. Refusing an
+    // operator's write because the feed archive is unavailable would be the
+    // collapse, not the safety.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'coord', sessionId: '',
+          title: 'caps changed',
+          body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
+                `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
+      } finally {
+        // FLUSH, like the only other `record()` caller in the tree
+        // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
+        // gives: `record()` bumps the in-memory seq, and a seq handed to a
+        // client but never persisted lets a restart re-mint the same
+        // `{epoch, seq}` pair for a different event — the stale-but-valid
+        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
+        // flush never rejects, and the caps write must not wait on it.
+        //
+        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
+        // inside the try, one line below `recordFeedEvent` — which throws
+        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
+        // the flush was skipped on precisely the path that needed it: the seq
+        // was already spent, the client already had it, and the file still
+        // held the older number. The seq is minted by `record()`, so its
+        // persistence must follow `record()` and nothing else.
+        void log.flush();
+      }
+    }
+    return reply.code(200).send({ ok: true, ...view });
   });
 
   /**
@@ -1585,11 +1852,13 @@ export function registerCoordRoutes(
     let runId: number | null;
     if (runIdRaw === undefined || runIdRaw === null) {
       runId = null;
-    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw)) {
+    // The same lower bound as the mail reader above and the kickoff route's
+    // (D-1165) — byte-identical logic, differing only in the refusal shape.
+    } else if (typeof runIdRaw === 'number' && Number.isInteger(runIdRaw) && runIdRaw >= 1) {
       runId = runIdRaw;
     } else {
       return reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: 'runId must be an integer when given' });
+        detail: 'runId must be a positive integer when given' });
     }
 
     if (paths.length > CLAIM_PATHS_MAX) {
@@ -1706,10 +1975,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD route in
-   * this file that is UNGATED: deliberately NOT behind `requireMailToken`, the
-   * `POST /api/runs/:id/abandon` shape (D-282's argument, applied by build 9
-   * D12/D16). The box token authenticates the fleet host, and the sessions
+   * `POST /api/claims/:id/break` — the OPERATOR's door, the THIRD of the FOUR
+   * routes in this file that are UNGATED: deliberately NOT behind
+   * `requireMailToken`, the `POST /api/runs/:id/abandon` shape (D-282's
+   * argument, applied by build 9 D12/D16). The ordinal is this door's PLACE in
+   * the order they were opened and stays true whatever opens next; the number
+   * beside it is a claim about the tree today, which is why it is now derived
+   * from `UNGATED.size` by a scanner rather than trusted —
+   * `POST /api/runs/:id/reclaim` (program-leverage wave 5) is the fourth. The
+   * box token authenticates the fleet host, and the sessions
    * that hold claims live there and hold that token — a session wedged behind
    * a dead holder's claim must not find the release valve behind the same key
    * the holder used to take it. So this rides the PWA's session-gated surface:
@@ -1794,12 +2068,19 @@ export function registerCoordRoutes(
    * `allocateDeviations` (`ledgerlog.ts`): recovery is MAX(file, db), so a
    * number is SKIPPED, never reissued — a gap costs nothing (the ledger is
    * prose, parsed by nothing); a reissue costs the incident. Until
-   * `sweepLedgerFloor` has seeded the project, allocation answers
-   * `409 not-seeded` — `openCoordDb`'s "refuse to start rather than open
-   * empty", one level up. No `coordMutex`: the decision and the commit are one
-   * synchronous store call with no await between them; the PRIMARY KEY
-   * (project, n) backstop firing under a future refactor that loses that
-   * transaction is retried 3x in-request (spec §3) and then thrown loudly.
+   * `sweepLedgerFloor` has seeded the project, allocation SEEDS IT HERE (wave
+   * 2, F2) and only then answers `409 not-seeded` — `openCoordDb`'s "refuse to
+   * start rather than open empty", one level up.
+   *
+   * No `coordMutex`, still — but the reason has NARROWED, so read it rather
+   * than reusing it. There IS now an await on this path (the synchronous floor
+   * seed), and it sits BETWEEN two `allocate()` calls rather than inside one:
+   * each call is still a single synchronous store transaction with nothing
+   * awaited inside it, which is the property that mattered. What the seed adds
+   * between them is idempotent by construction — `raiseLedgerFloor` only ever
+   * raises — so a racing writer costs a retry, never a wrong number. The
+   * PRIMARY KEY (project, n) backstop firing under a future refactor that loses
+   * that transaction is retried 3x in-request (spec §3) and then thrown loudly.
    *
    * The wire `floor` is the NEXT FREE number — the landed `AllocatedBlock`
    * carries the SEEDED floor, which allocation never moves (the next block
@@ -1849,7 +2130,31 @@ export function registerCoordRoutes(
         }
       }
     };
-    const r = allocate();
+    // SYNCHRONOUS SEED (wave 2, F2 — spec section 4 item 2). Allocate FIRST,
+    // and reach for the filesystem only once the allocator has said the one
+    // thing a seed can answer.
+    //
+    // That ordering is not an optimisation. `decideAllocation` checks
+    // `bad-count` BEFORE `not-seeded` deliberately, so a caller with both
+    // defects learns the one it can fix this instant; seeding up front would
+    // spend a document walk on a request that could never have been served,
+    // and avoiding that would mean a second copy of the count predicate here
+    // in L4 — where the decision does not belong.
+    let r = allocate();
+    let seedFailure: FloorMeasurement | null = null;
+    if (!r.ok && r.why === 'not-seeded') {
+      const m = await measureLedgerFloor(
+        { io: deps.io, projectsRoot: deps.cfg.projectsRoot }, project.trim());
+      if (m.ok) {
+        // `raiseLedgerFloor` only ever raises, in SQL rather than by caller
+        // discipline, so this is safe to run concurrently and repeatedly: a
+        // racing sweep that got there first simply wins.
+        coord.raiseLedgerFloor(project.trim(), m.scan.floor, m.scan.evidence, Date.now());
+        r = allocate();
+      } else {
+        seedFailure = m;
+      }
+    }
     if (r.ok) {
       const numbers = [...r.allocation.numbers];
       return reply.code(201).send({ ok: true, numbers,
@@ -1857,9 +2162,24 @@ export function registerCoordRoutes(
     }
     switch (r.why) {
       case 'not-seeded':
+        // TWO conditions, two sentences, because an operator acts on them
+        // differently: one is a box to fix, the other is a plan to write.
+        //
+        // The ternary's polarity is deliberate. `seedFailure` is null in
+        // exactly two cases — the seed was never attempted (unreachable on this
+        // arm, since `not-seeded` is what triggers it), or the seed SUCCEEDED
+        // and the retry still refused, which is a lost race and about which
+        // "could not be measured" is the honest thing to say. Defaulting the
+        // other way would claim a completed measurement that may never have
+        // run.
         return reply.code(409).send({ ok: false, error: 'not-seeded',
-          detail: `no floor for ${project.trim()} — sweepLedgerFloor has not scanned it yet; ` +
-            'the allocator fails shut rather than minting from a guess (D13)' });
+          detail: seedFailure !== null && seedFailure.why === 'no-refs'
+            ? `no floor for ${project.trim()} — its docs/superpowers plans and specs were read ` +
+              'and name no D-<n> at all, so there is nothing to seed from; the allocator fails ' +
+              'shut rather than minting from a guess (D13)'
+            : `no floor for ${project.trim()} — it could not be measured (the docs tree would ` +
+              'not list, a file would not read, or the walk ran out of budget), so nothing was ' +
+              'proven either way; the allocator fails shut rather than minting from a guess (D13)' });
       case 'bad-count':
         return reply.code(400).send({ ok: false, error: 'bad-request',
           detail: `count is an integer 1..${LEDGER_ALLOC_MAX} — a bigger block is likelier ` +
