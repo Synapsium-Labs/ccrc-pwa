@@ -58,6 +58,47 @@ function sources(dir: string): string[] {
 const ALL = ROOTS.flatMap(sources);
 const rel = (p: string): string => path.relative(ccrcRoot, p);
 
+/* `prose` and `passage` live at MODULE scope, not inside the one describe that
+ * first needed them. They were block-locals 245 lines BELOW the bare
+ * `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair at the
+ * abandonment-predicate test — so the cure this file defines was out of reach
+ * of the fourth instance of the disease, in the file that defines the cure
+ * (D-1439). Hoisting is the fix that also prevents the fifth: any describe here
+ * can now anchor a passage without writing the pair again, and writing it again
+ * in THIS file would be a second copy of a helper — the exact thing every other
+ * assertion in this suite forbids. */
+/** A docstring as a reader sees it: leading ` * ` gone, wrapping collapsed —
+ *  `coordinator-skill.test.ts`'s `flat()` lesson, applied to a JSDoc block.
+ *  Without it, "the ingress route\n   * ONLY" walks past every `toContain`. */
+const prose = (t: string): string =>
+  t.split('\n').map((l) => l.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+/** A named docstring slice between two literal anchors, flattened by `prose`.
+ *  `ledger-sweep.test.ts`'s `passage()`, copied for its reason as much as
+ *  its shape — and copied LATE: the three cases below shipped as a bare
+ *  `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair, which this
+ *  file's own header cites the lesson against without applying it (D-1426).
+ *
+ *  The failure is worse than the `''` the header warns about, and in the
+ *  opposite direction. A lost OPENING anchor does yield `''`. A lost CLOSING
+ *  one yields `-1`, and `String.slice(a, -1)` means "to length − 1" — so the
+ *  docstring silently becomes THE WHOLE REST OF THE FILE, and every
+ *  `toContain` below is satisfied by a blob that contains the entire module.
+ *  Measured 2026-09-04 by reverting each anchor with a one-word edit to
+ *  `store.ts`: the three slices ran to 197,980 / 76,803 / 160,592 chars and
+ *  all three cases stayed GREEN. The `> 300` floor was written for the empty
+ *  case and MAKES THAT WORSE rather than catching it — a 160KB blob clears a
+ *  300-char floor without slowing down. So both anchors are asserted, and the
+ *  closing one is searched for AFTER the opening one and must follow it. */
+const passage = (name: string, text: string, from: string, to: string): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const b = text.indexOf(to, a + from.length);
+  expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+  const out = prose(text.slice(a, b));
+  expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(300);
+  return out;
+};
+
 describe('the roots this scans', () => {
   it('actually found the four source trees, and the files the findings name', () => {
     // A scan over an empty list passes everything. This is the assertion that
@@ -441,10 +482,10 @@ describe('Build 7 nouns', () => {
     // not an absence assertion whose fixture cannot produce the presence.
     const defs = (store.match(/^const (?:ABANDONED_PARK_SQL|OUTSTANDING_OR_ABANDONED_SQL)\b/gm) ?? []).length;
     expect(defs, 'the two predicate definitions are not both present').toBe(2);
-    const doc = store.slice(
-      store.indexOf(' * The READ-side "still needs a human'),
-      store.indexOf('const OUTSTANDING_OR_ABANDONED_SQL'));
-    expect(doc.length, 'the predicate docstring anchors moved').toBeGreaterThan(300);
+    // Named apart from the sibling passage on the SAME anchors 250 lines below:
+    // two call sites sharing one name make an anchor failure unattributable.
+    const doc = passage('the abandonment-predicate docstring', store,
+      ' * The READ-side "still needs a human', 'const OUTSTANDING_OR_ABANDONED_SQL');
     expect(doc, 'the predicate docstring still calls the composed predicate one SQL definition')
       .not.toContain('in this one SQL definition');
   });
@@ -665,37 +706,6 @@ describe('store.ts docstrings that describe their own callers', () => {
    *  never counted as a call. */
   const codeOnly = (t: string): string =>
     t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
-  /** A docstring as a reader sees it: leading ` * ` gone, wrapping collapsed —
-   *  `coordinator-skill.test.ts`'s `flat()` lesson, applied to a JSDoc block.
-   *  Without it, "the ingress route\n   * ONLY" walks past every `toContain`. */
-  const prose = (t: string): string =>
-    t.split('\n').map((l) => l.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
-  /** A named docstring slice between two literal anchors, flattened by `prose`.
-   *  `ledger-sweep.test.ts`'s `passage()`, copied for its reason as much as
-   *  its shape — and copied LATE: the three cases below shipped as a bare
-   *  `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair, which this
-   *  file's own header cites the lesson against without applying it (D-1426).
-   *
-   *  The failure is worse than the `''` the header warns about, and in the
-   *  opposite direction. A lost OPENING anchor does yield `''`. A lost CLOSING
-   *  one yields `-1`, and `String.slice(a, -1)` means "to length − 1" — so the
-   *  docstring silently becomes THE WHOLE REST OF THE FILE, and every
-   *  `toContain` below is satisfied by a blob that contains the entire module.
-   *  Measured 2026-09-04 by reverting each anchor with a one-word edit to
-   *  `store.ts`: the three slices ran to 197,980 / 76,803 / 160,592 chars and
-   *  all three cases stayed GREEN. The `> 300` floor was written for the empty
-   *  case and MAKES THAT WORSE rather than catching it — a 160KB blob clears a
-   *  300-char floor without slowing down. So both anchors are asserted, and the
-   *  closing one is searched for AFTER the opening one and must follow it. */
-  const passage = (name: string, text: string, from: string, to: string): string => {
-    const a = text.indexOf(from);
-    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
-    const b = text.indexOf(to, a + from.length);
-    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
-    const out = prose(text.slice(a, b));
-    expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(300);
-    return out;
-  };
 
   it('the predicate docstring names the join kinds its callers actually carry', () => {
     const store = readFileSync(STORE, 'utf8');
