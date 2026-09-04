@@ -326,7 +326,7 @@ agent then omits it and a newer server reads a bare `missing: true` as UNMEASURE
 (`unreadable?: true`) would make an old agent's every bare `missing: true` read as proof of absence, which is the
 current defect with extra steps.
 
-- [ ] **Step 1: Write the failing test** — append to `agent/test/fileops.test.ts` after **:163**:
+- [x] **Step 1: Write the failing test** — append to `agent/test/fileops.test.ts` after **:163**:
 
 ```ts
   it('stat marks a genuinely missing whitelisted path with absent:true', async () => {
@@ -356,13 +356,13 @@ current defect with extra steps.
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — Run: `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`
+- [x] **Step 2: Run it and watch it fail** — Run: `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`
       Expected: the first case FAILS with
       `expected { ok: true, missing: true } to match object { ok: true, missing: true, absent: true }`
       (the marker does not exist yet). The second case PASSES already — it is the pin that the fix must not break, and it
       only becomes load-bearing once the marker exists. Both are stated here so Step 5's mutation table has both poles.
 
-- [ ] **Step 3: Implement** — `agent/src/fileops.ts`, replacing **:91-96**:
+- [x] **Step 3: Implement** — `agent/src/fileops.ts`, replacing **:91-96**:
 
 ```ts
 /** `statMeasured`'s result — the `stat` op's half of `ReadResult` above, and
@@ -435,12 +435,12 @@ and `case 'stat'` (**:276-282**):
 // readB64 → {dataB64: string|null}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
 ```
 
-- [ ] **Step 4: Run it and watch it pass** — `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`, then
+- [x] **Step 4: Run it and watch it pass** — `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`, then
       the whole agent suite: `cd agent && npm run test`. `agent/test/malformed.test.ts`'s 25 cases must stay green
       (nothing here touches `validateReq`), and `agent/test/fileops.test.ts:147-157`'s existing
       `toMatchObject({ ok: true, missing: true })` still passes because `toMatchObject` is a subset match.
 
-- [ ] **Step 5: MUTATION CHECK** — three, each reverted:
+- [x] **Step 5: MUTATION CHECK** — three, each reverted:
   1. Delete the ` ...(r.absent ? { absent: true as const } : {})` spread from `statPayload`.
      Expect RED on *stat marks a genuinely missing whitelisted path with absent:true* with
      `expected { ok: true, missing: true } to match object { ok: true, missing: true, absent: true }`.
@@ -452,7 +452,7 @@ and `case 'stat'` (**:276-282**):
   3. Change it to `absent: false`. Expect RED on case 1's assertion again, for the opposite reason (a proven ENOENT
      refused to say so). Together 2 and 3 pin the errno branch in BOTH directions, so neither constant survives.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "fix(agent): stat reports a proven ENOENT as absent, and stops calling every other errno missing (D-1396)"`
 
 ---
@@ -482,7 +482,7 @@ means the 17 existing `io.stat` call sites keep byte-identical behaviour while t
 `stat` for free. Reusing `ReadFailure` rather than minting a second two-member union keeps the vocabulary enumerated
 once.
 
-- [ ] **Step 1: Write the failing test** — append to `server/test/io.test.ts` after **:112**:
+- [x] **Step 1: Write the failing test** — append to `server/test/io.test.ts` after **:112**:
 
 ```ts
 describe('localIO.statMeasured', () => {
@@ -567,7 +567,7 @@ and to the stub-client describe, after **:178**:
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — Run:
+- [x] **Step 2: Run it and watch it fail** — Run:
       `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`
       Expected: FAIL at compile/type level first —
       `TS2339: Property 'statMeasured' does not exist on type 'FleetIO'` — and at runtime
@@ -580,7 +580,7 @@ and to the stub-client describe, after **:178**:
       (`pwa/` is different: `pwa/vite.config.ts` sets `typecheck: { enabled: true }`, so a PWA task
       DOES see its TS error from `vitest run` — see Task 4, whose prediction is correct as written.)
 
-- [ ] **Step 3: Implement** — `server/src/io.ts`. Extend the `ReadFailure` docstring's first sentence (**:5-9**) so the
+- [x] **Step 3: Implement** — `server/src/io.ts`. Extend the `ReadFailure` docstring's first sentence (**:5-9**) so the
       vocabulary's second user is declared where it is defined:
 
 ```ts
@@ -711,7 +711,7 @@ export function absentStatIO(predicate: (path: string) => boolean): FleetIO {
 }
 ```
 
-- [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
+- [x] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
       then the suites that own the 17 existing `io.stat` callers:
       `cd server && ./node_modules/.bin/vitest run test/transcript-ladder.test.ts test/sessionws.test.ts test/coord-fingerprint.test.ts`,
       then the suite that actually owns `src/watch.ts`'s single `io.stat` call site (`watch.ts:1586`,
@@ -726,7 +726,7 @@ export function absentStatIO(predicate: (path: string) => boolean): FleetIO {
       real evidence; the named suite is the fast signal.
       All must stay green — the derivation makes this a no-op for them.
 
-- [ ] **Step 5: MUTATION CHECK** — two, each reverted:
+- [x] **Step 5: MUTATION CHECK** — two, each reverted:
   1. In `remote/io.ts`'s `statMeasured`, change `r.absent === true ? 'absent' : 'unreadable'` to
      `r.missing === true ? 'absent' : 'unreadable'`.
      Expect RED on *an OLDER AGENT — {missing:true} with no `absent` key* with
@@ -739,7 +739,7 @@ export function absentStatIO(predicate: (path: string) => boolean): FleetIO {
      `localIO.readFileMeasured`'s existing EISDIR case at **io.test.ts:36-41** — one mutation, two files' worth of red,
      which is the point of having one errno rule instead of three.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "feat(server): statMeasured on FleetIO — one reader of the stat marker, stat derived (D-1396, D-1397)"`
 
 ---
@@ -768,7 +768,7 @@ for a missing directory, a forbidden path and a disconnected agent alike, and "t
 ambiguity as a confident empty chat." Copy it. Consolidating onto ONE stat also removes a real TOCTOU: today
 `sessionws.ts:564` and `tail.ts:18` stat the same path twice and can disagree.
 
-- [ ] **Step 1: Write the failing test** — update `server/test/transcript-tail.test.ts:46-49` and add one case:
+- [x] **Step 1: Write the failing test** — update `server/test/transcript-tail.test.ts:46-49` and add one case:
 
 ```ts
   it('missing file returns empty events, offset 0, and says so as a MEASUREMENT', async () => {
@@ -823,12 +823,12 @@ And in `server/test/sessionws.test.ts`, after **:1034**:
 
 (`sessionws.test.ts:23` gains `degradedStatIO` in the existing `./ioDoubles.js` import.)
 
-- [ ] **Step 2: Run it and watch it fail** — Run:
+- [x] **Step 2: Run it and watch it fail** — Run:
       `cd server && ./node_modules/.bin/vitest run test/transcript-tail.test.ts test/sessionws.test.ts`
       Expected: FAIL — `expected { events: [], offset: 0 } to deeply equal { events: [], offset: 0, missing: true, measured: true }`
       in the first file, and `expected undefined to be false` (`backlog.fileMeasured`) in the second.
 
-- [ ] **Step 3: Implement** — `server/src/transcript/tail.ts`, replacing **:13-32**:
+- [x] **Step 3: Implement** — `server/src/transcript/tail.ts`, replacing **:13-32**:
 
 ```ts
 /**
@@ -916,11 +916,11 @@ claim a distinction it has not yet acquired.)*
       foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
 ```
 
-- [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/transcript-tail.test.ts test/sessionws.test.ts`,
+- [x] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/transcript-tail.test.ts test/sessionws.test.ts`,
       then `cd server && npm run test` (the frame is cast in several suites; `sessionws.test.ts:974-1034`'s existing
       foreign-account/searchComplete case must stay green).
 
-- [ ] **Step 5: MUTATION CHECK** — two, each reverted:
+- [x] **Step 5: MUTATION CHECK** — two, each reverted:
   1. In `readBacklog`, change `measured: st.reason === 'absent'` to `measured: true`.
      Expect RED on *a transcript whose stat cannot be MEASURED …* with
      `expected { …, measured: true } to deeply equal { …, measured: false }`, and on the sessionws case with
@@ -929,7 +929,7 @@ claim a distinction it has not yet acquired.)*
      Expect RED on the sessionws case with `expected undefined to be false`. Right reason: the fact stops crossing the
      seam, which is where it is needed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "fix(server): the backlog frame says whether the transcript was measured, on one stat (D-1398, D-1399)"`
 
 ---
@@ -955,7 +955,7 @@ suppress "No messages yet" rather than assert an empty chat. The `rotated` arm (
 facts because "a banner that outlives its cause reads as a statement about what is on screen now"; `fileMeasured` is a
 fifth and must go with them.
 
-- [ ] **Step 1: Write the failing test** — append to `pwa/test/session-lifecycle.test.tsx` after **:535**:
+- [x] **Step 1: Write the failing test** — append to `pwa/test/session-lifecycle.test.tsx` after **:535**:
 
 ```ts
   // D-114 at the last seam. The transcript EXISTS; the server could not
@@ -1031,7 +1031,7 @@ the fifth fact belongs inside it. It drives the pure reducer (`applySessionMsg(e
     expect(s.file).toBeNull();
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — Run: `cd pwa && ./node_modules/.bin/vitest run test/session-lifecycle.test.tsx test/stores.test.ts`
+- [x] **Step 2: Run it and watch it fail** — Run: `cd pwa && ./node_modules/.bin/vitest run test/session-lifecycle.test.tsx test/stores.test.ts`
       Expected: FAIL — `Unable to find an element with the text: Can't read the fleet host right now`
       (the screen still prints the can't-find sentence), and in `stores.test.ts`
       `expected undefined to be false`.
@@ -1042,7 +1042,7 @@ the fifth fact belongs inside it. It drives the pure reducer (`applySessionMsg(e
       and only the runtime half of the old prediction can fire. A predicted RED must be read against
       the state its own plan has already reached, not against HEAD as the plan was drafted.
 
-- [ ] **Step 3: Implement** — `pwa/src/stores/session.ts`. After **:107**:
+- [x] **Step 3: Implement** — `pwa/src/stores/session.ts`. After **:107**:
 
 ```ts
   /** Whether the transcript itself was MEASURED. False means the server's
@@ -1100,7 +1100,7 @@ the banner (**:305-317**):
       )}
 ```
 
-- [ ] **Step 4: Run it and watch it pass** — `cd pwa && ./node_modules/.bin/vitest run test/session-lifecycle.test.tsx test/stores.test.ts`,
+- [x] **Step 4: Run it and watch it pass** — `cd pwa && ./node_modules/.bin/vitest run test/session-lifecycle.test.tsx test/stores.test.ts`,
       then `cd pwa && npm run test`. **Six `SessionSnapshot` literals must gain `fileMeasured: true`**: five one-line
       ones — `pwa/test/stores.test.ts:1136`, `tasks.test.tsx:84`, `mail-card.test.tsx:197`, `:419`,
       `mail-strip.test.tsx:228` (`grep -rn "searchComplete: true, file: null" pwa/test | wc -l` → 5, 2026-09-02) — plus
@@ -1108,7 +1108,7 @@ the banner (**:305-317**):
       `grep -rn "SessionSnapshot" pwa/test`). A required snapshot member is a compile error until each one answers it,
       which is exactly why it goes on `SessionSnapshot` rather than staying optional.
 
-- [ ] **Step 5: MUTATION CHECK** — three, each reverted:
+- [x] **Step 5: MUTATION CHECK** — three, each reverted:
   1. `fileMeasured: msg.fileMeasured ?? true` → `?? false`. Expect RED on *an older server that sends no fileMeasured*
      with `Unable to find an element with the text: Can't find this session's transcript`. Right reason: omission
      stopped meaning "measured" and every legacy server started crying wolf.
@@ -1118,7 +1118,7 @@ the banner (**:305-317**):
   3. Delete `fileMeasured: true,` from the `rotated` arm. Expect RED on the stores case with `expected false to be true`.
      Right reason: a banner outliving its transcript.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "fix(pwa): an unmeasurable transcript is not a missing one, and rotation forgets it (D-1398)"`
 
 ---
@@ -1153,7 +1153,7 @@ ENOTDIR/EACCES-on-the-parent-chain, so today's behaviour is preserved for every 
 `chmod 000` case (**coord-fingerprint.test.ts:89-106**) and EISDIR case (**:107-118**) both still take the
 stat-succeeds branch and still return `null`.
 
-- [ ] **Step 1: Write the failing test** — `server/test/coord-fingerprint.test.ts` needs two import edits first
+- [x] **Step 1: Write the failing test** — `server/test/coord-fingerprint.test.ts` needs two import edits first
       (**:8** gains `rmSync`, **:10** becomes `import { localIO, type FleetIO } from '../src/io.js';`), then append
       after **:118**:
 
@@ -1185,13 +1185,13 @@ stat-succeeds branch and still return `null`.
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — Run: `cd server && ./node_modules/.bin/vitest run test/coord-fingerprint.test.ts`
+- [x] **Step 2: Run it and watch it fail** — Run: `cd server && ./node_modules/.bin/vitest run test/coord-fingerprint.test.ts`
       Expected: the first case FAILS with
       `expected '<OTHER sha>' to be null` — today the derived `io.stat` collapses the double's `unreadable` to `null`,
       the arm reads that as "no loose ref", and the stale packed tip is returned. The second case passes already and is
       the anti-over-correction pin.
 
-- [ ] **Step 3: Implement** — `server/src/coord/gitref.ts`, replacing **:90-102**:
+- [x] **Step 3: Implement** — `server/src/coord/gitref.ts`, replacing **:90-102**:
 
 ```ts
   if (loose.reason === 'unreadable') {
@@ -1248,13 +1248,13 @@ Then re-state the two now-historical citations, in the same commit. `server/src/
 *(Neither restatement carries a guard of its own — they are history, not behaviour. Stated so no reviewer looks for
 one.)*
 
-- [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/coord-fingerprint.test.ts`,
+- [x] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/coord-fingerprint.test.ts`,
       then the coordination suites that consume a tip:
       `cd server && ./node_modules/.bin/vitest run test/coord-prhistory.test.ts test/peers-route.test.ts test/divergence-sweep.test.ts`.
       Re-run `coord-fingerprint.test.ts` IN ISOLATION if it flakes — it is not on the known-flake list, so a repeat
       failure is real.
 
-- [ ] **Step 5: MUTATION CHECK** — two, each reverted:
+- [x] **Step 5: MUTATION CHECK** — two, each reverted:
   1. Delete the second line (`if (st.reason !== 'absent') return null;`), leaving today's polarity.
      Expect RED on *refuses when the loose ref can be NEITHER read NOR measured* with `expected '<OTHER sha>' to be null`.
      Right reason: an unmeasurable stat went back to authorising a stale packed tip.
@@ -1263,7 +1263,7 @@ one.)*
      `expected null to be '<OTHER sha>'`. Right reason: the fix over-corrected into a blanket refusal, which would
      answer `tip-unmeasurable` for every packed branch on every fleet.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "fix(coord): a loose ref that cannot be measured refuses the tip instead of settling from packed-refs (D-1400)"`
 
 ---
@@ -1293,7 +1293,7 @@ and is REPORTED, never folded and never mirrored into `localIO` — capping `loc
 server serves today. `readFrom` swallows twice (**:80** and **:84**) and its EOF arm at **:82** is a POSITIVE answer
 that must stay distinct from both.
 
-- [ ] **Step 1: Write the failing test** — append to `agent/test/fileops.test.ts` after **:129**:
+- [x] **Step 1: Write the failing test** — append to `agent/test/fileops.test.ts` after **:129**:
 
 ```ts
   it('readB64 marks a genuinely missing whitelisted file absent:true', async () => {
@@ -1356,12 +1356,12 @@ that must stay distinct from both.
 `import { MAX_READ_B64_BYTES } from '../src/fileops.js';` — importing the constant rather than re-typing `12 * 1024 * 1024`
 keeps the cardinal enumerated once, which is why Step 3 exports it.)
 
-- [ ] **Step 2: Run it and watch it fail** — Run: `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`
+- [x] **Step 2: Run it and watch it fail** — Run: `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`
       Expected: FAIL at import — `SyntaxError: The requested module '../src/fileops.js' does not provide an export named 'MAX_READ_B64_BYTES'` —
       and once that export lands, `expected { ok: true, dataB64: null } to match object { ok: true, dataB64: null, absent: true }`
       on the first case and `… tooLarge: true, size: 12582913 }` on the third.
 
-- [ ] **Step 3: Implement** — `agent/src/fileops.ts`, replacing **:58-85**:
+- [x] **Step 3: Implement** — `agent/src/fileops.ts`, replacing **:58-85**:
 
 ```ts
 /** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`
@@ -1483,12 +1483,12 @@ and the two cases (**:257-269**):
 // readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
 ```
 
-- [ ] **Step 4: Run it and watch it pass** — `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`, then
+- [x] **Step 4: Run it and watch it pass** — `cd agent && ./node_modules/.bin/vitest run test/fileops.test.ts`, then
       `cd agent && npm run test`. The existing `readB64 returns null for a missing whitelisted file` (**:122-129**) and
       `readFrom reads from an offset` (**:95-101**) stay green: both use `toMatchObject`, and neither payload's existing
       keys moved.
 
-- [ ] **Step 5: MUTATION CHECK** — three, each reverted:
+- [x] **Step 5: MUTATION CHECK** — three, each reverted:
   1. In `readB64Payload`, replace the `too-large` branch with `return { dataB64: null };`.
      Expect RED on *readB64 REPORTS an over-cap clip as tooLarge …* with
      `expected { ok: true, dataB64: null } to match object { ok: true, dataB64: null, tooLarge: true, size: 12582913 }`.
@@ -1508,7 +1508,7 @@ and the two cases (**:257-269**):
      detects its absence is the "pin whose premise is never established", which is the class this
      wave exists to remove.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "fix(agent): readB64 reports over-cap and absence, readFrom reports absence, EOF stays positive (D-1401)"`
 
 ---
@@ -1535,7 +1535,7 @@ fold four (**io.ts:95-105**) and two (**:107-109**). The markers now exist on th
 `size: number | null` on the too-large arm rather than a defaulted `0`: an agent that sent `tooLarge` without a size
 would otherwise be reported as a zero-byte over-cap file, which is a manufactured number at a seam.
 
-- [ ] **Step 1: Write the failing test** — in `server/test/io.test.ts`, add siblings to the two describes:
+- [x] **Step 1: Write the failing test** — in `server/test/io.test.ts`, add siblings to the two describes:
 
 ```ts
 describe('localIO.readFileFromMeasured', () => {
@@ -1634,7 +1634,7 @@ file gains `import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';` �
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — Run:
+- [x] **Step 2: Run it and watch it fail** — Run:
       `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`
       Expected: FAIL with `TS2339: Property 'readFileB64Measured' does not exist on type 'FleetIO'` and, at runtime,
       `TypeError: localIO.readFileFromMeasured is not a function`.
@@ -1646,7 +1646,7 @@ file gains `import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';` �
       (`pwa/` is different: `pwa/vite.config.ts` sets `typecheck: { enabled: true }`, so a PWA task
       DOES see its TS error from `vitest run` — see Task 4, whose prediction is correct as written.)
 
-- [ ] **Step 3: Implement** — `server/src/io.ts`, after `MeasuredStat`:
+- [x] **Step 3: Implement** — `server/src/io.ts`, after `MeasuredStat`:
 
 ```ts
 /** A binary read that distinguishes its THREE failure modes. `too-large` is
@@ -1755,7 +1755,7 @@ Interface members, replacing **:46-47**:
     },
 ```
 
-- [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
+- [x] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/io.test.ts test/remote-io.test.ts`,
       then the suites whose subjects call the derived methods:
       `cd server && ./node_modules/.bin/vitest run test/routes.test.ts test/transcript-tail.test.ts test/lifecycle-mirror.test.ts test/lifecycle-replay.test.ts test/ask.test.ts test/naming.test.ts test/dialog.test.ts`.
       **There is no `test/coord-mirror.test.ts`** — the MODULE is `server/src/coord/mirror.ts`, and
@@ -1765,7 +1765,7 @@ Interface members, replacing **:46-47**:
       and the suites importing those are the ones named. Re-derive rather than trust this list.
       Behaviour of all four derived methods is unchanged, so all must be green.
 
-- [ ] **Step 5: MUTATION CHECK** — three, each reverted:
+- [x] **Step 5: MUTATION CHECK** — three, each reverted:
   1. In `remote/io.ts`'s `readFileB64Measured`, delete the `tooLarge` branch.
      Expect RED on *a modern agent answering {dataB64: null, tooLarge: true, size: N}* with
      `expected { ok: false, reason: 'unreadable' } to deeply equal { ok: false, reason: 'too-large', size: 12582913 }`.
@@ -1778,7 +1778,7 @@ Interface members, replacing **:46-47**:
      Expect RED on *has NO cap, deliberately* with `expected false to be true`. Right reason: the local half started
      refusing a file it serves today, which is the equalisation this seam rejects.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "feat(server): readFileB64Measured + readFileFromMeasured, one reader per marker, both derived (D-1401)"`
 
 ---
@@ -1805,7 +1805,7 @@ real offset, so an unreadable transcript renders as an empty chat with no signal
 delivery surface for that fact (`empty` is gated on `fileMeasured`); this arm is what makes it reachable from a real
 server.
 
-- [ ] **Step 1: Write the failing test** — `server/test/routes.test.ts`: give `makeApp` an optional io (**:37** and
+- [x] **Step 1: Write the failing test** — `server/test/routes.test.ts`: give `makeApp` an optional io (**:37** and
       **:66**), then two cases in the `clip route` describe:
 
 ```ts
@@ -1883,12 +1883,12 @@ status-code mismatch and not a fixture that never fired.)*
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail** — Run:
+- [x] **Step 2: Run it and watch it fail** — Run:
       `cd server && ./node_modules/.bin/vitest run test/routes.test.ts test/transcript-tail.test.ts`
       Expected: FAIL with `expected 404 to be 413` and `expected 404 to be 502` (the route still folds), and
       `expected { …, measured: true } to deeply equal { …, measured: false }` in the tail file.
 
-- [ ] **Step 3: Implement** — `server/src/server.ts`, replacing **:1826-1832**:
+- [x] **Step 3: Implement** — `server/src/server.ts`, replacing **:1826-1832**:
 
 ```ts
     const r = await deps.io.readFileB64Measured(file);
@@ -1932,12 +1932,12 @@ status-code mismatch and not a fixture that never fired.)*
 
 (the remainder of the function reads `res.data` / `res.size` unchanged.)
 
-- [ ] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/routes.test.ts test/transcript-tail.test.ts test/sessionws.test.ts`,
+- [x] **Step 4: Run it and watch it pass** — `cd server && ./node_modules/.bin/vitest run test/routes.test.ts test/transcript-tail.test.ts test/sessionws.test.ts`,
       then `cd server && npm run test` and `cd agent && npm run test` and `cd pwa && npm run test`.
       `routes.test.ts:573-579` (*404s a clip that is not on disk*) must stay green — in local mode
       `readFileB64Measured` answers `absent` for a real ENOENT, so 404 survives as the *measured* answer.
 
-- [ ] **Step 5: MUTATION CHECK** — three, each reverted:
+- [x] **Step 5: MUTATION CHECK** — three, each reverted:
   1. In the clip route, replace the three-way branch with `if (!r.ok) return reply.code(404).send({ ok: false, error: 'not-found' });`.
      Expect RED on both new route cases with `expected 404 to be 413` and `expected 404 to be 502`.
      Right reason: six conditions back to one status that asserts absence.
@@ -1949,7 +1949,7 @@ status-code mismatch and not a fixture that never fired.)*
      Expect RED on *a transcript whose BYTES cannot be read* with `expected true to be false`.
      Right reason: the unreadable body went back to being indistinguishable from an empty transcript.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
       `git commit -am "fix(server): the clip route and readBacklog stop narrowing what they measured (D-1402, D-1403)"`
 
 ---
@@ -2072,7 +2072,7 @@ pair lives in `pwa/src/session/MailStrip.tsx:167`, in a different package, which
 could not reach (`single-definition.test.ts`'s `ROOTS`, `:32-37`, are `shared` + `server/src` + `pwa/src` +
 `agent/src`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Insert in `server/test/single-definition.test.ts` immediately after line 458 (`ALL`, `rel`, `ccrcRoot`,
 `path` and `readFileSync` are all already in scope at `:17-59`):
@@ -2151,12 +2151,12 @@ Insert in `server/test/single-definition.test.ts` immediately after line 458 (`A
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t "delivery terminal pair"`
 Expected: FAIL on `expect(holders, 'a hand-written SQL list of the delivery terminal pair').toEqual([])` with
 received `[ 'server/src/coord/store.ts' ]`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 **(3a)** `shared/api.ts`, insert immediately after line 3055 (`isMailDeliveryState`'s closing `}`):
 
@@ -2252,7 +2252,7 @@ grep -c "('acked','rejected')" server/src/coord/store.ts            # -> 0
 grep -c 'TERMINAL_DELIVERY_SQL' server/src/coord/store.ts           # -> 14 (13 uses + the definition)
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 From inside `server/`, in this order:
 `./node_modules/.bin/vitest run test/single-definition.test.ts`
 `./node_modules/.bin/vitest run test/coord-store.test.ts`
@@ -2261,7 +2261,7 @@ From inside `server/`, in this order:
 `npm run build` (tsc — the new import must resolve, and the six rewritten fragments must still typecheck as
 template literals)
 
-- [ ] **Step 5: MUTATION CHECK** — in `server/src/coord/store.ts`, change the new definition to
+- [x] **Step 5: MUTATION CHECK** — in `server/src/coord/store.ts`, change the new definition to
 `const TERMINAL_DELIVERY_SQL = "('acked','rejected')";` (a hand-written list, byte-identical in behaviour).
 Expect RED on `./node_modules/.bin/vitest run test/single-definition.test.ts -t "delivery terminal pair"`:
 `a hand-written SQL list of the delivery terminal pair` receives `[ 'server/src/coord/store.ts' ]`, and the
@@ -2279,7 +2279,7 @@ definition `toMatch` still passes, which is precisely the gap being closed. Othe
 mutation (`mail-hardening.test.ts`'s markIngested/bumpReplayCount tests, `coord-store.test.ts`'s R1/H1/H2) —
 expected, and not the measurement. Revert both.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add shared/api.ts server/src/coord/store.ts server/test/single-definition.test.ts && git commit -m "feat(wave8): one TERMINAL_DELIVERY_STATES, and the scan that forbids the second copy (D-1405, D-1404, D-1406)"
 ```
@@ -2327,7 +2327,7 @@ test is "an EXCLUSION of the two terminal words, not an allow-list of the live o
 `pwa/test/mail-strip.test.tsx:557-563` already pins that property behaviourally — so the conversion must
 preserve it, not restate it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Insert in `server/test/single-definition.test.ts` immediately after the `it` Task 20 added:
 
@@ -2362,12 +2362,12 @@ Insert in `server/test/single-definition.test.ts` immediately after the `it` Tas
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t "in JS too"`
 Expected: FAIL on `a hand-written JS disjunction of the delivery terminal pair` with received
 `[ 'pwa/src/session/MailStrip.tsx' ]`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `pwa/src/session/MailStrip.tsx`, extend the value import (`:23-26`, the block that currently reads
 `import {\n  MAIL_MAX_ATTEMPTS, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,\n} from '../../../shared/api';`):
@@ -2413,14 +2413,14 @@ Leave `statusArm`'s `if (item.state === 'rejected') return 'abandoned';` alone �
 asking a different question ("is this row abandoned"), not a copy of the pair, and the scan's own third
 self-check pins that it stays legal.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts`
 `cd pwa && ./node_modules/.bin/vitest run test/mail-strip.test.tsx` — the behavioural half; its
 `keeps a gate on the \`unknown\` state` test (`:557-563`) is what proves the conversion preserved the
 exclusion rather than turning it into an allow-list.
 `cd pwa && npm run build`
 
-- [ ] **Step 5: MUTATION CHECK** — in `pwa/src/session/MailStrip.tsx:167`, revert to
+- [x] **Step 5: MUTATION CHECK** — in `pwa/src/session/MailStrip.tsx:167`, revert to
 `if (item.state === 'acked' || item.state === 'rejected') return null;`. Expect RED on
 `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t "in JS too"` — `holders`
 receives `[ 'pwa/src/session/MailStrip.tsx' ]` — while `cd pwa && ./node_modules/.bin/vitest run test/mail-strip.test.tsx`
@@ -2433,7 +2433,7 @@ being measured.)
 now returns a hold instead of `null`. Right reason: "no disjunction anywhere" must not be satisfiable by
 removing the exclusion, and this is the mutant that would do it. Revert both.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add pwa/src/session/MailStrip.tsx server/test/single-definition.test.ts && git commit -m "refactor(wave8): the client reads the terminal pair from L0 too, and a scan for its JS shape (D-1404)"
 ```
@@ -2464,7 +2464,7 @@ freshly-`queueDelivery`'d row and use the method as the FIXTURE that establishes
 a terminal row survives it. That is a mutation-table gap on the one writer `closeRun` calls (`store.ts:967`)
 from inside its own transaction.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Extend the import at `server/test/coord-store.test.ts:11` — it currently reads
 `import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR } from '../src/coord/store.js';`:
@@ -2520,7 +2520,7 @@ Insert after line **926**, still inside `describe('CoordStore: mail delivery rep
 If Task 25 has already landed in your tree, `s.markAcked(...)` returns a union rather than a boolean; the call
 above ignores the return either way, so no edit is needed.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 This test PASSES on the clean tree — the guard already ships; the defect is that nothing measured it. So the
 red-first measurement is the MUTANT, and it is taken FIRST, before the test exists:
@@ -2535,7 +2535,7 @@ red-first measurement is the MUTANT, and it is taken FIRST, before the test exis
    `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts -t "cancelOutstandingDeliveries leaves an acked row"`
    → PASS.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 No source change. The guard already exists — `server/src/coord/store.ts:995-996`, verbatim at `5e9f650d`:
 
 ```ts
@@ -2543,10 +2543,10 @@ No source change. The guard already exists — `server/src/coord/store.ts:995-99
       'AND mailId IN (SELECT id FROM mail WHERE runId = ?)',
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK** — drop ONLY the state clause, keeping the `WHERE` keyword. This is a
+- [x] **Step 5: MUTATION CHECK** — drop ONLY the state clause, keeping the `WHERE` keyword. This is a
 **two-line** edit; do not delete the tail of the first line, because that removes `WHERE` itself and SQLite
 then parses `lastError = ('run closed' AND mailId IN (…))` as a boolean expression against EVERY row, which
 reds for the wrong reason. Change the two lines above to read:
@@ -2562,7 +2562,7 @@ Expect RED on the new test at the FIRST assertion —
 Right reason: the guard's only job is that a terminal row is not re-parked, and the `live` assertion still
 PASSES, proving the red is "a finished row was overwritten", not "the method stopped working". Revert.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/test/coord-store.test.ts && git commit -m "test(wave8): red-on-mutation for cancelOutstandingDeliveries' terminality guard (D-1407)"
 ```
@@ -2597,7 +2597,7 @@ green. `noteGate` is the single writer of EVERY `MailGate` member (its only prod
 `watch.ts:2371`), so an unpinned guard there means a parked row can silently acquire a gate line claiming
 something is still holding a delivery that was abandoned.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append inside the existing `describe` in `server/test/mail-hardening.test.ts`, after the `bumpReplayCount`
 test that ends at `:211` (the file's `now` const is at `:147`, `store()` at `:12-13`):
@@ -2646,7 +2646,7 @@ test that ends at `:211` (the file's `now` const is at `:147`, `store()` at `:12
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 As in Task 22 the guard already ships, so the tests pass on the clean tree and the red-first measurement is
 the mutant, taken FIRST:
@@ -2658,17 +2658,17 @@ the mutant, taken FIRST:
 3. Revert, add the tests, and confirm:
    `cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts -t "noteGate"` → 3 passed.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 No source change. The guard already exists as the last line of `noteGate`'s statement, reading
 `"WHERE id = ? AND state NOT IN ('acked','rejected')",` before Task 20 and
 `` `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`, `` after it.
 Locator: `grep -n 'WHERE id = ? AND state NOT IN' server/src/coord/store.ts` — `noteGate`'s is the one
 directly under `'gateCount = CASE WHEN ? THEN gateCount + 1 ELSE 1 END, gateSince = ? ' +`.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 `cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK** — in `noteGate`'s statement, drop the guard so that line reads exactly:
+- [x] **Step 5: MUTATION CHECK** — in `noteGate`'s statement, drop the guard so that line reads exactly:
 
 ```ts
       'WHERE id = ?',
@@ -2682,7 +2682,7 @@ Right reason: a row that was parked or acked acquired a fresh gate claim, which 
 forbids — and the third test stays GREEN, proving `noteGate` still writes on a live row and the red is not
 "the method stopped working". Revert.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/test/mail-hardening.test.ts && git commit -m "test(wave8): red-on-mutation for noteGate's terminality guard (D-1408)"
 ```
@@ -2733,7 +2733,7 @@ caller-invisible-refusal defect this wave is closing everywhere else — the def
 `SetWorkItemResult` docstring names ("A refusal that the caller cannot see is a refusal that reads as a
 success").
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Insert in `server/test/coord-store.test.ts` immediately after line **482** (the closing `  });` of the
 existing `setDeliveryEnvelope overwrites a delivery's stored envelope in place…` test), inside the same
@@ -2774,12 +2774,12 @@ describe. If Task 22 has not landed, extend `:11`'s import the same way it does;
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts -t "setDeliveryEnvelope refuses a terminal row"`
 Expected: FAIL at the first assertion — `expected undefined to deeply equal { ok: true }` (the method returns
 `void` today).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Keep the existing docstring at `:2047-2063` and APPEND these paragraphs to it (i.e. replace its closing
 `   * computed. */` line with `   * computed.` followed by the block below), then replace `:2064-2066`:
@@ -2860,7 +2860,7 @@ and `routes.ts:1204`. That is deliberate and is the fail-shut choice — a syste
 be stamped is a mail no recipient can ever ack, and `queueSystemMail`'s existing `{ queued: false }` means
 "the dedupe guard suppressed it", a different and true statement that this must not borrow.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts`
 `cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts`
 `cd server && ./node_modules/.bin/vitest run test/coord-kickoff.test.ts`
@@ -2868,7 +2868,7 @@ be stamped is a mail no recipient can ever ack, and `queueSystemMail`'s existing
 `cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts`
 `cd server && npm run build`
 
-- [ ] **Step 5: MUTATION CHECK** — two mutations, each with its own red.
+- [x] **Step 5: MUTATION CHECK** — two mutations, each with its own red.
 **(a) Drop the guard:** change the statement back to
 `'UPDATE mail_deliveries SET envelope = ? WHERE id = ?'` (a plain single-quoted string; the binds
 `.run(envelope, id)` are unchanged, so there is no parameter-count error). Expect RED with
@@ -2882,7 +2882,7 @@ Right reason: that is the overloaded-value-at-a-seam this wave exists to remove,
 can see it — the first two assertions stay green under this mutation, which is what makes the red name the
 collapse rather than a broken method. Revert both.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/src/coord/store.ts server/src/coord/routes.ts server/src/coord/rundefs.ts server/test/coord-store.test.ts && git commit -m "fix(wave8): guard setDeliveryEnvelope and widen it, so the guard is not invisible (D-1409)"
 ```
@@ -2942,7 +2942,7 @@ and no test acks a parked delivery over HTTP. Secondarily, the guard is a read-t
 statements with no `BEGIN`; folding it into the UPDATE's own `WHERE` makes the decision atomic and leaves the
 read doing only what it is good for — labelling the refusal.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 **(1a)** In `server/test/mail-routes.test.ts`, extend the import at `:13`
 (`import { CoordStore } from '../src/coord/store.js';`):
@@ -3027,14 +3027,14 @@ Add, in the same `describe` (after `:926`, or after Task 22's test if that has l
 **(1c)** In `server/test/mail-hardening.test.ts:173` and `:207`, and `server/test/coord-kickoff.test.ts:124`,
 replace `.toBe(true)` with `.toEqual({ ok: true, state: 'acked' })`.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts -t "PARKED delivery is not a double ack"`
 Expected: FAIL with
 `expected { ok: true, already: true } to deeply equal { ok: true, already: true, parked: true, state: 'rejected', lastError: 'run closed' }`.
 Also: `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts -t "markAcked"` → FAIL with
 `expected false to deeply equal { ok: false, why: 'parked', state: 'rejected', lastError: 'run closed' }`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 **(3a)** `server/src/coord/store.ts` — add the result type at **MODULE SCOPE, outside the class**.
 `export class CoordStore {` opens at `:453`, so it cannot go beside `markAcked`; put it directly under Task
@@ -3162,7 +3162,7 @@ add ONE entry to the `NOT_CODES` set — after `'not-live'`, immediately before 
                               // this scan at all.
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts`
 `cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts`
 `cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts`
@@ -3173,7 +3173,7 @@ this task adds is in the file Task 20's scanner reads; this is the run that prov
 `cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts`
 `cd server && npm run build`
 
-- [ ] **Step 5: MUTATION CHECK** — three mutations, three distinct reds. Each SQL mutation is a **pair of
+- [x] **Step 5: MUTATION CHECK** — three mutations, three distinct reds. Each SQL mutation is a **pair of
 edits**: the `WHERE` and the `.run(…)` argument list. `node:sqlite` throws `column index out of range` on a
 surplus positional parameter (measured on node v24.14.1), so dropping a placeholder without dropping its bind
 value reds on a binding error instead of on the answer — the wrong reason.
@@ -3200,7 +3200,7 @@ mutant orchestrator ruling I2 calls out by name ("widen the markAcked exception 
 reason: it proves the rewrite preserved the narrow exception rather than smuggling it wider.
 Revert all three.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/src/coord/store.ts server/src/coord/routes.ts server/test/coord-store.test.ts server/test/mail-routes.test.ts server/test/mail-hardening.test.ts server/test/coord-kickoff.test.ts && git commit -m "fix(wave8): markAcked answers a union and the ack route gives the third answer (D-1410)"
 ```
@@ -3240,7 +3240,7 @@ its claims with a mechanism instead of a promise. Measured pre-wave at `5e9f650d
 in Step 2): **11** `UPDATE mail_deliveries` prepared statements in `store.ts`, of which **3** named a shared
 guard fragment and **8** did not.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Extend `server/test/mail-hardening.test.ts`'s imports (`:5-10` — `path` is already imported at `:6`):
 
@@ -3361,7 +3361,7 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Establish the pre-wave measurement first — it is reproducible from git, no reverting required:
 
@@ -3386,7 +3386,7 @@ that is the gap. Revert, add the tests, and re-apply in Step 5.
 Run: `cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts -t "names OUTSTANDING_STATES_SQL"`
 Expected on the clean post-Task-25 tree: PASS.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 No source change — Tasks 20, 24 and 25 already did it. Replace `CLAUDE.md:195`, which currently reads:
 
@@ -3417,7 +3417,7 @@ it slices from that literal to the next `.` and compares the backticked names ag
 `store.ts`. Reword it freely, but keep the marker and the terminating period, or update the test in the same
 commit.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 `cd server && ./node_modules/.bin/vitest run test/mail-hardening.test.ts`
 `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/coord-store.test.ts test/mail-routes.test.ts test/mail-sweep.test.ts test/coord-db.test.ts test/coord-health.test.ts`
 `cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts` — `CLAUDE.md` is in that scan's
@@ -3427,7 +3427,7 @@ corpus; the new prose names no host, account or tailnet, and this is the run tha
 `cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts test/node-floor.test.ts`
 `cd pwa && ./node_modules/.bin/vitest run test/mail-strip.test.tsx`
 
-- [ ] **Step 5: MUTATION CHECK** — three mutations.
+- [x] **Step 5: MUTATION CHECK** — three mutations.
 
 **(a) Guard deletion, on a writer this file does not otherwise test:** in `server/src/coord/store.ts`, drop
 `` AND state NOT IN ${TERMINAL_DELIVERY_SQL} `` from `setDeliveryEnvelope` (Task 24's guard) so the statement
@@ -3457,7 +3457,7 @@ are the same drift seen from two angles. On the full suite it also breaks the re
 these guards drifting out of true with nothing to notice.
 Revert all three.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/test/mail-hardening.test.ts CLAUDE.md && git commit -m "docs+test(wave8): the writer scan that makes the audit a mechanism, and CLAUDE.md's terminality clause rewritten, dated and pinned (D-1411)"
 ```
@@ -3547,7 +3547,7 @@ timestamp goes into shipped source. tmux resolves from `TMUX_PANE`, not `$TMUX`
 gate would be right only by accident. And `ccd/ccrc-api:154`'s refusal detail
 `'not inside a tmux session'` is measured-false on any box running a tmux server.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 First, **add `harnessBin` to the EXISTING import at `server/test/ccrc-api.test.ts:20`** — that line
 already reads `import { CCRC_API, ghContainedEnv } from './ccdWsHelpers.js';`, so a second import
@@ -3671,7 +3671,7 @@ describe('whoami: the pane is the proof', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts -t "pane"`
 
@@ -3682,7 +3682,7 @@ Expected: FAIL —
 - *could not answer FOR THIS PANE*: `expected '{"ok":false,"error":"no-tmux","detail":"not inside a tmux session; identity cannot be derived"}\n' to contain 'could not answer for this pane'`
 - *no uuid*: PASSES already (stated above).
 
-- [ ] **Step 3: Implement** — replace `ccd/ccrc-api:147-162` in full:
+- [x] **Step 3: Implement** — replace `ccd/ccrc-api:147-162` in full:
 
 ```bash
 # Attribution, not authentication: the one fact not carried in any payload is
@@ -3742,11 +3742,11 @@ cmd_whoami() {
 This keeps the `=~ $SAFE_RE` count at 3, which is what `ccrc-api-closed.test.ts:143-144`'s
 `toBeGreaterThanOrEqual(3)` pins (measured at HEAD: 3).
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/ccrc-api-ship.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) delete the two pane-gate lines** (`[[ -n "$pane" ]] || refuse 'no-pane' …` and
     `[[ "$pane" =~ ^%[0-9]+$ ]] || refuse 'bad-pane' …`), leaving `pane=""` to flow into `-t ""`:
     expect RED on *refuses with NO pane* —
@@ -3763,7 +3763,7 @@ This keeps the `=~ $SAFE_RE` count at 3, which is what `ccrc-api-closed.test.ts:
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc-api server/test/ccrc-api.test.ts && git commit -m "fix(wave8): whoami answered for the most-recently-active session, not this pane (D-1413)"
@@ -3806,7 +3806,7 @@ the session gate precisely so *"a session that cannot reach the allocator must n
 — while `CONTRIBUTING.md:66-70` sends outside contributors to the same allocator. So the client
 fills from the pane, refuses when it cannot, and `--by` keeps the contributor path open.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // server/test/ccrc-api.test.ts — new describe, after the whoami block
@@ -3916,7 +3916,7 @@ existing describe:
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts test/ccrc-api-closed.test.ts`
 
@@ -3931,7 +3931,7 @@ Expected: FAIL —
 - *has exactly ONE identity flag*: `expected [ '--json' ] to deeply equal [ '--by', '--json' ]`
 - The two "green before and after" cases PASS from the start, as stated.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 **(a)** Append to the `derive_identity` header block written in Task 40 (after its
 `TWO REFUSAL CODES` paragraph, before `DERIVED_ID=''`):
@@ -4017,11 +4017,11 @@ Driven end to end in bash before it was written down (single-line body, a multi-
 `{  }`, `[1,2]`, `{"byId" : "chosen", …}` and `{"byId" : "" , …}`): the four filled forms parse as
 JSON, the two `byId`-bearing forms are untouched or refused, and `[1,2]` refuses.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/ccrc-api-ship.test.ts test/ledger-routes.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) delete the whole `if [[ "$key" == 'ledger.allocate' … ]]` block**: expect RED on *fills
     byId from this pane* (`expected { project: 'p', … } to deeply equal { byId: 'demo-ws', … }`)
     AND on *sends NOTHING* (`expected [ { … } ] to have a length of 0 but got 1`). RIGHT REASON:
@@ -4048,7 +4048,7 @@ JSON, the two `byId`-bearing forms are untouched or refused, and `[1,2]` refuses
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc-api server/test/ccrc-api.test.ts server/test/ccrc-api-closed.test.ts && git commit -m "fix(wave8): the allocate body carries a proven identity or does not go (D-1414)"
@@ -4090,7 +4090,7 @@ reading. Nothing pins either today: `pp()`'s existing `"byId":"$id"` assertion a
 the CLAIM fence, and the regex below (verified against the file at HEAD: `false`) is what ties the
 spelling to the allocate fence.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // server/test/coordinator-skill.test.ts — two cases inside
@@ -4114,7 +4114,7 @@ spelling to the allocate fence.
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts -t "peer protocol"`
 
@@ -4122,7 +4122,7 @@ Expected: FAIL —
 `expected '…' to match /ledger allocate[\s\S]{0,220}"byId":"\$id"/` and
 `expected '…' not to contain '${resp'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Delete `peer-protocol.md:48` outright — `:47`'s `    )` already closes the capture, and `:49` is
 blank. Then replace the fence at `:126-129`:
@@ -4146,11 +4146,11 @@ from your pane when the body leaves it out, and refuses rather than sending a bl
 one; `--by <id>` is for a caller that has no pane at all.
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/ccrc-api-closed.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) delete `"byId":"$id",` from the allocate fence**: expect RED with
     `expected '…' to match /ledger allocate[\s\S]{0,220}"byId":"\$id"/`. RIGHT REASON: the exact
     omission that produced the empty holders is back, and `:980`'s claims-fence assertion stays
@@ -4160,7 +4160,7 @@ one; `--by <id>` is for a caller that has no pane at all.
 
   Revert both.
 
-- [ ] **Step 6: Commit** (AGENT-FIRST: this corpus ships to the fleet host before the server)
+- [x] **Step 6: Commit** (AGENT-FIRST: this corpus ships to the fleet host before the server)
 
 ```bash
 git add ccd/coordinator-skill/references/peer-protocol.md server/test/coordinator-skill.test.ts && git commit -m "fix(wave8): the documented allocate body names byId, and the curl-era resp clobber goes (D-1415, D-1417)"
@@ -4203,13 +4203,13 @@ a standing `expect(skill).toContain("tmux display-message -p '#S'")`
 (`coordinator-skill.test.ts:137`, `worker-skill.test.ts:114`). So this task edits a pinned clause and
 must land the CONTRACT literal in the same commit.
 
-- [ ] **Step 1: Run both suites and record the baseline** (before touching anything)
+- [x] **Step 1: Run both suites and record the baseline** (before touching anything)
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/worker-skill.test.ts`
 and record the file/test counts. Any later red that is NOT one of the assertions below is a pin
 break, not this task's work.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```ts
 // server/test/coordinator-skill.test.ts — REPLACES the it() at :134-139
@@ -4265,7 +4265,7 @@ and a dictated reason that is false is the plan's defect, not the implementer's:
 // would need escaping exactly where a copy-paste from SKILL.md is most useful.
 ```
 
-- [ ] **Step 3: Run it and watch it fail**
+- [x] **Step 3: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/worker-skill.test.ts`
 
@@ -4273,7 +4273,7 @@ Expected: FAIL — `expected '…' to contain 'ccrc-api" whoami'` in both files,
 `missing contract clause: Learn who you are on EVERY call: \`fromId\` and \`fro…` from the verbatim
 clause loop at `worker-skill.test.ts:68-72`.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Replace the fenced block at `ccd/coordinator-skill/SKILL.md:45-50` and at
 `ccd/worker-skill/SKILL.md:28-33` with the SAME block — the duplication is the corpora's standing
@@ -4313,13 +4313,13 @@ session happened to be active last:
 Then `ccd/worker-skill/SKILL.md:58` becomes the `CONTRACT[0]` sentence above, verbatim, keeping its
 `1. ` list prefix.
 
-- [ ] **Step 5: Run it and watch it pass** — the same two suites; every other clause must still be
+- [x] **Step 5: Run it and watch it pass** — the same two suites; every other clause must still be
   green against the baseline from Step 1. `coordinator-skill.test.ts:892-907` also re-runs (both
   files must still contain `$HOME/.local/bin/ccrc-api` and the "empty derivation is a stop"
   sentence) — the new block satisfies the first directly and the second is untouched at `:116-122` /
   `:103-109`.
 
-- [ ] **Step 6: MUTATION CHECK**
+- [x] **Step 6: MUTATION CHECK**
   - **(i) restore `tname=$(tmux display-message -p '#S')` in either SKILL.md**: expect RED with
     `the unchecked derivation is back: expected '…' not to contain "tname=$(tmux display-message -p '#S')"`.
     RIGHT REASON: that literal IS the derivation measured to name another session.
@@ -4329,7 +4329,7 @@ Then `ccd/worker-skill/SKILL.md:58` becomes the `CONTRACT[0]` sentence above, ve
 
   Revert both.
 
-- [ ] **Step 7: Commit** (AGENT-FIRST)
+- [x] **Step 7: Commit** (AGENT-FIRST)
 
 ```bash
 git add ccd/coordinator-skill/SKILL.md ccd/worker-skill/SKILL.md server/test/coordinator-skill.test.ts server/test/worker-skill.test.ts && git commit -m "fix(wave8): both skills derive identity through whoami, which refuses instead of guessing (D-1416)"
@@ -4377,7 +4377,7 @@ defects:
    avoided fourth "the fourth collision in this program"). The honest fix is to drop the count, not
    to pick a bigger one.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // server/test/ledger-instruction.test.ts — NEW
@@ -4475,7 +4475,7 @@ describe('the allocation instruction', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-instruction.test.ts`
 
@@ -4485,7 +4485,7 @@ Expected: the liveness case PASSES. The CLAUDE.md case FAILS at
 `LEDGER_SEED_GAP`, then `runs alongside`, then `Source runs ahead`, then the collision cardinal.
 The two assertions above it (`BY_SCANNING`, `POST /api/ledger/deviations`) pass from the start.
 
-- [ ] **Step 3: Implement** — replace `CLAUDE.md:121-133` with:
+- [x] **Step 3: Implement** — replace `CLAUDE.md:121-133` with:
 
 ```
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
@@ -4528,7 +4528,7 @@ convention this file already uses. Verified: `deviation-refs.test.ts:136-151` as
 `floorFromScan(trackedFiles()).floor === definedMax() + LEDGER_SEED_GAP`, and `definedMax()` at HEAD
 is 1332 (`git grep -hoE '\bD-[0-9]{1,5}\b' origin/main -- docs/superpowers/plans docs/superpowers/specs | grep -oE '[0-9]+' | sort -n | tail -1` → 1332).
 
-- [ ] **Step 4: Run it and watch it pass** — and the suites a `CLAUDE.md` edit can red:
+- [x] **Step 4: Run it and watch it pass** — and the suites a `CLAUDE.md` edit can red:
 
 ```
 cd server && ./node_modules/.bin/vitest run test/ledger-instruction.test.ts test/deviation-refs.test.ts test/topology-clean.test.ts test/box-token-census.test.ts test/oss-metadata.test.ts
@@ -4538,7 +4538,7 @@ cd server && ./node_modules/.bin/vitest run test/ledger-instruction.test.ts test
 (`- **Box token gates every coordination WRITE**`), so it is a control here, not a target.
 `oss-metadata.test.ts:89-100` pins the README size claim, likewise untouched.
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) put `Source runs ahead of the plans' ledgers, so a number taken from a plan alone collides
     with shipped refs.` back into the bullet**: expect RED with
     `source cannot run ahead of the plans — deviation-refs.test.ts reds on it`.
@@ -4551,7 +4551,7 @@ cd server && ./node_modules/.bin/vitest run test/ledger-instruction.test.ts test
 
   Each reds because the exact false or missing claim came back. Revert all four.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add CLAUDE.md server/test/ledger-instruction.test.ts && git commit -m "docs+test(wave8): say what the ledger floor means, and pin the four claims that were false (D-1418)"
@@ -4592,7 +4592,7 @@ still instruct.
   grep the ledger convention prescribes"* exists — the convention no longer does — and `:297-299`
   repeats the "three times" count beside its own enumeration of two.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // server/test/ledger-instruction.test.ts — two more cases in the same describe
@@ -4620,7 +4620,7 @@ still instruct.
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-instruction.test.ts -t "spec"` then
 `-t "CONTRIBUTING"`
@@ -4635,7 +4635,7 @@ Expected: FAIL —
   (`BY_SCANNING`, `POST /api/ledger/deviations`) pass from the start — the first is a ratchet, as in
   Task 44.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 **(a)** `docs/superpowers/specs/2026-08-21-account-provisioning-design.md:892-896` (the four prose
 lines under the `## 14. Deviations` header at `:890`) become:
@@ -4687,11 +4687,11 @@ rather than remembered:
   // origin/main and running this file.
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 `cd server && ./node_modules/.bin/vitest run test/ledger-instruction.test.ts test/deviation-refs.test.ts test/oss-metadata.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) restore the spec's original sentence** — `The next free number must be read from
     \`origin/main\` at plan-writing time — not from this branch, and not from Stage 3a's ceiling.`:
     expect RED with `the spec still prescribes reading a tree for a number: expected '## 14. Deviations …' not to match /…/`,
@@ -4707,7 +4707,7 @@ rather than remembered:
 
   Revert all three.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-08-21-account-provisioning-design.md CONTRIBUTING.md server/test/deviation-refs.test.ts server/test/ledger-instruction.test.ts && git commit -m "docs(wave8): the last live surfaces that still prescribed reading a tree for a number (D-1419)"
@@ -4753,7 +4753,7 @@ definitions of either number (the line is a blockquote,
 returns null on it with and without the `> ` marker). So had the landing half used `definitionsIn`,
 the mis-stamp could not have happened even reading the unmerged tree.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // server/test/ledger-sweep.test.ts — in describe('sweepLedgerReconcile'), after the
@@ -4818,7 +4818,7 @@ moment this plan was first committed, and `deviation-refs.test.ts:150` caught it
 `> **D-261..D-299** from …` classifies as none, with or without the `> `. `afterEach` at `:27`
 already calls `vi.restoreAllMocks()`.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts`
 
@@ -4831,7 +4831,7 @@ Expected: FAIL —
   old matcher for the word-boundary case, and the clock still gates the other) — they are
   de-vacuumings, and Step 5 (ii) and (iii) are what prove they are now live.
 
-- [ ] **Step 3: Implement** — replace `server/src/watch.ts:2113-2125`:
+- [x] **Step 3: Implement** — replace `server/src/watch.ts:2113-2125`:
 
 ```ts
       // ONE NOTION OF "THIS PLAN CARRIES D-N", shared by both halves of this
@@ -4864,7 +4864,7 @@ Expected: FAIL —
 
 Note `hit.file` — `Definition` names it `file`, where the old `LedgerDoc` named it `path`.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 ```
 cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts test/ledger-crosstree.test.ts test/ledger-store.test.ts test/ledgerseed.test.ts test/ledger-routes.test.ts
@@ -4874,7 +4874,7 @@ cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts test/ledge
 describes, measured `grep -c "  it(" ` on 2026-09-02); this task changes the CALLER, not the
 predicates, so all 30 must stay green — they are the control.
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) restore the old matcher** —
     ``const re = new RegExp(`\\bD-${a.n}\\b`); const hit = files.find((f) => re.test(f.text));``
     with `store.markLanded(project, a.n, hit.path, now)`: expect RED on BOTH new cases —
@@ -4894,7 +4894,7 @@ predicates, so all 30 must stay green — they are the control.
 
   Revert all three.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/src/watch.ts server/test/ledger-sweep.test.ts && git commit -m "fix(wave8): a number CITED in a plan is not a number the plan defines (D-1420, D-1421)"
@@ -4946,7 +4946,7 @@ landed off the plans dir every 15 minutes"* and claims no merge. It is therefore
 is deliberately kept OUT of `SITES` for a second reason: the guard's own regex literal lives in that
 file, so including it would make the scan self-matching and permanently red.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add `readFileSync` to the **existing** `node:fs` import at `ledger-sweep.test.ts:13` (which reads
 `import { mkdirSync, writeFileSync } from 'node:fs';`) — do NOT add a second `node:fs` import — and
@@ -5037,7 +5037,7 @@ describe('what `landed` is allowed to claim', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts -t "landed is allowed"`
 
@@ -5053,7 +5053,7 @@ Expected: FAIL —
   window 700 chars before `markLanded` does not reach the orphaned comment (distance 1052,
   measured). The `ledgerProjects` assertion is the second one and appears after that is fixed.
 
-- [ ] **Step 3: Implement** — one sentence, five places, adapted to each comment syntax.
+- [x] **Step 3: Implement** — one sentence, five places, adapted to each comment syntax.
 
 **`server/src/watch.ts:2076-2080`** (inside the existing `/** … */`, which opens at `:2075` and
 closes at `:2081`):
@@ -5134,12 +5134,12 @@ exactly as they are and insert this paragraph after `:1980`, before the blank ` 
    * TERMINAL column — which is why only that one was tightened.
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts test/coord-db.test.ts test/single-definition.test.ts`
 and `cd pwa && ./node_modules/.bin/vitest run` (the PWA bundles `shared/api.ts`).
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) restore `genuinely means merged` in `watch.ts`**: expect RED on *no site claims a merge*
     with `server/src/watch.ts still says landed means merged`.
   - **(ii) DELETE the corrected sentence from `shared/api.ts`'s `DeviationAllocation` docstring**
@@ -5155,7 +5155,7 @@ and `cd pwa && ./node_modules/.bin/vitest run` (the PWA bundles `shared/api.ts`)
 
   Revert all four.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/src/watch.ts server/src/coord/schema.ts server/src/coord/store.ts shared/api.ts server/test/ledger-sweep.test.ts && git commit -m "docs+test(wave8): landed means what the sweep measured, in all four places that claimed a merge (D-1422, D-1423)"
@@ -5204,7 +5204,7 @@ over that file shows it defines 18 numbers of which the allocator has issued ZER
 correctly-landed row can name it — exactly two rows do, and both are the corrupted pair (23 distinct
 `landedIn` files overall).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // server/test/coord-db.test.ts — new describe at the end of the file
@@ -5283,7 +5283,7 @@ numbers shift once `:331` is deleted, so work from the bottom up or anchor on th
    (`it('COORD_SCHEMA_VERSION derives to 7 — never hand-edited beside a growing array', …`) → `8`,
    and `expect(COORD_SCHEMA_VERSION).toBe(8)` / `expect(MIGRATIONS.length).toBe(8)` at `:656-657`.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts`
 
@@ -5295,7 +5295,7 @@ Expected: FAIL —
   the entry does not exist yet
 - *COORD_SCHEMA_VERSION derives to 8*: `expected 7 to be 8`, twice.
 
-- [ ] **Step 3: Implement** — append to `MIGRATIONS` in `server/src/coord/schema.ts`, after the entry
+- [x] **Step 3: Implement** — append to `MIGRATIONS` in `server/src/coord/schema.ts`, after the entry
   ending at `:720`:
 
 ```ts
@@ -5338,11 +5338,11 @@ Expected: FAIL —
   `,
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 `cd server && ./node_modules/.bin/vitest run test/coord-db.test.ts test/ledger-store.test.ts test/ledger-sweep.test.ts test/node-floor.test.ts`
 
-- [ ] **Step 5: MUTATION CHECK**
+- [x] **Step 5: MUTATION CHECK**
   - **(i) point the WHERE clause at the wave7 path (`GOOD`) instead**: expect RED on *un-lands
     exactly the rows* with the `n: 1293` row coming back `state: 'allocated', landedAt: null` while
     1294/1332 stay `landed`. RIGHT REASON: it proves the path is what selects, and that selecting
@@ -5363,7 +5363,7 @@ Expected: FAIL —
 
   Revert each.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/src/coord/schema.ts server/test/coord-db.test.ts && git commit -m "fix(wave8): un-land the two rows a citation stamped, so the corrected sweep can re-decide them (D-1424)"
@@ -5520,7 +5520,7 @@ never the mail join's `rr`). That is why the needle below is the `rr.`-aliased c
 act.** `store.ts:344-345` reads "Written entirely as a `LEFT JOIN` in this one SQL definition". After the
 extraction there are two definitions. Leaving it is precisely the defect class this wave exists to close.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `server/test/single-definition.test.ts`, append inside `describe('Build 7 nouns', …)` — immediately
 after the `it('spells the deliberate-cancel pair ONCE …')` case that ends at `:407`:
@@ -5570,7 +5570,7 @@ after the `it('spells the deliberate-cancel pair ONCE …')` case that ends at `
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t "spells the abandonment predicate ONCE"`
 
@@ -5578,7 +5578,7 @@ Expected: **1 failed** (not `0 tests`) — `ABANDONED_PARK_SQL is not defined`, 
 `toMatch(/^const ABANDONED_PARK_SQL =/m)` assertion, because the clauses are still inline in
 `OUTSTANDING_OR_ABANDONED_SQL`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 (a) In `server/src/coord/store.ts`, insert the new constant **between** `DELIBERATE_CANCEL_ERRORS_SQL`
 (ends `:266`) and the long docstring that opens `/**\n * The READ-side "still needs a human's attention"
@@ -5635,7 +5635,7 @@ with:
  * existing park-immutability guard in this file (`markDelivered`/
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/coord-store.test.ts`
 
@@ -5644,7 +5644,7 @@ deliberate-cancel clause is pinned by `it('D-1143 read side: the cancelled kicko
 that needs attention')` at `:1711`, and the terminal-run clause by `it('clears an abandoned park by
 DERIVATION once its own run reaches a terminal state — never by mutating the row (I2(a))')` at `:1054`.
 
-- [ ] **Step 5: MUTATION CHECK** — four, each red for its own reason; revert after each:
+- [x] **Step 5: MUTATION CHECK** — four, each red for its own reason; revert after each:
 
   1. Delete `AND COALESCE(rr.state, '') NOT IN ('done','failed')` from `ABANDONED_PARK_SQL`.
      Run: `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts -t "clears an abandoned park by DERIVATION"`
@@ -5666,7 +5666,7 @@ DERIVATION once its own run reaches a terminal state — never by mutating the r
      predicate one SQL definition`. Right reason: two definitions exist and the assertion above it
      (`defs === 2`) proves it before this one fires.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/src/coord/store.ts server/test/single-definition.test.ts && git commit -m "refactor(wave8): name the abandonment-park predicate once, before it gets a second reader"
@@ -5801,7 +5801,7 @@ number of its own).
 `server/src/coord/rundefs.ts:202`'s system-mail queue had been calling it too; corrected and pinned by a
 test that derives the caller set from the tree rather than reading the sentence.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 (a) In `server/test/coord-store.test.ts`, **ADD** `MAIL_RECLAIM_CANCELLED_ERROR` and
 `MAIL_REPLAY_CEILING_ERROR` to the existing `../src/coord/store.js` import (both are exported:
@@ -6155,7 +6155,7 @@ describe('store.ts docstrings that describe their own callers', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-store.test.ts -t "an ABANDONED role-addressed report"`
 
@@ -6178,7 +6178,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
 
 Expected: **1 failed** with `the docstring still says the ingress route is its only caller`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 (a) Add the import to `server/src/coord/store.ts`, beside `import { tx } from './db.js';` at `:2`:
 
@@ -6432,7 +6432,7 @@ once, at queue time" sentence — exactly as it is. Both stay true: each caller 
 > If it somehow has not, land Task 24 before this one rather than dropping the check — a discarded
 > return is not a compile error, so nothing would tell you.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run, in the foreground, timeout ≥ 600000 ms:
 
@@ -6446,7 +6446,7 @@ All green. In particular the pre-existing ARM (c) case at `coord-store.test.ts:1
 **unmodified** — that it does is the load-bearing evidence that (B) weakens no arm. (`typecheck-tests` is a
 known load flake; re-run it in isolation before calling it a real break.)
 
-- [ ] **Step 5: MUTATION CHECK** — nine bullets carrying eight M-numbers (M7 is split into M7a/M7b, which are two mutations of one clause), each measured before/after and reverted:
+- [x] **Step 5: MUTATION CHECK** — nine bullets carrying eight M-numbers (M7 is split into M7a/M7b, which are two mutations of one clause), each measured before/after and reverted:
 
   - **M1** replace `${ABANDONED_PARK_SQL}` with `d.state = 'rejected'`.
     `-t "nothing else"` → **RED**: `closedRunMail` and `failedRunMail` both reach the heir, so
@@ -6487,7 +6487,7 @@ known load flake; re-run it in isolation before calling it a real break.)
     be 1`). Right reason: the badge stopped counting what is addressed to the run's own session, which is
     the exact property the new docstring's reader-walk asserts.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/src/coord/store.ts server/test/coord-store.test.ts server/test/single-definition.test.ts && git commit -m "fix(wave8): re-queue an abandoned role-addressed report to the heir on reclaim, deduped (D-1425, D-1426)"
@@ -6535,7 +6535,7 @@ Do NOT amend, weaken or delete `:1159-1166`.** `GET /api/mail?to=<your id>` is s
 every `METHOD /api/path` either skill corpus names, and the same spelling already appears in this file at
 `:4` and `:41`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
   // A handover now puts the corpse's unacked ROLE mail in the heir's box as a
@@ -6563,14 +6563,14 @@ every `METHOD /api/path` either skill corpus names, and the same spelling alread
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts -t "never acked"`
 
 Expected: **1 failed** with `no paragraph in mail-envelope.md says what a handover does to a parked report`
 — `find` returns `undefined`, because that phrase appears nowhere in the file today.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `ccd/coordinator-skill/references/mail-envelope.md`, after the line `   said is lost.` (the end of item
 4) and before the existing blank line that precedes `You do not have to poll for any of this.`, insert a
@@ -6592,7 +6592,7 @@ blank line and then this indented continuation of item 4:
    read. The door itself is the operator's, and this corpus does not name it.
 ```
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/auth-passkey.test.ts`
 
@@ -6602,7 +6602,7 @@ the refusal-vocabulary scans (`:334-354`) and the three corpus-wide route prohib
 `mail-envelope.md` included. `ROUTE_CORPUS_EXCLUDES` (`:73`) keeps this file out of the route-parity harvest
 only — verified at HEAD, and it is precisely the reason the prohibition at `:1165` still applies.
 
-- [ ] **Step 5: MUTATION CHECK** — two; revert after each:
+- [x] **Step 5: MUTATION CHECK** — two; revert after each:
   1. Delete the whole sentence `The old park is not reopened: it stays exactly as it is, a true record that
      the delivery to that session was abandoned.` — from `The old park` through `abandoned.` inclusive,
      keeping every other sentence. Expect **RED**: `the passage does not say the old park is left
@@ -6615,7 +6615,7 @@ only — verified at HEAD, and it is precisely the reason the prohibition at `:1
      it: it shows the executor that the route string is forbidden by a standing prohibition, so the fix is
      to restore the prose phrase, never to touch `:1165`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/coordinator-skill/references/mail-envelope.md server/test/coordinator-skill.test.ts && git commit -m "docs(wave8): tell the heir a handover re-queues the parked role mail, and that the park is still terminal"
@@ -6675,7 +6675,7 @@ the block's subject is "what this client does not carry" — a much larger set t
 handlers in `routes.ts` against 18 ROUTES rows). The rewrite below makes FOUR unmistakably the count of
 D-282 release valves and states no other CAPS cardinal anywhere in the slice.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `server/test/coord-pause-route.test.ts`, add one import beside the others at `:15-27` (`readFileSync` is
 already imported at `:16`):
@@ -6709,7 +6709,7 @@ And at `:454` change the pinned site count:
     expect(sites.length, 'a count site was dropped instead of corrected').toBe(6);
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts -t "lists the doors"`
 
@@ -6722,7 +6722,7 @@ Expected: **1 failed** with
 `ccd/ccrc-api, the deliberately-absent block does not state the count as FOUR` — the passage states no CAPS
 cardinal at all, so the assertion compares `Set {}` against `Set {'FOUR'}`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 (a) Replace the `# WHAT IS DELIBERATELY ABSENT.` block in `ccd/ccrc-api` — everything from that line down to
 (but not including) the bare `#` line that precedes `# SELF-CONTAINED.` — with:
@@ -6808,7 +6808,7 @@ instead of counting them')` and narrates, in the past tense, the history D-1216 
 that has already gone two → three → four and left `ccd/ccrc-api` stuck at 'two'"). It is a record of what
 was measured then, not a claim about the tree now, and the ledger depends on that record.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts test/box-token-census.test.ts \
@@ -6820,7 +6820,7 @@ The last four are run because the edit changes a shipped executable's bytes. The
 `ccrc-api-ship.test.ts` reads `deploy.sh` and the file's mode, and `coordinator-skill.test.ts` touches
 `ccd/ccrc-api` only through two shell pipelines — but this measures that rather than assuming it.
 
-- [ ] **Step 5: MUTATION CHECK** — two; revert after each:
+- [x] **Step 5: MUTATION CHECK** — two; revert after each:
   1. Delete the `` #   `POST /api/runs/:id/reclaim` `` line from the corrected block.
      Run: `cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts -t "lists the doors"`
      Expect **RED**: `ccd/ccrc-api, the deliberately-absent block does not name /api/runs/:id/reclaim`.
@@ -6831,7 +6831,7 @@ The last four are run because the edit changes a shipped executable's bytes. The
      distinct CAPS cardinals against `CARDINAL[UNGATED.size]`, derived from the literal at `:177-180` and
      from no prose anywhere. Right reason — the number is derived where it is decided.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc-api server/test/coord-pause-route.test.ts server/test/box-token-census.test.ts && git commit -m "fix(wave8): name all four ungated doors in ccrc-api and put the census under the scanner (D-1168)"
@@ -6881,7 +6881,7 @@ route parity in the tree (`server/test/coordinator-skill.test.ts:174-198`) compa
 against `server/src/coord/routes.ts` and never this table, and `worker-skill.test.ts` has no route parity at
 all — a comment claiming a guard it does not have.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `server/test/ccrc-api.test.ts`, hoist the derivation to module scope, just above
 `describe('the closed route table', …)` at `:104`:
@@ -6942,7 +6942,7 @@ claim someone has to edit"). Then add, beside it:
   });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts -t "states the row count in prose"`
 
@@ -6950,7 +6950,7 @@ Expected: **1 failed** with `the closed-surface bullet states a row count this t
 `expected 'seventeen' to be 'eighteen'`. Both regexes match at HEAD and were verified to capture
 `seventeen` and `Seventeen` respectively, with the second matching exactly once in the whole file.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 (a) The line beginning `#   * The route comes from ROUTES below,` becomes:
 
@@ -6979,7 +6979,7 @@ before `declare -A ROUTES=(` — becomes:
 Note the new text contains no second `# <word> rows` line (`# Eighteen rows.` is the only one), which the
 uniqueness assertion in Step 1 checks.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts test/ccrc-api-closed.test.ts \
@@ -6990,7 +6990,7 @@ cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts test/ccrc-api-
 sit **outside** the `WHAT IS DELIBERATELY ABSENT` → `SELF-CONTAINED` slice — one above it, one below it — so
 that scanner is unaffected; running it here measures that rather than assuming it.
 
-- [ ] **Step 5: MUTATION CHECK** — two; revert after each:
+- [x] **Step 5: MUTATION CHECK** — two; revert after each:
   1. Restore `seventeen` on the closed-surface bullet line.
      Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-api.test.ts -t "states the row count in prose"`
      Expect **RED**: `the closed-surface bullet states a row count this table does not have — expected
@@ -7001,7 +7001,7 @@ that scanner is unaffected; running it here measures that rather than assuming i
      from ccd/ccrc-api`. Right reason — this is the anti-vacuity half: a pin whose site was deleted must
      fail, not pass on an empty match.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ccd/ccrc-api server/test/ccrc-api.test.ts && git commit -m "fix(wave8): ccrc-api said seventeen rows against eighteen, and named a parity test that never existed (D-1427, D-1428)"
@@ -7124,7 +7124,7 @@ below. That dated pair stays in this document and does NOT go into source or int
 `ledger-crosstree.test.ts`'s header says "No cardinal here, deliberately (D-1320)", and this wave does
 not get to break that rule inside the fix for its own class.
 
-- [ ] **Step 1: Write the failing test** — `server/test/ledger-crosstree.test.ts`, after `:153`
+- [x] **Step 1: Write the failing test** — `server/test/ledger-crosstree.test.ts`, after `:153`
 ```ts
   // ── D-1430 ───────────────────────────────────────────────────────
   // CommonMark 4.5 allows up to three SPACES before an opening fence; §2.2
@@ -7166,14 +7166,14 @@ not get to break that rule inside the fix for its own class.
     expect(definitionsIn([f('b.md', quoting)]).map((d) => d.n)).toEqual([]);
   });
 ```
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts -t "TAB-indented"`
 Expected: FAIL — `AssertionError: expected [ 1300 ] to deeply equal [ 1231, 1300 ]`
 Then: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts -t "OVER-reports"`
 Expected: FAIL — `AssertionError: expected [ 1231, 1232 ] to deeply equal []`
 (Both outputs were produced by the python port on 2026-09-02 with these exact fixture strings.)
 
-- [ ] **Step 3: Implement** — `server/src/coord/ledger.ts`, replace lines **186-202** with exactly this
+- [x] **Step 3: Implement** — `server/src/coord/ledger.ts`, replace lines **186-202** with exactly this
 ```ts
 /** A fenced-code delimiter: up to three SPACES of indent, then a run of three or
  *  more backticks or tildes. Captured as the RUN, because a fence closes only on
@@ -7207,7 +7207,7 @@ Expected: FAIL — `AssertionError: expected [ 1231, 1232 ] to deeply equal []`
  *  rule of its own: `DEFINITION` is anchored at column 0. */
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 ```
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 Run: `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts` — expect **32** tests
 (30 at HEAD + these 2). Then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`
 and `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts`: both corpus-reading
@@ -7215,14 +7215,14 @@ suites must be UNCHANGED by this task — record each count before and after and
 **0**, which is exactly what the 0-divergence measurement predicts. Their HEAD counts (26 and 15,
 measured 2026-09-02) are provenance only: items 1-4 run first and Tasks 46 and 47 add five cases to
 `ledger-sweep`.
-- [ ] **Step 5: MUTATION CHECK** — restore `const FENCE = /^\s{0,3}(\`{3,}|~{3,})/;` as the last line of
+- [x] **Step 5: MUTATION CHECK** — restore `const FENCE = /^\s{0,3}(\`{3,}|~{3,})/;` as the last line of
 the block, leaving the docstring and both fixtures alone. Expect RED **twice**, once per direction:
 `expected [ 1300 ] to deeply equal [ 1231, 1300 ]` (the HIDE) and
 `expected [ 1231, 1232 ] to deeply equal []` (the OVER-REPORT). Each reds for its own reason — one for a
 dropped definition, one for a quotation reported as a definition — so neither can pass for the other's
 reason, and neither can red because a fixture happens to be malformed: both fixtures are asserted in
 opposite directions. Revert.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/src/coord/ledger.ts server/test/ledger-crosstree.test.ts && git commit -m "fix(wave8): FENCE reads a tab as three spaces of indent, hiding entries and exposing quotations (D-1430)"
 ```
@@ -7264,7 +7264,7 @@ The real colon-form exemplar is `2026-08-23-stage5-oss-polish.md`, whose entries
 to `ENTRY`, all 15 with no em-dash on the line**. Landing one site without the other keeps a
 half-retracted claim alive, so both move in one commit and a guard makes the claim un-re-breakable.
 
-- [ ] **Step 1: Write the failing test** — `server/test/deviation-refs.test.ts`, after `:433`
+- [x] **Step 1: Write the failing test** — `server/test/deviation-refs.test.ts`, after `:433`
 ```ts
   // D-1431. The `auth-gate.test.ts` idiom — read the claim OUT of
   // the source file and check it against the thing it claims about — which is
@@ -7320,13 +7320,13 @@ half-retracted claim alive, so both move in one commit and a guard makes the cla
     }
   });
 ```
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts -t "colon-form exemplar"`
 Expected: FAIL — `AssertionError: expected one exemplar marker in each of deviation-refs.test.ts, ledger-crosstree.test.ts, found 0: : expected [] to deeply equal [ 'deviation-refs.test.ts', 'ledger-crosstree.test.ts' ]`
 (The claim is not yet machine-readable — that is the correct first red. Note the split `TAG` means the
 test's own source lines do NOT count as markers; verified in python against both source lines.)
 
-- [ ] **Step 3: Implement** — replace `server/test/deviation-refs.test.ts:117-123` with
+- [x] **Step 3: Implement** — replace `server/test/deviation-refs.test.ts:117-123` with
 ```ts
   // Definition-SHAPED line prefixes, deliberately looser than ENTRY: this repo's
   // ledgers hold entries spelled `- **D-190** (Task 1): the session-id
@@ -7368,18 +7368,18 @@ The colon fixture is `2026-08-23-stage5-oss-polish.md`'s D-189 line, verbatim (v
 is a live `'definition'` needle in `deviation-refs.test.ts`'s corpus table, and quoting it in this
 plan document would red that row.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` — expect **27** tests
 (26 + 1). Then `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts` — expect
 **32** (30 + Task 80's 2; this task replaces an existing `it`, it does not add one).
-- [ ] **Step 5: MUTATION CHECK** — change **either** marker line to
+- [x] **Step 5: MUTATION CHECK** — change **either** marker line to
 `// COLON-FORM EXEMPLAR: 2026-08-24-build9b-peers-claims-allocator.md`, i.e. put the refuted claim back.
 Expect RED: `AssertionError: <suite> names 2026-08-24-build9b-peers-claims-allocator.md as the exemplar
 of the form ENTRY cannot see, but that plan holds 0 such entries out of 14 definitions: expected +0 to
 be greater than +0`. That is the right reason and not a fixture accident: 0 and 14 are measured facts
 about a tracked file (`definitionsIn` + `ENTRY`, per line, fence-aware, 2026-09-02), and they are
 exactly the facts that refute the claim D-1329 retracted. Revert.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/test/deviation-refs.test.ts server/test/ledger-crosstree.test.ts && git commit -m "fix(wave8): land D-1329's retraction in the two test files it never reached, and pin the exemplar (D-1422, D-1431)"
 ```
@@ -7433,7 +7433,7 @@ claim is real, and it is the other number's.
 The four-vs-six number is the one cardinal here that CAN be pinned, because it is
 derived from tracked text rather than from a live `coord.db`, so it is mechanised rather than corrected.
 
-- [ ] **Step 1: Write the failing test** — `server/test/deviation-refs.test.ts`, after Task 81's `it`
+- [x] **Step 1: Write the failing test** — `server/test/deviation-refs.test.ts`, after Task 81's `it`
 ```ts
   // D-1433. The era-scoping argument's own data points. D-1310 found
   // that two of the six sub-211 collisions cited for it (D-149, D-172) were
@@ -7477,11 +7477,11 @@ import { crossTreeCollisions, definitionsIn, floorFromScan,
 (`LEDGER_ALLOCATOR_ERA` is exported at `server/src/coord/ledger.ts:114`; `GRANDFATHERED` is already
 module-scope in this test file at `:33-35`.)
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts -t "sub-211 collision set"`
 Expected: FAIL — `AssertionError: expected exactly one line marked SUB-211 COLLISIONS: in ledger-crosstree.test.ts, found 0: expected +0 to be +1`
 
-- [ ] **Step 3: Implement** — four edits in `server/test/ledger-crosstree.test.ts`, then two rows in
+- [x] **Step 3: Implement** — four edits in `server/test/ledger-crosstree.test.ts`, then two rows in
 `server/test/deviation-refs.test.ts`.
 
 `:20-22` (the header's blanket claim; `:19` ends "one of the five numbers this program actually lost."):
@@ -7546,12 +7546,12 @@ were decorated` occurs on exactly one line (`2026-08-15-fleet-robustness-build8.
 classifies as a definition; `D-291's wait — \`startedSessionFor\`` occurs on exactly one line
 (`2026-08-11-build4-conversation-and-controls.md:122`) and classifies as a citation.
 
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` — expect **30** tests
 (26 baseline + 1 from Task 81 + 1 `it` here + 2 table rows). Then
 `cd server && ./node_modules/.bin/vitest run test/ledger-crosstree.test.ts` — expect **32**, unchanged
 by this task (comments only).
-- [ ] **Step 5: MUTATION CHECK** — two, both required.
+- [x] **Step 5: MUTATION CHECK** — two, both required.
 (a) Restore the retracted members: `// SUB-211 COLLISIONS: D-73, D-142, D-143, D-144, D-149, D-172`.
 Expect RED: `AssertionError: the comment names a sub-211 collision set this corpus does not derive:
 expected [ 73, 142, 143, 144, 149, 172 ] to deeply equal [ 73, 142, 143, 144 ]`. Right reason: the two
@@ -7566,7 +7566,7 @@ would red the very row it describes).
 Right reason: the row is classified against the real line at HEAD, not against a fixture — an inverted
 `kind` is the only thing that can produce it.
 Revert both.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/test/ledger-crosstree.test.ts server/test/deviation-refs.test.ts && git commit -m "fix(wave8): four false provenance claims in ledger-crosstree, and derive the sub-211 set (D-1432, D-1433)"
 ```
@@ -7618,7 +7618,7 @@ the fixtures use a synthetic `demo` project and synthetic numbers (261/299), so 
 asserts depends on them; they are the only place a reader learns what the guard is for, which is why
 they are fixed and why they are labelled prose-only here.
 
-- [ ] **Step 1: Write the failing test** — `server/test/deviation-refs.test.ts`, last in the cross-tree
+- [x] **Step 1: Write the failing test** — `server/test/deviation-refs.test.ts`, last in the cross-tree
 `describe`
 ```ts
   // D-1434. A messaged floor assertion whose message says the
@@ -7670,14 +7670,14 @@ they are fixed and why they are labelled prose-only here.
       .toEqual([]);
   });
 ```
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts -t "reports the value it measured"`
 Expected: FAIL — the premise assertion passes (all seven REQUIRED entries are present at HEAD; measured
 by running this exact regex over the file in python3 on 2026-09-02), and the second reds:
 `AssertionError: a floor assertion states a condition it does not isolate — put the measured value in the message: expected [ 'es.length >= 100 :: ledger entries scanned', 'new Set(es.map((e) => e.file)).size >= 8 :: plans scanned', 'highWater >= 215 :: the definition-derived high-water went vacuous', 'here.length >= 50 :: no plans read from HEAD', 'there.length >= 50 :: no plans read from ${LEDGER_BASE}', 'definitionsIn(here).length >= 300 :: HEAD holds no ledger entries', 'definitionsIn(there).length >= 300 :: the base holds no ledger entries' ] to deeply equal []`
 (Seven, in that order — source order — measured 2026-09-02.)
 
-- [ ] **Step 3: Implement** — all seven, plus the `c.files` comment's undated cardinal, plus the two
+- [x] **Step 3: Implement** — all seven, plus the `c.files` comment's undated cardinal, plus the two
 sweep comments.
 
 `server/test/deviation-refs.test.ts:78-79`:
@@ -7743,7 +7743,7 @@ place is D-1331's own recorded defect:
     // when it was read back nine days later; the property is what the guard
     // needs.
 ```
-- [ ] **Step 4: Run it and watch it pass**
+- [x] **Step 4: Run it and watch it pass**
 Run: `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts` and
 `cd server && ./node_modules/.bin/vitest run test/ledger-sweep.test.ts`.
 
@@ -7754,14 +7754,14 @@ sweep edits are comments). An absolute is wrong here and was wrong in the draft,
 cases to that file, so the number is 20 and would have been 20 whatever this task did. Measured at
 HEAD `5e9f650d` on 2026-09-02: `deviation-refs` **26**, `ledger-sweep` **15**, `ledger-crosstree`
 **30** — provenance for the deltas, not values to assert after four items have landed.
-- [ ] **Step 5: MUTATION CHECK** — revert `:333` alone to
+- [x] **Step 5: MUTATION CHECK** — revert `:333` alone to
 `expect(here.length, 'no plans read from HEAD').toBeGreaterThanOrEqual(50);`. Expect RED:
 `AssertionError: a floor assertion states a condition it does not isolate — put the measured value in the message: expected [ 'here.length >= 50 :: no plans read from HEAD' ] to deeply equal []`.
 Right reason, and provably not another one: the premise assertion above it stays green (the expression
 and the floor are untouched, so `here.length >= 50` is still in `seen`), and the reverted assertion
 itself is still green (67 >= 50) — so the only thing red is the message being a claim the assertion
 does not isolate. Revert.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add server/test/deviation-refs.test.ts server/test/ledger-sweep.test.ts && git commit -m "fix(wave8): seven floor messages that state a condition they do not isolate, and the sweep's wrong-plan attribution (D-1434, D-1435)"
 ```
@@ -7828,7 +7828,7 @@ may stay in shipped source only if it cannot move.
    Date the totals; keep the deltas, and say why they survived: 6, 18, 24 and 27 are properties of a
    regex pair, while 394/405/421 are properties of a corpus that grows with every merge.
 
-- [ ] **Step 1: Re-measure every figure before editing** (this task has no test, so the measurement IS
+- [x] **Step 1: Re-measure every figure before editing** (this task has no test, so the measurement IS
 the step)
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -7869,7 +7869,7 @@ MIN(n) **274**; MAX(n) **1332**; **101 of 270** empty holders; **74** batches wi
 D-1066 / D-1067 / D-1068 / D-1069 / D-1243 / D-1244, with D-1067..1069 in
 `2026-08-30-d1067-d1068-delivered-row-terms.md` and NOT in the D-1066 plan.
 
-- [ ] **Step 2: Apply the fifteen edits — BOTTOM-UP, highest line number first**, so no earlier edit
+- [x] **Step 2: Apply the fifteen edits — BOTTOM-UP, highest line number first**, so no earlier edit
 shifts a later range. Each is `old range -> new text`; the eleven sites of the stale-count class are
 marked ★. (Ten distinct figures, eleven sites: C11 is stated twice.)
 
@@ -7998,7 +7998,7 @@ history) and do NOT renumber (45 is a counted total and is currently true, state
  * lives in the wave's plan, which is what a document is for (D-1328).
 ```
 
-- [ ] **Step 3: Verify no stale figure survives, and that nothing protected was touched**
+- [x] **Step 3: Verify no stale figure survives, and that nothing protected was touched**
 ```bash
 P=docs/superpowers/plans/2026-09-02-program-leverage-wave7-f7.md
 # (a) every stale-figure sentinel must be GONE. 13 hits at 5e9f650d, 0 after.
@@ -8017,7 +8017,7 @@ grep -nF 'there are six today' server/src/coord/ledger.ts   # expect no output
 # (d) the counted total is untouched
 awk 'NR>=1805 && /^\|/' $P | wc -l   # still 47
 ```
-- [ ] **Step 4: Confirm nothing else moved**
+- [x] **Step 4: Confirm nothing else moved**
 ```bash
 cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/ledger-crosstree.test.ts test/ledger-sweep.test.ts
 ```
@@ -8025,7 +8025,7 @@ Expect 31 / 32 / 15. This is not a formality: the plan is a tracked file the flo
 the 67 plans the collision scans read, so a `D-`ref edited into a new spelling above the ledger
 high-water would red `floorFromScan`, and a line accidentally written as a definition at column 0 would
 red the cross-tree scan.
-- [ ] **Step 5: MUTATION CHECK — not applicable, and the reason is the finding.** Every figure in this
+- [x] **Step 5: MUTATION CHECK — not applicable, and the reason is the finding.** Every figure in this
 task reads the live `~/.ccrc/coord.db` (which the server box owns and no suite may open) or a corpus
 snapshot that moves on every merge; there is no mutation any suite can observe, and inventing a guard
 that appeared to pin one would be this wave's own recurring class. That is precisely why the program's
@@ -8033,7 +8033,7 @@ standard says a cardinal like this may not live in shipped source, and why `ledg
 is DELETED here rather than corrected. **The one cardinal in this area that IS mechanised is the
 sub-211 set, and it is mechanised in Task 82, not here.** Put this sentence in the commit body so the
 next reviewer does not read the absent mutation check as an omission.
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 ```bash
 git add docs/superpowers/plans/2026-09-02-program-leverage-wave7-f7.md server/src/coord/ledger.ts && git commit -m "docs+fix(wave8): all TEN stale figures in the wave-7 plan, and the last movable cardinal out of ledger.ts (D-1437, D-1436)"
 ```
@@ -8128,6 +8128,16 @@ stopped* - an outage marker, not a drafting convention (build 9 D13, root cause 
 allocator was reachable. So the numbers were taken in one call and every definition written in the
 same act, which is the rule the markers were trying to honour by another route. The guard was right
 and the draft was wrong.
+
+**Corrected 2026-09-04 (D-1442): "one call" describes the BLOCK, not the wave.** The sentence above
+was read back during the wave-8 review as a claim that the allocator was never called again during
+execution, and that is false — `D-1438` was allocated 4.2 hours after the block, at the moment it was
+found (`allocatedAt` 1788374525899 for D-1437 against 1788389770188 for D-1438), exactly as its own
+entry below records and as the rule at the end of this section requires. `D-1439`-`D-1441` were then
+allocated on 2026-09-04 for the review's must-fixes, and `D-1442` for this correction. So the honest
+statement is: the PREDICTED deviations were allocated in one call before execution; every deviation
+FOUND during execution was allocated in its own call at the moment it was found. Both halves are the
+same rule, and only the first was written down.
 
 - **D-1396** (Task 1): the agent's `stat` op answered every errno — EACCES, ENOTDIR, ELOOP, EIO — as
   `{missing:true}`, the wire's proven-absence marker, so `remote/io.ts` reported "not there" for paths it had
@@ -8372,6 +8382,37 @@ and the draft was wrong.
   and stayed red for two tasks, because Task 6 is an AGENT-side change and its verification ran the
   `agent/` suite only — the guard that caught it lives in `server/`. Allocated at the moment it was found,
   from the allocator, floor 1438 -> 1439.
+- **D-1439** (found by the wave-8 REVIEW, after the merge; fixed in its own commit): the FOURTH bare
+  `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair, and it was in
+  `server/test/single-definition.test.ts` — the file whose own `passage()` docstring declares the triple
+  fatal. It carried all three parts: the bare pair, a `.toBeGreaterThan(300)` floor, and a NEGATIVE
+  `.not.toContain`. It survived this wave's own fix round (`e08610b9`) because that round judged it safe
+  on an argument the re-review then showed to be false, and kept the verdict anyway. MEASURED both ways
+  with one mutation — the closing anchor replaced by a string `store.ts` does not contain: the bare pair
+  **passed**, `passage()` reds with `expected -1 to be greater than 18060`. The reason it went unfixed is
+  a shape, not an oversight: `passage()` was a block-local **245 lines below** the site, in a different
+  `describe`, so the cure this file defines was out of reach of the fourth instance of the disease. Fixed
+  by HOISTING `prose` and `passage` to module scope, which also prevents the fifth and avoids a second
+  copy of a helper inside the one suite that forbids second copies.
+- **D-1440** (found by the wave-8 review): `server/test/coordinator-skill.test.ts`'s branch-discipline
+  block is scoped by the same bare pair with a `> 0` floor and a POSITIVE `toMatch`. The positive form is
+  the quieter half of the defect: on a lost closing anchor the block silently becomes the rest of the
+  file, `> 0` is satisfied by anything, and the `toMatch` can then be satisfied by the phrase appearing
+  ANYWHERE later in the file — so the assertion stops testing the block it names while staying green. The
+  coordinator's first ruling deferred this to a follow-up PR with its sibling on `main`; it was REVISED
+  once measured, because this one is live in this branch in a file this branch already edits.
+- **D-1441** (found by the wave-8 review, five of nine lenses independently): root `CLAUDE.md`'s
+  "Open on `main` — do NOT assume these are fixed" section is FALSIFIED BY THIS BRANCH. It still says the
+  agent's `stat` op answers EACCES as `{missing: true}` "so that wire's own absent-marker already lies",
+  which `D-1396` fixed — `agent/src/server.ts` now spreads `absent` only on a proven ENOENT — and it names
+  `server/src/io.ts` as `ReadFailure`'s home, which `D-1438` moved to `shared/agent-protocol.ts` and this
+  branch's own `single-definition.test.ts` pins. The cost is not tidiness: the next reader takes the
+  sentence at face value and writes a defensive fold at a new seam, re-collapsing the distinction
+  `gitref.ts` now depends on to refuse a wave close. It is this wave's own defect class, in the file that
+  documents the defect class.
+- **D-1442** (found by the wave-8 review): the claim-hygiene correction recorded in this section's own
+  preamble — "the numbers were taken in one call" reads as a claim about the WAVE when it is only true of
+  the PREDICTED BLOCK, and `D-1438` above falsifies it by 4.2 hours.
 
 Before the merge, both arms of the collision guard must be green:
 
@@ -8464,11 +8505,59 @@ constructed, the row says so and says why, rather than being omitted.
 
 ### Commits
 
-One commit per task, message naming the deviation numbers it defines.
+**Measured from this wave's SDD ledger** (`.superpowers/sdd/2026-09-02-program-leverage-wave8-f8/`),
+not reconstructed from the log: each row is the commit the ledger's own `Task N: complete (...)` line
+names, plus that task's follow-ups. Where a sha appears under two task numbers it is because the later
+task recorded it as its BASE; the owner is the earlier one.
 
-| Task | Commit | Subject |
+The plan said "one commit per task". It was **62** commits for 34 tasks, and the excess is the record
+rather than noise: the fix rounds, the plan corrections, and the eleven commits that exist only because
+a claim this plan made turned out to be false. Naming them is the point.
+
+| Task | Commits | The task |
 |---|---|---|
-| | | |
+| 1 | `357b601f`, `c4092c30` | The agent's `stat` op stops republishing every errno as proven absence |
+| 2 | `8248b6b0`, `a54e3c3a` | `statMeasured` on the port — one reader of the marker, `stat` derived through `this` |
+| 3 | `7a52fe8e`, `82737558` | The `backlog` frame stops asserting an absence nobody measured |
+| 4 | `5b2f8a61` | The PWA says the two different things, and forgets them on rotation |
+| 5 | `dc7d2126`, `6e58fafd`, `44755270` | `readBranchTip` refuses a tip it cannot prove, instead of settling from `packed-refs` |
+| 6 | `c49dea50` | The agent reports `readB64`'s third condition and `readFrom`'s absence |
+| 7 | `7317b069`, `51b5e9e4` | `readFileB64Measured` and `readFileFromMeasured` on the port |
+| 8 | `bc956896`, `530611a6`, `99e7bd16` | The two delivery-edge consumers stop narrowing |
+| 20 | `9f3c8e6c`, `8470e748` | Mint `TERMINAL_DELIVERY_STATES` in L0, build the SQL guard from it, forbid the second SQL copy |
+| 21 | `88067e94` | Convert the PWA's copy, and scan for the JS-disjunction shape the SQL regex cannot see |
+| 22 | `4cef2e99`, `7a943a5e` | Pin `cancelOutstandingDeliveries`' guard with a mutation-red test |
+| 23 | `3cdf1c4c` | Pin `noteGate`'s guard with a mutation-red test |
+| 24 | `33023c89`, `b5a74735` | Guard `setDeliveryEnvelope`, and widen it so the guard is not invisible |
+| 25 | `319dc965`, `f7421733` | `markAcked` returns a union, the guard moves into SQL, and the ack route gives the third answer |
+| 26 | `62822ec4`, `a0010bc3`, `a469ce91` | The writer scan that makes the claim, and `CLAUDE.md`'s terminality clause rewritten, dated and pinned |
+| 40 | `35351502` | `whoami` refuses unless the identity is provably this pane's |
+| 41 | `21410dec`, `6f2115a1`, `5b58c525` | `ledger allocate` carries an identity or refuses; `--by` is the documented door |
+| 42 | `ad9d875c` | peer-protocol.md — the allocate fence names `byId`, and the curl-era clobber goes |
+| 43 | `5ba32150`, `0f94a605`, `65497572` | both skills learn their identity from `ccrc-api whoami` |
+| 44 | `de375a12` | root CLAUDE.md says what the floor MEANS, and stops making four false claims |
+| 45 | `8554adeb` | the live-instruction residue outside CLAUDE.md |
+| 46 | `0f809c23` | the reconcile sweep applies ONE notion of "this plan carries D-N" |
+| 47 | `8fceb9e6`, `4a8828dc` | the docstrings stop claiming `landed` means merged |
+| 48 | `53e099da` | a migration un-lands the two rows the old matcher stamped |
+| 60 | `faf1c249` | Name the abandonment-park predicate once, before it gets a second reader |
+| 61 | `7e3c00e5`, `1405d1ec` | The fifth arm — re-queue a parked role-addressed report to the heir, as a NEW delivery |
+| 62 | `b448bd55` | Tell the heir, in the file it actually reads — AGENT-FIRST |
+| 63 | `39734e3f`, `7ca85eef` | `ccd/ccrc-api`'s ungated census says two; there are four — and make it a mechanism (D-1168) |
+| 64 | `767a6ab4` | The second stale cardinal in the same file — seventeen against eighteen — and the mechanism that never existed |
+| 80 | `f08296c0` | `FENCE` admits a TAB where CommonMark reads indented code — and it fails BOTH ways |
+| 81 | `d757a396` | D-1329's retraction reached `ledger.ts` only — both test files still assert the refuted exemplar |
+| 82 | `741a6c9a` | four false provenance claims in `ledger-crosstree.test.ts`, and a set that must be derived |
+| 83 | `f28bcaf6` | seven floor assertions state a condition they do not isolate, and the sweep names the wrong plan |
+| 84 | `acc01234` | the wave-7 plan's ten stale figures at eleven sites, and the one movable cardinal still in shipped source |
+
+**Commits that belong to no task.** `bf1e61e1` is the plan itself. `5c5848bd`, `3952cddb`, `ef8d3e3e`
+and `dc7d2126` are corrections to this document made mid-execution — a wrongly-sliced substitution, two
+phantom suite names, a mutation table counted twice, and a predicted RED read against the wrong state.
+`e08610b9` is the whole-branch review's fix round. `79a46a56` is the merge of `origin/main` (its clause
+12 unioned with this branch's clause 1) and `a36f350c` the review must-fix that followed it.
+`6a26a9a3` and `1c19787f` are **not this wave's** — they are `origin/main`'s PRs #45 and #46, which
+arrived through that merge.
 
 ### Deploy lane
 
