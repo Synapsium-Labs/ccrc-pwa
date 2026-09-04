@@ -261,6 +261,37 @@ const openRow = async (): Promise<void> => {
   fireEvent.click(toggle);
 };
 
+describe('the run history says WHEN, not "now"', () => {
+  it('renders an age for a run that started an hour ago', async () => {
+    // `formatReset` is a COUNTDOWN to a FUTURE epoch-seconds instant — its
+    // own first branch is `const s = resetAt - nowSec; if (s <= 0) return
+    // 'now'`. `run.startedAt` is always in the PAST, so feeding it there made
+    // the time column of EVERY row in the history read the literal string
+    // `now`, whatever the run's real age. The whole history looked like it had
+    // just happened. `formatAge` is the helper for a past instant, and it
+    // takes an AGE, so the subtraction has to happen at the call site.
+    const startedAt = Date.now() - 3_600_000;
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()] })}
+        getAutomation={async () => ({
+          automation: auto(),
+          runs: [runRow({ startedAt, endedAt: startedAt + 1_000, outcome: 'ok' })],
+        })}
+      />,
+    );
+    await openRow();
+    const when = await waitFor(() => {
+      const el = document.querySelector('.auto-run-when');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(when.textContent ?? '', 'an hour-old run must not read "now"').not.toBe('now');
+    expect(when.textContent ?? '').toMatch(/ago$/);
+  });
+});
+
 describe('Run now says what it queued, without claiming what has not happened', () => {
   it('renders a status note on the 202, and states no duration', async () => {
     // `Starting…` lives on the button and is gone in a millisecond once the

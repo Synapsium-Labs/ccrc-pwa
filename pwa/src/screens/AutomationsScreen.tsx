@@ -23,7 +23,7 @@ import {
   scheduleErrorSentence,
 } from '../auto/autoWords';
 import { AutomationSheet } from '../auto/AutomationSheet';
-import { formatReset } from '../fleet/formatReset';
+import { formatAge, formatReset } from '../fleet/formatReset';
 import { api, ApiError } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -54,7 +54,13 @@ function AutomationRunRow({ run, nowSec }: { run: AutomationRunSummary; nowSec: 
       <span className="auto-run-glyph" aria-hidden="true">{outcome.glyph}</span>
       <span className="auto-run-outcome">{outcome.word}</span>
       <span className="auto-run-trigger">{run.trigger}</span>
-      <span className="auto-run-when">{formatReset(Math.floor(run.startedAt / 1000), nowSec)}</span>
+      {/* `formatAge`, NOT `formatReset`. `formatReset` counts down to a FUTURE
+          instant and answers the literal `now` for anything already past, so
+          feeding it `startedAt` made every row in the history read `now`
+          whatever its real age. `nextRunAt` above is a future instant and
+          still uses `formatReset` correctly; an AGE is the other question, and
+          `formatAge` takes elapsed seconds, so the subtraction is here. */}
+      <span className="auto-run-when">{formatAge(nowSec - Math.floor(run.startedAt / 1000))}</span>
       {/* The adopted chip (spec §11's run detail): "ran — the spawn was cut
           short; check the pane" — an asterisked tick, never the plain one,
           so an operator scanning for green never mistakes this run for a
