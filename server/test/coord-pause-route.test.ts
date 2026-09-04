@@ -25,6 +25,7 @@ import { CCD_ARGV } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { CCRC_API } from './ccdWsHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 
@@ -409,6 +410,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
   const SELF = readFileSync(path.resolve(__dirname, 'coord-pause-route.test.ts'), 'utf8');
   const GATE_SRC = readFileSync(path.resolve(__dirname, '../src/auth/gate.ts'), 'utf8');
   const CLAUDE_MD = readFileSync(path.resolve(REPO, 'CLAUDE.md'), 'utf8');
+  const CCRC_API_SRC = readFileSync(CCRC_API, 'utf8');
 
   /** A named passage, or a loud failure. An anchor that stopped matching would
    *  otherwise yield the empty string, and the empty string satisfies the
@@ -440,6 +442,14 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     ['CLAUDE.md, the box-token bullet',
       passage('the box-token bullet', CLAUDE_MD,
         '- **Box token gates every coordination WRITE**', '\n- **')],
+    // The shipped bash client, added in wave 8 (D-1168). It is a CLIENT and not
+    // a route table, so it enumerates the doors for the opposite reason the
+    // sites above do: to say which ones it deliberately does not carry. The
+    // scanner does not care why a site names the set — only that a site that
+    // names it names all of it, at the count this tree actually has.
+    ['ccd/ccrc-api, the deliberately-absent block',
+      passage('the deliberately-absent block', CCRC_API_SRC,
+        'WHAT IS DELIBERATELY ABSENT', 'SELF-CONTAINED')],
   ];
 
   it('every prose site that states the door count states the DERIVED one', () => {
@@ -450,8 +460,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
       ['coord/routes.ts, the break docstring', docstringFor('/api/claims/:id/break')],
     ];
     // A site deleted from this list rather than corrected is the failure this
-    // pin exists to prevent; five is the number this wave measured stale.
-    expect(sites.length, 'a count site was dropped instead of corrected').toBe(5);
+    // pin exists to prevent; six is the number this tree has, the sixth being
+    // `ccd/ccrc-api`'s block, which wave 8 corrected and put under this scanner.
+    expect(sites.length, 'a count site was dropped instead of corrected').toBe(6);
     for (const [name, text] of sites) {
       expect(new Set([...text.matchAll(CARD_RE)].map((m) => m[0])),
         `${name} does not state the count as ${want}`).toEqual(new Set([want]));

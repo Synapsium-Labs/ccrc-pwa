@@ -29,13 +29,27 @@
 # `server/test/ccrc-api-closed.test.ts` pins those as standing tests, because a
 # property this load-bearing must be a mechanism and not a docstring.
 #
-# WHAT IS DELIBERATELY ABSENT. `POST /api/coord/pause`. D-282 leaves that door and
-# `POST /api/runs/:id/abandon` ungated on purpose, so a wedged run keeps a release
-# valve the coordinator's own box token cannot lock; coordinator clause 4 is the
-# other half — "This session never unpauses itself. `$REG/coordinator-paused` is
-# the operator's file." Carrying it here would hand every session the one verb
-# that clause exists to deny. It is an operator door, reached from the PWA. If the
-# need is ever real it is an operator tool, not a row below. (D-688.)
+# WHAT IS DELIBERATELY ABSENT. Plenty of routes have no row below, and most of
+# them are simply not this client's business. FOUR are absent as a DECISION —
+# the release valves D-282 leaves ungated:
+#   `POST /api/coord/pause`
+#   `POST /api/runs/:id/abandon`
+#   `POST /api/claims/:id/break`
+#   `POST /api/runs/:id/reclaim`
+# They carry no box token on purpose: the party a wedge locks out — the
+# coordinator, a session holding a claim, a program whose coordinator is the
+# corpse and whose box token died with it — is the party holding that key, so
+# putting a wedge's release valve behind it would leave the wedge no door. That
+# is precisely why none of them may be reachable from HERE. Coordinator clause 4
+# is the other half — "This session never unpauses itself.
+# `$REG/coordinator-paused` is the operator's file." — and an ungated door plus a
+# session-side verb is a door with no lock at all. They are operator doors,
+# reached from the PWA. If the need is ever real it is an operator tool, not a
+# row below. (D-688. The names and the count here are not a census anyone keeps
+# by hand: `server/test/coord-pause-route.test.ts` derives both from `UNGATED`,
+# the one place the set is decided, and reds this passage when they disagree —
+# D-1168, which is what this passage cost the last time a docstring stood in for
+# a mechanism.)
 #
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
