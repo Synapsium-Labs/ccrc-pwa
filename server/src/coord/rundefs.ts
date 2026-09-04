@@ -199,7 +199,27 @@ export function queueSystemMail(
     const envelope = renderEnvelope({ id: delivery.id, fromId: m.fromId, toId: m.toId, runId: m.runId,
       program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
       kind: m.kind, subject: m.subject, body: m.body, artifacts: [] });
-    coord.setDeliveryEnvelope(delivery.id, envelope);
+    const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
+    // Structurally impossible inside this transaction — the row was inserted
+    // six lines up and nothing else can see it. THROWN rather than ignored
+    // because `tx` rolls back on throw and rethrows: if the impossible
+    // happens, the whole mail is withdrawn rather than accepted with the
+    // placeholder envelope, which carries no `ack:` line and so names no
+    // delivery id for any recipient to ack against. The throw ESCAPES
+    // `queueSystemMail` — all four of its callers: `close.ts`'s `closeRun`,
+    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
+    // and `routes.ts`'s `POST /api/runs/:id/advance` handler — deliberately:
+    // `{ queued: false }` already means "the dedupe guard suppressed it", a
+    // different and true statement this must not borrow.
+    //
+    // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.
+    // It cited lines through two corrections and the second went stale inside
+    // a single wave: an edit anywhere ABOVE a call site moves it while the
+    // call itself does not change, so the cardinal rots on edits that have
+    // nothing to do with the fact being stated. The enclosing function is the
+    // property that identifies a caller; the number was only ever a way of
+    // pointing at it, and a worse one.
+    if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
     out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
   });
   return out;

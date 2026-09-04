@@ -183,7 +183,7 @@ export const LEDGER_ALLOCATOR_ERA = 211;
  */
 const DEFINITION = /^(?:#{2,4} |- \*\*|\*\*)D-(\d+)\b(?!\.\d)(?=\*\*\s*(?:—|\(|:)|\s+—|\s+\(|:)/;
 
-/** A fenced-code delimiter: up to three spaces of indent, then a run of three or
+/** A fenced-code delimiter: up to three SPACES of indent, then a run of three or
  *  more backticks or tildes. Captured as the RUN, because a fence closes only on
  *  the same character at the same length or longer — which is how a four-backtick
  *  block can quote a three-backtick one.
@@ -198,8 +198,22 @@ const DEFINITION = /^(?:#{2,4} |- \*\*|\*\*)D-(\d+)\b(?!\.\d)(?=\*\*\s*(?:—|\(
  *  guard. The nesting fixture is therefore CONSTRUCTED, deliberately, and saying
  *  so is the point: the behaviour was always right and red-on-mutation, and only
  *  the provenance lied. A true guard sold with a false measurement is this wave's
- *  own recurring class. */
-const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+ *  own recurring class.
+ *
+ *  SPACES, NOT `\s` (D-1430). The sentence at the top said "three
+ *  spaces" while the pattern below said `\s{0,3}`, which admits a TAB (and \r,
+ *  \f, \v, NBSP, U+2000-200A, U+3000, U+FEFF). CommonMark §2.2 expands a tab to
+ *  the next 4-column tab stop, so a tab-indented run is four columns of
+ *  indentation — an indented code block, not a fence. It failed in BOTH
+ *  directions, each driven by a fixture in `ledger-crosstree.test.ts`: a
+ *  tab-indented PAIR hid a real entry between two delimiters that do not exist,
+ *  and a single tab-indented run CLOSED a real fence early, left an odd fence at
+ *  EOF, and handed the whole-file arm a quotation to report as a definition —
+ *  "renumber NOW" aimed at a quoted line. Zero lines in the plans this guard
+ *  reads are affected today, so this is potential rather than live, which is the
+ *  bar `opensFence` sets one docstring below. The >= 4-space direction needs no
+ *  rule of its own: `DEFINITION` is anchored at column 0. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /** Whether a fence-shaped line really OPENS a block.
  *
@@ -339,11 +353,16 @@ export function crossTreeCollisions(
  * allocator issues something lower, which it never does.
  *
  * THE COUNT THAT USED TO SIT IN THAT SENTENCE — "the SAME four orphans
- * (D-1066..1069)" — WAS FALSIFIED BY THIS WAVE'S OWN NEXT MEASUREMENT (D-1332).
- * It was true when written and there are six today, because two merged plans
- * defined numbers the allocator never issued (D-1325). The property is what the
- * sentence is for; the enumeration was decoration that went stale in nine days,
- * in the file whose subject is exactly that.
+ * (D-1066..1069)" — WAS FALSIFIED BY THIS WAVE'S OWN NEXT MEASUREMENT (D-1332),
+ * because two merged plans defined numbers the allocator never issued (D-1325).
+ * ITS REPLACEMENT THEN NAMED A COUNT OF ITS OWN, and that one is gone too
+ * (D-1436). This set is a JOIN of a live `coord.db` no suite may open against a
+ * plan corpus that grows with every merge, so nothing in this repo can pin it,
+ * and any number written here is a snapshot waiting to go stale in a file whose
+ * subject is exactly that. The property is what the sentence is for — the
+ * hardcoded pair and this derivation report the SAME SET, whatever it is at the
+ * time. The dated snapshots live in the wave's plan, which is what a document is
+ * for (D-1328).
  *
  * `null` — a project with no allocations at all — reports nothing: there is no
  * era, so no definition can be below or above it.

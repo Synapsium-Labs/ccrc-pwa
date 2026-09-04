@@ -1,9 +1,12 @@
 import { createReadStream, watch, type FSWatcher } from 'node:fs';
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ReadFailure } from '../../shared/agent-protocol.js';
 
-/** Why a read couldn't produce content: `absent` means the path genuinely
- *  does not exist (ENOENT); `unreadable` means everything else — EACCES,
+/** Why a read couldn't produce content — and, since `MeasuredStat` below,
+ *  why a `stat` couldn't produce {mtimeMs,size} either: ONE vocabulary for
+ *  both, because they are the same two facts. `absent` means the path
+ *  genuinely does not exist (ENOENT); `unreadable` means everything else — EACCES,
  *  EISDIR, ENOTDIR, ELOOP, a non-errno failure — the path IS there (or the
  *  box can't even tell) and this box just can't read it. Fail-shut on
  *  purpose: only a proven ENOENT is allowed to answer `absent`.
@@ -18,8 +21,15 @@ import path from 'node:path';
  *  reads released, an identity field retires the row). An `lstat` ladder
  *  would close it and is deliberately NOT built: it would put a second
  *  syscall on every field read of every session on every tick to
- *  distinguish a state nothing in this system produces. */
-export type ReadFailure = 'absent' | 'unreadable';
+ *  distinguish a state nothing in this system produces.
+ *
+ *  DECLARED IN `shared/agent-protocol.ts`, not here (D-1438): the pair is
+ *  wire-adjacent vocabulary both this file and `agent/src/fileops.ts` fold
+ *  their read/stat outcomes into, and restating it here drifted into a
+ *  second copy that `single-definition.test.ts` caught. Re-exported so
+ *  every existing `from './io.js'` import (e.g. `registry.ts`'s
+ *  `BranchEvidence`) keeps working unchanged. */
+export type { ReadFailure };
 
 /** A read that distinguishes ITS OWN two failure modes instead of collapsing
  *  both to `null`, unlike `readFile`/`readFileB64` below. See THE GOVERNING
@@ -32,6 +42,38 @@ export type ReadFailure = 'absent' | 'unreadable';
  *  it outright. */
 export type MeasuredRead = { ok: true; content: string } | { ok: false; reason: ReadFailure };
 
+/** A `stat` that distinguishes its own two failure modes instead of
+ *  collapsing both to `null`, exactly as `MeasuredRead` does for reads — and
+ *  for a sharper reason: the agent's `stat` op used to answer EACCES/ENOTDIR
+ *  as `{missing:true}`, so the wire's absence marker was already a LIE for
+ *  every non-ENOENT failure (D-114). `stat` derives from this. THE GOVERNING
+ *  RULE applies unchanged: `ok`/`absent` are positive answers that
+ *  short-circuit, `unreadable` falls back to exactly the evidence the site
+ *  already used. */
+export type MeasuredStat =
+  | { ok: true; mtimeMs: number; size: number }
+  | { ok: false; reason: ReadFailure };
+
+/** A binary read that distinguishes its THREE failure modes. `too-large` is
+ *  not a fault and not an absence: the file is there and this transport
+ *  cannot carry it (the agent's `MAX_READ_B64_BYTES`, a property of the WS
+ *  frame). `localIO` has no cap and therefore never answers it — the
+ *  divergence is REPORTED at the seam rather than equalised, because capping
+ *  `localIO` would start refusing clips this server serves today. `size` is
+ *  `number | null`: null when the marker arrived without one, never a
+ *  manufactured 0. */
+export type MeasuredB64Read =
+  | { ok: true; dataB64: string }
+  | { ok: false; reason: ReadFailure }
+  | { ok: false; reason: 'too-large'; size: number | null };
+
+/** A range read that distinguishes its two failure modes. The EOF answer —
+ *  `{ok: true, data: '', size}` — is a MEASUREMENT (the cursor is at the end)
+ *  and never joins them. */
+export type MeasuredRangeRead =
+  | { ok: true; data: string; size: number }
+  | { ok: false; reason: ReadFailure };
+
 /**
  * Fs-facade seam every fleet-fs access goes through. `local` (this module)
  * hits node:fs against this box's disk; a `remote` implementation (T3) proxies
@@ -43,10 +85,20 @@ export interface FleetIO {
    *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this. */
   readFileMeasured(path: string): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
-  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;
-  readFileB64(path: string): Promise<string | null>;      // null on missing or unreadable; the agent's implementation folds in a THIRD condition, over-cap (D-114, agent/src/fileops.ts's MAX_READ_B64_BYTES) — localIO has no cap — binary-safe
+  /** Distinguishes absence from unreadability for a range read; the EOF arm
+   *  is a positive answer. `readFileFrom` derives from this. */
+  readFileFromMeasured(path: string, offset: number): Promise<MeasuredRangeRead>;
+  readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;   // null on ANY failure; use readFileFromMeasured to tell absent from unreadable
+  /** Distinguishes absence, unreadability and over-cap. `readFileB64` derives
+   *  from this. */
+  readFileB64Measured(path: string): Promise<MeasuredB64Read>;
+  readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
   readdir(path: string): Promise<string[] | null>;
-  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
+  /** Distinguishes "genuinely does not exist" from "could not be measured".
+   *  `stat` derives from this; see `MeasuredStat` above for why the wire's
+   *  own absence marker could not be trusted before this existed. */
+  statMeasured(path: string): Promise<MeasuredStat>;
+  stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;   // null on ANY failure — absent and unreadable both collapse here; use statMeasured to tell them apart
   /** Physical path for `path`, or null when it cannot be resolved (missing
    *  path, permission, or an implementation with no resolver — the remote io
    *  answers null unconditionally, so callers degrade to the unresolved
@@ -76,14 +128,20 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
 
 const TAIL_POLL_MS = 1500;
 
+/** The ONE place an errno becomes a `ReadFailure` (D-1397 closed the other two
+ *  copies this file used to carry). Only a proven ENOENT may
+ *  answer `absent`; every other errno — and a non-errno throw, which carries
+ *  no `code` at all — is `unreadable`. */
+const failureFor = (err: unknown): ReadFailure =>
+  (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
+
 /** node:fs implementation preserving today's exact behavior. */
 export const localIO: FleetIO = {
   async readFileMeasured(p) {
     try {
       return { ok: true, content: await readFile(p, 'utf8') };
     } catch (err) {
-      const reason: ReadFailure = (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
-      return { ok: false, reason };
+      return { ok: false, reason: failureFor(err) };
     }
   },
 
@@ -92,31 +150,49 @@ export const localIO: FleetIO = {
     return r.ok ? r.content : null;
   },
 
-  async readFileFrom(p, offset) {
+  async readFileFromMeasured(p, offset) {
     // Stream only [offset, size) — never load the whole file. Transcripts reach
     // tens of MB; the old read-whole-then-slice bloated the agent's RSS and
     // blocked its event loop (base64 + JSON.stringify of the full buffer).
     let size: number;
-    try { size = (await stat(p)).size; } catch { return null; }
+    try { size = (await stat(p)).size; } catch (err) { return { ok: false, reason: failureFor(err) }; }
     const from = Math.max(0, Math.min(offset, size));
-    if (from >= size) return { data: '', size };
-    try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
-    catch { return null; }
+    if (from >= size) return { ok: true, data: '', size };
+    try { return { ok: true, data: (await readRange(p, from, size)).toString('utf8'), size }; }
+    catch (err) { return { ok: false, reason: failureFor(err) }; }
+  },
+
+  async readFileFrom(p, offset) {
+    const r = await this.readFileFromMeasured(p, offset);
+    return r.ok ? { data: r.data, size: r.size } : null;
+  },
+
+  async readFileB64Measured(p) {
+    try { return { ok: true, dataB64: (await readFile(p)).toString('base64') }; }
+    catch (err) { return { ok: false, reason: failureFor(err) }; }
   },
 
   async readFileB64(p) {
-    try { return (await readFile(p)).toString('base64'); } catch { return null; }
+    const r = await this.readFileB64Measured(p);
+    return r.ok ? r.dataB64 : null;
   },
 
   async readdir(p) {
     try { return await readdir(p); } catch { return null; }
   },
 
-  async stat(p) {
+  async statMeasured(p) {
     try {
       const s = await stat(p);
-      return { mtimeMs: s.mtimeMs, size: s.size };
-    } catch { return null; }
+      return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    }
+  },
+
+  async stat(p) {
+    const r = await this.statMeasured(p);
+    return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
   },
 
   async realpath(p) {

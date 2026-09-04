@@ -17,7 +17,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCRC_API, ghContainedEnv } from './ccdWsHelpers.js';
+import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let home: string;
@@ -81,8 +81,16 @@ type Run = { stdout: string; stderr: string; status: number };
  *
  *  Never rejects on a non-zero exit: the exit status is part of what these tests
  *  measure, so turning it into an exception would hide it. */
-function run(args: string[], input?: string): Promise<Run> {
+function run(args: string[], input?: string,
+             overrides?: Record<string, string | undefined>): Promise<Run> {
   const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
+  // EXPLICIT, NEVER INHERITED. `process.env` is spread above, so a developer
+  // running this suite inside a tmux pane hands the child a real TMUX_PANE and
+  // the "no pane" case would measure their terminal instead of the fixture.
+  // `undefined` DELETES — the state cron and CI are actually in.
+  for (const [k, v] of Object.entries(overrides ?? {})) {
+    if (v === undefined) delete env[k]; else env[k] = v;
+  }
   return new Promise<Run>((resolve) => {
     const child = spawn(CCRC_API, args, { env });
     let stdout = '', stderr = '';
@@ -100,6 +108,81 @@ function run(args: string[], input?: string): Promise<Run> {
  *  both streams, so `runBoth` is the same call — kept as an alias only until the
  *  call sites below read as one vocabulary. */
 const runBoth = run;
+
+/** A tmux that ANSWERS, planted where `ghContainedEnv`'s poison cannot displace
+ *  it: `ccdWsHelpers.ts:233` is `if (fs.existsSync(p)) continue;`, so the stub
+ *  loop SKIPS a file already there, and `harnessBin` is the first PATH entry
+ *  (`ccdWsHelpers.ts:109-122, :245`). Every test plants before it calls `run`,
+ *  so this is the tmux the client meets — NOT a vacuous fixture.
+ *
+ *  It logs argv to the SAME `$HOME/tmux-calls` the poison stub uses
+ *  (`ccdWsHelpers.ts:229`), so `tmuxArgv()` reads one file whichever stub is in
+ *  place, and a test can prove the pane was passed as an explicit target. */
+const plantPane = (id: string, uuid = 'u-1234'): void => {
+  fs.writeFileSync(path.join(harnessBin(home), 'tmux'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf 'cc-${id}\\n'\n`,
+    { mode: 0o755 });
+  fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.cc-sessions', `${id}.uuid`), `${uuid}\n`);
+};
+
+/** Every argv the tmux on PATH saw. Absent file == no calls. */
+const tmuxArgv = (): string[] => {
+  const p = path.join(home, 'tmux-calls');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
+
+/** The repo root, taken from the client's own resolved path
+ *  (`<root>/ccd/ccrc-api`) rather than from `import.meta.url` a second time. */
+const root = path.resolve(CCRC_API, '../..');
+
+/** One skill corpus's identity fence: the two parameter expansions a session
+ *  runs against `whoami`'s stdout, EXTRACTED from `SKILL.md` rather than
+ *  retyped here. Retyped they would be a second copy of the coupling; extracted
+ *  they ARE it, so the case below reds on a drift on either side — this
+ *  command's `printf` byte format, or the corpora's slicing of it.
+ *
+ *  D-1416, and the reason it needs its own case: the skills' dependency on this
+ *  output is TEXTUAL, and the `JSON.parse(r.stdout)` case in the whoami describe
+ *  below — the only other test of it — constrains neither whitespace nor
+ *  punctuation. Measured: one space after each colon in `cmd_whoami`'s `printf`
+ *  leaves every other assertion in this file GREEN while both corpora derive
+ *  `id={` and `uuid={` — a malformed identity on every session on the fleet.
+ *  (Key ORDER is safe without a pin: `"uuid":"` cannot satisfy `*"id":"`,
+ *  because of the quote in front of it. It is the bytes between the keys that
+ *  were unpinned.) */
+const identityFence = (skill: 'coordinator' | 'worker'): string => {
+  const md = fs.readFileSync(path.join(root, `ccd/${skill}-skill/SKILL.md`), 'utf8');
+  const lines = md.split('\n').filter((l) => /^(id|uuid)=\$\{who#/.test(l));
+  expect(lines, `${skill}: expected exactly the two identity expansions`).toHaveLength(2);
+  return lines.join('\n');
+};
+
+/** Runs a shell fragment under bash with `input` on stdin, answering its stdout.
+ *  `who=$(cat)` at the call site is `who=$(… whoami)` in the corpora: command
+ *  substitution strips the trailing newline on both sides. */
+const sh = (script: string, input: string): Promise<string> =>
+  new Promise<string>((resolve) => {
+    const child = spawn('bash', ['-c', script]);
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.stdin.end(input);
+    child.on('close', () => resolve(out));
+  });
+
+/** The client's own ROUTES table, read from the client. Hoisted because the
+ *  prose pin below needs the SAME derivation the row-set assertion uses — a
+ *  second copy of this slice is exactly how the two would come to disagree,
+ *  which is the fault the pin exists to catch one level up.
+ *
+ *  The class allows a HYPHEN: `runs items-list` is the first two-word verb, and
+ *  a `[a-z.]+` class silently DROPPED it (D-843) — that is the whole reason this
+ *  reads the client instead of counting the `ROWS` table below. */
+const routeKeys = (): string[] => {
+  const src = fs.readFileSync(CCRC_API, 'utf8');
+  const table = src.slice(src.indexOf('declare -A ROUTES=('));
+  return [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
+};
 
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
@@ -141,12 +224,7 @@ describe('the closed route table', () => {
     // planting an eighteenth row in `ccd/ccrc-api` left `expect(ROWS).toHaveLength(17)`
     // green. So the client's own table is the input, and this asserts the two
     // sets AGREE. A new row is now red until it is exercised.
-    const src = fs.readFileSync(CCRC_API, 'utf8');
-    const table = src.slice(src.indexOf('declare -A ROUTES=('));
-    // The class allows a HYPHEN: `runs items-list` is the first two-word verb,
-    // and a `[a-z.]+` class silently DROPPED it (D-843) — this caught that,
-    // which is the whole reason it reads the client instead of counting ROWS.
-    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
+    const keys = routeKeys();
     expect(keys.sort()).toEqual(ROWS.map(([a]) => `${a[0]}.${a[1]}`).sort());
     // Stated separately so the number itself is a claim someone has to edit.
     // D-688: `POST /api/coord/pause` was inferred from routes.ts rather than
@@ -157,6 +235,38 @@ describe('the closed route table', () => {
     // the surface by imitation — it is the READ half of `runs items`, which
     // was unusable without it: settling needs ids and nothing published them.
     expect(keys).toHaveLength(18);
+  });
+
+  it('states the row count in prose as the number the table actually holds', () => {
+    const n = routeKeys().length;
+    const WORDS: Record<number, string> = {
+      15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
+      19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
+    };
+    const want = WORDS[n];
+    expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
+
+    const src = fs.readFileSync(CCRC_API, 'utf8');
+    // TWO ANCHORED SITES, not a sweep over every numeral in the file — and the
+    // difference matters: `ccrc-api` opens with "twelve permission denials in one
+    // wave", which is HISTORY and must stay exactly as written. A blanket scan
+    // would demand that sentence say eighteen. Each regex fails loudly when its
+    // own anchor moves, so a deleted sentence reds here rather than passing on an
+    // empty match — `passage()`'s lesson, applied to two one-line slices.
+    const SITES: [string, RegExp][] = [
+      ['the closed-surface bullet', /The route comes from ROUTES below, ([A-Za-z-]+) rows/],
+      ['the ROUTES table header', /\n#\s*([A-Za-z-]+) rows\b/],
+    ];
+    for (const [name, re] of SITES) {
+      const m = src.match(re);
+      expect(m, `${name}: the anchor this pin reads is gone from ccd/ccrc-api`).not.toBeNull();
+      expect(m![1]!.toLowerCase(), `${name} states a row count this table does not have`).toBe(want);
+    }
+    // The header anchor is a FIRST-match read, so it is only honest while it is
+    // unique. A second `# <word> rows` line anywhere in the client would make
+    // this pin silently watch the wrong one.
+    expect([...src.matchAll(/\n#\s*([A-Za-z-]+) rows\b/g)].length,
+      'the ROUTES-table header anchor is no longer unique in ccd/ccrc-api').toBe(1);
   });
 
   it('has no verb that reaches the pause door', async () => {
@@ -364,12 +474,211 @@ describe('unknown verbs refuse rather than improvise', () => {
   });
 });
 
-describe('whoami', () => {
-  it('refuses outside tmux rather than inventing an identity', async () => {
-    // Identity on this fleet is attribution, and the one thing not carried in a
-    // payload is what tmux says about the pane. No pane, no answer — never a
-    // guess, and deliberately no flag to supply one.
-    const r = await runBoth(['whoami']);
+describe('whoami: the pane is the proof', () => {
+  it('answers for THIS pane, and names it as an explicit target', async () => {
+    plantPane('demo-ws');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ id: 'demo-ws', uuid: 'u-1234' });
+    expect(tmuxArgv()[0], 'tmux was asked about the BOX, not about this pane')
+      .toContain('-t %7');
+  });
+
+  it('refuses with NO pane even though tmux would gladly answer', async () => {
+    // THE PRESENCE THE ABSENCE NEEDS: the stub SUCCEEDS and names a session that
+    // is not the caller's, which is exactly what the real binary does — measured
+    // 2026-09-02 from `env -i`, exit 0, another project's session.
+    plantPane('someone-else');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    // ASSERTED FIRST, deliberately: this is the live defect, and a mutation that
+    // reopens it should red with the leaked identity in the message rather than
+    // with `expected 0 not to be 0`.
+    expect(r.stdout + r.stderr, 'it answered with another session identity')
+      .not.toContain('someone-else');
     expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+    expect(tmuxArgv(), 'tmux was shelled before the gate decided').toEqual([]);
+  });
+
+  it('refuses a TMUX_PANE that is not a pane id — the forgery door', async () => {
+    // `-t` accepts a SESSION name, so an unvalidated `TMUX_PANE=cc-other` asks
+    // tmux about someone else's session and is believed.
+    plantPane('demo-ws');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: 'cc-someone-else' });
+    expect(tmuxArgv(), 'a session NAME reached -t as though it were a pane').toEqual([]);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-pane');
+  });
+
+  it('says tmux could not answer FOR THIS PANE, not that there is no session', async () => {
+    // No plantPane: the harness's own poisoned tmux answers rc 97 and prints
+    // nothing (`ccdWsHelpers.ts:229,235-239`), which is the "tmux refused" case.
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('could not answer for this pane');
+    expect(r.stdout, 'the measured-false detail is back')
+      .not.toContain('not inside a tmux session');
+  });
+
+  it('refuses when the registry has no uuid for the derived id', async () => {
+    // A REGRESSION PIN CARRIED ACROSS THE REWRITE, not a new guard: today's
+    // client already refuses here, so this case is green before and after. It is
+    // written down because the rewrite moves the check into a new function, and
+    // its mutation (Step 5 (iv)) is what makes it more than decoration.
+    plantPane('demo-ws');
+    fs.rmSync(path.join(home, '.cc-sessions', 'demo-ws.uuid'));
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-uuid');
+  });
+
+  it('is sliced correctly by the corpora that slice it — their expansions, this stdout', async () => {
+    plantPane('demo-ws');
+    const r = await run(['whoami'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).toBe(0);
+    const fence = identityFence('worker');
+    // Byte-identical across the two corpora is a standing property (a skill
+    // reaches a home only once its installer has run there, so the block is
+    // duplicated on purpose); asserting it here is what lets ONE run below
+    // speak for both.
+    expect(identityFence('coordinator'), 'the two corpora have drifted apart').toBe(fence);
+    const got = await sh(`who=$(cat)\n${fence}\nprintf '%s|%s' "$id" "$uuid"`, r.stdout);
+    expect(got, 'the corpora slice this stdout into a malformed identity')
+      .toBe('demo-ws|u-1234');
+  });
+});
+
+describe('ledger allocate carries an identity, or refuses', () => {
+  const BODY = '{"project":"p","count":2,"title":"t"}';
+
+  it('fills byId from this pane when the body names none', async () => {
+    plantPane('demo-ws');
+    await run(['ledger', 'allocate', '--json', '-'], BODY, { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]!.body))
+      .toEqual({ byId: 'demo-ws', project: 'p', count: 2, title: 't' });
+  });
+
+  it('an EMPTY object body gets a whole object back, not a trailing comma', async () => {
+    // The splice's OTHER arm, and the one no other case here reaches: every
+    // body above has at least one key, so the general form `{"byId":"x",<rest>`
+    // is always well-formed and the empty-object branch could be deleted with
+    // the whole file green — while `{"byId":"demo-ws",}` went on the wire as
+    // something no JSON parser accepts.
+    for (const body of ['{}', '{ }']) {
+      seen.length = 0;
+      plantPane('demo-ws');
+      const r = await run(['ledger', 'allocate', '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(r.status, `an empty object body (${body}) refused`).toBe(0);
+      expect(seen).toHaveLength(1);
+      expect(() => JSON.parse(seen[0]!.body), `${body} spliced into invalid JSON`)
+        .not.toThrow();
+      expect(seen[0]!.body).toBe('{"byId":"demo-ws"}');
+    }
+  });
+
+  it('sends NOTHING when there is a body and no derivable identity', async () => {
+    plantPane('someone-else');                       // tmux WOULD answer
+    const r = await run(['ledger', 'allocate', '--json', '-'], BODY,
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen, 'an unattributed allocate reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('no-pane');
+  });
+
+  it('refuses a present-but-BLANK byId rather than laundering it into the column', async () => {
+    // What a derivation that failed on the caller's side produces. The route
+    // stores '' with the same confidence as a real id, so the refusal has to
+    // happen here or not at all.
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'],
+      '{"byId":"","project":"p"}', { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('the SPACED spelling of that blank is the same refusal', async () => {
+    // What the whitespace-stripped copy buys, measured rather than asserted in
+    // a comment: `{"byId" : ""}` is one keystroke away from the case above and
+    // reaches the wire without the strip, splice and all.
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'],
+      '{"byId" : "","project":"p"}', { TMUX_PANE: '%7' });
+    expect(seen, 'a spaced blank byId reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('refuses a body that is not a JSON object rather than splicing into it', async () => {
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'], '[1,2]', { TMUX_PANE: '%7' });
+    expect(seen, 'a spliced non-object reached the wire').toHaveLength(0);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toContain('bad-body');
+  });
+
+  it('leading whitespace is not what "not a JSON object" means', async () => {
+    // A heredoc or a pretty-printer indents; the object-check has to look past
+    // that or it refuses a body that is fine. Pinned because the refusal it
+    // would produce is `bad-body` — the same word a real non-object gets, so
+    // the case above cannot tell the two apart.
+    plantPane('demo-ws');
+    const r = await run(['ledger', 'allocate', '--json', '-'],
+      '\n  {"project":"p"}', { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout).toBe(0);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', project: 'p' });
+  });
+
+  it('--by is the door for a caller with no pane', async () => {
+    await run(['ledger', 'allocate', '--by', 'ci-runner', '--json', '-'], BODY,
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]!.body).byId).toBe('ci-runner');
+  });
+
+  it('--by outranks the pane it is standing next to', async () => {
+    // The case above runs --by with NO pane, so it measures the door and not
+    // the precedence: with both present, either order satisfies it. An explicit
+    // flag has to win, because the caller who typed it is the one who knows the
+    // pane is the wrong answer — a coordinator allocating on a worker's behalf.
+    plantPane('demo-ws');
+    await run(['ledger', 'allocate', '--by', 'ci-runner', '--json', '-'], BODY,
+      { TMUX_PANE: '%7' });
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0]!.body).byId, 'the pane outranked an explicit --by')
+      .toBe('ci-runner');
+  });
+
+  it('--by is refused on every other row, and its value must be a plain id', async () => {
+    const a = await run(['claims', 'take', '--by', 'x', '--json', '-'], '{}');
+    expect(a.status).not.toBe(0);
+    expect(seen).toHaveLength(0);
+    const b = await run(['ledger', 'allocate', '--by', 'a b', '--json', '-'], BODY);
+    expect(b.status).not.toBe(0);
+    expect(b.stdout).toContain('bad-by');
+    expect(seen).toHaveLength(0);
+  });
+
+  // GREEN BEFORE AND AFTER — pins on the new code's restraint, reddable only by
+  // Step 5's mutations (ii) and (v). Written down because without them the two
+  // decisions they record would be true by accident.
+  it('leaves a caller-supplied byId exactly as written', async () => {
+    plantPane('demo-ws');
+    await run(['ledger', 'allocate', '--json', '-'],
+      '{"byId":"chosen","project":"p"}', { TMUX_PANE: '%7' });
+    expect(seen[0]!.body).toBe('{"byId":"chosen","project":"p"}');
+  });
+
+  it('a BODYLESS allocate is untouched — there is nothing to attribute', async () => {
+    // The scope decision, pinned: the rule is about a body THIS CLIENT SENDS,
+    // and the closed-table row above already exercises the path with none.
+    // That row reds under Step 5's (v) too, so it is a real pin and not a
+    // silent one; this case is what states the reason it holds.
+    const r = await run(['ledger', 'allocate'], undefined,
+      { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('');
   });
 });

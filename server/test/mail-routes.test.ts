@@ -10,7 +10,7 @@ import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapRea
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -513,6 +513,15 @@ describe('the rejection table is total, in both directions', () => {
                               // 'claim-terminal' (CLAIM_REFUSE_CODES) before any caller
                               // sees it, so admitting it through the guard would put a
                               // never-wire word INTO the wire vocabulary to do it.
+      'already-acked',        // store.ts `MarkAckedResult`'s refusal arm (wave 8) —
+                              // the `bad-count`/`not-live` shape exactly: a
+                              // store-internal spelling no wire carries. The ack
+                              // route maps it to `{already:true, parked:false}`
+                              // before any caller sees it, so admitting it to a
+                              // wire union would put a never-wire word INTO the
+                              // wire vocabulary to do it. Its siblings `absent`
+                              // and `parked` are one word each and never reach
+                              // this scan at all.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -665,11 +674,61 @@ describe('POST /api/mail/:id/ack', () => {
 
     const first = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ ok: true, already: false });
+    // Exact shape, not `toMatchObject`: `parked` is the POSITIVE marker the
+    // route's own comment says is "present in both directions", so its
+    // ABSENCE has to mean "this server does not know" — which only holds if
+    // a fresh, landed ack is pinned to carry it. Under `toMatchObject` the
+    // route could drop `parked`/`state` from this arm with zero reds, and a
+    // client reading a successful ack would be back to the ambiguity D-1410
+    // exists to remove.
+    expect(first.json()).toEqual({ ok: true, already: false, parked: false, state: 'acked' });
 
     const second = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({ ok: true, already: true });
+  });
+
+  it('a PARKED delivery is not a double ack — the third answer, so a worker does not act on an abandoned brief', async () => {
+    // D-1410. `already: true` meant BOTH "somebody already
+    // acked this" and "this brief was abandoned and your ack changed nothing".
+    // Worker-skill clause 3 is "Ack before you act", so the second reading is
+    // the one that costs a wave: the worker sees confirmation and starts work
+    // on a brief the coordinator's lane has given up on.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const deliveryId = ackIdFromEnvelope(w.coord.dueDeliveries(Date.now(), 60_000)[0]!.envelope);
+
+    w.coord.rejectDelivery(deliveryId, 'undeliverable', MAIL_RUN_CLOSED_ERROR);
+    // The fixture reached the state it claims: `rejectDelivery` returns void
+    // and carries its own terminality guard, so a park that DECLINED would
+    // leave this test asserting the third answer on a live row.
+    expect(w.coord.delivery(deliveryId)?.state).toBe('rejected');
+
+    const res = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, already: true, parked: true,
+                                 state: 'rejected', lastError: MAIL_RUN_CLOSED_ERROR });
+    // The row is untouched: an ack that did not land must not look like one
+    // that did, in the body OR in the store.
+    expect(w.coord.delivery(deliveryId)?.state).toBe('rejected');
+  });
+
+  it('a genuine double ack still says already, and says it is NOT parked', async () => {
+    // The discriminator, in the other direction — without this the assertion
+    // above is satisfied by a server that reports `parked: true` for
+    // everything.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const deliveryId = ackIdFromEnvelope(w.coord.dueDeliveries(Date.now(), 60_000)[0]!.envelope);
+
+    await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
+    const second = await ack(app, deliveryId, { fromId: 'demo-coordinator', fromUuid: UUID });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ ok: true, already: true, parked: false, state: 'acked' });
   });
 
   it('applies the SAME token and attribution gate as the ingress', async () => {

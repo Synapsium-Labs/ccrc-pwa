@@ -29,7 +29,18 @@ import type {
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { readB64, readFrom, listDir, readWhole, statPath, writeB64, type ReadResult } from './fileops.js';
+import {
+  readB64Measured,
+  readFromMeasured,
+  listDir,
+  readWhole,
+  statMeasured,
+  writeB64,
+  type ReadB64Result,
+  type ReadFromResult,
+  type ReadResult,
+  type StatResult,
+} from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -169,6 +180,42 @@ function readPayload(r: ReadResult): { data: string | null; absent?: true } {
   return { data: r.data, ...(r.absent ? { absent: true as const } : {}) };
 }
 
+/** Builds the `stat` op's wire payload from `statMeasured`'s result.
+ *  `missing: true` keeps its EXACT pre-existing meaning — "no {mtimeMs,size}
+ *  for you", absent and unmeasurable alike — so an older server's
+ *  `r.missing === true ? null : …` reader is unaffected. `absent` is spread
+ *  in ONLY when the failure was a proven ENOENT, never sent as
+ *  `absent: false`, matching `{mtimeMs,size} | {missing: true, absent?: true}`
+ *  in `shared/agent-protocol.ts`. A newer server reads a bare `missing: true`
+ *  as UNMEASURED — which is what makes an OLDER agent's every stat failure
+ *  fail SHUT instead of masquerading as proof the path is gone (D-114). */
+function statPayload(r: StatResult): { mtimeMs: number; size: number } | { missing: true; absent?: true } {
+  if (r.ok) return { mtimeMs: r.mtimeMs, size: r.size };
+  return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
+}
+
+/** Builds the `readB64` op's payload. `dataB64` keeps its exact pre-existing
+ *  meaning (null for every failure), so an older server's
+ *  `typeof data === 'string' ? data : null` reader is unaffected. TWO
+ *  positive markers, spread only when true: `absent` (a proven ENOENT) and
+ *  `tooLarge` (over the cap, with the measured `size` beside it so the server
+ *  can answer 413 with a number instead of a shrug). An older server ignores
+ *  both; a newer one reads a bare `dataB64: null` as UNMEASURED. */
+function readB64Payload(r: ReadB64Result): { dataB64: string | null; absent?: true; tooLarge?: true; size?: number } {
+  if (r.ok) return { dataB64: r.dataB64 };
+  if (r.reason === 'too-large') return { dataB64: null, tooLarge: true, size: r.size };
+  return { dataB64: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
+}
+
+/** Builds the `readFrom` op's payload. Shape is unchanged for both existing
+ *  arms — `{data, size}` on success, `{data: null}` on failure — with
+ *  `absent` spread in only on a proven ENOENT. The EOF case rides the SUCCESS
+ *  arm as `{data: '', size}`, exactly as it does today. */
+function readFromPayload(r: ReadFromResult): { data: string; size: number } | { data: null; absent?: true } {
+  if (r.ok) return { data: r.data, size: r.size };
+  return { data: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
+}
+
 function clampTimeout(ms: number | undefined): number {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return DEFAULT_EXEC_TIMEOUT_MS;
   return Math.min(ms, MAX_EXEC_TIMEOUT_MS);
@@ -257,14 +304,13 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'readFrom': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      const result = await readFrom(p, req.offset);
-      send(ws, ok(req.id, result ?? { data: null }));
+      send(ws, ok(req.id, readFromPayload(await readFromMeasured(p, req.offset))));
       return;
     }
     case 'readB64': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, { dataB64: await readB64(p) }));
+      send(ws, ok(req.id, readB64Payload(await readB64Measured(p))));
       return;
     }
     case 'readdir': {
@@ -276,8 +322,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'stat': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      const result = await statPath(p);
-      send(ws, ok(req.id, result ?? { missing: true }));
+      send(ws, ok(req.id, statPayload(await statMeasured(p))));
       return;
     }
     case 'writeB64': {
@@ -543,8 +588,8 @@ type VerbCache = { verbs: string[]; mtimeMs: number | null; size: number | null 
  *  forever from a cache entry that (wrongly) claims to already reflect the
  *  current file. */
 async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
-  const st = await statPath(resolveSpawnCmd('ccd', home));
-  if (st === null) return cache.verbs;
+  const st = await statMeasured(resolveSpawnCmd('ccd', home));
+  if (!st.ok) return cache.verbs;
   if (st.mtimeMs === cache.mtimeMs && st.size === cache.size) return cache.verbs;
   const verbs = await readCcdVerbs(home);
   if (verbs === null) return cache.verbs;

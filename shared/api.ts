@@ -1218,13 +1218,14 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
  * home nothing ever looked at).
  *
  * DELIBERATELY NOT spelled with the read-failure pair that `ReadFailure`
- * declares in `server/src/io.ts`. That vocabulary describes ONE read's failure;
- * this one describes a conclusion drawn from a read that may never have
- * happened, and `unmeasurable` is the wider word on purpose.
- * `single-definition.test.ts` pins that pair to `server/src/io.ts` alone — and
- * pins it as TEXT, so even naming it in a docstring here reds the build
- * (measured, while this comment was being written). Say `ReadFailure`, not its
- * members.
+ * declares in `shared/agent-protocol.ts` (moved there from `server/src/
+ * io.ts` by D-1438; re-exported from `io.ts` unchanged). That vocabulary
+ * describes ONE read's failure; this one describes a conclusion drawn from a
+ * read that may never have happened, and `unmeasurable` is the wider word on
+ * purpose. `single-definition.test.ts` pins that pair to `shared/agent-
+ * protocol.ts` alone — and pins it as TEXT, so even naming it in a docstring
+ * here reds the build (measured, while this comment was being written). Say
+ * `ReadFailure`, not its members.
  */
 export type SkillState = 'present' | 'absent' | 'unmeasurable';
 
@@ -2772,8 +2773,10 @@ export type HookAsk =
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
-   *  banner. D4 (§5.2) adds the two facts that banner cannot be honest without,
-   *  both OPTIONAL so an older PWA build ignores them and an older server that
+   *  banner. D4 (§5.2) added the facts that banner cannot be honest without and
+   *  D-1398 added another; the bullets below are the list, and no count is
+   *  written here because one was and it stopped matching them (D-1447). All are
+   *  OPTIONAL, so an older PWA build ignores them and an older server that
    *  never sends them is not a protocol violation:
    *    - `foreignAccount`: the account a rung-6 answer was found under — the
    *      "stranded history, held by `claude`" banner. Null for every
@@ -2784,9 +2787,33 @@ export type SessionStreamMsg =
    *      the fleet host right now" — NEVER "no messages yet". Remote `readdir`
    *      returns null for a missing directory, a forbidden path and a
    *      disconnected agent alike, and this build refuses to render that
-   *      ambiguity as a confident empty chat. */
+   *      ambiguity as a confident empty chat.
+   *    - `fileMeasured`: false when the transcript itself could not be
+   *      MEASURED — a stat that failed for a reason that is not a proven
+   *      ENOENT (an unreachable agent, a whitelist refusal, an EACCES or
+   *      ENOTDIR on the way to it). `missing: true` with
+   *      `fileMeasured: false` earns the same sentence `searchComplete:
+   *      false` earns — "can't read the fleet host right now", NEVER "there
+   *      is no transcript".
+   *
+   *      THE STAT IS NOT THE ONLY ARM, and the missing one is exactly the
+   *      combination an implementer would omit: a transcript that stats FINE
+   *      but whose BYTES never arrived reports `missing: FALSE` with
+   *      `fileMeasured: false` and a real non-zero `offset`
+   *      (`readBacklog`'s unreadable arm, D-1403). So read `fileMeasured`
+   *      INDEPENDENTLY of `missing` — a client that gates the host-unreadable
+   *      banner on `missing` alone renders that fourth combination as a
+   *      confident empty chat, which is the defect D-1403 closed and this
+   *      contract described its way back into by documenting only the stat
+   *      arm (D-1447). Absent on the wire reads as TRUE, exactly like
+   *      `searchComplete` and for the same reason: every older server DID
+   *      stat the file, it simply could not tell you what the failure meant,
+   *      and reading omission as `false` would put the host-unreadable
+   *      banner on every session of every pre-field server. This field is
+   *      what tells the difference the collapsed `io.stat` this frame's
+   *      `missing` used to be derived from could not (D-1398). */
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
-      foreignAccount?: string | null; searchComplete?: boolean }
+      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer
@@ -3097,6 +3124,24 @@ const MAIL_DELIVERY_STATES: readonly MailDeliveryState[] =
 export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
   return typeof v === 'string' && (MAIL_DELIVERY_STATES as readonly string[]).includes(v);
 }
+
+/** The two terminal members of `MailDeliveryState`, ONCE. `TERMINAL_ITEM_STATES`
+ *  (`server/src/coord/store.ts`) is the precedent and carries the argument: the
+ *  SQL literal in every delivery writer's `WHERE` is BUILT from this list
+ *  (`TERMINAL_DELIVERY_SQL`), so the guard and the prose that explains it cannot
+ *  drift — and `single-definition.test.ts` pins that this is the only place the
+ *  pair is spelled as one adjacent list under any of the four roots.
+ *
+ *  L0 rather than beside the guards it feeds, and that is the load-bearing
+ *  choice: a copy of this pair also lived in `pwa/src/session/MailStrip.tsx`,
+ *  in a DIFFERENT PACKAGE, which a constant minted in `server/src` could not
+ *  have been imported by (D-1405).
+ *
+ *  `unknown` is deliberately NOT a member. A state this build cannot name is not
+ *  a state it may declare finished; what to do with one is an open question
+ *  recorded by this wave, not a decision this list makes. */
+export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
+  readonly MailDeliveryState[];
 
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
@@ -5566,11 +5611,13 @@ export function isDeviationAllocState(v: unknown): v is DeviationAllocState {
  * nothing (the ledger is prose, parsed by nothing); a reissue cost 394
  * rewritten D-ref lines across 30 files under merge pressure.
  *
- * `'landed'` means the number appears in a plan in the MAIN checkout
- * (`sweepLedgerReconcile`) — genuinely merged, the signal the incident
- * lacked. `stale` is DERIVED at read time from `allocatedAt`, `state` and
- * the clock, never stored (see `DEVIATION_ALLOC_STATES`); it rides the
- * wire so a phone can see it without owning a clock policy.
+ * `'landed'` means the number was seen DEFINED in a plan file in the
+ * working tree of the MAIN checkout at sweep time (`sweepLedgerReconcile`),
+ * on whatever branch that checkout was on — NOT proof of a merge; `landedIn`
+ * (below) names a path in that tree, which may exist on no ref. `stale` is
+ * DERIVED at read time from `allocatedAt`, `state` and the clock, never
+ * stored (see `DEVIATION_ALLOC_STATES`); it rides the wire so a phone can
+ * see it without owning a clock policy.
  */
 export interface DeviationAllocation {
   readonly project: string;

@@ -673,7 +673,14 @@ export function registerCoordRoutes(
         program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
         kind, subject, body: msgBody, artifacts: artifactPaths,
       });
-      coord.setDeliveryEnvelope(delivery.id, envelope);
+      const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
+      // Structurally impossible inside this transaction — the row was inserted
+      // six lines up and nothing else can see it. THROWN rather than ignored
+      // because `tx` rolls back on throw and rethrows: if the impossible
+      // happens, the whole mail is withdrawn rather than accepted with the
+      // placeholder envelope, which carries no `ack:` line and so names no
+      // delivery id for any recipient to ack against.
+      if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
       return inserted;
     });
 
@@ -689,8 +696,11 @@ export function registerCoordRoutes(
    * `unknown-recipient` — the same code, because from the server's side that
    * is exactly what it is: this is not a delivery to you.
    *
-   * A second ack of an already-acked delivery is not an error — `markAcked`
-   * is idempotent — but it is not a second ack either: `already: true`.
+   * A second ack of an already-acked delivery is not an error — `markAcked` is
+   * idempotent — but neither is it a second ack (`already: true`, `parked:
+   * false`). A PARKED delivery is a THIRD answer again (`parked: true`, with
+   * the park's own `lastError`): the ack landed on nothing, and a worker that
+   * treats `already` as confirmation would act on an abandoned brief.
    */
   app.post('/api/mail/:id/ack', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -759,8 +769,29 @@ export function registerCoordRoutes(
         'this delivery is not addressed to you');
     }
 
-    const landed = coord.markAcked(id, Date.now());
-    return reply.code(200).send({ ok: true, already: !landed });
+    const acked = coord.markAcked(id, Date.now());
+    if (acked.ok) {
+      return reply.code(200).send({ ok: true, already: false, parked: false, state: acked.state });
+    }
+    if (acked.why === 'parked') {
+      // The third answer. 200, because the REQUEST was well-formed, addressed
+      // to this session and authenticated — nothing was rejected; what the
+      // caller needs to know is that its ack landed on nothing. `already` keeps
+      // its old value so a client that reads only that field behaves exactly as
+      // before; `parked` is the POSITIVE marker, present in both directions, so
+      // its absence means "this server does not know", never "not parked".
+      return reply.code(200).send({ ok: true, already: true, parked: true,
+                                    state: acked.state, lastError: acked.lastError });
+    }
+    if (acked.why === 'already-acked') {
+      return reply.code(200).send({ ok: true, already: true, parked: false, state: acked.state });
+    }
+    // `'absent'` — unreachable from here: `coord.delivery(id)` above already
+    // 404s an id that names no row, and nothing in this tree deletes one. Total
+    // rather than dropped, and it answers with the SAME code that pre-check
+    // does, because from the server's side that is what it is.
+    return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid },
+      'this delivery is not addressed to you');
   });
 
   /**
@@ -1668,9 +1699,12 @@ export function registerCoordRoutes(
    * `projects[]` — every project measured this pass — replaces a
    * `projectKnown` boolean: a typo'd project is this feature's central failure
    * mode (a worker reads `[]` as "I am alone" and conflicts), and the obvious
-   * fix, one `io.stat` of the project dir, is built on the call the tree
-   * already knows lies (D-114: the agent's stat answers EACCES as
-   * `{missing:true}`).
+   * fix, one `io.stat` of the project dir, was built on the call the tree then
+   * knew lied (D-114: the agent's stat answered EACCES as `{missing:true}`).
+   * That lie is CLOSED — `io.statMeasured` exists and the wire carries
+   * `absent?: true` — and `projects[]` still stands, now on its own merit: it
+   * is the measurement this pass already makes, so the probe would be a
+   * second syscall to learn something already in hand.
    *
    * Each row is the L0 `PeerSummary` plus `claimedPaths` (additive wire, one
    * reader per field). No row carries an `archivedReason`, and the type no

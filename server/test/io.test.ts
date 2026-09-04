@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, chmodSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
+import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';
 
 const mktempDir = (): string => mkTmp('ccrc-io-');
 const tmpFile = (name = 'x.txt'): string => path.join(mktempDir(), name);
@@ -76,6 +77,28 @@ describe('localIO.readFileFrom', () => {
   });
 });
 
+describe('localIO.readFileFromMeasured', () => {
+  it('EOF is a POSITIVE answer: {ok:true, data:"", size}', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abc');
+    expect(await localIO.readFileFromMeasured(file, 3)).toEqual({ ok: true, data: '', size: 3 });
+    expect(await localIO.readFileFromMeasured(file, 99)).toEqual({ ok: true, data: '', size: 3 });
+  });
+
+  it('a missing file is {ok:false, reason:"absent"}; a DIRECTORY (stat ok, range read EISDIR) is "unreadable"', async () => {
+    const dir = mktempDir();
+    expect(await localIO.readFileFromMeasured(path.join(dir, 'nope'), 0)).toEqual({ ok: false, reason: 'absent' });
+    expect(await localIO.readFileFromMeasured(dir, 0)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('readFileFrom DERIVES: both failure reasons still answer null, EOF still answers {data:"",size}', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abc');
+    expect(await localIO.readFileFrom(file, 3)).toEqual({ data: '', size: 3 });
+    expect(await localIO.readFileFrom(path.join(path.dirname(file), 'nope'), 0)).toBeNull();
+  });
+});
+
 describe('localIO.readFileB64', () => {
   it('reads a binary file back as base64, and null when missing', async () => {
     const dir = mktempDir();
@@ -84,6 +107,31 @@ describe('localIO.readFileB64', () => {
     writeFileSync(file, bytes);
     expect(await localIO.readFileB64(file)).toBe(bytes.toString('base64'));
     expect(await localIO.readFileB64(path.join(dir, 'nope.png'))).toBeNull();
+  });
+});
+
+describe('localIO.readFileB64Measured', () => {
+  it('round-trips bytes; a missing file is "absent"; a DIRECTORY is "unreadable"', async () => {
+    const dir = mktempDir();
+    const file = path.join(dir, 'clip.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    writeFileSync(file, bytes);
+    expect(await localIO.readFileB64Measured(file)).toEqual({ ok: true, dataB64: bytes.toString('base64') });
+    expect(await localIO.readFileB64Measured(path.join(dir, 'nope.png'))).toEqual({ ok: false, reason: 'absent' });
+    expect(await localIO.readFileB64Measured(dir)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('has NO cap, deliberately — the cap is the agent WS round trip, not the file', async () => {
+    // localIO must keep serving a clip the agent would refuse, or this seam
+    // starts refusing files the server serves today. The divergence is
+    // REPORTED (remote answers too-large, local answers the bytes), never
+    // equalised — see MAX_READ_B64_BYTES's docstring in agent/src/fileops.ts.
+    const dir = mktempDir();
+    const file = path.join(dir, 'huge.png');
+    writeFileSync(file, '');
+    truncateSync(file, MAX_READ_B64_BYTES + 1);
+    const r = await localIO.readFileB64Measured(file);
+    expect(r.ok).toBe(true);
   });
 });
 
@@ -108,6 +156,38 @@ describe('localIO.stat', () => {
     expect(s!.size).toBe(4);
     expect(typeof s!.mtimeMs).toBe('number');
     expect(await localIO.stat(path.join(path.dirname(file), 'nope'))).toBeNull();
+  });
+});
+
+describe('localIO.statMeasured', () => {
+  it('reports {ok:true, mtimeMs, size} for a real file', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    const r = await localIO.statMeasured(file);
+    expect(r.ok).toBe(true);
+    expect(r).toMatchObject({ ok: true, size: 4 });
+  });
+
+  it('a missing path (ENOENT) reads as {ok:false, reason:"absent"}', async () => {
+    const dir = mktempDir();
+    expect(await localIO.statMeasured(path.join(dir, 'nope'))).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a path THROUGH a file (ENOTDIR, not ENOENT) reads as {ok:false, reason:"unreadable"}', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    expect(await localIO.statMeasured(path.join(file, 'child'))).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('stat DERIVES from statMeasured — both failure reasons still collapse to null for every existing caller', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    expect(await localIO.stat(path.join(path.dirname(file), 'nope'))).toBeNull();
+    expect(await localIO.stat(path.join(file, 'child'))).toBeNull();
+    // And the derivation is real, not a copy: a double that overrides ONLY
+    // the measured method must reach the derived one (ioDoubles.ts's rule).
+    const io: FleetIO = { ...localIO, statMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
+    expect(await io.stat(file)).toBeNull();
   });
 });
 

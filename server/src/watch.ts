@@ -1979,6 +1979,18 @@ export class FleetWatcher {
    * decoration: numbers allocated but not yet written into any plan are
    * invisible to this scan, and re-issuing one IS the bb47c9e failure.
    *
+   * SEEDED FROM THE SAME branch-dependent working tree as reconcile, and unlike
+   * reconcile that is left alone DELIBERATELY. A floor that reads a plan on an
+   * unmerged branch raises the fleet's floor permanently and burns every number
+   * below it — measured 2026-09-02, this project's floor stood well above the
+   * highest number the allocator had ever issued, raised off a file on no merged
+   * ref. (No cardinal here: the floor rises on its own sweep, so any figure
+   * written down is false by the next tick.) That is WASTE, not corruption: the
+   * numbers are cheap and a conservative floor is exactly what prevents a
+   * reissue, which is the failure this lane exists to make impossible.
+   * Reconcile's looseness was different in kind — it wrote a false fact into a
+   * TERMINAL column — which is why only that one was tightened.
+   *
    * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
    * `void`, so a test that awaits `tick()` has not awaited this.
    */
@@ -2073,11 +2085,19 @@ export class FleetWatcher {
   }
 
   /**
-   * D13: allocated -> landed when the number appears in a PLAN of the main
-   * checkout — so `landed` genuinely means merged, the signal the bb47c9e
-   * incident lacked while the authoritative record sat on an unmerged ref
-   * for 15 hours. A number 7 days old and never landed is REPORTED (once per
-   * changing set) and NEVER reclaimed.
+   * D13: allocated -> landed when a plan of the main checkout DEFINES the number.
+   * `landed` means exactly that and no more: the number was seen defined in a plan
+   * file in the working tree of `<projectsRoot>/<project>` at the moment of a
+   * sweep, on whatever branch that checkout was sitting on, uncommitted edits
+   * included. It is NOT proof of a merge — nothing between `readLedgerDocs`'s
+   * readdir and this column consults git, and `landedIn` names a path in that tree
+   * which may exist on no ref (measured 2026-09-02: it did). Reading a REF instead
+   * would need git, which is unreachable BY POLICY rather than by construction:
+   * `CCRC_FLEET=remote` sends every command across the agent's
+   * `EXEC_COMMANDS = ['tmux','ccd']` whitelist, while the server process itself
+   * holds an unwhitelisted `execFile` (`server/src/exec.ts:59-71`) that LOCAL mode
+   * uses. A number 7 days old and never landed is REPORTED (once per changing set)
+   * and NEVER reclaimed.
    */
   async sweepLedgerReconcile(): Promise<void> {
     const now = Date.now();
@@ -2110,10 +2130,24 @@ export class FleetWatcher {
         project, ['plans'], SWEEP_POLICY);
       if (read.files.length === 0 && !read.complete) continue;
       const files = read.files;
+      // ONE NOTION OF "THIS PLAN CARRIES D-N" (D-1420), shared by both halves
+      // of this sweep. Until now the landing half matched a bare `\bD-<n>\b`
+      // over the whole file text while the orphan half below used
+      // `definitionsIn` — two standards over the same corpus, eleven lines
+      // apart, in the same loop. It fired: on 2026-09-02 a BLOCKQUOTE citing an
+      // allocation range stamped two numbers `landed` (terminally — markLanded's
+      // `state = 'allocated'` guard never re-evaluates a landed row) against a
+      // plan that DEFINES neither. (That plan was on no merged ref when it
+      // stamped; it merged 2026-09-03, which changes nothing — the stamp was
+      // wrong because the file CITES the range, not because it was unmerged.)
+      // `definitionsIn`
+      // reads that same line as no definition at all, which is why SHARING the
+      // predicate is the fix rather than adding a second regex. Computed once
+      // and used twice, so the two halves cannot drift apart again.
+      const defs = definitionsIn(files);
       for (const a of openByProject.get(project) ?? []) {
-        const re = new RegExp(`\\bD-${a.n}\\b`);
-        const hit = files.find((f) => re.test(f.text));
-        if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
+        const hit = defs.find((d) => d.n === a.n);
+        if (hit !== undefined) store.markLanded(project, a.n, hit.file, now);
       }
       // The INVERSE of `markLanded`, and the half nothing has ever measured: a
       // plan that DEFINES an allocator-era number the allocator never issued.
@@ -2121,8 +2155,7 @@ export class FleetWatcher {
       // standing to refuse anything (D13's own stance on `stale`, one block
       // down). See `unallocatedDefinitions` for what this deliberately does NOT
       // claim, and why batch scatter is not reported here.
-      const orphans = unallocatedDefinitions(
-        definitionsIn(files), store.ledgerIssued(project));
+      const orphans = unallocatedDefinitions(defs, store.ledgerIssued(project));
       const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
       if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
         this.lastOrphanReport.set(project, oJson);

@@ -131,11 +131,16 @@ describe('the coordinator skill: its contract', () => {
     }
   });
 
-  it('tells the session how to learn its own id the ONE way that works on this box', () => {
-    // ccd/session-hook.sh:15-19 — derived from tmux, never from a `from:`
-    // field. Copied because the skill runs where the hook runs.
-    expect(skill).toContain("tmux display-message -p '#S'");
+  it('tells the session how to learn its own id the ONE way that is actually its own', () => {
+    // The bare derivation this replaced was measured on the fleet host three
+    // times on 2026-09-02: with no TMUX_PANE it exits 0 naming the MOST RECENTLY
+    // ACTIVE session — a different one on each run — so a session whose lookup
+    // went wrong got another session's id and believed it. `ccrc-api whoami`
+    // targets THIS pane and refuses instead.
+    expect(skill).toContain('ccrc-api" whoami');
     expect(skill).toContain('cc-');
+    expect(skill, 'the unchecked derivation is back')
+      .not.toContain("tname=$(tmux display-message -p '#S')");
   });
 
   // Wave 3 §3.1. A coordinator writes a ledger and a brief that name the
@@ -597,6 +602,31 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
     expect(para).toMatch(/prove|provenance|its own/i);
   });
 
+  // A handover now puts the corpse's unacked ROLE mail in the heir's box as a
+  // new delivery. Unsaid, the heir reads item 4 above, concludes the reports are
+  // gone, and re-dispatches finished work — exactly the harm `resume.md`'s "read
+  // outstanding mail before deciding anything" exists to prevent.
+  //
+  // ANCHORED ON A PHRASE THE PARAGRAPH OWNS, NOT ON THE ROUTE, and that is not a
+  // style choice: the `never names the reclaim door` case at the foot of this
+  // file forbids that route string corpus-wide, so a paragraph anchored on it
+  // could not exist. The phrase is paren-free so it is also safe as a `-t`
+  // pattern, and `find` returning `undefined` is what makes a deleted passage
+  // red instead of silently passing.
+  it('tells the heir a handover re-queues the reports the dead coordinator never acked', () => {
+    const para = envelope().split('\n\n')
+      .find((p) => p.includes('hands the program to a new coordinator'));
+    expect(para,
+      'no paragraph in mail-envelope.md says what a handover does to a parked report').toBeDefined();
+    expect(para, 'the passage does not say the heir gets a NEW delivery').toMatch(/new delivery/i);
+    // The distinction that must survive any rewrite: a NEW delivery, not the old
+    // park reopened — item 4's own "the park is terminal" is still true and this
+    // paragraph must not read as a retraction of it. One exact phrase, not a
+    // disjunction with alternatives no prose here can satisfy.
+    expect(para, 'the passage does not say the old park is left unreopened')
+      .toContain('is not reopened');
+  });
+
   // NO CENSUS ASSERTION HERE, and the reason is worth recording so it is not
   // re-added: this file ALREADY pins it exactly —
   //   `expect(hits).toBe(CONTRACT[2].split(verb).length - 1)`
@@ -622,6 +652,30 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
 // three spaces), so a literal `toContain` would pin the wrap point rather than
 // the sentence and would red on a re-flow that changed nothing.
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+/** A named slice between two literal anchors — `single-definition.test.ts`'s
+ *  `passage()`, copied for its REASON as much as its shape (this tree keeps the
+ *  idiom per-file on purpose: it touches nothing shared, so a copy costs one
+ *  helper and an import would cost a seam).
+ *
+ *  The bare `wl.slice(wl.indexOf(OPEN), wl.indexOf(CLOSE))` pair it replaces was
+ *  the POSITIVE-assertion form of the runaway slice, which is the quieter half of
+ *  the defect (D-1440). A lost OPENING anchor gives `''`; a lost CLOSING one gives
+ *  `-1`, and `String.slice(a, -1)` means "to length - 1" — so the block silently
+ *  becomes the whole rest of the file, a `> 0` floor is satisfied by anything at
+ *  all, and a `toMatch` can then be answered by the phrase appearing ANYWHERE
+ *  below. The assertion stops testing the block it names and stays green. So both
+ *  anchors are asserted, the closing one is searched for AFTER the opening one and
+ *  must follow it, and the floor is a real one rather than `> 0`. */
+const passage = (name: string, text: string, from: string, to: string, floor: number): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const b = text.indexOf(to, a + from.length);
+  expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+  const out = text.slice(a, b);
+  expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(floor);
+  return out;
+};
 
 describe('the coordinator delegates the standing protocol to the worker skill', () => {
   /** The worker skill's own frontmatter `name:`, harvested — never typed here.
@@ -685,9 +739,9 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     // bearing BECAUSE of what it prevents, and a block that kept the
     // instruction while losing the reason is a rule a coordinator may talk
     // itself out of.
-    const block = wl.slice(wl.indexOf('One sentence from the protocol goes in every brief anyway'),
-      wl.indexOf("The workspace's name is frozen"));
-    expect(block.length, 'the branch-discipline block never closes').toBeGreaterThan(0);
+    const block = passage('the branch-discipline block', wl,
+      'One sentence from the protocol goes in every brief anyway',
+      "The workspace's name is frozen", 600);
     expect(block, 'the branch-discipline block no longer says what a feature branch costs')
       .toMatch(/refuses\s+`stale-tip` forever, with no non-abandon path to close a run/);
     expect(flat(skill)).toContain(
@@ -1095,6 +1149,41 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(pp()).toContain('"byUuid":"$uuid"');
     expect(pp()).not.toContain('"fromId":"$id"');
     expect(pp()).not.toContain('"fromUuid":"$uuid"');
+  });
+
+  it('the allocate fence names byId, in the spelling the claim fence already uses', () => {
+    // The route takes `byId` optionally and stores `byId ?? ''`, so an omitted
+    // field lands as no holder at all — measured 2026-09-02, at least 101 of
+    // this project's allocations are in that state. This fence is the only
+    // documented allocate body in either corpus, so it is where that started.
+    // What makes it about THIS fence is ORDER, measured: both existing
+    // `"byId":"$id"` spellings (`:42` and `:68` — the claims bodies the test above
+    // pins, ~80 lines above the allocator section) sit BEFORE `ledger
+    // allocate`, so with this fence's byId deleted even an unbounded
+    // `[\s\S]*` fails to match. The 220 bound is the FORWARD guard: it stops a
+    // `byId` added in some later section from satisfying this from a distance.
+    expect(pp()).toMatch(/ledger allocate[\s\S]{0,220}"byId":"\$id"/);
+  });
+
+  it('no reference file carries a ${resp expansion — the client returns the body, and there is no second stream', () => {
+    // A curl-era leftover: `resp` is assigned nowhere in either corpus, so the
+    // line overwrote the captured body with the empty expansion of an unset
+    // variable. A coordinator copying that fence lost the whole 409 answer —
+    // the ADDRESS this section's own prose ("Reading a 409") teaches reading.
+    //
+    // WIDENED (D-1417, same number as the fix): this scanned `peer-protocol.md`
+    // ALONE, so the identical clobber landing in a sibling reference — every
+    // one of which ships copyable fences — was invisible to it. The corpus is
+    // DERIVED from the directory, the `REFERENCE_NAMES` reason (D-1003): a
+    // reference file added tomorrow is scanned without anyone remembering to
+    // add it. SKILL.md is deliberately OUT of this scan and must stay out — its
+    // its "stdout is the response body" paragraph names `${resp` in PROSE, as
+    // the history of what the capture idiom
+    // USED TO be, and that sentence is the reason a reader does not reinvent it.
+    for (const name of REFERENCE_NAMES) {
+      expect(refs(name), `${name} carries the curl-era \${resp clobber`)
+        .not.toContain('${resp');
+    }
   });
 
   it('tells the truth about which layer refuses a bad claim path (fix, post-9b review)', () => {

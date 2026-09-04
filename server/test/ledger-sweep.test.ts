@@ -10,7 +10,8 @@
 // the first live floor seed, permanently: the floor only rises.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import path from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -185,10 +186,51 @@ describe('sweepLedgerReconcile', () => {
     expect(rows[1]).toMatchObject({ n: 262, state: 'allocated' });
   });
 
+  it('lands on the file that DEFINES the number, not on one that merely cites it', async () => {
+    // BOTH DIRECTIONS IN ONE MEASUREMENT, because the fixture corpus here is a
+    // bare directory tree with no repository at all (`fixture()`:33 is a mkTmp,
+    // and readLedgerDocs reads it through FleetIO): "on the served ref" and "not
+    // on it" are the same state, so a ref-based fixture is not constructible and
+    // every existing green assertion in this file is compatible with the defect.
+    // The SHAPE is constructible, and it is the live one — copied from the
+    // blockquote that stamped two numbers against an unmerged file on 2026-09-02.
+    //
+    // The citing file sorts FIRST (`ledgerseed.ts:182` walks `[...names].sort()`),
+    // so under the old matcher `files.find` returns it — which is what makes this
+    // a measurement rather than a coin toss.
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261
+    h.plantDoc('demo', 'plans', 'a-cites.md',
+      `> **D-${261}..D-${299}** from \`POST /api/ledger/deviations\`.`);
+    h.plantDoc('demo', 'plans', 'b-defines.md', `- **D-${261}** — the real entry`);
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(h.coord.ledgerAllocations('demo')[0]).toMatchObject({
+      n: 261, state: 'landed',
+      landedIn: 'docs/superpowers/plans/b-defines.md',
+    });
+  });
+
+  it('a citation ALONE lands nothing — the live shape, with no definition anywhere', async () => {
+    const h = fixture();
+    await seedAndAllocate(h, 1);                          // 261
+    h.plantDoc('demo', 'plans', 'cite.md',
+      `> **D-${261}..D-${299}** from \`POST /api/ledger/deviations\`.`);
+    at(NOW + 1000);
+    await h.watcher.sweepLedgerReconcile();
+    expect(h.coord.ledgerAllocations('demo')[0])
+      .toMatchObject({ n: 261, state: 'allocated', landedIn: null, landedAt: null });
+  });
+
   it('REPORTS a number a plan defines that the allocator never issued (F7)', async () => {
-    // The inverse of markLanded, and the half nothing has ever measured. Live
-    // instance on main while this was written: D-1066..1069, defined in
-    // 2026-08-30-d1066-dead-recipient-parks.md with no allocation row.
+    // The inverse of markLanded, and the half nothing has ever measured. The
+    // live shape on main is an allocator-era number that a merged plan defines
+    // and the allocator never issued — D-1066 in
+    // 2026-08-30-d1066-dead-recipient-parks.md, D-1067..1069 in
+    // 2026-08-30-d1067-d1068-delivered-row-terms.md, and more since. The comment
+    // that stood here put all four of those numbers in the first file, which
+    // defines only D-1066, and no suite can pin either the set or its size: it
+    // is read from the live coord.db (D-1435).
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261 IS issued
     h.plantDoc('demo', 'plans', 'p.md',
@@ -221,9 +263,11 @@ describe('sweepLedgerReconcile', () => {
     // has had a test since D13 ("reported (once per changing set)"), which is what
     // makes the omission on this side an omission rather than a policy.
     //
-    // The live case it protects is on main right now: D-1066..1069 have no
-    // allocation row, so without the dedupe every ccrc-server on the fleet logs
-    // that line every 15 minutes, forever.
+    // The live case it protects is on main right now — the same NON-EMPTY orphan
+    // set the REPORTS test above describes — so without the dedupe every
+    // ccrc-server on the fleet logs that line every 15 minutes, forever. The
+    // enumeration this comment used to carry named four and was already wrong
+    // when it was written; the property is what the guard needs.
     const h = fixture();
     await seedAndAllocate(h, 1);
     h.plantDoc('demo', 'plans', 'p.md', `- **D-${299}** — never asked for`);
@@ -264,7 +308,14 @@ describe('sweepLedgerReconcile', () => {
   it(`D-${261} does not land D-${2611} — the boundary is a word boundary`, async () => {
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261
-    h.plantDoc('demo', 'plans', 'p.md', `only D-${2611} appears here`);
+    // A REAL DEFINITION, not a bare mention (D-1421). A bare mention cannot
+    // land under the shared `definitionsIn` predicate for a reason that has
+    // nothing to do with the word boundary this case is about, so the old
+    // fixture would have passed with the boundary deleted. The warn spy is
+    // here because the definition below is an unissued number, which the
+    // orphan half now reports.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.plantDoc('demo', 'plans', 'p.md', `### D-${2611} — a different number, defined`);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
@@ -289,7 +340,10 @@ describe('sweepLedgerReconcile', () => {
     await seedAndAllocate(h, 1);
     at(NOW + 1000);
     await h.watcher.sweepLedgerReconcile();
-    h.plantDoc('demo', 'plans', 'p.md', `D-${261}`);
+    // A REAL DEFINITION (D-1421): under the shared `definitionsIn` predicate a
+    // bare `D-261` can never land whatever the clock says, so the old fixture
+    // was compatible with the 15-minute gate being deleted outright.
+    h.plantDoc('demo', 'plans', 'p.md', `### D-${261} — would land, but for the clock`);
     at(NOW + 5 * 60_000);
     await h.watcher.sweepLedgerReconcile();               // inside the interval
     expect(h.coord.ledgerAllocations('demo')[0]!.state).toBe('allocated');
@@ -299,5 +353,84 @@ describe('sweepLedgerReconcile', () => {
     const w = new FleetWatcher(testDeps(mkTmp('ccrc-ledger-sweep-')), new Bus(), 10_000);
     await expect(w.sweepLedgerReconcile()).resolves.toBeUndefined();
     await expect(w.sweepLedgerFloor([])).resolves.toBeUndefined();
+  });
+});
+
+describe('what `landed` is allowed to claim', () => {
+  const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+  /** A named slice between two literal anchors. An anchor that stopped matching
+   *  yields '', and '' satisfies every assertion below it — box-token-census
+   *  .test.ts:220's rule, copied for its reason as much as its shape. */
+  const passage = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    const out = flat(text.slice(a, b));
+    expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(120);
+    return out;
+  };
+
+  // THIS FILE IS DELIBERATELY NOT A SITE. It makes no merge claim (measured: the
+  // regex below scores zero against it at 5e9f650d), and it holds that regex as a
+  // literal — scanning itself is the self-matching-guard failure, permanently red
+  // for a reason that has nothing to do with the corpus.
+  const SITES = ['server/src/watch.ts', 'server/src/coord/schema.ts',
+                 'server/src/coord/store.ts', 'shared/api.ts'] as const;
+
+  // ANCHORED PER SITE, not whole-file: `shared/api.ts` already contains a
+  // lowercase "working tree" at :652 (`cmd_ws_audit reads the working tree
+  // ITSELF`), so a whole-file presence check would be green before the change and
+  // stay green if the corrected sentence were deleted — the exact mutation this
+  // case exists to catch.
+  const PASSAGES: ReadonlyArray<readonly [string, string, string, string]> = [
+    ['watch.ts, sweepLedgerReconcile', 'server/src/watch.ts',
+     '   * D13: allocated -> landed', '  async sweepLedgerReconcile'],
+    ['watch.ts, sweepLedgerFloor', 'server/src/watch.ts',
+     '   * D13: the allocator SELF-SEEDS', '  async sweepLedgerFloor'],
+    ['schema.ts, the ledger_alloc DDL comment', 'server/src/coord/schema.ts',
+     "  -- D13: the allocator's record.", '  CREATE TABLE ledger_alloc ('],
+    ['store.ts, markLanded', 'server/src/coord/store.ts',
+     '  /** allocated -> landed, once', '  markLanded(project: string'],
+    ['shared/api.ts, DeviationAllocation', 'shared/api.ts',
+     ' * One allocated deviation number, as `GET /api/ledger` reports it.',
+     'export interface DeviationAllocation'],
+  ];
+
+  it('no site claims a merge the reader never performs', () => {
+    // The read is io.readdir/io.readFile under ${projectsRoot}/${project}, on
+    // whatever branch that checkout is on, uncommitted edits included — measured
+    // 2026-09-02, when it stamped landedIn with a path that was then on no
+    // merged ref (it merged 2026-09-03; the stamp was wrong for the citation,
+    // not for the merge status).
+    for (const rel of SITES) {
+      expect(flat(read(rel)), `${rel} still says landed means merged`)
+        .not.toMatch(/genuinely means merged|genuinely merged|in a merged plan|in a plan in the MAIN/);
+    }
+  });
+
+  it('and each passage that used to lie says what IS measured', () => {
+    // Absence is not enough: deleting the sentence would satisfy the case above.
+    // Lowercase on purpose — the assertion is case-SENSITIVE, so the prose must
+    // spell it `working tree`, not `WORKING TREE`.
+    for (const [name, rel, from, to] of PASSAGES) {
+      expect(passage(name, read(rel), from, to),
+        `${name} dropped the claim instead of correcting it`).toMatch(/working tree/);
+    }
+  });
+
+  it('markLanded carries its own docstring, and ledgerProjects is not described as landing', () => {
+    const src = read('server/src/coord/store.ts');
+    const i = src.indexOf('  markLanded(project: string');
+    expect(i, 'markLanded moved — re-anchor this guard').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, i - 700), i),
+      'markLanded still has no docstring of its own').toMatch(/allocated -> landed, once/);
+    const j = src.indexOf('  ledgerProjects(): string[]');
+    expect(j, 'ledgerProjects moved — re-anchor this guard').toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, j - 700), j),
+      'the landing docstring is still attached to ledgerProjects').not.toMatch(/allocated -> landed/);
   });
 });

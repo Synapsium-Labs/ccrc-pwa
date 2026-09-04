@@ -673,4 +673,51 @@ describe('a chat that had to look elsewhere says so', () => {
     });
     expect(screen.getByText(/Stranded history — read from another account,/)).toBeInTheDocument();
   });
+
+  // D-114 at the last seam. The transcript EXISTS; the server could not
+  // measure it. Kills one sentence serving a measured and an unmeasured
+  // absence — the same mutant `searchComplete` killed on the readdir side.
+  it('an UNMEASURABLE transcript says the fleet host is unreadable, not "can\'t find it"', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'u1', offset: 0, missing: true,
+      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      searchComplete: true, fileMeasured: false, events: [],
+    } as Backlog);
+    expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
+    expect(screen.queryByText("Can't find this session's transcript")).not.toBeInTheDocument();
+    expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
+  });
+
+  // The fourth combination, reachable once readBacklog measures the BODY too:
+  // the file is present (missing:false) and its bytes never came back. No
+  // "No messages yet", because nobody looked at any messages.
+  it('a PRESENT transcript whose bytes could not be read is not an empty chat', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'u1', offset: 4096, missing: false,
+      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      searchComplete: true, fileMeasured: false, events: [],
+    } as Backlog);
+    expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
+    expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
+  });
+
+  // Kills `fileMeasured: msg.fileMeasured ?? false`, which would put the
+  // host-unreadable banner on every session of every pre-field server.
+  it('an older server that sends no fileMeasured has MEASURED the file', () => {
+    const store = makeStore();
+    const fleet = makeFleet();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    applyBacklog(store, {
+      type: 'backlog', uuid: 'u1', offset: 0, missing: true,
+      file: '/home/rc/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
+    } as Backlog);
+    expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
+    expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
+  });
 });

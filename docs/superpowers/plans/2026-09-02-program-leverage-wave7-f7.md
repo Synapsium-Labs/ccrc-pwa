@@ -1022,13 +1022,25 @@ a number landed on ANY `\bD-<n>\b` occurrence in any plan and never asks whose f
 
 **What is reported, and what is deliberately not.** Reported: an allocator-era number a plan DEFINES
 with no allocation row — unambiguous, because nobody asked for it. Live instance on `main` while this
-was written: D-1066..1069. NOT reported, each rejected by measurement:
-- *"allocated to its definer"*, the question as posed — it cannot be built. 101 of 243 allocator-era
-  rows carry `allocatedTo: ''`, because `byId` is optional and the coordinator's own documented call
-  omits it (D-1301).
-- *batch scatter* — across 65 batches exactly two are scattered, and one of them (D-999..D-1046) is a
-  program block spent correctly across its own waves. Structurally identical to the theft, so scatter
-  is an observation and never a defect.
+was written (2026-09-02, morning): D-1066..1069. Six by the end of the same day, D-1243 and D-1244
+having merged. **Fifty-four on `origin/main` `1c19787f` when re-derived on 2026-09-04** by the shipped
+`unallocatedDefinitions` over the shipped plan scan, because one plan merged since
+(`2026-09-02-graphify-read-side-ccrc-level.md`) hand-numbers forty-eight more; still six on this
+branch's own HEAD, which does not carry that file. Four, six, fifty-four in three days — which is the
+whole argument for keeping this count out of shipped source, and the reason wave 8 deleted the last one
+still standing there (D-1436). NOT reported, each rejected by measurement:
+- *"allocated to its definer"*, the question as posed — it cannot be built. 101 allocator-era rows
+  carry `allocatedTo: ''` (measured 2026-09-04, of 313 rows; it read 101 of 243 when this was written
+  and 101 of 270 on 2026-09-02), because `byId` is optional and the coordinator's own documented call
+  omits it (D-1301). The empty-holder population is CLOSED — they are historical build-4/8
+  reconciliation rows, and the numerator has not moved across three measurements — but the denominator
+  rises with every allocation, which is why only one of the two is a property and the pair is dated.
+- *batch scatter* — **three** batches are scattered as of 2026-09-04, over 76 (two over 65 when this
+  was written; two over 74 on 2026-09-02; the third is this program's own wave-7 block, D-1293..D-1304,
+  which landed across two files). So the "exactly two" the wave-8 crosscheck called the load-bearing
+  half of this bullet survived two days. What does not move is the reason scatter is not reported: one
+  of the three (D-999..D-1046) is a program block spent correctly across its own waves, structurally
+  identical to the theft, so scatter is an observation and never a defect.
 
 - [x] **Step 1: `unallocatedDefinitions` + `projectEra` as L1, with fixtures** — including the
   per-project era derivation that replaced a hardcoded `LEDGER_ALLOCATOR_ERA`/`LEDGER_BOOTSTRAP` pair
@@ -1149,8 +1161,8 @@ both unmoved.
 `byId` set, in seven acts (12 + 1 + 1 + 1 + 8 + 1 + 1), each immediately before the entry defining it, so
 the allocate→define window that fired three times in this program is never open here. Verified at close,
 in both directions: **25 allocated, 25 defined, zero allocated-but-undefined, zero
-defined-but-not-allocated to this session.** (The fix rounds add D-1318..D-1325 and D-1326..D-1331; each
-section below states its own range and act structure, taken from the allocator.)
+defined-but-not-allocated to this session.** (The fix rounds add D-1318..D-1325 and D-1326..D-1332;
+each section below states its own range and act structure, taken from the allocator.)
 
 **The review round.** Nine adversarial lenses over the branch diff, then a refute-default verification
 pass — eighteen agents, every mutation run in a throwaway worktree and never in this one. It found four
@@ -1186,7 +1198,9 @@ in this plan or in the diff is defined below.
   allocator's was 1292.** The brief said "floor **1243** — and READ the floor from the allocator, never
   from a document". Read: `GET /api/ledger?project=ccrc-pwa` answered `floor: 1292`, and there were
   **zero** allocation rows at or above 1243. 1243 is `max(defined) + 1`; the allocator's floor is
-  `max(defined) + LEDGER_SEED_GAP` (50, `shared/api.ts:5443`), i.e. 1242 + 50. A worker who had trusted
+  `max(defined) + LEDGER_SEED_GAP` (50, named in `shared/api.ts` — by NAME, because the line number has
+  gone stale twice inside this one program: `:5443` when this was written, `:5598` when wave 8 planned
+  the correction, `:5632` on 2026-09-04), i.e. 1242 + 50. A worker who had trusted
   the brief would have defined D-1243, forty-nine numbers below the floor — which
   `deviation-refs.test.ts`'s floor assertion cannot catch, because it only rejects refs ABOVE the
   high-water. The instruction was right and the number in the same sentence was wrong; the instruction
@@ -1209,8 +1223,10 @@ in this plan or in the diff is defined below.
   of the first incident was undetectable. Fixed for allocator-era numbers only, by Task 7's
   prefix-only `DEFINITION`; the pre-allocator half is left to `GRANDFATHERED`, whose "may only SHRINK"
   rule a widened subject scan would have forced us to break (measured: widening the subject extraction
-  surfaces six sub-211 collisions — D-73/142/143/144/149/172 — every one of which would have had to
-  join that set).
+  surfaces four sub-211 collisions — D-73/142/143/144 — every one of which would have had to join that
+  set. It read six until D-1310 found that two of them are line-initial bolded CITATIONS the shipped
+  entry-shape rule drops; the set is now DERIVED from the corpus by `deviation-refs.test.ts`, so it
+  cannot go stale again — re-derived 2026-09-04 at HEAD and at `origin/main` alike, four both times).
 
 - **D-1295** (2026-09-02, the mechanism this wave was asked for) — **the collision scan reads one tree,
   and the fix is to read two, not to document a merge.** The brief offered "make the pre-merge
@@ -1395,8 +1411,15 @@ the review found two more of it.
   guard detects, so wave 8 narrating "D-1231 and D-1232 were re-used" would red the guard, and the only
   remedy the failure message offered was to renumber a deviation the branch merely cited. Fixed with a
   lookahead for the four ways a real entry opens (`**`, ` —`, ` (`, `:`); measured over the scanned
-  plans as 394 prefix matches → 388 entry-shaped, and **all six dropped lines are citations**
-  (D-149, D-171, D-172, D-291, D-292, D-1026). Both directions now pinned. Knock-on: two of the six
+  plans at the time (the review's HEAD `ed81ad85`), 394 prefix matches → 388 entry-shaped, and **all
+  six dropped lines are citations** (D-149, D-171, D-172, D-291, D-292, D-1026). Re-measured
+  2026-09-04 at HEAD `f28bcaf6` with the pattern that ships TODAY — which gained a bare-bold prefix
+  arm in D-1322, *after* this paragraph was written — the same pairing reads 501 → 482, dropping
+  nineteen lines, and all nineteen are still citations. So neither the totals NOR the drop count is a
+  property: both move with the corpus and with the pattern, and "exactly six" holds only under the
+  retired one. What survives is the DIRECTION — every prefix-shaped line the lookahead drops is a
+  citation — which is why the shipped docstring now asserts that and no number at all. Both directions
+  pinned. Knock-on: two of the six
   sub-211 collisions this wave cited as evidence for the era scoping (D-149, D-172) were never
   collisions — they are these citations — so that argument rested on four data points, not six.
 
@@ -1420,9 +1443,10 @@ the review found two more of it.
   `const coords: string[] = []` left **6295 tests passing**. The failure it hides is invisible by
   construction: the field is present on the wire and reads as a healthy `null`.
   (b) **`lastOrphanReport`.** The sweep's once-per-changing-set dedupe had no test in any suite;
-  deleting the condition left `ledger-sweep` 14/14. Without it, the live D-1066..1069 orphan set logs on
-  every 15-minute sweep forever. Its mirror on the *stale* side has been pinned since D13, which is what
-  makes this an omission rather than a policy. Both now have tests that red on the deletion.
+  deleting the condition left `ledger-sweep` 14/14. Without it the live orphan set — non-empty, and
+  fifty-four numbers on `origin/main` when re-derived on 2026-09-04 — logs on every 15-minute sweep
+  forever. Its mirror on the *stale* side has been pinned since D13, which is what makes this an
+  omission rather than a policy. Both now have tests that red on the deletion.
 
 - **D-1313** (2026-09-02, the fix is better than the thing it replaces) — **the allocator era is derived
   per project, and `LEDGER_BOOTSTRAP` is retired.** The first version hardcoded `LEDGER_ALLOCATOR_ERA`
@@ -1432,8 +1456,12 @@ the review found two more of it.
   history named as "never allocated", beside a nonsensical fourteen-number hole grandfathered out of a
   different repo. The allocator already knows each project's answer and it costs one `MIN(n)`. Measured:
   this project's first ISSUED number is **274**, not 211 — so 211..273 were all hand-numbered and the
-  bootstrap set was both too narrow and repo-specific — and the two forms report the **same four
-  orphans** (D-1066..1069). A project with no allocations reports nothing, because it has no era.
+  bootstrap set was both too narrow and repo-specific — and the two forms report the **same orphan set,
+  whatever it is at the time**. (It was four when this was written, six the same evening — which is what
+  D-1332 records — and fifty-four on `origin/main` on 2026-09-04. The set is a JOIN of a live
+  `coord.db`, which no suite may open, against a corpus that grows with every merge, so wave 8 deleted
+  the count from `projectEra`'s docstring and left the property there and the dated snapshots here.)
+  A project with no allocations reports nothing, because it has no era.
   This also retires the constant D-1306 was written about; that deviation's lesson stands and its
   mechanism is gone with the constant.
 
@@ -1569,17 +1597,30 @@ document — the wave's own D-1317 is why.
 
 - **D-1320** (2026-09-02, MUST-FIX — a stale cardinal inside the docstring whose subject is stale
   cardinals) — **`ledger.ts` shipped two, one of them belonging to a different regex entirely.** The
-  paragraph said *"394 prefix matches, 388 entry-shaped"* (measured over the corpus at HEAD: 405 and
-  399) and *"this shape sees 29 definition lines `ENTRY` cannot"* — where 29 is the **`DEFINED`**
-  figure, the floor scan's lookahead-less pattern, i.e. the looser shape that paragraph exists to
-  distinguish itself from; the true `DEFINITION`-not-`ENTRY` delta was 27. D-1310's knock-on correction
-  applied to the other argument in the same docstring (six sub-211 collisions became four) and never to
-  the 29. The same number is repeated in `ledger-crosstree.test.ts`'s header and at three places in
-  this plan. **Independently re-measured before fixing** — the reviewer's HEAD figures reproduce
-  exactly (405/399/375, delta 27); their `origin/main` figures are one lower than mine because main
-  gained PR #44 in between. Fixed by removing every cardinal from that docstring and stating the delta
-  as SHAPES with named exemplars, which is D-1294's own argument for a delta carried one step further:
-  a delta still moves, a shape does not.
+  paragraph said *"394 prefix matches, 388 entry-shaped"* (measured over the corpus at the review's
+  HEAD `ed81ad85`: 405 and 399) and *"this shape sees 29 entry lines `ENTRY` cannot"* — where 29 is the
+  **`DEFINED`** figure, the floor scan's lookahead-less pattern, i.e. the looser shape that paragraph
+  exists to distinguish itself from; the true entry-shape-not-`ENTRY` delta was 27. D-1310's knock-on
+  correction applied to the other argument in the same docstring (six sub-211 collisions became four)
+  and never to the 29. The same number is repeated in `ledger-crosstree.test.ts`'s header and at three
+  places in this plan. **Independently re-measured before fixing** — the reviewer's HEAD figures
+  reproduce exactly (405/399/375, delta 27); their `origin/main` figures are one lower than mine
+  because main gained PR #44 in between.
+  **Re-measured a third time on 2026-09-04 at HEAD `f28bcaf6`, and the delta did NOT survive.** The
+  wave-8 plan predicted it would — its crosscheck ruled that *"6, 18, 24 and 27 are properties of a
+  regex pair"* while only the totals move — and the measurement refutes that in two independent ways.
+  (i) Against the pattern that actually ships since D-1322, the trio at `5e9f650d` was already
+  457/439/391 with a delta of 51, not 421/415/391 with 27; the 27 was re-derived from the pattern
+  `ed81ad85` shipped, which no longer exists, so it is a figure about a retired regex.
+  (ii) Under EITHER pattern the delta moved at HEAD — 464/458/393 delta **68** with the retired pair,
+  501/482/393 delta **92** with the shipped one — because this branch's own wave-8 plan opens all
+  forty-one of its ledger entries in the colon form, which `ENTRY` cannot see, and 27 + 41 = 68
+  exactly. A delta is therefore not a property either: it is a joint property of two patterns AND the
+  corpus, and it went stale inside the same wave that certified it as durable. That is the finding,
+  stated as a measurement rather than an aphorism — and it is the argument for the fix that was
+  already made, which was to remove every cardinal from that docstring and state the delta as SHAPES
+  with named exemplars. D-1294's own argument, carried one step further than it went: a delta still
+  moves, a shape does not.
 
 - **D-1321** (2026-09-02, MUST-FIX — a deleted premise, re-asserted forty-four lines below its own
   deletion) — **`runWords.ts` said "the board renders warnings on its `active` slice only"** in the
@@ -1601,7 +1642,9 @@ document — the wave's own D-1317 is why.
   Wave 8 will narrate *"D-1243 was taken by PR #42"* about a number main really defines, so this trips
   next wave with the printed remedy *"renumber NOW"* aimed at a number the branch only cited.
   **The other direction was open too:** entries opened with a bare `**D-297 — subject**` and no list
-  bullet — how build 8, stage 2e, the worker-skill plan and upstream-launcher-locks write every entry —
+  bullet — how build 8 writes MOST of its entries (measured 2026-09-04: 9 of its 14, the other 5 in the
+  heading form), and how stage 2e, the worker-skill plan and upstream-launcher-locks write all of
+  theirs —
   were invisible to `DEFINITION` and to `ENTRY` alike, so a re-definition of any of them was silently
   missed by a guard whose whole subject is not missing one. The review supplied a candidate regex as a
   **starting point, not a mandate**, and it was verified rather than adopted: twenty-one real shapes
@@ -1673,8 +1716,8 @@ document — the wave's own D-1317 is why.
 
 ### The escalated question, ruled — recorded here because the answer is better than the ask
 
-The wave escalated one item: `byId` at `POST /api/ledger/deviations` is optional, 101 of 243
-allocator-era rows carry `allocatedTo: ''`, and hole (a) — *was this number allocated to its definer* —
+The wave escalated one item: `byId` at `POST /api/ledger/deviations` is optional, the empty-holder
+count reported above is what that produced, and hole (a) — *was this number allocated to its definer* —
 cannot be closed while that is true. The ruling: **do not require it at the route; fix it in the
 client.** `ccd/ccrc-api`'s `cmd_whoami` already derives `{id, uuid}` from tmux and the registry, so the
 client can fill `byId` with no new input, and the 101 empty holders trace to `peer-protocol.md`'s
@@ -1693,10 +1736,14 @@ D-1324 recurring inside D-1324's own fix — and one real silent miss in the fen
 coordinator committed in advance to merging when these land, and was right to send them: a must-fix
 ruling that tolerates five recurrences of its own class is advisory.
 
-Numbers **D-1326..D-1331**, allocated from `POST /api/ledger/deviations` with `byId` set, in one act of
-six. **The refs for D-1326 and D-1327 were written into `ledger.ts` BEFORE the allocate call
-returned** — the floor happened to be 1326 and nobody raced it, but that is luck, not the discipline,
-and the discipline is the whole subject of this wave. Recorded rather than smoothed over.
+Numbers **D-1326..D-1332**, allocated from `POST /api/ledger/deviations` with `byId` set: six in ONE
+act (D-1326..D-1331, sharing `allocatedAt` 1788347619644), plus D-1332 in a separate act thirty-one
+minutes later during self-review (1788349510260). The act structure is a fact about the allocation
+table, not a rounding of the range — re-verified against the allocator on 2026-09-04, and widening the
+range is not permission to lose it. **The refs for D-1326 and D-1327 were written into `ledger.ts`
+BEFORE the allocate call returned** — the floor happened to be 1326 and nobody raced it, but that is
+luck, not the discipline, and the discipline is the whole subject of this wave. Recorded rather than
+smoothed over.
 
 - **D-1326** (2026-09-02, MUST-FIX — a true guard sold with a false measurement) — **the nested-fence
   exemplar was invented, and it shipped in three places.** D-1323's fix asserted that
@@ -1787,7 +1834,8 @@ and the discipline is the whole subject of this wave. Recorded rather than smoot
   allocator, and a line distance is a number nothing derives, so the comment names the guard instead.
 
 - **D-1332** (2026-09-02, self-review of the final round, and the class one more time) — **`projectEra`'s
-  docstring said the two approaches report "the SAME four orphans (D-1066..1069)", and there are six.**
+  docstring said the two approaches report "the SAME four orphans (D-1066..1069)", and there were six
+  that evening.**
   True when D-1313 wrote it; falsified nine days later by this wave's OWN next measurement, because
   D-1325 found two merged plans defining numbers the allocator never issued. Found by scanning my own
   final-round diff for the very class the round was sent back for, which is the only reason it was
@@ -1838,7 +1886,7 @@ wrong and this table's own rule is the order. Recorded here rather than left as 
 | `LEDGER_ALLOCATOR_ERA` 211 → 0, so the pre-allocator era joins the scan | `AssertionError: expected [ Array(1) ] to deeply equal []` | server `ledger-crosstree` |
 | delete the orphan report from `sweepLedgerReconcile` | `AssertionError: expected "warn" to be called 1 times, but got 0 times` | server `ledger-sweep` |
 | revert the sweep's project list to `openByProject.keys()` — OPEN allocations only | `AssertionError: a fully-landed project is never audited: expected "warn" to be called 1 times, but got 0 times` | server `ledger-sweep` |
-| empty `LEDGER_BOOTSTRAP` — **came back GREEN first time** (D-1306), reds only after the test was made to read the shipped constant | `AssertionError: the bootstrap set is not 211..224 — it may only SHRINK, never move: expected [] to deeply equal [ 211, 212, 213, 214, 215, 216, …(8) ]` | server `ledger-crosstree` |
+| ~~empty `LEDGER_BOOTSTRAP`~~ **SUPERSEDED by D-1313**, which retired the constant in the same wave — the mutation can no longer be applied and the quoted first-fail can no longer be produced (measured 2026-09-04: `git grep -n LEDGER_BOOTSTRAP` returns one narrating docstring in `ledger.ts` and plan prose, and zero constants; the assertion string appears in no test file). Kept because this table is landing-order history and D-1306's lesson — **came back GREEN first time**, reds only after the test was made to read the shipped constant — is load-bearing. The row that replaces it in practice is *hardcode the era back to 211 + a bootstrap set instead of `projectEra` (D-1313)*, already in this table. | `AssertionError: the bootstrap set is not 211..224 — it may only SHRINK, never move: expected [] to deeply equal [ 211, 212, 213, 214, 215, 216, …(8) ]` | server `ledger-crosstree` |
 | `h.briefQueued === false` → `!h.briefQueued`, so null joins false | `AssertionError: expected [ { glyph: '⌦', …(2) } ] to deeply equal []` | pwa `runs-health` |
 | drop the null guard before the kickoff arithmetic (`since ?? 0`) — null coerces to an infinitely old kickoff | `AssertionError: a healthy run drew a warning: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |
 | make an absent `health` render a claim instead of silence | `AssertionError: an older server was made to assert a health claim: expected <span class="run-warn" …(1)>…(1)</span> to be null` | pwa `runs-health` |

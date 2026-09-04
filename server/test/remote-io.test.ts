@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
 import { createIo } from '../src/remote/io.js';
 import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { MAX_READ_B64_BYTES } from '../../agent/src/fileops.js';
 
 describe('remote FleetIO — file ops over the agent WS', () => {
   let agent: RunningAgent | undefined;
@@ -53,6 +54,16 @@ describe('remote FleetIO — file ops over the agent WS', () => {
     writeFileSync(file, bytes);
     expect(await f.io.readFileB64(file)).toBe(bytes.toString('base64'));
     expect(await f.io.readFileB64(path.join(fixture!.home, '.cc-clips', 'nope.png'))).toBeNull();
+  });
+
+  it('an over-cap clip reads as {ok:false, reason:"too-large"} with the real size, not as missing', async () => {
+    const f = await connected();
+    const file = path.join(fixture!.home, '.cc-clips', 'huge.png');
+    writeFileSync(file, '');
+    truncateSync(file, MAX_READ_B64_BYTES + 1);
+    expect(await f.io.readFileB64Measured(file)).toEqual({ ok: false, reason: 'too-large', size: MAX_READ_B64_BYTES + 1 });
+    // And the derived method still answers today's null, so its one caller is untouched until Task 8.
+    expect(await f.io.readFileB64(file)).toBeNull();
   });
 
   it('readdir lists names, null when missing', async () => {
@@ -136,6 +147,30 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       expect(await f.io.readFileMeasured(file)).toEqual({ ok: false, reason: 'unreadable' });
     });
   });
+
+  describe('statMeasured', () => {
+    it('a real file reads as {ok:true, …}, a missing one as {ok:false, reason:"absent"}', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'sm.txt');
+      writeFileSync(file, 'abcd');
+      expect(await f.io.statMeasured(file)).toMatchObject({ ok: true, size: 4 });
+      expect(await f.io.statMeasured(path.join(fixture!.home, '.cc-sessions', 'nope.txt')))
+        .toEqual({ ok: false, reason: 'absent' });
+    });
+
+    it('a path THROUGH a file (ENOTDIR) reads as "unreadable", NEVER "absent" — the D-114 case, end to end', async () => {
+      const f = await connected();
+      const file = path.join(fixture!.home, '.cc-sessions', 'sm2.txt');
+      writeFileSync(file, 'abcd');
+      expect(await f.io.statMeasured(path.join(file, 'child'))).toEqual({ ok: false, reason: 'unreadable' });
+    });
+
+    it('a path outside every whitelist reads as "unreadable", NEVER "absent"', async () => {
+      const f = await connected();
+      const outside = path.join(fixture!.projectsRoot, '..', 'definitely-outside.txt');
+      expect(await f.io.statMeasured(outside)).toEqual({ ok: false, reason: 'unreadable' });
+    });
+  });
 });
 
 describe('remote FleetIO — readFileMeasured against a stub FleetClient (no real agent)', () => {
@@ -175,5 +210,45 @@ describe('remote FleetIO — readFileMeasured against a stub FleetClient (no rea
   it('a rejected request (forbidden/disconnected/timeout) reads as "unreadable"', async () => {
     const io = createIo(rejectingClient(new Error('forbidden')));
     expect(await io.readFileMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('an OLDER AGENT — {missing:true} with no `absent` key — reads as "unreadable", NEVER "absent"', async () => {
+    const io = createIo(clientAnswering({ missing: true }));
+    expect(await io.statMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a modern agent answering {missing:true, absent:true} reads as "absent"', async () => {
+    const io = createIo(clientAnswering({ missing: true, absent: true }));
+    expect(await io.statMeasured('/whatever/missing.txt')).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a rejected stat request (forbidden/disconnected/timeout) reads as "unreadable"', async () => {
+    const io = createIo(rejectingClient(new Error('forbidden')));
+    expect(await io.statMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('an OLDER AGENT — {dataB64: null} with no marker — reads as "unreadable", NEVER "absent"', async () => {
+    const io = createIo(clientAnswering({ dataB64: null }));
+    expect(await io.readFileB64Measured('/whatever/clip.png')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a modern agent answering {dataB64: null, tooLarge: true, size: N} reads as "too-large" WITH the size', async () => {
+    const io = createIo(clientAnswering({ dataB64: null, tooLarge: true, size: 12582913 }));
+    expect(await io.readFileB64Measured('/whatever/huge.png')).toEqual({ ok: false, reason: 'too-large', size: 12582913 });
+  });
+
+  it('a tooLarge marker with no size reports a NULL size, never a manufactured 0', async () => {
+    const io = createIo(clientAnswering({ dataB64: null, tooLarge: true }));
+    expect(await io.readFileB64Measured('/whatever/huge.png')).toEqual({ ok: false, reason: 'too-large', size: null });
+  });
+
+  it('an OLDER AGENT — readFrom {data: null} with no marker — reads as "unreadable"', async () => {
+    const io = createIo(clientAnswering({ data: null }));
+    expect(await io.readFileFromMeasured('/whatever/t.jsonl', 0)).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('a modern agent answering readFrom {data: null, absent: true} reads as "absent"', async () => {
+    const io = createIo(clientAnswering({ data: null, absent: true }));
+    expect(await io.readFileFromMeasured('/whatever/t.jsonl', 0)).toEqual({ ok: false, reason: 'absent' });
   });
 });

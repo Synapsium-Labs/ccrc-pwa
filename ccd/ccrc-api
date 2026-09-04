@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventeen rows, and nothing else.
+#   * The route comes from ROUTES below, eighteen rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -29,13 +29,27 @@
 # `server/test/ccrc-api-closed.test.ts` pins those as standing tests, because a
 # property this load-bearing must be a mechanism and not a docstring.
 #
-# WHAT IS DELIBERATELY ABSENT. `POST /api/coord/pause`. D-282 leaves that door and
-# `POST /api/runs/:id/abandon` ungated on purpose, so a wedged run keeps a release
-# valve the coordinator's own box token cannot lock; coordinator clause 4 is the
-# other half — "This session never unpauses itself. `$REG/coordinator-paused` is
-# the operator's file." Carrying it here would hand every session the one verb
-# that clause exists to deny. It is an operator door, reached from the PWA. If the
-# need is ever real it is an operator tool, not a row below. (D-688.)
+# WHAT IS DELIBERATELY ABSENT. Plenty of routes have no row below, and most of
+# them are simply not this client's business. FOUR are absent as a DECISION —
+# the release valves D-282 leaves ungated:
+#   `POST /api/coord/pause`
+#   `POST /api/runs/:id/abandon`
+#   `POST /api/claims/:id/break`
+#   `POST /api/runs/:id/reclaim`
+# They carry no box token on purpose: the party a wedge locks out — the
+# coordinator, a session holding a claim, a program whose coordinator is the
+# corpse and whose box token died with it — is the party holding that key, so
+# putting a wedge's release valve behind it would leave the wedge no door. That
+# is precisely why none of them may be reachable from HERE. Coordinator clause 4
+# is the other half — "This session never unpauses itself.
+# `$REG/coordinator-paused` is the operator's file." — and an ungated door plus a
+# session-side verb is a door with no lock at all. They are operator doors,
+# reached from the PWA. If the need is ever real it is an operator tool, not a
+# row below. (D-688. The names and the count here are not a census anyone keeps
+# by hand: `server/test/coord-pause-route.test.ts` derives both from `UNGATED`,
+# the one place the set is decided, and reds this passage when they disagree —
+# D-1168, which is what this passage cost the last time a docstring stood in for
+# a mechanism.)
 #
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
@@ -59,10 +73,17 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Seventeen rows. Measured from both corpora on 2026-08-26 by
+# Eighteen rows, and that word is SCANNED: `server/test/ccrc-api.test.ts` derives
+# the count from the table below and reds if this line or the bullet at the top
+# of this file states a different one. The rows were CHOSEN on 2026-08-26 by
 # `grep -rhoE '(GET|POST) /api/[A-Za-z0-9/:_-]+' ccd/coordinator-skill ccd/worker-skill`,
-# which Task 5's standing test re-runs so a skill that starts calling an
-# unreachable route goes red rather than failing in the field.
+# which is how they were measured once and is NOT a guard that re-runs — an
+# earlier version of this comment claimed it was, and nothing in the tree ever
+# compared those corpora to this table. What does exist is narrower and worth
+# knowing before you rely on it: `coordinator-skill.test.ts` checks the
+# COORDINATOR corpus against `server/src/coord/routes.ts`, and the worker corpus
+# has no route parity at all — so a skill that starts calling a route this table
+# lacks fails in the field, not in the suite.
 declare -A ROUTES=(
   [runs.list]='GET|/api/runs|no|-'
   [runs.open]='POST|/api/runs|no|-'
@@ -114,6 +135,7 @@ usage() {
       printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
     done
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
+    printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
   } >&2
 }
 
@@ -145,20 +167,64 @@ read_token() {
 }
 
 # Attribution, not authentication: the one fact not carried in any payload is
-# what tmux says about the pane this runs in. No pane, no answer — and
-# deliberately no flag to supply one, because a client that made forging an
-# identity convenient would be the worst place on the fleet to add that.
+# what tmux says about the pane this runs in.
+#
+# THE VARIABLE THAT DECIDES IS `TMUX_PANE`, NOT `$TMUX`, and that gate is the
+# whole guard. `tmux display-message -p '#S'` with no pane in the environment
+# does NOT refuse on a box running a tmux server — it answers for the MOST
+# RECENTLY ACTIVE session and exits 0. Measured on the fleet host three times
+# across 2026-09-02: from `env -i` the same binary named a DIFFERENT session on
+# each run, and on the last one it named another project's session while the
+# caller's own pane belonged to this one. A caller with no pane therefore got a
+# complete, confident, WRONG identity. WHICH session it names is a race, so no
+# cardinal about it belongs in this file; the property is what is guarded. The
+# detail this refusal used to carry — 'not inside a tmux session' — was itself
+# false on any box that has panes at all.
+#
+# THE PANE ID IS VALIDATED BEFORE IT IS PASSED, and that check is load-bearing
+# rather than tidy: `-t` accepts a SESSION name, so an unvalidated TMUX_PANE of
+# `cc-other` would ask tmux about someone else's session and be believed.
+#
+# TWO REFUSAL CODES, NOT ONE. 'no-pane' (you are not in a pane) and 'bad-pane'
+# (your TMUX_PANE is not a pane id) are different facts to whoever reads them —
+# "run me inside a session" against "your environment is lying" — and collapsing
+# them is the overloaded value this repo forbids at a seam.
+#
+# THERE IS ONE FLAG, AND IT DECLARES RATHER THAN FORGES. `--by <id>`, on the
+# `ledger allocate` row alone, names a caller that HAS no pane — a contributor at
+# a shell or in CI, whom CONTRIBUTING.md sends to this allocator and for whom
+# auth/gate.ts's EXEMPT entry keeps the door open. It is refused on every other
+# row, and a session in a pane is filled from its pane. What is still
+# deliberately absent is any way to answer AS another session on a route that
+# checks attribution.
+DERIVED_ID=''
+DERIVED_UUID=''
+derive_identity() {   # sets DERIVED_ID / DERIVED_UUID, or refuses. NEVER call it
+                      # inside $( ): `refuse` prints the envelope on stdout and a
+                      # substitution would swallow it (`server_url` has that shape).
+  local pane tname
+  # READ ONCE into a local, so `set -u` (line 43) cannot turn a deleted gate
+  # below into an unbound-variable error instead of the misattribution the gate
+  # is there to stop. A guard whose removal fails for the wrong reason is a
+  # guard nobody has actually measured.
+  pane="${TMUX_PANE:-}"
+  [[ -n "$pane" ]] \
+    || refuse 'no-pane' 'not inside a tmux pane (TMUX_PANE unset); identity cannot be derived'
+  [[ "$pane" =~ ^%[0-9]+$ ]] \
+    || refuse 'bad-pane' 'TMUX_PANE is not a pane id'
+  tname=$(tmux display-message -p -t "$pane" '#S' 2>/dev/null) \
+    || refuse 'no-tmux' 'tmux could not answer for this pane'
+  [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session for this pane'
+  DERIVED_ID="${tname#cc-}"
+  [[ "$DERIVED_ID" =~ $SAFE_RE ]] || refuse 'bad-session' 'tmux session name is not a usable id'
+  [[ -r "$REG/$DERIVED_ID.uuid" ]] || refuse 'no-uuid' "no $REG/$DERIVED_ID.uuid for this session"
+  DERIVED_UUID=$(tr -d '[:space:]' < "$REG/$DERIVED_ID.uuid")
+  [[ -n "$DERIVED_UUID" ]] || refuse 'no-uuid' "$REG/$DERIVED_ID.uuid is empty"
+}
+
 cmd_whoami() {
-  local tname id uuid
-  tname=$(tmux display-message -p '#S' 2>/dev/null) \
-    || refuse 'no-tmux' 'not inside a tmux session; identity cannot be derived'
-  [[ -n "$tname" ]] || refuse 'no-tmux' 'tmux named no session'
-  id="${tname#cc-}"
-  [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-session' 'tmux session name is not a usable id'
-  [[ -r "$REG/$id.uuid" ]] || refuse 'no-uuid' "no $REG/$id.uuid for this session"
-  uuid=$(tr -d '[:space:]' < "$REG/$id.uuid")
-  [[ -n "$uuid" ]] || refuse 'no-uuid' "$REG/$id.uuid is empty"
-  printf '{"id":"%s","uuid":"%s"}\n' "$id" "$uuid"
+  derive_identity
+  printf '{"id":"%s","uuid":"%s"}\n' "$DERIVED_ID" "$DERIVED_UUID"
 }
 
 main() {
@@ -189,12 +255,17 @@ main() {
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
   fi
 
-  local body_src='' query=''
+  local body_src='' query='' by=''
   while (( $# )); do
     case "$1" in
       --json)
         [[ $# -ge 2 ]] || refuse 'bad-args' '--json needs a file or -'
         body_src="$2"; shift 2 ;;
+      --by)
+        [[ $# -ge 2 ]] || refuse 'bad-args' '--by needs a value'
+        [[ "$key" == 'ledger.allocate' ]] || refuse 'bad-args' "$group $verb takes no --by"
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-by' '--by value is not a plain session id'
+        by="$2"; shift 2 ;;
       --*)
         local k="${1#--}" v
         [[ $# -ge 2 ]] || refuse 'bad-args' "--$k needs a value"
@@ -216,6 +287,64 @@ main() {
       [[ -r "$body_src" ]] || refuse 'no-body' "cannot read $body_src"
       body=$(cat -- "$body_src")
     fi
+  fi
+
+  # THE ONE BODY THIS CLIENT REWRITES, and the first in its history. Measured
+  # 2026-09-02: at least 101 of this project's allocations already carry an empty
+  # holder, because the documented body omits `byId` and the route stores
+  # `byId ?? ''` — an omitted field and an explicit empty string reaching one
+  # column. That 101 is a FLOOR that can only grow, which is why it may stand
+  # here: nothing in the tree UPDATEs `allocatedTo`, and `LedgerLog.append` has
+  # already put each of those lines in the append-only log, so no repair can
+  # lower it. The route may not change (operator ruling), so the fill happens
+  # here: from the pane, or from `--by`, or not at all.
+  #
+  # NEVER AN OVERRIDE. If the body already names `byId` it is left alone. The
+  # test is TEXTUAL, over a whitespace-stripped COPY (so `"byId" : ""` reads the
+  # same as `"byId":""`), and it errs toward not touching the body — the safe
+  # direction, since duplicate keys resolve last-wins and a splice would silently
+  # change precedence. A blank one is REFUSED rather than passed through: that is
+  # exactly what a derivation that failed on the caller's side produces.
+  #
+  # THE TEXTUAL TEST'S LIMITS, STATED RATHER THAN HIDDEN. A substring is not a
+  # JSON key, and three bodies show where the two part company — each measured
+  # 2026-09-03 against a loopback server, each re-permitting this block's own
+  # defect for that one body. A NESTED key (`{"project":"p","meta":{"byId":"x"}}`)
+  # and a WHITESPACE-PADDED one (`{"byId ":"sneaky",...}`) both read as "the
+  # caller has spoken", so the fill is SILENTLY suppressed and a body with no
+  # top-level `byId` goes on the wire. A `\u`-ESCAPED key (`{"\u0062yId":"",...}`)
+  # reads the other way, as absent: the splice fires and the wire body
+  # last-wins-parses to `{"byId":""}`, which is the blank refusal bypassed.
+  # None of the three is a forgery door — the caller already owns the body it
+  # hands us, and identity here is attribution — so the cost is an unattributed
+  # or blank row, the same one this block exists to stop, for that body only.
+  # Where the escaping runs the other way the test holds: a `\"byId\":` inside a
+  # title fills normally (the backslashes survive the strip and break both
+  # substrings), and the same text UNESCAPED is an invalid body that trips the
+  # blank refusal loudly.
+  #
+  # THE SPLICE IS SAFE BECAUSE OF SAFE_RE. Both `$by` and the derived id admit no
+  # quote and no backslash, so neither can escape the JSON string it lands in.
+  if [[ "$key" == 'ledger.allocate' && -n "$body" ]]; then
+    local nb="${body//[[:space:]]/}"
+    case "$nb" in
+      *'"byId":""'*)
+        refuse 'bad-body' 'the body names an EMPTY byId; the allocator would store it as no holder at all' ;;
+    esac
+    case "$nb" in
+      *'"byId":'*) : ;;                      # the caller has spoken
+      *)
+        local who lead rest restnb
+        if [[ -n "$by" ]]; then who="$by"; else derive_identity; who="$DERIVED_ID"; fi
+        lead="${body%%[![:space:]]*}"
+        rest="${body#"$lead"}"
+        [[ "$rest" == '{'* ]] \
+          || refuse 'bad-body' 'the allocate body is not a JSON object; byId cannot be added'
+        rest="${rest#\{}"
+        restnb="${rest//[[:space:]]/}"
+        if [[ "$restnb" == '}' ]]; then body="{\"byId\":\"$who\"}"
+        else body="{\"byId\":\"$who\",$rest"; fi ;;
+    esac
   fi
 
   local base token path url
