@@ -949,3 +949,60 @@ agents. Five findings were refuted and two survived a genuine three-skeptic vote
 survived only because no skeptic ran. I re-measured the five that drive a decision by hand and marked
 every other one a LEAD in the findings mail. An unrefuted finding is not a confirmed finding, and a
 review that says otherwise is doing the thing this program exists to stop.
+
+## Wave 8 CLOSES — and with it program-leverage, 2026-09-04 14:55 UTC
+
+`PR #48 -> main bae46952`, five checks green (`test` server/agent/pwa, `test-macos`, `build-pwa`),
+`MERGEABLE | CLEAN`. Fingerprint re-measured by me before the merge: tip `bd88f78e`,
+`handoffCommit == branchTip`, **0 behind** `origin/main` (was 2), 67 ahead, 59 files, +12940/−469,
+tree clean, `merge-tree` exit 0. Both must-fixes verified in the tree, not taken on report: SKILL.md
+at 12 clauses with prose "twelve", CONTRACT at 12 literals with main's count-derivation kept; zero
+bare `indexOf` pairs in `single-definition.test.ts` and `passage()` at module scope.
+
+**Deployed AGENT-FIRST** — fleet host, then server. `ccd version` = `bd88f78e`; `/health` =
+`{"sha":"bd88f78e","ref":"ws/quiet-meadow","dirty":false}`. All 15 live `claude-session@*` units
+verified active across the agent deploy. **Both lanes shipped from the same worktree deliberately:**
+its tree object is byte-identical to merged `main` (`dc79aaba` both sides), and two lanes built from
+two different commits is how `build:agreed` goes false for no reason at all. Run 30 closed
+`final:true`, `released:true`.
+
+**The wave's defining lesson is one line: a subset assertion cannot notice growth.** Main grew the
+worker skill to twelve clauses; the branch pinned eleven; `SKILL.md` auto-merged clean; and
+`carries all eleven clauses verbatim` passed on the twelve-clause file, shipping clause 12 pinned by
+nothing while README and CLAUDE.md asserted a pin that did not exist. The safe failure — a pin
+quoting text that vanished — is the one everybody guards against, including me in mail 202. The
+dangerous one is a guard that stays true while the thing it guards gets bigger.
+
+**Second: a cure out of reach of the disease is not a cure.** `single-definition.test.ts` shipped a
+fourth bare-`indexOf` slice — floor and negative assertion included — 245 lines above its own
+`passage()` helper, because the helper was block-local in a different `describe`. The worker
+diagnosed that shape unprompted and hoisted it, which forecloses the fifth instance as well as
+fixing the fourth. Of the five review items that was the only one that made the next bug less likely
+rather than this one absent.
+
+**Third: the coordinator was wrong twice and it mattered both times.** My brief carried "the three
+inherited" over two named items — a count with nothing behind it, in the wave whose subject is
+sentences that stopped being true (D-1429 keeps it). And I ruled both runaway-slice instances out of
+remit when one was live in the branch, in a file it already edited. The worker refused to invent the
+third and pushed back on the ruling; both refusals were right. **A worker that accepts a brief's
+arithmetic is a worker not reading it.**
+
+**On the review's own honesty.** Nine lenses raised 30 findings; the verify phase then died on a
+session limit, losing 70 of 99 agents, so 23 of 25 survivors were never skeptic-tested. Rather than
+present them as confirmed I re-measured the five that drive a decision by hand and shipped the rest
+as explicit LEADS. The worker then did what I could not: confirmed each, put it to a skeptic, fixed
+8 and **recorded the 2 refutations with their reasoning** so the next reviewer finds an answer
+instead of re-raising the question. Refutations are findings. Almost nobody writes them down.
+
+**Carried forward, unclosed by choice, into the next program's inbox** — these are decisions, not
+debt discovered late: (1) D-1410's third answer still has no consumer — live harm, additive on the
+wire, closable with no `FLEET_PROTO` bump; (2) `ccd-refusal-scan.test.ts:107`, the last runaway-slice
+instance, main-only, follow-up PR; (3) the **51** post-allocator orphan D-numbers on `main`
+(`D-1243..1253`, `D-1333..1372`), forty of them from one merge on 09-03 — the guard that prevents
+them now exists on `main` as of this merge, and did not before it; (4) `rejectDelivery`'s gate-column
+clear, still unmeasured tree-wide, and `ccd/session-hook.sh:47`, the last bare tmux identity idiom.
+
+**Program-leverage: eight waves, closed.** The recurring defect class across the last four was one
+thing wearing different clothes — **a true sentence that stopped being true** — and the durable fix
+was always the same move: restate the claim on a footing time cannot shift. Wave 8's own contribution
+to the evidence is that the claim which failed hardest was the coordinator's.
