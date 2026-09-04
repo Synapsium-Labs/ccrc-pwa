@@ -4071,6 +4071,55 @@ stale ledger cells re-measured. Committing the two source files again would be a
   (this branch's own previous commit), so this entry is **D-1453**; `git grep D-1453 HEAD origin/main`
   is empty.
 
+- **D-1454** (2026-09-04, T3 — a refused tree is a finding, and a capped list is a lie about its size)
+  — **the census recorded eleven refused trees per pass and doctor answered `PASS graphify: … census
+  ok`, and the one refusal reason it did record capped its evidence at five paths without saying so.**
+  Two halves of one blindness, both measured on the reference fleet 2026-09-04:
+
+  **(a) `_check_graphify` read the pass STATUS and never the pass's ROWS.** `~/.ccrc/graph-sweep.json`
+  carries `.passes[-1].trees[]`, one row per tree with its own `outcome` and `reason`; the check
+  looked only at `.passes[-1].status`, which answers "did the pass run", not "did the trees build".
+  On the live fleet that is `status: "ok"` over **11 of 51 trees `refused-by-guard` and 2 `failed`,
+  every pass** — repositories that have had no graph for as long as the census window remembers,
+  reported to their operator as `census ok`. Nothing else prints those rows: the sweep runs off a
+  timer and writes to nobody's terminal, the hook's card names only the CURRENT tree, and there is no
+  `ccrc graph` verb at all (`grep '^cmd_' ccd/ccrc` — the census has no printer, which is why the
+  remedy names `$HOME/.ccrc/graph-sweep.json` itself and invents no verb). The check now counts
+  those two outcomes and WARNs naming both counts and the per-repository remedy.
+
+  **WARN, never FAIL — a ruling, not a hedge.** A refused tree is the corpus guard (D-1449, D-1451)
+  doing exactly its job: the graph it already had is untouched and it builds again the moment its
+  corpus is clean. The repair lives in the REPOSITORY (commit the path, ignore it, or name it in
+  `~/.ccrc/graph-noise/<repo>.list`), not on the box, so a FAIL would red `ccrc doctor` — hence
+  `ccrc install`'s closing gate (D-139, "a fresh install ends green") — for a condition no ccrc verb
+  can clear, on every box, for as long as any tree has an untracked artifact. The two counts share
+  one bucket (one remedy: read the rows, act per tree) and its own `_dr_warn` line, separate from the
+  census bucket above it, whose remedy is about the TIMER and answers nothing here. An unparseable
+  count is left to the existing "does not parse" arm rather than reported as `0 refused` — a
+  measurement that failed is not a measurement of zero.
+
+  **(b) `head -5` cannot report what it dropped.** The reason string was built as `comm … | head -5`,
+  so a tree with six untracked paths and one with sixty produced character-identical reasons. Those
+  are different problems with different remedies — one commit against a corpus filter — and the row
+  is the only place the refusal is ever stated. The cap stays (a census row is read on a phone); the
+  FULL breach is now computed once, capped after, and the remainder counted: ` (+N more)`. The
+  suffix needs no separator of its own because the existing `tr '\n' ' '` already leaves a trailing
+  space, so an uncapped reason keeps byte-for-byte the text it has always had — pinned by the
+  five-path test, which asserts the clause is ABSENT there.
+
+  | mutation | measured red |
+  | --- | --- |
+  | the whole `gfx_rows_warn` verdict branch deleted from `_check_graphify` | `ccrc-doctor-graphify` — `Tests  1 failed \| 26 passed (27)`: *WARNs, naming both counts, when the last pass carries refused-by-guard and failed rows* — `expected 'PASS graphify: engine 0.9.9, skills c…' to match /^WARN graphify:/` |
+  | that branch's `_dr_warn graphify` -> `_dr_fail graphify` (the never-FAIL ruling) | `ccrc-doctor-graphify` — `Tests  1 failed \| 26 passed (27)`: same row, the FAIL verdict where the WARN belongs |
+  | the count clause dropped (`[ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"` -> `:`) | `graph-sweep` — `Tests  1 failed \| 64 passed \| 2 skipped (67)`: *the refusal reason says how many breach paths the 5-path cap cut* — `expected 'untracked paths entered the corpus: b…' to match /\(\+3 more\)$/` |
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1453**
+  (this branch's own previous commit), so this entry is **D-1454** — the brief's own "D-1375" was allocated
+  against a stale reading of `origin/main` (whose own highest is **D-1448**, not D-1372) and is long
+  since spent — `git grep D-1375` finds nothing anywhere, because the series ran past it before this
+  branch was cut.
+  `git grep D-1454 HEAD origin/main` is empty.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

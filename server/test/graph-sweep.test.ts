@@ -1038,6 +1038,37 @@ describe('graph-sweep: D-1161 — the default yields, the operator instructs', (
       .not.toMatch(/(^|\s)-f \/\.graphifyignore\s*$/m);
   });
 
+  // D-1454 — THE 5-PATH CAP HID THE SIZE OF THE BREACH. The reason keeps its
+  // cap (a census row is read on a phone, and 60 paths on one line is not a
+  // finding, it is a wall), but a reader has no way to tell a tree with six
+  // untracked paths — one commit away from building again — from one with
+  // sixty, which is a corpus problem. The count is the difference between
+  // "fix it" and "triage it", and it costs one clause.
+  const reasonOf = (tree: string) =>
+    lastPass().trees.find((t: { path: string }) => t.path === tree)?.reason as string;
+
+  it('the refusal reason says how many breach paths the 5-path cap cut (D-1454)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    const untracked = ['b1.py', 'b2.py', 'b3.py', 'b4.py', 'b5.py', 'b6.py', 'b7.py', 'b8.py'];
+    fs.writeFileSync(j('fixture-corpus'), ['a.py', ...untracked].join('\n') + '\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const reason = reasonOf(repo);
+    // five named, and the three the cap cut are COUNTED, not silently dropped.
+    expect(reason, 'the cap still names at most five paths').toContain('b5.py');
+    expect(reason, 'a sixth path is named — the cap is gone, not counted').not.toContain('b6.py');
+    expect(reason, 'the breach beyond the cap is invisible').toMatch(/\(\+3 more\)$/);
+  });
+
+  it('a breach that fits inside the cap carries no count clause (D-1454)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nb1.py\nb2.py\nb3.py\nb4.py\nb5.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    expect(reasonOf(repo), 'five paths named and five shown — nothing was cut')
+      .not.toMatch(/\(\+\d+ more\)/);
+  });
+
   // The trap-body fix and the caller-side cleanup are DEFENSE IN DEPTH for the
   // root-level rm above: each alone closes it, so neither reddens that test on
   // its own (measured — both single mutations stayed green; the pair reddens).

@@ -548,10 +548,28 @@ PY
   # its output is only ever tested for EMPTINESS, never compared to a path, so
   # quoting cannot change its answer and it is left as it is.
   tracked="$(git -C "$tree" ls-files -z | tr '\0' '\n')"
-  breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
-            | grep -v '^graphify-out/memory/' | head -5 || true)"
-  if [ -n "$breach" ]; then
-    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")"
+  # D-1454 — THE CAP STAYS, THE SIZE OF THE BREACH STOPS BEING A SECRET. Five
+  # paths is all a census row can carry (it is read on a phone, and this one
+  # line is the only place the refusal is ever stated), but "6 untracked paths"
+  # and "60" are different problems with different remedies — one commit
+  # against a corpus filter — and the capped reason spelled them identically.
+  # So the FULL breach is computed once and the cap applied after, with the
+  # remainder counted: `head -5` on its own can never report what it dropped.
+  # `wc -l` over a non-empty capture is exact here — every line comm emits ends
+  # in a newline, and the empty case never reaches it (the `-n` test above).
+  local breach_all breach_n
+  breach_all="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
+            | grep -v '^graphify-out/memory/' || true)"
+  if [ -n "$breach_all" ]; then
+    breach="$(head -5 <<<"$breach_all")"
+    breach_n="$(wc -l <<<"$breach_all")"
+    breach_n="${breach_n//[![:digit:]]/}"   # BSD `wc` pads its count with spaces
+    local more=""
+    [ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"
+    # NB the `tr` above leaves a TRAILING SPACE (the here-string's own final
+    # newline becomes one), so the suffix needs no separator of its own and the
+    # uncapped reason keeps the exact text it has always had.
+    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")$more"
     _gs_owns_ignore "$tree" && rm -f "$tree/.graphifyignore"
     return 1
   fi

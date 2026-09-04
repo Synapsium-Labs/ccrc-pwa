@@ -356,6 +356,48 @@ describe('ccrc doctor: graphify', () => {
     expect(line).toMatch(/^WARN graphify:/);
   });
 
+  // D-1454 — A REFUSED TREE IS A FINDING FOR AN OPERATOR, NOT A ROW NOBODY READS.
+  // Measured on the reference fleet 2026-09-04: 11 of 51 trees `refused-by-guard`
+  // and 2 `failed` on every pass, while doctor printed `PASS graphify: … census
+  // ok` — the pass STATUS was `ok` (the pass ran; it is the per-tree rows that
+  // did not) and nothing in the check ever looked at `trees[]`. The census is
+  // the only place those rows exist and no verb prints it, so this line is the
+  // only way an operator learns a tree has had no graph for a fortnight. WARN,
+  // never FAIL: a refused tree is the corpus guard doing its job.
+  it('WARNs, naming both counts, when the last pass carries refused-by-guard and failed rows (D-1454)', () => {
+    const home = healthy('ccrc-doctor-gfx-rows-'); graphifyHealthy(home);
+    const now = new Date().toISOString();
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: x.py', duration_ms: 3 },
+        { path: '/h/projects/b', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: y.py', duration_ms: 3 },
+        { path: '/h/projects/c', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: z.py', duration_ms: 3 },
+        { path: '/h/projects/d', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
+        { path: '/h/projects/e', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
+        { path: '/h/projects/f', outcome: 'fresh', reason: '', duration_ms: 1 },
+      ] }] }));
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line, 'a refused tree is the guard working — never a FAIL').toMatch(/^WARN graphify:/);
+    expect(line, 'the refused count is not named').toContain('3 refused');
+    expect(line, 'the failed count is not named').toContain('2 failed');
+    expect(line, 'the remedy an operator can act on is not on the line').toContain('graph-noise');
+  });
+
+  // …and the other half: a pass whose rows are all clean leaves the PASS text
+  // exactly as it was. A bucket that fires on a healthy census is a bucket an
+  // operator learns to ignore (D-139's own reasoning, applied to rows).
+  it('says nothing new when every row of the last pass is clean (D-1454)', () => {
+    const home = healthy('ccrc-doctor-gfx-rows-clean-'); graphifyHealthy(home);
+    const now = new Date().toISOString();
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/a', outcome: 'fresh', reason: '', duration_ms: 1 },
+        { path: '/h/projects/b', outcome: 'stale-rebuilt', reason: '', duration_ms: 40 },
+        { path: '/h/projects/c', outcome: 'skipped-budget', reason: 'budget spent', duration_ms: 0 },
+      ] }] }));
+    expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
+  });
+
   it('WARNs when a tracked tree has not been given the graphify-out/ exclude', () => {
     const home = healthy('ccrc-doctor-gfx-excl-'); graphifyHealthy(home);
     const repo = join(home, 'projects', 'demo');
