@@ -3677,6 +3677,53 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | `ccd/session-hook.sh`: delete the `fresh+=" — same content as HEAD"` append entirely | `coordinator-skill` — `Test Files  1 failed (1)`, `Tests  no tests`: *Error: ccd/session-hook.sh appends no freshness qualifier at all — … the graph-card paragraph that names one has to be re-derived against it* |
   | `ccd/session-hook.sh`: reword the qualifier to `" — identical bytes to HEAD"` without touching the doc | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *the graph-card paragraph never names the `identical bytes to HEAD` qualifier the hook appends…* |
 
+- **D-1449** (2026-09-04, T1 — the guard compares git's truth, not git's quoting) — **the corpus
+  guard measured a TRACKED file as untracked whenever its name carried a non-ASCII byte, refusing the
+  tree for ever with no remedy on the box.** `_gs_guard` (`ccd/ccd-graph-sweep`) built the tracked
+  side with `git -C "$tree" ls-files` and `comm -23`'d it against `detect()`'s output. `detect()`
+  prints raw UTF-8 relative paths; `git ls-files` C-QUOTES any path with a byte above 0x7f — the whole
+  line wrapped in double quotes with each byte as an octal escape — unless `core.quotepath` is off.
+  Measured directly:
+
+  ```
+  $ git ls-files                              $ git -c core.quotepath=false ls-files
+  "J\303\240rn \303\266/pic \303\266.png"          Jàrn ö/pic ö.png
+  "J\303\240rnb\303\254tar.json"                 Jàrnbìtar.json
+  ```
+
+  So the tracked side spelled a name the corpus side never spells, `comm -23` emitted the corpus
+  spelling as a breach, and the tree was refused. **MEASURED on the live fleet: `mm-data` was refused
+  over exactly two tracked files** — a JSON named with `à`/`ò` and a PNG named with `ö` — both
+  committed, both in HEAD, neither in any way untracked. The refusal is permanent: nothing an operator
+  can do to the tree changes what `ls-files` prints, and the noise-list remedy (`<repo>.list`) does not
+  apply because the paths are not noise.
+
+  **Fix:** one spelling — `git -C "$tree" -c core.quotepath=false ls-files`. The flag is set per
+  invocation rather than in the repo's config, so ccrc changes no state in a tree it does not own.
+
+  **The other git listings in this file were checked and left alone, deliberately.** `rev-parse`
+  ignores `core.quotepath` entirely (measured: `--show-toplevel` and `--path-format=absolute
+  --git-common-dir` both print raw UTF-8 from inside a non-ASCII subdirectory), so `_gs_trees`'
+  toplevel discovery and `_gs_guard`'s repo-basename derivation were never affected. The RULE 3 probe
+  `git -C "$tree" ls-files -c -i -X "$probe" | head -n1` DOES quote, but its output is only ever tested
+  for EMPTINESS — quoting cannot turn a hit into a miss — so it feeds no path comparison and is left
+  as it is. That reasoning is written into the source comment beside the fix so the next reader does
+  not have to re-derive why one call got the flag and the other did not.
+
+  Baseline `graph-sweep` `Tests  53 passed | 2 skipped (55)`.
+
+  | mutation | measured red |
+  | --- | --- |
+  | drop `-c core.quotepath=false` (the pre-fix spelling) | `graph-sweep` — `Tests  1 failed \| 52 passed \| 2 skipped (55)`: *a TRACKED non-ASCII path is not read as untracked* — `expected 'refused-by-guard' not to be 'refused-by-guard'` |
+  | `-c core.quotepath=true` (a wrong VALUE, not an absent flag) | `graph-sweep` — `Tests  1 failed \| 52 passed \| 2 skipped (55)`: same test, same assertion |
+  | `if [ -n "$breach" ]` → `if false` (the breach refusal deleted, to prove the inverse test is not vacuous) | `graph-sweep` — `Tests  3 failed \| 50 passed \| 2 skipped (55)`: *an UNTRACKED non-ASCII path still refuses…* plus row 2 and the armed-trap case |
+
+  **Number allocated as D-1449, not the D-1373 the brief named.** The brief's premise was that
+  `origin/main`'s highest was D-1372; re-grepping `origin/main` across `docs/` AND source per
+  `CLAUDE.md`'s rule finds **D-1448** (`docs/superpowers/plans/2026-09-02-program-leverage-wave8-f8.md`,
+  `agent/src/fileops.ts`, `shared/api.ts`) — this ledger's own tail ends at D-1372, which is exactly
+  the "a number taken from a plan alone collides with shipped refs" trap the rule warns about.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

@@ -572,6 +572,37 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
   });
 });
 
+describe('graph-sweep: the guard compares git TRUTH, not git QUOTING (D-1449)', () => {
+  // `git ls-files` C-quotes any path carrying a non-ASCII byte
+  // (`"J\303\240rn.py"`) unless core.quotepath is off, while detect() prints
+  // raw UTF-8 relative paths. `comm -23` then reads a TRACKED file as
+  // untracked and refuses the tree for ever, with no remedy on the box.
+  // MEASURED on the live fleet: mm-data was refused over two tracked files —
+  // a JSON named with a/o diacritics and a PNG named with an umlaut.
+  const NON_ASCII = 'Jàrnbìtar.py';        // raw UTF-8; git would print "J\303\240rnb\303\254tar.py"
+
+  it('a TRACKED non-ASCII path is not read as untracked (the tree still builds)', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, NON_ASCII), 'x = 1\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'a tracked non-ASCII name');
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${NON_ASCII}\n`);
+    runSweep();
+    expect(outcomeOf(repo)).not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+  });
+
+  it('an UNTRACKED non-ASCII path still refuses, and the reason carries the raw name', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, NON_ASCII), 'x = 1\n');   // written, never committed
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${NON_ASCII}\n`);
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const reason = lastPass().trees.find((t: { path: string }) => t.path === repo).reason;
+    expect(reason).toContain(NON_ASCII);
+    expect(reason).not.toContain('\\303');   // never the C-quoted spelling
+  });
+});
+
 describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branch review)', () => {
   // A repo that adopts graphify upstream may COMMIT its own .graphifyignore
   // — tracked, so ignore rules don't protect it from deletion the way they

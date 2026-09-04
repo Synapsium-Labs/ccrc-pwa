@@ -392,7 +392,16 @@ for k in ('code','document','paper','image','video'):
         print(os.path.relpath(f, root))
 PY
 )" || { GUARD_REASON="detect() failed in $tree"; return 1; }
-  tracked="$(git -C "$tree" ls-files)"
+  # D-1449 — COMPARE GIT'S TRUTH, NOT GIT'S QUOTING. `ls-files` C-quotes any
+  # path carrying a non-ASCII byte (`"J\303\240rn.py"`, in double quotes)
+  # unless core.quotepath is off, while detect() prints raw UTF-8 relative
+  # paths — so `comm -23` read a TRACKED file as untracked and refused the tree
+  # for ever, with no remedy on the box. Measured on the live fleet: mm-data
+  # refused over two tracked files (a JSON named with a/o diacritics, a PNG
+  # named with an umlaut). The `ls-files -c -i -X` probe above quotes too, but
+  # its output is only ever tested for EMPTINESS, never compared to a path, so
+  # quoting cannot change its answer and it is left as it is.
+  tracked="$(git -C "$tree" -c core.quotepath=false ls-files)"
   breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
             | grep -v '^graphify-out/memory/' | head -5 || true)"
   if [ -n "$breach" ]; then
