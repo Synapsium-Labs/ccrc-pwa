@@ -3779,6 +3779,88 @@ stale ledger cells re-measured. Committing the two source files again would be a
   (this branch's own previous commit); `D-1450` is unallocated in `origin/main`, at `HEAD`, and in
   the working tree outside these edits.
 
+- **D-1451** (2026-09-04, T2 — what git ignores never enters the corpus) — **detect() never reads a
+  NESTED `.gitignore`, so gitignored build artifacts entered the corpus untracked and the guard
+  refused the tree — for ever, with no remedy on the box.** `_load_graphifyignore`
+  (`graphify/detect.py:793-836`) walks the ancestor chain from the VCS root **down to** the scan root
+  — `ceiling` → `root`, and never below it — merging each directory's `.gitignore` and
+  `.graphifyignore` on the way. A `.gitignore` that lives *under* the scan root is therefore never
+  loaded at all, and everything it excludes is scanned as ordinary source. `_gs_guard`
+  (`ccd/ccd-graph-sweep`) then measures those paths as untracked (they are: git ignores them) and
+  refuses the build. Nothing an operator does to the tree changes what detect picks up, and
+  `<repo>.list` does not apply because the path is not ccrc's noise — so the refusal is permanent.
+
+  MEASURED live: **synapsium-platform** refused over `frontend/exposynapse-site/.astro/settings.json`
+  (ignored by `frontend/exposynapse-site/.gitignore`), **MekWarLive/swift-harbor** over `.husky/_/*`
+  (ignored by `.husky/_/.gitignore`).
+
+  **Fix:** derive **git's own verdicts** into the generated `.graphifyignore`, so the two sides answer
+  with one authority instead of two —
+  `git -C "$tree" ls-files -o -i --exclude-standard --directory -z | tr '\0' '\n'`, one ENTRY per
+  line, each anchored at the tree root with a leading `/` (a directory entry keeps its trailing `/`),
+  appended after the noise-list patterns in the same file, under the same ownership marker, so
+  `_gs_rm_generated` still removes it and every existing ownership rule keeps applying unchanged.
+  Nothing else is skipped and the list is **not capped**: a capped corpus is one this guard could not
+  explain. The entry count is logged in the pass output instead
+  (`git-ignored entries derived into the corpus filter: N`).
+
+  **Anchoring is load-bearing, not cosmetic.** detect anchors on a leading `/` against the directory
+  holding the file (`detect.py:883-895`) — here the tree root — and takes a directory entry's whole
+  subtree through the ancestor walk (`detect.py:924-931`). Unanchored, `build/` matches **at every
+  depth**, so an ignored root `build/` would hide a tracked `src/build/`.
+
+  **The invariant is measured, not argued.** These entries cannot hide tracked content by
+  construction: `--directory` collapses a directory only when it holds no tracked file (measured — a
+  directory with one tracked and one ignored file lists `mixed/skip.log`, never `mixed/`), and a file
+  entry names an untracked path. Every derived entry is still run through the existing RULE-3 probe
+  (`git ls-files -c -i -X`) and withheld-and-reported if it would. The probe runs **once over the
+  whole set** in the common case — git's answer over a union is empty iff it is empty for every
+  member — and falls back to one call per entry only when that union is non-empty, i.e. when there is
+  a culprit to name.
+
+  **Two rules deliberately left standing.** A tree carrying a FOREIGN `.graphifyignore` derives
+  nothing: that file is not the sweep's to write, and D-1161's "hands off" outweighs the new filter
+  (without this the derivation would have clobbered a repo's own committed file, which the ownership
+  tests catch). And `graphify-out/` — ignored on every tree by `ccrc install`'s own exclude lines — is
+  derived like any other entry rather than special-cased, because `graphify-out/memory/` bypasses the
+  ignore filter inside detect itself (`detect.py:1160-1166`: `if not in_memory and _is_ignored(…)`),
+  so the entry cannot cost the corpus the query results the guard exempts. Checked in the installed
+  0.9.9, not assumed.
+
+  **Harness:** the fake detect stub (`plantGuardPython`) echoed `$HOME/fixture-corpus` verbatim and
+  ignored `.graphifyignore` entirely — it could not tell a filter that works from one that does
+  nothing. It now filters its echoed corpus through the generated file's exact entries the way real
+  detect applies them: a leading `/` stripped (it anchors at the root, where the file is written), a
+  directory entry by prefix, a file entry by equality, and `graphify-out/memory/` exempt as
+  `detect.py:1160-1166` has it.
+
+  **Cost, measured** on a fixture repo with **300 ignored entries** (30 directories each holding a
+  tracked `keep.py` beside ten ignored `*.log` files; the live custom-tools tree has 308): the
+  derivation call **7 ms**, the union probe **6 ms**, whole-pass wall time **170/148/150 ms** with the
+  derivation against **127/151/128 ms** without it — ~20 ms on a tree whose real build is minutes.
+  The per-entry fallback, which only runs when the union probe finds a culprit, costs **1063 ms** for
+  those 300 entries; that is the price of naming which entry is at fault, paid only when there is one.
+
+  Baseline `graph-sweep` after the fix: `Tests  59 passed | 2 skipped (61)` (four new rows; D-1450
+  left it at `Tests  55 passed | 2 skipped (57)`).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the derivation dropped (`done < <(true)`) | `graph-sweep` — `Tests  3 failed \| 56 passed \| 2 skipped (61)`: *a NESTED .gitignore below the tree root is honoured*, *a directory holding BOTH a tracked and an ignored file is NOT collapsed*, *a derived entry is ANCHORED* |
+  | the leading `/` dropped (`derived+=("$e")`) | `graph-sweep` — `Tests  3 failed \| 56 passed \| 2 skipped (61)`: the same three rows, and the anchoring row fails as designed — `expected [ 'never-built', 'stale-rebuilt' ] to include 'refused-by-guard'`, i.e. the RULE-3 probe withheld the unanchored `build/` because it hides the tracked `src/build/x.ts`, and `build/junk.js` then breached |
+  | the entry-count log dropped | `graph-sweep` — `Tests  1 failed \| 58 passed \| 2 skipped (61)`: *a NESTED .gitignore …* — the count is bound, not decorative |
+  | the RULE-3 probe over derived entries dropped (`if false; then`) | `graph-sweep` — **`Tests  59 passed \| 2 skipped (61)`, GREEN.** Recorded rather than papered over: with `--directory` and anchoring in place no reachable fixture makes the probe fire, which is the invariant it re-measures. Its effect is visible only on a mutated input — it is exactly what the anchoring row's refusal above is — so the honest claim is "a belt that measures a constructed invariant", not "a guard with its own red row" |
+
+  **Deviations from the brief, both deliberate.** (1) The brief specified
+  `-c core.quotepath=false … ls-files`; the shipped call is `-z | tr '\0' '\n'`, because D-1450 —
+  landed on this branch one commit earlier — measured that `core.quotepath=false` silences only the
+  non-ASCII quoting class and leaves backslash, double-quote and control-byte names C-quoted. A
+  C-quoted entry is a pattern that matches nothing (or the wrong thing), so the brief's spelling would
+  have shipped the defect D-1450 had just removed from the other side of the same comparison. (2) The
+  brief allocated **D-1374**; the highest number across `origin/main` and this branch, in both `docs/`
+  and source, is **D-1450** (this branch's own previous commit), so this entry is **D-1451** — the
+  brief's number is long since taken.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

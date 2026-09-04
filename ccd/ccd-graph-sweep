@@ -329,12 +329,13 @@ _gs_guard() {
   # An operator's list is an instruction about THIS repo that cannot be
   # honoured, so it refuses; the default is hygiene the repo never asked for,
   # and hygiene yields to a repo that has stated its own corpus policy.
+  local foreign=0
   if [ -f "$tree/.graphifyignore" ] && ! _gs_owns_ignore "$tree"; then
     if [ -f "$own" ]; then
       GUARD_REASON="$tree/.graphifyignore exists and was not written by ccd-graph-sweep — refusing to overwrite a file this tree owns"
       return 1
     fi
-    noise_files=()
+    noise_files=(); foreign=1
   fi
   # RULE 3 — a DEFAULT pattern is withheld when this repo TRACKS anything it
   # would hide; an operator pattern is honoured as written. D-1161: a
@@ -375,9 +376,82 @@ _gs_guard() {
   # to be able to see why, and the remedy (a `<repo>.list`, which is honoured
   # as written) named.
   [ -n "$withheld" ] && echo "graph-sweep: $tree: default noise withheld, repo tracks matching files:$withheld (a $repo.list is honoured as written)" >&2
-  if [ "${#patterns[@]}" -gt 0 ]; then
+  # D-1451 — WHAT GIT IGNORES NEVER ENTERS THE CORPUS.
+  #
+  # detect() reads `.gitignore` only along the ANCESTOR CHAIN from the VCS root
+  # down to the scan root (`_load_graphifyignore`, detect.py:793-836: it walks
+  # `ceiling` → `root`, never below). A NESTED `.gitignore` under the scan root
+  # is therefore never applied at all, so a gitignored build artifact enters the
+  # corpus, is untracked, and this guard refuses the tree — for ever, with no
+  # remedy on the box (nothing an operator does to the tree changes what detect
+  # picks up, and `<repo>.list` does not apply because the path is not ccrc's
+  # noise). MEASURED on the live fleet: synapsium-platform refused over
+  # `frontend/exposynapse-site/.astro/settings.json` (ignored by
+  # `frontend/exposynapse-site/.gitignore`), MekWarLive/swift-harbor over
+  # `.husky/_/*` (ignored by `.husky/_/.gitignore`).
+  #
+  # So ask GIT for its own verdicts and hand them to detect as entries: one per
+  # line, each ANCHORED at the tree root with a leading `/` (detect.py:883-895
+  # anchors on that, against the directory holding the file — here the root), a
+  # directory keeping its trailing `/` so the ancestor walk (detect.py:924-931)
+  # takes everything under it. Anchoring is not cosmetic: `build/` unanchored
+  # matches at EVERY depth, which is how an ignored root `build/` would hide a
+  # tracked `src/build/`.
+  #
+  # These entries can never hide tracked content by construction — `--directory`
+  # collapses a directory only when it holds no tracked file, and a file entry
+  # names an untracked path — but the invariant is MEASURED rather than argued:
+  # every entry goes through the same RULE-3 probe as a default pattern, and any
+  # that would hide something tracked is withheld and reported. The probe runs
+  # ONCE over the whole set in the common case (git's answer over a union is
+  # empty iff it is empty for every member), and only falls back to one call per
+  # entry when that union is non-empty, i.e. when there is a culprit to name.
+  #
+  # Not capped: a capped list is a corpus this guard cannot explain. The count
+  # is logged instead. `-z | tr` for the same reason as the tracked side above
+  # (D-1450) — raw for every quoting class in one call; the one shape it cannot
+  # represent, a newline inside a filename, breaks the line-based corpus side
+  # identically, so the two stay in step. An entry carrying a glob metacharacter
+  # (`*`, `?`, `[`) is spent as a glob by both git and detect; a filename that
+  # contains one is pathological and is left as git spells it.
+  local -a derived=()
+  local dheld="" e
+  if [ "$foreign" -eq 0 ]; then
+    probe="$(mktemp)" || { GUARD_REASON="cannot create a temp file to test derived ignore entries"; return 1; }
+    while IFS= read -r e; do
+      [ -n "$e" ] || continue
+      derived+=("/$e")
+    done < <(git -C "$tree" ls-files -o -i --exclude-standard --directory -z 2>/dev/null | tr '\0' '\n')
+    if [ "${#derived[@]}" -gt 0 ]; then
+      printf '%s\n' "${derived[@]}" > "$probe"
+      if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+        local -a kept=()
+        for e in "${derived[@]}"; do
+          printf '%s\n' "$e" > "$probe"
+          if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+            dheld="$dheld $e"
+          else
+            kept+=("$e")
+          fi
+        done
+        derived=(${kept[@]+"${kept[@]}"})
+      fi
+    fi
+    rm -f "$probe"
+  fi
+  # NOT SILENT either — and a withheld derived entry is a stronger signal than a
+  # withheld default: it means git's own verdicts disagree with git's own index
+  # about a path, so the tree may still be refused below for that path.
+  [ -n "$dheld" ] && echo "graph-sweep: $tree: derived ignore entries withheld, repo tracks matching files:$dheld" >&2
+  [ "${#derived[@]}" -gt 0 ] && echo "graph-sweep: $tree: git-ignored entries derived into the corpus filter: ${#derived[@]}" >&2
+  if [ "${#patterns[@]}" -gt 0 ] || [ "${#derived[@]}" -gt 0 ]; then
+    # NB: an empty array must contribute NOTHING — a bare `printf '%s\n' "$@"`
+    # of one would emit a lone newline, i.e. a blank entry. The trailing `true`
+    # keeps a false `[` test off the block's exit status.
     { echo "# generated by ccd-graph-sweep for one build — never committed, never edited"
-      printf '%s\n' "${patterns[@]}"; } > "$tree/.graphifyignore"
+      [ "${#patterns[@]}" -gt 0 ] && printf '%s\n' "${patterns[@]}"
+      [ "${#derived[@]}" -gt 0 ] && printf '%s\n' "${derived[@]}"
+      true; } > "$tree/.graphifyignore"
     GS_FILTER_TREE="$tree"
     trap '_gs_rm_generated "$GS_FILTER_TREE"' EXIT INT TERM
   fi

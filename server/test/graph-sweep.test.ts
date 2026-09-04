@@ -78,8 +78,38 @@ function plantGuardPython(): void {
   // — mkdirSync it here rather than relying on call order.
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
-# fake detect(): echo the fixture corpus (paths relative to cwd)
-cat "$HOME/fixture-corpus" 2>/dev/null || true
+# fake detect(): the fixture corpus (paths relative to cwd) — filtered through
+# the generated .graphifyignore the way the real detect() applies THESE entries
+# (D-1451). A leading '/' anchors at the directory holding the file, which is
+# the tree root (detect.py:883-895, \`anchored = raw.startswith("/")\`); a
+# trailing '/' is a directory, excluded with everything under it by the
+# ancestor walk (detect.py:924-931), i.e. by prefix; anything else names one
+# file, matched by equality. graphify-out/memory/ bypasses the filter entirely,
+# exactly as detect.py:1160-1166 does — query results are re-added whatever the
+# ignore rules say, which is why the guard exempts them from the breach test.
+# A stub that ignored .graphifyignore could not tell a filter that works from
+# one that does nothing.
+[ -f "$HOME/fixture-corpus" ] || exit 0
+pats=()
+if [ -f .graphifyignore ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    pats+=("\${line#/}")
+  done < .graphifyignore
+fi
+while IFS= read -r p || [ -n "$p" ]; do
+  [ -n "$p" ] || continue
+  case "$p" in graphify-out/memory/*) printf '%s\\n' "$p"; continue ;; esac
+  keep=1
+  for pat in \${pats[@]+"\${pats[@]}"}; do
+    case "$pat" in
+      */) [ "\${p#"$pat"}" != "$p" ] && keep=0 ;;
+      *)  [ "$p" = "$pat" ] && keep=0 ;;
+    esac
+  done
+  [ "$keep" = 1 ] && printf '%s\\n' "$p"
+done < "$HOME/fixture-corpus"
+exit 0
 `, { mode: 0o755 });
 }
 function runSweep(env: NodeJS.ProcessEnv = {}) {
@@ -629,6 +659,89 @@ describe('graph-sweep: the guard compares git TRUTH, not git QUOTING (D-1449)', 
     const reason = lastPass().trees.find((t: { path: string }) => t.path === repo).reason;
     expect(reason).toContain('back\\slash.py');
     expect(reason).not.toContain('back\\\\slash.py');   // never the C-quoted spelling
+  });
+});
+
+describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () => {
+  // detect() reads `.gitignore` only along the ancestor chain from the VCS root
+  // down to the SCAN root (`_load_graphifyignore`, detect.py:793-836) — a
+  // NESTED `.gitignore` below the scan root is never read at all. So gitignored
+  // build artifacts entered the corpus, were untracked, and the guard refused
+  // the tree for ever, with no remedy on the box. MEASURED on the live fleet:
+  // synapsium-platform over `frontend/exposynapse-site/.astro/settings.json`
+  // (ignored by `frontend/exposynapse-site/.gitignore`) and
+  // MekWarLive/swift-harbor over `.husky/_/*` (ignored by `.husky/_/.gitignore`).
+  // The fix derives GIT'S OWN verdicts into the generated filter, so the two
+  // sides answer with one authority instead of two.
+  const captureFilter = 'cp .graphifyignore "$HOME/seen-ignore" 2>/dev/null || true';
+  const seen = () => fs.readFileSync(j('seen-ignore'), 'utf8');
+
+  it('a NESTED .gitignore below the tree root is honoured — the tree BUILDS, and the entry is anchored', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'frontend', '.astro'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'frontend', 'index.ts'), 'export const i = 1;\n');
+    fs.writeFileSync(path.join(repo, 'frontend', '.gitignore'), '.astro/\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'a nested .gitignore, below the scan root');
+    fs.writeFileSync(path.join(repo, 'frontend', '.astro', 'settings.json'), '{}\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'),
+      'a.py\nfrontend/index.ts\nfrontend/.astro/settings.json\n');
+    const r = runSweep();
+    expect(outcomeOf(repo), 'git ignores it, so it is not a breach — it is not corpus at all')
+      .not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'one ENTRY per line, anchored at the tree root, directory entries keeping their slash')
+      .toMatch(/^\/frontend\/\.astro\/$/m);
+    expect(r.stderr, 'the count is logged in the pass output, uncapped')
+      .toMatch(/git-ignored entries derived into the corpus filter: 1$/m);
+  });
+
+  it('a directory holding BOTH a tracked and an ignored file is NOT collapsed — only the ignored file is named', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'mixed'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    fs.writeFileSync(path.join(repo, 'mixed', 'keep.py'), 'k = 1\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'a directory with tracked content beside ignored');
+    fs.writeFileSync(path.join(repo, 'mixed', 'skip.log'), 'noise\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nmixed/keep.py\nmixed/skip.log\n');
+    runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), '--directory collapses a directory only when it holds no tracked file')
+      .toMatch(/^\/mixed\/skip\.log$/m);
+    expect(seen(), 'collapsing it would take the TRACKED mixed/keep.py out of the corpus with it')
+      .not.toMatch(/^\/mixed\/$/m);
+  });
+
+  it('a repo with nothing ignored gets no derived entries at all', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    // an operator list, so a filter is written at all and its contents are visible
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), "the operator's pattern is still written").toMatch(/^fixtures\/$/m);
+    expect(seen(), 'nothing is ignored, so nothing is derived').not.toMatch(/^\//m);
+    expect(r.stderr).not.toContain('git-ignored entries derived');
+  });
+
+  it('a derived entry is ANCHORED — an ignored `build/` may not hide a TRACKED src/build/', () => {
+    // Unanchored, this entry is a `build/` that matches at every depth: the
+    // RULE-3 probe sees it hide the tracked src/build/x.ts and withholds it,
+    // and build/junk.js then breaches the corpus. Anchored, it names the root
+    // directory git actually ignores and nothing else.
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(path.join(repo, 'src', 'build'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'build/\n');
+    fs.writeFileSync(path.join(repo, 'src', 'build', 'x.ts'), 'export const x = 1;\n');
+    git(repo, 'add', '.gitignore'); git(repo, 'add', '-f', 'src/build/x.ts');
+    git(repo, 'commit', '-qm', 'tracks src/build despite an unanchored build/ rule');
+    fs.writeFileSync(path.join(repo, 'build', 'junk.js'), 'junk\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nsrc/build/x.ts\nbuild/junk.js\n');
+    runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'the entry names the ignored ROOT directory, not the name at every depth')
+      .toMatch(/^\/build\/$/m);
   });
 });
 
