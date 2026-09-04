@@ -1926,11 +1926,69 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // `mail_deliveries.id` are separate sequences — D-41). The parks above were
     // given REAL envelopes naming DEAD, so this measures the distinction rather
     // than the absence of a fixture.
+    //
+    // AND THE REST OF IT (D-1425 fix round). `to:` and `ack:` were the only two
+    // fields under test, which left every other field of the re-rendered
+    // envelope free: `fromId: r.fromId -> fromId: to`, `kind: … -> 'unknown'`
+    // and dropping `runId` each passed 413 tests across 8 suites. `from:` is the
+    // WORKER who wrote the report — a re-queue changes who READS a message,
+    // never who sent it — and the `run:` line is what tells the heir which wave
+    // of which program it is being handed.
+    const wave = s.run(ids[3]!)!;
     for (const m of heir) {
       const env = s.deliveryEnvelope(m.deliveryId)!.envelope;
       expect(env).toContain(`to: ${LIVE}`);
       expect(env).toContain(`ack: ccrc-api mail ack ${m.deliveryId} `);
+      expect(env).toContain(`from: ${WORKER}`);
+      expect(env).toContain('kind: status');
+      expect(env).toContain('subject: wave-done');
+      expect(env).toContain(
+        `run: ${ids[3]!} (program:${wave.program} wave ${wave.wave}/${wave.waveOf!})`);
     }
+  });
+
+  it('a stored `kind` that is not a MailKind is re-queued as `unknown`, never asserted', () => {
+    // THE OTHER DIRECTION of `isMailKind(r.kind) ? r.kind : 'unknown'`, which
+    // was measured in NEITHER. `insertMail`'s parameter is already `MailKind`,
+    // so the false branch is dead through every typed path — which is exactly
+    // why the method narrows instead of casting: a cast would have been this
+    // writer asserting what it never checked. Reached the only way it can be,
+    // by writing the column directly — a hand-repaired row, or one an older
+    // build wrote — so the branch is measured rather than argued.
+    const s = store();
+    const ids = waves(s);
+    const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
+    const mailId = s.delivery(parked)!.mailId;
+    s.db.prepare('UPDATE mail SET kind = ? WHERE id = ?').run('not-a-kind', mailId);
+
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+
+    const heir = s.outstandingMailFor(LIVE);
+    expect(heir.map((m) => m.id)).toEqual([mailId]);
+    expect(s.deliveryEnvelope(heir[0]!.deliveryId)!.envelope).toContain('kind: unknown');
+  });
+
+  it('answers HOW MANY rows it re-queued — the count its only caller drops', () => {
+    // `reclaimProgram` discards this method's return value, so `return 0` passes
+    // every suite that reaches it through the door. Called directly instead —
+    // the cast idiom the rollback test below already uses — because the method's
+    // own contract is the only thing left that can hold the number honest.
+    // Written down as a fact about the tree, not a complaint: the count has no
+    // production reader yet, and this test is what would go red if one appeared
+    // and got a constant.
+    const s = store();
+    const ids = waves(s);
+    parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
+    parkRendered(s, 'coordinator', ids[3]!, MAIL_REPLAY_CEILING_ERROR);
+    const reach = s as unknown as {
+      requeueAbandonedCoordinatorMail: (p: string, to: string, d: readonly string[]) => number;
+    };
+
+    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(2);
+    // Again, with nothing left to move: the `NOT EXISTS` guard sees the two rows
+    // the first call minted, so the answer is 0 rather than 2 a second time —
+    // which is also why the number cannot be pinned as a constant.
+    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(0);
   });
 
   it('re-queues exactly the abandoned role mail this program owes the chair — nothing else', () => {

@@ -905,9 +905,28 @@ export class CoordStore {
    *     `repointCoordinatorMail` handed it to them one statement ago. This is
    *     why this call is last: run before the repoint, the guard would look at a
    *     row still naming the corpse and mint a duplicate.
+   *   `ORDER BY MIN(d.id)` is NOT a third dedupe clause, and it is deliberately
+   *     NOT pinned. SQLite promises no row order for a `GROUP BY`, and this loop
+   *     mints one delivery id per row it walks, so without it the heir's new ids
+   *     would come back in whatever order the planner chose. No test can red on
+   *     its removal, because on REACHABLE state there is nothing to observe:
+   *     `insertMail` and `queueDelivery` are adjacent at every call site in this
+   *     tree, so `m.id` order and `MIN(d.id)` order are the same order, and a
+   *     fixture that pulled them apart would exist only to be ordered. Said out
+   *     loud rather than guarded by a test that would be green either way.
    *
-   * THE READERS OF THE PREDICATE WERE WALKED, as `OUTSTANDING_OR_ABANDONED_SQL`'s
-   * own docstring does for D-1143. All four:
+   * THE READERS OF BOTH PREDICATES WERE WALKED, as `OUTSTANDING_OR_ABANDONED_SQL`'s
+   * own docstring does for D-1143 — and the walk is DERIVED, not typed.
+   * `single-definition.test.ts`'s "the re-queue's reader walk names every holder
+   * the file actually has" scans this file for both interpolations, maps each hit
+   * to the declaration it sits in, and reds if any name is missing from the list
+   * below: the same move as the two cases beside it, one level up from a
+   * duplicated VALUE to a duplicated CLAIM. It is derived because the hand-typed
+   * first version was WRONG (D-1426) — it claimed "all four", named a reader on
+   * the narrow side (`dueDeliveries`) that does not use the constant at all, and
+   * omitted `runHealth`, which is the single reader whose OUTPUT this arm moves.
+   *
+   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — three readers:
    *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
    *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
    *     it with no wire change.
@@ -917,17 +936,62 @@ export class CoordStore {
    *     `RunSummary.unreadMail` — the badge the MailStrip renders — exactly
    *     where it was. Measured by "the re-queue leaves the wave unread badge
    *     alone" in `coord-store.test.ts`.
-   *   the coordinator-kickoff-wedge query in `healthFor` — unreachable: it is
+   *   `runHealth`'s coordinator-kickoff-wedge query — unreachable: it is
    *     `m.runId IS NULL`-scoped, and every row this method inserts belongs to a
-   *     mail that survived an INNER join on `m.runId`.
-   *   the composed constant's own definition — no reader of its own.
-   * And on the narrower `OUTSTANDING_STATES_SQL` side: `dueDeliveries` picks the
-   * new row up, which is the whole point; `hasOutstandingMail`'s slot is keyed by
-   * SENDER, and `queueSystemMail`'s sender type is `SystemMailSender` =
-   * coordinator|operator with no call site addressing the ROLE, so no system
-   * mail is in this candidate set and none can be swallowed;
-   * `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
-   * `m.runId IS NULL`-scoped and therefore unreachable too.
+   *     mail that survived an INNER join on `m.runId`. (The hand-typed version
+   *     put this query in `healthFor`, which only CALLS `runHealth`.)
+   *
+   * On the narrower `OUTSTANDING_STATES_SQL` — nine holders, in file order:
+   *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
+   *     no reader of its own.
+   *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
+   *     method inside the one `reclaimProgram` transaction, so neither can see a
+   *     row it inserted; that ordering is argued above and at each of their own
+   *     definitions. A LATER reclaim is the reachable case, and both stay right:
+   *     the cancel matches `mail.runId IS NULL` kickoffs only and every row here
+   *     has a run, and the repoint moving a still-outstanding re-queued row on
+   *     to the NEXT heir is arm (a) doing exactly its job.
+   *   `requeueAbandonedCoordinatorMail` — this method's own `NOT EXISTS` dedupe,
+   *     above.
+   *   `cancelOutstandingDeliveries` — reached, and correctly. A new row belongs
+   *     to a mail with a run, so when that run closes the row is parked like any
+   *     other outstanding delivery, with `MAIL_RUN_CLOSED_ERROR` — a DELIBERATE
+   *     cancel, which `ABANDONED_PARK_SQL` excludes, so it cannot come back
+   *     round through this arm on a later reclaim.
+   *   `runHealth`'s outstanding-vs-parked count — THE ONE READER WHOSE OUTPUT
+   *     THIS ARM CHANGES, and the one the hand-typed walk omitted. Both halves
+   *     of that query are per-DELIVERY, exactly as `RunHealth.mailOutstanding`
+   *     and `mailParked` are documented (`shared/api.ts`), so for a single
+   *     re-queued report the run's `mailOutstanding` goes 0 -> 1 while
+   *     `mailParked` stays 1, and `pwa/src/fleet/runWords.ts` renders
+   *     "1 parked ... (1 still outstanding)" about ONE message. Nothing here is
+   *     wrong: the park is still a park, the new delivery is still outstanding,
+   *     each field says what it is documented to say, and the outstanding half
+   *     clears on the heir's ack. It is written down because the sentence an
+   *     operator READS counts one message twice, and a walk that skipped this
+   *     reader would have shipped that surprise unannounced.
+   *   `hasOutstandingMail` — its slot cannot be swallowed, but NOT for the
+   *     reason this walk first gave. That version said the slot is "keyed by
+   *     SENDER" and then argued from `queueSystemMail`'s ADDRESSEE ("no call
+   *     site addressing the ROLE") — two different axes, so a true premise sat
+   *     under a conclusion it did not carry. The key is
+   *     `(m.fromId, m.runId, d.toId, m.subject)`; `m.toId`, the column THIS
+   *     query selects on, is not in it at all. What protects the slot is that a
+   *     re-queued row is the opposite of a system mail on BOTH keyed axes.
+   *     RECIPIENT: `queueSystemMail`'s four call sites (`dispatch.ts:661`,
+   *     `close.ts:248`, `routes.ts:1235`, `kickoff.ts:156`) each pass a WORKER
+   *     session id — `run.sessionId`, or the id the kickoff route was given —
+   *     never the chair, while `d.toId` here is `to`, the heir CHAIR. SENDER:
+   *     the probe's `fromId` is a `SystemMailSender`, the role pair, whereas
+   *     every row this method can select arrived through `POST /api/mail`, which
+   *     refuses a `fromId` with no registry row (`routes.ts:543-558`) — so
+   *     `m.fromId` on it is a session id. The SENDER axis is the load-bearing
+   *     one: `to` is operator-typed free text (`POST /api/runs/:id/reclaim`
+   *     reads `claimedBy` off the body), so nothing structurally stops an
+   *     operator naming a run's own worker as the heir, and the recipient axis
+   *     alone would then be resting on `m.subject` happening to differ.
+   *   `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
+   *     `m.runId IS NULL`-scoped and therefore unreachable too.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately

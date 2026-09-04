@@ -713,6 +713,64 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(prose(doc), 'the docstring does not name the in-file caller')
       .toContain('requeueAbandonedCoordinatorMail');
   });
+
+  /** Statement keywords that wear a declaration's shape at two-space indent. A
+   *  `  if (` inside a top-level function body would otherwise be recorded as
+   *  the holder of every line under it. */
+  const JS_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'do', 'else',
+    'try', 'new', 'typeof', 'await', 'throw', 'case', 'const', 'let', 'var', 'function', 'class',
+    'delete', 'in', 'of', 'yield', 'void', 'super', 'this']);
+
+  /** Every `${NAME}` interpolation of `needle` in `src`, named by the
+   *  declaration it sits in — a class member, or a top-level `const`. Comment
+   *  lines go first (`codeOnly`), so a SENTENCE about a predicate is never
+   *  counted as a use of it, which matters more here than anywhere else in this
+   *  file: the prose under test is itself full of the needle's name. */
+  const holdersOf = (src: string, needle: string): string[] => {
+    const out: string[] = [];
+    let decl = '';
+    for (const line of codeOnly(src).split('\n')) {
+      const m = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?([A-Za-z_]\w*)\s*[(<]/
+        .exec(line) ?? /^(?:export )?const ([A-Za-z_]\w*)\s*=/.exec(line);
+      if (m && !JS_KEYWORDS.has(m[1]!)) decl = m[1]!;
+      if (line.includes(needle)) out.push(decl);
+    }
+    return [...new Set(out)];
+  };
+
+  it("the re-queue's reader walk names every holder the file actually has", () => {
+    // D-1426. The walk shipped hand-typed and claimed "all four" — while the
+    // narrow predicate had NINE holders, one of the four named (`dueDeliveries`)
+    // spells its two states out and is not a holder at all, and the omitted one
+    // was `runHealth`, the single reader whose OUTPUT the fifth arm moves. So
+    // the list is derived from the same source it describes, which is the only
+    // form of that claim a later edit cannot quietly falsify.
+    const store = readFileSync(STORE, 'utf8');
+    const doc = store.slice(
+      store.indexOf('   * THE READERS OF BOTH PREDICATES WERE WALKED'),
+      store.indexOf('   * BOUNDED by the role-addressed reports'));
+    expect(doc.length, "the re-queue's reader-walk anchors moved").toBeGreaterThan(300);
+
+    const narrow = holdersOf(store, '${OUTSTANDING_STATES' + '_SQL}');
+    const wide = holdersOf(store, '${OUTSTANDING_OR_ABANDONED' + '_SQL}');
+    // Anti-vacuity floors, not counts — a count here would be the second copy
+    // this file exists to forbid. They exist so a scanner whose regex stopped
+    // matching cannot pass by finding nothing to check.
+    expect(narrow.length, 'no holder of the narrow predicate — the scan is broken')
+      .toBeGreaterThanOrEqual(6);
+    expect(wide.length, 'no holder of the composed predicate — the scan is broken')
+      .toBeGreaterThanOrEqual(3);
+
+    // The derived set is the authority and the prose is what gets checked
+    // against it, never the other way round: a tenth holder reds here until the
+    // walk admits it.
+    for (const name of [...new Set([...narrow, ...wide])]) {
+      expect(prose(doc), `the reader walk does not name ${name}`).toContain(name);
+    }
+    // The omission itself, called out by name, so the regression that started
+    // this has a line of its own rather than only a derived one.
+    expect(narrow, 'runHealth stopped reading the narrow predicate').toContain('runHealth');
+  });
 });
 
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
