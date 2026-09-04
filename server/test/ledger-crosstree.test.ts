@@ -19,7 +19,13 @@
 //      D-1158 among them — one of the five numbers this program actually lost.
 //      No cardinal here, deliberately (D-1320): the totals move with every plan,
 //      and a count in a comment is stale by its own commit. What is stable is the
-//      SHAPE, and every shape below is copied from a real plan.
+//      SHAPE. Provenance is stated PER FIXTURE below and is NOT uniform: some
+//      shapes are ABRIDGED from real lines on main, the nesting fixture is
+//      CONSTRUCTED and says so in its own paragraph, and the unabridged lines are
+//      pinned by `deviation-refs.test.ts`'s corpus classification table, which
+//      reads them out of HEAD. The blanket "every shape below is copied from a
+//      real plan" that stood here was false of at least four fixtures and was
+//      refuted by this file's own nesting paragraph (D-1432).
 import { describe, it, expect } from 'vitest';
 import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra,
          unallocatedDefinitions } from '../src/coord/ledger.js';
@@ -65,9 +71,13 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
   it('is not fooled by a LINE-INITIAL BOLDED citation, which is the shape this repo writes', () => {
     // The first version of this suite tested only MID-LINE mentions, and a
     // prefix-only DEFINITION called all four of these definitions. Every string
-    // here is copied from a real plan on main. The second is the exact prose a
-    // wave writes when it RECORDS a ledger collision — so a prefix-only rule reds
-    // on the narrative describing the incident this guard exists to detect, and
+    // here is ABRIDGED from a real citation on main — only the D-172 one is
+    // present as written, as a prefix of a line in
+    // `2026-08-23-stage5-oss-polish.md`; the other three are shortened or
+    // reworded, and the unabridged lines are pinned against HEAD by the corpus
+    // table in `deviation-refs.test.ts`. The second is the exact prose a wave
+    // writes when it RECORDS a ledger collision — so a prefix-only rule reds on
+    // the narrative describing the incident this guard exists to detect, and
     // tells the author to renumber a deviation they only cited.
     expect(definitionsIn([f('a.md', '- **D-149 sweep:** any task that touches the EXEMPT table')])).toEqual([]);
     expect(definitionsIn([f('a.md', '- **D-172, D-173 and D-174 were re-used** by this branch')])).toEqual([]);
@@ -113,10 +123,14 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
   });
 
   it('reads the BARE-BOLD entry, which both ENTRY and the first draft were blind to', () => {
-    // Four plans on main open every entry this way — build 8, stage 2e, the
-    // worker skill, upstream-launcher-locks. A re-definition of any of those
-    // numbers was silently missed by a guard whose subject is not missing one.
-    // Strings copied verbatim from `origin/main`.
+    // Four plans on main open entries this way — build 8 (which uses BOTH forms:
+    // most of its entries are bare-bold and the rest are heading/bullet ones),
+    // stage 2e, the worker skill, upstream-launcher-locks. A re-definition of any
+    // of those numbers was silently missed by a guard whose subject is not
+    // missing one. Strings ABRIDGED from real entries on `origin/main` — not
+    // verbatim, as this comment claimed for a wave: the real lines are longer,
+    // and the corpus table in `deviation-refs.test.ts` pins them unabridged at
+    // HEAD.
     expect(definitionsIn([f('a.md', '**D-297 — the `_spawn` split demoted a process-fatal error.** Task 3 gave')])
       .map((d) => d.n)).toEqual([297]);
     expect(definitionsIn([f('a.md', '**D-301 (was D-B8-5) — four guards were decorated, not pinned.** Review')])
@@ -322,9 +336,14 @@ describe('crossTreeCollisions — one merge earlier', () => {
   });
 
   it('leaves the pre-allocator era alone — GRANDFATHERED must never have to grow', () => {
-    // Widening the SUBJECT extraction instead would have surfaced six sub-211
-    // collisions (D-73/142/143/144/149/172), every one of which would have had to
-    // join a set whose own rule says it may only SHRINK.
+    // Widening the SUBJECT extraction instead would have surfaced sub-211
+    // collisions outside GRANDFATHERED, every one of which would have had to
+    // join a set whose own rule says it may only SHRINK. The set is DERIVED,
+    // never remembered: `deviation-refs.test.ts` reads the line below and checks
+    // it against the corpus. It read SIX until D-1310 found that D-149 and D-172
+    // are citations the shipped DEFINITION drops — a retraction that reached two
+    // plan entries and not this file (D-1433).
+    // SUB-211 COLLISIONS: D-73, D-142, D-143, D-144
     expect(crossTreeCollisions([f('a.md', '- **D-72** — x')], [f('b.md', '- **D-72** — y')])).toEqual([]);
     expect(crossTreeCollisions([f('a.md', '- **D-210** — x')], [f('b.md', '- **D-210** — y')])).toEqual([]);
     // 211 is the first allocator-era number and IS in scope.

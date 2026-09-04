@@ -12,7 +12,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { crossTreeCollisions, definitionsIn, floorFromScan } from '../src/coord/ledger.js';
+import { crossTreeCollisions, definitionsIn, floorFromScan,
+         LEDGER_ALLOCATOR_ERA } from '../src/coord/ledger.js';
 import { LEDGER_SEED_GAP } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -425,6 +426,8 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     ['definition', 'D-99 — the remote-control switch is a FILE'],
     ['definition', "D-211** (Task 3) — the plan's red-first step"],
     ['definition', 'D-190** (Task 1): the session-id pattern'],
+    ['definition', 'D-301 (was D-B8-5)' + ' — four guards were decorated'],
+    ['citation', "D-291's wait — `startedSessionFor`"],
   ] as const)('classifies the corpus line %s: %s', (kind, needle) => {
     it(`is read as a ${kind}`, () => {
       const found: string[] = [];
@@ -495,6 +498,39 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
         'ENTRY-blind entries carry an em-dash — that is the WRAPPED form, a different blindness')
         .toBeGreaterThan(0);
     }
+  });
+
+  // D-1433. The era-scoping argument's own data points. D-1310 found
+  // that two of the six sub-211 collisions cited for it (D-149, D-172) were
+  // never collisions — they are line-initial bolded CITATIONS, and the shipped
+  // DEFINITION drops both — so the argument rests on four. That correction
+  // landed in D-1310's entry and in D-1320's, and never in the test file the
+  // argument ships in. Derived here rather than remembered, in the
+  // `auth-gate.test.ts` idiom: read the claim out of the source, check it
+  // against the corpus. No split needle is needed — this scan reads the OTHER
+  // file, never its own.
+  it('the era-scoping comment names the sub-211 collision set this corpus derives', () => {
+    const CROSSTREE = readFileSync(path.join(here, 'ledger-crosstree.test.ts'), 'utf8');
+    const claim = CROSSTREE.split('\n').filter((l) => l.includes('SUB-211 COLLISIONS:'));
+    expect(claim.length,
+      'expected exactly one line marked SUB-211 COLLISIONS: in ledger-crosstree.test.ts, found ' +
+      `${claim.length}`).toBe(1);
+    const claimed = [...claim[0]!.matchAll(/D-(\d+)/g)].map((m) => Number(m[1]));
+
+    const byN = new Map<number, Set<string>>();
+    for (const d of definitionsIn(plansAt('HEAD'))) {
+      byN.set(d.n, (byN.get(d.n) ?? new Set<string>()).add(d.file));
+    }
+    const derived = [...byN.entries()]
+      .filter(([n, files]) => n < LEDGER_ALLOCATOR_ERA && files.size > 1 && !GRANDFATHERED.has(n))
+      .map(([n]) => n).sort((a, b) => a - b);
+    // The premise, established rather than assumed: a derivation that found
+    // nothing would be satisfied by any claim that named nothing.
+    expect(derived.length,
+      `the derivation found ${derived.length} sub-211 collisions outside GRANDFATHERED — a scan that ` +
+      'finds none asserts nothing').toBeGreaterThan(0);
+    expect(claimed,
+      'the comment names a sub-211 collision set this corpus does not derive').toEqual(derived);
   });
 
   it('sees MORE than the subject-based scan above — the two are not redundant', () => {
