@@ -152,6 +152,46 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
     expect(definitionsIn([f('a.md', stray)]).map((d) => d.n)).toEqual([1300]);
   });
 
+  // ── D-1430 ───────────────────────────────────────────────────────
+  // CommonMark 4.5 allows up to three SPACES before an opening fence; §2.2
+  // expands a tab to the next 4-column tab stop, so a TAB-indented run is four
+  // columns of indentation — an indented code block, and not a fence at all.
+  //
+  // BOTH DIRECTIONS ARE REAL, and the second is the dangerous one. The brief
+  // that sent this back called it a hide-only under-report; it is not.
+  //   (A) HIDE — a tab-indented pair opens and closes a block that does not
+  //       exist, and a real entry between them is dropped IN SILENCE.
+  //   (B) OVER-REPORT — a tab-indented run CLOSES a real fence early, leaving
+  //       an odd fence at EOF; the whole-file fail-loud arm then scans the file
+  //       whole and every QUOTED entry reads as a definition. That prints
+  //       "renumber NOW" at a quotation — the false positive D-1310 and D-1322
+  //       were both written to close, arriving through the guard that closes it.
+  //
+  // No line in today's corpus is affected: the narrowing was measured over the
+  // plans `plansAt` feeds before it was made, and the dated figures live in the
+  // wave plan, not here — this file's own header forbids a cardinal in a comment
+  // (D-1320), and this fix does not get an exemption from it.
+  it('does not read a TAB-indented run as a fence — the HIDE direction', () => {
+    const hidden = [
+      '\t```',
+      '- **D-1231** — an entry inside what is really an indented code block',
+      '\t```',
+      '- **D-1300** — this plan’s own entry, after it',
+    ].join('\n');
+    expect(definitionsIn([f('a.md', hidden)]).map((d) => d.n)).toEqual([1231, 1300]);
+  });
+
+  it('and the same class OVER-reports: a tab run closing a real fence exposes a quotation', () => {
+    const quoting = [
+      '```',
+      '- **D-1231** — the entry another plan defines, quoted',
+      '\t```',
+      '- **D-1232** — and the one after it, still quoted',
+      '```',
+    ].join('\n');
+    expect(definitionsIn([f('b.md', quoting)]).map((d) => d.n)).toEqual([]);
+  });
+
   it('lets a longer fence quote a shorter one — a CONSTRUCTED case, and here is why', () => {
     // Parity counting gets this backwards: it opens on the outer fence, closes on
     // the FIRST inner one, and reads the quoted block's middle as ordinary prose.
