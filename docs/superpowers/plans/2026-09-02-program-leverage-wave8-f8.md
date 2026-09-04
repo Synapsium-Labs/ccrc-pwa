@@ -8413,6 +8413,58 @@ same rule, and only the first was written down.
 - **D-1442** (found by the wave-8 review): the claim-hygiene correction recorded in this section's own
   preamble — "the numbers were taken in one call" reads as a claim about the WAVE when it is only true of
   the PREDICTED BLOCK, and `D-1438` above falsifies it by 4.2 hours.
+- **D-1443** (found by the wave-8 review, CONFIRMED by an independent verifier and survived a skeptic):
+  `passage()` guards anchor EXISTENCE but not EXTENT, in all five of its copies. Both anchors can exist
+  and the slice still be wrong — `indexOf` stops at the FIRST closing anchor after the opener, so a
+  GENERIC terminator (`'\n- **'`, `'\n**Do'`) is matched by any new bullet or paragraph written INSIDE
+  the region. The passage truncates, the length check is a LOWER bound a truncated passage still clears,
+  and every negative assertion then passes because the text it exists to catch was cut away. The proof is
+  not the shrink but what the shrink hides: with CLAUDE.md's ledger bullet split at one sentence and the
+  sentence *read the next free number from `origin/main` before allocating* planted in the cut tail, the
+  old terminator ran **4 passed** and the new one reds. That planted sentence is the exact instruction the
+  suite exists to keep out of the corpus. Fixed at all three exposed sites by naming the terminator each
+  intends; the other four consumers were checked and are not exposed (`box-token-census` pins its extent
+  by hand, `ledger-sweep` and `single-definition` terminate on indented code declarations).
+- **D-1444** (found by the wave-8 review): migration 8's paragraph opens *THAT MEASUREMENT EXPIRED THE DAY
+  AFTER IT WAS TAKEN* and then states a cardinal that did the same thing. It said the graphify plan yields
+  43 definition lines / 42 distinct, D-1245..D-1252 and D-1333..D-1366; re-derived by replaying the
+  shipped `DEFINITION` and `FENCE` over the merged copy it is **49 lines, 48 distinct, D-1245..D-1252 and
+  D-1333..D-1372** — PR #46 extended it the morning after the comment was written. The migration's SQL and
+  its argument are untouched (it keys on the two NUMBERS, not the path). Both copies now state the
+  unbounded property instead of a number, per D-1328.
+- **D-1445** (found by the wave-8 review): three stale citations of one shape, each self-inflicted.
+  `coord-store.test.ts` cited five `watch.ts` lines short by exactly 33 that had NEVER been right in this
+  tree — three wave-8 commits added those lines BEFORE the citing comment was written. `coordinator-skill.test.ts`
+  carried three numeric cites, one moved by a later same-branch commit, in a file whose own rule 100 lines
+  below is "BY SYMBOL, no line numbers". `ledger-instruction.test.ts` stated a spec's total line count that
+  a sibling commit falsified TWELVE MINUTES later. All now named or quoted; the one incidental count is
+  deleted rather than refreshed.
+- **D-1446** (found by the wave-8 review): `gitref.ts` contradicts itself twice, and this wave's own D-1400
+  is what made it so. `readWorktreeRecords`' docstring cites `readBranchTip` as precedent for a
+  fail-direction it "names and accepts", and `readBranchTip`'s parenthetical still lists an untraversable
+  ref tree among the cases falling through to `packed-refs`. The code has done the opposite since D-1400
+  (`if (st.reason !== 'absent') return null`). Both corrected; the census's suppressing direction is kept
+  and now argued on its own terms rather than borrowed from a function that stopped agreeing.
+- **D-1447** (found by the wave-8 review): `shared/api.ts`'s `fileMeasured` contract documents only the
+  STAT arm, and the omitted arm is exactly the one an implementer would miss — `readBacklog`'s unreadable
+  arm returns `missing: FALSE` with `fileMeasured: false` and a real non-zero offset (D-1403). A client
+  gating the host-unreadable banner on `missing` alone renders it as the confident empty chat D-1403
+  closed. The contract now says to read `fileMeasured` INDEPENDENTLY of `missing`.
+- **D-1448** (found by the wave-8 review): `agent/src/fileops.ts` hand-wrote the errno test SIX times —
+  four as the `ReadFailure` ternary D-1397 had already factored into one helper next door, two more as the
+  boolean `absent` form. Deduped LOCALLY: not imported from `server/src` (not on this package's compile or
+  deploy path, so an import would be a new seam between two deployables) and not moved to `shared/`
+  (D-1438's type-only argument does not extend to a runtime function — L0 is what the PWA bundles).
+  Mutating the single helper to answer `absent` for every errno reds four agent tests by name.
+
+**Two review findings were REFUTED and are recorded here rather than acted on.** (1)
+`mail-hardening.test.ts` interpolates a captured binding name into a RegExp unescaped, and a `$`-leading
+name would make it unmatchable — but the failure mode is a false RED, not a false green (an unmatchable
+pattern sets `checked` false and the guard fails loud), and no `$`-bearing identifier exists in
+`server/src`. (2) The reclaim re-queue dedupes on *is the heir's copy outstanding* rather than *does the
+heir already have a copy*, so an acked heir copy can be re-minted — but `store.ts`'s docstring and
+`mail-envelope.md` publish exactly FOUR suppressions to operators, and adding a fifth would falsify that
+shipped sentence while risking the silent mail loss D-1425 closed.
 
 Before the merge, both arms of the collision guard must be green:
 
