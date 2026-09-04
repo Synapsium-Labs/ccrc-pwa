@@ -47,7 +47,9 @@ const passage = (name: string, text: string, from: string, to: string): string =
 };
 
 /** A section that runs to end of file. The spec's §14 is the LAST section (the
- *  file is 896 lines and §14 opens at :890, both measured 2026-09-03), so
+ *  §14 opens at :890, measured 2026-09-04 — the file's TOTAL line count stood
+ *  here too and was stale within twelve minutes of being written, by a sibling
+ *  commit on this same branch, so it is gone rather than refreshed: D-1445), so
  *  `passage`'s closing anchor cannot exist and would red for the wrong reason. */
 const sectionToEnd = (name: string, text: string, from: string): string => {
   const a = text.indexOf(from);

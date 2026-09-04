@@ -58,10 +58,12 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * `HOLD_UNREADABLE` and `prhistory.ts` makes with its own listing/re-read.
  * This is the `unreadable` arm's own fallback, not the only path to it — the
  * `absent` arm above already goes straight to `packed-refs` with no `stat`
- * involved. Only when THIS arm's `stat` ALSO reads absent (the ordinary
- * "packed and never re-committed" case, or the rare inability to even
- * traverse the ref tree) is `packed-refs` treated as git's honest fallback
- * below.
+ * involved. Only when THIS arm's `stat` reads a PROVEN absent (the ordinary
+ * "packed and never re-committed" case) is `packed-refs` treated as git's honest
+ * fallback below. The parenthetical here used to add "or the rare inability to
+ * even traverse the ref tree"; D-1400 made that false in this very function and
+ * left the sentence standing (D-1446). An untraversable ref tree answers
+ * `unreadable`, not `absent`, and takes the refuse arm.
  */
 export async function readBranchTip(
   io: FleetIO, projectsRoot: string, project: string, branch: string,
@@ -257,8 +259,12 @@ export type WorktreeRead =
  *
  * The one case this still cannot see through is a chain that `stat`s fine but
  * cannot be TRAVERSED (EACCES on `<project>/.git` itself), which reads as the
- * absent case — the same fail-direction `readBranchTip` names and accepts, and
- * the suppressing one. The rung walk inherits it exactly: a single dropped round
+ * absent case. `readBranchTip` above took that same direction UNTIL D-1400; it now
+ * proves with `statMeasured` and refuses anything but a proven `absent`, so citing
+ * it as precedent here has been false since (D-1446). This census is the last
+ * reader in this file that still lets an unmeasurable `stat` read as absence, and
+ * deliberately: the direction is the SUPPRESSING one — it can only hide a record,
+ * never manufacture one — and `io.stat` has no measured form at these rungs. The rung walk inherits it exactly: a single dropped round
  * trip landing on one stat and not its neighbour reads as the standing fact.
  *
  * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.

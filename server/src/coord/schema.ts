@@ -743,10 +743,13 @@ export const MIGRATIONS: readonly string[] = [
   // this repair's first design, on the measurement that the citing file defined
   // nothing the allocator had ever issued. THAT MEASUREMENT EXPIRED THE DAY AFTER
   // IT WAS TAKEN. The file merged to main on 2026-09-03 carrying a ledger of its
-  // own; replaying `definitionsIn` over that copy yields 43 definition lines, 42
-  // distinct — D-1245..D-1252 and D-1333..D-1366 — and the upper band is
+  // own; replaying `definitionsIn` over that copy yields a ledger of its own — a
+  // D-1245..D-1252 band and an unbroken band from D-1333 UP, which that plan keeps
+  // extending (#46 carried it past D-1366 the morning after this paragraph was
+  // first written, which is why the cardinal that stood here is gone: it went
+  // stale in one day, D-1444) — and the upper band is
   // allocator-issued by the file's own record. A path-keyed statement would
-  // therefore have un-landed up to 42 CORRECT rows, and would have found some
+  // therefore have un-landed every one of those CORRECT rows, and would have found some
   // already there: the old bare-`\b` matcher landed D-1333 against this same file
   // too, and THERE IT WAS RIGHT. The repair would have created the corruption it
   // exists to fix.

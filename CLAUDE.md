@@ -216,11 +216,19 @@ and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDe
 replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
 that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
-ruled on. `FleetIO.readFile`'s docstring now
-ADMITS the collapse instead of denying it, and `readFileMeasured` (`MeasuredRead`/`ReadFailure`,
-`server/src/io.ts`) ships a result-returning read that tells absent from unreadable — but the collapse
-isn't gone from the tree: `readFile`, `readFileB64` and `readFileFrom` still fold every failure to one `null`
-(the agent's half of `readFileB64` folds in a THIRD condition, an over-cap file — `localIO`'s has no cap), and the agent's `stat` op answers EACCES
-as `{missing: true}`, so that wire's own absent-marker already lies for non-ENOENT failures (D-114,
-`docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
+ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
+this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:
+`readFileMeasured`, `readFileFromMeasured`, `readFileB64Measured` and `statMeasured` (`server/src/io.ts`)
+each tell absent from unreadable, and the B64 arm tells a THIRD condition, over-cap, with the measured
+size beside it. The four convenience reads — `readFile`, `readFileFrom`, `readFileB64`, `stat` — still
+fold every failure to one `null`, DELIBERATELY, so an older caller keeps its exact meaning; each now
+names its own collapse in `io.ts` and points at its measured sibling, and each derives from it, so no
+adapter narrows a distinction it received. **The one read left with no measured sibling is `readdir`.**
+The agent's wire no longer lies either: `absent` is a separate positive marker spread ONLY on a proven
+ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
+server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the
+opposite. And `ReadFailure` lives in **`shared/agent-protocol.ts`**, not `server/src/io.ts`: D-1438 moved
+it there so both sides declare the vocabulary once, and `single-definition.test.ts` pins that home
+(`expect(holders).toEqual(['shared/agent-protocol.ts'])`). Read the interface, not this paragraph
+(D-114, `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
 task list and `docs/superpowers/plans/`, so this file never goes stale on it.

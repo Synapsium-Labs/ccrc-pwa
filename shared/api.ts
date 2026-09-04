@@ -2773,8 +2773,10 @@ export type HookAsk =
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
-   *  banner. D4 (§5.2) adds the two facts that banner cannot be honest without,
-   *  both OPTIONAL so an older PWA build ignores them and an older server that
+   *  banner. D4 (§5.2) added the facts that banner cannot be honest without and
+   *  D-1398 added another; the bullets below are the list, and no count is
+   *  written here because one was and it stopped matching them (D-1447). All are
+   *  OPTIONAL, so an older PWA build ignores them and an older server that
    *  never sends them is not a protocol violation:
    *    - `foreignAccount`: the account a rung-6 answer was found under — the
    *      "stranded history, held by `claude`" banner. Null for every
@@ -2792,7 +2794,18 @@ export type SessionStreamMsg =
    *      ENOTDIR on the way to it). `missing: true` with
    *      `fileMeasured: false` earns the same sentence `searchComplete:
    *      false` earns — "can't read the fleet host right now", NEVER "there
-   *      is no transcript". Absent on the wire reads as TRUE, exactly like
+   *      is no transcript".
+   *
+   *      THE STAT IS NOT THE ONLY ARM, and the missing one is exactly the
+   *      combination an implementer would omit: a transcript that stats FINE
+   *      but whose BYTES never arrived reports `missing: FALSE` with
+   *      `fileMeasured: false` and a real non-zero `offset`
+   *      (`readBacklog`'s unreadable arm, D-1403). So read `fileMeasured`
+   *      INDEPENDENTLY of `missing` — a client that gates the host-unreadable
+   *      banner on `missing` alone renders that fourth combination as a
+   *      confident empty chat, which is the defect D-1403 closed and this
+   *      contract described its way back into by documenting only the stat
+   *      arm (D-1447). Absent on the wire reads as TRUE, exactly like
    *      `searchComplete` and for the same reason: every older server DID
    *      stat the file, it simply could not tell you what the failure meant,
    *      and reading omission as `false` would put the host-unreadable

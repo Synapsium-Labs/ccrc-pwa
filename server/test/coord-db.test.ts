@@ -683,9 +683,10 @@ describe('coord.db: migration 8 — un-landing the two rows a CITATION stamped',
   // The file the old matcher stamped against. It CITES an allocation RANGE in a
   // blockquote — `> **D-1294..D-1332** from \`POST /api/ledger/deviations\`` — and
   // DEFINES neither number. That, and only that, is the argument: it is otherwise
-  // an ordinary merged plan which defines 42 distinct numbers of its own
-  // (1245-1252 and 1333-1366, measured by replaying `definitionsIn` over
-  // `origin/main`'s copy on 2026-09-03), most of them allocator-issued. So the
+  // an ordinary merged plan which defines a whole ledger of its own — a 1245-1252
+  // band and an unbroken band from 1333 up, which that plan keeps extending, so no
+  // count is written here (it moved the day after one was, D-1444) — most of them
+  // allocator-issued. So the
   // path CANNOT be the whole discriminator, and the two rows below prove it from
   // both sides.
   const CITING = 'docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md';

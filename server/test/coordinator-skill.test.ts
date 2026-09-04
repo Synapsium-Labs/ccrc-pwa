@@ -1157,7 +1157,7 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // this project's allocations are in that state. This fence is the only
     // documented allocate body in either corpus, so it is where that started.
     // What makes it about THIS fence is ORDER, measured: both existing
-    // `"byId":"$id"` spellings (`:42` and `:68` — the claims bodies `:980`
+    // `"byId":"$id"` spellings (`:42` and `:68` — the claims bodies the test above
     // pins, ~80 lines above the allocator section) sit BEFORE `ledger
     // allocate`, so with this fence's byId deleted even an unbounded
     // `[\s\S]*` fails to match. The 220 bound is the FORWARD guard: it stops a
@@ -1169,7 +1169,7 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // A curl-era leftover: `resp` is assigned nowhere in either corpus, so the
     // line overwrote the captured body with the empty expansion of an unset
     // variable. A coordinator copying that fence lost the whole 409 answer —
-    // the ADDRESS this section's own prose (`:79`) teaches reading.
+    // the ADDRESS this section's own prose ("Reading a 409") teaches reading.
     //
     // WIDENED (D-1417, same number as the fix): this scanned `peer-protocol.md`
     // ALONE, so the identical clobber landing in a sibling reference — every
@@ -1177,7 +1177,8 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // DERIVED from the directory, the `REFERENCE_NAMES` reason (D-1003): a
     // reference file added tomorrow is scanned without anyone remembering to
     // add it. SKILL.md is deliberately OUT of this scan and must stay out — its
-    // `:134` names `${resp` in PROSE, as the history of what the capture idiom
+    // its "stdout is the response body" paragraph names `${resp` in PROSE, as
+    // the history of what the capture idiom
     // USED TO be, and that sentence is the reason a reader does not reinvent it.
     for (const name of REFERENCE_NAMES) {
       expect(refs(name), `${name} carries the curl-era \${resp clobber`)

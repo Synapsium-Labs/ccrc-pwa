@@ -1826,11 +1826,15 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
   });
 
   /** Abandonment parks a role-addressed report can wear, one per writer that
-   *  actually writes one: `server/src/watch.ts:2533-2536` (registry-absent, and
-   *  its second string for a purged-after-delivery row), `:2630` (session-dead,
-   *  which writes a TEMPLATE — `recipient session is ${lc}` — of which this is
-   *  one instantiation), `:2747` (the replay ceiling) and `:2832`/`:2840` (a
-   *  send that never landed, `res.error`).
+   *  actually writes one — all five `store.rejectDelivery` call sites in
+   *  `server/src/watch.ts`'s mail lane, named rather than numbered (D-1445: the
+   *  five line numbers that stood here were short by exactly 33 and had NEVER
+   *  been right in this tree, because three wave-8 commits added those lines
+   *  above them before the comment citing them was written): the registry-absent
+   *  park, whose second string covers a purged-after-delivery row; the
+   *  session-dead park, which writes a TEMPLATE — `recipient session is ${lc}`
+   *  — of which this is one instantiation; the replay-ceiling park; and the two
+   *  send-never-landed parks (`res.error`).
    *
    *  ONLY `MAIL_REPLAY_CEILING_ERROR` IS DRIFT-PROOF, and saying so is the
    *  point: it is imported from the store, the other four are literals typed
