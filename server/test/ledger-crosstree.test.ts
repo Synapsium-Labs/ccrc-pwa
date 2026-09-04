@@ -42,12 +42,19 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
 
   it('reads the colon form and the WRAPPED form that ENTRY cannot see (D-1294)', () => {
     // Exactly PR #38's spelling of D-1158 — an em-dash at end of line with the
-    // subject on the next — and build 9b's colon form. deviation-refs' ENTRY
-    // matches neither, which is why half of the first incident was undetectable
-    // even in a fully merged tree.
+    // subject on the next — and the colon form this repo's stage-5 ledger uses,
+    // copied verbatim from that plan. ENTRY matches neither, which is why half
+    // of the first incident was undetectable even in a fully merged tree.
+    //
+    // The colon exemplar was attributed to build 9b until D-1329 refuted it;
+    // that retraction reached ledger.ts only, so this fixture carried the refuted
+    // spelling for a wave. `deviation-refs.test.ts` now reads the marker below
+    // and checks the named plan against the corpus, in both directions.
+    // COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md
     expect(definitionsIn([f('a.md', '- **D-1158** (2026-08-31, found by running the suite) —\n  the subject')])
       .map((d) => d.n)).toEqual([1158]);
-    expect(definitionsIn([f('b.md', '- **D-211** (Task 3): the entry')]).map((d) => d.n)).toEqual([211]);
+    expect(definitionsIn([f('b.md', '- **D-189** (Task 1): the duckdns placeholder set shipped as')])
+      .map((d) => d.n)).toEqual([189]);
   });
 
   it('is not fooled by a prose REFERENCE — this scans entries, not mentions', () => {

@@ -115,12 +115,20 @@ describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)',
       .toString('utf8').split('\0').filter(Boolean).sort()
       .map((f) => ({ path: f, text: readFileSync(path.join(ROOT, f), 'utf8') }));
 
-  // Definition-SHAPED line prefixes, deliberately looser than ENTRY: the
-  // build-9b ledger spells its entries `- **D-211** (Task 3): …` — colon, no
-  // em-dash — which ENTRY cannot see (a collision-scan blindness noted where
-  // this suite landed, not fixed here). For a MAX the prefix alone is enough:
-  // it reads the number a heading/bullet line DEFINES, whatever its subject
-  // punctuation.
+  // Definition-SHAPED line prefixes, deliberately looser than ENTRY: this repo's
+  // ledgers hold entries spelled `- **D-190** (Task 1): the session-id
+  // pattern shipped …` — colon, no em-dash — which ENTRY cannot see. For a MAX
+  // the prefix alone is enough: it reads the number a heading/bullet line
+  // DEFINES, whatever its subject punctuation.
+  //
+  // THE EXEMPLAR THIS COMMENT FIRST GAVE WAS REFUTED (D-1329, whose retraction
+  // reached `server/src/coord/ledger.ts` and not this file). It named build 9b;
+  // measured, that plan's D-211 entry is the EM-DASH form and the plan holds zero
+  // ENTRY-blind entries — a claim the corpus table below already refuted, and
+  // passed while refuting. The line break in the quoted spelling above is
+  // deliberate: the contiguous string is a needle in that table, and this repo's
+  // own plans are part of the corpus it scans.
+  // COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md
   const DEFINED = /^(?:#{2,4} |- \*\*)D-(\d+)\b/;
   const definedMax = (): number => {
     let max = 0;
@@ -433,6 +441,60 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
           .toBe(kind === 'definition');
       }
     });
+  });
+
+  // D-1431. The `auth-gate.test.ts` idiom — read the claim OUT of
+  // the source file and check it against the thing it claims about — which is
+  // the only mechanism in this area that has ever stopped a false claim from
+  // re-entering. D-1329 retracted "build 9b spells its entries with a colon and
+  // no em-dash"; the retraction reached ledger.ts only, so at 5e9f650d two
+  // suites asserted the refuted exemplar while the corpus row for that very line
+  // pinned the em-dash spelling and passed.
+  //
+  // THE NEEDLE IS SPELLED SPLIT, and that is not decoration: this scan reads its
+  // OWN file, so a contiguous tag matches its own call site and the "one marker
+  // per suite" check fires on a file that is perfectly correct. Measured — the
+  // first draft of this test did exactly that, which is the same trap
+  // `auth-gate.test.ts`'s own header records springing on all three of its
+  // needles, first run.
+  //
+  // No cardinal is asserted: the counts move with the corpus. The PROPERTY is
+  // that the plan each marker names holds at least one entry `DEFINITION` reads
+  // and `ENTRY` cannot, and that at least one of those is the COLON spelling
+  // rather than the WRAPPED em-dash — a different blindness with its own test.
+  it('the colon-form exemplar these suites name really is colon-form, and really ENTRY-blind', () => {
+    const TAG = 'COLON-FORM ' + 'EXEMPLAR: ';
+    const MARKER = new RegExp(TAG + '(\\S+\\.md)');
+    const SUITES = ['deviation-refs.test.ts', 'ledger-crosstree.test.ts'];
+    const named = SUITES.flatMap((suite) =>
+      readFileSync(path.join(here, suite), 'utf8').split('\n')
+        .map((l) => MARKER.exec(l))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map((m) => [suite, m[1]!] as [string, string]));
+    expect(named.map(([s]) => s),
+      `expected one exemplar marker in each of ${SUITES.join(', ')}, found ` +
+      `${named.length}: ${named.map(([s, p]) => `${s} -> ${p}`).join(', ')}`).toEqual(SUITES);
+
+    const plans = plansAt('HEAD');
+    for (const [suite, plan] of named) {
+      const hit = plans.find((p) => p.path === plan);
+      expect(hit, `${suite} names ${plan}, which the scanned corpus does not hold`).toBeDefined();
+      // Fence-aware: a line only counts if the number it opens is also a real
+      // definition of the whole file, so a quoted entry cannot stand in.
+      const defined = new Set(definitionsIn([hit!]).map((d) => d.n));
+      const blind = hit!.text.split('\n').filter((line) => {
+        const one = definitionsIn([{ path: 'one-line.md', text: line }]);
+        return one.length === 1 && defined.has(one[0]!.n) && ENTRY.exec(line) === null;
+      });
+      expect(blind.length,
+        `${suite} names ${plan} as the exemplar of the form ENTRY cannot see, but that plan holds ` +
+        `${blind.length} such entries out of ${defined.size} definitions`).toBeGreaterThan(0);
+      const colon = blind.filter((line) => !line.includes('—'));
+      expect(colon.length,
+        `${suite} names ${plan} as the colon-spelling exemplar, but all ${blind.length} of its ` +
+        'ENTRY-blind entries carry an em-dash — that is the WRAPPED form, a different blindness')
+        .toBeGreaterThan(0);
+    }
   });
 
   it('sees MORE than the subject-based scan above — the two are not redundant', () => {
