@@ -886,3 +886,66 @@ mistake in miniature (Task 46's own comments asserting a file "sits on no merged
 written and false a day later) were corrected in the same pass. This is the third wave running in
 which the recurring defect class is **a true sentence that stopped being true**, and the second in
 which the fix was to restate the claim on a footing time cannot move.
+
+## Wave 8 — reported done, reviewed SHIP-WITH-FIXES, 2026-09-04 13:30 UTC
+
+The worker reported wave 8 complete at 12:54 UTC (mail 201): 34/34 tasks, D-1396..D-1438, and a
+fingerprint it deliberately measured BEFORE opening a PR, because the brief asked for the
+re-measurement first. **I verified every figure independently** from my own worktree against a
+freshly fetched origin — tip `e08610b9`, `handoffCommit == branchTip`, base `5e9f650d`, 60 ahead,
+59 files, +12675/−450, tree clean — and confirmed against the live allocator that D-1396..D-1438 are
+**43/43 genuinely issued rows**, not hand-assigned. Board settled 5/5; run 30 → `awaiting-review`.
+
+**I stopped the PR.** `origin/main` had moved to `1c19787f` = the branch's base plus PRs #45/#46, and
+`ws/quiet-meadow` no longer merged clean. That is stop-the-line and not a chore: a CONFLICTING PR
+gets **no CI at all** — GitHub computes no merge ref, so `pull_request` never fires, while CodeRabbit
+still reports and the PR reads as checked. This repo has already paid for that once (stage3a, #72).
+
+**The merge trap was the inverse of the one I warned about, and my warning would not have caught it.**
+I told the worker a hand-resolved pin can end up quoting text that no longer exists. Measured, that is
+the SAFE direction — it reds by name. The real trap: main added a **twelfth** worker-skill clause plus
+machinery that DERIVES the clause count and pins it. `git merge-file` on `SKILL.md` exits 0 and yields
+a clean twelve-clause file whose prose says "twelve"; the branch's CONTRACT holds **eleven** literals
+and `carries all eleven clauses verbatim` is a **subset** check — so all eleven still match and the
+suite is **green** while clause 12 ships pinned by nothing, README (3 sites) and CLAUDE.md assert
+"twelve clauses pinned by `worker-skill.test.ts`" as a claim nothing checks, and main's own
+count-derivation is dropped. A subset assertion cannot notice growth; that is the general lesson.
+
+**Second must-fix: the wave shipped a fourth bare-`indexOf` slice in the file that defines the cure.**
+`single-definition.test.ts:444` pairs a raw `store.slice(store.indexOf(A), store.indexOf(B))` with a
+`>300` floor and a NEGATIVE assertion — the exact triple the wave declared fatal — 245 lines above
+its own `passage()` helper at :690. A guard is not adopted until the old idiom is gone from the file
+that hosts it.
+
+**`CLAUDE.md`'s "Open on `main` — do NOT assume these are fixed" is now falsified by this branch**, and
+five of nine review lenses found it independently: the D-114 stat-EACCES sentence is closed by the
+branch's own `agent/src/server.ts:187`, and the paragraph still names `ReadFailure`'s home as
+`server/src/io.ts` while the branch's `single-definition.test.ts:1024` pins
+`['shared/agent-protocol.ts']`. The section that exists to list what is NOT fixed had itself stopped
+being true — this program's signature defect, found in the file that documents the defect.
+
+**Three coordinator rulings, one of them revised by the review.** (1) The "third inherited" item never
+existed: board item 142's own title says three and names two. That miscount was **mine**, in the wave
+whose subject is sentences that stopped being true; D-1429 keeps it on the record rather than
+inventing a third task. (2) D-1410's consumer-less ack distinction stays open — adding a clause to a
+fleet-wide verbatim-pinned skill, designed nowhere, in the last hour of the last wave is the change
+class this program spent eight waves pricing; the distinction is additive on the wire, so a consumer
+can land later with no `FLEET_PROTO` bump. (3) I ruled both runaway-slice instances out of remit and
+was **half wrong**: `coordinator-skill.test.ts:718` is live in the branch, in a file it already edits.
+Fixed here; `ccd-refusal-scan.test.ts:107` stays a follow-up.
+
+**The orphan finding, confirmed and widened.** Re-derived against the live allocator rather than the
+`stale` flag (false on all 313 rows): 456 distinct `D-N` are cited on `origin/main` and **186 were
+never issued**, but that figure is bimodal and must not be reported as one number — `D-100..224`,
+`D-800`, `D-900..904`, `D-1066..1069` predate the allocator. The post-allocator orphans are
+`D-1243..1253` and `D-1333..1372` — **51, not the 48 the worker measured**, its range right and its
+edges three numbers narrow. Forty arrived in a single merge on 09-03 while this very wave was spending
+nine tasks making hand-assignment impossible. **A guard built on a branch does not protect `main`
+until it is on `main`.**
+
+**A caveat on the review itself, recorded because the alternative is a false confidence.** Nine
+lenses raised 30 findings; the adversarial verify phase then died on a session limit, losing 70 of 99
+agents. Five findings were refuted and two survived a genuine three-skeptic vote; the remaining 23
+survived only because no skeptic ran. I re-measured the five that drive a decision by hand and marked
+every other one a LEAD in the findings mail. An unrefuted finding is not a confirmed finding, and a
+review that says otherwise is doing the thing this program exists to stop.
