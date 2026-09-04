@@ -221,7 +221,7 @@ export function checkPreClaim(
 /** Rungs 3-9, in spec §7's order. */
 export async function checkPostClaim(
   deps: FireDeps,
-  a: Pick<AutomationRow, 'id' | 'project' | 'consecutiveFailures'>,
+  a: Pick<AutomationRow, 'id' | 'project' | 'consecutiveFailures' | 'provedAt'>,
   nowMs: number,
 ): Promise<PostClaimVerdict> {
   // Rungs 3 and 5 are ONE readdir (`dispatch.ts:222-226`'s idiom) and fail
@@ -276,8 +276,24 @@ export async function checkPostClaim(
       detail: `${projected.wrapper} measured ${homeScore}, ceiling ${AUTOMATION_PRESSURE_CEILING}`,
     };
   }
-  // Rung 9.
-  if (a.consecutiveFailures >= AUTOMATION_FAILURE_CEILING) {
+  // Rung 9. NOT for a row that has never been proved, and the reason is a
+  // closed cycle rather than a preference. `consecutiveFailures` has exactly
+  // two resets — `armAutomation` and an `ok` settle. Arming refuses
+  // `never-run-by-hand` while `provedAt` is NULL, and `provedAt` is stamped in
+  // ONE place: a settle whose run was MANUAL and BOUND A SESSION. Refusing
+  // here happens BEFORE the spawn, so no session is bound, so `provedAt` stays
+  // NULL, so arming stays refused, so the counter is never reset. Three
+  // pre-proof refusals — an unreachable fleet box (rung 3), the global switch
+  // (rung 4), a mistyped project (rung 6) — would leave a NEW automation dead
+  // for ever, recoverable only by retire-and-recreate or by hand-editing
+  // coord.db.
+  //
+  // An unproved row cannot be ARMED, so it cannot fire unattended at all: its
+  // only door is the operator's own tap, and this ceiling exists to stop
+  // UNATTENDED repetition. `armAutomation`'s own docstring states the
+  // principle — "a ceiling that survives the operator's explicit re-arm is a
+  // wedge with no door" — and for an unproved row that door is itself locked.
+  if (a.provedAt !== null && a.consecutiveFailures >= AUTOMATION_FAILURE_CEILING) {
     return {
       refused: 'failure-ceiling',
       detail: `${a.consecutiveFailures} consecutive failures, ceiling ${AUTOMATION_FAILURE_CEILING}`,

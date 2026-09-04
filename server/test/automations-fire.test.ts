@@ -168,7 +168,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
     const cfg = fixtureCfg();
     const io = makeIo({ readdir: { [cfg.registryDir]: null } });
     const deps = makeDeps(io, makeCoord({}), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({
       refused: 'registry-unmeasurable', detail: `${cfg.registryDir} is not listable`,
     });
@@ -178,7 +178,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
     const cfg = fixtureCfg();
     const io = makeIo({ readdir: { [cfg.registryDir]: [] } });
     const deps = makeDeps(io, makeCoord({ paused: true }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({ refused: 'automations-paused', detail: 'the automations lane is paused' });
   });
 
@@ -186,7 +186,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
     const cfg = fixtureCfg();
     const io = makeIo({ readdir: { [cfg.registryDir]: [COORDINATOR_PAUSE_MARKER] } });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({
       refused: 'coordinator-paused',
       detail: `${COORDINATOR_PAUSE_MARKER} is present in ${cfg.registryDir}`,
@@ -197,7 +197,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
     const cfg = fixtureCfg();
     const io = makeIo({ readdir: { [cfg.registryDir]: [], [cfg.projectsRoot]: [] } });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({
       refused: 'unknown-project', detail: 'project demo is not known to this fleet',
     });
@@ -209,7 +209,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
       readdir: { [cfg.registryDir]: [], [cfg.projectsRoot]: null, [cfg.limitsDir]: [] },
     });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     // `'ok' in verdict`, not `verdict.ok` — `PostClaimVerdict`'s two arms do
     // not share a key both sides carry (unlike `FireDecision.act`), so a
     // bare `.ok` access does not typecheck until narrowed by presence.
@@ -227,7 +227,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
       readdir: { [cfg.registryDir]: homeAble, [cfg.projectsRoot]: null, [cfg.limitsDir]: [] },
     });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({ refused: 'no-placeable-account', detail: 'no home-able account is available' });
   });
 
@@ -241,7 +241,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
       },
     });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({
       refused: 'account-pressed',
       detail: `${homeAble.id} measured 99, ceiling ${AUTOMATION_PRESSURE_CEILING}`,
@@ -258,7 +258,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
       },
     });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect('ok' in verdict).toBe(true);
     if ('ok' in verdict) {
       expect(verdict.homeScore).toBe(0);
@@ -266,12 +266,45 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
     }
   });
 
+  it('rung 9 does NOT refuse an automation that has never been proved — the ceiling is not a wedge', async () => {
+    // THE CYCLE THIS BREAKS. `consecutiveFailures` has exactly two resets:
+    // `armAutomation` and an `ok` settle. Arming refuses `never-run-by-hand`
+    // while `provedAt` is NULL, and `provedAt` is stamped in one place — a
+    // settle whose run was MANUAL and BOUND A SESSION. Rung 9 refuses before
+    // the spawn, so no session is bound, so `provedAt` stays NULL, so arming
+    // stays refused, so the counter is never reset. Three pre-proof refusals —
+    // an unreachable fleet box (rung 3), the global switch (rung 4), a mistyped
+    // project (rung 6) — would leave a NEW automation dead for ever, with no
+    // door but retire-and-recreate or hand-editing coord.db.
+    //
+    // An unproved row cannot be ARMED, so it cannot fire unattended at all;
+    // its only door is the operator's own tap, and the ceiling exists to stop
+    // UNATTENDED repetition. `armAutomation`'s own docstring already states the
+    // principle this restores: "a ceiling that survives the operator's explicit
+    // re-arm is a wedge with no door".
+    const cfg = fixtureCfg();
+    const homeAble = cfg.roster.accounts.find((a) => a.homeAble)!;
+    const io = makeIo({
+      readdir: { [cfg.registryDir]: [], [cfg.projectsRoot]: null, [cfg.limitsDir]: [`${homeAble.id}.json`] },
+      readFile: {
+        [path.join(cfg.limitsDir, `${homeAble.id}.json`)]: JSON.stringify({ five: 0, seven: 0 }),
+      },
+    });
+    const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
+    const verdict = await checkPostClaim(
+      deps,
+      { id: 1, project: 'demo', consecutiveFailures: AUTOMATION_FAILURE_CEILING, provedAt: null },
+      1_000,
+    );
+    expect(verdict, 'a never-proved automation at the ceiling has no other door').toMatchObject({ ok: true });
+  });
+
   it('rung 9: failure-ceiling refuses, carrying the count AND the ceiling', async () => {
     const cfg = fixtureCfg();
     const io = makeIo({ readdir: { [cfg.registryDir]: [], [cfg.projectsRoot]: null, [cfg.limitsDir]: [] } });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
     const verdict = await checkPostClaim(
-      deps, { id: 1, project: 'demo', consecutiveFailures: AUTOMATION_FAILURE_CEILING }, 1_000,
+      deps, { id: 1, project: 'demo', consecutiveFailures: AUTOMATION_FAILURE_CEILING, provedAt: 1 }, 1_000,
     );
     expect(verdict).toEqual({
       refused: 'failure-ceiling',
@@ -290,7 +323,7 @@ describe('checkPostClaim — rungs 3-9, after the lease claim', () => {
       readFile: { [path.join(cfg.limitsDir, `${homeAble.id}.json`)]: JSON.stringify({ five: 1, seven: 2 }) },
     });
     const deps = makeDeps(io, makeCoord({ paused: false }), cfg);
-    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0 }, 1_000);
+    const verdict = await checkPostClaim(deps, { id: 1, project: 'demo', consecutiveFailures: 0, provedAt: 1 }, 1_000);
     expect(verdict).toEqual({ ok: true, homeScore: 2, projectedWrapper: homeAble.id });
   });
 });
