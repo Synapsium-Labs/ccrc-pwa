@@ -76,8 +76,9 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
 
   it('the scanner is looking at something', () => {
     const es = entries();
-    expect(es.length, 'ledger entries scanned').toBeGreaterThanOrEqual(100);
-    expect(new Set(es.map((e) => e.file)).size, 'plans scanned').toBeGreaterThanOrEqual(8);
+    expect(es.length, `only ${es.length} ledger entries scanned`).toBeGreaterThanOrEqual(100);
+    expect(new Set(es.map((e) => e.file)).size,
+      `only ${new Set(es.map((e) => e.file)).size} plans scanned`).toBeGreaterThanOrEqual(8);
   });
 
   it('every grandfathered number still collides — the set is re-derived, never nudged, and only shrinks', () => {
@@ -151,7 +152,9 @@ describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)',
     // an allocated-but-unentered number reds here until its entry lands,
     // which is the direction the ledger discipline points anyway.
     const highWater = definedMax();
-    expect(highWater, 'the definition-derived high-water went vacuous').toBeGreaterThanOrEqual(215);
+    expect(highWater,
+      `the definition-derived high-water is ${highWater} — too low to be this tree's ledger`)
+      .toBeGreaterThanOrEqual(215);
     const scan = floorFromScan(trackedFiles());
     expect(scan, 'the tree seeds — an empty scan here means the docs moved').not.toBeNull();
     expect(scan!.floor,
@@ -214,12 +217,17 @@ describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)'
   });
 
   it('is looking at the real tree — guards the guard', async () => {
-    // 707 tracked files measured at reconciliation; the floor has margin so
-    // ordinary growth or pruning never touches it, while a broken walk (a
-    // wrong cwd, a filter eating everything) reds loudly and specifically
-    // instead of letting the tree scan above pass over nothing.
+    // The floor has margin so ordinary growth or pruning never touches it, while
+    // a broken walk (a wrong cwd, a filter eating everything) reds loudly and
+    // specifically instead of letting the tree scan above pass over nothing. The
+    // count that used to sit in this comment — "707 tracked files measured at
+    // reconciliation" — is now in the message, where it is derived rather than
+    // remembered: the walk read 824 on 2026-09-04, so a reader checking "the
+    // floor has margin" against 707 was computing 15% where the true figure was
+    // 27%.
     const c = await load();
-    expect(c.files).toBeGreaterThan(600);
+    expect(c.files, `only ${c.files} tracked files walked — the corpus walk is broken`)
+      .toBeGreaterThan(600);
   });
 
   it('sees the alias corpus the reconciliation left behind', async () => {
@@ -342,10 +350,13 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     // [], which satisfies the assertion below for entirely the wrong reason.
     const here = plansAt('HEAD');
     const there = plansAt(LEDGER_BASE!);
-    expect(here.length, 'no plans read from HEAD').toBeGreaterThanOrEqual(50);
-    expect(there.length, `no plans read from ${LEDGER_BASE}`).toBeGreaterThanOrEqual(50);
-    expect(definitionsIn(here).length, 'HEAD holds no ledger entries').toBeGreaterThanOrEqual(300);
-    expect(definitionsIn(there).length, 'the base holds no ledger entries').toBeGreaterThanOrEqual(300);
+    expect(here.length, `only ${here.length} plans read from HEAD`).toBeGreaterThanOrEqual(50);
+    expect(there.length,
+      `only ${there.length} plans read from ${LEDGER_BASE}`).toBeGreaterThanOrEqual(50);
+    expect(definitionsIn(here).length,
+      `HEAD holds only ${definitionsIn(here).length} ledger entries`).toBeGreaterThanOrEqual(300);
+    expect(definitionsIn(there).length,
+      `the base holds only ${definitionsIn(there).length} ledger entries`).toBeGreaterThanOrEqual(300);
   });
 
   it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
@@ -541,6 +552,55 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const strict = entries().length;
     expect(loose, 'the loose scan sees no more than ENTRY — one of them has drifted')
       .toBeGreaterThan(strict);
+  });
+
+  // D-1434. A messaged floor assertion whose message says the
+  // scan read nothing, while the floor is 50, reds for 1..49 as well as for 0 —
+  // so in 49 of its 50 failing states the message is a false statement about
+  // what happened, and the reader of a CI log has only the message.
+  //
+  // NO EXAMPLE CALL IS SPELLED IN THIS COMMENT, deliberately: this scan reads its
+  // own file, and an illustrative `expect(…).toBeGreaterThanOrEqual(50)` written
+  // out here would be matched by the regex below and would keep the guard red
+  // forever. Measured — the first draft of this comment did exactly that.
+  //
+  // The rule is scoped so it never asks for churn where the message is already
+  // exact: when the floor is an integer literal >= 2 the failing set is wide, so
+  // the message must carry the measured value. A floor of 0 reds only on
+  // emptiness, and a comparison against another measured quantity states its own
+  // condition; both are left alone.
+  //
+  // KNOWN LIMIT, stated where a CI reader sees it rather than only in a plan: the
+  // regex requires the message to sit on ONE line, so an assertion whose message
+  // is built by concatenation across lines is invisible to this scan. REQUIRED
+  // below is what stops that from degrading silently — it names the assertions
+  // this rule was measured against, so losing one reds by name instead of just
+  // lowering a count.
+  it('every wide floor assertion in this file reports the value it measured', () => {
+    const SELF = readFileSync(path.join(here, 'deviation-refs.test.ts'), 'utf8');
+    const FLOOR = /expect\(\s*([^,\n]+?),\s*(['"`])([^\n]*?)\2\s*\)\s*\.toBeGreaterThan(?:OrEqual)?\(\s*(\d+)\s*\)/g;
+    const wide = [...SELF.matchAll(FLOOR)].filter((m) => Number(m[4]) >= 2);
+    const seen = wide.map((m) => `${m[1]!.trim()} >= ${m[4]}`);
+    const REQUIRED = [
+      'es.length >= 100',
+      'new Set(es.map((e) => e.file)).size >= 8',
+      'highWater >= 215',
+      'here.length >= 50',
+      'there.length >= 50',
+      'definitionsIn(here).length >= 300',
+      'definitionsIn(there).length >= 300',
+    ];
+    // The premise, established rather than assumed: a scan that had drifted off
+    // its own file would find nothing and every assertion below it would hold.
+    expect(REQUIRED.filter((r) => !seen.includes(r)),
+      `this scan no longer sees assertions it was written for; it found: ${seen.join(' | ')}`)
+      .toEqual([]);
+    const mute = wide
+      .filter((m) => !m[3]!.includes('${' + m[1]!.trim() + '}'))
+      .map((m) => `${m[1]!.trim()} >= ${m[4]} :: ${m[3]}`);
+    expect(mute,
+      'a floor assertion states a condition it does not isolate — put the measured value in the message')
+      .toEqual([]);
   });
 });
 

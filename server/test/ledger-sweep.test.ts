@@ -223,9 +223,14 @@ describe('sweepLedgerReconcile', () => {
   });
 
   it('REPORTS a number a plan defines that the allocator never issued (F7)', async () => {
-    // The inverse of markLanded, and the half nothing has ever measured. Live
-    // instance on main while this was written: D-1066..1069, defined in
-    // 2026-08-30-d1066-dead-recipient-parks.md with no allocation row.
+    // The inverse of markLanded, and the half nothing has ever measured. The
+    // live shape on main is an allocator-era number that a merged plan defines
+    // and the allocator never issued — D-1066 in
+    // 2026-08-30-d1066-dead-recipient-parks.md, D-1067..1069 in
+    // 2026-08-30-d1067-d1068-delivered-row-terms.md, and more since. The comment
+    // that stood here put all four of those numbers in the first file, which
+    // defines only D-1066, and no suite can pin either the set or its size: it
+    // is read from the live coord.db (D-1435).
     const h = fixture();
     await seedAndAllocate(h, 1);                          // 261 IS issued
     h.plantDoc('demo', 'plans', 'p.md',
@@ -258,9 +263,11 @@ describe('sweepLedgerReconcile', () => {
     // has had a test since D13 ("reported (once per changing set)"), which is what
     // makes the omission on this side an omission rather than a policy.
     //
-    // The live case it protects is on main right now: D-1066..1069 have no
-    // allocation row, so without the dedupe every ccrc-server on the fleet logs
-    // that line every 15 minutes, forever.
+    // The live case it protects is on main right now — the same NON-EMPTY orphan
+    // set the REPORTS test above describes — so without the dedupe every
+    // ccrc-server on the fleet logs that line every 15 minutes, forever. The
+    // enumeration this comment used to carry named four and was already wrong
+    // when it was written; the property is what the guard needs.
     const h = fixture();
     await seedAndAllocate(h, 1);
     h.plantDoc('demo', 'plans', 'p.md', `- **D-${299}** — never asked for`);
