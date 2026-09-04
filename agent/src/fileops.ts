@@ -3,6 +3,21 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
 
+/** The agent's half of `server/src/io.ts`'s `failureFor` (D-1397) — the ONE place
+ *  an errno becomes a `ReadFailure` on this side. Only a PROVEN `ENOENT` may
+ *  answer `absent`; every other errno is `unreadable`, which is the whole point
+ *  of the vocabulary and the one rule four hand-written copies could each get
+ *  wrong independently (D-1448).
+ *
+ *  RESTATED rather than imported, and neither half of that is an oversight.
+ *  `agent/tsconfig.json` includes only `src/**` and `../shared/**`, so
+ *  `server/src` is not on this package's compile or deploy path at all. And it
+ *  is kept OUT of `shared/` deliberately: D-1438 put `ReadFailure` there on the
+ *  argument that a TYPE-only export costs the PWA's bundle nothing, and that
+ *  argument does not extend to a runtime function — L0 is what the PWA bundles. */
+const failureFor = (e: unknown): ReadFailure =>
+  (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
+
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -61,7 +76,7 @@ export async function readWhole(p: string): Promise<ReadResult> {
   try {
     return { data: await readFile(p, 'utf8'), absent: false };
   } catch (e) {
-    return { data: null, absent: (e as NodeJS.ErrnoException).code === 'ENOENT' };
+    return { data: null, absent: failureFor(e) === 'absent' };
   }
 }
 
@@ -95,7 +110,7 @@ export async function readB64Measured(p: string): Promise<ReadB64Result> {
   try {
     size = (await stat(p)).size;
   } catch (e) {
-    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+    return { ok: false, reason: failureFor(e) };
   }
   if (size > MAX_READ_B64_BYTES) return { ok: false, reason: 'too-large', size };
   try {
@@ -103,7 +118,7 @@ export async function readB64Measured(p: string): Promise<ReadB64Result> {
   } catch (e) {
     // Unlinked between the stat and the read is a real race and a real
     // absence; anything else is not.
-    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+    return { ok: false, reason: failureFor(e) };
   }
 }
 
@@ -122,14 +137,14 @@ export async function readFromMeasured(p: string, offset: number): Promise<ReadF
   try {
     size = (await stat(p)).size;
   } catch (e) {
-    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+    return { ok: false, reason: failureFor(e) };
   }
   const from = Math.max(0, Math.min(offset, size));
   if (from >= size) return { ok: true, data: '', size };
   try {
     return { ok: true, data: (await readRange(p, from, size)).toString('utf8'), size };
   } catch (e) {
-    return { ok: false, reason: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable' };
+    return { ok: false, reason: failureFor(e) };
   }
 }
 
@@ -177,7 +192,7 @@ export async function statMeasured(p: string): Promise<StatResult> {
     const s = await stat(p);
     return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
   } catch (e) {
-    return { ok: false, absent: (e as NodeJS.ErrnoException).code === 'ENOENT' };
+    return { ok: false, absent: failureFor(e) === 'absent' };
   }
 }
 
