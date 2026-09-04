@@ -4157,8 +4157,30 @@ export class CoordStore {
    *  while the route performed the act inside the request, retire could not
    *  land in the gap. */
   leasedAutomations(): AutomationRow[] {
+    // AND WHOSE RUN HAS NOT YET BOUND A SESSION. The lease alone is not the
+    // question pass 3 means to ask; "does this lease still have an act to
+    // perform" is. The sweep's single-flight guard is a private field of the
+    // watcher — in memory BY DESIGN, so a run a crashed process left leased is
+    // picked up again — and that resume is wanted. But without this predicate
+    // the resume cannot tell "claimed and never started" from "claimed,
+    // spawned, and interrupted before the settle", and the second reading is a
+    // SECOND SPAWN: `markAutomationSpawn` is an unconditional UPDATE, so the
+    // new identify overwrites sessionId/workspace/branch on the one run row and
+    // the first session becomes an orphan no run row names — spec §6's
+    // orphan-manufacture rule, measured as a real second `ws-add` before this
+    // clause existed.
+    //
+    // What happens to such a run instead: nothing, until `lapseAutomationRuns`
+    // settles it `lost` at its hard lease, WITH its sessionId preserved. That
+    // is an honest record of a session that WAS created, which is what §6 asks
+    // for; a second session is not. The window this closes is wider than the
+    // spawn — the prompt ladder's `pending` arm and `fireAutomation`'s own
+    // `.catch` both leave a run `running` with its lease held.
     const rows = this.db.prepare(
-      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations WHERE leaseRunId IS NOT NULL ORDER BY id`,
+      `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations ` +
+      'WHERE leaseRunId IS NOT NULL AND NOT EXISTS (' +
+      '  SELECT 1 FROM automation_runs r WHERE r.id = automations.leaseRunId AND r.sessionId IS NOT NULL' +
+      ') ORDER BY id',
     ).all() as unknown as AutomationRowDb[];
     return rows.map((r) => this.hydrateAutomation(r));
   }

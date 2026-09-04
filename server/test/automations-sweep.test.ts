@@ -129,6 +129,75 @@ async function rig(): Promise<{
   return { w, coord, home, calls, deps, log };
 }
 
+describe('a restart is not a second spawn', () => {
+  it('never re-performs the act for a run that already bound a session', async () => {
+    // THE WINDOW. Pass 3 fires "every open lease this process has not already
+    // started", and its only single-flight guard, `automationsInFlight`, is a
+    // PRIVATE FIELD OF THE WATCHER — in memory by design, so that a run a
+    // CRASHED process left leased is picked up again. That resume is wanted.
+    // What was missing is the distinction inside it: "claimed and never
+    // started" and "claimed, spawned, and interrupted before the settle" are
+    // the same row to a predicate that reads `leaseRunId` alone.
+    //
+    // The second act is silent, not loud. `markAutomationSpawn` is an
+    // unconditional `UPDATE automation_runs SET ... WHERE id = ?`, so the
+    // second identify OVERWRITES sessionId/workspace/branch on the one run row
+    // and the first session becomes an orphan no run row names — what
+    // `store.ts`'s own docstring calls "spec §6's orphan-manufacture rule".
+    // The window is not only the spawn: the prompt ladder's `pending` arm and
+    // `fireAutomation`'s own `.catch` both leave the run `running` with its
+    // lease held for the full hard lease.
+    //
+    // A run whose session exists is therefore left alone. It settles `lost`
+    // when its hard lease lapses, with its sessionId preserved — an honest
+    // record of a session that WAS created, which is the outcome spec §6
+    // asks for and a second session is not.
+    const { w, coord, calls, deps } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'nightly', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 },
+      NOW,
+    );
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup: the proving claim was refused');
+    coord.markAutomationSpawn({
+      runId: claim.runId, spawnRc: 0,
+      identity: {
+        bound: true, sessionId: 'demo-auto-quiet-basin', workspace: 'ws', branch: 'main',
+        wrapper: 'claude', adopted: false,
+      },
+    });
+    // The state a process that died between the spawn and the settle leaves:
+    // running, session bound, lease still open. The row is `paused` and has no
+    // `nextRunAt`, so `dueAutomations` excludes it — pass 3 is the only actor
+    // that can reach it, which is what makes this measurement about pass 3.
+    expect(coord.automationRuns(id, 5)[0]!.sessionId).not.toBeNull();
+    expect(coord.automation(id)!.leaseRunId).toBe(claim.runId);
+
+    // A SECOND watcher over the SAME deps is the restart: one coord.db, a
+    // fresh and empty `automationsInFlight`.
+    const restarted = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await restarted.tick();
+      await restarted.sweepAutomations();
+      // A REAL wait, not one microtask turn. `fireOne` void-dispatches, and
+      // `fireAutomation`'s first step is an `io.readdir` against the real
+      // filesystem, so a single `setImmediate` returns long before the act
+      // could have reached `ws-add` — an assertion there measures nothing and
+      // passed on the BROKEN tree too, which is how this fixture was caught
+      // lying before it was ever used. Only `Date` is faked in this file, so
+      // `setTimeout` is real, and the first fixture in this file completes a
+      // whole spawn AND prompt well inside this window.
+      await new Promise((resolve) => { setTimeout(resolve, 400); });
+      expect(calls.filter((c) => c.includes('ws-add')),
+        'a run that already has a session must never be spawned a second time').toEqual([]);
+      expect(coord.automationRuns(id, 5)[0]!.sessionId).toBe('demo-auto-quiet-basin');
+    } finally {
+      restarted.stop();
+    }
+    w.stop();
+  });
+});
+
 describe('FleetWatcher.sweepAutomations — the schedule path', () => {
   it('a due armed automation fires exactly once — spawns and prompts a real session', async () => {
     const { w, coord, calls } = await rig();
