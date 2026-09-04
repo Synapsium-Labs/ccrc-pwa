@@ -7,7 +7,7 @@
 // This is three ANCHORED PASSAGES, not a corpus scanner. topology-clean.test.ts's
 // FORBIDDEN table is the corpus ratchet, and its `scope?` docstring (:216-219)
 // states "at ship NO class carries one" — a class scoped to three files would
-// break a stated ship invariant of that file. box-token-census.test.ts:220's
+// break a stated ship invariant of that file. box-token-census.test.ts's
 // `passage()` idiom touches nothing shared, so that is the one copied.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 
-/** box-token-census.test.ts:220's helper, copied for its REASON as much as its
+/** box-token-census.test.ts's `passage()` helper, copied for its REASON as much as its
  *  shape: an anchor that stopped matching yields '', and '' satisfies every
  *  negative assertion below it. This tree has been bitten by that twice. */
 const passage = (name: string, text: string, from: string, to: string): string => {
