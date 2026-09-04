@@ -451,6 +451,53 @@ describe('CoordStore: automations — the failure ceiling (spec §8)', () => {
     expect(row.consecutiveFailures).toBe(AUTOMATION_FAILURE_CEILING);
   });
 
+  it("the operator's own pause does not disarm their schedules — a refusal is not a failure of the automation", () => {
+    // Spec §8 states a PRINCIPLE, not a list: "`skipped` does not count — it
+    // is not a failure of the automation, it is the lease working." The map
+    // already extends it past the spec's literal example to `missed` and
+    // `unknown` on that same reasoning. `refused` collapses SEVEN post-claim
+    // conditions into one increment, and most of them are not the automation:
+    // `coordinator-paused` and `automations-paused` are the OPERATOR'S OWN
+    // switches, `registry-unmeasurable` is an unreachable fleet box,
+    // `no-placeable-account`/`account-pressed`/`cap-concurrency` are fleet
+    // capacity, and `failure-ceiling` is circular — counting it drives the
+    // counter past its own ceiling for ever.
+    //
+    // Counting them means an operator who pauses the fleet for three of an
+    // automation's occurrences comes back to a schedule that has DISARMED
+    // itself, with `scheduleError='failure-ceiling'` blaming the automation for
+    // the operator's own switch. Nothing was spawned, nothing was prompted;
+    // there is no failure to count. `unknown-project` is the one refusal that
+    // IS the automation's own configuration, so it is the one that still
+    // counts, and the fixture below asserts that half too — a map that ignored
+    // everything would pass the first half while asserting nothing.
+    const s = store();
+    const t0 = 1_000;
+    const id = makeArmed(s, t0, t0);
+    let now = t0 + 1_000;
+    for (let i = 0; i < AUTOMATION_FAILURE_CEILING + 1; i++) {
+      const claim = s.claimAndOpenRun({ automationId: id, now, occurrence: manualOccurrence() });
+      if (!('runId' in claim)) throw new Error('unreachable');
+      s.settleAutomationRun({
+        runId: claim.runId, settlement: { outcome: 'refused', refusal: 'coordinator-paused' }, now: now + 1,
+      });
+      now += 100;
+    }
+    const row = s.automation(id)!;
+    expect(row.consecutiveFailures, "the operator's pause is not the automation's failure").toBe(0);
+    expect(row.state, 'an operator pause must not disarm the schedule').toBe('armed');
+    expect(row.scheduleError).toBeNull();
+
+    // The other direction: a refusal that IS the automation's own configuration.
+    const bad = s.claimAndOpenRun({ automationId: id, now, occurrence: manualOccurrence() });
+    if (!('runId' in bad)) throw new Error('unreachable');
+    s.settleAutomationRun({
+      runId: bad.runId, settlement: { outcome: 'refused', refusal: 'unknown-project' }, now: now + 1,
+    });
+    expect(s.automation(id)!.consecutiveFailures,
+      "a project the box does not know IS the automation's own defect").toBe(1);
+  });
+
   it('skipped and missed do not move the counter; an ok resets it; armAutomation clears it', () => {
     const s = store();
     const t0 = 1_000;

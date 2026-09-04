@@ -1511,17 +1511,28 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // anywhere; rung 5's actual marker check imports `COORDINATOR_PAUSE_
     // MARKER` from `rundefs.ts` by value, same as `dispatch.ts`/`watch.ts`.
     //
-    // `pwa/src/auto/autoWords.ts` is the fourth and last NAMED holder: it keys
-    // the SENTENCE an operator reads when that rung refuses. A words table
-    // must spell every member of the union it is total over, or the entry is
+    // `pwa/src/auto/autoWords.ts` is the fourth NAMED holder: it keys the
+    // SENTENCE an operator reads when that rung refuses. A words table must
+    // spell every member of the union it is total over, or the entry is
     // `undefined` and JSX renders an empty cell — so this holder is forced by
     // the same `noUncheckedIndexedAccess` rule that makes the table total in
     // the first place. Still not a second definition of the marker's name.
+    //
+    // `server/src/coord/store.ts` is the fifth, and it is forced by the same
+    // totality rule as the words table: `AUTOMATION_REFUSAL_LEDGER` is a
+    // `Record<AutomationRefusal, …>` answering, per member, whether that
+    // refusal is the AUTOMATION'S OWN failure — and this member's answer is
+    // `'ignore'`, because a coordinator the operator paused is not a defect in
+    // the schedule. A `Record` over the union cannot omit a key without a
+    // compile error, so the spelling is the type's, not a second vocabulary.
+    // It reads no marker file: rung 5's own check imports
+    // `COORDINATOR_PAUSE_MARKER` from `rundefs.ts` by value.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel).sort();
     expect(holders).toEqual([
       'pwa/src/auto/autoWords.ts',      // the refusal SENTENCE
       'server/src/auto/fire.ts',        // the refusal CODE, returned by a rung
       'server/src/coord/rundefs.ts',    // the marker literal (the one definition)
+      'server/src/coord/store.ts',      // whether this refusal counts as a failure
       'shared/api.ts',                  // the refusal-code vocabulary
     ]);
   });

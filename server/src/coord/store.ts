@@ -653,13 +653,63 @@ const AUTOMATION_TRANSITIONS: Readonly<Record<AutomationState, readonly Automati
 /** Whether an outcome moves `consecutiveFailures`, and how — a TOTAL map
  *  over the outcome union (spec §8): `ok` resets it, `skipped`/`missed` are
  *  the lease/grace machinery working and never count against the automation,
- *  and every other settled outcome increments it. */
+ *  and every other settled outcome increments it. `refused` DEFERS to the
+ *  refusal map below, because one outcome is not one fact there. */
 type FailureLedger = 'increment' | 'reset' | 'ignore';
 const AUTOMATION_LEDGER_MAP: Record<AutomationOutcome, FailureLedger> = {
   running: 'ignore', ok: 'reset', failed: 'increment', refused: 'increment',
   lost: 'increment', skipped: 'ignore', missed: 'ignore', unknown: 'ignore',
 };
-const automationLedger = (o: AutomationOutcome): FailureLedger => AUTOMATION_LEDGER_MAP[o];
+
+/** WHICH REFUSALS ARE THE AUTOMATION'S OWN FAILURE — a TOTAL map over the
+ *  refusal union, for the same reason the outcome map above is total.
+ *
+ *  Spec §8 states a principle rather than a list: "`skipped` does not count —
+ *  it is not a failure of the automation, it is the lease working", and the
+ *  outcome map already extends that past the spec's one example to `missed`
+ *  and `unknown`. `refused` needed the same treatment and did not get it: it
+ *  collapsed SEVEN post-claim conditions into one increment, and most of them
+ *  are not the automation at all. `coordinator-paused` and
+ *  `automations-paused` are the OPERATOR'S OWN switches; an operator who
+ *  pauses the fleet across three of an automation's occurrences came back to a
+ *  schedule that had DISARMED ITSELF, carrying
+ *  `scheduleError='failure-ceiling'` — the automation blamed for the
+ *  operator's act. `registry-unmeasurable` is an unreachable fleet box,
+ *  `no-placeable-account`/`account-pressed`/`cap-concurrency` are fleet
+ *  capacity (and `cap-concurrency` is excluded for precisely the reason
+ *  `overlap` already was), and `failure-ceiling` is circular: counting it
+ *  drives the counter past its own ceiling for ever.
+ *
+ *  None of those spawned a session or sent a prompt, so there is no failure to
+ *  count. `unknown-project` is the one refusal that IS the automation's own
+ *  configuration, so it is the one that still counts. The `spawn-*` and
+ *  `prompt-refused` codes are unaffected: they settle `failed`, not `refused`,
+ *  and `failed` increments. */
+const AUTOMATION_REFUSAL_LEDGER: Record<AutomationRefusal, 'increment' | 'ignore'> = {
+  'unknown-project': 'increment',
+  'registry-unmeasurable': 'ignore',
+  'coordinator-paused': 'ignore',
+  'automations-paused': 'ignore',
+  'no-placeable-account': 'ignore',
+  'account-pressed': 'ignore',
+  'cap-concurrency': 'ignore',
+  overlap: 'ignore',
+  'failure-ceiling': 'ignore',
+  'spawn-refused': 'increment',
+  'spawn-cut-short': 'increment',
+  'spawn-unmeasured': 'increment',
+  'spawn-ambiguous': 'increment',
+  'prompt-refused': 'increment',
+  unknown: 'ignore',
+};
+
+/** A `refused` outcome with NO refusal recorded cannot be attributed, so it
+ *  does not count — the same answer this file gives every other unattributable
+ *  outcome, and never a silent `increment` off a missing field. */
+const automationLedger = (o: AutomationOutcome, refusal: AutomationRefusal | null): FailureLedger => {
+  if (o !== 'refused') return AUTOMATION_LEDGER_MAP[o];
+  return refusal === null ? 'ignore' : AUTOMATION_REFUSAL_LEDGER[refusal];
+};
 
 /** Applied INSIDE the store, never a parameter — two callers passing their
  *  own bounds is two places for the hard bound to be widened, and *not being
@@ -4015,7 +4065,7 @@ export class CoordStore {
     const cur = this.db.prepare('SELECT state, consecutiveFailures FROM automations WHERE id = ?')
       .get(input.automationId) as { state: string; consecutiveFailures: number } | undefined;
     if (!cur) return { consecutiveFailures: 0, autoPaused: false };
-    const action = automationLedger(input.outcome);
+    const action = automationLedger(input.outcome, input.refusal);
     const consecutiveFailures =
       action === 'increment' ? cur.consecutiveFailures + 1
       : action === 'reset' ? 0
