@@ -10,6 +10,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
+import { renderEnvelope } from '../src/coord/envelope.js';
 import { releaseIsSafe } from '../src/coord/rundefs.js';
 import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -1822,6 +1823,265 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(del(s, d)).toMatchObject({ toId: DEAD, state: 'queued', lastError: null });
     // …and it is still visible to the party who CAN tell which program it meant.
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([d]);
+  });
+
+  /** Abandonment parks a role-addressed report can wear, one per writer that
+   *  actually writes one: `server/src/watch.ts:2533-2536` (registry-absent, and
+   *  its second string for a purged-after-delivery row), `:2630` (session-dead,
+   *  which writes a TEMPLATE — `recipient session is ${lc}` — of which this is
+   *  one instantiation), `:2747` (the replay ceiling) and `:2832`/`:2840` (a
+   *  send that never landed, `res.error`).
+   *
+   *  ONLY `MAIL_REPLAY_CEILING_ERROR` IS DRIFT-PROOF, and saying so is the
+   *  point: it is imported from the store, the other four are literals typed
+   *  from the writers named above. The list is BREADTH, not a contract — what
+   *  the predicate actually keys on is a park NOT being one of the two
+   *  deliberate cancels, so a sixth abandonment string would be re-queued by
+   *  this arm whether or not it is listed here. */
+  const ABANDONMENT_ERRORS = [
+    'recipient not in registry',
+    'recipient purged after this message was delivered, and never acked',
+    'recipient session is stopped',
+    MAIL_REPLAY_CEILING_ERROR,
+    'enter-ignored',
+  ] as const;
+
+  /** A park wearing a REAL envelope, not the block's placeholder. M6 in the
+   *  mutation table is "reuse the parked row's stored envelope", and against
+   *  `queue()`'s placeholder string (`'envelope rendered once, at queue time'`)
+   *  that mutant would red because the fixture never had a `to:` line at
+   *  all — the right colour for the wrong reason. Rendered through
+   *  `renderEnvelope`, the same function the ingress uses, so a reused envelope
+   *  really does name the CORPSE and really does carry an `ack:` id `markAcked`
+   *  refuses. */
+  const parkRendered = (
+    s: CoordStore, mailToId: string, runId: number, lastError: string,
+  ): number => {
+    const r = s.run(runId)!;
+    const mail = s.insertMail({ fromId: WORKER, fromUuid: `u-${WORKER}`, toId: mailToId,
+      runId, kind: 'status', subject: 'wave-done', body: 'the wave is done', artifacts: [] });
+    const d = s.queueDelivery(mail.id, DEAD, '');
+    s.setDeliveryEnvelope(d.id, renderEnvelope({
+      id: d.id, fromId: WORKER, toId: DEAD, runId,
+      program: r.program, wave: r.wave, waveOf: r.waveOf,
+      kind: 'status', subject: 'wave-done', body: 'the wave is done', artifacts: [],
+    }));
+    s.rejectDelivery(d.id, 'undeliverable', lastError);
+    return d.id;
+  };
+
+  /** The `park` the two `park(s, queue(s, …), …)` lines below use: a delivery
+   *  the block already queued, walked to an abandonment park. Kept beside
+   *  `parkRendered` rather than folded into it — those two rows are the ones
+   *  whose envelope is never read, so the cheap placeholder is honest there. */
+  const park = (s: CoordStore, id: number, lastError: string): number => {
+    s.rejectDelivery(id, 'undeliverable', lastError);
+    return id;
+  };
+
+  /** The state `reclaimProgram`'s own comment (store.ts:648-656) says is real: a
+   *  program whose rows disagree about the claimant — "a hand-recovered row, a
+   *  `reconstruct` a human finished by hand" — so `displaced` has two members.
+   *  Written by hand because it is the only way: `openRun` REFUSES a second
+   *  claimant (see `CoordStore: runs` → 'refuses a second coordinator rather
+   *  than arbitrating'), which is exactly why this is a fixture and not a
+   *  scenario. */
+  const splitClaim = (s: CoordStore, runId: number, other: string): void => {
+    s.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(other, runId);
+  };
+
+  it('ARM (e): an ABANDONED role-addressed report reaches the heir as a NEW delivery', () => {
+    const s = store();
+    const ids = waves(s);
+    const parked = ABANDONMENT_ERRORS.map((e) => parkRendered(s, 'coordinator', ids[3]!, e));
+
+    // ANTI-VACUITY, in the direction the wedge was actually reported: every one
+    // of these is visible on the CORPSE before the reclaim — that IS the leak —
+    // and the heir's box is empty.
+    expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId).sort((a, b) => a - b))
+      .toEqual([...parked].sort((a, b) => a - b));
+    expect(s.outstandingMailFor(LIVE)).toEqual([]);
+
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+
+    // The park is UNTOUCHED — this is a new delivery, not a reopen, and arm
+    // (c)'s sentence stands exactly as it was written.
+    parked.forEach((d, i) => {
+      expect(del(s, d)).toMatchObject({
+        toId: DEAD, state: 'rejected', rejectCode: 'undeliverable',
+        lastError: ABANDONMENT_ERRORS[i]!,
+      });
+    });
+
+    // …and the heir holds ONE queued delivery per parked mail, none of them the
+    // parked row itself.
+    const heir = s.outstandingMailFor(LIVE);
+    expect(heir.map((m) => m.state)).toEqual(parked.map(() => 'queued'));
+    expect(new Set(heir.map((m) => m.id)))
+      .toEqual(new Set(parked.map((d) => s.delivery(d)!.mailId)));
+    for (const m of heir) expect(parked).not.toContain(m.deliveryId);
+
+    // The two lines a re-used envelope could never have carried: it names the
+    // HEIR, and its `ack:` names its OWN delivery id (`mail.id` and
+    // `mail_deliveries.id` are separate sequences — D-41). The parks above were
+    // given REAL envelopes naming DEAD, so this measures the distinction rather
+    // than the absence of a fixture.
+    for (const m of heir) {
+      const env = s.deliveryEnvelope(m.deliveryId)!.envelope;
+      expect(env).toContain(`to: ${LIVE}`);
+      expect(env).toContain(`ack: ccrc-api mail ack ${m.deliveryId} `);
+    }
+  });
+
+  it('re-queues exactly the abandoned role mail this program owes the chair — nothing else', () => {
+    const s = store();
+    const ids = waves(s);
+    const other = (openRun(s, { program: 'sibling', wave: 1, waveOf: 1, claimedBy: DEAD }) as
+      { id: number }).id;
+
+    // MOVES.
+    const mine = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
+    // STAYS (1): addressed to a literal session id — arm (b).
+    const literal = parkRendered(s, DEAD, ids[3]!, 'recipient session is stopped');
+    // STAYS (2): role-addressed with no run — arm (d), D-1142's fold, still shut.
+    const noRun = park(s, queue(s, { toId: 'coordinator', runId: null }, DEAD),
+      'recipient session is stopped');
+    // STAYS (3): a sibling program's chair.
+    const sibling = parkRendered(s, 'coordinator', other, 'recipient session is stopped');
+    // STAYS (4): a third session this reclaim displaced nobody from.
+    const bystander = park(s, queue(s, { toId: 'coordinator', runId: ids[3]! }, 'ccrc-pwa-uninvolved'),
+      'recipient session is stopped');
+    // STAYS (5): a DELIBERATE cancel. `cancelOutstandingDeliveries` is called
+    //   from `closeRun`, which also advances the run — so in the field this park
+    //   and a terminal run arrive TOGETHER and the two exclusion clauses double-
+    //   cover the row. This calls the store's own public writer WITHOUT the
+    //   advance (its docstring blesses the standalone call), so the row is
+    //   excluded by the deliberate-cancel clause alone.
+    const closedRunMail = queue(s, { toId: 'coordinator', runId: ids[0]! }, DEAD);
+    s.cancelOutstandingDeliveries(ids[0]!);
+    // STAYS (6): an ABANDONMENT park whose own run has since gone terminal.
+    //   `planned -> failed` is a legal single transition (`RUN_TRANSITIONS`,
+    //   shared/api.ts) and a bare `advance` does not park anything, so this
+    //   reaches a terminal run without `closeRun` — the terminal-run clause is
+    //   the only thing excluding it. The same trick the I2(a) case uses.
+    const failedRunMail = parkRendered(s, 'coordinator', ids[1]!, 'recipient session is stopped');
+    expect(s.advance(ids[1]!, 'failed', 'operator')).toMatchObject({ ok: true });
+
+    // THE PREMISE, established rather than assumed: the corpse's own mailbox
+    // already answers which parks still need a human — and it is that set, minus
+    // what the ADDRESSING rules keep in place, that the heir must inherit.
+    expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId).sort((a, b) => a - b))
+      .toEqual([mine, literal, noRun, sibling].sort((a, b) => a - b));
+
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+
+    const heir = s.outstandingMailFor(LIVE);
+    expect(heir.map((m) => m.id)).toEqual([s.delivery(mine)!.mailId]);
+    expect(heir[0]!.deliveryId).not.toBe(mine);
+    for (const d of [mine, literal, noRun, sibling, bystander, closedRunMail, failedRunMail]) {
+      expect(del(s, d).toId, `delivery ${d} was moved`).not.toBe(LIVE);
+    }
+    // Exactly one row addressed to the heir exists AT ALL — history read, not
+    // the outstanding one — so no second delivery slipped in for a mail this arm
+    // was supposed to leave alone.
+    expect(s.mailForRecipient(LIVE).map((m) => m.deliveryId)).toEqual([heir[0]!.deliveryId]);
+  });
+
+  it('one mail parked against TWO displaced claimants reaches the heir once, not twice', () => {
+    // THE HAZARD THIS TREE HAS NEVER HAD BEFORE. `mail_deliveries` has no unique
+    // constraint on (mailId, toId) — the only index is `mail_deliveries_due`
+    // (schema.ts) — and until this arm nothing ever wrote a second delivery
+    // for one mail. Two claimants is the state reclaimProgram's own comment
+    // (store.ts:648-656) says is reachable.
+    const s = store();
+    const ids = waves(s);
+    const OTHER = 'ccrc-pwa-second-corpse';
+    splitClaim(s, ids[0]!, OTHER);
+
+    const mail = s.insertMail({ fromId: WORKER, fromUuid: `u-${WORKER}`, toId: 'coordinator',
+      runId: ids[3]!, kind: 'status', subject: 'wave-done', body: 'the wave is done', artifacts: [] });
+    const toDead = s.queueDelivery(mail.id, DEAD, 'envelope rendered once, at queue time').id;
+    const toOther = s.queueDelivery(mail.id, OTHER, 'envelope rendered once, at queue time').id;
+    s.rejectDelivery(toDead, 'undeliverable', 'recipient session is stopped');
+    s.rejectDelivery(toOther, 'undeliverable', 'recipient session is stopped');
+
+    // THE PREMISE: both parks are candidates before the reclaim — each is on a
+    // displaced claimant's box and each reads as needing a human.
+    expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([toDead]);
+    expect(s.outstandingMailFor(OTHER).map((m) => m.deliveryId)).toEqual([toOther]);
+
+    const r = s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000);
+    expect(r).toMatchObject({ ok: true });
+
+    // ONE new delivery, for ONE mail — the heir is not told the same thing twice.
+    expect(s.mailForRecipient(LIVE).map((m) => m.id)).toEqual([mail.id]);
+  });
+
+  it('never re-queues a mail the heir can already read — which is why it runs after the repoint', () => {
+    // ANTI-REGRESSION, and flagged as such rather than dressed up: this case is
+    // GREEN before the fifth arm exists (nothing re-queues anything), so its
+    // red-first proof is the mutation table, where dropping the NOT EXISTS
+    // clause and moving the call above `repointCoordinatorMail` are each
+    // measured RED.
+    const s = store();
+    const ids = waves(s);
+    const OTHER = 'ccrc-pwa-second-corpse';
+    splitClaim(s, ids[0]!, OTHER);
+
+    const mail = s.insertMail({ fromId: WORKER, fromUuid: `u-${WORKER}`, toId: 'coordinator',
+      runId: ids[3]!, kind: 'status', subject: 'wave-done', body: 'the wave is done', artifacts: [] });
+    // One delivery still OUTSTANDING on one displaced claimant — arm (c) moves
+    // this one — and one PARKED on the other, which is arm (e)'s candidate.
+    const live = s.queueDelivery(mail.id, OTHER, 'envelope rendered once, at queue time').id;
+    const dead = s.queueDelivery(mail.id, DEAD, 'envelope rendered once, at queue time').id;
+    s.rejectDelivery(dead, 'undeliverable', 'recipient session is stopped');
+
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+
+    // The repoint moved the outstanding row; the park was left; and NO third row
+    // was minted, because the heir can already read that message.
+    expect(del(s, live).toId).toBe(LIVE);
+    expect(del(s, dead)).toMatchObject({ toId: DEAD, state: 'rejected' });
+    expect(s.mailForRecipient(LIVE).map((m) => m.deliveryId)).toEqual([live]);
+  });
+
+  it('the re-queue leaves the wave unread badge alone — unreadMail is keyed by the run session', () => {
+    // THE READER THE NEW DOCSTRING NAMES, MEASURED. `unreadMailCount(runId,
+    // sessionId)` is called from `hydrateRun` with `row.sessionId` — the run's
+    // WORKER — never with `claimedBy`, so a delivery to the heir CHAIR must not
+    // move it. A bare `toBe(0)` would be true for a reason that has nothing to
+    // do with this arm (the counter short-circuits to 0 on a null sessionId), so
+    // the premise is established first: give the wave its worker and one unread
+    // message, and the badge reads 1.
+    const s = store();
+    const ids = waves(s);
+    s.setSession(ids[3]!, WORKER);
+    queue(s, { toId: WORKER, runId: ids[3]! }, WORKER);
+    expect(s.run(ids[3]!)!.unreadMail).toBe(1);
+
+    const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
+    expect(s.run(ids[3]!)!.unreadMail).toBe(1);
+
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+
+    // The heir really did get the report…
+    expect(s.outstandingMailFor(LIVE).map((m) => m.id)).toEqual([s.delivery(parked)!.mailId]);
+    // …and the wave's badge did not move.
+    expect(s.run(ids[3]!)!.unreadMail).toBe(1);
+  });
+
+  it('the fifth arm is in the SAME transaction — a throw rolls back runs, mail AND the re-queue', () => {
+    const s = store();
+    const ids = waves(s);
+    const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
+    const patched = s as unknown as { requeueAbandonedCoordinatorMail: () => void };
+    patched.requeueAbandonedCoordinatorMail = () => { throw new Error('requeue failed'); };
+
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('requeue failed');
+
+    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+    expect(del(s, parked).toId).toBe(DEAD);
+    expect(s.mailForRecipient(LIVE)).toEqual([]);
   });
 
   it('scopes the repoint to THIS program: a sibling program’s coordinator mail is untouched', () => {

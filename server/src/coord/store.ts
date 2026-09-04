@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
+import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
 import type { LedgerLog } from './ledgerlog.js';
@@ -391,8 +392,10 @@ const ABANDONED_PARK_SQL =
  * survived both acking and run close, forever. Rather than teach a writer to
  * chase this (another mutation, another race with the same close-time park
  * this file's other comments spend so many words guarding against), the
- * READ derives it: `rr.state` (via the `LEFT JOIN runs rr ON rr.id =
- * m.runId` every caller of this fragment now carries) is checked directly,
+ * READ derives it: `rr.state` (via the `runs rr ON rr.id = m.runId` join each
+ * caller of this fragment brings — LEFT in the read paths, INNER in
+ * `requeueAbandonedCoordinatorMail`, and `COALESCE` below is what makes the
+ * predicate indifferent to which) is checked directly,
  * and `COALESCE(rr.state, '')` — not a bare `rr.state NOT IN (...)` — is
  * deliberate: SQLite's `IN` against a NULL `rr.state` (no run named at all,
  * `m.runId IS NULL`, or a runId the `runs` table has no row for) is NULL,
@@ -640,6 +643,20 @@ export class CoordStore {
    *   (d) role-addressed with `mail.runId` NULL -> LEFT. See D-1142 on
    *       `repointCoordinatorMail` below: it cannot be PROVEN to be this
    *       program's, and the fold is recorded rather than opened.
+   *   (e) role-addressed, naming a run of THIS program, ABANDONED against a
+   *       displaced claimant — a park this lane GAVE UP on, never a deliberate
+   *       cancel, on a run that is not itself terminal -> the heir is queued a
+   *       NEW delivery for the same `mail` row. Arm (c) stands exactly as
+   *       written and is not weakened by this: the parked row is not moved and
+   *       not reopened. What the heir gets is a SECOND delivery of one mail,
+   *       which is what two delivery attempts to two recipients have always
+   *       looked like in this schema — `mail` and `mail_deliveries` are separate
+   *       tables for exactly that reason. The set is not hand-written here
+   *       either: it is `ABANDONED_PARK_SQL`, the same predicate
+   *       `outstandingMailFor(<corpse>)` uses to decide a park still needs a
+   *       human, so "what the heir inherits" and "what the corpse's box was
+   *       showing" cannot drift apart. (D-1425,
+   *       `requeueAbandonedCoordinatorMail` below.)
    * …and, in the opposite direction, an outstanding `program-kickoff` to a
    * displaced claimant is CANCELLED rather than repointed (D-1143,
    * `cancelKickoffsTo`): a re-kickoff queued minutes before a reclaim would
@@ -660,9 +677,12 @@ export class CoordStore {
    * mail to a provably-dead coordinator parks itself `undeliverable` about
    * fifteen and a half minutes after it was queued. Past that window there is
    * nothing outstanding left to repoint and the report stays on the corpse,
-   * visible to `outstandingMailFor(<corpse>)` and to nobody else. Reopening a
-   * parked row is a different decision, on a different door, and this one does
-   * not make it.
+   * visible to `outstandingMailFor(<corpse>)` and to nobody else — and that is
+   * now arm (e)'s half of the job rather than a hole:
+   * `requeueAbandonedCoordinatorMail` queues the heir a NEW delivery for exactly
+   * the parks that mailbox was showing. Reopening the parked row is still a
+   * decision this store does not make. The row stays `rejected`, and the reason
+   * it parked stays readable on it.
    *
    * THE ENVELOPE IS NOT RE-RENDERED, deliberately (D-1142). `renderEnvelope`
    * runs exactly ONCE, at queue time (spec:174-177, "verbatim, never
@@ -714,6 +734,14 @@ export class CoordStore {
       if (displaced.length > 0) {
         this.cancelKickoffsTo(displaced);
         this.repointCoordinatorMail(run.program, to, displaced);
+        // LAST, and the position is LOAD-BEARING — but not for `cancelKickoffsTo`'s
+        // reason above, which is about a narrowing statement running before a
+        // widening one and does not apply here. This statement's `NOT EXISTS`
+        // clause reads `mail_deliveries` as the two above left it, so a mail the
+        // repoint just moved to `to` is SEEN and skipped. Run first, that row
+        // would still name the corpse, the guard would miss it, and the heir
+        // would be handed two copies of one report.
+        this.requeueAbandonedCoordinatorMail(run.program, to, displaced);
       }
       return {
         ok: true as const, program: run.program,
@@ -823,6 +851,143 @@ export class CoordStore {
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
       "WHERE m.toId = 'coordinator' AND r.program = ?)",
     ).run(to, ...displaced, program);
+  }
+
+  /**
+   * D-1425 — the arm (a) could not reach. A role-addressed report the
+   * lane had ALREADY GIVEN UP on is delivered to the heir as a NEW row.
+   *
+   * WHY A SECOND DELIVERY AND NOT AN UN-PARK. Un-parking is one statement and
+   * three problems. It would be the first writer in this tree to return a
+   * terminal row to a NON-TERMINAL state — not the first to reopen a terminal
+   * row, which `markAcked` below already does for one park, and the broader
+   * sentence would itself be a false claim. It would force a ruling on
+   * `deliveredAt` that has no true answer: `sweepMail` branches on it (the
+   * replay bump and the session-dead rung both read it), so keeping the corpse's
+   * value counts the HEIR's first receipt as a replay, and nulling it denies a
+   * delivery that happened — one column carrying two conditions a consumer
+   * handles differently. And it would falsify arm (c) here, the bound paragraph
+   * above, and `ccd/coordinator-skill/references/mail-envelope.md`'s "the park
+   * is terminal for that delivery". A new row makes every one of those sentences
+   * stay true, and its zeroed counters are TRUE OF IT rather than reset.
+   *
+   * NOT A RE-RENDER OF A REPLAY. spec:176-177 is "Until acked, the delivery
+   * replays — verbatim, never re-rendered". That binds a DELIVERY replaying;
+   * this is a second delivery, so it renders its own envelope, naming the heir
+   * in `to:` and its own id in `ack:` — the `queueDelivery(…, '') ->
+   * renderEnvelope(delivery.id) -> setDeliveryEnvelope` pair `routes.ts` and
+   * `rundefs.ts` already use, for the same reason (the delivery id does not
+   * exist until the row does).
+   *
+   * THE PREDICATE IS NOT HAND-WRITTEN. `ABANDONED_PARK_SQL` is the mailbox's own
+   * "this park still needs a human" clause, so the deliberate-cancel parks (a
+   * run closing, a chair changing hands) and the parks whose own run has since
+   * finished are excluded BY THE CONSTANT rather than by three more words here.
+   * The rest are the repoint's clauses, unchanged in meaning: `d.toId IN
+   * (<displaced>)` (never `to`, never a bystander), `m.toId = 'coordinator'`
+   * (arm (b)), the INNER join to `runs` (arm (d) — every `m.runId IS NULL` row
+   * drops out on the way), and `rr.program = ?`.
+   *
+   * TWO CLAUSES ARE THIS METHOD'S OWN, and they exist because this is the FIRST
+   * writer in the tree to give one `mail` row a second delivery. Nothing else
+   * ever did — `queueDelivery` has exactly two other call sites and each follows
+   * an `insertMail` — and `mail_deliveries` carries no unique key on
+   * `(mailId, toId)` to fall back on (`schema.ts`: the one index is
+   * `mail_deliveries_due`). So:
+   *   `GROUP BY m.id` — a program whose rows disagree about the claimant (the
+   *     hand-recovered row the caller's own comment describes) puts TWO
+   *     displaced ids in `displaced`, and one mail parked against both would
+   *     otherwise be queued to the heir twice. SQLite's bare-column rule makes
+   *     the selected `m.*`/`rr.*` values well defined here: `m.id` is the
+   *     grouping key and `rr` joins it one-to-one on `m.runId`.
+   *   `NOT EXISTS (… x.toId = ? AND x.state IN OUTSTANDING_STATES_SQL)` — the
+   *     heir may ALREADY be able to read this message, most often because
+   *     `repointCoordinatorMail` handed it to them one statement ago. This is
+   *     why this call is last: run before the repoint, the guard would look at a
+   *     row still naming the corpse and mint a duplicate.
+   *
+   * THE READERS OF THE PREDICATE WERE WALKED, as `OUTSTANDING_OR_ABANDONED_SQL`'s
+   * own docstring does for D-1143. All four:
+   *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
+   *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
+   *     it with no wire change.
+   *   `unreadMailCount(runId, sessionId)` — NOT reached, and not by luck:
+   *     `hydrateRun` calls it with `row.sessionId`, the run's WORKER, never with
+   *     `claimedBy`. A delivery to the heir CHAIR therefore leaves
+   *     `RunSummary.unreadMail` — the badge the MailStrip renders — exactly
+   *     where it was. Measured by "the re-queue leaves the wave unread badge
+   *     alone" in `coord-store.test.ts`.
+   *   the coordinator-kickoff-wedge query in `healthFor` — unreachable: it is
+   *     `m.runId IS NULL`-scoped, and every row this method inserts belongs to a
+   *     mail that survived an INNER join on `m.runId`.
+   *   the composed constant's own definition — no reader of its own.
+   * And on the narrower `OUTSTANDING_STATES_SQL` side: `dueDeliveries` picks the
+   * new row up, which is the whole point; `hasOutstandingMail`'s slot is keyed by
+   * SENDER, and `queueSystemMail`'s sender type is `SystemMailSender` =
+   * coordinator|operator with no call site addressing the ROLE, so no system
+   * mail is in this candidate set and none can be swallowed;
+   * `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
+   * `m.runId IS NULL`-scoped and therefore unreachable too.
+   *
+   * BOUNDED by the role-addressed reports of ONE program that parked while its
+   * coordinator was dead, at most one new row per `mail` row, and deliberately
+   * NOT capped beyond that: a cap here would drop mail silently, which is the
+   * failure this method exists to end.
+   */
+  // THIS SIGNATURE IS MULTI-LINE, AND THAT IS A DECLARED EXEMPTION, NOT AN
+  // OVERSIGHT. Task 24 requires delivery-row WRITERS to keep their signature on
+  // one line, because Task 26's writer census walks back from each prepared
+  // statement to the nearest single-line signature and a wrapped one silently
+  // mis-attributes. This method is not such a writer: it prepares a SELECT and
+  // reaches the delivery rows only through `queueDelivery` and
+  // `setDeliveryEnvelope`, each of which carries its own one-line signature and
+  // is named by the census in its own right. The exemption is stated rather
+  // than relied on: `mail-hardening.test.ts` — Task 26's census, which landed
+  // earlier in this wave — is re-run AFTER this method exists, so if the walk
+  // ever does reach back past this signature, it reds here rather than in the
+  // field.
+  private requeueAbandonedCoordinatorMail(
+    program: string, to: string, displaced: readonly string[],
+  ): number {
+    const rows = this.db.prepare(
+      'SELECT m.id AS mailId, m.fromId AS fromId, m.kind AS kind, m.subject AS subject, ' +
+      'm.body AS body, m.artifacts AS artifacts, m.runId AS runId, ' +
+      'rr.program AS program, rr.wave AS wave, rr.waveOf AS waveOf ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE ${ABANDONED_PARK_SQL} AND d.toId IN (${placeholders(displaced.length)}) ` +
+      "AND m.toId = 'coordinator' AND rr.program = ? " +
+      'AND NOT EXISTS (SELECT 1 FROM mail_deliveries x ' +
+      `WHERE x.mailId = m.id AND x.toId = ? AND x.state IN ${OUTSTANDING_STATES_SQL}) ` +
+      'GROUP BY m.id ORDER BY MIN(d.id)',
+    ).all(...displaced, program, to) as {
+      mailId: number; fromId: string; kind: string; subject: string; body: string;
+      artifacts: string; runId: number; program: string; wave: number; waveOf: number | null;
+    }[];
+    for (const r of rows) {
+      const delivery = this.queueDelivery(r.mailId, to, '');
+      // THE RESULT IS READ, NOT DROPPED. Task 24 gave `setDeliveryEnvelope` a
+      // `SetEnvelopeResult` precisely because "a writer whose safety rests on its
+      // two callers' shape breaks silently the day a third one appears" — this IS
+      // that third caller, and TypeScript does not complain about a discarded
+      // return, so dropping it here would re-mint the defect one task after it was
+      // fixed. Same handling as the other two: unstampable is a bug, not a state.
+      const stamped = this.setDeliveryEnvelope(delivery.id, renderEnvelope({
+        id: delivery.id, fromId: r.fromId, toId: to, runId: r.runId,
+        program: r.program, wave: r.wave, waveOf: r.waveOf,
+        // Narrowed the way `hydrateMail` narrows it, not cast: `kind` is a
+        // CLOSED union and `'unknown'` is a real member. The branch is dead in
+        // practice (`insertMail`'s parameter is already `MailKind`), and a cast
+        // would have been this method quietly asserting what it did not check.
+        kind: isMailKind(r.kind) ? r.kind : 'unknown',
+        subject: r.subject, body: r.body,
+        artifacts: JSON.parse(r.artifacts) as string[],
+      }));
+      if (!stamped.ok) {
+        throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
+      }
+    }
+    return rows.length;
   }
 
   /**
@@ -2102,8 +2267,17 @@ export class CoordStore {
   }
 
   /**
-   * Overwrites a delivery's stored `envelope` — used by the ingress route
-   * ONLY, once, immediately after `queueDelivery`, to close a bug fix-round
+   * Overwrites a delivery's stored `envelope`, once, immediately after
+   * `queueDelivery`. THREE callers, each doing exactly that and none of them a
+   * re-render: the ingress route in `routes.ts`, the system-mail queue in
+   * `rundefs.ts` (which has called it since Build 7 — this sentence said "the
+   * ingress route ONLY" for two builds while it did:
+   * D-1426) and `requeueAbandonedCoordinatorMail`
+   * in this file, which renders
+   * the heir's own envelope for a second delivery of one mail. Pinned by
+   * `single-definition.test.ts`'s "setDeliveryEnvelope names every caller it
+   * has", which derives the caller set from `server/src` rather than reading
+   * this sentence. It exists to close a bug fix-round
    * finding 5 / D-41 named: the envelope's own `ack:` line has to name the
    * DELIVERY id (what `delivery(id)`/`markAcked` resolve by, both above),
    * but `mail.id` and `mail_deliveries.id` are two SEPARATE `AUTOINCREMENT`

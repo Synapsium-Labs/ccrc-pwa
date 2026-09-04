@@ -646,6 +646,75 @@ describe('Build 7 nouns', () => {
   });
 });
 
+// ── program-leverage wave 8 ────────────────────────────────────────────────
+//
+// A docstring that names its own callers is a SECOND COPY of a fact the code
+// already states, and this file exists because two copies of one fact drift.
+// Same corpus, same argument as the header above — "a comment is a request; a
+// red suite is a mechanism" — one level up from a duplicated VALUE to a
+// duplicated CLAIM. Both cases derive the fact from `server/src` and check the
+// prose against it; neither reads itself, and `ROOTS` (:32-37) contains no test
+// directory, so no needle here can match its own source line.
+describe('store.ts docstrings that describe their own callers', () => {
+  const STORE = path.join(ccrcRoot, 'server/src/coord/store.ts');
+  /** Source with every comment LINE removed, so a sentence about a call is
+   *  never counted as a call. */
+  const codeOnly = (t: string): string =>
+    t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+  /** A docstring as a reader sees it: leading ` * ` gone, wrapping collapsed —
+   *  `coordinator-skill.test.ts`'s `flat()` lesson, applied to a JSDoc block.
+   *  Without it, "the ingress route\n   * ONLY" walks past every `toContain`. */
+  const prose = (t: string): string =>
+    t.split('\n').map((l) => l.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+
+  it('the predicate docstring names the join kinds its callers actually carry', () => {
+    const store = readFileSync(STORE, 'utf8');
+    const code = codeOnly(store);
+    const left = (code.match(/LEFT JOIN runs rr\b/g) ?? []).length;
+    const inner = (code.match(/(?<!LEFT )JOIN runs rr\b/g) ?? []).length;
+    // BOTH premises, established before the claim is judged. Without the second
+    // one this assertion would be demanding a word about a caller that does not
+    // exist.
+    expect(left, 'no LEFT-JOIN caller of the mail→run edge — nothing to contrast').toBeGreaterThan(0);
+    expect(inner, 'no INNER-JOIN caller of the mail→run edge — the sentence under test is not yet false')
+      .toBeGreaterThan(0);
+
+    const doc = store.slice(
+      store.indexOf(' * The READ-side "still needs a human'),
+      store.indexOf('const OUTSTANDING_OR_ABANDONED_SQL'));
+    expect(doc.length, 'the predicate docstring anchors moved').toBeGreaterThan(300);
+    expect(prose(doc),
+      'the predicate docstring names one join kind while its callers carry two').toContain('INNER');
+  });
+
+  it('setDeliveryEnvelope names every caller it has, derived from the tree', () => {
+    const store = readFileSync(STORE, 'utf8');
+    const doc = store.slice(
+      store.indexOf('   * Overwrites a delivery'), store.indexOf('  setDeliveryEnvelope('));
+    expect(doc.length, "setDeliveryEnvelope's docstring anchors moved").toBeGreaterThan(300);
+
+    // The claim that was false for two builds. Split at the call site so this
+    // needle can never match a scan of this file (`ALL` does not reach
+    // `server/test`, but the idiom is cheap and the next scanner may).
+    expect(prose(doc), 'the docstring still says the ingress route is its only caller')
+      .not.toContain('used by the ingress ' + 'route ONLY');
+
+    const outside = ALL.filter((f) =>
+      rel(f).startsWith('server/src/') && rel(f) !== 'server/src/coord/store.ts'
+      && /\.setDeliveryEnvelope\(/.test(codeOnly(readFileSync(f, 'utf8'))));
+    expect(outside.length, 'the scan found no caller outside store.ts — nothing to check the prose against')
+      .toBeGreaterThanOrEqual(2);
+    for (const f of outside) {
+      expect(prose(doc), `the docstring does not name ${rel(f)}`).toContain(path.basename(rel(f)));
+    }
+
+    expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
+      'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
+    expect(prose(doc), 'the docstring does not name the in-file caller')
+      .toContain('requeueAbandonedCoordinatorMail');
+  });
+});
+
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
 // "an account" / "a wrapper" was the one domain concept in this system with no
 // type and no home, enumerated by hand in eight places across three languages.

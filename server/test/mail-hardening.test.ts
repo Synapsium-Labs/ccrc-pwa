@@ -501,20 +501,41 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     }
 
     // THE ANTI-VACUITY FLOOR. Two call sites at f7421733 (`rundefs.ts`'s
-    // `queueSystemMail` and `routes.ts`'s mail-send route); Task 61 adds a
-    // third and raises this rather than breaking it. Without the floor a scan
-    // that found nothing — a renamed method, a broken walk, an over-eager
-    // comment strip — passes silently, which is the failure this wave has hit
-    // more than once.
+    // `queueSystemMail` and `routes.ts`'s mail-send route); Task 61 added the
+    // third (`store.ts`'s `requeueAbandonedCoordinatorMail`) and RAISED this
+    // rather than breaking it, exactly as this comment said it would. Without
+    // the floor a scan that found nothing — a renamed method, a broken walk, an
+    // over-eager comment strip — passes silently, which is the failure this wave
+    // has hit more than once.
     expect(sites.length, 'no setDeliveryEnvelope call site found in server/src at all')
-      .toBeGreaterThanOrEqual(2);
+      .toBeGreaterThanOrEqual(3);
     // …and no prose mention was counted as a call site. `store.ts` and
     // `routes.ts` both discuss this method at length, so this is the corpus
     // where a receiver-less mention could go wrong — but it holds with the
     // strip neutered too (measured above), so read it as a SHAPE pin on
     // `CALL` requiring a receiver, not as the strip's proof.
-    expect(sites.map((s) => s.at).filter((a) => a.startsWith('server/src/coord/store.ts')),
-      'a mention of setDeliveryEnvelope inside store.ts was counted as a call site').toEqual([]);
+    //
+    // THIS WAS `toEqual([])` AND HAD TO CHANGE (D-1425). Task 61 gave `store.ts`
+    // its first genuine IN-FILE caller — `requeueAbandonedCoordinatorMail` calls
+    // `this.setDeliveryEnvelope(…)` to stamp the second delivery it queues — so
+    // an empty-set assertion now reds on a REAL call site, which is the opposite
+    // of the defect it was written to catch. What it protected is kept exactly,
+    // and DERIVED rather than counted: the store.ts sites this scan reports must
+    // be precisely the lines that carry a receiver call in the blanked source. A
+    // prose mention counted as a call appears on the left and not on the right;
+    // a real caller the scan MISSED appears on the right and not on the left.
+    const STORE_REL = 'server/src/coord/store.ts';
+    const storeCode = blankComments(readFileSync(path.join(ccrcRoot, STORE_REL), 'utf8'));
+    const realInStore = storeCode
+      .map((l, i) => (/\bthis\.setDeliveryEnvelope\(/.test(l) ? `${STORE_REL}:${i + 1}` : null))
+      .filter((a): a is string => a !== null);
+    expect(realInStore.length,
+      'store.ts has no in-file caller of setDeliveryEnvelope — this half has nothing to check')
+      .toBeGreaterThanOrEqual(1);
+    expect(sites.map((s) => s.at).filter((a) => a.startsWith(STORE_REL)),
+      'the store.ts sites this scan reports are not exactly its real in-file callers — either a '
+      + 'mention of setDeliveryEnvelope was counted as a call site, or a real caller was missed')
+      .toEqual(realInStore);
 
     for (const s of sites) {
       expect(s.bound,
