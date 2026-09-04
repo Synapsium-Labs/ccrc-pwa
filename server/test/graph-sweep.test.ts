@@ -30,6 +30,17 @@ function makeRepo(name: string): string {
   fs.appendFileSync(path.join(d, '.git', 'info', 'exclude'), 'graphify-out/\n.graphifyignore\n');
   return d;
 }
+// D-1368 — A FIXTURE THAT WANTS A TREE TO READ STALE HAS TO CHANGE THE TREE.
+// `--allow-empty` moves HEAD and leaves `HEAD^{tree}` byte-identical to the
+// built commit's, which is now the definition of FRESH — so every "make it
+// stale again" step below commits real content. The counter keeps the names
+// unique across a file that reuses one repo name in most of its cases.
+let bumps = 0;
+function bump(repo: string, msg = 'move'): void {
+  bumps += 1;
+  fs.writeFileSync(path.join(repo, `bump${bumps}.py`), `z${bumps} = ${bumps}\n`);
+  git(repo, 'add', '-A'); git(repo, 'commit', '-qm', msg);
+}
 function plantEngine(behavior = ''): void {
   const bin = j('.ccrc', 'graphify-venv', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -154,6 +165,152 @@ describe('graph-sweep: probe + census (Task 6)', () => {
   });
 });
 
+describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367)', () => {
+  /** A git tree at `~/worktrees/<name>` — the DEPTH-1 shape, where the
+   *  workspace directly under the worktrees root is itself the toplevel. The
+   *  old glob pair (one level under `projects`, two under `worktrees`) never
+   *  named it, while `--is-inside-work-tree` said yes to every one of its
+   *  subdirectories, so the
+   *  sweep built a graph into each of them instead. Measured on the live fleet
+   *  2026-09-03 — 8 stray `graphify-out/` directories under one worktree,
+   *  including `node_modules/graphify-out` and `graphify-out/graphify-out`. */
+  function makeWorktreeRoot(name: string): string {
+    const d = j('worktrees', name);
+    fs.mkdirSync(path.join(d, 'src'), { recursive: true });
+    execFileSync('git', ['init', '-q', d]);
+    fs.writeFileSync(path.join(d, 'a.py'), 'x = 1\n');
+    fs.writeFileSync(path.join(d, 'src', 'b.py'), 'y = 2\n');
+    git(d, 'add', '.'); git(d, 'commit', '-qm', 'init');
+    fs.appendFileSync(path.join(d, '.git', 'info', 'exclude'), 'graphify-out/\n.graphifyignore\n');
+    return d;
+  }
+  const paths = (): string[] => lastPass().trees.map((t: { path: string }) => t.path);
+
+  it('discovers a depth-1 worktree ITSELF, and none of its subdirectories', () => {
+    const solo = makeWorktreeRoot('solo'); plantEngine();
+    expect(runSweep().status).toBe(0);
+    expect(paths(), 'a depth-1 worktree is never discovered at all').toContain(solo);
+    expect(paths().filter((p) => p.startsWith(solo + '/')),
+      'a subdirectory of a work tree was censused as a tree of its own').toEqual([]);
+    // The effect, not merely the census row: the stray graphs the live fleet
+    // grew are graphs the sweep BUILT into those subdirectories.
+    expect(fs.existsSync(path.join(solo, 'src', 'graphify-out')),
+      'the sweep built a graph into a plain subdirectory').toBe(false);
+    expect(fs.existsSync(path.join(solo, '.git', 'graphify-out')),
+      'the sweep built a graph inside .git').toBe(false);
+    expect(outcomeOf(solo)).toBe('never-built');
+  });
+
+  it('still discovers a depth-2 worktree, and never its container directory', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const wtDir = j('worktrees', 'alpha', 'wt1');
+    fs.mkdirSync(path.dirname(wtDir), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'wt1-branch', wtDir);
+    expect(runSweep().status).toBe(0);
+    expect(paths()).toContain(wtDir);
+    expect(paths()).toContain(repo);
+    expect(paths(), 'the plain directory that merely HOLDS worktrees was censused as a tree')
+      .not.toContain(j('worktrees', 'alpha'));
+  });
+
+  it('skips a candidate whose canonical path is UNMEASURABLE — never "two empties are equal"', () => {
+    // Both spellings of the shim answer nothing. The predicate is an EQUALITY,
+    // so an unmeasurable answer that is spent rather than skipped makes every
+    // candidate compare equal to every other and the whole
+    // subdirectory-of-a-worktree class walks straight back in.
+    const solo = makeWorktreeRoot('solo'); plantEngine();
+    const stub = j('pathstub'); fs.mkdirSync(stub, { recursive: true });
+    for (const name of ['realpath', 'readlink']) {
+      fs.writeFileSync(path.join(stub, name), '#!/bin/bash\nexit 0\n', { mode: 0o755 });
+    }
+    runSweep({ PATH: `${stub}:${process.env.PATH}` });
+    expect(paths().filter((p) => p === solo || p.startsWith(solo + '/')),
+      'an unmeasurable canonical path was spent as if it were a measurement').toEqual([]);
+    expect(lastPass().status).toBe('probed-zero');
+  });
+
+  it('censuses one row per tree when two names reach the same one (dedupe by realpath)', () => {
+    const repo = makeRepo('beta'); plantEngine();
+    fs.symlinkSync(repo, j('projects', 'beta-link'));
+    expect(runSweep().status).toBe(0);
+    const real = fs.realpathSync(repo);
+    const hits = paths().filter((p) => fs.realpathSync(p) === real);
+    expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
+  });
+
+  // D-1370 — WHICH of the two names survives the dedupe, not merely how many.
+  // The case above symlinks WITHIN `projects/`, where both names are equally
+  // arbitrary and only the count is a claim. Across the two roots the names
+  // are NOT equal: one is the tree's real path, the one a session's
+  // `$REG/<id>.workdir` and the card's `cwd` actually carry, and the census
+  // row is compared against those VERBATIM by both readers. Glob order alone
+  // handed the row to `$PROJECTS_ROOT` — the alias — measured: the pass
+  // carried one row and it was `…/projects/foo`, with the real workspace path
+  // absent from the pass entirely.
+  it('keeps the REAL path, not the alias, when the two names live under different roots', () => {
+    const realTree = makeWorktreeRoot('foo'); plantEngine();
+    fs.mkdirSync(j('projects'), { recursive: true });         // no makeRepo() here to make it
+    fs.symlinkSync(realTree, j('projects', 'foo'));          // an alias, globbed FIRST
+    expect(runSweep().status).toBe(0);
+    const canonical = fs.realpathSync(realTree);
+    const hits = paths().filter((p) => fs.realpathSync(p) === canonical);
+    expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
+    expect(hits[0], 'the census carries the ALIAS — every reader that matches the row by string ' +
+      '(the idle gate, the card) is unmatched for a session recorded under the real path')
+      .toBe(realTree);
+  });
+
+  // The EFFECT the row's spelling decides, not just the spelling. `_gs_busy`
+  // matches a session by raw string compare of `$REG/<id>.workdir` against the
+  // as-globbed path, so an alias row means the idle gate never fires and the
+  // sweep builds under a working session — the one thing that gate exists to
+  // prevent.
+  it('an alias row would unmatch the idle gate — a session on the real path still defers it', () => {
+    seedAccountsSh(home);
+    const realTree = makeWorktreeRoot('foo'); plantEngine();
+    fs.mkdirSync(j('projects'), { recursive: true });
+    fs.symlinkSync(realTree, j('projects', 'foo'));
+    const reg = j('.cc-sessions'); fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, 'foo-ws1.workdir'), realTree + '\n');   // the REAL name
+    fs.writeFileSync(path.join(reg, 'foo-ws1.wrapper'), 'claude\n');
+    fs.writeFileSync(path.join(reg, 'foo-ws1.hookstate.json'),
+      JSON.stringify({ pid: 4242, state: { state: 'working' } }));
+    const cfg = j('.claude'); fs.mkdirSync(path.join(cfg, 'sessions'), { recursive: true });
+    fs.writeFileSync(path.join(cfg, 'sessions', '4242.json'), JSON.stringify({ state: 'working' }));
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(realTree), 'the sweep built a graph under a WORKING session because its ' +
+      'census row named the alias and the idle gate matches by string').toBe('skipped-busy');
+    expect(fs.existsSync(j('engine-calls')),
+      'the engine ran on a tree the idle gate should have deferred').toBe(false);
+  });
+
+  // D-1371 — THE SHAPE THE FLEET ACTUALLY HAS, not the one /tmp has. Both
+  // cases above build their roots as REAL directories, which is the only shape
+  // where "is this candidate spelled as its own realpath" is ever true — so
+  // D-1370's guard measured green there while being INERT on the live box,
+  // where `$HOME/projects` is ITSELF a symlink (`~/projects -> /data/projects`,
+  // `/data -> /mnt/…`). Under a symlinked root no candidate can equal its own
+  // realpath, nothing is preferred, the survivor falls back to glob order and
+  // the ALIAS wins: exactly the failure D-1370 was written to stop. MEASURED
+  // on this fixture against the D-1370 spelling — the pass carried one row and
+  // it was `…/projects/alpha`, the real name absent from the pass entirely.
+  it('prefers the real name when the ROOT ITSELF is a symlink (the live fleet shape)', () => {
+    const realRoot = j('real-projects');
+    fs.mkdirSync(realRoot, { recursive: true });
+    fs.symlinkSync(realRoot, j('projects'));            // the root, reached through a link
+    const zeta = makeRepo('zeta');                      // the real tree, under that root
+    fs.symlinkSync('zeta', j('projects', 'alpha'));     // the alias, globbed FIRST
+    plantEngine();
+    expect(runSweep().status).toBe(0);
+    const canonical = fs.realpathSync(zeta);
+    const hits = paths().filter((p) => fs.realpathSync(p) === canonical);
+    expect(hits, `one tree, censused ${hits.length} times: ${hits.join(', ')}`).toHaveLength(1);
+    expect(hits[0], 'the census carries the ALIAS under a symlinked root — the survivor rule asks ' +
+      'about ANCESTRY when the only thing that distinguishes the two names is the last component')
+      .toBe(j('projects', 'zeta'));
+  });
+});
+
 describe('graph-sweep: build discriminators (Task 7)', () => {
   it('row 7 — a wedged engine is timed-out by the knob, not a hung pass', () => {
     const repo = makeRepo('alpha');
@@ -166,7 +323,7 @@ describe('graph-sweep: build discriminators (Task 7)', () => {
   it('row 17 — a shrink refusal is refused-shrink, never failed', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                                // seed a graph + stamp
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');       // make it stale again
+    bump(repo);                                                // make it stale again
     plantEngine('echo "refusing to write: node count shrank" >&2; exit 1\n# no graph write:');
     // the fake above must NOT rewrite graph.json — remove the trailing writer lines for this plant:
     const enginePath = j('.ccrc', 'graphify-venv', 'bin', 'graphify');
@@ -210,7 +367,7 @@ exit 1
   it('skipped-locked — a held .rebuild.lock defers the tree without waiting', async () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                            // seed + stamp
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');   // stale again
+    bump(repo);                                            // stale again
     const lock = path.join(repo, 'graphify-out', '.rebuild.lock');
     fs.writeFileSync(lock, '');
     const holder = spawn('flock', [lock, 'sleep', '30']);
@@ -229,7 +386,7 @@ describe('graph-sweep: corpus guard (Task 8)', () => {
     const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
     runSweep();                                                     // seed a good graph
     const seeded = fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs;
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');
+    bump(repo);
     fs.writeFileSync(path.join(repo, 'poison.py'), 'x');            // untracked, would enter corpus
     fs.writeFileSync(j('fixture-corpus'), 'a.py\npoison.py\n');
     runSweep();
@@ -594,6 +751,103 @@ describe('graph-sweep: D-1161 — the default yields, the operator instructs', (
   });
 });
 
+describe('graph-sweep: freshness is CONTENT, not commit identity (D-1368)', () => {
+  /** How many times the fake engine ran across every pass so far — the effect,
+   *  not merely the census word. A tree the sweep calls fresh is a tree it did
+   *  not build. */
+  const engineCalls = (): number =>
+    (fs.readFileSync(j('engine-calls'), 'utf8').match(/^cwd=/gm) ?? []).length;
+
+  it('an empty commit moves HEAD and the graph stays fresh — no rebuild, no reason', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    expect(engineCalls()).toBe(1);
+    const seeded = fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs;
+    git(repo, 'commit', '-qm', 'empty', '--allow-empty');       // HEAD moves, tree does not
+    runSweep();
+    expect(outcomeOf(repo)).toBe('fresh');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('');
+    expect(engineCalls(), 'the sweep rebuilt a graph whose content is already HEAD\'s').toBe(1);
+    expect(fs.statSync(path.join(repo, 'graphify-out', 'graph.json')).mtimeMs).toBe(seeded);
+  });
+
+  it('the SQUASH shape — HEAD is a commit carrying the built tree that does not descend from it', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const main = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+    git(repo, 'checkout', '-q', '-b', 'side');
+    fs.writeFileSync(path.join(repo, 'w.py'), 'k = 9\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'work');
+    runSweep();                                                 // the graph is built HERE
+    expect(outcomeOf(repo)).toBe('never-built');
+    const sideTip = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'checkout', '-q', main);
+    git(repo, 'merge', '--squash', '-q', 'side');
+    git(repo, 'commit', '-qm', 'squashed');
+    // the premise, both halves — this is the live-fleet shape of 2026-09-03:
+    // built 0281e084 vs HEAD 6a26a9a3, `rev-parse X^{tree}` identical.
+    expect(git(repo, 'rev-parse', `${sideTip}^{tree}`))
+      .toBe(git(repo, 'rev-parse', 'HEAD^{tree}'));
+    expect(git(repo, 'rev-list', '--left-right', '--count', `${sideTip}...HEAD`))
+      .toMatch(/^1\s+1$/);
+    runSweep();
+    expect(outcomeOf(repo), 'every pass rebuilds a graph that is already of HEAD\'s content')
+      .toBe('fresh');
+    expect(engineCalls()).toBe(1);
+  });
+
+  it('BOTH sides unmeasurable is NOT a match — two empties never compare fresh', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                   // seed a graph + stamp
+    fs.writeFileSync(path.join(repo, 'graphify-out', 'graph.json'),
+      JSON.stringify({ nodes: [], links: [], built_at_commit: 'c'.repeat(40) }));
+    // A ref pointing at an object that is not there: `rev-parse HEAD` still
+    // answers (exit 0, the raw sha), while `HEAD^{tree}` cannot be peeled — so
+    // BOTH sides of the content comparison come back empty, and an equality
+    // that spends them is an equality that calls an unmeasurable tree fresh.
+    const br = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+    fs.writeFileSync(path.join(repo, '.git', 'refs', 'heads', br), 'd'.repeat(40) + '\n');
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe('d'.repeat(40));
+    runSweep();
+    expect(outcomeOf(repo), 'a tree whose content could not be measured at all was called fresh')
+      .toBe('stale-rebuilt');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+  });
+
+  // D-1369 — the mirror image. `built_at_commit` is repo-controlled text, and
+  // D-1368 made the sweep spend it as a git REVISION for the first time. A rev
+  // NAME peels on both sides of the equality and compares trivially equal, so
+  // the tree reads `fresh` for ever and is never rebuilt again — where the old
+  // string compare simply failed for a rev name and the tree rebuilt every
+  // pass. `fresh` is what the census reports, so nothing surfaces it.
+  it('a built_at_commit that is a rev NAME is not a sha, and never resolves to "fresh"', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                   // seed a graph + stamp
+    expect(engineCalls()).toBe(1);
+    fs.writeFileSync(path.join(repo, 'graphify-out', 'graph.json'),
+      JSON.stringify({ nodes: [], links: [], built_at_commit: 'HEAD' }));
+    bump(repo);                                                   // real content, genuinely stale
+    runSweep();
+    expect(outcomeOf(repo), 'a self-referential revision compared equal to itself and a genuinely '
+      + 'stale graph was declared fresh').toBe('stale-rebuilt');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+    expect(engineCalls(), 'the sweep never rebuilt the stale tree at all').toBe(2);
+  });
+
+  it('a GARBAGE-COLLECTED built commit is unmeasurable, and falls through to stale/head', () => {
+    // Either `rev-parse` answering empty is the one case that keeps today's
+    // behaviour: the sweep cannot prove the content matches, so it rebuilds.
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();
+    const graph = path.join(repo, 'graphify-out', 'graph.json');
+    fs.writeFileSync(graph, JSON.stringify({ nodes: [], links: [],
+      built_at_commit: 'c'.repeat(40) }));                       // no such commit here
+    runSweep();
+    expect(outcomeOf(repo)).toBe('stale-rebuilt');
+    expect(lastPass().trees.find((t: { path: string }) => t.path === repo).reason).toBe('head');
+  });
+});
+
 describe('graph-sweep: idle gate (Task 9)', () => {
   // seedAccountsSh gives the fixture HOME a real ~/.ccrc/accounts.sh so the
   // sweep's `source "$HOME/.ccrc/accounts.sh"` + `_ccrc_cfg_dir` resolve.
@@ -630,11 +884,26 @@ describe('graph-sweep: idle gate (Task 9)', () => {
   it('O3 — the escape hatch overrides busy at >=20 commits behind', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                                    // seed
-    for (let i = 0; i < 20; i++) git(repo, 'commit', '-qm', `c${i}`, '--allow-empty');
+    for (let i = 0; i < 20; i++) bump(repo, `c${i}`);
     plantSession(repo, 'working');
     runSweep();
     expect(outcomeOf(repo)).toBe('stale-rebuilt');
   });
+  it('O3 (D-1368) — a same-content HEAD counts as ZERO commits, so the escape never fires', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                    // seed
+    for (let i = 0; i < 20; i++) git(repo, 'commit', '-qm', `e${i}`, '--allow-empty');
+    // The hatch is only ASKED on a tree that is stale AND busy, and D-1368
+    // makes the head dimension fresh here — so the tree is kept stale by the
+    // OTHER dimension, a pin bump (row 13's mechanism). Without that this case
+    // would never reach `_gs_busy` at all and would measure nothing.
+    fs.writeFileSync(j('.ccrc', 'graphify.pin'), '0.9.50\n');
+    plantSession(repo, 'working');
+    runSweep();
+    expect(outcomeOf(repo), 'the one-sided distance count fired the build-anyway escape over '
+      + '20 commits that changed nothing at all').toBe('skipped-busy');
+  });
+
   // finding 3b — only the COMMITS arm above was ever tested; the SECONDS arm
   // (CCRC_GRAPH_STALE_ESCAPE_SECS, checked against the engine stamp's own
   // mtime) had no coverage at all. One commit keeps the commits-arm well
@@ -643,7 +912,7 @@ describe('graph-sweep: idle gate (Task 9)', () => {
   it('O3 — the escape hatch overrides busy once the engine stamp itself is old enough (SECONDS arm)', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();                                                    // seed a fresh build + stamp
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');            // stale again; 1 commit behind
+    bump(repo);                                                     // stale again; 1 commit behind
     const stampPath = path.join(repo, 'graphify-out', '.graphify_engine');
     const old = Date.now() / 1000 - 10;                             // age the stamp 10s
     fs.utimesSync(stampPath, old, old);
@@ -654,7 +923,7 @@ describe('graph-sweep: idle gate (Task 9)', () => {
   it('O3 — a LARGE escape-secs threshold still defers a busy stale tree (SECONDS arm, negative case)', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();
-    git(repo, 'commit', '-qm', 'move', '--allow-empty');
+    bump(repo);
     const stampPath = path.join(repo, 'graphify-out', '.graphify_engine');
     const old = Date.now() / 1000 - 10;
     fs.utimesSync(stampPath, old, old);

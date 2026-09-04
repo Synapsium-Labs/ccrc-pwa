@@ -66,8 +66,33 @@ _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
 # per-file hash map, so neither of the design's two named sources actually
 # holds the number (D-1246). `git rev-parse` and `git rev-list --left-right
 # --count` are ref reads. Any failure omits its clause; a total failure prints nothing.
+# D-1368 — FRESHNESS IS CONTENT, NOT COMMIT IDENTITY. This file's ONE spelling
+# of that predicate, asked by the card below and nowhere else.
+#
+# `built != HEAD` was spent as "the graph is of another commit", and after a
+# squash merge — or any rewrite that keeps the tree — that is false: HEAD's
+# tree is byte-identical to the built commit's, so the graph describes THIS
+# tree exactly. The card then said `not an ancestor of HEAD` about a graph
+# whose content IS HEAD's; and `fresh` is the one word clause 12 of the worker
+# skill says licenses taking a query answer as read, so the wrong answer here
+# switches a dispatched worker's verification duty ON over a graph that needs
+# none — the same trust the D-1353 direction spends, spent the other way.
+# MEASURED on the live fleet 2026-09-03 (built 0281e084, HEAD 6a26a9a3,
+# `rev-parse X^{tree}` identical for both).
+#
+# EITHER SIDE ANSWERING EMPTY IS NOT A MATCH: a garbage-collected built commit
+# cannot be compared at all, and the caller falls through to the ancestry
+# measurement, which answers `freshness unmeasured` for it. Staleness is
+# measured or it is not claimed.
+_hook_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
+  local t="$1" bt ht
+  bt=$(git -C "$t" rev-parse --verify -q "$2^{tree}" 2>/dev/null) || bt=""
+  ht=$(git -C "$t" rev-parse --verify -q 'HEAD^{tree}' 2>/dev/null) || ht=""
+  [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
+}
+
 _hook_graph_card() {
-  local cwd="" row="" nodes="" built="" tip="" lr="" ahead="" behind="" engine="" pin="" fresh="" line=""
+  local cwd="" row="" nodes="" built="" tip="" lr="" ahead="" behind="" engine="" pin="" fresh="" line="" bcommit=""
   cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
   # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
   # for a harness whose SessionStart payload carries no cwd at all.
@@ -133,6 +158,22 @@ _hook_graph_card() {
   if [ -n "$built" ] && [ -n "$tip" ]; then
     if [ "$tip" = "$built" ]; then
       fresh="fresh"
+    elif _hook_same_tree "$cwd" "$built"; then
+      # D-1368. THE STATE IS STILL `fresh`; the rest is a qualifier on it.
+      # `— same content as HEAD` is APPENDED to the word rather than replacing
+      # it, and that is a decision about the contract, not about the code:
+      # `fresh` is the one word clause 12 of the worker skill branches on, and
+      # a reader of this card does exactly the same thing here as it does for a
+      # graph built at HEAD itself — takes the query answer as read. A new
+      # STATE would have to be named by both skill docs, which harvest this
+      # file's freshness assignments (D-1340/D-1342); a qualifier must not,
+      # because there is no new decision to attach to it. It is appended only
+      # when the graph was built at a DIFFERENT commit — an abbreviated sha
+      # naming this very HEAD resolves to `$tip` and keeps the bare word — so a
+      # reader can still tell "built here" from "built elsewhere, same bytes".
+      fresh="fresh"
+      bcommit=$(git -C "$cwd" rev-parse --verify -q "$built^{commit}" 2>/dev/null) || bcommit=""
+      [ "$bcommit" = "$tip" ] || fresh+=" — same content as HEAD"
     else
       # ANCESTRY, NOT DISTANCE (D-1353). `rev-list --count "$built..HEAD"` asks
       # ONE side of the question — how many commits HEAD carries that the

@@ -181,13 +181,21 @@ you name the plan file.
 **A brief may quote the worker's graph card, where that workspace has one.** A
 session whose tree carries `graphify-out/graph.json` gets one `SessionStart`
 line for THAT tree: node count, the commit the graph was built at, and a
-freshness clause reading `fresh`, `1 commit behind HEAD` / `N commits behind
-HEAD`, `not an ancestor of HEAD`, or `freshness unmeasured` — the third when the
-graph was built at a commit this tree cannot reach (a branch tip the session has
-since checked away from, or a diverged branch), so the graph describes code the
-tree does not carry rather than merely missing code it does, and the last when
-the graph names a commit that git in that tree will not date, which is a
-different thing again from a graph that is merely old. Every half is individually optional: whatever the hook could not
+freshness clause. **CONTENT decides that clause first** (D-1368): a graph whose
+built commit carries the same TREE as `HEAD` describes this workspace exactly,
+so it reads `fresh` however the two commits stand to one another — a squash
+merge or a rebase rewrites the commit and keeps every byte — and the card
+APPENDS ` — same content as HEAD` when the built commit is not `HEAD` itself, a
+qualifier on the state rather than a state of its own, so the one word is still
+what you branch on. Only when the two trees DIFFER does ancestry decide, and
+only there does the clause read `1 commit behind HEAD` / `N commits behind
+HEAD`, `not an ancestor of HEAD`, or `freshness unmeasured` — the second when
+the graph was built at a commit this tree cannot reach AND carrying different
+content (a branch tip the session has since checked away from, or a genuinely
+diverged branch), so the graph describes code the tree does not carry rather
+than merely missing code it does, and the last when the graph names a commit
+that git in that tree will not date, which is a different thing again from a
+graph that is merely old. Every half is individually optional: whatever the hook could not
 measure is simply left out, so a card with no freshness clause at all is a
 fourth state and not a fault. A tree the sweep REFUSED gets a different and
 equally quotable line — `this tree has no knowledge graph`, plus the sweep's own

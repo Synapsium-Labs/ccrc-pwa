@@ -3418,6 +3418,265 @@ stale ledger cells re-measured. Committing the two source files again would be a
   guard's own author did not look at). The guard's negative case in
   `install-graphify-skill.test.ts` is unchanged and still the one that pins the warning.
 
+- **D-1367** (2026-09-03, live-fleet measurement after the read-side deploy) — **the sweep's discovery
+  predicate accepted every SUBDIRECTORY of a work tree and the one shape that matters least: the tree
+  itself.** `_gs_trees` globbed one level under `$PROJECTS_ROOT` and TWO under `$WORKTREES_ROOT`, then
+  admitted a candidate on `git rev-parse --is-inside-work-tree`. That predicate is true of every
+  directory inside a work tree, `.git` included, and false of nothing that sits under one — so a
+  worktree living at DEPTH 1 (`~/worktrees/<name>`, its own toplevel, which is what `ccd ws-add`
+  leaves for a single-workspace repo) was never discovered at all, while each of its immediate
+  subdirectories was discovered as a tree in its own right and BUILT INTO. Measured on the live fleet
+  2026-09-03: **8 stray `graphify-out/` directories under one worktree** — `node_modules/graphify-out`
+  and `graphify-out/graphify-out` among them — plus two `failed` census rows every pass, for ever.
+  **Those 8 directories are the operator's to delete: this fix stops the sweep creating them, and
+  deletes nothing** (the sweep's only removal site is the ownership-gated `.graphifyignore` one,
+  D-1161, and widening it to `graphify-out/` would be exactly the class of act this file refuses).
+
+  The fix asks the question the sweep actually means. A candidate is a tree **iff the realpath of its
+  own `git rev-parse --show-toplevel` is the realpath of itself** — "are you a tree", not "are you
+  inside one". `"$WORKTREES_ROOT"/*/` joins the glob so the depth-1 shape is asked at all; the two
+  worktree globs now overlap, so candidates are **deduped by realpath**, which also collapses two
+  names that reach one tree (a symlink and its target) and would otherwise be built twice in a pass.
+  The canonicaliser is a named shim, `_gs_realpath` (`realpath`, then `readlink -f`) — both spellings
+  are acceptable on both userlands, and `ccd-graph-sweep` is already outside `macos-platform.test.ts`'s
+  owned corpus for the GNU calls it still carries. **Its empty answer is a SKIP, never a value**: the
+  predicate is an equality, so an unmeasurable path spent rather than skipped makes every candidate
+  compare equal to every other and walks the whole subdirectory class straight back in. The census row
+  keeps the path AS GLOBBED rather than the canonical one — `$REG/<id>.workdir` and the hook's `cwd`
+  are compared against it verbatim, and canonicalising it would silently unmatch every reader.
+
+  Measured (`server/test/graph-sweep.test.ts`, baseline `Tests  42 passed | 2 skipped (44)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | restore the `--is-inside-work-tree` predicate in place of the toplevel equality | `Tests  1 failed \| 40 passed \| 2 skipped (43)` — *a subdirectory of a work tree was censused as a tree of its own: expected [ Array(1) ] to deeply equal []* |
+  | drop `"$WORKTREES_ROOT"/*/` from the glob | `Tests  1 failed \| 40 passed \| 2 skipped (43)` — the depth-1 tree is not discovered, nothing else is either, and the pass exits `probed-zero`: *expected 1 to be +0* |
+  | drop the realpath dedupe loop | `Tests  1 failed \| 40 passed \| 2 skipped (43)` — *one tree, censused 2 times: …/projects/beta, …/projects/beta-link: expected […(2)] to have a length of 1 but got 2* |
+  | drop `_gs_realpath`'s empty skip (`[ -n "$p" ] \|\| return 1`), so two empties compare equal | `Tests  1 failed \| 41 passed \| 2 skipped (44)` — *an unmeasurable canonical path was spent as if it were a measurement: expected [ Array(1) ] to deeply equal []* |
+
+  The last row's fixture puts stub `realpath` and `readlink` on the sweep's `PATH` that print nothing,
+  which is the only way to make the shim's failure arm reachable at all; without it the empty-skip
+  clause was a guard no test could redden.
+
+- **D-1368** (2026-09-03, live-fleet measurement after the read-side deploy) — **freshness was keyed
+  on COMMIT IDENTITY, so a squash merge made a tree permanently stale to the sweep and permanently
+  suspect to the card, both about a graph whose content IS HEAD's.** `_gs_stale` said stale when
+  `built_at_commit != HEAD`. After a squash merge — or any history rewrite that keeps the tree —
+  HEAD's tree is byte-identical to the built commit's, so `graphify update` writes nothing, the stamp
+  keeps the old sha, and EVERY pass records `stale-rebuilt` for that tree, for ever. MEASURED on the
+  live fleet 2026-09-03: `graph.json` mtime 01:18, census `stale-rebuilt … head` at 16:09, built
+  `0281e084` vs HEAD `6a26a9a3`, and `git rev-parse 0281e084^{tree} 6a26a9a3^{tree}` identical.
+  Three places shared the root, one spelling of the predicate each:
+
+  1. **The sweep** (`_gs_stale`) rebuilt on every pass, burning the whole per-pass budget on a tree
+     that needed nothing.
+  2. **The card** (`_hook_graph_card`) reported `not an ancestor of HEAD` for a graph whose content is
+     HEAD's. That is the D-1353 direction spent the other way and it costs the same trust: `fresh` is
+     the one word clause 12 of the worker skill says licenses taking a query answer as read
+     (D-1341/D-1342), so the wrong answer here switches a dispatched worker's verification duty ON
+     over a graph that needs none.
+  3. **`_gs_busy`'s O3 escape hatch** counted `rev-list --count "$built..HEAD"`, which for a
+     NON-ANCESTOR counts everything since the merge-base — so a squashed history could fire the
+     `build anyway` escape against a busy session over commits that changed nothing at all.
+
+  The fix, once per file: if `git rev-parse "$built^{tree}"` equals `git rev-parse "HEAD^{tree}"`
+  and both are non-empty, the graph is FRESH — the sweep does not rebuild (outcome `fresh`, reason
+  empty), the card says `fresh`, and the hatch treats the distance as 0. When the trees DIFFER,
+  today's ancestry/distance logic is untouched. **Either side answering empty is not a match**: a
+  garbage-collected built commit, or a HEAD whose tree cannot be peeled, falls through to today's
+  behaviour (`freshness unmeasured` in the card, stale with reason `head` in the sweep) rather than to
+  a freshness nobody measured. `git rev-parse X^{tree}` is git, not GNU userland, so
+  `macos-platform.test.ts` is unaffected.
+
+  **The card's new text is a QUALIFIER, not a fifth state.** It reads `fresh` and appends
+  `— same content as HEAD` only when the built commit is not HEAD itself (an abbreviated sha naming
+  this very HEAD resolves to the tip and keeps the bare word). That is a decision about the contract:
+  `fresh` stays the word both skill docs harvest out of this file's freshness assignments
+  (D-1340/D-1342), because a reader does exactly the same thing in both cases, and a new STATE would
+  have to be named by both docs and by clause 12 for a branch that does not exist.
+
+  **The 8 stray `graphify-out/` directories D-1367 records on the live fleet are the operator's to
+  delete.** Neither fix deletes anything: D-1367 stops the sweep creating them, and this one stops it
+  rebuilding into the tree it should have left alone.
+
+  **Fixture shape changed with the semantics.** Every "make it stale again" step in
+  `graph-sweep.test.ts` was `git commit --allow-empty`, and `session-hook.test.ts`'s `gitTree` built
+  its whole distance ladder out of empty commits — all of which leave `HEAD^{tree}` byte-identical to
+  the built commit's, i.e. the exact shape this entry makes FRESH. Those fixtures now commit real
+  content (`bump()` in the sweep suite, one file per commit in `gitTree`), so the distance and
+  ancestry rows still measure the arm they were written for.
+
+  Measured (baselines `graph-sweep` `Tests  47 passed | 2 skipped (49)`, `session-hook`
+  `Tests  56 passed (56)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | `ccd/ccd-graph-sweep`: `_gs_stale` back to `[ "$built" = "$head" ] \|\| { REASON=head; return 0; }` | `graph-sweep` — `Tests  2 failed \| 44 passed \| 2 skipped (48)`: the empty-commit and the SQUASH rows, both *expected 'stale-rebuilt' to be 'fresh'* |
+  | `ccd/ccd-graph-sweep`: the escape hatch back to the bare `rev-list --count "$built..HEAD"` | `graph-sweep` — `Tests  1 failed \| 45 passed \| 2 skipped (48)`: *the one-sided distance count fired the build-anyway escape over 20 commits that changed nothing at all: expected 'stale-rebuilt' to be 'skipped-busy'* |
+  | `ccd/ccd-graph-sweep`: `_gs_same_tree` drops its non-empty guards (`[ "$bt" = "$ht" ]` alone) | `graph-sweep` — `Tests  1 failed \| 46 passed \| 2 skipped (49)`: *a tree whose content could not be measured at all was called fresh: expected 'fresh' to be 'stale-rebuilt'* |
+  | `ccd/session-hook.sh`: delete the whole `elif _hook_same_tree …` arm | `session-hook` — `Tests  2 failed \| 54 passed (56)`: *…reported as behind HEAD* and *…was called off this tree's history* (`not an ancestor`) |
+  | `ccd/session-hook.sh`: append the qualifier unconditionally (drop the `bcommit` test) | `session-hook` — `Tests  1 failed \| 55 passed (56)`: *an abbreviated sha of HEAD stopped reading as fresh: expected … to contain '(fresh)'* |
+  | `ccd/session-hook.sh`: `_hook_same_tree` drops its non-empty guards | `session-hook` — `Tests  1 failed \| 55 passed (56)`: *a graph whose content could not be measured at all was announced as fresh: expected … not to match /\bfresh\b/* |
+
+  The last row of each pair needed a fixture that could reach the failure arm at all: a branch ref
+  overwritten with a sha no object answers to, where `git rev-parse HEAD` still exits 0 with the raw
+  sha while `HEAD^{tree}` cannot be peeled — so BOTH sides of the comparison come back empty. Without
+  it, "never compare two empties as equal" was a guard no test could redden.
+
+- **D-1369** (2026-09-03, review of the D-1367/D-1368 diff) — **D-1368 made the sweep spend an
+  UNVALIDATED `built_at_commit` as a git REVISION for the first time, and a rev NAME resolves to a
+  comparison with itself.** `_gs_same_tree` peels `"$2^{tree}"` against `HEAD^{tree}`. `built_at_commit`
+  comes out of a `graph.json` any tree can write, and if it reads `HEAD` — or `@`, or a branch name —
+  both sides peel to the SAME tree object, the equality holds trivially, and the tree reads `fresh` for
+  ever and is never rebuilt again. This is a NEW failure mode, not a pre-existing one: the old
+  `[ "$built" = "$head" ]` compared the value as a STRING, where a rev name is simply unequal and the
+  tree rebuilt every pass. It is also invisible — `fresh` is what the census reports — which makes it
+  the mirror image of the wedge D-1368 was written to fix. MEASURED against the shipped script with a
+  fixture HOME: cold pass `{"outcome":"never-built"}`, then `graph.json` rewritten to
+  `{"built_at_commit":"HEAD"}` plus a REAL content commit, second pass `{"outcome":"fresh"}` with
+  `engine calls: 1`.
+
+  The asymmetry was explicit in the tree and only on one side of it: the card validates the same field
+  one line before it peels it (`ccd/session-hook.sh`: `[[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""`),
+  and `grep -n built ccd/ccd-graph-sweep` showed no validation anywhere in the file. **Fix:** the same
+  input contract, at the top of `_gs_same_tree` — `[[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || return 1` — so an
+  unvalidated repo-controlled string can never resolve to a self-referential comparison. Only the
+  rev-NAME class is reachable: `git rev-parse --verify -q "^{tree}"` already exits 1 for the empty and
+  the `-`-leading forms.
+
+  **The README carried the same drift, and the D-1363 harvest could not see it.** `README.md`'s R1
+  bullet — the canonical system overview, per `CLAUDE.md` — still said freshness was *"ancestry, not
+  distance"* and listed only `fresh`, `N commits behind HEAD`, `not an ancestor of HEAD` and
+  `freshness unmeasured`, which is precisely the wrong answer for the squash case D-1368 makes read
+  `fresh — same content as HEAD`. The guard written for this class stayed green over it twice over:
+  its harvest de-dupes `/\bfresh="([^"]+)"/`, so D-1368's fifth assignment `fresh="fresh"` left the
+  vocabulary SET identical, and the qualifier is APPENDED (`fresh+=`), which that regex never matches
+  — measured `Test Files 8 passed (8), Tests 364 passed | 10 skipped (374)` over the drifted bullet.
+  The bullet now states the rule as **content first, then ancestry** and names the qualifier, and the
+  harvest in `ccrc-install-graphify.test.ts` collects `fresh+=` sites too (throwing when there are
+  none) and derives the content-first claim from the hook's own decision ORDER — the index of the
+  `_hook_same_tree` call against the index of the two-sided `rev-list`, so no spelling of either
+  predicate is pinned.
+
+  Measured (baseline `graph-sweep` `Tests  50 passed | 2 skipped (52)`, `ccrc-install-graphify`
+  `Tests  52 passed (52)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | new tests against the un-fixed `ccd/ccd-graph-sweep` (red-first) | `graph-sweep` — `Tests  3 failed \| 47 passed \| 2 skipped (52)`, incl. *a self-referential revision compared equal to itself and a genuinely stale graph was declared fresh: expected 'fresh' to be 'stale-rebuilt'* |
+  | `ccd/ccd-graph-sweep`: drop `_gs_same_tree`'s `[[ "$2" =~ ^[0-9a-f]{7,40}$ ]] \|\| return 1` | `graph-sweep` — `Tests  1 failed \| 49 passed \| 2 skipped (52)`: *a built_at_commit that is a rev NAME is not a sha, and never resolves to "fresh"* |
+  | `README.md`: the R1 bullet back to its ancestry-only wording | `ccrc-install-graphify` — `Tests  1 failed \| 51 passed (52)`: *states that CONTENT is asked first, and names the qualifier it appends (D-1369)* |
+  | `ccd/session-hook.sh`: delete the `fresh+=" — same content as HEAD"` append | `ccrc-install-graphify` — `Test Files  1 failed (1)`, `Tests  no tests`: *ccd/session-hook.sh appends no freshness qualifier at all — the card was rewritten, and the README bullet that names one has to be re-derived against it rather than left standing* |
+  | `ccd/session-hook.sh`: reword the qualifier to `" — identical bytes to HEAD"` | `ccrc-install-graphify` — `Tests  1 failed \| 51 passed (52)`: *the canonical overview's graph-card bullet never names the `identical bytes to HEAD` qualifier the hook appends to a freshness word* |
+
+- **D-1370** (2026-09-03, review of the D-1367/D-1368 diff) — **the realpath dedupe was justified by a
+  false premise, and in the one case where it does anything it dropped the tree's own real name in
+  favour of an alias — unmatching both readers the comment three lines below it promises to keep
+  matched.** D-1367's comment said the two worktree globs "now overlap", so candidates are deduped by
+  realpath. They do not: `"$WORKTREES_ROOT"/*/` and `"$WORKTREES_ROOT"/*/*/` can never yield the same
+  path (that would need `~/worktrees/a/b == ~/worktrees/c`), and neither can reach `$PROJECTS_ROOT`.
+  The three globs are DISJOINT as paths and no candidate is ever globbed twice. What does collapse two
+  candidates onto one tree is a SYMLINK, and there the survivor was decided by glob order —
+  `$PROJECTS_ROOT` is listed first — so an alias under `projects/` won over the real toplevel under
+  `worktrees/`.
+
+  That contradicts the contract stated in the same comment block: the row keeps the path AS GLOBBED
+  because `$REG/<id>.workdir` and the hook's `cwd` are compared against it VERBATIM
+  (`_gs_busy`'s `[ "$(cat "$wd")" = "$tree" ]`; the card's `.path == $p` census lookup), *"and
+  canonicalising the census would silently unmatch every reader"*. A census carrying the alias
+  unmatches them just as silently for a session recorded under the real name: no idle-gate match — the
+  sweep BUILDS while that session is `working`, the one thing the gate exists to prevent — and no
+  "the sweep refused this tree" card. MEASURED with a fixture HOME: a real tree at
+  `<home>/worktrees/foo` plus `ln -s <home>/worktrees/foo <home>/projects/foo` gave a pass carrying
+  exactly one row, and it was the ALIAS `…/projects/foo`; the real workspace path was absent from the
+  pass entirely.
+
+  **Fix:** the rationale is corrected (the dedupe exists for symlink aliases, not glob overlap), and
+  the survivor becomes a DECISION — prefer the candidate that is its own realpath, the tree named by
+  its real path, falling back to first-seen when neither is (two symlinks, where the names are equally
+  arbitrary and only the count is a claim). `_gs_trees` therefore buffers its rows rather than
+  streaming them, so a later real name can displace an earlier alias. The existing test symlinked
+  WITHIN `projects/`, where both names are arbitrary, so it pinned the count and never the survivor;
+  the new cross-root fixture pins the name, and a second one pins the EFFECT — a session whose
+  `.workdir` records the real path still defers its tree as `skipped-busy`, with the engine never run.
+
+  Measured (baseline `graph-sweep` `Tests  50 passed | 2 skipped (52)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | new tests against the un-fixed `ccd/ccd-graph-sweep` (red-first) | `graph-sweep` — `Tests  3 failed \| 47 passed \| 2 skipped (52)`, incl. *the census carries the ALIAS …: expected '…/projects/foo' to be '…/worktrees/foo'* and *the sweep built a graph under a WORKING session …: expected undefined to be 'skipped-busy'* |
+  | `ccd/ccd-graph-sweep`: drop `[ "$d" = "$real" ] && named["$dup"]="$d"` (survivor back to glob order) | `graph-sweep` — `Tests  2 failed \| 48 passed \| 2 skipped (52)`: *keeps the REAL path, not the alias, when the two names live under different roots* and *an alias row would unmatch the idle gate — a session on the real path still defers it* |
+
+- **D-1371** (2026-09-03, review of the D-1369/D-1370 diff) — **D-1370's survivor rule was INERT on
+  the path shape the fleet actually has, and measured green only because the fixture roots are real
+  directories.** The predicate shipped was `[ "$d" = "$real" ]` — *is this candidate spelled as its
+  own realpath* — which is a question about the WHOLE path, ancestry included. MEASURED on the live
+  box: `~/projects` is itself a symlink (`~/projects -> /data/projects`, `/data -> /mnt/…`), so
+  `realpath ~/projects/<x>` lands under the mounted volume `/data` points at, and **no** candidate under
+  `$PROJECTS_ROOT` can ever equal its own realpath. Nothing is preferred, the survivor falls back to
+  glob order, and the ALIAS wins — exactly the failure D-1370 was written to stop. MEASURED with a
+  fixture HOME reproducing that shape (`$HOME/projects` a symlink to a real directory, the real tree
+  at `$HOME/projects/zeta`, the alias `$HOME/projects/alpha -> zeta`): the pass carried exactly one
+  row and it was `…/projects/alpha`, the real name absent from the pass entirely. D-1370's two new
+  tests stayed GREEN throughout — `makeRepo`/`makeWorktreeRoot` build under a real `/tmp`, which is
+  the one shape where the shipped predicate happens to be true of the real name.
+
+  **Fix:** ask about the candidate's OWN last component, which is the only thing that distinguishes
+  the two names — `if [ ! -L "$d" ] && [ -L "${named[$dup]}" ]`. The real name displaces an alias;
+  nothing displaces a real name; two aliases (or two names that differ only in a symlinked ancestor)
+  leave the first-seen standing, where the names are equally arbitrary and only the count is a claim.
+  This is correct regardless of ancestor symlinks. A third fixture pins it on the shape the fleet has
+  rather than the one `/tmp` has; the two cross-root fixtures from D-1370 stay green under either
+  spelling, which is why they could not catch this.
+
+  Measured (baseline `graph-sweep` `Tests  51 passed | 2 skipped (53)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | `ccd/ccd-graph-sweep`: survivor back to D-1370's `[ "$d" = "$real" ]` | `graph-sweep` — `Tests  1 failed \| 50 passed \| 2 skipped (53)`: *prefers the real name when the ROOT ITSELF is a symlink (the live fleet shape)* — `expected '…/projects/alpha' to be '…/projects/zeta'` |
+  | `ccd/ccd-graph-sweep`: drop the survivor rule entirely (glob order) | `graph-sweep` — `Tests  3 failed \| 48 passed \| 2 skipped (53)`: the two D-1370 fixtures *and* the new one |
+
+- **D-1372** (2026-09-03, review of the D-1369/D-1370 diff) — **D-1369 fixed the freshness drift in
+  `README.md` and left the identical drift standing in the sibling doc a coordinator quotes into
+  briefs.** `ccd/coordinator-skill/references/wave-lifecycle.md`'s graph-card paragraph enumerated the
+  clause as exactly `fresh` / `1 commit behind HEAD` / `N commits behind HEAD` / `not an ancestor of
+  HEAD` / `freshness unmeasured`, and explained the third as firing when the graph was built at a
+  commit the tree cannot reach *"(a branch tip the session has since checked away from, or a diverged
+  branch)"*. After D-1368 a diverged branch whose TREE is identical reads `fresh — same content as
+  HEAD`, so both the enumeration and its explanation are falsified for that case — and
+  `server/test/session-hook.test.ts`'s *calls a SQUASHED history fresh* pins exactly that shape
+  (`rev-list --left-right --count` = `1 1`, a diverged branch) as reading `fresh — same content as
+  HEAD` and NOT `not an ancestor`.
+
+  The guard was blind to it in precisely the way D-1369 records for the README:
+  `coordinator-skill.test.ts`'s FRESHNESS harvest de-dupes `/\bfresh="([^"]+)"/`, so D-1368's new
+  `fresh="fresh"` assignment left the vocabulary SET identical, and the qualifier is APPENDED with
+  `fresh+=`, which that regex never matches. `coordinator-skill` measured GREEN over the drifted
+  paragraph in the baseline run (`Tests  66 passed (66)`) — the same vacuous pass D-1369 recorded.
+
+  **Fix:** the paragraph is scoped the way the README bullet now is — content decides first, the card
+  APPENDS ` — same content as HEAD`, and the enumerated ancestry words apply *only* when the two trees
+  differ — and `ccrc-install-graphify.test.ts`'s `QUALIFIERS` harvest (same `fresh\+="([^"]+)"`
+  collection, same throw-on-empty) is mirrored into `coordinator-skill.test.ts` so the sibling doc is
+  bound by mechanism rather than by an author remembering it. The order arm is DERIVED from the hook's
+  own call sites (`_hook_same_tree` before `rev-list --left-right --count`), pinning which predicate
+  decides first and no spelling of either.
+
+  **`ccd/worker-skill/SKILL.md` clause 12 is deliberately left alone**, recorded here rather than
+  implied: its parenthetical fires on `not an ancestor of HEAD`, and that word is still reached only
+  when the trees genuinely differ, so the sentence is true post-D-1368. Clause 12 is pinned VERBATIM
+  by `worker-skill.test.ts`, so touching it for tidiness would cost a verbatim re-pin for no
+  correctness gain. `worker-skill` measured green.
+
+  Measured (baseline `coordinator-skill` `Tests  66 passed (66)`):
+
+  | mutation | measured red |
+  | --- | --- |
+  | `wave-lifecycle.md`: the graph-card paragraph back to its enumeration-only wording | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *the graph-card paragraph never names the `same content as HEAD` qualifier the hook appends…* |
+  | `wave-lifecycle.md`: keep the qualifier named, drop only the `CONTENT decides that clause first` scoping | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *…enumerates the ancestry words without saying that CONTENT is asked first* |
+  | `ccd/session-hook.sh`: delete the `fresh+=" — same content as HEAD"` append entirely | `coordinator-skill` — `Test Files  1 failed (1)`, `Tests  no tests`: *Error: ccd/session-hook.sh appends no freshness qualifier at all — … the graph-card paragraph that names one has to be re-derived against it* |
+  | `ccd/session-hook.sh`: reword the qualifier to `" — identical bytes to HEAD"` without touching the doc | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *the graph-card paragraph never names the `identical bytes to HEAD` qualifier the hook appends…* |
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

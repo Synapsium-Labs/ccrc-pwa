@@ -831,6 +831,28 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
   })();
 
+  /** Every QUALIFIER the card can APPEND to a freshness word, harvested from
+   *  the hook's own `fresh+=` sites. D-1369 — THE HARVEST ABOVE COULD NOT SEE
+   *  D-1368 LAND. That change made a squash-merged graph read
+   *  `fresh — same content as HEAD`, which is precisely the case the README
+   *  went on promising would read `not an ancestor of HEAD`; the guard stayed
+   *  green over the drifted bullet (measured: Tests 364 passed | 10 skipped)
+   *  twice over — the new `fresh="fresh"` assignment left the vocabulary SET
+   *  identical after the de-dupe, and the qualifier is APPENDED, so
+   *  `/\bfresh="([^"]+)"/` never matched it at all. A qualifier is deliberately
+   *  not a state (nothing branches on it, so neither skill doc harvests it),
+   *  but it IS card text the canonical overview has to name, for the same
+   *  reason the states are. Leading punctuation is stripped so the pin is on
+   *  the words, not on the em dash that joins them. */
+  const QUALIFIERS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+      .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
+    if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
+      'all — the card was rewritten, and the README bullet that names one has to be re-derived ' +
+      'against it rather than left standing');
+    return [...new Set(vals)];
+  })();
+
   /** Word-BOUNDARY match, never a raw substring (D-1342). `fresh` is a
    *  substring of `freshness unmeasured`, so a `toContain` arm for the one
    *  state that licenses trusting the graph passes on the longer word alone
@@ -880,6 +902,31 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
       'distance on an unreachable commit now reads `fresh` — D-1353 was reversed').toBe('ahead');
     expect(card(), 'the R1 bullet quotes the card words but not the ancestry rule that picks them')
       .toMatch(/ancestry, not distance/);
+  });
+
+  it('states that CONTENT is asked first, and names the qualifier it appends (D-1369)', () => {
+    // DERIVED FROM ORDER, exactly as the ancestry arm above is. The card asks
+    // a CONTENT predicate (`_hook_same_tree`, a `^{tree}` equality) before it
+    // asks ancestry at all, so a graph whose bytes are HEAD's reads `fresh`
+    // and never reaches the `not an ancestor of HEAD` arm — which is what the
+    // README promised for that very case until D-1369. Nothing here pins a
+    // spelling of either predicate, only which one decides first.
+    const content = hook.indexOf('_hook_same_tree "$cwd"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
+      'looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
+      'is looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(content, 'ccd/session-hook.sh decides ancestry before content, so a graph whose tree ' +
+      'IS HEAD\'s reads `not an ancestor of HEAD` again — D-1368 was reversed')
+      .toBeLessThan(ancestry);
+    expect(card(), 'the R1 bullet describes freshness as ancestry alone — the card asks content ' +
+      'FIRST, and a squash-merged graph reads `fresh` where this bullet promises otherwise')
+      .toMatch(/content first, then ancestry/);
+    for (const q of QUALIFIERS) {
+      expect(card(), `the canonical overview's graph-card bullet never names the \`${q}\` ` +
+        'qualifier the hook appends to a freshness word').toMatch(wordRe(q));
+    }
   });
 });
 
