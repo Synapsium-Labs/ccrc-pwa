@@ -47,7 +47,7 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * to corroborate: a proven ENOENT already IS "no loose ref exists". An
  * `unreadable` loose ref is the weaker fact — it does not know whether the
  * ref exists — so it still needs independent proof before falling through.
- * Below, `io.stat` on the IDENTICAL path is that proof, independent of
+ * Below, `io.statMeasured` on the IDENTICAL path is that proof, independent of
  * whether the bytes are readable — `stat` only needs search permission on
  * the parent directory chain, not read permission on the leaf,
  * so it succeeds on a `chmod 000` file and on a directory (the `EISDIR`
@@ -58,10 +58,12 @@ const BRANCH_OK = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/;
  * `HOLD_UNREADABLE` and `prhistory.ts` makes with its own listing/re-read.
  * This is the `unreadable` arm's own fallback, not the only path to it — the
  * `absent` arm above already goes straight to `packed-refs` with no `stat`
- * involved. Only when THIS arm's `stat` ALSO reads absent (the ordinary
- * "packed and never re-committed" case, or the rare inability to even
- * traverse the ref tree) is `packed-refs` treated as git's honest fallback
- * below.
+ * involved. Only when THIS arm's `stat` reads a PROVEN absent (the ordinary
+ * "packed and never re-committed" case) is `packed-refs` treated as git's honest
+ * fallback below. The parenthetical here used to add "or the rare inability to
+ * even traverse the ref tree"; D-1400 made that false in this very function and
+ * left the sentence standing (D-1446). An untraversable ref tree answers
+ * `unreadable`, not `absent`, and takes the refuse arm.
  */
 export async function readBranchTip(
   io: FleetIO, projectsRoot: string, project: string, branch: string,
@@ -93,12 +95,23 @@ export async function readBranchTip(
     // `unreadable` is weaker: EACCES/EISDIR/a transport hiccup — the path
     // could still be a live ref this box just can't read the bytes of, so
     // `stat` on the SAME path proves presence without needing the bytes
-    // (docstring above) — if it succeeds, this IS the loose ref, git's
-    // authoritative answer, and it must be refused rather than silently
-    // answered from packed-refs. An older agent's every measured read
-    // collapses to `unreadable`, so this arm is also what makes it take
-    // today's path verbatim (THE GOVERNING RULE).
-    if (await io.stat(loosePath) !== null) return null;
+    // (docstring above). THREE answers now, where this used to see two:
+    //   ok         — this IS the loose ref, git's authoritative answer, and
+    //                it must be refused rather than answered from packed-refs;
+    //   unreadable — the stat could not be TAKEN. Not proof of anything, and
+    //                this function's whole contract is to refuse what it
+    //                cannot prove rather than let a stale packed tip settle a
+    //                wave close. Until D-114 was closed this arrived wearing
+    //                `{missing:true}`, i.e. indistinguishable from proof;
+    //   absent     — proven no loose ref: packed-refs is the honest fallback.
+    // AGENT SKEW: an OLDER agent's every measured read is `unreadable`, so a
+    // PACKED branch reads `tip-unmeasurable` against one until the agent is
+    // deployed. That is the fail-shut direction (refusing a close, never
+    // settling one on a stale SHA) and the reason this ships AGENT-FIRST.
+    const st = await io.statMeasured(loosePath);
+    if (st.ok) return null;                  // the ref IS there — refuse, as before
+    if (st.reason !== 'absent') return null;  // could not be measured — refuse (D-1400)
+    // Only a PROVEN absence reaches packed-refs below.
   }
   const packed = await io.readFile(path.join(gitDir, 'packed-refs'));
   if (packed === null) return null;
@@ -246,8 +259,12 @@ export type WorktreeRead =
  *
  * The one case this still cannot see through is a chain that `stat`s fine but
  * cannot be TRAVERSED (EACCES on `<project>/.git` itself), which reads as the
- * absent case — the same fail-direction `readBranchTip` names and accepts, and
- * the suppressing one. The rung walk inherits it exactly: a single dropped round
+ * absent case. `readBranchTip` above took that same direction UNTIL D-1400; it now
+ * proves with `statMeasured` and refuses anything but a proven `absent`, so citing
+ * it as precedent here has been false since (D-1446). This census is the last
+ * reader in this file that still lets an unmeasurable `stat` read as absence, and
+ * deliberately: the direction is the SUPPRESSING one — it can only hide a record,
+ * never manufacture one — and `io.stat` has no measured form at these rungs. The rung walk inherits it exactly: a single dropped round
  * trip landing on one stat and not its neighbour reads as the standing fact.
  *
  * A DETACHED HEAD gives `headBranch: null`, never a fabricated name.

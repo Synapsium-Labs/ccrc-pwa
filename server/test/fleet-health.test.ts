@@ -47,7 +47,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
   started: true, spawnState: null,
 });
@@ -165,6 +165,7 @@ describe('GET /api/fleet — degraded mode', () => {
     expect(body.sessions[0]?.hookState).toBeNull();
     expect(body.sessions[0]?.askSummary).toBeNull();
     expect(body.sessions[0]?.subagents).toBeNull();
+    expect(body.sessions[0]?.graphQueries).toBeNull();
     expect(body).toEqual({
       sessions: [session('claude-Cached')],
       stale: true,

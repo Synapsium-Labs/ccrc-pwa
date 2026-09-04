@@ -34,7 +34,7 @@ import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
-import { floorFromScan } from './coord/ledger.js';
+import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type {
   ProvenancePair, AutomationRow as StoreAutomationRow, FiringOccurrence, ScheduleStamp,
@@ -461,6 +461,11 @@ export class FleetWatcher {
    *  `lastDivergenceJson` idiom, so a standing stale number is not a log
    *  line every 15 minutes forever. */
   private lastStaleReport: string | null = null;
+
+  /** Per project, the last orphan set this sweep reported — `lastStaleReport`'s
+   *  once-per-changing-set idiom, keyed because the reconcile sweep now walks
+   *  every project the allocator has issued for rather than a subset of them. */
+  private readonly lastOrphanReport = new Map<string, string>();
   /** Built lazily (`mirrorFor` below) as soon as a coordination database
    *  exists — NOT only on the first sweep, since `lifecycleHealth()` must be
    *  able to ask it before any sweep has run. The mirror holds the cursor,
@@ -2130,6 +2135,18 @@ export class FleetWatcher {
    * decoration: numbers allocated but not yet written into any plan are
    * invisible to this scan, and re-issuing one IS the bb47c9e failure.
    *
+   * SEEDED FROM THE SAME branch-dependent working tree as reconcile, and unlike
+   * reconcile that is left alone DELIBERATELY. A floor that reads a plan on an
+   * unmerged branch raises the fleet's floor permanently and burns every number
+   * below it — measured 2026-09-02, this project's floor stood well above the
+   * highest number the allocator had ever issued, raised off a file on no merged
+   * ref. (No cardinal here: the floor rises on its own sweep, so any figure
+   * written down is false by the next tick.) That is WASTE, not corruption: the
+   * numbers are cheap and a conservative floor is exactly what prevents a
+   * reissue, which is the failure this lane exists to make impossible.
+   * Reconcile's looseness was different in kind — it wrote a false fact into a
+   * TERMINAL column — which is why only that one was tightened.
+   *
    * PUBLIC for the reason `sweepDivergences` is: `tick()` dispatches it with
    * `void`, so a test that awaits `tick()` has not awaited this.
    */
@@ -2224,11 +2241,19 @@ export class FleetWatcher {
   }
 
   /**
-   * D13: allocated -> landed when the number appears in a PLAN of the main
-   * checkout — so `landed` genuinely means merged, the signal the bb47c9e
-   * incident lacked while the authoritative record sat on an unmerged ref
-   * for 15 hours. A number 7 days old and never landed is REPORTED (once per
-   * changing set) and NEVER reclaimed.
+   * D13: allocated -> landed when a plan of the main checkout DEFINES the number.
+   * `landed` means exactly that and no more: the number was seen defined in a plan
+   * file in the working tree of `<projectsRoot>/<project>` at the moment of a
+   * sweep, on whatever branch that checkout was sitting on, uncommitted edits
+   * included. It is NOT proof of a merge — nothing between `readLedgerDocs`'s
+   * readdir and this column consults git, and `landedIn` names a path in that tree
+   * which may exist on no ref (measured 2026-09-02: it did). Reading a REF instead
+   * would need git, which is unreachable BY POLICY rather than by construction:
+   * `CCRC_FLEET=remote` sends every command across the agent's
+   * `EXEC_COMMANDS = ['tmux','ccd']` whitelist, while the server process itself
+   * holds an unwhitelisted `execFile` (`server/src/exec.ts:59-71`) that LOCAL mode
+   * uses. A number 7 days old and never landed is REPORTED (once per changing set)
+   * and NEVER reclaimed.
    */
   async sweepLedgerReconcile(): Promise<void> {
     const now = Date.now();
@@ -2238,27 +2263,62 @@ export class FleetWatcher {
     const store = this.deps.coord;
     if (!store) return;
     const open = store.openAllocations();
-    if (open.length > 0) {
-      const byProject = new Map<string, typeof open>();
-      for (const a of open) {
-        const list = byProject.get(a.project);
-        if (list === undefined) byProject.set(a.project, [a]); else list.push(a);
+    const openByProject = new Map<string, typeof open>();
+    for (const a of open) {
+      const list = openByProject.get(a.project);
+      if (list === undefined) openByProject.set(a.project, [a]); else list.push(a);
+    }
+    // BEHAVIOUR CHANGE, STATED (F7). The project list is now every project the
+    // allocator has issued for, not only those with OPEN allocations. That is a
+    // widening, and the reason is that the second question below cannot be asked
+    // of the old corpus: a project whose numbers have all landed has no open rows
+    // and would never be audited, which is exactly the state a project reaches
+    // once it is working correctly. The plan read is still ONE per project per
+    // sweep — both questions are answered from the same `files`, so this costs a
+    // read only for projects that previously had none, and still nothing per row.
+    for (const project of store.ledgerProjects()) {
+      // Reconcile reads plans ALONE — a different question (did this number
+      // land in a plan?), not a narrower copy of the floor's dir list. Same
+      // SWEEP_POLICY: a file it cannot read simply is not evidence that a
+      // number landed, and the next pass looks again.
+      const read = await readLedgerDocs(
+        { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot },
+        project, ['plans'], SWEEP_POLICY);
+      if (read.files.length === 0 && !read.complete) continue;
+      const files = read.files;
+      // ONE NOTION OF "THIS PLAN CARRIES D-N" (D-1420), shared by both halves
+      // of this sweep. Until now the landing half matched a bare `\bD-<n>\b`
+      // over the whole file text while the orphan half below used
+      // `definitionsIn` — two standards over the same corpus, eleven lines
+      // apart, in the same loop. It fired: on 2026-09-02 a BLOCKQUOTE citing an
+      // allocation range stamped two numbers `landed` (terminally — markLanded's
+      // `state = 'allocated'` guard never re-evaluates a landed row) against a
+      // plan that DEFINES neither. (That plan was on no merged ref when it
+      // stamped; it merged 2026-09-03, which changes nothing — the stamp was
+      // wrong because the file CITES the range, not because it was unmerged.)
+      // `definitionsIn`
+      // reads that same line as no definition at all, which is why SHARING the
+      // predicate is the fix rather than adding a second regex. Computed once
+      // and used twice, so the two halves cannot drift apart again.
+      const defs = definitionsIn(files);
+      for (const a of openByProject.get(project) ?? []) {
+        const hit = defs.find((d) => d.n === a.n);
+        if (hit !== undefined) store.markLanded(project, a.n, hit.file, now);
       }
-      for (const [project, rows] of byProject) {
-        // Reconcile reads plans ALONE — a different question (did this number
-        // land in a plan?), not a narrower copy of the floor's dir list. Same
-        // SWEEP_POLICY: a file it cannot read simply is not evidence that a
-        // number landed, and the next pass looks again.
-        const read = await readLedgerDocs(
-          { io: this.deps.io, projectsRoot: this.deps.cfg.projectsRoot },
-          project, ['plans'], SWEEP_POLICY);
-        if (read.files.length === 0 && !read.complete) continue;
-        const files = read.files;
-        for (const a of rows) {
-          const re = new RegExp(`\\bD-${a.n}\\b`);
-          const hit = files.find((f) => re.test(f.text));
-          if (hit !== undefined) store.markLanded(project, a.n, hit.path, now);
-        }
+      // The INVERSE of `markLanded`, and the half nothing has ever measured: a
+      // plan that DEFINES an allocator-era number the allocator never issued.
+      // Reported, never enforced — the ledger is prose and this sweep has no
+      // standing to refuse anything (D13's own stance on `stale`, one block
+      // down). See `unallocatedDefinitions` for what this deliberately does NOT
+      // claim, and why batch scatter is not reported here.
+      const orphans = unallocatedDefinitions(defs, store.ledgerIssued(project));
+      const oJson = JSON.stringify([project, orphans.map((o) => o.n)]);
+      if (orphans.length > 0 && oJson !== this.lastOrphanReport.get(project)) {
+        this.lastOrphanReport.set(project, oJson);
+        console.warn(
+          `ccrc-server: ${orphans.length} deviation number(s) defined in ${project}'s plans were ` +
+          'never allocated: ' + orphans.map((o) => `D-${o.n} (${o.files.join(', ')})`).join('; ') +
+          ' — allocate through POST /api/ledger/deviations and define in the same act');
       }
     }
     const stale = store.staleAllocations(now - LEDGER_STALE_MS);

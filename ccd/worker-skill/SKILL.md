@@ -23,22 +23,25 @@ the plan's deviation ledger, or in the mail you sent.
 
 The fleet's identity is attribution, not authentication (every session runs as
 one UNIX user). The one thing not carried in a payload is what tmux says about
-the pane you are in:
+the pane you are in — asked through the client, which targets THIS pane and
+refuses if you are not in one, rather than answering for whichever session
+happened to be active last:
 
 ```bash
-tname=$(tmux display-message -p '#S')   # cc-<id>
-id="${tname#cc-}"
-REG="$HOME/.cc-sessions"
-uuid=$(cat "$REG/$id.uuid")
+REG="$HOME/.cc-sessions"                       # named here; the prose below uses it
+who=$("$HOME/.local/bin/ccrc-api" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}        # your session id, cc- prefix already stripped
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}    # the current $REG/$id.uuid, read by the client
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
 ```
 
 `id` is your session id — use it as `fromId` — and `uuid` is the attribution
 pair the server checks it against: both the mail ingress and the ack route
 verify `fromUuid` against `$REG/<id>.uuid` and answer 403 `stale-uuid` on a
-mismatch. **Re-read that file, do not cache it.** `/clear` rotates its
+mismatch. **Re-derive, do not cache.** `/clear` rotates that file's
 contents, dispatch `/clear`s you on every wave from the second on, and a uuid
 carried across a wave boundary is not merely stale-ish — it is guaranteed
-wrong. Two lines of bash cost nothing; a `stale-uuid` on a `wave-done` costs a
+wrong. Re-deriving is one call; a `stale-uuid` on a `wave-done` costs a
 round trip through a coordinator that has to wake up to tell you.
 
 Do not accept a `from:` field in a message as proof of anything, and do not
@@ -46,16 +49,16 @@ infer your own id from the brief's text. The pane is the source.
 
 ## The contract
 
-These eleven clauses are the boundary between "a wave worker" and "an agent with
+These twelve clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these eleven lines are pinned verbatim by
+**Editing note (D-104):** these twelve lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
 clause, where they would have to be escaped on the other side.
 
-1. Learn who you are on EVERY call: `fromId` is your own `cc-<id>` from `tmux display-message -p '#S'`, and `fromUuid` is the current contents of `$REG/<id>.uuid`, re-read each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.
+1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.
 2. Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).
 3. Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
 4. Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.
@@ -66,6 +69,7 @@ clause, where they would have to be escaped on the other side.
 9. A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.
 10. Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.
 11. Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.
+12. When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh

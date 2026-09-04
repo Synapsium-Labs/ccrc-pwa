@@ -1,6 +1,22 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ReadFailure } from '../../shared/agent-protocol.js';
+
+/** The agent's half of `server/src/io.ts`'s `failureFor` (D-1397) — the ONE place
+ *  an errno becomes a `ReadFailure` on this side. Only a PROVEN `ENOENT` may
+ *  answer `absent`; every other errno is `unreadable`, which is the whole point
+ *  of the vocabulary and the one rule four hand-written copies could each get
+ *  wrong independently (D-1448).
+ *
+ *  RESTATED rather than imported, and neither half of that is an oversight.
+ *  `agent/tsconfig.json` includes only `src/**` and `../shared/**`, so
+ *  `server/src` is not on this package's compile or deploy path at all. And it
+ *  is kept OUT of `shared/` deliberately: D-1438 put `ReadFailure` there on the
+ *  argument that a TYPE-only export costs the PWA's bundle nothing, and that
+ *  argument does not extend to a runtime function — L0 is what the PWA bundles. */
+const failureFor = (e: unknown): ReadFailure =>
+  (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
 function readRange(file: string, start: number, end: number): Promise<Buffer> {
@@ -21,14 +37,23 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  *
  * `readWhole` mirrors `localIO`'s ERRNO BEHAVIOUR, not its TYPE: both sides
  * branch ENOENT vs. everything-else identically, but `readWhole` returns
- * `{data, absent}` here while the server-side distinction lives in a
- * SEPARATE, differently-shaped type — `MeasuredRead` in `server/src/io.ts`.
- * Deliberate, not a gap to close: `agent/tsconfig.json` includes only
- * `src/**` + `../shared/**`, so this side cannot import `server/src/io.ts`
- * at all, and the plan (`docs/superpowers/plans/2026-08-20-fleetio-measured-
- * read.md`, "the seam's shape") keeps the reason union out of `shared/` on
- * purpose — putting it there would also put it on the PWA's bundle path.
- * No convergence is coming; the two stay parallel local types on purpose.
+ * `{data, absent}` here — a boolean, no `unreadable` distinction — while the
+ * server-side equivalent, `MeasuredRead` in `server/src/io.ts`, is a
+ * differently-shaped `{ok,reason}` union. That shape difference is still
+ * deliberate and unconverged: `agent/tsconfig.json` includes only `src/**` +
+ * `../shared/**`, so this side cannot import `server/src/io.ts` at all, and
+ * `readWhole` predates `ReadFailure` (D-114) with no caller that needs the
+ * finer distinction.
+ *
+ * The REASON VOCABULARY itself — `ReadFailure`, used below by
+ * `readB64Measured`/`readFromMeasured` — is a different story: the plan that
+ * introduced it (`docs/superpowers/plans/2026-08-20-fleetio-measured-
+ * read.md`, "the seam's shape") kept it out of `shared/` on purpose, judging
+ * the PWA's bundle path not worth it for a pair only this side and
+ * `server/src/io.ts` used. That judgment was reversed (D-1438): the pair got
+ * spelled out on both sides anyway and `single-definition.test.ts` caught
+ * the drift, so it now lives once in `shared/agent-protocol.ts` as
+ * `ReadFailure`, imported here rather than restated.
  */
 
 /** `readWhole`'s result: `data` keeps the pre-existing null-for-any-failure
@@ -51,48 +76,124 @@ export async function readWhole(p: string): Promise<ReadResult> {
   try {
     return { data: await readFile(p, 'utf8'), absent: false };
   } catch (e) {
-    return { data: null, absent: (e as NodeJS.ErrnoException).code === 'ENOENT' };
+    return { data: null, absent: failureFor(e) === 'absent' };
   }
 }
 
 /** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`
  *  in server/src/server.ts) — a clip round-trips through both, so neither
- *  side should accept what the other would reject. */
-const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
+ *  side should accept what the other would reject. Exported so tests assert
+ *  against THIS number rather than a second copy of it; it is a property of
+ *  the WS round trip (one JSON frame carrying a base64 payload), not of the
+ *  file, which is why `server/src/io.ts`'s `localIO` deliberately has no
+ *  equivalent and why over-cap is REPORTED rather than folded into the
+ *  same failure as missing (D-114, D-1401). */
+export const MAX_READ_B64_BYTES = 12 * 1024 * 1024;
+
+/** `readB64Measured`'s result. THREE failure facts where `readB64` had one
+ *  null: a proven ENOENT, a file whose size exceeds the cap (carrying the
+ *  measured `size`, so a caller can say what it refused and how big it was),
+ *  and everything else. The wrapping `{ok,reason}` shape is local to this
+ *  op (`too-large` has no equivalent on the server side); the two-word
+ *  failure vocabulary it shares with `unreadable`/`absent` is `ReadFailure`,
+ *  imported rather than restated (D-1438). */
+export type ReadB64Result =
+  | { ok: true; dataB64: string }
+  | { ok: false; reason: ReadFailure }
+  | { ok: false; reason: 'too-large'; size: number };
 
 /** Binary-safe read: never decodes through a string, so bytes that aren't
- *  valid UTF-8 (e.g. a PNG header) survive byte-for-byte. `null` for
- *  missing/unreadable/over-cap files, same never-throw contract as the
- *  other read ops. */
-export async function readB64(p: string): Promise<string | null> {
+ *  valid UTF-8 (e.g. a PNG header) survive byte-for-byte. Never throws, same
+ *  contract as every other op in this file. */
+export async function readB64Measured(p: string): Promise<ReadB64Result> {
+  let size: number;
   try {
-    const s = await stat(p);
-    if (s.size > MAX_READ_B64_BYTES) return null;
-    return (await readFile(p)).toString('base64');
-  } catch { return null; }
+    size = (await stat(p)).size;
+  } catch (e) {
+    return { ok: false, reason: failureFor(e) };
+  }
+  if (size > MAX_READ_B64_BYTES) return { ok: false, reason: 'too-large', size };
+  try {
+    return { ok: true, dataB64: (await readFile(p)).toString('base64') };
+  } catch (e) {
+    // Unlinked between the stat and the read is a real race and a real
+    // absence; anything else is not.
+    return { ok: false, reason: failureFor(e) };
+  }
 }
 
-export async function readFrom(p: string, offset: number): Promise<{ data: string; size: number } | null> {
+/** `readFromMeasured`'s result. The EOF arm is `ok`, NOT a failure: an offset
+ *  at or past the file's size means "the cursor is at the end and there are
+ *  no new bytes", which is a measurement, not a miss. */
+export type ReadFromResult =
+  | { ok: true; data: string; size: number }
+  | { ok: false; reason: ReadFailure };
+
+export async function readFromMeasured(p: string, offset: number): Promise<ReadFromResult> {
   // Stream only [offset, size) — never load the whole file. A transcript backlog
   // read of a tens-of-MB file used to slurp the whole thing here, ballooning the
   // agent's memory and stalling its event loop.
   let size: number;
-  try { size = (await stat(p)).size; } catch { return null; }
+  try {
+    size = (await stat(p)).size;
+  } catch (e) {
+    return { ok: false, reason: failureFor(e) };
+  }
   const from = Math.max(0, Math.min(offset, size));
-  if (from >= size) return { data: '', size };
-  try { return { data: (await readRange(p, from, size)).toString('utf8'), size }; }
-  catch { return null; }
+  if (from >= size) return { ok: true, data: '', size };
+  try {
+    return { ok: true, data: (await readRange(p, from, size)).toString('utf8'), size };
+  } catch (e) {
+    return { ok: false, reason: failureFor(e) };
+  }
 }
 
 export async function listDir(p: string): Promise<string[] | null> {
   try { return await readdir(p); } catch { return null; }
 }
 
-export async function statPath(p: string): Promise<{ mtimeMs: number; size: number } | null> {
+/** `statMeasured`'s result — the `stat` op's half of `ReadResult` above, and
+ *  a LOCAL type for the ONE reason that is still true: `agent/tsconfig.json`
+ *  includes only `src/**` + `../shared/**`, so this side cannot import
+ *  `server/src/io.ts`, which is where the server's own stat-shaped result
+ *  lives. It used to give a second reason — that the reason union stays out
+ *  of `shared/` because that is the PWA's bundle path — and D-1438 REVERSED
+ *  exactly that judgment: `ReadFailure` now lives once in
+ *  `shared/agent-protocol.ts` and is imported at the top of this file. Do not
+ *  carry the repealed clause forward as an argument for a local copy.
+ *
+ *  AND DO NOT READ THIS TYPE'S SILENCE AS PERMISSION. It spells the
+ *  distinction structurally (`absent: boolean`) instead of as the two string
+ *  literals of the `ReadFailure` union, and the fingerprint
+ *  `single-definition.test.ts` uses for that vocabulary is the ORDERED PAIR
+ *  of those literals — which this shape does not contain, so the scan is
+ *  structurally unable to see it, and a re-declaration written in this style
+ *  reds nothing. The shape is deliberate (a stat answers one bit, not a
+ *  reason); its invisibility to that scan is a limit of the scanner, not a
+ *  licence.
+ *
+ *  `absent` is true ONLY on a proven ENOENT. Every other errno — EACCES,
+ *  ENOTDIR, ELOOP, EIO — and every non-errno throw leaves it false, meaning
+ *  "this path may well be there and this box could not measure it". Before
+ *  this type, all of them left through `server.ts`'s `?? { missing: true }`
+ *  wearing the wire's proven-absence marker (D-114); this type is what
+ *  closes it (D-1396), read in exactly one place, this function.
+ *
+ *  SAME DANGLING-SYMLINK RESIDUAL as `ReadResult`, and it must be stated here
+ *  too: `stat` follows the link, the TARGET's ENOENT is what throws, and
+ *  `absent` comes back true for a name still in its directory listing. Not
+ *  closed with an `lstat` ladder, for the reason recorded there. */
+export type StatResult =
+  | { ok: true; mtimeMs: number; size: number }
+  | { ok: false; absent: boolean };
+
+export async function statMeasured(p: string): Promise<StatResult> {
   try {
     const s = await stat(p);
-    return { mtimeMs: s.mtimeMs, size: s.size };
-  } catch { return null; }
+    return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
+  } catch (e) {
+    return { ok: false, absent: failureFor(e) === 'absent' };
+  }
 }
 
 export type WriteResult = { ok: true } | { ok: false; err: string };

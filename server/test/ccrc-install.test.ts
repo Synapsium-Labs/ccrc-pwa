@@ -56,6 +56,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
+import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -727,7 +728,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // teaching the shared fake venv python to answer a `-c` argv.
   const gfxPkg = join(home, 'fixture-graphify-pkg');
   mkdirSync(join(gfxPkg, 'skills', 'claude', 'references'), { recursive: true });
-  writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
+  writeFileSync(join(gfxPkg, 'skill.md'), skillMd(PKG_DESCRIPTION));  // the shipped description, not a stub (D-1366)
   writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
   // D-1244: `_inst_graph_always_on` reads its block from the same package. A
   // fixture without one made the step SKIP, and a skip is now (correctly) a
@@ -2036,10 +2037,13 @@ describe('ccrc install: the order is stated in one place', () => {
       // out of every `git status`. Neither reads what the other wrote, so the
       // position is a grouping rather than a dependency — but it must follow
       // `_inst_tree`, since it copies the list out of the PLACED tree.
-      // D-1243. The READ side, and it sits right after the skill because it is
-      // assembled from the same pinned package the skill is — before the noise
-      // list, which serves the write path this one deliberately does not.
-      '_inst_graph_always_on',
+      // D-1245. The READ side moved OUT of the operator's account-wide
+      // CLAUDE.md and into the artifacts ccrc owns outright (the session
+      // hook's SessionStart card, worker clause 12, the PATH converge, and
+      // the `graphQueries` counter the hook already writes). What
+      // is left here is the REMOVER, in `_inst_graph_hooks_off`'s own shape:
+      // a step whose whole job is taking back what an earlier layer planted.
+      '_inst_graph_always_on_off',
       '_inst_graph_noise',
       // graphify Task 4 (D-996/D'). Right after `_inst_graphify_skill`, per
       // the task brief: the sweep's `check-ignore` precondition needs a
@@ -2827,13 +2831,20 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
     // Nothing but the four executables `_inst_bins` installs (graphify Task 10
-    // adds `ccd-graph-sweep`) — no wrapper, no temp file, no staged leftover —
-    // beside what the fixture itself planted.
+    // adds `ccd-graph-sweep`) and R3's one SYMLINK — no wrapper, no temp file,
+    // no staged leftover — beside what the fixture itself planted.
+    //
+    // `graphify` is here because `_inst_graphify_engine` now converges
+    // `$HOME/.local/bin/graphify` onto the pinned venv (R3, D-1346): the one
+    // path a session's bare `graphify` resolves to. It is on BOTH platform
+    // arms, unlike the two above it — `_inst_bins` gates `ccd-cap-scopes` on
+    // cgroups and `ccd-graph-sweep` on a systemd timer, while the converge is
+    // gated only on the server role, which this fixture is not.
     expect(readdirSync(join(home, '.local', 'bin'))
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
-        ? ['ccd', 'ccrc']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
-        : ['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc']);
+        ? ['ccd', 'ccrc', 'graphify']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
+        : ['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {

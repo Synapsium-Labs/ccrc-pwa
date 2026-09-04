@@ -19,7 +19,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -882,5 +882,70 @@ describe('the held cell is a door only when there is somewhere to go (Task 5)', 
     render(<SessionLine session={s({ held: null })} onOpenRun={() => {}}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(heldOf()).toBeNull();
+  });
+});
+
+describe('the graph chip', () => {
+  it('renders graph N when the hook counted reads', () => {
+    render(<SessionLine session={s({ graphQueries: 4 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 4')).toBeInTheDocument();
+  });
+
+  it('renders graph 0 — a measured zero is the finding, not the absence of one', () => {
+    render(<SessionLine session={s({ graphQueries: 0 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 0')).toBeInTheDocument();
+  });
+
+  it('renders NO chip when the count is null — nothing was measured', () => {
+    render(<SessionLine session={s({ graphQueries: null })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/^graph /)).toBeNull();
+  });
+
+  // The live `fleet` frame is CAST, not revived (`stores/fleet.ts`'s
+  // `asFleetMsg` validates `Array.isArray(sessions)` and returns
+  // `m as FleetMsg`), and this field is ADDITIVE with `FLEET_PROTO` held at
+  // 1 — a promise that a server predating it keeps talking to this client.
+  // Such a server omits the KEY, which `s({graphQueries: null})` above cannot
+  // produce: it always sets it. Read raw, `undefined !== null` is true and
+  // the chip renders `graph ` with no number under
+  // `title="undefined graphify read(s) this session"` — the exact inversion
+  // of the field's own `0`-versus-`null` contract (D-1251). Same `delete`
+  // idiom as the `substrate`/`unmeasured` blocks above, and the same job:
+  // this is the test that pins the read going through `graphReadCount`
+  // (shared/api.ts) rather than `session.graphQueries` directly.
+  it('renders NO chip when the server omits the key entirely — an older server (D-1251)', () => {
+    const raw = s({ graphQueries: 4 }) as unknown as Record<string, unknown>;
+    delete raw['graphQueries'];
+    expect(() => render(
+      <SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />,
+    )).not.toThrow();
+    // The class, not the text: RTL's matcher trims, so `graph ` normalises to
+    // `graph` and a text query would MISS the very chip this test forbids.
+    const chip = document.querySelector('.sess-graph');
+    expect(chip, `a numberless chip rendered: ${chip?.outerHTML}`).toBeNull();
+  });
+
+  it('renders NO chip when the count arrives as a non-number an older peer never promised (D-1251)', () => {
+    // `graphReadCount`'s other degrade, and the reason it is not a bare
+    // `?? null`: a broken peer sending a string or a NaN is ignorant of the
+    // count, not a witness that the session read `NaN` times.
+    for (const bad of ['3', Number.NaN, Number.POSITIVE_INFINITY]) {
+      cleanup();
+      render(<SessionLine session={{ ...s(), graphQueries: bad } as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />);
+      const chip = document.querySelector('.sess-graph');
+      expect(chip, `${String(bad)} rendered a chip: ${chip?.outerHTML}`).toBeNull();
+    }
+  });
+
+  it('renders NO chip on a dead session, however many reads it made', () => {
+    // The `!dead &&` conjunct, pinned like every sibling cell in this file
+    // (the task tally at the top, the pr chip below): a dead row's meta line
+    // is about what to DO with the corpse, and a live-session read count is
+    // not that. The count is non-null and non-zero here so that only the
+    // `!dead` guard can be what hides it.
+    render(<SessionLine session={s({ graphQueries: 4, status: 'dead', bucket: 'dead' })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/^graph /)).toBeNull();
   });
 });

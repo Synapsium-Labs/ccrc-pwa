@@ -20,7 +20,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { AskQuestion, Dialog, SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
-import { degradedReadIO, unreadableField } from './ioDoubles.js';
+import { degradedReadIO, unreadableField, degradedStatIO } from './ioDoubles.js';
 
 const ID = 'claude-a-MekWarLive';
 const UUID_A = 'a'.repeat(36);
@@ -1030,6 +1030,33 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     } finally {
       stream2.stop();
       rmSync(home2, { recursive: true, force: true });
+    }
+  });
+
+  it('a transcript that is RIGHT THERE but unmeasurable is not reported as a found-nothing search', async () => {
+    // The exact D-114 shape at the delivery seam: the resolver's every stat
+    // of the .jsonl is unmeasurable, so the ladder falls to `fallback` with
+    // complete: true (its readdirs all worked) and the frame would say
+    // `missing: true, searchComplete: true` — which the PWA renders as
+    // "Can't find this session's transcript" about a file the fixture just
+    // wrote. `fileMeasured: false` is the sentence that fact deserves.
+    const home = mkTmp('ccrc-unmeasured-backlog-');
+    seedRoster(home);
+    seed(home);
+    const io = degradedStatIO((p) => p.endsWith(`${UUID_A}.jsonl`));
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      const backlog = frames.find((f) => f.type === 'backlog');
+      expect(backlog).toBeDefined();
+      expect(backlog.file).toBe(path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`));
+      expect(backlog.missing).toBe(true);        // unchanged wire meaning
+      expect(backlog.searchComplete).toBe(true); // the SEARCH did finish
+      expect(backlog.fileMeasured).toBe(false);  // the FILE was never measured
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

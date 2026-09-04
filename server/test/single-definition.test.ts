@@ -58,6 +58,47 @@ function sources(dir: string): string[] {
 const ALL = ROOTS.flatMap(sources);
 const rel = (p: string): string => path.relative(ccrcRoot, p);
 
+/* `prose` and `passage` live at MODULE scope, not inside the one describe that
+ * first needed them. They were block-locals 245 lines BELOW the bare
+ * `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair at the
+ * abandonment-predicate test — so the cure this file defines was out of reach
+ * of the fourth instance of the disease, in the file that defines the cure
+ * (D-1439). Hoisting is the fix that also prevents the fifth: any describe here
+ * can now anchor a passage without writing the pair again, and writing it again
+ * in THIS file would be a second copy of a helper — the exact thing every other
+ * assertion in this suite forbids. */
+/** A docstring as a reader sees it: leading ` * ` gone, wrapping collapsed —
+ *  `coordinator-skill.test.ts`'s `flat()` lesson, applied to a JSDoc block.
+ *  Without it, "the ingress route\n   * ONLY" walks past every `toContain`. */
+const prose = (t: string): string =>
+  t.split('\n').map((l) => l.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+/** A named docstring slice between two literal anchors, flattened by `prose`.
+ *  `ledger-sweep.test.ts`'s `passage()`, copied for its reason as much as
+ *  its shape — and copied LATE: the three cases below shipped as a bare
+ *  `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair, which this
+ *  file's own header cites the lesson against without applying it (D-1426).
+ *
+ *  The failure is worse than the `''` the header warns about, and in the
+ *  opposite direction. A lost OPENING anchor does yield `''`. A lost CLOSING
+ *  one yields `-1`, and `String.slice(a, -1)` means "to length − 1" — so the
+ *  docstring silently becomes THE WHOLE REST OF THE FILE, and every
+ *  `toContain` below is satisfied by a blob that contains the entire module.
+ *  Measured 2026-09-04 by reverting each anchor with a one-word edit to
+ *  `store.ts`: the three slices ran to 197,980 / 76,803 / 160,592 chars and
+ *  all three cases stayed GREEN. The `> 300` floor was written for the empty
+ *  case and MAKES THAT WORSE rather than catching it — a 160KB blob clears a
+ *  300-char floor without slowing down. So both anchors are asserted, and the
+ *  closing one is searched for AFTER the opening one and must follow it. */
+const passage = (name: string, text: string, from: string, to: string): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const b = text.indexOf(to, a + from.length);
+  expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+  const out = prose(text.slice(a, b));
+  expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(300);
+  return out;
+};
+
 describe('the roots this scans', () => {
   it('actually found the four source trees, and the files the findings name', () => {
     // A scan over an empty list passes everything. This is the assertion that
@@ -343,6 +384,112 @@ describe('Build 7 nouns', () => {
     expect(hits.map(rel)).toEqual(['shared/api.ts']);
   });
 
+  // D-1296: the done-authority six were spelled THREE times — inside
+  // MAIL_REJECT_CODES, and as an identical `Extract<MailRejectCode, ...>` in both
+  // close.ts and fingerprint.ts. Wave 7's health read needs them at RUNTIME for a
+  // SQL `IN (...)`, which would have been a fourth. One array, and the two Extract
+  // copies deleted.
+  it('enumerates the done-authority family exactly once, and the Extract copies are gone', () => {
+    const DEF = /^\s*export const DONE_AUTHORITY_CODES\b/m;
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel))
+      .toEqual(['shared/api.ts']);
+    // Not "no Extract anywhere" — an Extract over a different union is ordinary.
+    // This is the one hand-typed copy of THIS list, anchored on its first member
+    // so a reorder cannot slip past.
+    const COPY = /Extract<\s*MailRejectCode\s*,[^>]*'stale-tip'/;
+    expect(ALL.filter((f) => COPY.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+
+  // D-1319. `runHealth`'s statement (1) reuses `DELIBERATE_CANCEL_ERRORS_SQL`
+  // "rather than respelling the two literals", and said in the same breath that
+  // `single-definition.test.ts` forbids the second copy. IT DID NOT — this file
+  // had never mentioned the pair. Measured before this test existed: a
+  // hand-respelled `NOT IN ('run closed','coordinator reclaimed')` in that very
+  // query shipped GREEN through the whole suite. A comment is a request; this is
+  // the mechanism it claimed to be standing on.
+  //
+  // Same shape as the terminal-trio scan below, and for the same reason: the
+  // shipped list is BUILT by interpolation from the two exported constants, so
+  // this scanner sees no literal at all in the real source, and any hand-written
+  // SQL list of the pair scores a hit. Either order, because a copy written from
+  // memory is as likely to be the other way round.
+  //
+  // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
+  // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
+  // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
+  // explaining the constant is a guard someone deletes.
+  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
+    const PAIR = new RegExp(
+      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
+    // The premise, established inside the test rather than assumed: this pattern
+    // really does recognise the copy it forbids, in both orders. Without these
+    // two lines the assertion below is satisfied by a regex that matches nothing.
+    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+
+    // …and the one definition is still built from the two named constants, so
+    // "no literal anywhere" cannot be satisfied by deleting the exclusion.
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      const defs = ALL.filter((f) =>
+        new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
+      expect(defs, name).toEqual(['server/src/coord/store.ts']);
+    }
+    // The two readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from both.
+    expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
+      .toBeGreaterThanOrEqual(2);
+  });
+
+  // The SECOND half of the same rule, and the reason it needs its own case: the
+  // abandonment predicate is about to have two readers — the mailbox
+  // (`outstandingMailFor`) and the reclaim's re-queue — and a respelling in
+  // either is invisible to the deliberate-cancel pin above, which watches only
+  // the two `lastError` literals. This watches the run-state clause, the half a
+  // re-queue is most likely to retype because its alias (`rr`) is the caller's
+  // own join.
+  //
+  // NO SELF-MATCH RISK, stated so the next author does not "fix" a hazard that
+  // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
+  // and never itself, and `ROOTS` (:32-37) does not include `server/test`. The
+  // needles below can therefore be written whole.
+  it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+
+    // The premise, established rather than assumed: this needle really is the
+    // clause, and it really is distinct from the twelve `runs`-row predicates in
+    // the same file (those read `r.state`/`state`, never the mail join's `rr`).
+    const CLAUSE = "COALESCE(rr.state, '') NOT IN ('done','failed')";
+    expect(store, 'the abandonment clause is not in store.ts at all').toContain(CLAUSE);
+    expect(store.split(CLAUSE).length - 1,
+      'the abandonment run-state clause is written more than once').toBe(1);
+
+    // …and the one spelling lives in a named constant that the read predicate is
+    // COMPOSED from, so "written once" cannot be satisfied by deleting a reader.
+    expect(store, 'ABANDONED_PARK_SQL is not defined').toMatch(/^const ABANDONED_PARK_SQL =/m);
+    expect(store).toMatch(
+      /const OUTSTANDING_OR_ABANDONED_SQL =\s*`\(d\.state IN \$\{OUTSTANDING_STATES_SQL\} OR \$\{ABANDONED_PARK_SQL\}\)`;/);
+
+    // THE PROSE HALF. The docstring one screen up describes the composed
+    // predicate; after the split it may not still call itself ONE definition.
+    // The premise is established first — there really are two now — so this is
+    // not an absence assertion whose fixture cannot produce the presence.
+    const defs = (store.match(/^const (?:ABANDONED_PARK_SQL|OUTSTANDING_OR_ABANDONED_SQL)\b/gm) ?? []).length;
+    expect(defs, 'the two predicate definitions are not both present').toBe(2);
+    // Named apart from the sibling passage on the SAME anchors 250 lines below:
+    // two call sites sharing one name make an anchor failure unattributable.
+    const doc = passage('the abandonment-predicate docstring', store,
+      ' * The READ-side "still needs a human', 'const OUTSTANDING_OR_ABANDONED_SQL');
+    expect(doc, 'the predicate docstring still calls the composed predicate one SQL definition')
+      .not.toContain('in this one SQL definition');
+  });
+
   // D-7: `tasks` is Claude Code's TodoWrite vocabulary and belongs to it. A
   // coordination type that spells itself Task is the collision spec:40-44
   // exists to prevent, and it would land in the same union, the same store and
@@ -392,6 +539,111 @@ describe('Build 7 nouns', () => {
       expect(/\(\s*['"]done['"]\s*,\s*['"]failed['"]\s*,\s*['"]abandoned['"]\s*\)/.test(src),
         `${rel(f)} hand-writes the terminal trio as an SQL literal`).toBe(false);
     }
+  });
+
+  // D-1404. Same shape and the same reason as the
+  // deliberate-cancel scan at the top of this describe (D-1319) and the
+  // terminal-trio scan above: the shipped SQL is BUILT by `join`, so this
+  // scanner sees no literal at all in the real source, and any hand-written SQL
+  // list of the delivery terminal pair scores a hit. Either order, because a
+  // copy written from memory is as likely to be the other way round.
+  //
+  // Measured before this test existed (2026-09-02, 5e9f650d): the pair was
+  // spelled six times in `store.ts`'s own SQL and seven more times in its
+  // docstrings, and the whole suite was green. Those prose copies are why the
+  // SQL rewrite must also rewrite the comments — unlike the deliberate-cancel
+  // case the prose here spells the SQL FORM itself, so an SQL-shaped regex hits
+  // a comment explaining the constant.
+  //
+  // ANCHORED ON `(` AND `)` ONLY, never `[`. The trio scan above can use
+  // `[[(]` because its own definition lives in a file it EXPECTS to see in
+  // `holders`; this one asserts `holders` is EMPTY, and the definition is
+  // `['acked', 'rejected']` — bracketed. A `[[(]` here would match the
+  // definition itself and the test could never pass. The cost is stated
+  // honestly: a hand-written JS ARRAY copy under another name is out of this
+  // scanner's reach, exactly as this file's own header paragraph says
+  // ("A determined author can evade either one").
+  it('spells the delivery terminal pair ONCE — TERMINAL_DELIVERY_STATES, never a hand-written SQL list', () => {
+    // This scan reads ALL, and ALL is built from ROOTS — which does NOT include
+    // `server/test`. That is what makes it safe for this test to spell the
+    // forbidden literal in its own self-checks below, and it is measured here
+    // rather than assumed: adding `server/test` to ROOTS would turn every
+    // literal-scan in this file into a guard that matches its own source.
+    expect(ALL.map(rel)).not.toContain('server/test/single-definition.test.ts');
+
+    const PAIR = /\(\s*'(acked|rejected)'\s*,\s*'(acked|rejected)'\s*\)/;
+    // The premise, established inside the test rather than assumed: without
+    // these three lines the assertion below is satisfied by a regex that
+    // matches nothing.
+    expect(PAIR.test("NOT IN ('acked','rejected') ")).toBe(true);
+    expect(PAIR.test("NOT IN ( 'rejected', 'acked' )")).toBe(true);
+    expect(PAIR.test("IN ('queued','delivered')")).toBe(false);
+
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the delivery terminal pair').toEqual([]);
+
+    // …and the one definition still exists and is still what the guards are
+    // built from, so "no literal anywhere" cannot be satisfied by deleting
+    // every guard instead.
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(
+      /export const TERMINAL_DELIVERY_STATES = \['acked', 'rejected'\] as const/);
+    const defs = ALL.filter((f) =>
+      /^\s*export const TERMINAL_DELIVERY_STATES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(defs, 'TERMINAL_DELIVERY_STATES').toEqual(['shared/api.ts']);
+
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(
+      /const TERMINAL_DELIVERY_SQL =\s*\n?\s*`\('\$\{TERMINAL_DELIVERY_STATES\.join\("','"\)\}'\)`/);
+
+    // THE FLOOR IS COUNTED OVER CODE, NOT PROSE, and that is the whole point of
+    // it. This task rewrites SEVEN DOCSTRING lines to read
+    // `NOT IN ${TERMINAL_DELIVERY_SQL}` as well, so a count over the raw file
+    // would sit at 13 and stay above 6 with every real guard deleted — an
+    // anti-vacuity check that is itself vacuous. Comment lines are stripped
+    // first, and the strip is proved to work on a sentence that only exists
+    // inside a comment.
+    const code = store.split('\n').filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l)).join('\n');
+    expect(store, 'the sentinel is gone from store.ts — pick another comment-only phrase')
+      .toContain('the same guard every other');
+    expect(code, 'the comment strip did not strip comments').not.toContain('the same guard every other');
+    // Six negative-form guards at 5e9f650d (2026-09-02), as a FLOOR so a
+    // seventh writer raises it rather than breaking it.
+    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length)
+      .toBeGreaterThanOrEqual(6);
+  });
+
+  // …and the SAME pair in its JS shape, which the SQL-anchored regex above is
+  // structurally incapable of seeing. Two scans, not one, because the two
+  // copies do not look alike: `store.ts` wrote an SQL list, `MailStrip.tsx`
+  // wrote a disjunction, and a single regex that caught both would have to be
+  // loose enough to fire on prose (D-1404).
+  it('spells the delivery terminal pair ONCE in JS too — no hand-written === disjunction', () => {
+    const DISJ = /===\s*'(acked|rejected)'[^\n]*\|\|[^\n]*===\s*'(acked|rejected)'/;
+    // The premise, established here: both orders are recognised, and a
+    // SINGLE-member test — which is not a copy of the pair and is a legitimate
+    // thing to write (`statusArm`, MailStrip.tsx: `state === 'rejected'` alone)
+    // — is not.
+    expect(DISJ.test("if (item.state === 'acked' || item.state === 'rejected') return null;")).toBe(true);
+    expect(DISJ.test("x.state === 'rejected' || x.state === 'acked'")).toBe(true);
+    expect(DISJ.test("if (item.state === 'rejected') return 'abandoned';")).toBe(false);
+
+    const holders = ALL.filter((f) => DISJ.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written JS disjunction of the delivery terminal pair').toEqual([]);
+
+    // The client really does still EXCLUDE the pair — "no disjunction anywhere"
+    // is also satisfied by deleting the test entirely, which would put a gate
+    // line on an acked row. Asserted as the CALL SHAPE, not as the identifier:
+    // the identifier also appears in this file's own new docstring paragraph,
+    // so a `toContain('TERMINAL_DELIVERY_STATES')` would be satisfied by the
+    // comment alone and would pass with the GUARD deleted — the single
+    // `.includes(item.state)` early-return matched just below. Named by its
+    // call shape rather than its line: this sentence used to say "line 167",
+    // and the very commit that wrote that number had already pushed the guard
+    // off it.
+    const strip = readFileSync(path.join(ccrcRoot, 'pwa/src/session/MailStrip.tsx'), 'utf8');
+    expect(strip).toMatch(
+      /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
   });
 
   // D-289 (was D-B4-16): no L1 file holds a database handle. `architecture:78-81` puts
@@ -468,6 +720,124 @@ describe('the auto ring — server/src/auto holds no coord-db handle', () => {
       expect(/from\s+'\.\.\/coord\/db\.js'/.test(src), `${rel(f)} imports ../coord/db.js`).toBe(false);
       expect(/from\s+'node:sqlite'/.test(src), `${rel(f)} imports node:sqlite`).toBe(false);
     }
+  });
+});
+
+// ── program-leverage wave 8 ────────────────────────────────────────────────
+//
+// A docstring that names its own callers is a SECOND COPY of a fact the code
+// already states, and this file exists because two copies of one fact drift.
+// Same corpus, same argument as the header above — "a comment is a request; a
+// red suite is a mechanism" — one level up from a duplicated VALUE to a
+// duplicated CLAIM. Both cases derive the fact from `server/src` and check the
+// prose against it; neither reads itself, and `ROOTS` (:32-37) contains no test
+// directory, so no needle here can match its own source line.
+describe('store.ts docstrings that describe their own callers', () => {
+  const STORE = path.join(ccrcRoot, 'server/src/coord/store.ts');
+  /** Source with every comment LINE removed, so a sentence about a call is
+   *  never counted as a call. */
+  const codeOnly = (t: string): string =>
+    t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+
+  it('the predicate docstring names the join kinds its callers actually carry', () => {
+    const store = readFileSync(STORE, 'utf8');
+    const code = codeOnly(store);
+    const left = (code.match(/LEFT JOIN runs rr\b/g) ?? []).length;
+    const inner = (code.match(/(?<!LEFT )JOIN runs rr\b/g) ?? []).length;
+    // BOTH premises, established before the claim is judged. Without the second
+    // one this assertion would be demanding a word about a caller that does not
+    // exist.
+    expect(left, 'no LEFT-JOIN caller of the mail→run edge — nothing to contrast').toBeGreaterThan(0);
+    expect(inner, 'no INNER-JOIN caller of the mail→run edge — the sentence under test is not yet false')
+      .toBeGreaterThan(0);
+
+    const doc = passage('the predicate docstring', store,
+      ' * The READ-side "still needs a human', 'const OUTSTANDING_OR_ABANDONED_SQL');
+    expect(doc,
+      'the predicate docstring names one join kind while its callers carry two').toContain('INNER');
+  });
+
+  it('setDeliveryEnvelope names every caller it has, derived from the tree', () => {
+    const store = readFileSync(STORE, 'utf8');
+    const doc = passage("setDeliveryEnvelope's docstring", store,
+      '   * Overwrites a delivery', '  setDeliveryEnvelope(');
+
+    // The claim that was false for two builds. Split at the call site so this
+    // needle can never match a scan of this file (`ALL` does not reach
+    // `server/test`, but the idiom is cheap and the next scanner may).
+    expect(doc, 'the docstring still says the ingress route is its only caller')
+      .not.toContain('used by the ingress ' + 'route ONLY');
+
+    const outside = ALL.filter((f) =>
+      rel(f).startsWith('server/src/') && rel(f) !== 'server/src/coord/store.ts'
+      && /\.setDeliveryEnvelope\(/.test(codeOnly(readFileSync(f, 'utf8'))));
+    expect(outside.length, 'the scan found no caller outside store.ts — nothing to check the prose against')
+      .toBeGreaterThanOrEqual(2);
+    for (const f of outside) {
+      expect(doc, `the docstring does not name ${rel(f)}`).toContain(path.basename(rel(f)));
+    }
+
+    expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
+      'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
+    expect(doc, 'the docstring does not name the in-file caller')
+      .toContain('requeueAbandonedCoordinatorMail');
+  });
+
+  /** Statement keywords that wear a declaration's shape at two-space indent. A
+   *  `  if (` inside a top-level function body would otherwise be recorded as
+   *  the holder of every line under it. */
+  const JS_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'do', 'else',
+    'try', 'new', 'typeof', 'await', 'throw', 'case', 'const', 'let', 'var', 'function', 'class',
+    'delete', 'in', 'of', 'yield', 'void', 'super', 'this']);
+
+  /** Every `${NAME}` interpolation of `needle` in `src`, named by the
+   *  declaration it sits in — a class member, or a top-level `const`. Comment
+   *  lines go first (`codeOnly`), so a SENTENCE about a predicate is never
+   *  counted as a use of it, which matters more here than anywhere else in this
+   *  file: the prose under test is itself full of the needle's name. */
+  const holdersOf = (src: string, needle: string): string[] => {
+    const out: string[] = [];
+    let decl = '';
+    for (const line of codeOnly(src).split('\n')) {
+      const m = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?([A-Za-z_]\w*)\s*[(<]/
+        .exec(line) ?? /^(?:export )?const ([A-Za-z_]\w*)\s*=/.exec(line);
+      if (m && !JS_KEYWORDS.has(m[1]!)) decl = m[1]!;
+      if (line.includes(needle)) out.push(decl);
+    }
+    return [...new Set(out)];
+  };
+
+  it("the re-queue's reader walk names every holder the file actually has", () => {
+    // D-1426. The walk shipped hand-typed and claimed "all four" — while the
+    // narrow predicate had NINE holders, one of the four named (`dueDeliveries`)
+    // spells its two states out and is not a holder at all, and the omitted one
+    // was `runHealth`, the single reader whose OUTPUT the fifth arm moves. So
+    // the list is derived from the same source it describes, which is the only
+    // form of that claim a later edit cannot quietly falsify.
+    const store = readFileSync(STORE, 'utf8');
+    const doc = passage("the re-queue's reader walk", store,
+      '   * THE READERS OF BOTH PREDICATES WERE WALKED',
+      '   * BOUNDED by the role-addressed reports');
+
+    const narrow = holdersOf(store, '${OUTSTANDING_STATES' + '_SQL}');
+    const wide = holdersOf(store, '${OUTSTANDING_OR_ABANDONED' + '_SQL}');
+    // Anti-vacuity floors, not counts — a count here would be the second copy
+    // this file exists to forbid. They exist so a scanner whose regex stopped
+    // matching cannot pass by finding nothing to check.
+    expect(narrow.length, 'no holder of the narrow predicate — the scan is broken')
+      .toBeGreaterThanOrEqual(6);
+    expect(wide.length, 'no holder of the composed predicate — the scan is broken')
+      .toBeGreaterThanOrEqual(3);
+
+    // The derived set is the authority and the prose is what gets checked
+    // against it, never the other way round: a tenth holder reds here until the
+    // walk admits it.
+    for (const name of [...new Set([...narrow, ...wide])]) {
+      expect(doc, `the reader walk does not name ${name}`).toContain(name);
+    }
+    // The omission itself, called out by name, so the regression that started
+    // this has a line of its own rather than only a derived one.
+    expect(narrow, 'runHealth stopped reading the narrow predicate').toContain('runHealth');
   });
 });
 
@@ -1466,12 +1836,15 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the
 // `'absent' | 'unreadable'` read-failure vocabulary lives once, in
-// `server/src/io.ts`'s `ReadFailure`, and `registry.ts`'s `BranchEvidence`
+// `shared/agent-protocol.ts`'s `ReadFailure` — it was `server/src/io.ts`'s
+// until D-1438 moved it, which is what the first `it()` below asserts and
+// what this paragraph went on claiming for a wave — and `registry.ts`'s
+// `BranchEvidence`
 // DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
 // pair — it used to spell `'absent' | 'unreadable'` a second time at
 // `registry.ts:20`. `oneDefinition` above is per-named-symbol and hardcodes
 // `shared/api.ts` as the one legal home, so it cannot be reused for a
-// symbol whose home is `server/src/io.ts` — this is a bespoke assertion in
+// symbol whose home is `shared/agent-protocol.ts` — this is a bespoke assertion in
 // the same style.
 //
 // The fingerprint is the ORDERED PAIR, not either word alone:
@@ -1487,9 +1860,18 @@ describe('one absent/unreadable read vocabulary', () => {
   // is a legitimate lone `'absent'` and must not trip it.
   const PAIR = /'absent'\s*\|\s*'unreadable'|'unreadable'\s*\|\s*'absent'/;
 
-  it('is declared in exactly one file, and that file is server/src/io.ts', () => {
+  // D-1438: moved from `server/src/io.ts` to `shared/agent-protocol.ts`. The
+  // pair is wire-adjacent vocabulary both `agent/src/fileops.ts` and
+  // `server/src/io.ts` fold their read/stat outcomes into — declaring it
+  // server-side only left the agent side to restate it (twice: `ReadB64Result`
+  // and `ReadFromResult`), which is exactly the drift this scan exists to
+  // catch. `shared/` is a real consumer of both ends already (`agent/src/
+  // server.ts`, `server/src/remote/io.ts` both import `agent-protocol.ts`),
+  // so it is the one home reachable from both packages without an agent
+  // importing `server/src`.
+  it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
     const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['server/src/io.ts']);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
 
   it('is what registry.ts derives BranchEvidence from, not a second copy', () => {
@@ -1497,6 +1879,22 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).not.toMatch(PAIR);
     expect(registry).toMatch(/export type BranchEvidence = 'named' \| ReadFailure \| 'empty';/);
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
+  });
+
+  it('server/src/io.ts re-exports ReadFailure rather than restating it', () => {
+    const io = readFileSync(path.join(ccrcRoot, 'server/src/io.ts'), 'utf8');
+    expect(io).not.toMatch(PAIR);
+    expect(io).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/,
+    );
+  });
+
+  it('agent/src/fileops.ts imports ReadFailure rather than restating it', () => {
+    const fileops = readFileSync(path.join(ccrcRoot, 'agent/src/fileops.ts'), 'utf8');
+    expect(fileops).not.toMatch(PAIR);
+    expect(fileops).toMatch(
+      /import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/,
+    );
   });
 
   it('trips on EITHER ordering — a second copy spelled the other way round is still a second copy', () => {
@@ -1858,9 +2256,16 @@ describe('graphify — one pin, one census path', () => {
     expect(holders).toEqual(['ccd/ccrc']);
   });
   it("the census path '.ccrc/graph-sweep.json' is spelled by writers/readers, not duplicated as a second constant", () => {
-    // the sweep WRITES it, doctor READS it — both may spell it; nothing else may.
+    // The sweep WRITES it; doctor and the session hook READ it. Spelling a
+    // path you read is not duplicating a constant — what this guard forbids is
+    // a SECOND definition, a `CENSUS=`-shaped copy nothing derives from. The
+    // hook is a legitimate third holder (D-1333): it is installed on its own
+    // into ~/.cc-sessions and runs as Claude Code's hook with no ccd around to
+    // source, so it can only spell the path. The list stays exact-match, so a
+    // FOURTH holder still reddens this.
     const holders = holdersOf('graph-sweep.json');
-    expect(holders).toEqual(['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks']);
+    expect(holders).toEqual(
+      ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
   });
 });
 

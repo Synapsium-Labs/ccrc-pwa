@@ -65,8 +65,23 @@ density of the file you are editing.
 
 **`D-N` markers in comments are the deviation ledger** — a global, monotonic record of
 decisions and the measurements behind them. Read them as history; don't delete them. If
-you add one, take the next free number (check `main` first — two branches allocating in
-parallel has caused a renumber before).
+you add one, you are ISSUED numbers by the allocator (`POST /api/ledger/deviations`),
+and **allocate and define in the same act** — the gap between asking for a number and
+writing it down is where two branches come to hold the same one.
+
+Two branches allocating in parallel has forced a renumber more than once, so it is checked
+rather than remembered:
+
+```bash
+git fetch origin main
+cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
+```
+
+That suite compares this branch's ledger entries against `origin/main`'s **without merging
+either into the other**, and reds if any allocator-era number is defined in two different
+plans. It measures whatever `origin/main` your checkout has fetched — hence the `git fetch`
+first — and it goes red on a base it cannot resolve rather than quietly passing, so a
+shallow clone reports a problem instead of a clean bill. CI runs it on every PR.
 
 **Don't collapse two conditions a caller handles differently into one value.** "Absent"
 and "unreadable" are not the same answer; a function that returns `null` for both has

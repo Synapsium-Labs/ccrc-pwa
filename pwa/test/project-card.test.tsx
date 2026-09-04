@@ -17,7 +17,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: 'quiet-mesa', name: null, status: 'idle',
   statusUpdatedAt: null, limits: null, dialogPending: false, version: null,
   model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -384,7 +384,12 @@ const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   state: 'dispatched', claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
-  unreadMail: 0, ...over,
+  unreadMail: 0,
+  // F7's per-run health facts. All-clear, deliberately: every case in this file
+  // predates the warn row and must keep rendering exactly as it did.
+  health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+            lastRejectCode: null, briefQueued: true, clearError: null,
+            coordKickoffPendingSince: null }, ...over,
 });
 
 const worker = sess({ id: 'demo-still-cove', workspace: 'still-cove' });

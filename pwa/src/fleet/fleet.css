@@ -809,6 +809,7 @@
 .sess-line--active .sess-meta,
 .sess-line--active .sess-state,
 .sess-line--active .sess-tally,
+.sess-line--active .sess-graph,
 .sess-line--active .sess-subagents,
 .sess-line--active .sess-warn,
 .sess-line--active .sess-acct,
@@ -1076,6 +1077,15 @@
    quiet register as .sess-tally, no colour of its own (inherits .sess-meta's
    ink-secondary), so it needs no new contrast pair. */
 .sess-cleanup-fact {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* The hook's graph-read counter — same quiet register as .sess-tally, no
+   colour of its own (it inherits .sess-meta's ink-secondary), so it brings no
+   new contrast pair with it. */
+.sess-graph {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
@@ -1986,6 +1996,37 @@ button.sess-held {
    IS worth a second look is told apart by its WORDS ("resumed, not cleared"),
    the board's standing two-cue rule, never by a hue. Self-grounded under
    `.run-row` exactly as its neighbours are; no new token pair. */
+/* F7's compact warn row. Its OWN wrapped line inside the existing `.run-row`
+   (`flex-basis: 100%` against that row's `flex-wrap: wrap`), so a wedge reads as
+   a sentence about the run rather than as one more cell competing for phone
+   width. Scoped under `.run-row` — that is what grounds it for design/audit.mjs,
+   whose rule is that every colour sits on a declared background.
+
+   NO --glow, NO animation, NO box-shadow: runs are not living panes, and
+   `pwa/test/fleet-css.test.ts`'s selector loop holds this class to that. The ink
+   is `--status-attention-text`, already declared and already priced by
+   contrast-check.mjs — the amber warn register `.pr-warn` and
+   `.program-start-warn` use, not a new pair. */
+.run-row .run-warn {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--status-attention-text);
+}
+.run-row .run-warn-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.run-row .run-warn-glyph { color: var(--ink-tertiary); }
+
 .run-row .run-resumed {
   font-size: var(--text-2xs); color: var(--ink-tertiary);
 }

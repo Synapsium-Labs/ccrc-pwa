@@ -549,9 +549,12 @@ export const MIGRATIONS: readonly string[] = [
 
   -- D13: the allocator's record. One row per issued number, forever. state
   -- stores exactly TWO values, allocated|landed (DEVIATION_ALLOC_STATES,
-  -- shared/api.ts) — 'landed' means the number appears in a plan in the MAIN
-  -- checkout (sweepLedgerReconcile, part B), the signal the bb47c9e incident
-  -- lacked. 'stale' is NEVER WRITTEN here: a fact about a row and a clock is
+  -- shared/api.ts) — 'landed' means the number was seen DEFINED in a plan file
+  -- in the working tree of the MAIN checkout at sweep time, on whatever branch
+  -- that checkout was on, uncommitted edits included (sweepLedgerReconcile,
+  -- part B). NOT proof of a merge: no git is consulted on that path, so it is a
+  -- weaker signal than the one the bb47c9e incident lacked, not the same one.
+  -- 'stale' is NEVER WRITTEN here: a fact about a row and a clock is
   -- derived by the reader (allocatedAt + LEDGER_STALE_MS, 7 days
   -- never-landed), reported and NEVER reclaimed. Read back through the L0
   -- guard, never a cast.
@@ -689,6 +692,110 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 7: user_version 6 -> 7 ────────────────────────────────────────────────
+  // Two columns recording what a dispatch DECIDED, as opposed to what it did
+  // (D-1298). MIGRATIONS[0..5] ARE FROZEN, for the reason every entry above
+  // states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`,
+  // so an amendment to an applied entry never runs again.
+  //
+  // `briefQueued` is `!resumed || clearedAt !== null` (coord/dispatch.ts) — the
+  // answer to "did this dispatch actually queue a wave-brief". Its TRUE branch
+  // already leaves a durable artefact, the brief mail row itself. Its FALSE branch
+  // — a resume whose `/clear` was refused — left NOTHING, and absence there is
+  // indistinguishable from "no dispatch ever happened", which is the one state an
+  // operator most needs told apart from it. A reader could re-derive the formula
+  // from `resumed`/`clearedAt`, but that is a re-derivation of a RULE, not a
+  // record of a DECISION, and it silently changes meaning the day anything else
+  // writes `clearedAt`.
+  //
+  // `clearError` is the `sendPrompt` refusal code that made it false. Today it
+  // survives only as `run_events.detail`'s `clear-refused:<code>` — a table no
+  // HTTP route serves — written through a MUTUALLY EXCLUSIVE ternary
+  // (coord/dispatch.ts) that already drops it whenever `adopted` wins.
+  //
+  // NULLABLE, NO DEFAULT, both. NULL means "an older build wrote this row, or no
+  // dispatch has committed for it". `briefQueued = 0` means "this dispatch queued
+  // no brief". A `DEFAULT 0` would make those one value — the overloaded null this
+  // file's own additive-only rule forbids at a new seam, and the exact defect the
+  // dispatchStartedAt and gate-column entries above each argued through.
+  `
+  ALTER TABLE runs ADD COLUMN briefQueued INTEGER;
+  ALTER TABLE runs ADD COLUMN clearError  TEXT;
+  `,
+
+  // ── 8: user_version 7 -> 8 ────────────────────────────────────────────────
+  // A ONE-TIME DATA REPAIR (D-1424) — the only entry in this array that is not
+  // DDL, and the reason it is one is that hand-editing a live coord.db is
+  // available to nobody. MIGRATIONS[0..6] ARE FROZEN, for the reason every entry
+  // above states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION;
+  // v++)`, so an amendment to an applied entry never runs again.
+  //
+  // WHAT WENT WRONG. Until this build the reconcile sweep's landing half matched
+  // a bare `\bD-<n>\b` anywhere in a plan's text while its orphan half, eleven
+  // lines away, used the DEFINITION shape (D-1420, watch.ts). On 2026-09-02 a
+  // BLOCKQUOTE citing an allocation RANGE — a line reading, in full, "> " then
+  // bold "D-1294..D-1332" then "from POST /api/ledger/deviations" — stamped those
+  // two numbers `landed` against a plan that CITES them and DEFINES neither.
+  // `markLanded`'s `WHERE ... state = 'allocated'` (store.ts) makes a landing
+  // terminal, so the corrected sweep can never re-decide them: the rows have to
+  // be put back before it can.
+  //
+  // WHY TWO NUMBERS **AND** A PATH, AND NOT THE PATH ALONE. The path alone was
+  // this repair's first design, on the measurement that the citing file defined
+  // nothing the allocator had ever issued. THAT MEASUREMENT EXPIRED THE DAY AFTER
+  // IT WAS TAKEN. The file merged to main on 2026-09-03 carrying a ledger of its
+  // own; replaying `definitionsIn` over that copy yields a ledger of its own — a
+  // D-1245..D-1252 band and an unbroken band from D-1333 UP, which that plan keeps
+  // extending (#46 carried it past D-1366 the morning after this paragraph was
+  // first written, which is why the cardinal that stood here is gone: it went
+  // stale in one day, D-1444) — and the upper band is
+  // allocator-issued by the file's own record. A path-keyed statement would
+  // therefore have un-landed every one of those CORRECT rows, and would have found some
+  // already there: the old bare-`\b` matcher landed D-1333 against this same file
+  // too, and THERE IT WAS RIGHT. The repair would have created the corruption it
+  // exists to fix.
+  //
+  // WHAT HOLDS THE NARROW FORM is a property of the two numbers, not of that
+  // file's size — which is why it does not expire the way the first one did. The
+  // citing file defines neither 1294 nor 1332, and cannot come to: both are
+  // already DEFINED, on origin/main, in
+  // 2026-09-02-program-leverage-wave7-f7.md, and an allocator-era number defined
+  // in a second file is what `unallocatedDefinitions` and
+  // `deviation-refs.test.ts` exist to catch. So no correctly-landed row can name
+  // THIS pair against THIS path, however that plan grows. It does NOT generalise
+  // to another citing file or another pair; the matcher fix is what stops there
+  // being one.
+  //
+  // AFTER THIS both numbers are `allocated` again and the corrected sweep
+  // re-decides them from the plans it can actually read — landing them against
+  // the wave-7 plan that defines them, once the main checkout carries it, and
+  // until then leaving an OPEN row, which is a true statement where the stamp was
+  // a false one. `landedAt` is cleared with `landedIn` for the same reason: a row
+  // that is `allocated` while still carrying a landing stamp is the overloaded
+  // value this whole repair is about.
+  //
+  // `state = 'landed'` is BELT-AND-BRACES and no test can red it, which is said
+  // here rather than hidden: `markLanded` is the only writer of `landedIn` in
+  // `server/src` and it always sets `state`, `landedAt` and `landedIn` together,
+  // so an `allocated` row carrying a non-null `landedIn` is a state this tree
+  // cannot reach. A fixture that could red the predicate would have to invent
+  // one. The two NUMBERS and the PATH are what actually hold this statement.
+  `
+  UPDATE ledger_alloc
+     SET state = 'allocated', landedAt = NULL, landedIn = NULL
+   WHERE state = 'landed'
+     AND n IN (1294, 1332)
+     AND landedIn = 'docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md';
+  `,
+
+  // ── 9: user_version 8 -> 9 ────────────────────────────────────────────────
+  // APPENDED, NOT MERGED, AND RENUMBERED. This entry was written when
+  // `MIGRATIONS[6]` was the free slot; by the time it merged, `main` had taken
+  // 7 (the dispatch-decision columns) and 8 (the ledger data repair), so it
+  // lands at 9. Renumbering THIS one is the only correct resolution — the
+  // other two are already on `main`, so a box may have applied them, and
+  // `db.ts` runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`: an entry
+  // that changes index changes which boxes have already run it.
+  // MIGRATIONS[0..7] ARE FROZEN.
   // Automations: a Runner that spawns a session at a time the operator
   // chooses, plus its full run history (design spec §5,
   // docs/superpowers/specs/2026-08-31-automations-design.md:305-419). FOUR

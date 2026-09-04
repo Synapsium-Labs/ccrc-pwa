@@ -659,6 +659,13 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.clearedAt).toEqual(expect.any(Number));
     expect(row?.workspace).toBe('demo-existing');
     expect(row?.branch).toBe('ws/demo-existing');
+    // F7 / D-1298, the TRUE branch. Its sibling below asserts `briefQueued: 0` on
+    // a refused /clear, and without this case that assertion would pass just as
+    // well against an implementation that wrote 0 unconditionally — the fixture
+    // has to be able to produce the presence, not only the absence.
+    expect(w.coord.db.prepare('SELECT briefQueued, clearError FROM runs WHERE id = ?')
+      .get(opened.id)).toEqual({ briefQueued: 1, clearError: null });
+    expect(row?.health.briefQueued).toBe(true);
   });
 
   it('a RESUMED dispatch leaves dispatchStartedAt null — the column measures the SPAWN, and a resume ' +
@@ -723,6 +730,18 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);   // refused before any keystroke
     expect(w.coord.run(opened.id)?.clearedAt).toBeNull();
     expect(w.coord.run(opened.id)?.state).toBe('dispatched');   // dispatch itself still lands
+    // F7 / D-1298: the DECISION is durable now, not only the run-event string.
+    // Before migration 7 this branch left nothing a reader could reach: the
+    // `clear-refused:` detail sits on `run_events`, which no HTTP route serves,
+    // and its ternary drops it whenever `adopted` wins. `briefQueued === false`
+    // and `null` stay two different facts, which is why the column is defaultless.
+    const durable = w.coord.db.prepare('SELECT briefQueued, clearError FROM runs WHERE id = ?')
+      .get(opened.id) as { briefQueued: number | null; clearError: string | null };
+    expect(durable, 'the dispatch decision is not durable')
+      .toEqual({ briefQueued: 0, clearError: 'dialog-open' });
+    const health = w.coord.runHealth([opened.id], []).get(opened.id)!;
+    expect(health.briefQueued, 'the board cannot see that no brief was queued').toBe(false);
+    expect(health.clearError).toBe('dialog-open');
     // D-47: the refusal is a fact about the run now, not a null column and a
     // silently discarded error — `run_events.detail` names which of
     // sendPrompt's typed refusals fired.

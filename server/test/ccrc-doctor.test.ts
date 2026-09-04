@@ -995,6 +995,41 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     '#!/bin/sh\n[ "$1" = --version ] && { echo "graphify 0.9.9"; exit 0; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(home, '.ccrc', 'graphify.pin'), '0.9.9\n');
+  // R3: `graphify-path` is a check, and healthy()'s contract is that every
+  // check PASSES. `<home>/.local/bin` is already the head of the contained
+  // PATH (`ghContainedEnv` -> `harnessBin`, which also creates the directory),
+  // so the link is what `command -v graphify` finds.
+  //
+  // `linkReal(home, 'realpath')` IS LOAD-BEARING, not tidiness — but for the
+  // SKIP it prevents, not for a failing verdict (D-1354 corrects the R3
+  // sentence that stood here, which described the check as D-1350 found it
+  // rather than as D-1350 left it). This file's contained PATH is
+  // `<home>/.local/bin:<home>/stub-bin` and NO system directory — it links in
+  // only jq, timeout, stat and date. `_check_graphify-path` resolves both
+  // sides with `realpath`, and since D-1350 it answers an unreachable
+  // `realpath` with a SKIP: it does not guess from the unresolved paths, so a
+  // converged-but-realpath-less box is never handed the mismatch verdict. That
+  // makes a missing `realpath` a COUNTING defect here, not a failing one —
+  // `HEALTHY_SKIPS` is how many skips a healthy box is allowed, and one more
+  // moves every summary pin that reads it.
+  //
+  // Measured 2026-09-02, by deleting this one line and re-running this file:
+  // baseline `Tests  314 passed | 3 skipped (317)`; without it `Tests  7
+  // failed | 307 passed | 3 skipped (317)`, with doctor printing `SKIP
+  // graphify-path: this box has no usable realpath …`. All seven reds are
+  // skip/verdict COUNTS: the three `(N skipped)` summary pins (tmux_skew,
+  // config fleet-role, fleet local), both `expect(skipped).toBe(HEALTHY_SKIPS)`
+  // assertions, the `"… 1 warned, 1 failed"` pin (which red on `(0 skipped)`
+  // while its verdict half still read `1 warned, 1 failed`), and
+  // `expect(verdicts).toBe(total - HEALTHY_SKIPS)` (27 vs 28). The run's rc
+  // stays 0 and the `fail` assertion never red — no line said the check
+  // failed. (`ccrc-doctor-graphify.test.ts` links a real `realpath` in its own
+  // `healthy()` for the same reason, and pins the SKIP itself as its D-1350
+  // case; `ccrc-doctor-graphify.test.ts` also pins THIS paragraph against the
+  // shipped arm, so the two cannot drift apart again.)
+  linkReal(home, 'realpath');
+  symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
+    join(home, '.local', 'bin', 'graphify'));
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
     pin: '0.9.9', status: 'ok', trees: [] }] }));
@@ -4530,13 +4565,26 @@ describe('ccrc doctor: the output contract', () => {
     ghStub(home, ['github.com', '  - Logged in to github.com account fixture-bot (oauth_token)'], 0);
     const skipBox = healthy('ccrc-doctor-shape-skip-');
     rmSync(join(skipBox, '.ccrc', 'ccrc.env'), { force: true });
+    // THE NAME HALF IS DERIVED FROM THE TABLE, not spelled as a charset
+    // (D-1345). It used to read `[a-z0-9_]+`, which was never a rule anybody
+    // stated — it was the alphabet every check id happened to use — and R3's
+    // `graphify-path`, whose hyphen the spec and `_check_graphify-path`'s own
+    // header both choose deliberately, made it a false verdict about the SHAPE
+    // this test is named for: `PASS graphify-path: …` is exactly
+    // `<VERDICT> <name>: <detail>`. Deriving the alternation from
+    // `CCRC_DOCTOR_CHECKS` is this project's own "enumerate once, derive" rule
+    // and it is STRICTER than any charset — a verdict printed under a name the
+    // table does not carry is now red here, where the old regex accepted it.
+    const nameAlt = tableNames()
+      .map((n) => n.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')).join('|');
+    const shape = new RegExp(`^(PASS|WARN|FAIL|SKIP) (${nameAlt}): \\S`);
     for (const [h, wantSkips] of [
       [home, HEALTHY_SKIPS], [skipBox, 2 + HEALTHY_SKIPS],
     ] as const) {
       let verdicts = 0; let skips = 0;
       for (const l of runDoctor(h).stdout.split('\n')) {
         if (!l || l.startsWith('  remedy: ') || l.startsWith('summary: ')) continue;
-        expect(l).toMatch(/^(PASS|WARN|FAIL|SKIP) [a-z0-9_]+: \S/);
+        expect(l).toMatch(shape);
         if (l.startsWith('SKIP ')) skips++; else verdicts++;
       }
       // Without this the loop above is a scan over an empty list, which passes

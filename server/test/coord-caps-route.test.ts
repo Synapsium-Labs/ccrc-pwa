@@ -62,14 +62,24 @@ const postCaps = (app: FastifyInstance, payload: unknown) =>
   app.inject({ method: 'POST', url: '/api/coord/caps', payload: payload as Record<string, unknown> });
 
 describe('GET /api/coord/caps', () => {
-  it('answers the stored limits and the derived usage', async () => {
+  it('answers the stored limits, the derived usage, and when they last moved', async () => {
     const { app, coord } = await withCoord();
-    coord.setCaps({ maxConcurrentWorkers: 4, maxSessionsPerDay: 16 });
+    // D-1169: the caller owns the moment now, so a fixture can finally pin it —
+    // which is the concrete cost the old internal `Date.now()` carried.
+    coord.setCaps({ maxConcurrentWorkers: 4, maxSessionsPerDay: 16 }, 1_700_000_000_000);
     const res = await getCaps(app);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 4, maxSessionsPerDay: 16 },
-      usage: { running: 0, dispatchedIn24h: 0 } });
+      usage: { running: 0, dispatchedIn24h: 0 },
+      updatedAt: 1_700_000_000_000 });
+  });
+
+  it('says null, never the epoch, for caps nobody has ever moved', async () => {
+    // Migration 1 seeds `updatedAt = 0`. A dial rendering 1970 for an untouched
+    // box would be inventing an event the column cannot actually report.
+    const { app } = await withCoord();
+    expect((await getCaps(app)).json().updatedAt).toBeNull();
   });
 
   it('answers 501 not-configured on a box with no coordination database', async () => {
@@ -101,7 +111,10 @@ describe('POST /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 5, maxSessionsPerDay: DEFAULTS.maxSessionsPerDay },
-      usage: { running: 0, dispatchedIn24h: 0 } });
+      usage: { running: 0, dispatchedIn24h: 0 },
+      // A write stamps it; the route reads the STORED value back, so this is the
+      // server's own clock and not the caller's assertion about it.
+      updatedAt: expect.any(Number) });
     // …and it really landed in the store, not merely in the reply.
     expect(coord.caps()).toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 12 });
   });

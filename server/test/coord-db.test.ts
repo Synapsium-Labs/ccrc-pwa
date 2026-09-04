@@ -327,8 +327,8 @@ describe('coord.db: migration 1 — runs_by_session', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
-    expect(COORD_SCHEMA_VERSION).toBe(7);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as
       { name: string }[]).map((r) => r.name);
     expect(names).toContain('runs_by_session');
@@ -373,7 +373,8 @@ describe('coord.db: migration 2 — the lifecycle journal mirror', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(tables).toEqual(expect.arrayContaining([
@@ -441,7 +442,8 @@ describe('coord.db: migration 3 — claims and the deviation ledger', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name);
     expect(tables).toEqual(expect.arrayContaining([
@@ -548,7 +550,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
     expect(runsColumn(db, 'dispatchStartedAt')).toBeDefined();
     db.close();
   });
@@ -570,7 +573,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     raw.close();
 
     const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(7);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
     const cols = (db.prepare('PRAGMA table_info(mail_deliveries)').all() as unknown as ColumnInfo[])
       .map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(['lastGate', 'gateCount', 'gateSince', 'gateAt']));
@@ -611,9 +615,51 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 7 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(7);
-    expect(MIGRATIONS.length).toBe(7);
+  it('migration 7 gives runs briefQueued and clearError, nullable and defaultless', () => {
+    // D-1298. NULLABLE WITH NO DEFAULT, and both halves are load-bearing here for
+    // the same reason they were for dispatchStartedAt: NULL means "an older build
+    // wrote this row, or no dispatch has committed", while `briefQueued = 0` means
+    // "this dispatch queued no brief". A DEFAULT 0 would make those one value —
+    // the overloaded null at exactly the seam the columns exist to keep honest,
+    // because the FALSE branch is the one that previously left no trace at all.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const bq = runsColumn(db, 'briefQueued');
+    const ce = runsColumn(db, 'clearError');
+    expect(bq, 'runs.briefQueued is absent').toBeDefined();
+    expect(ce, 'runs.clearError is absent').toBeDefined();
+    expect(bq!.type).toBe('INTEGER');
+    expect(ce!.type).toBe('TEXT');
+    expect(bq!.notnull, 'briefQueued is NOT NULL — absence would read as false').toBe(0);
+    expect(bq!.dflt_value, 'briefQueued carries a default — null and false collapse').toBeNull();
+    expect(ce!.notnull, 'clearError is NOT NULL').toBe(0);
+    expect(ce!.dflt_value, 'clearError carries a default').toBeNull();
+    db.close();
+  });
+
+  it('reaches a database ALREADY at user_version 6 — it cannot be an amendment to any earlier migration', () => {
+    // The guard migrations 2..6 each earned, for migration 7. A file left by a
+    // wave-6 server is at 6; db.ts's loop starts at `current`, so anything amended
+    // INTO entries 0..5 can never run against it again.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let i = 0; i <= 5; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 6');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    expect(runsColumn(db, 'briefQueued')).toBeDefined();
+    expect(runsColumn(db, 'clearError')).toBeDefined();
+    db.close();
+  });
+
+  it('COORD_SCHEMA_VERSION derives to 9 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(9);
+    expect(MIGRATIONS.length).toBe(9);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -633,7 +679,84 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
   });
 });
 
-describe('coord.db: migration 6 — automations, their runs and their steps', () => {
+describe('coord.db: migration 8 — un-landing the two rows a CITATION stamped', () => {
+  // The file the old matcher stamped against. It CITES an allocation RANGE in a
+  // blockquote — `> **D-1294..D-1332** from \`POST /api/ledger/deviations\`` — and
+  // DEFINES neither number. That, and only that, is the argument: it is otherwise
+  // an ordinary merged plan which defines a whole ledger of its own — a 1245-1252
+  // band and an unbroken band from 1333 up, which that plan keeps extending, so no
+  // count is written here (it moved the day after one was, D-1444) — most of them
+  // allocator-issued. So the
+  // path CANNOT be the whole discriminator, and the two rows below prove it from
+  // both sides.
+  const CITING = 'docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md';
+  const DEFINING = 'docs/superpowers/plans/2026-09-02-program-leverage-wave7-f7.md';
+
+  const INSERT =
+    'INSERT INTO ledger_alloc (project, n, title, allocatedTo, runId, allocatedAt, ' +
+    'state, landedAt, landedIn) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)';
+  const ROWS = 'SELECT n, state, landedAt, landedIn FROM ledger_alloc ORDER BY n';
+
+  /** A file exactly as a server at user_version 7 left it, carrying the two rows
+   *  the citation stamped, one landed off a real definition in ANOTHER file, one
+   *  landed off a real definition in the SAME file, and one still open. The
+   *  fourth row is the one the plan's path-only statement would have destroyed:
+   *  the old matcher landed D-1333 against that file too, and it was RIGHT to. */
+  const atV7 = (): string => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let i = 0; i <= 6; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 7');
+    });
+    const ins = raw.prepare(INSERT);
+    ins.run('ccrc-pwa', 1293, 'landed off a definition elsewhere', 'x', 1, 'landed', 9, DEFINING);
+    ins.run('ccrc-pwa', 1294, 'stamped off a citation', 'x', 1, 'landed', 9, CITING);
+    ins.run('ccrc-pwa', 1300, 'still open', 'x', 1, 'allocated', null, null);
+    ins.run('ccrc-pwa', 1332, 'stamped off a citation', 'x', 1, 'landed', 9, CITING);
+    ins.run('ccrc-pwa', 1333, 'landed off a real definition in that same file', 'x', 1, 'landed', 9, CITING);
+    raw.close();
+    return p;
+  };
+
+  it('un-lands exactly the two numbers the citation named, and touches nothing else', () => {
+    const p = atV7();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare(ROWS).all()).toEqual([
+      { n: 1293, state: 'landed', landedAt: 9, landedIn: DEFINING },
+      { n: 1294, state: 'allocated', landedAt: null, landedIn: null },
+      { n: 1300, state: 'allocated', landedAt: null, landedIn: null },
+      { n: 1332, state: 'allocated', landedAt: null, landedIn: null },
+      // NOT un-landed, and this row is the whole reason the statement names two
+      // numbers instead of a path: that file really does define D-1333, so this
+      // landing is TRUE and a path-keyed repair would have deleted it.
+      { n: 1333, state: 'landed', landedAt: 9, landedIn: CITING },
+    ]);
+    db.close();
+  });
+
+  it('cannot reach a row the corrected sweep lands against that same file afterwards', () => {
+    // Not merely "running it twice changes nothing" — that is trivially true once
+    // no row matches. This plants a row the CORRECTED sweep really will land, with
+    // the CITING file as its `landedIn`, and proves the statement cannot reach it.
+    // D-1340 is defined in that file (`- **D-1340** — …`) and issued by the
+    // allocator, so this is the ordinary future, not a contrived one.
+    const p = atV7();
+    const db = openCoordDb(p);
+    db.prepare(INSERT).run(
+      'ccrc-pwa', 1340, 're-landed by the corrected sweep', 'x', 1, 'landed', 11, CITING);
+    const before = db.prepare(ROWS).all();
+    db.exec(MIGRATIONS[7]!);
+    expect(db.prepare(ROWS).all()).toEqual(before);
+    db.close();
+  });
+});
+
+
+describe('coord.db: migration 9 — automations, their runs and their steps', () => {
   interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
   const tableInfo = (db: DatabaseSync, table: string): ColumnInfo[] =>
     db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[];
@@ -668,10 +791,10 @@ describe('coord.db: migration 6 — automations, their runs and their steps', ()
     ).run(row);
   };
 
-  it('reaches user_version 7 and creates all four tables plus their indexes', () => {
+  it('reaches the head user_version and creates all four tables plus their indexes', () => {
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-      .toBe(7);
+      .toBe(COORD_SCHEMA_VERSION);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name);
     expect(tables).toEqual(expect.arrayContaining([
@@ -772,9 +895,11 @@ describe('coord.db: migration 6 — automations, their runs and their steps', ()
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
     tx(raw, () => {
-      raw.exec(MIGRATIONS[0]!); raw.exec(MIGRATIONS[1]!); raw.exec(MIGRATIONS[2]!);
-      raw.exec(MIGRATIONS[3]!); raw.exec(MIGRATIONS[4]!); raw.exec(MIGRATIONS[5]!);
-      raw.exec('PRAGMA user_version = 6');
+      // Seeds every entry BELOW this one and stamps the version it left, so the
+      // loop has exactly this migration to run. The range moved from 0..5 to 0..7
+      // when `main` took 7 and 8 and this entry was renumbered to 9.
+      for (let i = 0; i <= 7; i++) raw.exec(MIGRATIONS[i]!);
+      raw.exec('PRAGMA user_version = 8');
     });
     raw.prepare(
       "INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')",
@@ -787,7 +912,7 @@ describe('coord.db: migration 6 — automations, their runs and their steps', ()
 
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
-      .toBe(7);
+      .toBe(COORD_SCHEMA_VERSION);
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as
       { name: string }[]).map((r) => r.name);
     expect(tables).toEqual(expect.arrayContaining([

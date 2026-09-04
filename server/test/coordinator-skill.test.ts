@@ -131,11 +131,16 @@ describe('the coordinator skill: its contract', () => {
     }
   });
 
-  it('tells the session how to learn its own id the ONE way that works on this box', () => {
-    // ccd/session-hook.sh:15-19 — derived from tmux, never from a `from:`
-    // field. Copied because the skill runs where the hook runs.
-    expect(skill).toContain("tmux display-message -p '#S'");
+  it('tells the session how to learn its own id the ONE way that is actually its own', () => {
+    // The bare derivation this replaced was measured on the fleet host three
+    // times on 2026-09-02: with no TMUX_PANE it exits 0 naming the MOST RECENTLY
+    // ACTIVE session — a different one on each run — so a session whose lookup
+    // went wrong got another session's id and believed it. `ccrc-api whoami`
+    // targets THIS pane and refuses instead.
+    expect(skill).toContain('ccrc-api" whoami');
     expect(skill).toContain('cc-');
+    expect(skill, 'the unchecked derivation is back')
+      .not.toContain("tname=$(tmux display-message -p '#S')");
   });
 
   // Wave 3 §3.1. A coordinator writes a ledger and a brief that name the
@@ -597,6 +602,31 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
     expect(para).toMatch(/prove|provenance|its own/i);
   });
 
+  // A handover now puts the corpse's unacked ROLE mail in the heir's box as a
+  // new delivery. Unsaid, the heir reads item 4 above, concludes the reports are
+  // gone, and re-dispatches finished work — exactly the harm `resume.md`'s "read
+  // outstanding mail before deciding anything" exists to prevent.
+  //
+  // ANCHORED ON A PHRASE THE PARAGRAPH OWNS, NOT ON THE ROUTE, and that is not a
+  // style choice: the `never names the reclaim door` case at the foot of this
+  // file forbids that route string corpus-wide, so a paragraph anchored on it
+  // could not exist. The phrase is paren-free so it is also safe as a `-t`
+  // pattern, and `find` returning `undefined` is what makes a deleted passage
+  // red instead of silently passing.
+  it('tells the heir a handover re-queues the reports the dead coordinator never acked', () => {
+    const para = envelope().split('\n\n')
+      .find((p) => p.includes('hands the program to a new coordinator'));
+    expect(para,
+      'no paragraph in mail-envelope.md says what a handover does to a parked report').toBeDefined();
+    expect(para, 'the passage does not say the heir gets a NEW delivery').toMatch(/new delivery/i);
+    // The distinction that must survive any rewrite: a NEW delivery, not the old
+    // park reopened — item 4's own "the park is terminal" is still true and this
+    // paragraph must not read as a retraction of it. One exact phrase, not a
+    // disjunction with alternatives no prose here can satisfy.
+    expect(para, 'the passage does not say the old park is left unreopened')
+      .toContain('is not reopened');
+  });
+
   // NO CENSUS ASSERTION HERE, and the reason is worth recording so it is not
   // re-added: this file ALREADY pins it exactly —
   //   `expect(hits).toBe(CONTRACT[2].split(verb).length - 1)`
@@ -622,6 +652,30 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
 // three spaces), so a literal `toContain` would pin the wrap point rather than
 // the sentence and would red on a re-flow that changed nothing.
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+/** A named slice between two literal anchors — `single-definition.test.ts`'s
+ *  `passage()`, copied for its REASON as much as its shape (this tree keeps the
+ *  idiom per-file on purpose: it touches nothing shared, so a copy costs one
+ *  helper and an import would cost a seam).
+ *
+ *  The bare `wl.slice(wl.indexOf(OPEN), wl.indexOf(CLOSE))` pair it replaces was
+ *  the POSITIVE-assertion form of the runaway slice, which is the quieter half of
+ *  the defect (D-1440). A lost OPENING anchor gives `''`; a lost CLOSING one gives
+ *  `-1`, and `String.slice(a, -1)` means "to length - 1" — so the block silently
+ *  becomes the whole rest of the file, a `> 0` floor is satisfied by anything at
+ *  all, and a `toMatch` can then be answered by the phrase appearing ANYWHERE
+ *  below. The assertion stops testing the block it names and stays green. So both
+ *  anchors are asserted, the closing one is searched for AFTER the opening one and
+ *  must follow it, and the floor is a real one rather than `> 0`. */
+const passage = (name: string, text: string, from: string, to: string, floor: number): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const b = text.indexOf(to, a + from.length);
+  expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+  const out = text.slice(a, b);
+  expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(floor);
+  return out;
+};
 
 describe('the coordinator delegates the standing protocol to the worker skill', () => {
   /** The worker skill's own frontmatter `name:`, harvested — never typed here.
@@ -685,9 +739,9 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     // bearing BECAUSE of what it prevents, and a block that kept the
     // instruction while losing the reason is a rule a coordinator may talk
     // itself out of.
-    const block = wl.slice(wl.indexOf('One sentence from the protocol goes in every brief anyway'),
-      wl.indexOf("The workspace's name is frozen"));
-    expect(block.length, 'the branch-discipline block never closes').toBeGreaterThan(0);
+    const block = passage('the branch-discipline block', wl,
+      'One sentence from the protocol goes in every brief anyway',
+      "The workspace's name is frozen", 600);
     expect(block, 'the branch-discipline block no longer says what a feature branch costs')
       .toMatch(/refuses\s+`stale-tip` forever, with no non-abandon path to close a run/);
     expect(flat(skill)).toContain(
@@ -698,6 +752,120 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     // has to survive the trim too, or the one non-negotiable sentence becomes
     // optional by omission.
     expect(wl).toContain(`clause 5's "the content is this session's judgement" does not cover it`);
+  });
+});
+
+describe('the graph-card paragraph describes the card ccd/session-hook.sh actually prints', () => {
+  // NOTHING under `server/test` read this paragraph when it landed, so it could
+  // — and did — describe a two-state freshness the hook has not had since
+  // D-1336, and a card that every session prints when the hook prints nothing at
+  // all for a tree with no graph and no census row. That is the same class the
+  // refusal-code cross-check above closes for SKILL.md: a doc that quotes
+  // another file's vocabulary and is bound to nothing drifts silently. Every
+  // word quoted here is HARVESTED from the writer, so the next hook change reds
+  // this doc instead of orphaning it.
+  const hook = readFileSync(path.join(root, 'ccd/session-hook.sh'), 'utf8');
+
+  /** The paragraph itself, by its own opening — one blank-line-delimited block. */
+  const para = (): string => {
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf("**A brief may quote the worker's graph card");
+    expect(start, 'wave-lifecycle.md carries no graph-card paragraph at all')
+      .toBeGreaterThanOrEqual(0);
+    const end = wl.indexOf('\n\n', start);
+    return flat(wl.slice(start, end === -1 ? undefined : end));
+  };
+
+  /** Every freshness word the card can carry, harvested from the hook's own
+   *  assignments, normalised over the count. Four arms, three words: `fresh`,
+   *  `<n> commit(s) behind HEAD`, and D-1336's `freshness unmeasured` — the one
+   *  the paragraph collapsed. */
+  const FRESHNESS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
+      'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
+      'looking at the wrong file');
+    return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
+  })();
+
+  /** Every QUALIFIER the card APPENDS to a freshness word, harvested from the
+   *  hook's own `fresh+=` sites — the twin of `ccrc-install-graphify.test.ts`'s
+   *  (D-1369), mirrored here for the reason D-1372 records: the harvest above
+   *  COULD NOT SEE D-1368 LAND. That change made a squash-merged graph read
+   *  `fresh — same content as HEAD`, which is exactly the case this paragraph
+   *  went on promising would read `not an ancestor of HEAD`, and the pin stayed
+   *  green over the drift twice over — the new `fresh="fresh"` assignment left
+   *  the vocabulary SET identical after the de-dupe, and the qualifier is
+   *  APPENDED, so `/\bfresh="([^"]+)"/` never matched it at all. A qualifier is
+   *  deliberately not a state (nothing branches on it, which is why the
+   *  FRESHNESS harvest is the right shape for the states), but it IS card text
+   *  a coordinator quotes into a brief. Leading punctuation is stripped so the
+   *  pin is on the words, not on the em dash that joins them. */
+  const QUALIFIERS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+      .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
+    if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
+      'all — the card was rewritten, and the graph-card paragraph that names one has to be ' +
+      're-derived against it rather than left standing');
+    return [...new Set(vals)];
+  })();
+
+  /** Word-BOUNDARY match, never a raw substring — the same hole as the worker
+   *  suite's twin harvest (D-1342). `fresh` is a substring of `freshness
+   *  unmeasured`, so a `toContain` arm for it passes on the longer word alone
+   *  and can never fail; this paragraph carries NO verbatim pin, so that
+   *  harvest is its only binding and a vacuous arm leaves it unbound. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  it('names the qualifier the hook APPENDS, and scopes the ancestry words to a differing tree (D-1372)', () => {
+    // DERIVED FROM ORDER, the same way the README's twin arm is: the card asks
+    // a CONTENT predicate before it asks ancestry at all, so a graph whose
+    // bytes are HEAD's reads `fresh` and never reaches the `not an ancestor of
+    // HEAD` arm — which is what this paragraph promised for that very case
+    // until D-1372. Nothing here pins a spelling of either predicate, only
+    // which one decides first.
+    const content = hook.indexOf('_hook_same_tree "$cwd"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
+      'looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
+      'is looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(content, 'ccd/session-hook.sh decides ancestry before content, so a graph whose tree ' +
+      "IS HEAD's reads `not an ancestor of HEAD` again — D-1368 was reversed")
+      .toBeLessThan(ancestry);
+    for (const q of QUALIFIERS) {
+      expect(para(), `the graph-card paragraph never names the \`${q}\` qualifier the hook ` +
+        'appends to a freshness word — a coordinator quoting the card into a brief meets text ' +
+        'this paragraph says the card cannot carry').toMatch(wordRe(q));
+    }
+    expect(para(), 'the graph-card paragraph enumerates the ancestry words without saying that ' +
+      'CONTENT is asked first — a squash-merged graph reads `fresh` where this paragraph ' +
+      'promises `not an ancestor of HEAD`').toMatch(/CONTENT decides that clause first/);
+  });
+
+  it('names every freshness state the hook can print, including the unmeasured one', () => {
+    for (const word of FRESHNESS) {
+      expect(para(), `the graph-card paragraph never names the \`${word}\` state the hook prints`)
+        .toMatch(wordRe(word));
+    }
+  });
+
+  it('does not promise a card for every session — the hook prints nothing for most trees', () => {
+    // The no-graph arm returns SILENTLY unless the sweep census carries a row
+    // for the tree, and prints a DIFFERENT sentence when it does. A coordinator
+    // told every session prints a card reads a missing one as a fault.
+    const m = /_hook_emit_context "graphify: ([^"$]+?) —/.exec(hook);
+    expect(m, 'ccd/session-hook.sh emits no no-graph sentence — this pin is looking at the ' +
+      'wrong file, or the refused-tree arm lost its one quotable line').not.toBeNull();
+    expect(para(), 'the paragraph never quotes the line a refused tree gets instead of a card')
+      .toContain(m![1]!);
+    expect(para(), 'the paragraph does not say a tree can get NO card at all')
+      .toMatch(/gets NOTHING/);
+    // The regression itself, spelled: the sentence that made this paragraph
+    // wrong is the one that generalised over every session.
+    expect(para(), 'the paragraph is back to claiming every session prints a card')
+      .not.toMatch(/Every session's `SessionStart` prints one line/);
   });
 });
 
@@ -981,6 +1149,41 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(pp()).toContain('"byUuid":"$uuid"');
     expect(pp()).not.toContain('"fromId":"$id"');
     expect(pp()).not.toContain('"fromUuid":"$uuid"');
+  });
+
+  it('the allocate fence names byId, in the spelling the claim fence already uses', () => {
+    // The route takes `byId` optionally and stores `byId ?? ''`, so an omitted
+    // field lands as no holder at all — measured 2026-09-02, at least 101 of
+    // this project's allocations are in that state. This fence is the only
+    // documented allocate body in either corpus, so it is where that started.
+    // What makes it about THIS fence is ORDER, measured: both existing
+    // `"byId":"$id"` spellings (`:42` and `:68` — the claims bodies the test above
+    // pins, ~80 lines above the allocator section) sit BEFORE `ledger
+    // allocate`, so with this fence's byId deleted even an unbounded
+    // `[\s\S]*` fails to match. The 220 bound is the FORWARD guard: it stops a
+    // `byId` added in some later section from satisfying this from a distance.
+    expect(pp()).toMatch(/ledger allocate[\s\S]{0,220}"byId":"\$id"/);
+  });
+
+  it('no reference file carries a ${resp expansion — the client returns the body, and there is no second stream', () => {
+    // A curl-era leftover: `resp` is assigned nowhere in either corpus, so the
+    // line overwrote the captured body with the empty expansion of an unset
+    // variable. A coordinator copying that fence lost the whole 409 answer —
+    // the ADDRESS this section's own prose ("Reading a 409") teaches reading.
+    //
+    // WIDENED (D-1417, same number as the fix): this scanned `peer-protocol.md`
+    // ALONE, so the identical clobber landing in a sibling reference — every
+    // one of which ships copyable fences — was invisible to it. The corpus is
+    // DERIVED from the directory, the `REFERENCE_NAMES` reason (D-1003): a
+    // reference file added tomorrow is scanned without anyone remembering to
+    // add it. SKILL.md is deliberately OUT of this scan and must stay out — its
+    // its "stdout is the response body" paragraph names `${resp` in PROSE, as
+    // the history of what the capture idiom
+    // USED TO be, and that sentence is the reason a reader does not reinvent it.
+    for (const name of REFERENCE_NAMES) {
+      expect(refs(name), `${name} carries the curl-era \${resp clobber`)
+        .not.toContain('${resp');
+    }
   });
 
   it('tells the truth about which layer refuses a bad claim path (fix, post-9b review)', () => {

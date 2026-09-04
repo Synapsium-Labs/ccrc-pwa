@@ -60,7 +60,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -97,7 +97,12 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
-  handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0, ...over,
+  handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
+  // F7's per-run health facts. All-clear, deliberately: every case in this file
+  // predates the warn row and must keep rendering exactly as it did.
+  health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+            lastRejectCode: null, briefQueued: true, clearError: null,
+            coordKickoffPendingSince: null }, ...over,
 });
 
 const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });

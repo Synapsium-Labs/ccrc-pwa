@@ -31,10 +31,12 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The eleven clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
-// quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'`
-// — both carry single quotes, and the sibling suite's single-quoted style would
-// need escaping exactly where a copy-paste from SKILL.md is most useful.
+// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
+// since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
+// `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
+// Both therefore hold a single quote, and the sibling suite's single-quoted style
+// would need escaping exactly where a copy-paste from SKILL.md is most useful.
 // For the same reason SKILL.md is written with STRAIGHT apostrophes throughout:
 // `coordinator-skill.test.ts`'s literals carry curly ones (`operator’s`,
 // `judgement`) because its prose does, and a straight/curly mismatch is a
@@ -45,7 +47,7 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 // SKILL.md reds this pin without looking like a change. SKILL.md's contract
 // section states the same rule where an editor of the prose will see it.
 const CONTRACT = [
-  "Learn who you are on EVERY call: `fromId` is your own `cc-<id>` from `tmux display-message -p '#S'`, and `fromUuid` is the current contents of `$REG/<id>.uuid`, re-read each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
+  "Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
   // D-105: this clause used to name the 6 for BOTH lanes. It is the
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
@@ -58,6 +60,7 @@ const CONTRACT = [
   "A done-claim's fingerprint is measured ONCE and sent ONCE: `handoffCommit` must equal the branch tip you measured, and `prPhase` must be one of the eight enum words (`unchecked`, `none`, `no-commits`, `open`, `draft`, `merged`, `closed`, `unknown`). After `wave-done` you stop pushing — a new commit under your own claim makes it stale — and a rejected claim is never re-asserted without new commits and a fresh measurement.",
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
+  "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
 ];
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
@@ -65,9 +68,69 @@ const CONTRACT = [
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all eleven clauses verbatim', () => {
+  it('carries all twelve clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
+    }
+  });
+
+  // ── the COUNT, which the verbatim pin above structurally cannot see ──────
+  //
+  // MEASURED (R2 review, round 2), and both holes are the same hole: the
+  // CONTRACT pin is a SUBSET check, so appending a 13th clause to SKILL.md left
+  // every assertion in this file GREEN — the contract could be extended with no
+  // pin at all, which is the one thing "pinned verbatim" exists to prevent —
+  // and reverting "These twelve clauses" to "eleven" in SKILL.md, README.md or
+  // CLAUDE.md was green too, because no assertion anywhere held the word. The
+  // count was hand-maintained in five places and pinned in none. Both are
+  // cardinality claims, so both are now derived from ONE value, `CONTRACT.length`.
+
+  /** Number words, index-addressed — `box-token-census.test.ts`'s own idiom,
+   *  aimed here at the single count this repo spells out in prose five times. */
+  const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+    'eighteen', 'nineteen', 'twenty'];
+  const COUNT_WORD = WORDS[CONTRACT.length];
+
+  it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
+    // `^\d+\. ` matches the contract lines and nothing else in this file — the
+    // contract is the only ordered list SKILL.md carries (measured). So a 13th
+    // clause forces a 13th literal above instead of slipping past the subset
+    // check, and a deleted clause reds here as well as there.
+    const numbered = [...skill.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbered, 'SKILL.md numbers a different set of clauses than the CONTRACT pins')
+      .toEqual(CONTRACT.map((_, i) => i + 1));
+  });
+
+  it('spells that same count, as one derived word, everywhere prose states it', () => {
+    expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
+      .toBeTruthy();
+    // SKILL.md states it twice in its own words ("These twelve clauses", "these
+    // twelve lines"). HARVESTED, never matched literally, so a revert to
+    // "eleven" fails with the wrong word named rather than with a missing string.
+    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines)\b/g)]
+      .map((m) => m[1]!).filter((w) => WORDS.includes(w));
+    expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
+      .toBeGreaterThanOrEqual(2);
+    for (const w of stated) {
+      expect(w, `SKILL.md says ${w} where the CONTRACT pins ${CONTRACT.length}`).toBe(COUNT_WORD);
+    }
+    // README.md and CLAUDE.md each describe this skill BY PATH, with the count
+    // in the same sentence. The sites are derived from that path rather than
+    // listed by line number, so a fourth mention is covered the day it lands and
+    // a moved paragraph does not silently stop being checked.
+    const marker = 'ccd/worker-skill/SKILL.md';
+    for (const rel of ['README.md', 'CLAUDE.md']) {
+      const text = readFileSync(path.join(root, rel), 'utf8');
+      let hits = 0;
+      for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
+        const m = /\b([a-z]+) clauses\b/.exec(text.slice(i, i + 160));
+        expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
+        expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
+          .toBe(COUNT_WORD);
+        hits++;
+      }
+      expect(hits, `${rel} no longer names ${marker} at all`).toBeGreaterThan(0);
     }
   });
 
@@ -107,13 +170,12 @@ describe('the worker skill: its contract', () => {
     }
   });
 
-  it('tells the session how to learn its own id the ONE way that works on this box', () => {
-    // ccd/session-hook.sh:15-19 — derived from tmux, never from a `from:`
-    // field, and never cached: `/clear` rotates `$REG/<id>.uuid`, and dispatch
-    // clears this session on every wave >= 2.
-    expect(skill).toContain("tmux display-message -p '#S'");
+  it('tells the session how to learn its own id the ONE way that is actually its own', () => {
+    expect(skill).toContain('ccrc-api" whoami');
     expect(skill).toContain('cc-');
     expect(skill).toContain('.uuid');
+    expect(skill, 'the unchecked derivation is back')
+      .not.toContain("tname=$(tmux display-message -p '#S')");
   });
 
   it('has YAML frontmatter with exactly a name and a description that says when NOT to use it', () => {
@@ -283,5 +345,48 @@ describe('the worker skill: the name dispatch invokes it by', () => {
     expect(WORKER_KICKOFF_PREFIX,
       `dispatch's kickoff prefix does not name the \`${SKILL_NAME}\` skill:\n${WORKER_KICKOFF_PREFIX}`)
       .toContain(`the ${SKILL_NAME} skill`);
+  });
+});
+
+
+describe('the worker skill: clause 12 branches on the card the hook actually prints', () => {
+  /** Every freshness word the `SessionStart` graph card can carry, HARVESTED
+   *  from `ccd/session-hook.sh`'s own assignments and normalised over the count
+   *  (`$behind commits behind HEAD` / `1 commit behind HEAD` → `behind HEAD`).
+   *
+   *  Harvest-and-compare rather than a typed list, this file's `replayCeiling`
+   *  idiom: the hook WRITES this vocabulary, and a clause that branches on a
+   *  word the hook stopped printing is a rule that can never fire — the exact
+   *  failure that a doc three files away drifted into (R2 review). */
+  const FRESHNESS = ((): string[] => {
+    const hook = readFileSync(path.join(root, 'ccd/session-hook.sh'), 'utf8');
+    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
+      'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
+      'looking at the wrong file');
+    return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
+  })();
+
+  /** Word-BOUNDARY match, never a raw substring. `fresh` is a substring of
+   *  `freshness unmeasured`, so a `toContain` arm for the one state that
+   *  licenses trusting the graph passes on the mere presence of the longer
+   *  word and can never fail — vacuous exactly where this describe is most
+   *  load-bearing (D-1342). `\bfresh\b` is false on `freshness unmeasured`
+   *  and true on the clause's own `` `fresh` ``. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  it('names every freshness word the card can carry, and says what each licenses', () => {
+    const clause = CONTRACT[CONTRACT.length - 1]!;
+    for (const word of FRESHNESS) {
+      expect(clause, `clause 12 branches on no card word matching \`${word}\``)
+        .toMatch(wordRe(word));
+    }
+    // The BRANCH, not merely the vocabulary. A clause that lists the words
+    // without saying what each one licenses is information delivered with no
+    // decision rule attached — a comment standing in for a mechanism, which is
+    // what this clause shipped as before the fix.
+    expect(clause, 'clause 12 lists the card words but attaches no rule to them')
+      .toMatch(/LEAD to verify/);
   });
 });

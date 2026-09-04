@@ -96,6 +96,15 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** How many graph READS this session has made — `hookstate.ts`'s
+   *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
+   *  bump, and an older peer that omits it revives as `null` below.
+   *
+   *  `null` mirrors `hookState`/`subagents`: no fresh hook data, or a hook too
+   *  old to count. `0` is a MEASUREMENT — the session reported and has read
+   *  nothing — and the console shows the two differently (`graph 0` versus no
+   *  chip at all), which is the whole reason this is not a `number`. */
+  graphQueries: number | null;
   bucket: SessionBucket;
   /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
    *  record — never a watcher's memory of when it noticed, which would reset on
@@ -256,6 +265,35 @@ export function substrateFault(
     at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : 0,
     text: typeof raw.text === 'string' && raw.text !== '' ? raw.text : 'substrate fault (reason unreadable)',
   };
+}
+
+/**
+ * Tolerant read of `FleetSession.graphQueries` for a value that has NOT been
+ * through `reviveFleetSession` — the live `fleet` WS frame, cast on arrival
+ * by `pwa/src/stores/fleet.ts`'s `asFleetMsg` (`unmeasuredFields` above
+ * records the whole argument). The ONE place every PWA surface reads this
+ * field, so the fleet card and the run board cannot drift onto two different
+ * fallbacks — CLAUDE.md's wire rule, "a SINGLE reader per field".
+ *
+ * ABSENCE READS AS NULL, i.e. as "nothing measured" — the opposite degrade
+ * from `unmeasuredFields`, and deliberately so. This field is ADDITIVE with
+ * `FLEET_PROTO` held at 1 (see its docstring above), which is a promise that
+ * a server predating it keeps talking to a newer client; such a server omits
+ * the key, and a row from it is IGNORANT of the count, never a witness that
+ * the session read nothing. Read raw, `undefined !== null` is true and the
+ * chip renders `graph ` with no number under a `title` reading `undefined
+ * graphify read(s) this session` — a numberless chip on the one row the
+ * chip's whole `0`-versus-`null` split exists to keep apart (D-1251,
+ * MEASURED on both surfaces before this reader existed).
+ *
+ * A present-but-unusable value (a string, `NaN`, `Infinity` — shapes the wire
+ * type forbids and only a broken or hostile peer sends) degrades to `null`
+ * too: unmeasured is the honest answer for a count nobody can read, and it is
+ * the same rule `optNum` applies on the revival path.
+ */
+export function graphReadCount(s: { graphQueries?: number | null }): number | null {
+  const v = s.graphQueries ?? null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1180,13 +1218,14 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
  * home nothing ever looked at).
  *
  * DELIBERATELY NOT spelled with the read-failure pair that `ReadFailure`
- * declares in `server/src/io.ts`. That vocabulary describes ONE read's failure;
- * this one describes a conclusion drawn from a read that may never have
- * happened, and `unmeasurable` is the wider word on purpose.
- * `single-definition.test.ts` pins that pair to `server/src/io.ts` alone — and
- * pins it as TEXT, so even naming it in a docstring here reds the build
- * (measured, while this comment was being written). Say `ReadFailure`, not its
- * members.
+ * declares in `shared/agent-protocol.ts` (moved there from `server/src/
+ * io.ts` by D-1438; re-exported from `io.ts` unchanged). That vocabulary
+ * describes ONE read's failure; this one describes a conclusion drawn from a
+ * read that may never have happened, and `unmeasurable` is the wider word on
+ * purpose. `single-definition.test.ts` pins that pair to `shared/agent-
+ * protocol.ts` alone — and pins it as TEXT, so even naming it in a docstring
+ * here reds the build (measured, while this comment was being written). Say
+ * `ReadFailure`, not its members.
  */
 export type SkillState = 'present' | 'absent' | 'unmeasurable';
 
@@ -2033,6 +2072,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
+      // Absent → null, exactly as `optSubagents` degrades: a snapshot written
+      // before this field existed is ignorant of the count, not a witness to
+      // its being zero. Present-but-not-a-finite-number throws inside
+      // `optNum`, which this function's catch turns into "reject the whole
+      // session" — the same rule every other numeric field here follows.
+      graphQueries: optNum(o, 'graphQueries'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
       statusUnmeasured: optBool(o, 'statusUnmeasured', false),
       // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the
@@ -2741,8 +2786,10 @@ export type HookAsk =
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
-   *  banner. D4 (§5.2) adds the two facts that banner cannot be honest without,
-   *  both OPTIONAL so an older PWA build ignores them and an older server that
+   *  banner. D4 (§5.2) added the facts that banner cannot be honest without and
+   *  D-1398 added another; the bullets below are the list, and no count is
+   *  written here because one was and it stopped matching them (D-1447). All are
+   *  OPTIONAL, so an older PWA build ignores them and an older server that
    *  never sends them is not a protocol violation:
    *    - `foreignAccount`: the account a rung-6 answer was found under — the
    *      "stranded history, held by `claude`" banner. Null for every
@@ -2753,9 +2800,33 @@ export type SessionStreamMsg =
    *      the fleet host right now" — NEVER "no messages yet". Remote `readdir`
    *      returns null for a missing directory, a forbidden path and a
    *      disconnected agent alike, and this build refuses to render that
-   *      ambiguity as a confident empty chat. */
+   *      ambiguity as a confident empty chat.
+   *    - `fileMeasured`: false when the transcript itself could not be
+   *      MEASURED — a stat that failed for a reason that is not a proven
+   *      ENOENT (an unreachable agent, a whitelist refusal, an EACCES or
+   *      ENOTDIR on the way to it). `missing: true` with
+   *      `fileMeasured: false` earns the same sentence `searchComplete:
+   *      false` earns — "can't read the fleet host right now", NEVER "there
+   *      is no transcript".
+   *
+   *      THE STAT IS NOT THE ONLY ARM, and the missing one is exactly the
+   *      combination an implementer would omit: a transcript that stats FINE
+   *      but whose BYTES never arrived reports `missing: FALSE` with
+   *      `fileMeasured: false` and a real non-zero `offset`
+   *      (`readBacklog`'s unreadable arm, D-1403). So read `fileMeasured`
+   *      INDEPENDENTLY of `missing` — a client that gates the host-unreadable
+   *      banner on `missing` alone renders that fourth combination as a
+   *      confident empty chat, which is the defect D-1403 closed and this
+   *      contract described its way back into by documenting only the stat
+   *      arm (D-1447). Absent on the wire reads as TRUE, exactly like
+   *      `searchComplete` and for the same reason: every older server DID
+   *      stat the file, it simply could not tell you what the failure meant,
+   *      and reading omission as `false` would put the host-unreadable
+   *      banner on every session of every pre-field server. This field is
+   *      what tells the difference the collapsed `io.stat` this frame's
+   *      `missing` used to be derived from could not (D-1398). */
   | { type: 'backlog'; uuid: string; events: ChatEvent[]; offset: number; file: string; missing: boolean;
-      foreignAccount?: string | null; searchComplete?: boolean }
+      foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
   | { type: 'dialog'; dialog: Dialog }            // a pane menu is awaiting an answer
@@ -3066,6 +3137,24 @@ const MAIL_DELIVERY_STATES: readonly MailDeliveryState[] =
 export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
   return typeof v === 'string' && (MAIL_DELIVERY_STATES as readonly string[]).includes(v);
 }
+
+/** The two terminal members of `MailDeliveryState`, ONCE. `TERMINAL_ITEM_STATES`
+ *  (`server/src/coord/store.ts`) is the precedent and carries the argument: the
+ *  SQL literal in every delivery writer's `WHERE` is BUILT from this list
+ *  (`TERMINAL_DELIVERY_SQL`), so the guard and the prose that explains it cannot
+ *  drift — and `single-definition.test.ts` pins that this is the only place the
+ *  pair is spelled as one adjacent list under any of the four roots.
+ *
+ *  L0 rather than beside the guards it feeds, and that is the load-bearing
+ *  choice: a copy of this pair also lived in `pwa/src/session/MailStrip.tsx`,
+ *  in a DIFFERENT PACKAGE, which a constant minted in `server/src` could not
+ *  have been imported by (D-1405).
+ *
+ *  `unknown` is deliberately NOT a member. A state this build cannot name is not
+ *  a state it may declare finished; what to do with one is an open question
+ *  recorded by this wave, not a decision this list makes. */
+export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
+  readonly MailDeliveryState[];
 
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
@@ -3482,6 +3571,36 @@ export const MAIL_REJECT_CODES = [
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
+ * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
+ * a forward advance can be refused with, as distinct from the ingress, peer-bound
+ * and delivery families above.
+ *
+ * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
+ * one: the ARRAY is the single definition and the type follows it, because wave
+ * 7's per-run health read needs the members at RUNTIME for a SQL `IN (...)` and a
+ * hand-kept fourth copy is exactly what this replaces. It was spelled three times
+ * — here, and as an identical `Extract<MailRejectCode, ...>` in both
+ * `coord/close.ts` and `coord/fingerprint.ts` (D-1296).
+ *
+ * `satisfies readonly MailRejectCode[]` is the load-bearing clause: a typo, or a
+ * member that leaves the parent union, is a compile error here — which a bare
+ * `as const` could not catch.
+ */
+export const DONE_AUTHORITY_CODES = [
+  'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
+  'pr-unmeasurable', 'no-handoff-commit',
+] as const satisfies readonly MailRejectCode[];
+export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
+
+// NO `isDoneRejectCode` PREDICATE, deliberately. Every sibling vocabulary here
+// exports one because something reads a raw string back through it; nothing does
+// for this family — `mail_rejections.code` is read back UNTYPED on purpose
+// (`CoordStore.rejections`), and the list's only consumer is a SQL `IN (...)`
+// bind. A predicate with no caller is a guard that guards nothing and a second
+// place for the members to be spelled. It shipped in this wave's first draft with
+// zero callers and zero tests, and was deleted in review.
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT
@@ -3680,6 +3799,70 @@ export interface RunItemTally { done: number; total: number }
 /** One run, as `/ws/fleet`'s `runs` frame and `GET /api/runs` carry it.
  *  Deliberately flat and deliberately small: this rides the fleet socket
  *  alongside a full session snapshot on every change. */
+/**
+ * Per-run health facts the `/runs` board renders as a compact warn row (F7).
+ * Every wedge below was previously discoverable only by reading /mail or the
+ * database by hand: a parked delivery, a replay count climbing toward the
+ * 20-attempt ceiling, a repeated done-claim refusal, a dispatch whose brief was
+ * never queued, and a coordinator that was never briefed at all.
+ *
+ * ADDITIVE; `FLEET_PROTO` is deliberately NOT bumped. An older server omits the
+ * whole object and the PWA renders NOTHING — never "no wedge here", which is a
+ * claim this build would be making on that server's behalf.
+ *
+ * EVERY MEMBER IS A COUNT, A CODE OR A STORED TIMESTAMP — never an age, and that
+ * is a hard constraint rather than a preference. The WS `runs` frame is dropped
+ * from the broadcast when its JSON is unchanged (`server/test/fleetws.test.ts`),
+ * so a field carrying a clock would differ on every tick, defeat that dedupe and
+ * turn an idle fleet into a broadcast storm — a performance regression shaped
+ * exactly like a feature. The thresholds therefore live in the renderer, which is
+ * the `SPAWN_STALL_MS` precedent (D-1300).
+ */
+export interface RunHealth {
+  /** Deliveries of this run's mail still `queued` or `delivered`. */
+  readonly mailOutstanding: number;
+  /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
+   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
+   *  working as designed and is excluded, because reporting it would announce a
+   *  chair that has already changed hands. */
+  readonly mailParked: number;
+  /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
+   *  delivery attempts and mail 129 reached 911, each arriving after the work it
+   *  was meant to steer; this is the number that was climbing the whole time
+   *  while nothing on any surface showed it. MAX and not SUM: one message nearing
+   *  the ceiling is the signal, and quiet siblings must not dilute it. */
+  readonly mailReplayMax: number;
+  /** How many done-authority refusals this run has collected
+   *  (`DONE_AUTHORITY_CODES`); other reject families are not counted. */
+  readonly doneRejects: number;
+  /** The newest one's code, or null when there are none. FREE TEXT on the wire in
+   *  `MailSummary.lastError`'s sense — `mail_rejections.code` is stored
+   *  unvalidated and read back as a raw string, so a client may DISPLAY this and
+   *  must never key a total `Record<..., ...>` off it. */
+  readonly lastRejectCode: string | null;
+  /** What this run's last committed dispatch DECIDED about the brief.
+   *  `null` is a THIRD condition and not a flavour of `false`: no dispatch has
+   *  committed, or the row predates migration 7. `false` means a dispatch ran and
+   *  queued no brief — the state that previously left no trace at all (D-1298). */
+  readonly briefQueued: boolean | null;
+  /** The `sendPrompt` refusal code that made `briefQueued` false, or null. Free
+   *  text, on `lastError`'s terms. */
+  readonly clearError: string | null;
+  /** When the OLDEST unacked `program-kickoff` addressed to this run's
+   *  `claimedBy` was first sent, or null when there is none. A timestamp, never a
+   *  verdict — the renderer owns the threshold.
+   *
+   *  "UNACKED" AND NOT "STILL BEING RETRIED" (D-1318). A kickoff that parked —
+   *  the replay ceiling, a recipient the registry no longer lists — is still a
+   *  kickoff nobody ever acked, and the first version of this field went null the
+   *  moment the lane gave up, which is the one moment the wedge became permanent.
+   *  Null here means acked, or no coordinator, or a park the store treats as a
+   *  DECISION (a reclaim cancelling the dead chair's kickoff before mailing the
+   *  new one) — three conditions a caller renders identically, and deliberately:
+   *  none of them is "somebody is stuck". */
+  readonly coordKickoffPendingSince: number | null;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -3770,6 +3953,19 @@ export interface RunSummary {
   items: RunItemTally;
   /** Unacked mail addressed to this run's session. */
   unreadMail: number;
+
+  /**
+   * F7's per-run health facts — the wedges this program spent six waves finding
+   * forensically, as measured values. See `RunHealth`.
+   *
+   * REQUIRED here because `hydrateRun` returns a literal and must therefore
+   * compute it, and OPTIONAL at every PWA reader, because an older SERVER omits
+   * it. The one tolerant reader is `runWarnings()` in `pwa/src/fleet/runWords.ts`
+   * — NOT `runHealth`, which is the SERVER store method that measures this
+   * object; naming that one here pointed a maintainer at the wrong ring for the
+   * tolerance guarantee. No JSX reads a member directly.
+   */
+  health: RunHealth;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
@@ -3783,6 +3979,24 @@ export interface RunSummary {
  *  does NOT silently move what the console calls stalled — that is a
  *  deliberate edit here, made with this paragraph's inequality in hand. */
 export const SPAWN_STALL_MS = 360_000;
+
+/** F7. A `RunHealth.mailReplayMax` at or above this is a delivery climbing toward
+ *  `MAIL_REPLAY_MAX_ATTEMPTS` (20, `server/src/watch.ts`), and the board says so.
+ *
+ *  A RENDERING threshold on `SPAWN_STALL_MS`'s terms — nothing server-side reads
+ *  it, and it is deliberately NOT derived from the ceiling it watches. Half is
+ *  the point: a warning that fires only AT the ceiling arrives with the message
+ *  already parked, which is precisely how mail 120 and mail 129 were discovered
+ *  (722 and 911 attempts, both after the work they were meant to steer). */
+export const MAIL_REPLAY_WARN_COUNT = 10;
+
+/** F7. An unacked `program-kickoff` older than this is a coordinator that was
+ *  never briefed — an open run whose chair nobody ever sat in.
+ *
+ *  A RENDERING threshold, same argument. Fifteen minutes is the `MAIL_GATE_HELD_MS`
+ *  register rather than a copy of any lane number: it clears a full server suite
+ *  (~9 min) with room, so a coordinator that is merely busy stays silent. */
+export const KICKOFF_UNACKED_MS = 900_000;
 
 /** D-792, §6. WHEN the console is allowed to name the gate holding a delivery.
  *
@@ -3930,7 +4144,37 @@ export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
  *  TOGETHER, in one shape and one round trip: a cap without its usage is a
  *  number an operator cannot act on, and a usage without its cap is a number
  *  they cannot read. */
-export interface CoordCapsView { caps: CoordCaps; usage: CoordCapsUsage }
+export interface CoordCapsView {
+  caps: CoordCaps;
+  usage: CoordCapsUsage;
+  /** When the caps were last written, or `null` if they never have been (D-1169).
+   *
+   *  ADDITIVE, and on the VIEW rather than on `CoordCaps`: the view is the
+   *  read-side shape, while `CoordCaps` is the stored value that `decideCaps`
+   *  merges and `setCaps` writes — a timestamp is not a cap, and widening the
+   *  stored type for a display fact is what wave 6 declined to do.
+   *
+   *  `null` is not "the epoch": migration 1 seeds `updatedAt = 0`, and a dial
+   *  that rendered 1970 for a box nobody has ever tuned would be inventing an
+   *  event. An older server omits the field entirely, which reads the same way
+   *  through whatever reads it.
+   *
+   *  NO CLIENT READS THIS YET, and saying so is the point — the sentence here used
+   *  to claim absence "reads the same way through the one reader that consumes it",
+   *  and there is no such reader (`CapsControl` takes a `CoordCapsView` and touches
+   *  only `caps` and `usage`). A wire type that teaches a call its own readers do
+   *  not make is where a doc lie starts, which `RunSummary.claimedBy` says in as
+   *  many words two hundred lines up.
+   *
+   *  D-1169 IS closed by this field, both halves as that deviation states them —
+   *  "the column already exists and only the read is missing", plus `setCaps`
+   *  reading its own clock. The read is here and the clock is the caller's. The
+   *  dial is a further thing D-1169 names as motivation rather than as a
+   *  deliverable, and whoever builds it must treat absent (an older server) and
+   *  `null` (a box nobody has tuned) alike — which is why both are spelled out
+   *  here rather than discovered then. */
+  updatedAt?: number | null;
+}
 
 /** A file staged into ~/.cc-clips/<id>/, ready to be named in a prompt. The
  *  server reports no dimensions — it has no image decoder, and never will. */
@@ -5380,11 +5624,13 @@ export function isDeviationAllocState(v: unknown): v is DeviationAllocState {
  * nothing (the ledger is prose, parsed by nothing); a reissue cost 394
  * rewritten D-ref lines across 30 files under merge pressure.
  *
- * `'landed'` means the number appears in a plan in the MAIN checkout
- * (`sweepLedgerReconcile`) — genuinely merged, the signal the incident
- * lacked. `stale` is DERIVED at read time from `allocatedAt`, `state` and
- * the clock, never stored (see `DEVIATION_ALLOC_STATES`); it rides the
- * wire so a phone can see it without owning a clock policy.
+ * `'landed'` means the number was seen DEFINED in a plan file in the
+ * working tree of the MAIN checkout at sweep time (`sweepLedgerReconcile`),
+ * on whatever branch that checkout was on — NOT proof of a merge; `landedIn`
+ * (below) names a path in that tree, which may exist on no ref. `stale` is
+ * DERIVED at read time from `allocatedAt`, `state` and the clock, never
+ * stored (see `DEVIATION_ALLOC_STATES`); it rides the wire so a phone can
+ * see it without owning a clock policy.
  */
 export interface DeviationAllocation {
   readonly project: string;

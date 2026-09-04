@@ -33,8 +33,8 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type FleetSession, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runWarnings, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -128,6 +128,8 @@ function RunRow({
   // directly, for the same reason `SessionLine.tsx` gives — a live frame can
   // omit the key entirely at runtime even though the type says required.
   const degradedFields = session === null ? [] : unmeasuredFields(session);
+  // Same discipline, same reason — the ONE reader for the count (D-1251).
+  const graphReads = session === null ? null : graphReadCount(session);
   // Total lookup, never a raw index (finding 2): `state` degrades a token
   // this build's vocabulary has no key for to the designated `unknown`
   // member, and `items` defaults a row that reached this renderer without
@@ -163,6 +165,10 @@ function RunRow({
   // picks no words.
   const verdict = session === null ? null : spawnVerdictChip(session);
   const resume = resumeNote(run, nowSec);
+  // F7. The DECISION is `runWarnings`' — five conditions, one place, tolerant of
+  // a server that has never heard of `health`. This component picks no words and
+  // compares no thresholds; it lays out what it was handed.
+  const warnings = runWarnings(run, nowMs);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -209,6 +215,19 @@ function RunRow({
           {verdict.word}
         </span>
       )}
+      {/* The worker's read counter, in the fleet card's own class — the same
+          reuse this row already makes of `.sess-spawn` and `.sess-unmeasured`
+          next door, and for the same reason: a second `.run-…` class for one
+          meaning is two vocabularies over one field. Read through
+          `graphReadCount`, never `session.graphQueries`, for the reason
+          `unmeasuredFields` is used two lines up: the live frame is cast, not
+          revived, so an older server's row omits this ADDITIVE key and a raw
+          `!== null` paints `graph ` with no number (D-1251). */}
+      {graphReads !== null && (
+        <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
+          graph {graphReads}
+        </span>
+      )}
       {/* D-1, finally on screen. `data-cleared` carries the half the word
           alone cannot: the two branches are two different facts, and a test
           that could only read the string would be pinning prose. */}
@@ -224,6 +243,22 @@ function RunRow({
           title={`registry ${degradedFields.join('/')} temporarily unreadable — retrying`}
         >
           unreadable
+        </span>
+      )}
+      {warnings.length > 0 && (
+        // Its own wrapped LINE, not another inline cell: `.run-row` is
+        // `flex-wrap: wrap`, so a `flex-basis: 100%` child becomes a sub-row
+        // inside the existing <li> without a second list element and without a
+        // fourth `flex: none` control competing for phone width. Not tappable, so
+        // it may live inside `body` (and therefore inside `.run-open`) — D-287's
+        // sibling rule binds controls, and this is prose.
+        <span className="run-warn">
+          {warnings.map((w) => (
+            <span key={w.word} className="run-warn-item" title={w.title}>
+              <span className="run-warn-glyph" aria-hidden="true">{w.glyph}</span>
+              {' '}{w.word}
+            </span>
+          ))}
         </span>
       )}
     </>

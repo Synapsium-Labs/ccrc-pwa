@@ -178,6 +178,35 @@ leaves that clause pointing at nothing and the worker improvising the very
 thing the clause exists to stop. Name it explicitly, every wave, the same way
 you name the plan file.
 
+**A brief may quote the worker's graph card, where that workspace has one.** A
+session whose tree carries `graphify-out/graph.json` gets one `SessionStart`
+line for THAT tree: node count, the commit the graph was built at, and a
+freshness clause. **CONTENT decides that clause first** (D-1368): a graph whose
+built commit carries the same TREE as `HEAD` describes this workspace exactly,
+so it reads `fresh` however the two commits stand to one another — a squash
+merge or a rebase rewrites the commit and keeps every byte — and the card
+APPENDS ` — same content as HEAD` when the built commit is not `HEAD` itself, a
+qualifier on the state rather than a state of its own, so the one word is still
+what you branch on. Only when the two trees DIFFER does ancestry decide, and
+only there does the clause read `1 commit behind HEAD` / `N commits behind
+HEAD`, `not an ancestor of HEAD`, or `freshness unmeasured` — the second when
+the graph was built at a commit this tree cannot reach AND carrying different
+content (a branch tip the session has since checked away from, or a genuinely
+diverged branch), so the graph describes code the tree does not carry rather
+than merely missing code it does, and the last when the graph names a commit
+that git in that tree will not date, which is a different thing again from a
+graph that is merely old. Every half is individually optional: whatever the hook could not
+measure is simply left out, so a card with no freshness clause at all is a
+fourth state and not a fault. A tree the sweep REFUSED gets a different and
+equally quotable line — `this tree has no knowledge graph`, plus the sweep's own
+last reason — and a tree the sweep has not reached gets NOTHING. A missing card
+is never something to report as broken. Quoting the freshness half in the brief
+tells the worker what it is querying before it queries it: a graph 97 commits
+stale answers confidently and wrongly, and worker clause 12 turns anything but
+`fresh` into a lead the worker must verify by reading the file. The card is
+measured per tree, so a brief that quotes it is quoting THAT workspace, not the
+fleet.
+
 **One sentence from the protocol goes in every brief anyway: "commit on this
 workspace's own branch; do not create or switch to a separate feature
 branch."** (F5, build4 dogfood wave 1.) `ws-add` creates the workspace on its

@@ -45,7 +45,7 @@ const fleetSession = (id: string, wrapper: string): FleetSession => ({
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
+  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
 });
 
@@ -62,6 +62,7 @@ const emptySnap = (): SessionSnapshot => ({
   missingFile: null,
   strandedAccount: null,
   searchComplete: true,
+  fileMeasured: true,
   file: null,
 });
 
@@ -200,10 +201,11 @@ describe('applySessionMsg', () => {
     let s = applySessionMsg(emptySnap(), {
       type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 90,
       file: '/t/claude2/u1.jsonl', missing: true,
-      foreignAccount: 'claude2', searchComplete: false,
+      foreignAccount: 'claude2', searchComplete: false, fileMeasured: false,
     });
     expect(s.strandedAccount).toBe('claude2');
     expect(s.searchComplete).toBe(false);
+    expect(s.fileMeasured).toBe(false);            // NEW
     expect(s.missingFile).toBe('/t/claude2/u1.jsonl');
     expect(s.file).toBe('/t/claude2/u1.jsonl');
 
@@ -211,6 +213,7 @@ describe('applySessionMsg', () => {
 
     expect(s.strandedAccount).toBeNull();
     expect(s.searchComplete).toBe(true);
+    expect(s.fileMeasured).toBe(true);             // NEW
     expect(s.missingFile).toBeNull();
     expect(s.file).toBeNull();
   });
@@ -1133,7 +1136,7 @@ describe('Build 4 wave 4 — the wire additions that were refused', () => {
     const s: SessionSnapshot = {
       events: [user('a', 'hi')], offset: 12, uuid: 'u1', status: null,
       statusUpdatedAt: null, dialog: null, ask: null, tasks: [], mail: [],
-      missingFile: null, strandedAccount: null, searchComplete: true, file: null,
+      missingFile: null, strandedAccount: null, searchComplete: true, fileMeasured: true, file: null,
     };
     // A frame from a newer server this build was never compiled to know.
     expect(applySessionMsg(s, { type: 'mail_log' } as unknown as SessionStreamMsg)).toBe(s);

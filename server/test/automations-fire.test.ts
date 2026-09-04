@@ -60,6 +60,13 @@ function makeIo(spec: {
     readFileMeasured: async () => boom('readFileMeasured'),
     readFileFrom: async () => boom('readFileFrom'),
     readFileB64: async () => boom('readFileB64'),
+    // The measured trio `main` added beside the three folding readers: this
+    // double enumerates every member deliberately, so a rung that reaches for
+    // one this fixture did not arrange throws by name instead of reading
+    // `undefined` as an answer.
+    readFileFromMeasured: async () => boom('readFileFromMeasured'),
+    readFileB64Measured: async () => boom('readFileB64Measured'),
+    statMeasured: async () => boom('statMeasured'),
     stat: async () => boom('stat'),
     realpath: async () => boom('realpath'),
     writeFileB64: async () => boom('writeFileB64'),
