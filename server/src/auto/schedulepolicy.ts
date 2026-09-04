@@ -163,20 +163,44 @@ export function decideFire(
   return { act: 'record-missed', scheduledFor, lateMs, advance };
 }
 
-export interface FailureLadder {
-  readonly consecutiveFailures: number;   // the value to store
-  readonly autoPause: boolean;            // state='paused', scheduleError='failure-ceiling'
-}
+// THE §8 LADDER LIVES IN THE STORE, AND ONLY THERE. An `export function
+// failureLadder(prev, outcome)` stood here, whose docstring said it existed "so
+// the store APPLIES and never decides" — but the store decides for itself, with
+// its own `AUTOMATION_LEDGER_MAP` plus the refusal ledger beside it, and this
+// copy had ZERO production callers. Two copies of one policy is what this
+// tree's single-definition doctrine forbids, and these two had already DRIFTED:
+// this one answered `missed` with increment-and-auto-pause while the live map
+// answers `ignore` (the grace machinery working is not the automation's
+// failure). Its only consumer was a test titled "spec §8: missed counts,
+// skipped does not" — a green suite pinning the copy nothing runs and
+// contradicting shipped behaviour, which `single-definition.test.ts` cannot
+// see because it scans for duplicated VALUES, not duplicated decisions.
+//
+// The live ledger's coverage is end-to-end in `automations-store.test.ts`
+// ("skipped and missed do not move the counter; an ok resets it", and the
+// operator-pause fixture beside it), which is where a decision the store makes
+// belongs.
 
-/** Spec §8, as a function so the store APPLIES and never decides:
- *  'ok' -> 0; 'skipped' -> unchanged (the lease working is not a failure);
- *  everything else -> prev + 1, autoPause at >= AUTOMATION_FAILURE_CEILING. */
-export function failureLadder(
-  prev: number,
-  outcome: Exclude<AutomationOutcome, 'running' | 'unknown'>,
-): FailureLadder {
-  if (outcome === 'ok') return { consecutiveFailures: 0, autoPause: false };
-  if (outcome === 'skipped') return { consecutiveFailures: prev, autoPause: false };
-  const next = prev + 1;
-  return { consecutiveFailures: next, autoPause: next >= AUTOMATION_FAILURE_CEILING };
+/** WHETHER THIS BUILD CAN KEEP A WALL CLOCK AT ALL — pure, so it is testable
+ *  without a small-ICU node to hand.
+ *
+ *  `icuHasZones()` (`shared/schedule.ts`) exists because a small-ICU build
+ *  does NOT throw on an IANA zone: it silently answers UTC. Every
+ *  `wall-clock` cadence on such a box therefore fires at the UTC wall clock —
+ *  two hours early in Warsaw in summer — while `nextRunAt`, every run row and
+ *  every operator-facing sentence look exactly right, because they are all
+ *  computed from the same wrong offset. There is no refusal to hang it on
+ *  either: `nextOccurrence` answers `unknown-timezone` for a zone ICU
+ *  REJECTS, and this zone is accepted.
+ *
+ *  The detector shipped with ZERO production callers, so nothing said any of
+ *  this out loud. Answers null when there is nothing to say — a box with full
+ *  ICU, or one with no wall-clock automation to mis-fire. */
+export function zoneWarning(hasZones: boolean, wallClockCount: number): string | null {
+  if (hasZones || wallClockCount <= 0) return null;
+  const plural = wallClockCount === 1 ? '' : 's';
+  return 'this node build carries no IANA timezone data, so every named timezone silently '
+    + `resolves to UTC: ${wallClockCount} wall-clock automation${plural} will fire at the UTC wall `
+    + 'clock, NOT the zone it names, and its history will look correct. Run a full-ICU node build '
+    + '(or set NODE_ICU_DATA).';
 }

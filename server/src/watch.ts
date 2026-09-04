@@ -56,8 +56,12 @@ import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 // (`checkPostClaim`) run exclusively inside `fireAutomation` itself.
 import { checkPreClaim, fireAutomation, type FireDeps } from './auto/fire.js';
 import {
-  decideFire, type AutomationRow as PolicyAutomationRow, type SchedulePlan,
+  decideFire, zoneWarning, type AutomationRow as PolicyAutomationRow, type SchedulePlan,
 } from './auto/schedulepolicy.js';
+// L0, and reached for exactly one question: whether this node build can keep a
+// wall clock at all. See `zoneWarning`'s own docstring for why a small-ICU
+// build is silent rather than loud.
+import { icuHasZones } from '../../shared/schedule.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:76 — see detectDialogs's own comment
 
@@ -652,6 +656,10 @@ export class FleetWatcher {
    * the controller ruling asks for.
    */
   private automationsInFlight = new Set<number>();
+  /** Said once per process, never per tick — a repeated warning about a fact
+   *  that cannot change while the process lives is noise that trains the
+   *  operator to skip the log. */
+  private zoneWarned = false;
   /**
    * The per-restart catch-up bound (spec §8). An automation id enters this
    * set the first time THIS PROCESS fires a `catchup` occurrence or records
@@ -2393,6 +2401,25 @@ export class FleetWatcher {
     const now = Date.now();
     if (this.lastAutomationSweep !== 0 && now - this.lastAutomationSweep < AUTOMATION_SWEEP_MS) return;
     this.lastAutomationSweep = now;
+
+    // ONE LINE, ONCE PER PROCESS, and only on a build that cannot keep a wall
+    // clock. `icuHasZones()` is true on a full-ICU node, so on every ordinary
+    // box this costs a single boolean and never touches the store. L4 decides
+    // nothing here: `zoneWarning` (L1) owns the question of whether there is
+    // anything to say, including "no wall-clock automation exists, so this box
+    // cannot mis-fire one".
+    if (!this.zoneWarned && !icuHasZones()) {
+      try {
+        const wall = store.automations({}).filter((a) => a.cadence.kind === 'wall-clock').length;
+        const msg = zoneWarning(false, wall);
+        if (msg !== null) {
+          console.warn(`ccrc-server: ${msg}`);
+          this.zoneWarned = true;
+        }
+      } catch {
+        // A bad read must not kill the sweep, and the warning can wait a tick.
+      }
+    }
 
     try {
       store.lapseAutomationRuns(now);

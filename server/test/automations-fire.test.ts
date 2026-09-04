@@ -20,7 +20,7 @@ import {
   type FireDeps, type AutomationCoordPort, type FireOutcome,
 } from '../src/auto/fire.js';
 import {
-  decideFire, planSchedule, failureLadder, type AutomationRow,
+  decideFire, planSchedule, zoneWarning, type AutomationRow,
 } from '../src/auto/schedulepolicy.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -468,22 +468,32 @@ describe('decideFire — the catch-up rule (spec §8), driven through schedulepo
   });
 });
 
-describe('failureLadder — spec §8: missed counts, skipped does not', () => {
-  it('ok resets the counter to 0', () => {
-    expect(failureLadder(2, 'ok')).toEqual({ consecutiveFailures: 0, autoPause: false });
+
+describe('zoneWarning — the small-ICU build that answers UTC instead of refusing', () => {
+  it('says nothing on a build that has zones', () => {
+    expect(zoneWarning(true, 12)).toBeNull();
   });
 
-  it('skipped leaves the counter unchanged — the lease working is not a failure', () => {
-    expect(failureLadder(2, 'skipped')).toEqual({ consecutiveFailures: 2, autoPause: false });
+  it('says nothing when there is no wall-clock automation to mis-fire', () => {
+    // The warning is about a CONSEQUENCE, not about a build. A box running
+    // only interval cadences cannot mis-fire one, and a warning it cannot act
+    // on is the noise that trains an operator to skip the log.
+    expect(zoneWarning(false, 0)).toBeNull();
   });
 
-  it('missed increments and auto-pauses at the ceiling', () => {
-    expect(failureLadder(AUTOMATION_FAILURE_CEILING - 1, 'missed'))
-      .toEqual({ consecutiveFailures: AUTOMATION_FAILURE_CEILING, autoPause: true });
-  });
-
-  it('refused increments without auto-pausing below the ceiling', () => {
-    expect(failureLadder(0, 'refused')).toEqual({ consecutiveFailures: 1, autoPause: false });
+  it('names the count, and says the history will look correct — which is the whole danger', () => {
+    // `icuHasZones()` exists because a small-ICU node does NOT throw on an
+    // IANA zone; it silently answers UTC. So `nextRunAt`, the run rows and
+    // every sentence the operator reads are all computed from the same wrong
+    // offset and all agree with each other. Nothing looks broken; the
+    // automation just fires at the wrong hour for ever. The detector shipped
+    // with ZERO production callers, which is why nothing said so.
+    const one = zoneWarning(false, 1);
+    expect(one).not.toBeNull();
+    expect(one!).toContain('1 wall-clock automation will');
+    expect(one!).toContain('look correct');
+    const many = zoneWarning(false, 4);
+    expect(many!).toContain('4 wall-clock automations will');
   });
 });
 
