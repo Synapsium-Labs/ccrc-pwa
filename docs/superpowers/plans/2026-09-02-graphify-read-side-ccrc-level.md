@@ -3700,6 +3700,10 @@ stale ledger cells re-measured. Committing the two source files again would be a
 
   **Fix:** one spelling — `git -C "$tree" -c core.quotepath=false ls-files`. The flag is set per
   invocation rather than in the repo's config, so ccrc changes no state in a tree it does not own.
+  **SUPERSEDED by D-1450 below** — that spelling silences only the NON-ASCII quoting class and left
+  three others (backslash, double quote, control byte) refusing tracked trees exactly as before; the
+  shipped spelling is now `ls-files -z | tr '\0' '\n'`. The paragraph is kept as written because it
+  is the history of what was measured on the fleet, not because it is the current fix.
 
   **The other git listings in this file were checked and left alone, deliberately.** `rev-parse`
   ignores `core.quotepath` entirely (measured: `--show-toplevel` and `--path-format=absolute
@@ -3723,6 +3727,57 @@ stale ledger cells re-measured. Committing the two source files again would be a
   `CLAUDE.md`'s rule finds **D-1448** (`docs/superpowers/plans/2026-09-02-program-leverage-wave8-f8.md`,
   `agent/src/fileops.ts`, `shared/api.ts`) — this ledger's own tail ends at D-1372, which is exactly
   the "a number taken from a plan alone collides with shipped refs" trap the rule warns about.
+
+- **D-1450** (2026-09-04, T1 review — the quoting fix was a QUARTER of the fix) — **`-c
+  core.quotepath=false` silences only the non-ASCII quoting class.** D-1449 above read the tracked
+  side with that flag and its comment headline claimed the comparison now saw git's truth. It did
+  not. `git ls-files` C-quotes a path — wrapping it in double quotes with C escapes — in **four**
+  classes, and the flag touches **one**. Measured in a scratch repo tracking four files
+  (never a live tree):
+
+  | file, raw | `ls-files` | `-c core.quotepath=false ls-files` | `ls-files -z \| tr '\0' '\n'` |
+  | --- | --- | --- | --- |
+  | `Jàrnbìtar.py` | `"J\303\240rnb\303\254tar.py"` | `Jàrnbìtar.py` | `Jàrnbìtar.py` |
+  | `back\slash.py` | `"back\\slash.py"` | `"back\\slash.py"` | `back\slash.py` |
+  | `quo"te.py` | `"quo\"te.py"` | `"quo\"te.py"` | `quo"te.py` |
+  | `tab<TAB>name.py` | `"tab\tname.py"` | `"tab\tname.py"` | `tab<TAB>name.py` |
+
+  So for a tracked file carrying a backslash, a double quote or any control byte, D-1449's defect
+  survived **unchanged and in full**: the tracked side spells a name the corpus side never spells,
+  `comm -23` emits it as a breach, and the tree is refused **for ever**, with the same
+  no-remedy-on-the-box property — nothing an operator does to the tree changes what `ls-files`
+  prints, and `<repo>.list` does not apply because the path is not noise. Narrower than mm-data's
+  measured case, identical in kind and in consequence.
+
+  **Fix:** read the tracked side NUL-separated — `tracked="$(git -C "$tree" ls-files -z | tr '\0'
+  '\n')"`. One call, raw for every class, and it makes `core.quotepath` irrelevant rather than
+  configuring around it, so the flag is dropped instead of being kept as a second half-mechanism.
+  `tr` is POSIX, so the macOS lens is unaffected (`macos-platform` green). The one shape `-z | tr`
+  cannot represent is a **newline inside a filename** — and that breaks the line-based corpus side
+  identically, so the two sides stay in step rather than disagreeing; that limit is now stated in the
+  source comment, which also enumerates all four quoting classes instead of asserting a coverage
+  claim the code did not deliver.
+
+  **What was NOT changed, re-checked:** the `ls-files -c -i -X` probe still quotes and is still left
+  alone, for the same reason as in D-1449 — its output is only ever tested for EMPTINESS, so quoting
+  cannot turn a hit into a miss. `rev-parse` remains unaffected. That reasoning stays in the source
+  comment beside the fix.
+
+  Baseline `graph-sweep` after the fix: `Tests  55 passed | 2 skipped (57)` (two new rows).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the shipped D-1449 spelling `-c core.quotepath=false ls-files` (i.e. this fix reverted) | `graph-sweep` — `Tests  1 failed \| 54 passed \| 2 skipped (57)`: *a TRACKED path git C-quotes for a backslash, a quote or a tab is not read as untracked* |
+  | plain `ls-files` (the original pre-D-1449 spelling) | `graph-sweep` — `Tests  2 failed \| 53 passed \| 2 skipped (57)`: that row **plus** *a TRACKED non-ASCII path is not read as untracked* |
+  | `-z` kept, the `tr` decode dropped (`$( )` eats the NULs, so every name concatenates into one line) | `graph-sweep` — `Tests  6 failed \| 49 passed \| 2 skipped (57)`: both tracked-path rows plus the four `.graphifyignore`-ownership/noise rows |
+
+  The first row is the point: the previously shipped guard passes the whole suite as it stood, and
+  goes red only against the new coverage — which is what made this a real finding and not a style
+  note. The two new tests are the inverse pair, tracked and untracked, matching D-1449's own shape.
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1449**
+  (this branch's own previous commit); `D-1450` is unallocated in `origin/main`, at `HEAD`, and in
+  the working tree outside these edits.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

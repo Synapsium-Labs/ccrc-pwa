@@ -392,16 +392,23 @@ for k in ('code','document','paper','image','video'):
         print(os.path.relpath(f, root))
 PY
 )" || { GUARD_REASON="detect() failed in $tree"; return 1; }
-  # D-1449 — COMPARE GIT'S TRUTH, NOT GIT'S QUOTING. `ls-files` C-quotes any
-  # path carrying a non-ASCII byte (`"J\303\240rn.py"`, in double quotes)
-  # unless core.quotepath is off, while detect() prints raw UTF-8 relative
-  # paths — so `comm -23` read a TRACKED file as untracked and refused the tree
-  # for ever, with no remedy on the box. Measured on the live fleet: mm-data
-  # refused over two tracked files (a JSON named with a/o diacritics, a PNG
-  # named with an umlaut). The `ls-files -c -i -X` probe above quotes too, but
+  # D-1449, widened by D-1450 — COMPARE GIT'S TRUTH, NOT GIT'S QUOTING.
+  # `ls-files` C-quotes a path (wrapping it in double quotes) in FOUR classes,
+  # not one: a non-ASCII byte (`"J\303\240rn.py"`), a backslash
+  # (`"back\\slash.py"`), a double quote (`"quo\"te.py"`) and any control byte
+  # (`"tab\tname.py"`). detect() prints raw UTF-8 relative paths, so `comm -23`
+  # read a TRACKED file as untracked and refused the tree for ever, with no
+  # remedy on the box. Measured on the live fleet: mm-data refused over two
+  # tracked files (a JSON named with a/o diacritics, a PNG named with an
+  # umlaut). `-c core.quotepath=false` silences ONLY the non-ASCII class and
+  # leaves the other three quoting exactly as before (measured), so the fix is
+  # `-z`, which is raw for every class in one call and makes core.quotepath
+  # irrelevant. The one shape `-z | tr` cannot represent is a newline inside a
+  # filename — and that breaks the line-based corpus side identically, so the
+  # two sides stay in step. The `ls-files -c -i -X` probe above quotes too, but
   # its output is only ever tested for EMPTINESS, never compared to a path, so
   # quoting cannot change its answer and it is left as it is.
-  tracked="$(git -C "$tree" -c core.quotepath=false ls-files)"
+  tracked="$(git -C "$tree" ls-files -z | tr '\0' '\n')"
   breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
             | grep -v '^graphify-out/memory/' | head -5 || true)"
   if [ -n "$breach" ]; then

@@ -601,6 +601,35 @@ describe('graph-sweep: the guard compares git TRUTH, not git QUOTING (D-1449)', 
     expect(reason).toContain(NON_ASCII);
     expect(reason).not.toContain('\\303');   // never the C-quoted spelling
   });
+
+  // D-1450: `-c core.quotepath=false` silences ONLY the non-ASCII class.
+  // `ls-files` still C-quotes a backslash, a double quote and any control
+  // byte, so a tracked file in any of those three classes was refused by the
+  // identical defect, with the identical no-remedy-on-the-box property. `-z`
+  // is raw for all four in one call; this row is what the narrower spelling
+  // cannot pass.
+  const QUOTED_TOO = ['back\\slash.py', 'quo"te.py', 'tab\tname.py'];
+
+  it('a TRACKED path git C-quotes for a backslash, a quote or a tab is not read as untracked', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    for (const n of QUOTED_TOO) fs.writeFileSync(path.join(repo, n), 'x = 1\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracked names git C-quotes');
+    fs.writeFileSync(j('fixture-corpus'), `a.py\n${QUOTED_TOO.join('\n')}\n`);
+    runSweep();
+    expect(outcomeOf(repo)).not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+  });
+
+  it('an UNTRACKED backslash-named path still refuses, and the reason carries the raw name', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    fs.writeFileSync(path.join(repo, 'back\\slash.py'), 'x = 1\n');   // never committed
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nback\\slash.py\n');
+    runSweep();
+    expect(outcomeOf(repo)).toBe('refused-by-guard');
+    const reason = lastPass().trees.find((t: { path: string }) => t.path === repo).reason;
+    expect(reason).toContain('back\\slash.py');
+    expect(reason).not.toContain('back\\\\slash.py');   // never the C-quoted spelling
+  });
 });
 
 describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branch review)', () => {
