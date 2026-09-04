@@ -1430,6 +1430,179 @@ describe('ccrc install: the always-on block is REMOVED (_inst_graph_always_on_of
   });
 });
 
+// ── TWO ROSTERED HOMES, and what "every home" could not mean until now ────
+// D-1456. `deploy/accounts.default.json` declares ONE account, so every
+// fixture above seeds a one-home box: each "every rostered home" step in this
+// file is measured against a single directory, and the suite cannot tell
+// "every" from "at least one". The shared-file case the symlink resolution
+// cites as its own motivation — two homes pointing at ONE physical CLAUDE.md,
+// the live fleet's ordinary shape — was exercised only through a dotfiles
+// target OUTSIDE the homes, which puts the write on the `mv` path but leaves
+// the COUNTERS unbound. D-1244's plan wrote that gap down rather than closing
+// it ("Known, and deliberately not fixed here": "the `$n`/`$same` counters
+// double-counting one physical file is unmeasured. A two-account fixture would
+// close all three and is the next thing to do here."). This is that fixture.
+//
+// THE ROSTER IS PLANTED, NOT PATCHED. `_inst_roster` seeds the shipped
+// single-account default ONLY when `$HOME/.ccrc/accounts.json` is absent — an
+// existing roster is user-owned and never overwritten (`ccd/ccrc`,
+// `_inst_roster`) — so writing the file before the run is the supported door,
+// and `_inst_accounts_sh` then GENERATES the `accounts.sh` every step below
+// reads through `_ccrc_cfg_dir`. Nothing here hand-writes that projection: a
+// roster this suite generated the same way the box does is the only kind whose
+// `CCRC_ACCOUNTS` order, config dirs and hues are the real ones.
+//
+// `exec.kind: external` ON THE SECOND ACCOUNT, for a fixture reason with
+// teeth. Exactly one account may be `upstream` (`shared/roster-json.mjs`:
+// "the roster has N upstream accounts: exactly one account must have exec.kind
+// upstream"), so the second cannot be that; `generated` would put
+// `_inst_wrappers` to work writing a launcher this describe is not about,
+// while `external` is the one kind ccrc never writes at all ("upstream and
+// external are never written"). The account is still fully rostered — it gets
+// a config dir from `_inst_dirs` and a `_ccrc_cfg_dir` arm like any other —
+// which is all any step measured below asks of it.
+const SECOND_SUFFIX = '.claude-second';
+
+/** Plant a TWO-account roster and answer both homes' config dirs, in the
+ *  order `CCRC_ACCOUNTS` will carry them (declaration order — `shared/generate.mjs`
+ *  emits `_ccrc_cfg_dir`'s arms length-descending but the ARRAY in roster order). */
+function seedTwoAccountRoster(home: string): [string, string] {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify({
+    version: 1,
+    accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'second', label: 'second', configDirSuffix: SECOND_SUFFIX,
+        exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'anthropic' },
+    ],
+  }, null, 2)}\n`);
+  // THE EXTERNAL ACCOUNT'S LAUNCHER IS THE OPERATOR'S, and doctor measures that
+  // it exists: `FAIL wrappers: second has no executable at $HOME/.local/bin/second`
+  // is what a run without this line ends on, and `install` exits with doctor's
+  // code. ccrc never writes this file for an `external` account — that is the
+  // whole meaning of the kind — so the fixture writes it, exactly as the
+  // operator who declared the account would have.
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'second'),
+    '#!/bin/sh\n# fixture: an external account\'s hand-written launcher\nexit 0\n', { mode: 0o755 });
+  return [join(home, '.claude'), join(home, SECOND_SUFFIX)];
+}
+
+describe('ccrc install: EVERY rostered home, measured against two of them (D-1456)', () => {
+  const START = '<!-- ccrc:graphify-always-on:start -->';
+  const END = '<!-- ccrc:graphify-always-on:end -->';
+  const BLOCK = `${START}\n## graphify\n\n- first run \`graphify query\`\n${END}`;
+
+  /** The roster really did reach the box: a run that seeded the shipped
+   *  single-account default instead would make every row below a statement
+   *  about one home wearing two names. Asserted from the GENERATED projection,
+   *  not from the JSON this fixture wrote. */
+  const rosteredAccounts = (home: string): string => {
+    const sh = readFileSync(join(home, '.ccrc', 'accounts.sh'), 'utf8');
+    return /^CCRC_ACCOUNTS=(.*)$/m.exec(sh)?.[1] ?? '';
+  };
+
+  it('clears the always-on block from BOTH homes, and its count line says 2', () => {
+    const home = freshBox('ccrc-inst-gfx-two-off-');
+    plantFakeVenv(home);
+    const [a, b] = seedTwoAccountRoster(home);
+    for (const d of [a, b]) {
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'CLAUDE.md'), `# head\n\n- operator line\n\n${BLOCK}\n\n## TAIL\n- keep me\n`);
+    }
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
+    // BOTH files, byte-identically around the block. A remover that stops after
+    // the first home leaves the second one's stale instruction in place — the
+    // exact failure "every rostered home" was never able to distinguish.
+    for (const d of [a, b]) {
+      expect(readFileSync(join(d, 'CLAUDE.md'), 'utf8'), `${d} still carries the block`)
+        .toBe('# head\n\n- operator line\n\n## TAIL\n- keep me\n');
+    }
+    // AND THE COUNT, because the files alone do not bind it: the step reports
+    // what it did, and a report that says 1 while clearing 2 is the same class
+    // of untrue sentence D-1454 found in doctor.
+    expect(r.stdout).toMatch(/always-on read rule — 2 home\(s\) cleared, 0 left in place/);
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+  });
+
+  it('converges the worker skill and the graphify skill into BOTH homes', () => {
+    // `_inst_skills` and `_inst_graphify_skill` both enumerate homes out of
+    // `accounts.sh` (`install-worker-skill.sh`, `install-graphify-skill.sh`:
+    // `for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")")`),
+    // and until this fixture existed that loop ran exactly once on every box
+    // this suite built — so "each account's skills directory", the sentence
+    // both steps print, was a claim no row could contradict.
+    const home = freshBox('ccrc-inst-gfx-two-skills-');
+    plantFakeVenv(home);
+    const [a, b] = seedTwoAccountRoster(home);
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
+    for (const d of [a, b]) {
+      expect(existsSync(join(d, 'skills', 'ccrc-worker', 'SKILL.md')),
+        `${d} has no ccrc-worker skill`).toBe(true);
+      // The graphify skill's body is the PACKAGE's, copied verbatim — so this
+      // asserts the assembled bytes, not merely a file at a path.
+      expect(readFileSync(join(d, 'skills', 'graphify', 'SKILL.md'), 'utf8'),
+        `${d}'s graphify SKILL.md is not the package's body`).toBe(skillMd(PKG_DESCRIPTION));
+      expect(readFileSync(join(d, 'skills', 'graphify', '.graphify_version'), 'utf8').trim(),
+        `${d} carries no version stamp`).toBe('0.9.9');
+    }
+  });
+
+  it('counts ONE physical file once when two homes share it through a symlink', () => {
+    // THE CASE D-1244 NAMED AND COULD NOT REACH. Two rostered homes, one
+    // physical CLAUDE.md: the second home's path is a symlink to the first's
+    // file, which is the live fleet's own shape ("Two homes on this fleet ARE
+    // symlinks to a third's file, so this is the ordinary case, not the exotic
+    // one" — `_inst_graph_always_on_off`). The step resolves the link, finds
+    // the block already gone, and must count the physical file ONCE: the
+    // remover cleared one file, not two, and it says so.
+    const home = freshBox('ccrc-inst-gfx-two-shared-');
+    plantFakeVenv(home);
+    const [a, b] = seedTwoAccountRoster(home);
+    for (const d of [a, b]) mkdirSync(d, { recursive: true });
+    const real = join(a, 'CLAUDE.md');
+    const PRE = `# shared\n\n${BLOCK}\n`;
+    writeFileSync(real, PRE);
+    symlinkSync(real, join(b, 'CLAUDE.md'));
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    // THE PREMISE, ASSERTED BEFORE THE EFFECT (D-1457) — this row is the one that cannot
+    // see its own fixture degrade. Every assertion below is satisfied by a
+    // ONE-home run: with only `.claude` rostered the remover clears the real
+    // file, leaves `b/CLAUDE.md` an untouched symlink, prints the same
+    // `1 home(s) cleared, 0 left in place`, and cuts the same single backup.
+    // Rows 1 and 2 are bound by effect (two files, two skill trees); this one
+    // is bound only by this line.
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
+    expect(readFileSync(real, 'utf8')).toBe('# shared\n');
+    expect(lstatSync(join(b, 'CLAUDE.md')).isSymbolicLink(), 'the alias was replaced by a file')
+      .toBe(true);
+    // ONE, not two. The alias is the same inode; a counter that adds a home
+    // rather than a file reports a second clearance that never happened.
+    expect(r.stdout).toMatch(/always-on read rule — 1 home\(s\) cleared, 0 left in place/);
+    // …and the DEGRADED accounting agrees: nothing was left in place, so the
+    // landing line names no `graphify-read-rule` at all.
+    expect(r.stdout).toMatch(/^install: done — every step above converged$/m);
+    expect(r.stdout).not.toMatch(/graphify-read-rule/);
+    // EXACTLY ONE BACKUP of that physical file, for the reason the idempotence
+    // row above states: two copies under one run would mean the remover visited
+    // the same physical path twice.
+    const backupsRoot = join(home, 'ccrc-backups');
+    const copies = (existsSync(backupsRoot) ? readdirSync(backupsRoot) : []).flatMap((d) =>
+      readdirSync(join(backupsRoot, d)).filter((f) => f.endsWith('_CLAUDE.md')));
+    expect(copies.length, 'the shared physical file was backed up once per home, not once')
+      .toBe(1);
+  });
+});
+
 describe('ccrc install: graphify exclude writer (_inst_graph_excludes)', () => {
   it('converges the common-dir exclude for a project AND its worktree, ignored from the worktree', () => {
     const home = freshBox('ccrc-inst-gfx-excl-');

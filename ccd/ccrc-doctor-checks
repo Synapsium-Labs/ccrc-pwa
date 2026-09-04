@@ -2698,6 +2698,7 @@ _check_graphify() {
 
   local -a gfx_install_fail=() gfx_excludes_warn=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
+  local -a gfx_rows_warn=()
 
   # ── (2) engine: the venv's own `graphify --version` against the pin ──────
   # Parsed by parameter expansion, not awk — the same rule `_check_disk`'s own
@@ -2856,6 +2857,47 @@ _check_graphify() {
         fi
         ;;
     esac
+
+    # ── D-1454: the ROWS of that pass, not only its status ─────────────────
+    # A pass whose status is `ok` can still have left a third of the fleet's
+    # trees with no graph: `ok` means the pass RAN, and every per-tree verdict
+    # lives in `trees[]`, which nothing here read. MEASURED on the reference
+    # fleet 2026-09-04 — 11 of 51 trees `refused-by-guard` and 2 `failed` on
+    # every pass, under `PASS graphify: … census ok`. The census is the only
+    # record of those rows, NO VERB PRINTS IT (there is no `ccrc graph`
+    # anything — grep `cmd_` in `ccd/ccrc`), and the sweep prints to nobody, so
+    # this line is the whole of an operator's visibility into it.
+    #
+    # WARN, NEVER FAIL, and that is a ruling, not a hedge: a refused tree is
+    # the corpus guard doing exactly its job (D-1449's own subject), the fix is
+    # in the REPOSITORY and not on this box, and a FAIL would red `ccrc doctor`
+    # — hence `ccrc install`'s closing gate, D-139 — for a condition no ccrc
+    # verb can clear. The two counts share one bucket because they share one
+    # remedy (read the rows, then act per-tree); the failed count is named
+    # separately because "refused" and "could not build" are different repairs.
+    local gfx_refused gfx_rowfail gfx_rowtotal
+    gfx_refused="$(jq -r '[.passes[-1].trees[]? | select(.outcome == "refused-by-guard")] | length' "$census" 2>/dev/null)"
+    gfx_rowfail="$(jq -r '[.passes[-1].trees[]? | select(.outcome == "failed")] | length' "$census" 2>/dev/null)"
+    gfx_rowtotal="$(jq -r '[.passes[-1].trees[]?] | length' "$census" 2>/dev/null)"
+    # An unparseable answer is NOT a zero — it is a measurement that failed,
+    # and the arms above already own "the census does not parse". Anything but
+    # a run of digits is left to them rather than reported here as "0 refused".
+    case "$gfx_refused$gfx_rowfail$gfx_rowtotal" in
+      ''|*[!0-9]*) ;;
+      *)
+        if [ "$gfx_refused" -gt 0 ] || [ "$gfx_rowfail" -gt 0 ]; then
+          local -a gfx_bits=()
+          [ "$gfx_refused" -gt 0 ] && gfx_bits+=("$gfx_refused refused (untracked paths — commit them, ignore them, or name them in \$HOME/.ccrc/graph-noise/<repo>.list)")
+          [ "$gfx_rowfail" -gt 0 ] && gfx_bits+=("$gfx_rowfail failed")
+          local gfx_rows_txt="" gfx_bit
+          for gfx_bit in "${gfx_bits[@]}"; do
+            [ -z "$gfx_rows_txt" ] || gfx_rows_txt+=", "
+            gfx_rows_txt+="$gfx_bit"
+          done
+          gfx_rows_warn+=("$gfx_rows_txt — of $gfx_rowtotal tree(s) in the last graph-sweep pass")
+        fi
+        ;;
+    esac
   fi
 
   # ── (7) D-995: room on the filesystem WORKTREES_ROOT (or PROJECTS_ROOT) is
@@ -2930,6 +2972,15 @@ _check_graphify() {
   if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
     _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")" \
       "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#gfx_rows_warn[@]}" -gt 0 ]; then
+    # Its own bucket and its own remedy: the census WARN above is about the
+    # TIMER (is the sweep still firing), and `systemctl status` answers nothing
+    # here — these rows are per-repository work. No verb prints the census, so
+    # the remedy names the file itself rather than inventing one.
+    _dr_warn graphify "$(_dr_join "${gfx_rows_warn[@]}")" \
+      "read the rows — each carries its own reason — in \$HOME/.ccrc/graph-sweep.json (.passes[-1].trees[]); a refused tree keeps its last graph and builds again as soon as its corpus is clean"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_disk_warn[@]}" -gt 0 ]; then

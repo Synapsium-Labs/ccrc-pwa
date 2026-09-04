@@ -1644,6 +1644,24 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   guard, which measures corpus *minus* tracked — and graphify's shrink guard would then refuse the
   write, wedging the tree at `refused-shrink` on every pass. An **operator** pattern is honoured as
   written, tracked content included: that is the escape hatch, and the only one.
+- **What git already ignores is derived into the same generated file** (D-1451) —
+  `git ls-files -o -i --exclude-standard --directory`, one entry per line, each anchored at the tree
+  root with a leading `/`. detect() reads `.gitignore` only along the ancestor chain from the VCS
+  root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied and
+  its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy on
+  the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor over
+  `.husky/_/`). Uncapped, with the entry count logged in the pass output; every derived entry goes
+  through the same `ls-files -c -i -X` probe as a default pattern, and a tree that owns a foreign
+  `.graphifyignore` derives nothing — that file is not the sweep's to write. Two D-1452 refinements:
+  git prints a collapsed directory AND every ignored file under it, so the entries a directory entry
+  already covers are **pruned** before the filter is written (each one costs detect a pattern match
+  per scanned path, twice per pass — one forward pass over git's sorted listing, D-1453, after the
+  first cut shipped as a nested loop that cost 15 s of bash on a 5500-entry tree), and a filename
+  carrying a glob metacharacter reads as a path to git and as a pattern to everyone else. That last
+  seam is **three-way** (D-1453): the probe is `git ls-files -X`, i.e. wildmatch, where `*` does not
+  cross a `/`; detect is `fnmatch`, where it does. So the probe alone cannot stand in for detect — a
+  derived entry is made literal in BOTH dialects first (`*` → `[*]`, `?` → `[?]`, `[` → `[[]`), and
+  the probe is the belt behind it.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
 per-home skill drift, per-tree excludes, the census's last pass, and free space on the

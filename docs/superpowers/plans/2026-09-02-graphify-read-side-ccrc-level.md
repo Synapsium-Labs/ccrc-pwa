@@ -3677,6 +3677,552 @@ stale ledger cells re-measured. Committing the two source files again would be a
   | `ccd/session-hook.sh`: delete the `fresh+=" — same content as HEAD"` append entirely | `coordinator-skill` — `Test Files  1 failed (1)`, `Tests  no tests`: *Error: ccd/session-hook.sh appends no freshness qualifier at all — … the graph-card paragraph that names one has to be re-derived against it* |
   | `ccd/session-hook.sh`: reword the qualifier to `" — identical bytes to HEAD"` without touching the doc | `coordinator-skill` — `Tests  1 failed \| 65 passed (66)`: *the graph-card paragraph never names the `identical bytes to HEAD` qualifier the hook appends…* |
 
+- **D-1449** (2026-09-04, T1 — the guard compares git's truth, not git's quoting) — **the corpus
+  guard measured a TRACKED file as untracked whenever its name carried a non-ASCII byte, refusing the
+  tree for ever with no remedy on the box.** `_gs_guard` (`ccd/ccd-graph-sweep`) built the tracked
+  side with `git -C "$tree" ls-files` and `comm -23`'d it against `detect()`'s output. `detect()`
+  prints raw UTF-8 relative paths; `git ls-files` C-QUOTES any path with a byte above 0x7f — the whole
+  line wrapped in double quotes with each byte as an octal escape — unless `core.quotepath` is off.
+  Measured directly:
+
+  ```
+  $ git ls-files                              $ git -c core.quotepath=false ls-files
+  "J\303\240rn \303\266/pic \303\266.png"          Jàrn ö/pic ö.png
+  "J\303\240rnb\303\254tar.json"                 Jàrnbìtar.json
+  ```
+
+  So the tracked side spelled a name the corpus side never spells, `comm -23` emitted the corpus
+  spelling as a breach, and the tree was refused. **MEASURED on the live fleet: `mm-data` was refused
+  over exactly two tracked files** — a JSON named with `à`/`ò` and a PNG named with `ö` — both
+  committed, both in HEAD, neither in any way untracked. The refusal is permanent: nothing an operator
+  can do to the tree changes what `ls-files` prints, and the noise-list remedy (`<repo>.list`) does not
+  apply because the paths are not noise.
+
+  **Fix:** one spelling — `git -C "$tree" -c core.quotepath=false ls-files`. The flag is set per
+  invocation rather than in the repo's config, so ccrc changes no state in a tree it does not own.
+  **SUPERSEDED by D-1450 below** — that spelling silences only the NON-ASCII quoting class and left
+  three others (backslash, double quote, control byte) refusing tracked trees exactly as before; the
+  shipped spelling is now `ls-files -z | tr '\0' '\n'`. The paragraph is kept as written because it
+  is the history of what was measured on the fleet, not because it is the current fix.
+
+  **The other git listings in this file were checked and left alone, deliberately.** `rev-parse`
+  ignores `core.quotepath` entirely (measured: `--show-toplevel` and `--path-format=absolute
+  --git-common-dir` both print raw UTF-8 from inside a non-ASCII subdirectory), so `_gs_trees`'
+  toplevel discovery and `_gs_guard`'s repo-basename derivation were never affected. The RULE 3 probe
+  `git -C "$tree" ls-files -c -i -X "$probe" | head -n1` DOES quote, but its output is only ever tested
+  for EMPTINESS — quoting cannot turn a hit into a miss — so it feeds no path comparison and is left
+  as it is. That reasoning is written into the source comment beside the fix so the next reader does
+  not have to re-derive why one call got the flag and the other did not.
+
+  Baseline `graph-sweep` `Tests  53 passed | 2 skipped (55)`.
+
+  | mutation | measured red |
+  | --- | --- |
+  | drop `-c core.quotepath=false` (the pre-fix spelling) | `graph-sweep` — `Tests  1 failed \| 52 passed \| 2 skipped (55)`: *a TRACKED non-ASCII path is not read as untracked* — `expected 'refused-by-guard' not to be 'refused-by-guard'` |
+  | `-c core.quotepath=true` (a wrong VALUE, not an absent flag) | `graph-sweep` — `Tests  1 failed \| 52 passed \| 2 skipped (55)`: same test, same assertion |
+  | `if [ -n "$breach" ]` → `if false` (the breach refusal deleted, to prove the inverse test is not vacuous) | `graph-sweep` — `Tests  3 failed \| 50 passed \| 2 skipped (55)`: *an UNTRACKED non-ASCII path still refuses…* plus row 2 and the armed-trap case |
+
+  **Number allocated as D-1449, not the D-1373 the brief named.** The brief's premise was that
+  `origin/main`'s highest was D-1372; re-grepping `origin/main` across `docs/` AND source per
+  `CLAUDE.md`'s rule finds **D-1448** (`docs/superpowers/plans/2026-09-02-program-leverage-wave8-f8.md`,
+  `agent/src/fileops.ts`, `shared/api.ts`) — this ledger's own tail ends at D-1372, which is exactly
+  the "a number taken from a plan alone collides with shipped refs" trap the rule warns about.
+
+- **D-1450** (2026-09-04, T1 review — the quoting fix was a QUARTER of the fix) — **`-c
+  core.quotepath=false` silences only the non-ASCII quoting class.** D-1449 above read the tracked
+  side with that flag and its comment headline claimed the comparison now saw git's truth. It did
+  not. `git ls-files` C-quotes a path — wrapping it in double quotes with C escapes — in **four**
+  classes, and the flag touches **one**. Measured in a scratch repo tracking four files
+  (never a live tree):
+
+  | file, raw | `ls-files` | `-c core.quotepath=false ls-files` | `ls-files -z \| tr '\0' '\n'` |
+  | --- | --- | --- | --- |
+  | `Jàrnbìtar.py` | `"J\303\240rnb\303\254tar.py"` | `Jàrnbìtar.py` | `Jàrnbìtar.py` |
+  | `back\slash.py` | `"back\\slash.py"` | `"back\\slash.py"` | `back\slash.py` |
+  | `quo"te.py` | `"quo\"te.py"` | `"quo\"te.py"` | `quo"te.py` |
+  | `tab<TAB>name.py` | `"tab\tname.py"` | `"tab\tname.py"` | `tab<TAB>name.py` |
+
+  So for a tracked file carrying a backslash, a double quote or any control byte, D-1449's defect
+  survived **unchanged and in full**: the tracked side spells a name the corpus side never spells,
+  `comm -23` emits it as a breach, and the tree is refused **for ever**, with the same
+  no-remedy-on-the-box property — nothing an operator does to the tree changes what `ls-files`
+  prints, and `<repo>.list` does not apply because the path is not noise. Narrower than mm-data's
+  measured case, identical in kind and in consequence.
+
+  **Fix:** read the tracked side NUL-separated — `tracked="$(git -C "$tree" ls-files -z | tr '\0'
+  '\n')"`. One call, raw for every class, and it makes `core.quotepath` irrelevant rather than
+  configuring around it, so the flag is dropped instead of being kept as a second half-mechanism.
+  `tr` is POSIX, so the macOS lens is unaffected (`macos-platform` green). The one shape `-z | tr`
+  cannot represent is a **newline inside a filename** — and that breaks the line-based corpus side
+  identically, so the two sides stay in step rather than disagreeing; that limit is now stated in the
+  source comment, which also enumerates all four quoting classes instead of asserting a coverage
+  claim the code did not deliver.
+
+  **What was NOT changed, re-checked:** the `ls-files -c -i -X` probe still quotes and is still left
+  alone, for the same reason as in D-1449 — its output is only ever tested for EMPTINESS, so quoting
+  cannot turn a hit into a miss. `rev-parse` remains unaffected. That reasoning stays in the source
+  comment beside the fix.
+
+  Baseline `graph-sweep` after the fix: `Tests  55 passed | 2 skipped (57)` (two new rows).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the shipped D-1449 spelling `-c core.quotepath=false ls-files` (i.e. this fix reverted) | `graph-sweep` — `Tests  1 failed \| 54 passed \| 2 skipped (57)`: *a TRACKED path git C-quotes for a backslash, a quote or a tab is not read as untracked* |
+  | plain `ls-files` (the original pre-D-1449 spelling) | `graph-sweep` — `Tests  2 failed \| 53 passed \| 2 skipped (57)`: that row **plus** *a TRACKED non-ASCII path is not read as untracked* |
+  | `-z` kept, the `tr` decode dropped (`$( )` eats the NULs, so every name concatenates into one line) | `graph-sweep` — `Tests  6 failed \| 49 passed \| 2 skipped (57)`: both tracked-path rows plus the four `.graphifyignore`-ownership/noise rows |
+
+  The first row is the point: the previously shipped guard passes the whole suite as it stood, and
+  goes red only against the new coverage — which is what made this a real finding and not a style
+  note. The two new tests are the inverse pair, tracked and untracked, matching D-1449's own shape.
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1449**
+  (this branch's own previous commit); `D-1450` is unallocated in `origin/main`, at `HEAD`, and in
+  the working tree outside these edits.
+
+- **D-1451** (2026-09-04, T2 — what git ignores never enters the corpus) — **detect() never reads a
+  NESTED `.gitignore`, so gitignored build artifacts entered the corpus untracked and the guard
+  refused the tree — for ever, with no remedy on the box.** `_load_graphifyignore`
+  (`graphify/detect.py:793-836`) walks the ancestor chain from the VCS root **down to** the scan root
+  — `ceiling` → `root`, and never below it — merging each directory's `.gitignore` and
+  `.graphifyignore` on the way. A `.gitignore` that lives *under* the scan root is therefore never
+  loaded at all, and everything it excludes is scanned as ordinary source. `_gs_guard`
+  (`ccd/ccd-graph-sweep`) then measures those paths as untracked (they are: git ignores them) and
+  refuses the build. Nothing an operator does to the tree changes what detect picks up, and
+  `<repo>.list` does not apply because the path is not ccrc's noise — so the refusal is permanent.
+
+  MEASURED live: **synapsium-platform** refused over `frontend/exposynapse-site/.astro/settings.json`
+  (ignored by `frontend/exposynapse-site/.gitignore`), **MekWarLive/swift-harbor** over `.husky/_/*`
+  (ignored by `.husky/_/.gitignore`).
+
+  **Fix:** derive **git's own verdicts** into the generated `.graphifyignore`, so the two sides answer
+  with one authority instead of two —
+  `git -C "$tree" ls-files -o -i --exclude-standard --directory -z | tr '\0' '\n'`, one ENTRY per
+  line, each anchored at the tree root with a leading `/` (a directory entry keeps its trailing `/`),
+  appended after the noise-list patterns in the same file, under the same ownership marker, so
+  `_gs_rm_generated` still removes it and every existing ownership rule keeps applying unchanged.
+  Nothing else is skipped and the list is **not capped**: a capped corpus is one this guard could not
+  explain. The entry count is logged in the pass output instead
+  (`git-ignored entries derived into the corpus filter: N`).
+
+  **Anchoring is load-bearing, not cosmetic.** detect anchors on a leading `/` against the directory
+  holding the file (`detect.py:883-895`) — here the tree root — and takes a directory entry's whole
+  subtree through the ancestor walk (`detect.py:924-931`). Unanchored, `build/` matches **at every
+  depth**, so an ignored root `build/` would hide a tracked `src/build/`.
+
+  **The invariant is measured, not argued.** These entries ALMOST never hide tracked content:
+  `--directory` collapses a directory only when it holds no tracked file (measured — a
+  directory with one tracked and one ignored file lists `mixed/skip.log`, never `mixed/`), and a file
+  entry names an untracked path. Every derived entry is still run through the existing RULE-3 probe
+  (`git ls-files -c -i -X`) and withheld-and-reported if it would. **CORRECTED by D-1452:** this
+  paragraph originally said *cannot* hide tracked content *by construction*, and the mutation table
+  below justified a green probe row with "no reachable fixture makes the probe fire". Both are false —
+  a filename carrying a glob metacharacter is the reachable class, and the probe now carries its own
+  red row. See D-1452. The probe runs **once over the
+  whole set** in the common case — git's answer over a union is empty iff it is empty for every
+  member — and falls back to one call per entry only when that union is non-empty, i.e. when there is
+  a culprit to name.
+
+  **Two rules deliberately left standing.** A tree carrying a FOREIGN `.graphifyignore` derives
+  nothing: that file is not the sweep's to write, and D-1161's "hands off" outweighs the new filter
+  (without this the derivation would have clobbered a repo's own committed file). **CORRECTED by
+  D-1452:** this parenthesis originally ended "…which the ownership tests catch". They do not, and it
+  was measured that they do not — every ownership fixture lacked a gitignored untracked path, so the
+  derivation was vacuous and all three stayed green with the skip deleted. The skip is pinned by its
+  own row, ownership (d), from D-1452 onward. And `graphify-out/` — ignored on every tree by `ccrc install`'s own exclude lines — is
+  derived like any other entry rather than special-cased, because `graphify-out/memory/` bypasses the
+  ignore filter inside detect itself (`detect.py:1160-1166`: `if not in_memory and _is_ignored(…)`),
+  so the entry cannot cost the corpus the query results the guard exempts. Checked in the installed
+  0.9.9, not assumed.
+
+  **Harness:** the fake detect stub (`plantGuardPython`) echoed `$HOME/fixture-corpus` verbatim and
+  ignored `.graphifyignore` entirely — it could not tell a filter that works from one that does
+  nothing. It now filters its echoed corpus through the generated file's exact entries the way real
+  detect applies them: a leading `/` stripped (it anchors at the root, where the file is written), a
+  directory entry by prefix, a file entry by equality, and `graphify-out/memory/` exempt as
+  `detect.py:1160-1166` has it.
+
+  **Cost, measured** on a fixture repo with **300 ignored entries** (30 directories each holding a
+  tracked `keep.py` beside ten ignored `*.log` files; the live custom-tools tree has 308): the
+  derivation call **7 ms**, the union probe **6 ms**, whole-pass wall time **170/148/150 ms** with the
+  derivation against **127/151/128 ms** without it — ~20 ms on a tree whose real build is minutes.
+  The per-entry fallback, which only runs when the union probe finds a culprit, costs **1063 ms** for
+  those 300 entries; that is the price of naming which entry is at fault, paid only when there is one.
+  **CORRECTED by D-1452:** every number in this paragraph is the SHELL side only — and **by D-1453**:
+  they are also the shell side of a fixture where the pruning loop is DEGENERATE (`dirs: 0`), so they
+  say nothing about the pruning cost. In the fixture
+  detect IS the stub, so the pass timing cannot see the cost the entries impose where it is actually
+  paid — inside detect, which evaluates every entry against every scanned path, twice per tree per
+  pass (the guard's own `detect()` and `graphify update`). That cost is O(entries x paths); measured
+  against the installed 0.9.9 in D-1452.
+
+  Baseline `graph-sweep` after the fix: `Tests  59 passed | 2 skipped (61)` (four new rows; D-1450
+  left it at `Tests  55 passed | 2 skipped (57)`).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the derivation dropped (`done < <(true)`) | `graph-sweep` — `Tests  3 failed \| 56 passed \| 2 skipped (61)`: *a NESTED .gitignore below the tree root is honoured*, *a directory holding BOTH a tracked and an ignored file is NOT collapsed*, *a derived entry is ANCHORED* |
+  | the leading `/` dropped (`derived+=("$e")`) | `graph-sweep` — `Tests  3 failed \| 56 passed \| 2 skipped (61)`: the same three rows, and the anchoring row fails as designed — `expected [ 'never-built', 'stale-rebuilt' ] to include 'refused-by-guard'`, i.e. the RULE-3 probe withheld the unanchored `build/` because it hides the tracked `src/build/x.ts`, and `build/junk.js` then breached |
+  | the entry-count log dropped | `graph-sweep` — `Tests  1 failed \| 58 passed \| 2 skipped (61)`: *a NESTED .gitignore …* — the count is bound, not decorative |
+  | the RULE-3 probe over derived entries dropped (`if false; then`) | ~~`Tests  59 passed \| 2 skipped (61)`, GREEN — no reachable fixture makes the probe fire~~ **SUPERSEDED by D-1452: that sentence was a measured falsehood.** The reachable fixture is a filename carrying a glob metacharacter; with it, the same mutation reddens — `graph-sweep` — `Tests  1 failed \| 61 passed \| 2 skipped (64)`: *a derived entry whose FILENAME carries a glob metacharacter is withheld* |
+
+  **Deviations from the brief, both deliberate.** (1) The brief specified
+  `-c core.quotepath=false … ls-files`; the shipped call is `-z | tr '\0' '\n'`, because D-1450 —
+  landed on this branch one commit earlier — measured that `core.quotepath=false` silences only the
+  non-ASCII quoting class and leaves backslash, double-quote and control-byte names C-quoted. A
+  C-quoted entry is a pattern that matches nothing (or the wrong thing), so the brief's spelling would
+  have shipped the defect D-1450 had just removed from the other side of the same comparison. (2) The
+  brief allocated **D-1374**; the highest number across `origin/main` and this branch, in both `docs/`
+  and source, is **D-1450** (this branch's own previous commit), so this entry is **D-1451** — the
+  brief's number is long since taken.
+
+- **D-1452** (2026-09-04, T2 review follow-up — the derivation's three unmeasured claims) — **D-1451
+  shipped a guard whose failure DELETES a tracked file with no red row, and a ledger that said
+  otherwise.** Three findings, all measured before being believed.
+
+  **(1) The `foreign` skip shipped unpinned, and the ledger claimed coverage the tree did not have.**
+  D-1451's fourth deviation said the derivation is skipped on a tree carrying a foreign
+  `.graphifyignore` "which the ownership tests catch". MEASURED: mutate the skip to `if true; then`
+  and the whole file stays green — `graph-sweep` — `Tests  59 passed | 2 skipped (61)`. The reason is
+  structural, not luck: `trackForeignIgnore` force-ADDS the file (so `ls-files -o` never lists it) and
+  `makeRepo` plants NO gitignored untracked path, so `derived` is empty in (a), (a2) and (b) either
+  way and the write block never runs at all. The hazard the skip prevents is the worst in this file:
+  the generated filter overwrites the repo's own COMMITTED file, and `_gs_rm_generated` — now
+  marker-matching (D-1161) — reads its own marker on what is now a marker-bearing file and `rm -f`s
+  it at exit, leaving the repo with a DELETED TRACKED FILE. **Fix:** ownership row **(d)**, the same
+  fixture as (a2) plus the missing precondition — `.gitignore` = `*.log` committed and an untracked
+  `noise.log` — asserting the committed file exists, is byte-identical, `git status --porcelain` is
+  empty, and the tree is not `refused-by-guard`.
+
+  **(2) The RULE-3 probe over derived entries has a reachable fixture; the ledger said it does not.**
+  **CORRECTED by D-1453: the seam below is THREE-way, not two-way, and this fixture measures only the
+  half where the two glob dialects happen to AGREE.** `git ls-files -X` is wildmatch (`*` does not
+  cross `/`); detect is `fnmatch.fnmatch` (`*` does). With the tracked file at the SAME depth as the
+  entry they agree and the probe fires, as below; move it one directory deeper and the probe goes
+  silent while detect still eats the tracked file. The real fix is to neutralize the metacharacter so
+  the entry is literal in BOTH dialects — see D-1453 (1).**
+  D-1451's mutation table recorded the probe as green-under-mutation and justified that with "with
+  `--directory` and anchoring in place no reachable fixture makes the probe fire". That sentence is a
+  measured falsehood, and the class it misses is the seam between the readings of an entry: **git
+  spells an entry as a PATH; detect and `ls-files -X` each spend it as a GLOB — but not the SAME glob
+  dialect (D-1453).** MEASURED (git 2.43.0):
+  `.gitignore` carrying `/a\*.log` — an ESCAPED star, so only the file literally named `a*.log` is
+  ignored — with a tracked, committed `ab.log` and an untracked `a*.log`. Then `ls-files -o -i
+  --exclude-standard --directory` prints `a*.log`, and that entry as a probe pattern gives `ls-files
+  -c -i -X` the answer `ab.log`: the derived entry WOULD hide a tracked file. **Fix:** that fixture as
+  a fifth D-1451 row, asserting the `derived ignore entries withheld, repo tracks matching files:
+  /a*.log` stderr line, that the withheld entry never reaches the generated filter, and that no count
+  is logged because nothing survived. The assertion sits on the stderr line and the generated file,
+  not on the outcome, because the corpus stub matches file entries by EQUALITY while real detect
+  globs — the one place in this file where the stub cannot mirror the engine. **CORRECTED by D-1453:
+  that is exactly the place where the mirror is LOAD-BEARING — a derived entry that eats a tracked
+  file out of the corpus shows up nowhere else — so the stub now globs, tees the corpus, and this
+  row was replaced by two.**
+
+  **(3) git emits REDUNDANT entries, and every one of them is paid for per scanned path.** MEASURED
+  (git 2.43.0): `.gitignore` = `*.log` and a directory `f/` holding only `a.log` and `b.log` — `git
+  ls-files -o -i --exclude-standard --directory` prints **`f/`, `f/a.log`, `f/b.log`**, three entries
+  for one collapsed subtree. (`--directory` collapses the directory, but git still lists the files
+  under it whenever the directory is not itself named by a rule; contrast a directly-named
+  `node_modules/`, which prints one entry.) **Why it matters, MEASURED against the installed 0.9.9**
+  (`graphify.detect._is_ignored`, pure path math, shared ancestor `_cache`, 2000 synthetic paths):
+  **4 anchored patterns → 0.588 s; 300 anchored patterns → 30.296 s** — ~50 us per (pattern, path),
+  because the anchored arm recomputes `target.relative_to(anchor)` INSIDE the per-pattern loop
+  (`detect.py:891-895`) instead of once per target. That is tens of seconds per detect call on a
+  300-entry tree, doubled per pass (the guard's own `detect()` and `graphify update`), against
+  `CCRC_GRAPH_BUILD_TIMEOUT=600` — i.e. entry count moves a big tree toward a `timed-out` row, which
+  D-1451's shell-side timings could not show. It also inflated the logged count, which over-reported
+  what the filter carries. **Fix:** after the read loop, drop any entry already covered by a derived
+  DIRECTORY entry — pure shell, no new process, `case "$e" in "$d"*)` with `$d` QUOTED so a
+  metacharacter in a directory name stays literal. The count log then states the entries the filter
+  actually carries. **CORRECTED by D-1453 (2): that fix was written as a nested loop, O(entries ×
+  directories), and the 300-entry cost fixture below never entered it — a tracked file in every
+  directory means git collapses nothing, so `dirs` is empty. On the shape pruning exists for (5500
+  entries under 500 collapsed `__pycache__/`) the nested loop cost 14555 ms of bash per tree per pass.
+  It is now a single forward pass: 54 ms, identical result.**
+
+  **Not done, and why.** The per-(pattern, path) cost is a defect in the installed engine, not in this
+  tree — pruning cuts the multiplier, it does not fix the loop. Hoisting `relative_to(anchor)` out of
+  the per-pattern loop is an upstream graphify change and is out of this task's scope; recorded here
+  so the next reader has the measurement rather than re-deriving it.
+
+  Baseline `graph-sweep` after the fix: `Tests  62 passed | 2 skipped (64)` (three new rows; D-1451
+  left it at `Tests  59 passed | 2 skipped (61)`).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the `foreign` skip dropped (`if [ "$foreign" -eq 0 ]; then` -> `if true; then`) | `graph-sweep` — `Tests  1 failed \| 59 passed \| 2 skipped (62)` (measured before rows 2-3 existed): *(d) a foreign file plus a GITIGNORED untracked path* — `AssertionError: the repo's own committed file must still exist: expected false to be true`, i.e. the derived filter overwrote the tracked file and the exit trap then deleted it |
+  | the RULE-3 probe over derived entries dropped (`if false; then`) | `graph-sweep` — `Tests  1 failed \| 61 passed \| 2 skipped (64)`: *a derived entry whose FILENAME carries a glob metacharacter is withheld* — the withheld line never appears, and `/a*.log` reaches the filter |
+  | the redundant-entry pruning dropped (the inner `for d in ${dirs[@]}` test removed) | `graph-sweep` — `Tests  1 failed \| 61 passed \| 2 skipped (64)`: *redundant entries under a COLLAPSED directory are pruned* — the generated filter carries `/f/`, `/f/a.log`, `/f/b.log` and the count logs 3 |
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1451**
+  (this branch's own previous commit), so this entry is **D-1452**; `git grep D-1452 HEAD origin/main`
+  is empty.
+
+  **One PRE-EXISTING red, measured and left alone.** `server/test/typecheck-tests.test.ts` is red in
+  this checkout — `Tests  2 failed | 7 passed (9)`, "these server files are compiled by NO typecheck
+  project" over 349 files including `src/askkey.ts`, plus the helpers row. It is a PATH-SPELLING
+  artefact of this box, not a code defect and not this task's: `/data` is a symlink to
+  `/mnt/<volume>`, and `tsc --listFiles` reports `src/` and `shared/` files under the
+  `/data/projects/ccrc-pwa/...` spelling while the suite's own `readdirSync` walk enumerates the
+  `/mnt/...` one, so every such file reads as uncovered. MEASURED at pristine `HEAD` with all four of
+  this commit's files restored from `git show HEAD:<path>`: identical failure, identical summary line
+  — then this commit's versions were put back and `git status --porcelain` re-checked. Recorded so
+  the next reader does not attribute it to the derivation.
+
+
+- **D-1453** (2026-09-04, T2 review follow-up 2 — the seam is THREE-way, and the loop was quadratic)
+  — **D-1452 fixed the loud half of the glob seam and shipped a comment asserting it had fixed the
+  quiet half too. It had not: a derived entry can pass the RULE-3 probe and still drop a TRACKED file
+  from the corpus, silently.** Two findings, both measured on scratch fixtures before being believed.
+
+  **(1) git's path, wildmatch's glob and fnmatch's glob are THREE readings, not two.** D-1452 (2)
+  corrected D-1451's "can never hide tracked content by construction" to "git spells an entry as a
+  PATH, detect and `ls-files -X` spend it as a GLOB" — but that sentence still conflates the two
+  CONSUMERS, and the source comment D-1452 shipped went further and said outright that "the RULE-3
+  probe above is what keeps that spelling from hiding a tracked file". **Measured false.** The probe
+  is `git ls-files -X`, i.e. **wildmatch**, where `*` does NOT cross a `/`; detect is
+  **`fnmatch.fnmatch`** (`detect.py:866`, anchored arm), where `*` DOES. D-1452's own fixture put the
+  tracked file at the SAME depth as the entry (`ab.log` beside `a*.log`), which is exactly where the
+  two dialects agree — so the probe fired and the row went green. Move the tracked file **one
+  directory deeper** and the probe goes silent while detect still eats it.
+
+  MEASURED, scratch fixture, no live path touched — repo with `.gitignore` = `/a\*.py` (an ESCAPED
+  star, so only the literal name is ignored), tracked `ax/b.py` and `keep.py`, untracked ignored
+  `a*.py`:
+
+  | step | measured |
+  | --- | --- |
+  | `git ls-files -o -i --exclude-standard --directory` | `a*.py` |
+  | RULE-3 probe, `git ls-files -c -i -X <(echo /a*.py)` | **EMPTY** — the guard KEEPS the entry |
+  | real detect (installed 0.9.9), no generated filter | `['a*.py', 'ax/b.py', 'keep.py']` |
+  | real detect WITH the kept entry `/a*.py` | `['keep.py']` — the **TRACKED `ax/b.py` is gone** |
+  | `_is_ignored(root/'ax/b.py', root, [(root, '/a*.py')])` | `True` |
+
+  And unlike the probe's own case this is **SILENT**: no withheld line, no breach, the guard returns
+  0. The harm is the wedge `ccd/graph-noise.default.list`'s D-1160/D-1161 header already names — the
+  sweep drops tracked nodes from the corpus, graphify's shrink guard sees an unaccounted net loss and
+  refuses the write, and the tree wedges at `refused-shrink` on every pass, for ever.
+
+  **Fix:** make a derived entry literal in BOTH dialects before anyone spends it — neutralize each
+  glob metacharacter into a one-character class, `[` → `[[]` FIRST (so the brackets the next two
+  insert are not re-escaped), then `*` → `[*]`, then `?` → `[?]`. Pure parameter expansion, no new
+  process. MEASURED on the same fixture: with `/a[*].py` the probe still reports no tracked file AND
+  real detect returns `['ax/b.py', 'keep.py']` — the tracked file survives and the untracked `a*.py`
+  is still excluded. (`_is_ignored(ax/b.py, root, [(root,'/a[*].py')])` → `False`;
+  `_is_ignored(a*.py, …)` → `True`.)
+
+  **The probe stays, and is now honestly a belt.** After neutralization an entry matches exactly the
+  path git named, plus — for a directory — its subtree, which `--directory` only collapses when it
+  holds no tracked file. Its one remaining reachable class is the OTHER dialect gap, and it errs
+  SAFE there: a backslash is LITERAL to `fnmatch` but an ESCAPE to wildmatch. MEASURED: `.gitignore`
+  `a\\b.log` (one literal backslash) with a tracked `ab.log` and an ignored untracked `a\b.log` — git
+  derives `a\b.log`; `git ls-files -c -i -X` on that entry prints **`ab.log`** (TRACKED, so the probe
+  fires and withholds), while `_is_ignored(ab.log, root, [(root, '/a\b.log')])` is **False** — detect
+  would never have hidden it. A visible false positive, which is the direction a belt may fail in,
+  and it is that row that now pins the probe.
+
+  **The stub could not SEE the class, and that was the load-bearing gap.** D-1452 recorded the corpus
+  stub's equality match on file entries as "the one place in this file where the stub cannot mirror
+  the engine" and moved the assertions off the corpus onto stderr. That is precisely backwards: it is
+  the one place where the mirror is load-bearing, because an entry that eats a tracked file shows up
+  NOWHERE ELSE. `plantGuardPython` now matches a file entry with an UNQUOTED `case "$p" in $pat)` —
+  bash's `case` lets `*` cross a `/` exactly as `fnmatch` does — and tees the filtered corpus to
+  `$HOME/seen-corpus`, so a row can assert what SURVIVED rather than only what the filter carries.
+  MEASURED that this matters: with neutralization removed AND the stub put back to equality, the
+  corpus assertion goes GREEN (blind) and only the filter-shape assertion reddens.
+
+  **(2) The pruning loop was O(entries × directories), and D-1452's cost fixture never entered it.**
+  D-1452's 300-entry fixture is "30 directories each holding a tracked `keep.py` beside ten ignored
+  `*.log` files" — a tracked file in every directory means git collapses NOTHING, so `dirs` is empty
+  and the inner loop never runs. REPRODUCED: `raw entries 300, dirs 0`, loop **5 ms**, kept 300 —
+  which is what the ~7/6 ms shell-side numbers were measuring. The shape pruning EXISTS for is the
+  opposite one. MEASURED on it, same loop verbatim — `.gitignore` = `*.pyc`, 500 `p<i>/__pycache__/`
+  each holding 10 `.pyc`, plus a tracked `p<i>/m.py` outside them: `raw entries 5500, dirs 500`,
+  loop **14555 ms**, kept 500. Fifteen seconds of bash per tree per pass, inside the serialized sweep,
+  BEFORE the build, on a 15-minute timer, against `CCRC_GRAPH_BUDGET`. It scales as entries × dirs, so
+  2000 dirs / 20000 entries is minutes.
+
+  **Fix:** ONE FORWARD PASS. git's listing is sorted, so a collapsed directory is immediately followed
+  by every entry under it (`f/` sorts before `f/a.log`; any `g/…` sorts after all of `f/…`), and
+  nested collapsed directories fall out of the same test — so a single `cur` prefix variable suffices:
+  skip while the entry is under `cur`, else emit and set `cur` to the entry when it ends in `/`.
+  MEASURED on the same 5500-entry fixture: **IDENTICAL result (kept 500) in 54 ms against 14555 ms** —
+  ~270×, and O(n). The shipped loop, neutralization included, re-timed: 5500/500 → **64 ms**,
+  300/0 → **12 ms**, 1 entry → **2 ms**. Both numbers are the SHELL side only; the corpus-side cost
+  (~50 us per (pattern, path), 300 anchored patterns → 30.296 s over 2000 paths) is D-1452 (3)'s
+  measurement and is unchanged — pruning cuts the multiplier, and that is still the reason it matters.
+
+  **Not done, and why.** Hoisting `relative_to(anchor)` out of detect's per-pattern loop remains an
+  upstream graphify defect, out of this task's scope (D-1452 already records it). A backslash in a
+  derived filename is left as git spells it: no single string is literal to both dialects there, and
+  the failure it causes is the probe's SAFE direction — withheld and reported, never a silent loss.
+
+  Baseline `graph-sweep` after the fix: `Tests  63 passed | 2 skipped (65)` (D-1452 left it at
+  `Tests  62 passed | 2 skipped (64)`: one row replaced, two added).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the glob neutralization dropped (`esc="${e//\[/[[]}"; esc="${esc//\*/[*]}"; esc="${esc//\?/[?]}"` -> `esc="$e"`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`: *a derived entry whose FILENAME carries a glob metacharacter is made LITERAL — a tracked file one directory deeper survives* — `AssertionError: the TRACKED file one directory deeper is still in the corpus: expected [ 'keep.py', '' ] to include 'ax/b.py'` |
+  | the same mutation PLUS the stub's file arm put back to equality (`case "$p" in $pat)` -> `[ "$p" = "$pat" ]`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`, but the corpus assertion is GREEN and the red is *the metacharacter is neutralized into a one-character class* — i.e. with the old stub the tracked-file loss is invisible, which is why the stub change ships with the source change |
+  | the RULE-3 probe over derived entries dropped (`if false; then`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`: *the RULE-3 probe still withholds — a backslash is an escape to wildmatch and a literal to fnmatch* — the withheld line never appears |
+  | the single-pass prefix skip dropped (`if [ -n "$cur" ]; then case "$e" in "$cur"*) continue ;; esac; fi` -> `:`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`: *redundant entries under a COLLAPSED directory are pruned* — `expected '# generated by ccd-graph-sweep for on…' not to match /^\/f\/a\.log$/` |
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1452**
+  (this branch's own previous commit), so this entry is **D-1453**; `git grep D-1453 HEAD origin/main`
+  is empty.
+
+- **D-1454** (2026-09-04, T3 — a refused tree is a finding, and a capped list is a lie about its size)
+  — **the census recorded eleven refused trees per pass and doctor answered `PASS graphify: … census
+  ok`, and the one refusal reason it did record capped its evidence at five paths without saying so.**
+  Two halves of one blindness, both measured on the reference fleet 2026-09-04:
+
+  **(a) `_check_graphify` read the pass STATUS and never the pass's ROWS.** `~/.ccrc/graph-sweep.json`
+  carries `.passes[-1].trees[]`, one row per tree with its own `outcome` and `reason`; the check
+  looked only at `.passes[-1].status`, which answers "did the pass run", not "did the trees build".
+  On the live fleet that is `status: "ok"` over **11 of 51 trees `refused-by-guard` and 2 `failed`,
+  every pass** — repositories that have had no graph for as long as the census window remembers,
+  reported to their operator as `census ok`. Nothing else prints those rows: the sweep runs off a
+  timer and writes to nobody's terminal, the hook's card names only the CURRENT tree, and there is no
+  `ccrc graph` verb at all (`grep '^cmd_' ccd/ccrc` — the census has no printer, which is why the
+  remedy names `$HOME/.ccrc/graph-sweep.json` itself and invents no verb). The check now counts
+  those two outcomes and WARNs naming both counts and the per-repository remedy.
+
+  **WARN, never FAIL — a ruling, not a hedge.** A refused tree is the corpus guard (D-1449, D-1451)
+  doing exactly its job: the graph it already had is untouched and it builds again the moment its
+  corpus is clean. The repair lives in the REPOSITORY (commit the path, ignore it, or name it in
+  `~/.ccrc/graph-noise/<repo>.list`), not on the box, so a FAIL would red `ccrc doctor` — hence
+  `ccrc install`'s closing gate (D-139, "a fresh install ends green") — for a condition no ccrc verb
+  can clear, on every box, for as long as any tree has an untracked artifact. The two counts share
+  one bucket (one remedy: read the rows, act per tree) and its own `_dr_warn` line, separate from the
+  census bucket above it, whose remedy is about the TIMER and answers nothing here. An unparseable
+  count is left to the existing "does not parse" arm rather than reported as `0 refused` — a
+  measurement that failed is not a measurement of zero.
+
+  **(b) `head -5` cannot report what it dropped.** The reason string was built as `comm … | head -5`,
+  so a tree with six untracked paths and one with sixty produced character-identical reasons. Those
+  are different problems with different remedies — one commit against a corpus filter — and the row
+  is the only place the refusal is ever stated. The cap stays (a census row is read on a phone); the
+  FULL breach is now computed once, capped after, and the remainder counted: ` (+N more)`. The
+  suffix needs no separator of its own because the existing `tr '\n' ' '` already leaves a trailing
+  space, so an uncapped reason keeps byte-for-byte the text it has always had — pinned by the
+  five-path test, which asserts the clause is ABSENT there.
+
+  | mutation | measured red |
+  | --- | --- |
+  | the whole `gfx_rows_warn` verdict branch deleted from `_check_graphify` | `ccrc-doctor-graphify` — `Tests  1 failed \| 26 passed (27)`: *WARNs, naming both counts, when the last pass carries refused-by-guard and failed rows* — `expected 'PASS graphify: engine 0.9.9, skills c…' to match /^WARN graphify:/` |
+  | that branch's `_dr_warn graphify` -> `_dr_fail graphify` (the never-FAIL ruling) | `ccrc-doctor-graphify` — `Tests  1 failed \| 26 passed (27)`: same row, the FAIL verdict where the WARN belongs |
+  | the count clause dropped (`[ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"` -> `:`) | `graph-sweep` — `Tests  1 failed \| 64 passed \| 2 skipped (67)`: *the refusal reason says how many breach paths the 5-path cap cut* — `expected 'untracked paths entered the corpus: b…' to match /\(\+3 more\)$/` |
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1453**
+  (this branch's own previous commit), so this entry is **D-1454** — the brief's own "D-1375" was allocated
+  against a stale reading of `origin/main` (whose own highest is **D-1448**, not D-1372) and is long
+  since spent — `git grep D-1375` finds nothing anywhere, because the series ran past it before this
+  branch was cut.
+  `git grep D-1454 HEAD origin/main` is empty.
+
+- **D-1455** (2026-09-04, T3 review — a one-pass fixture cannot tell "the last pass" from "every pass")
+  — **D-1454's row census shipped with its LAST-pass dimension unpinned.** Both new fixtures planted a
+  census holding exactly ONE pass, so `.passes[-1].trees[]` and `.passes[].trees[]` had identical
+  answers and nothing in the suite could tell them apart. MEASURED by the reviewer and reproduced
+  here: rewriting all three jq filters at `ccd/ccrc-doctor-checks:2879-2881` to `.passes[]` left
+  `ccrc-doctor-graphify` fully green at `Tests  27 passed (27)`.
+
+  That is not a cosmetic gap. The census keeps **ten** passes (`ccd/ccd-graph-sweep:44`,
+  `.passes = ((.passes // []) + $p | .[-10:])`), so on the reference fleet the mutant would count
+  roughly ten passes of rows — ~110 refused, ~20 failed — and keep naming repositories that were
+  fixed nine passes ago, while the line still ends `— of N tree(s) in the last graph-sweep pass`. A
+  false sentence carrying an inflated number is precisely the shape D-1454(b)'s own prose objects to,
+  and the fix for a refusal is a commit in the REPOSITORY, so the pass right after the repair is
+  clean while the census still carries the old rows: reading every pass would warn forever about a
+  tree already fixed.
+
+  **Fixture, not implementation.** The guard was right; only its binding was missing. Both D-1454
+  tests now plant a SECOND, older pass whose rows would change the answer if they were counted:
+  the WARN test's older pass carries four more `refused-by-guard` rows (so `.passes[]` reads
+  `7 refused … of 10 tree(s)` instead of `3 refused … of 6 tree(s)`), and the clean-rows test's
+  older pass carries one refused and one failed row (so `.passes[]` WARNs on a census whose last
+  pass is spotless). A third assertion, `of 6 tree(s)`, pins the TOTAL against the same drift — it
+  was the one number on the line no test read.
+
+  | mutation | measured red |
+  | --- | --- |
+  | all three jq filters `.passes[-1].trees[]?` -> `.passes[].trees[]?` (`ccd/ccrc-doctor-checks:2879-2881`) | `ccrc-doctor-graphify` — `Tests  2 failed \| 25 passed (27)`: *WARNs, naming both counts…* — `expected 'WARN graphify: 7 refused (untracked p…' to contain '3 refused'`; and *says nothing new when every row of the last pass is clean* — `expected 'WARN graphify: 1 refused (untracked p…' to match /^PASS graphify:/` |
+  | the TOTAL filter alone, line 2881 `.passes[-1].trees[]?]` -> `.passes[].trees[]?]` | `ccrc-doctor-graphify` — `Tests  1 failed \| 26 passed (27)`: *WARNs, naming both counts…* — `expected 'WARN graphify: 3 refused (untracked p…' to contain 'of 6 tree(s)'` |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1454** (this
+  branch's previous commit), so this entry is **D-1455**; `git grep D-1455 HEAD origin/main` is empty.
+
+- **D-1456** (2026-09-04, T4 — "every rostered home" was measured against one home) — **every
+  install suite in this tree seeds a ONE-account box, so no row could tell "every" from "at least
+  one".** `deploy/accounts.default.json` declares a single account and `_inst_roster` seeds it, so
+  `ccrc-install-graphify.test.ts`'s 52 rows measured `_inst_graph_always_on_off`, `_inst_skills` and
+  `_inst_graphify_skill` — three steps whose own report lines say "each account's" and "N home(s)" —
+  against exactly one directory. D-1244's plan wrote the gap down rather than closing it (`2026-09-02-d1244-the-read-rule-clobbered-what-it-promised-not-to.md`,
+  "Known, and deliberately not fixed here"): *"the `$n`/`$same` counters double-counting one
+  physical file is unmeasured. A two-account fixture would close all three and is the next thing to
+  do here."*
+
+  **Fixture, not implementation — the shipped behaviour was right and is now bound.** `seedTwoAccountRoster`
+  writes `$HOME/.ccrc/accounts.json` BEFORE the run, which is the supported door (`_inst_roster`
+  seeds the shipped default only when that file is absent; an existing roster is user-owned and
+  never overwritten), and `_inst_accounts_sh` then generates the `accounts.sh` every step reads
+  through `_ccrc_cfg_dir`. The second account is `exec.kind: external`: exactly one account may be
+  `upstream` (`shared/roster-json.mjs`), and `generated` would put `_inst_wrappers` to work writing
+  a launcher these rows are not about, while `external` is the kind ccrc never writes. Two fixture
+  facts were MEASURED rather than guessed: doctor's `wrappers` check FAILs on an external account
+  with no `$HOME/.local/bin/<id>` (`install` exits with doctor's code, so every row died at
+  `expected 1 to be +0` until the fixture planted that operator-owned launcher), and doctor's
+  `graphify` check reads the skill census across ALL homes, which is why truncating
+  `install-graphify-skill.sh`'s home loop fails the whole install rather than just the skill row.
+
+  Three rows: both homes' blocks removed with the count line reading `2 home(s) cleared`; the worker
+  skill and the graphify skill (bytes, plus the `.graphify_version` stamp) converged into both; and
+  the D-1244 case itself — two rostered homes sharing ONE physical `CLAUDE.md` through a symlink,
+  where the step must report `1 home(s) cleared`, leave the alias a link, add no `graphify-read-rule`
+  to `INST_DEGRADED`, and cut exactly one backup.
+
+  | mutation | measured red |
+  | --- | --- |
+  | `_inst_graph_always_on_off`'s loop header `"${CCRC_ACCOUNTS[@]}"` -> `"${CCRC_ACCOUNTS[0]}"` (stop after the first home) | `ccrc-install-graphify` — `Tests  1 failed \| 54 passed (55)`: *clears the always-on block from BOTH homes…* — `/tmp/…/.claude-second still carries the block: expected '# head\n\n- operator line\n\n<!-- ccr…' to be '# head\n\n- operator line\n\n## TAIL\…'` |
+  | the same function's symlink arm, `f="$phys"` -> `f="$phys"; n=$((n+1))` (count the alias as a second file) | `ccrc-install-graphify` — `Tests  1 failed \| 54 passed (55)`: *counts ONE physical file once…* — `expected 'install: box: /tmp/ccrc-inst-gfx-two-…' to match /always-on read rule — 1 home\(s\) cle…/` |
+  | `install-worker-skill.sh`'s home enumeration `"${CCRC_ACCOUNTS[@]}"` -> `"${CCRC_ACCOUNTS[0]}"` | `ccrc-install-graphify` — `Tests  1 failed \| 54 passed (55)`: *converges the worker skill and the graphify skill into BOTH homes* — `/tmp/…/.claude-second has no ccrc-worker skill: expected false to be true` |
+  | `install-graphify-skill.sh`'s home enumeration, same edit | `ccrc-install-graphify` — `Tests  3 failed \| 52 passed (55)`: all three new rows, each `expected 1 to be +0` — doctor's `graphify` census refuses the whole install, which is the honest shape of that defect |
+  | the broader spelling of row 2 — the census's `continue   # nothing of ours here` -> `n=$((n+1)); continue` | `ccrc-install-graphify` — `Tests  3 failed \| 52 passed (55)`: the new symlink row plus the two pre-existing count rows (*treats markers QUOTED…*, *is idempotent…*) |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1455** (this
+  branch's previous commit), so this entry is **D-1456**; `git grep D-1456 HEAD origin/main` is empty.
+  The brief proposed **D-1376**, which is already inside the range this branch has spent — the
+  standing rule (grep both trees, add one) wins over a number quoted in a brief.
+
+- **D-1457** (2026-09-04, T4 review — the row that closed D-1244 could not see its own fixture
+  degrade) — **a two-account fixture is a premise, and a row that does not assert its premise is
+  measuring something else.** D-1456's symlink row (`counts ONE physical file once when two homes
+  share it through a symlink`) is bound entirely by EFFECTS that a ONE-home box produces
+  byte-identically: with only `.claude` rostered the remover visits one home, clears the real file,
+  leaves `b/CLAUDE.md` an untouched symlink, prints the same `1 home(s) cleared, 0 left in place`,
+  adds no `graphify-read-rule`, and cuts exactly one backup. Its two siblings are self-guarding —
+  row 1 already asserted `rosteredAccounts(home)`, row 2 asserts files inside `.claude-second`,
+  which a one-home box does not have — so the one row whose entire subject is TWO homes sharing ONE
+  file was the one row that would have stayed green if the roster never reached the box. Measured,
+  not argued: deleting the `{ id: 'second', … }` entry from `seedTwoAccountRoster` reddened rows 1
+  and 2 and left row 3 **passing**.
+
+  Fix: the premise assertion `expect(rosteredAccounts(home), 'the two-account roster never reached
+  the box').toMatch(/claude.*second/)` now sits immediately after the `r.code` check in the symlink
+  row, and in the skills row for symmetry (that one was already bound by effect; the line costs
+  nothing and states the premise out loud). No production change — the shipped behaviour was and is
+  correct.
+
+  | mutation | measured red |
+  | --- | --- |
+  | the FIXTURE degraded: drop the `{ id: 'second', … }` account from `seedTwoAccountRoster` (a roster that never reaches the box) | `ccrc-install-graphify` — `Tests  3 failed \| 52 skipped (55)`: all three D-1456 rows, the symlink row now among them — `the two-account roster never reached the box: expected '(claude)' to match /claude.*second/` (before this fix that row PASSED) |
+  | re-measured, `_inst_graph_always_on_off`'s symlink arm `f="$phys"` -> `f="$phys"; n=$((n+1))` | `ccrc-install-graphify` — `Tests  1 failed \| 2 passed \| 52 skipped (55)`: *counts ONE physical file once…* — `expected 'install: box: /tmp/ccrc-inst-gfx-two-…' to match /always-on read rule — 1 home\(s\) cle…/` |
+  | re-measured, the census's `continue   # nothing of ours here` -> `n=$((n+1)); continue` | `ccrc-install-graphify` — `Tests  3 failed \| 52 passed (55)`: the symlink row plus the two pre-existing count rows |
+  | re-measured, `install-worker-skill.sh`'s home enumeration `"${CCRC_ACCOUNTS[@]}"` -> `"${CCRC_ACCOUNTS[0]}"` (row 2 still reddens on EFFECT, not on the new premise line) | `ccrc-install-graphify` — `Tests  1 failed \| 2 passed \| 52 skipped (55)`: *converges the worker skill and the graphify skill into BOTH homes* — `/tmp/…/.claude-second has no ccrc-worker skill: expected false to be true` |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1456** (this
+  branch's previous commit), so this entry is **D-1457**; `git grep D-1457 HEAD origin/main` is empty.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

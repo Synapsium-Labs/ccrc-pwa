@@ -1,5 +1,7 @@
 # Graphify Fleet Integration Implementation Plan
 
+**All tasks shipped (PRs #41, #42, #44, #45, #46); boxes ticked retroactively 2026-09-04.**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Every project ccrc places a session in gets a pinned graphify engine, the skill converged
@@ -97,7 +99,7 @@ _(allocated from `POST /api/ledger/deviations` via `ccrc-api ledger allocate`, 2
 - Produces: the measured resolver fact Task 9 builds on, and the hook-file inventory Task 10's
   uninstaller is written against.
 
-- [ ] **Step 1: Measure the tmux-free status-file resolver.** Read-only. For every fresh
+- [x] **Step 1: Measure the tmux-free status-file resolver.** Read-only. For every fresh
   `~/.cc-sessions/<id>.hookstate.json` (mtime < 30 min), resolve:
 
 ```bash
@@ -114,21 +116,21 @@ for h in ~/.cc-sessions/*.hookstate.json; do
 done
 ```
 
-- [ ] **Step 2: Cross-check ONE session against the pane-pid path** (read-only `tmux list-panes`,
+- [x] **Step 2: Cross-check ONE session against the pane-pid path** (read-only `tmux list-panes`,
   one invocation, sanctioned by this plan's approval): confirm the `$sf` above is byte-identical to
   the file ccd's `ccd/ccd:10492-10493` derivation reaches for the same session.
-- [ ] **Step 3: Verdict.** If ≥1 live session resolves and the cross-check matches → resolver
+- [x] **Step 3: Verdict.** If ≥1 live session resolves and the cross-check matches → resolver
   CONFIRMED; record the sample size. If `hookstate.pid` ≠ pane pid, or `<id>.wrapper` is not a
   registry field (check `ls ~/.cc-sessions/ | sed 's/^[^.]*\.//' | sort -u`), record the ACTUAL
   field/derivation that works — Task 9 uses whatever is recorded here, and if it needs a registry
   file outside R2's set, STOP and ask the operator to extend R2 before Task 9.
-- [ ] **Step 4: Inventory the 9 graphify git hooks.** For each repo under `~/projects` whose
+- [x] **Step 4: Inventory the 9 graphify git hooks.** For each repo under `~/projects` whose
   `.git/hooks/post-commit` mentions graphify: record which hook FILES exist (post-commit,
   post-checkout), whether each file is WHOLLY graphify-generated (starts with graphify's own marker —
   read one) or chains other content, and the `_PINNED` interpreter each names.
-- [ ] **Step 5: Locate the ws-audit consent artifact** for Task 9/O5: `grep -n '_ws_audit\|consent\|audit' ccd/ccd | head -30`;
+- [x] **Step 5: Locate the ws-audit consent artifact** for Task 9/O5: `grep -n '_ws_audit\|consent\|audit' ccd/ccd | head -30`;
   record the exact registry filename(s) an outstanding audit leaves behind.
-- [ ] **Step 6: Append findings + commit.** Add "## Task 0 findings" at the end of this plan with the
+- [x] **Step 6: Append findings + commit.** Add "## Task 0 findings" at the end of this plan with the
   measured facts; `git add docs/superpowers/plans/2026-08-28-graphify-fleet-integration.md && git commit -m "docs(graphify): task 0 measurement findings"`.
 
 ---
@@ -144,7 +146,7 @@ done
   exactly one bash file. Tasks 2/3 read `$GRAPHIFY_PIN` (in-process) or `~/.ccrc/graphify.pin`
   (cross-process stamp, written by Task 2).
 
-- [ ] **Step 1: Write the failing test.** Append to `server/test/single-definition.test.ts`, after
+- [x] **Step 1: Write the failing test.** Append to `server/test/single-definition.test.ts`, after
   the last bash-side describe (the file already defines `holdersOf`, `BASH`, `rel`):
 
 ```ts
@@ -165,9 +167,9 @@ describe('graphify — one pin, one census path', () => {
 });
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (`holdersOf('graphifyy==')` is `[]`):
+- [x] **Step 2: Run it — expect FAIL** (`holdersOf('graphifyy==')` is `[]`):
   `cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t graphify`
-- [ ] **Step 3: Add the pin to `ccd/ccrc`**, directly below the `INST_ROLE=both` block:
+- [x] **Step 3: Add the pin to `ccd/ccrc`**, directly below the `INST_ROLE=both` block:
 
 ```bash
 # The ONE spelling of the graphify engine version ccrc installs (spec §A, O1).
@@ -180,8 +182,8 @@ GRAPHIFY_PIN=0.9.9
   Note: the census-path row stays red until Tasks 6 and 11 create their files — mark it `.todo`
   until Task 11, then flip it on: write it now as `it.todo(...)` with the body in a comment, and
   Task 11 step 6 activates it.
-- [ ] **Step 4: Run — expect the two active rows PASS.**
-- [ ] **Step 5: Commit** — `git commit -m "feat(graphify): single-definition pin GRAPHIFY_PIN=0.9.9"`
+- [x] **Step 4: Run — expect the two active rows PASS.**
+- [x] **Step 5: Commit** — `git commit -m "feat(graphify): single-definition pin GRAPHIFY_PIN=0.9.9"`
 
 ---
 
@@ -200,7 +202,7 @@ GRAPHIFY_PIN=0.9.9
   `$HOME/.ccrc/graphify-venv/bin/…` — never `command -v` (spec §3.7: a root-owned
   `/usr/local/bin/graphify` symlink shadows PATH).
 
-- [ ] **Step 1: Write the failing test** (`server/test/ccrc-install-graphify.test.ts`). Reuse
+- [x] **Step 1: Write the failing test** (`server/test/ccrc-install-graphify.test.ts`). Reuse
   `ccrc-install.test.ts`'s fixture idiom (`freshBox`/`runInstall` equivalents — import or copy its
   `installCcrc`/env builders; grep that file for `freshBox(` and mirror its setup). The venv seam:
   a PRE-EXISTING `~/.ccrc/graphify-venv/bin/python` makes the step skip `python3 -m venv` and use
@@ -249,8 +251,8 @@ describe('ccrc install: graphify engine step', () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (no engine step exists; no stamp written).
-- [ ] **Step 3: Implement** in `ccd/ccrc` (beside the other `_inst_*` functions):
+- [x] **Step 2: Run — expect FAIL** (no engine step exists; no stamp written).
+- [x] **Step 3: Implement** in `ccd/ccrc` (beside the other `_inst_*` functions):
 
 ```bash
 # Engine into a ccrc-owned venv (spec §A): PEP-668-immune, one rm -rf to remove,
@@ -277,10 +279,10 @@ _inst_graphify_engine() {
 
   Spine: insert `_inst_graphify_engine` between `_inst_dirs` and `_inst_hooks` in `cmd_install`
   (excerpted spine at `ccd/ccrc:2908-2926`), and the analogous position in `cmd_update`.
-- [ ] **Step 4: Run — expect PASS.** Also re-run `test/ccrc-install.test.ts` whole — the new spine
+- [x] **Step 4: Run — expect PASS.** Also re-run `test/ccrc-install.test.ts` whole — the new spine
   step must not break its step-count/output pins; if a pin lists the spine's echo lines, add the new
   line to the expected set.
-- [ ] **Step 5: Commit** — `git commit -m "feat(graphify): venv engine provisioning, pinned + stamped"`
+- [x] **Step 5: Commit** — `git commit -m "feat(graphify): venv engine provisioning, pinned + stamped"`
 
 ---
 
@@ -302,7 +304,7 @@ _inst_graphify_engine() {
   `CCRC_GRAPHIFY_PKG` (skip the python resolution, use this package dir),
   `CCRC_GRAPHIFY_PIN` (skip the stamp read).
 
-- [ ] **Step 1: Write the failing test** (`server/test/install-graphify-skill.test.ts`), modelled on
+- [x] **Step 1: Write the failing test** (`server/test/install-graphify-skill.test.ts`), modelled on
   `install-worker-skill.test.ts:1-46` (same `mkTmp` + HOMES + `--homes` runner):
 
 ```ts
@@ -368,8 +370,8 @@ describe('install-graphify-skill', () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (installer does not exist).
-- [ ] **Step 3: Write `ccd/install-graphify-skill.sh`** — the worker installer's swap loop
+- [x] **Step 2: Run — expect FAIL** (installer does not exist).
+- [x] **Step 3: Write `ccd/install-graphify-skill.sh`** — the worker installer's swap loop
   (`ccd/install-worker-skill.sh:57-88`, copy it faithfully: diff-continue, staged tmp, backup,
   mv+rollback, per-home `rc=1; continue`) with a NEW head:
 
@@ -444,8 +446,8 @@ done
 exit "$rc"
 ```
 
-- [ ] **Step 4: Run — expect PASS.**
-- [ ] **Step 5: Wire into ccrc.** In `ccd/ccrc`, after `_inst_skills` in the spine:
+- [x] **Step 4: Run — expect PASS.**
+- [x] **Step 5: Wire into ccrc.** In `ccd/ccrc`, after `_inst_skills` in the spine:
 
 ```bash
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -463,7 +465,7 @@ _inst_graphify_skill() {
   Uninstall arm (beside `_uninst_cc_sessions`, `ccd/ccrc:4568`) — roster homes, realpath-de-duped,
   `rm -rf "<skills>/graphify"`; add `"$reg/install-graphify-skill.sh"` to `_uninst_cc_sessions`' `rm -f` list.
   Extend `server/test/ccrc-uninstall.test.ts`'s file-list expectations accordingly.
-- [ ] **Step 6: Run the install/uninstall suites; commit** —
+- [x] **Step 6: Run the install/uninstall suites; commit** —
   `git commit -m "feat(graphify): assembled-SRC skill installer, roster-wide, de-duped"`
 
 ---
@@ -482,7 +484,7 @@ _inst_graphify_skill() {
 - Produces: `graphify-out/` and `.graphifyignore` lines in each repo's COMMON-DIR
   `.git/info/exclude`; the sweep's gate `git -C <tree> check-ignore -q graphify-out` passes.
 
-- [ ] **Step 1: Failing test, ws-add half.** In the existing ws-add suite (copy its invocation idiom
+- [x] **Step 1: Failing test, ws-add half.** In the existing ws-add suite (copy its invocation idiom
   exactly — it already builds a repo and calls ws-add through `h.sh(...)`):
 
 ```ts
@@ -496,8 +498,8 @@ it('ws-add excludes graphify-out/ and .graphifyignore beside .ccrc/', () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect FAIL** (only `.ccrc/` is appended today).
-- [ ] **Step 3: Implement, ws-add half.** At `ccd/ccd:2993`, extend the existing idempotent append:
+- [x] **Step 2: Run — expect FAIL** (only `.ccrc/` is appended today).
+- [x] **Step 3: Implement, ws-add half.** At `ccd/ccd:2993`, extend the existing idempotent append:
 
 ```bash
   grep -qxF '.ccrc/' "$common/info/exclude" 2>/dev/null || echo '.ccrc/' >> "$common/info/exclude"
@@ -509,7 +511,7 @@ it('ws-add excludes graphify-out/ and .graphifyignore beside .ccrc/', () => {
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
 ```
 
-- [ ] **Step 4: Failing test, install half** (in `ccrc-install-graphify.test.ts`). Define the
+- [x] **Step 4: Failing test, install half** (in `ccrc-install-graphify.test.ts`). Define the
   shared helper both this task and Task 10 use:
 
 ```ts
@@ -530,7 +532,7 @@ export function makeFixtureRepo(home: string, rel: string): string {
   (`git -C <repoA> worktree add ../../worktrees/repoA/ws1 -b ws1`); run install; assert
   `git -C ~/worktrees/repoA/ws1 check-ignore -q graphify-out` exits 0 and that a second run appends
   nothing (exclude file content identical).
-- [ ] **Step 5: Implement `_inst_graph_excludes`** in `ccd/ccrc`:
+- [x] **Step 5: Implement `_inst_graph_excludes`** in `ccd/ccrc`:
 
 ```bash
 # D' (spec §4): the exclude precondition needs a WRITER, or the sweep refuses
@@ -555,7 +557,7 @@ _inst_graph_excludes() {
 }
 ```
 
-- [ ] **Step 6: Run both suites — PASS; commit** —
+- [x] **Step 6: Run both suites — PASS; commit** —
   `git commit -m "feat(graphify): exclude writer — ws-add + install converge common-dir excludes (D-996)"`
 
 ---
@@ -570,7 +572,7 @@ _inst_graph_excludes() {
 - Produces: `LifecycleClass` type + `LIFECYCLE` const. L0: the file imports NOTHING (not even
   `node:*`) — the PWA may bundle `shared/*.ts` (project CLAUDE.md ring rules).
 
-- [ ] **Step 1: Failing test:**
+- [x] **Step 1: Failing test:**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -595,8 +597,8 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
 });
 ```
 
-- [ ] **Step 2: Run — FAIL** (module absent).
-- [ ] **Step 3: Implement `shared/lifecycle.ts`** (no imports; plain literals):
+- [x] **Step 2: Run — FAIL** (module absent).
+- [x] **Step 3: Implement `shared/lifecycle.ts`** (no imports; plain literals):
 
 ```ts
 // L0. The artifact-lifecycle policy's §4(a) machine-readable manifest
@@ -634,10 +636,10 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
 ];
 ```
 
-- [ ] **Step 4: Run — PASS.** Also run the full server suite's ring/import checks if present
+- [x] **Step 4: Run — PASS.** Also run the full server suite's ring/import checks if present
   (`grep -ln 'shared' server/test/*ring* server/test/*import* 2>/dev/null` — if a ring suite scans
   `shared/`, confirm it passes with the new file).
-- [ ] **Step 5: Commit** — `git commit -m "feat(lifecycle): shared/lifecycle.ts manifest with graphify classes (spec §7, O7)"`
+- [x] **Step 5: Commit** — `git commit -m "feat(lifecycle): shared/lifecycle.ts manifest with graphify classes (spec §7, O7)"`
 
 ---
 
@@ -654,7 +656,7 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   `_gs_guard()` (Task 8) — later tasks REPLACE the named stubs; `~/.ccrc/graph-sweep.json` schema
   `{passes:[{started,finished,pin,status,trees:[{path,outcome,reason,duration_ms}]}]}` (last 10).
 
-- [ ] **Step 1: Failing tests** (`server/test/graph-sweep.test.ts`). The harness plants a FAKE
+- [x] **Step 1: Failing tests** (`server/test/graph-sweep.test.ts`). The harness plants a FAKE
   engine in the fixture venv — every graph-sweep test drives the sweep through `HOME=fixture`:
 
 ```ts
@@ -768,8 +770,8 @@ describe('graph-sweep: probe + census (Task 6)', () => {
 
   Import note: the pass-locked and skipped-locked cases use `spawn` — add
   `import { spawn } from 'node:child_process';` to the suite's imports.
-- [ ] **Step 2: Run — FAIL** (sweep absent).
-- [ ] **Step 3: Implement `ccd/ccd-graph-sweep`** (skeleton; stubs replaced by Tasks 7–9):
+- [x] **Step 2: Run — FAIL** (sweep absent).
+- [x] **Step 3: Implement `ccd/ccd-graph-sweep`** (skeleton; stubs replaced by Tasks 7–9):
 
 ```bash
 #!/usr/bin/env bash
@@ -899,8 +901,8 @@ _gs_finish ok 0
   Task-6 note: until Task 7 lands, set `BUILD_OUTCOME=failed BUILD_REASON="exit $rc"` just before
   the case (two lines, replaced in Task 7); `BUSY_OUTCOME`/`BUSY_REASON` are set by Task 9's real
   `_gs_busy` (the stub returns 1 = never busy, so they are unread).
-- [ ] **Step 4: Run — the Task-6 rows PASS** (rows 13, 1, 8, pause, pass-locked, cold-build).
-- [ ] **Step 5: Commit** — `git commit -m "feat(graphify): ccd-graph-sweep skeleton — probe, census, budget, pause (D-998 vocabulary)"`
+- [x] **Step 4: Run — the Task-6 rows PASS** (rows 13, 1, 8, pause, pass-locked, cold-build).
+- [x] **Step 5: Commit** — `git commit -m "feat(graphify): ccd-graph-sweep skeleton — probe, census, budget, pause (D-998 vocabulary)"`
 
 ---
 
@@ -916,7 +918,7 @@ _gs_finish ok 0
   line). Discriminators (spec §C.3): exit 124 ⇒ `timed-out`; exit≠0 ∧ `graph.json` size+mtime
   unchanged ∧ shrink message on stderr ⇒ `refused-shrink`; every other exit≠0 ⇒ `failed`.
 
-- [ ] **Step 1: Failing tests** (append to `graph-sweep.test.ts`; `plantEngine(behavior)` injects
+- [x] **Step 1: Failing tests** (append to `graph-sweep.test.ts`; `plantEngine(behavior)` injects
   the failure mode):
 
 ```ts
@@ -983,9 +985,9 @@ exit 1
 ```
 
   child holding it, run the sweep, assert `skipped-locked`, then `child.kill()`.)
-- [ ] **Step 2: Run — FAIL** (skeleton reports everything non-zero as `failed`; no lock probe;
+- [x] **Step 2: Run — FAIL** (skeleton reports everything non-zero as `failed`; no lock probe;
   fake-engine `cwd=` assert fails only if skeleton got it wrong — keep it as a pin either way).
-- [ ] **Step 3: Replace `_gs_build`** and delete the Task-6 placeholder lines:
+- [x] **Step 3: Replace `_gs_build`** and delete the Task-6 placeholder lines:
 
 ```bash
 _gs_build() {
@@ -1038,7 +1040,7 @@ _gs_build() {
   `grep -n 'shrank\|shrink' ~/.local/lib/python3.12/site-packages/graphify/export.py | head -3`
   on the fleet box, copy the literal into the grep above (replace the loose `shrank\|shrink`), and
   note it in the script comment. A pin bump revisits this literal (O1's acceptance).
-- [ ] **Step 4: Run — PASS. Commit** —
+- [x] **Step 4: Run — PASS. Commit** —
   `git commit -m "feat(graphify): sweep build — timeout/shrink/failed discriminators, contained argv"`
 
 ---
@@ -1056,7 +1058,7 @@ _gs_build() {
 - Produces: guard verdict + `GUARD_REASON`; `.graphifyignore` written before / removed after each
   build (trap'd); stray-file cleanup.
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
 
 ```ts
 describe('graph-sweep: corpus guard (Task 8)', () => {
@@ -1117,8 +1119,8 @@ cat "$HOME/fixture-corpus" 2>/dev/null || true
 });
 ```
 
-- [ ] **Step 2: Run — FAIL.**
-- [ ] **Step 3: Replace `_gs_guard`:**
+- [x] **Step 2: Run — FAIL.**
+- [x] **Step 3: Replace `_gs_guard`:**
 
 ```bash
 # Pre-build corpus guard (spec §E): there is NO publish seam — to_json writes
@@ -1169,7 +1171,7 @@ PY
   and `trap - EXIT INT TERM` (the trap covers the crash window only). Note the fake venv `python`
   ignores stdin and echoes the fixture corpus — the real one runs the heredoc; both satisfy the
   same contract.
-- [ ] **Step 4: Run — PASS. Commit** —
+- [x] **Step 4: Run — PASS. Commit** —
   `git commit -m "feat(graphify): pre-build corpus guard, noise lists, no-! rule, ephemeral filter"`
 
 ---
@@ -1187,7 +1189,7 @@ PY
 - Produces: `BUSY_OUTCOME` ∈ `skipped-busy | skipped-audit`, `BUSY_REASON`. R2 discipline: reads
   only — any write under `$REG` from this function is a defect.
 
-- [ ] **Step 1: Failing tests:**
+- [x] **Step 1: Failing tests:**
 
 ```ts
 describe('graph-sweep: idle gate (Task 9)', () => {
@@ -1239,8 +1241,8 @@ describe('graph-sweep: idle gate (Task 9)', () => {
 });
 ```
 
-- [ ] **Step 2: Run — FAIL** (stub never reports busy).
-- [ ] **Step 3: Replace `_gs_busy`** (adjust the two ADJUST lines to Task 0's findings):
+- [x] **Step 2: Run — FAIL** (stub never reports busy).
+- [x] **Step 3: Replace `_gs_busy`** (adjust the two ADJUST lines to Task 0's findings):
 
 ```bash
 # Idle gate (spec §C.5 + R2). READ-ONLY against $REG. Authority is the live
@@ -1289,7 +1291,7 @@ _gs_busy() {
 
   Test setup note: this describe's `beforeEach` must also call `seedAccountsSh(home)`
   (import from `./ccdWsHelpers.js`) so `_ccrc_cfg_dir` resolves the fixture wrapper.
-- [ ] **Step 4: Run — PASS. Commit** —
+- [x] **Step 4: Run — PASS. Commit** —
   `git commit -m "feat(graphify): idle gate — tmux-free resolver, audit token (O5), escape hatch (O3)"`
 
 ---
@@ -1310,7 +1312,7 @@ _gs_busy() {
 - Consumes: Task 0 step 4's hook-file inventory; Tasks 6–9's sweep.
 - Produces: the timer live on fleet/both boxes; the 9 legacy graphify git hooks removed.
 
-- [ ] **Step 1: Unit files** (mirror `deploy/systemd/ccd-cap-scopes.*`):
+- [x] **Step 1: Unit files** (mirror `deploy/systemd/ccd-cap-scopes.*`):
 
 ```ini
 # deploy/systemd/ccd-graph-sweep.service
@@ -1336,7 +1338,7 @@ AccuracySec=1min
 WantedBy=timers.target
 ```
 
-- [ ] **Step 2: Failing tests.** (a) `ccrc-install.test.ts`: add
+- [x] **Step 2: Failing tests.** (a) `ccrc-install.test.ts`: add
   `['ccd-graph-sweep.service', 'deploy/systemd/ccd-graph-sweep.service']` and the `.timer` row to
   `UNIT_FILES` — but ROLE-GATED: on a `--role server` box these two must NOT land (add one
   assertion in the units describe: install with `--role server` leaves both absent; the four
@@ -1365,7 +1367,7 @@ it('O6(b): removes a wholly-graphify post-commit hook, refuses a chained one', (
 });
 ```
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   `_inst_units` — append, gated:
 
 ```bash
@@ -1423,7 +1425,7 @@ _inst_graph_hooks_off() {
   `AGENT_BUILD_CMD`; add `systemctl --user enable --now ccd-graph-sweep.timer` to `AGENT_CMD`;
   `install_atomic ccd/install-graphify-skill.sh .cc-sessions/install-graphify-skill.sh 755` + a
   remote `bash ~/.cc-sessions/install-graphify-skill.sh` AFTER the worker-skill arm (`:695-715`).
-- [ ] **Step 4: Run all four touched suites — PASS. Commit** —
+- [x] **Step 4: Run all four touched suites — PASS. Commit** —
   `git commit -m "feat(graphify): sweep units + deploy wiring + legacy hook removal (O6b)"`
 
 ---
@@ -1442,7 +1444,7 @@ _inst_graph_hooks_off() {
 - Produces: verdict line `(PASS|WARN|FAIL|SKIP) graphify: …`; closes **D-995** (WORKTREES_ROOT df
   arm) and **D-997** (skill drift visible).
 
-- [ ] **Step 1: Failing tests** (each starts from `healthy()` + a planted-healthy graphify fixture,
+- [x] **Step 1: Failing tests** (each starts from `healthy()` + a planted-healthy graphify fixture,
   breaks ONE thing):
 
 ```ts
@@ -1504,10 +1506,10 @@ describe('ccrc doctor: graphify', () => {
 
   (Extend `stubDf` in the shared doctor-test helpers so a `df -Pk <path under ~/worktrees>` answers
   from `fixture-df-avail-worktrees` — same fixture-file convention the existing stub uses.)
-- [ ] **Step 2: Run — FAIL** (`graphify` not in the table; the table-vs-functions meta-test in
+- [x] **Step 2: Run — FAIL** (`graphify` not in the table; the table-vs-functions meta-test in
   `ccrc-doctor.test.ts` will ALSO fail once the entry exists without the function — that pair is
   the mutation coverage for the registration itself).
-- [ ] **Step 3: Implement.** Add `graphify` to `CCRC_DOCTOR_CHECKS` (after `wrappers`); write
+- [x] **Step 3: Implement.** Add `graphify` to `CCRC_DOCTOR_CHECKS` (after `wrappers`); write
   `_check_graphify` on the `_check_wrappers` shape — findings arrays, `_dr_join`, worst-class
   return. Conditions, each ONE finding string: (1) `CCRC_ROLE=server` → `_dr_skip` and return 3;
   (2) engine: `$HOME/.ccrc/graphify-venv/bin/graphify --version` vs the pin stamp — missing venv or
@@ -1520,9 +1522,9 @@ describe('ccrc doctor: graphify', () => {
   {`probed-zero`} → FAIL; `finished` older than 3× the 15-min interval → WARN "timer not firing";
   (7) D-995: `df -Pk "$HOME/worktrees"` (or PROJECTS root if worktrees absent) with `_check_disk`'s
   exact parse-and-floor idiom (2 GiB FAIL / 10 GiB WARN), finding text naming the device.
-- [ ] **Step 4: Activate Task 1's `.todo` census-path row** in `single-definition.test.ts` (the
+- [x] **Step 4: Activate Task 1's `.todo` census-path row** in `single-definition.test.ts` (the
   sweep + doctor now both exist as the only two spellers).
-- [ ] **Step 5: Run doctor suites + single-definition — PASS. Commit** —
+- [x] **Step 5: Run doctor suites + single-definition — PASS. Commit** —
   `git commit -m "feat(graphify): doctor check — engine/skills/excludes/census/worktrees-disk (D-995, D-997)"`
 
 ---
@@ -1537,7 +1539,7 @@ describe('ccrc doctor: graphify', () => {
 **Interfaces:**
 - Consumes: everything above, green.
 
-- [ ] **Step 1: Venv-gated integration tests** (rows 5b + 18 behavioural). Gate on the REAL engine:
+- [x] **Step 1: Venv-gated integration tests** (rows 5b + 18 behavioural). Gate on the REAL engine:
 
 ```ts
 const realVenv = process.env.CCRC_GRAPHIFY_TEST_VENV;   // set on the fleet box only
@@ -1574,17 +1576,17 @@ describe('graph-sweep: real-engine integration (venv-gated; quiet-box CI is the 
   });
 });
 ```
-- [ ] **Step 2: Full suite gate.** `cd server && npm run test` (foreground, ≥600000ms), then
+- [x] **Step 2: Full suite gate.** `cd server && npm run test` (foreground, ≥600000ms), then
   `cd agent && npm run test`, `cd pwa && npm run test`. Known load-flakes re-run in isolation
   before calling anything broken (project CLAUDE.md list).
-- [ ] **Step 3: README.** Add a "Graph layer (graphify)" subsection under the fleet-box tooling
+- [x] **Step 3: README.** Add a "Graph layer (graphify)" subsection under the fleet-box tooling
   docs: what installs where (venv, skills, excludes, sweep timer), the pause file, the census path,
   the O7 reclaim line, and the pin-bump procedure (edit `GRAPHIFY_PIN`, run install, expect a
   full-fleet rebuild pass — O2 budget applies).
-- [ ] **Step 4: Deviations sweep.** Any deviation found during Tasks 1–11 that is not D-995..D-998:
+- [x] **Step 4: Deviations sweep.** Any deviation found during Tasks 1–11 that is not D-995..D-998:
   allocate via `ccd/ccrc-api ledger allocate` (count as needed, title naming this plan) and record
   in "## Deviations found" below — never invent a number, never write `D-TBD` into a diff.
-- [ ] **Step 5: Commit; hand to the operator for deploy.** Deploy is AGENT-FIRST
+- [x] **Step 5: Commit; hand to the operator for deploy.** Deploy is AGENT-FIRST
   (`bash deploy/deploy.sh agent <fleet-host>` then the server lane), from the workstation with the
   documented per-box overrides. First live pass: watch `~/.ccrc/graph-sweep.json` — expect
   `status: ok`, 8 builds per pass, ~60 trees converging over ~8 passes; `touch

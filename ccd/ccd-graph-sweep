@@ -329,12 +329,13 @@ _gs_guard() {
   # An operator's list is an instruction about THIS repo that cannot be
   # honoured, so it refuses; the default is hygiene the repo never asked for,
   # and hygiene yields to a repo that has stated its own corpus policy.
+  local foreign=0
   if [ -f "$tree/.graphifyignore" ] && ! _gs_owns_ignore "$tree"; then
     if [ -f "$own" ]; then
       GUARD_REASON="$tree/.graphifyignore exists and was not written by ccd-graph-sweep — refusing to overwrite a file this tree owns"
       return 1
     fi
-    noise_files=()
+    noise_files=(); foreign=1
   fi
   # RULE 3 — a DEFAULT pattern is withheld when this repo TRACKS anything it
   # would hide; an operator pattern is honoured as written. D-1161: a
@@ -375,9 +376,147 @@ _gs_guard() {
   # to be able to see why, and the remedy (a `<repo>.list`, which is honoured
   # as written) named.
   [ -n "$withheld" ] && echo "graph-sweep: $tree: default noise withheld, repo tracks matching files:$withheld (a $repo.list is honoured as written)" >&2
-  if [ "${#patterns[@]}" -gt 0 ]; then
+  # D-1451 — WHAT GIT IGNORES NEVER ENTERS THE CORPUS.
+  #
+  # detect() reads `.gitignore` only along the ANCESTOR CHAIN from the VCS root
+  # down to the scan root (`_load_graphifyignore`, detect.py:793-836: it walks
+  # `ceiling` → `root`, never below). A NESTED `.gitignore` under the scan root
+  # is therefore never applied at all, so a gitignored build artifact enters the
+  # corpus, is untracked, and this guard refuses the tree — for ever, with no
+  # remedy on the box (nothing an operator does to the tree changes what detect
+  # picks up, and `<repo>.list` does not apply because the path is not ccrc's
+  # noise). MEASURED on the live fleet: synapsium-platform refused over
+  # `frontend/exposynapse-site/.astro/settings.json` (ignored by
+  # `frontend/exposynapse-site/.gitignore`), MekWarLive/swift-harbor over
+  # `.husky/_/*` (ignored by `.husky/_/.gitignore`).
+  #
+  # So ask GIT for its own verdicts and hand them to detect as entries: one per
+  # line, each ANCHORED at the tree root with a leading `/` (detect.py:883-895
+  # anchors on that, against the directory holding the file — here the root), a
+  # directory keeping its trailing `/` so the ancestor walk (detect.py:924-931)
+  # takes everything under it. Anchoring is not cosmetic: `build/` unanchored
+  # matches at EVERY depth, which is how an ignored root `build/` would hide a
+  # tracked `src/build/`.
+  #
+  # The seam here is THREE-WAY, not two-way (D-1453, correcting D-1452): git
+  # spells an entry as a PATH; the RULE-3 probe spends it as a WILDMATCH glob
+  # (`git ls-files -X`, where `*` does NOT cross `/`); detect spends it as an
+  # `fnmatch.fnmatch` glob (detect.py:866, anchored arm, where `*` DOES cross
+  # `/`). A filename carrying a glob metacharacter parts all three, and the two
+  # glob dialects part from each other — so the probe alone CANNOT stand in for
+  # detect. MEASURED: `.gitignore` `/a\*.py` (a LITERAL star) with a tracked
+  # `ax/b.py` and an untracked `a*.py` — git derives `a*.py`; the probe answers
+  # EMPTY (wildmatch will not let `*` cross the `/` in `ax/b.py`), so the entry
+  # is kept; and real detect (0.9.9) then returns ['keep.py'] where it returned
+  # ['a*.py', 'ax/b.py', 'keep.py'] — the TRACKED `ax/b.py` is gone from the
+  # corpus, SILENTLY: no withheld line, no breach, exit 0. That is exactly the
+  # wedge graph-noise.default.list's D-1160/D-1161 header names (shrink guard
+  # sees an unaccounted net loss and every pass ends `refused-shrink`).
+  #
+  # So make the entry LITERAL IN BOTH DIALECTS before anyone spends it:
+  # neutralize each metacharacter into a single-character class — `[` -> `[[]`
+  # first (so the brackets the next two insert are not re-escaped), then
+  # `*` -> `[*]`, `?` -> `[?]`. Both wildmatch and fnmatch read `[*]` as one
+  # literal star. Measured on the same fixture: with `/a[*].py` the probe still
+  # reports no tracked file AND detect returns ['ax/b.py', 'keep.py'] — the
+  # tracked file survives, the untracked `a*.py` is still excluded.
+  #
+  # The RULE-3 probe stays, and is now a genuine belt rather than the load-
+  # bearing member the previous comment claimed: after neutralization an entry
+  # matches exactly the path git named (plus, for a directory, its subtree,
+  # which `--directory` only collapses when it holds no tracked file). Its one
+  # remaining reachable class is the OTHER dialect gap, and it errs SAFE there:
+  # a backslash is literal to fnmatch but an ESCAPE to wildmatch, so an ignored
+  # untracked `a\b.log` beside a tracked `ab.log` makes the probe fire on a
+  # file detect would never have hidden — withheld and reported, which is a
+  # visible false positive rather than a silent loss. A test pins that row. The
+  # probe runs ONCE over the whole set in the common case (git's answer over a
+  # union is empty iff it is empty for every member), and only falls back to one
+  # call per entry when that union is non-empty, i.e. when there is a culprit.
+  #
+  # Not capped: a capped list is a corpus this guard cannot explain. The count
+  # is logged instead. `-z | tr` for the same reason as the tracked side above
+  # (D-1450) — raw for every quoting class in one call; the one shape it cannot
+  # represent, a newline inside a filename, breaks the line-based corpus side
+  # identically, so the two stay in step.
+  # The `foreign` skip is the one thing standing between this derivation and a
+  # repo's own COMMITTED `.graphifyignore`: without it the generated filter
+  # overwrites that tracked file, and `_gs_rm_generated` — reading its own
+  # marker on what is now a marker-bearing file — deletes it at exit. Pinned by
+  # ownership row (d), which is the only ownership fixture carrying a gitignored
+  # untracked path, i.e. the only one where the derivation has anything to write
+  # (D-1452; (a)/(a2)/(b) stay green with this skip deleted — measured).
+  local -a derived=()
+  local dheld="" e
+  if [ "$foreign" -eq 0 ]; then
+    probe="$(mktemp)" || { GUARD_REASON="cannot create a temp file to test derived ignore entries"; return 1; }
+    local -a raw=()
+    local cur="" esc
+    while IFS= read -r e; do
+      [ -n "$e" ] || continue
+      raw+=("$e")
+    done < <(git -C "$tree" ls-files -o -i --exclude-standard --directory -z 2>/dev/null | tr '\0' '\n')
+    # D-1452 — DROP WHAT A COLLAPSED DIRECTORY ALREADY CARRIES. `--directory`
+    # collapses a directory only when it holds no tracked file, but git still
+    # prints every ignored file UNDER it whenever the directory is not itself
+    # named by a rule: measured on git 2.43.0, `*.log` over a `f/` holding only
+    # `a.log` and `b.log` prints `f/`, `f/a.log`, `f/b.log` — three entries for
+    # one subtree. (A directly-named rule, `node_modules/`, prints the one
+    # entry.) Each redundant entry is dead weight the CORPUS side pays for:
+    # detect evaluates every entry against every scanned path, ~50 us per
+    # (pattern, path) measured on the installed 0.9.9 (the anchored arm
+    # recomputes `relative_to(anchor)` inside the per-pattern loop,
+    # detect.py:891-895), twice per tree per pass. It also inflates the count
+    # logged below, which would then over-report what the filter carries.
+    #
+    # ONE FORWARD PASS, not entries x directories (D-1453). git's listing is
+    # sorted, so a collapsed directory is immediately followed by every entry
+    # under it — `f/` sorts before `f/a.log`, and any `g/...` sorts after all of
+    # `f/...` — so a single `cur` prefix suffices, and nested collapsed
+    # directories fall out of the same test. The quadratic shape was never
+    # measured because the cost fixture had a tracked file in every directory,
+    # i.e. `dirs` empty and the inner loop never entered; on the shape pruning
+    # exists for (5500 entries under 500 collapsed `__pycache__/`) it cost
+    # 14555 ms of bash per tree per pass against this pass's 54 ms, same result.
+    # `"$cur"*` is quoted, so a metacharacter in a directory name stays literal.
+    for e in ${raw[@]+"${raw[@]}"}; do
+      if [ -n "$cur" ]; then case "$e" in "$cur"*) continue ;; esac; fi
+      case "$e" in */) cur="$e" ;; *) cur="" ;; esac
+      # literal in BOTH glob dialects before the probe or detect sees it — see
+      # the three-way-seam note above. `[` first, then `*`, then `?`.
+      esc="${e//\[/[[]}"; esc="${esc//\*/[*]}"; esc="${esc//\?/[?]}"
+      derived+=("/$esc")
+    done
+    if [ "${#derived[@]}" -gt 0 ]; then
+      printf '%s\n' "${derived[@]}" > "$probe"
+      if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+        local -a kept=()
+        for e in "${derived[@]}"; do
+          printf '%s\n' "$e" > "$probe"
+          if [ -n "$(git -C "$tree" ls-files -c -i -X "$probe" 2>/dev/null | head -n1)" ]; then
+            dheld="$dheld $e"
+          else
+            kept+=("$e")
+          fi
+        done
+        derived=(${kept[@]+"${kept[@]}"})
+      fi
+    fi
+    rm -f "$probe"
+  fi
+  # NOT SILENT either — and a withheld derived entry is a stronger signal than a
+  # withheld default: it means git's own verdicts disagree with git's own index
+  # about a path, so the tree may still be refused below for that path.
+  [ -n "$dheld" ] && echo "graph-sweep: $tree: derived ignore entries withheld, repo tracks matching files:$dheld" >&2
+  [ "${#derived[@]}" -gt 0 ] && echo "graph-sweep: $tree: git-ignored entries derived into the corpus filter: ${#derived[@]}" >&2
+  if [ "${#patterns[@]}" -gt 0 ] || [ "${#derived[@]}" -gt 0 ]; then
+    # NB: an empty array must contribute NOTHING — a bare `printf '%s\n' "$@"`
+    # of one would emit a lone newline, i.e. a blank entry. The trailing `true`
+    # keeps a false `[` test off the block's exit status.
     { echo "# generated by ccd-graph-sweep for one build — never committed, never edited"
-      printf '%s\n' "${patterns[@]}"; } > "$tree/.graphifyignore"
+      [ "${#patterns[@]}" -gt 0 ] && printf '%s\n' "${patterns[@]}"
+      [ "${#derived[@]}" -gt 0 ] && printf '%s\n' "${derived[@]}"
+      true; } > "$tree/.graphifyignore"
     GS_FILTER_TREE="$tree"
     trap '_gs_rm_generated "$GS_FILTER_TREE"' EXIT INT TERM
   fi
@@ -392,11 +531,45 @@ for k in ('code','document','paper','image','video'):
         print(os.path.relpath(f, root))
 PY
 )" || { GUARD_REASON="detect() failed in $tree"; return 1; }
-  tracked="$(git -C "$tree" ls-files)"
-  breach="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
-            | grep -v '^graphify-out/memory/' | head -5 || true)"
-  if [ -n "$breach" ]; then
-    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")"
+  # D-1449, widened by D-1450 — COMPARE GIT'S TRUTH, NOT GIT'S QUOTING.
+  # `ls-files` C-quotes a path (wrapping it in double quotes) in FOUR classes,
+  # not one: a non-ASCII byte (`"J\303\240rn.py"`), a backslash
+  # (`"back\\slash.py"`), a double quote (`"quo\"te.py"`) and any control byte
+  # (`"tab\tname.py"`). detect() prints raw UTF-8 relative paths, so `comm -23`
+  # read a TRACKED file as untracked and refused the tree for ever, with no
+  # remedy on the box. Measured on the live fleet: mm-data refused over two
+  # tracked files (a JSON named with a/o diacritics, a PNG named with an
+  # umlaut). `-c core.quotepath=false` silences ONLY the non-ASCII class and
+  # leaves the other three quoting exactly as before (measured), so the fix is
+  # `-z`, which is raw for every class in one call and makes core.quotepath
+  # irrelevant. The one shape `-z | tr` cannot represent is a newline inside a
+  # filename — and that breaks the line-based corpus side identically, so the
+  # two sides stay in step. The `ls-files -c -i -X` probe above quotes too, but
+  # its output is only ever tested for EMPTINESS, never compared to a path, so
+  # quoting cannot change its answer and it is left as it is.
+  tracked="$(git -C "$tree" ls-files -z | tr '\0' '\n')"
+  # D-1454 — THE CAP STAYS, THE SIZE OF THE BREACH STOPS BEING A SECRET. Five
+  # paths is all a census row can carry (it is read on a phone, and this one
+  # line is the only place the refusal is ever stated), but "6 untracked paths"
+  # and "60" are different problems with different remedies — one commit
+  # against a corpus filter — and the capped reason spelled them identically.
+  # So the FULL breach is computed once and the cap applied after, with the
+  # remainder counted: `head -5` on its own can never report what it dropped.
+  # `wc -l` over a non-empty capture is exact here — every line comm emits ends
+  # in a newline, and the empty case never reaches it (the `-n` test above).
+  local breach_all breach_n
+  breach_all="$(comm -23 <(sort -u <<<"$corpus") <(sort -u <<<"$tracked") \
+            | grep -v '^graphify-out/memory/' || true)"
+  if [ -n "$breach_all" ]; then
+    breach="$(head -5 <<<"$breach_all")"
+    breach_n="$(wc -l <<<"$breach_all")"
+    breach_n="${breach_n//[![:digit:]]/}"   # BSD `wc` pads its count with spaces
+    local more=""
+    [ "${breach_n:-0}" -gt 5 ] && more="(+$((breach_n - 5)) more)"
+    # NB the `tr` above leaves a TRAILING SPACE (the here-string's own final
+    # newline becomes one), so the suffix needs no separator of its own and the
+    # uncapped reason keeps the exact text it has always had.
+    GUARD_REASON="untracked paths entered the corpus: $(tr '\n' ' ' <<<"$breach")$more"
     _gs_owns_ignore "$tree" && rm -f "$tree/.graphifyignore"
     return 1
   fi
