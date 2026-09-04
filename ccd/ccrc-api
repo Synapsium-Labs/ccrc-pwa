@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, seventeen rows, and nothing else.
+#   * The route comes from ROUTES below, eighteen rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -73,10 +73,17 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Seventeen rows. Measured from both corpora on 2026-08-26 by
+# Eighteen rows, and that word is SCANNED: `server/test/ccrc-api.test.ts` derives
+# the count from the table below and reds if this line or the bullet at the top
+# of this file states a different one. The rows were CHOSEN on 2026-08-26 by
 # `grep -rhoE '(GET|POST) /api/[A-Za-z0-9/:_-]+' ccd/coordinator-skill ccd/worker-skill`,
-# which Task 5's standing test re-runs so a skill that starts calling an
-# unreachable route goes red rather than failing in the field.
+# which is how they were measured once and is NOT a guard that re-runs — an
+# earlier version of this comment claimed it was, and nothing in the tree ever
+# compared those corpora to this table. What does exist is narrower and worth
+# knowing before you rely on it: `coordinator-skill.test.ts` checks the
+# COORDINATOR corpus against `server/src/coord/routes.ts`, and the worker corpus
+# has no route parity at all — so a skill that starts calling a route this table
+# lacks fails in the field, not in the suite.
 declare -A ROUTES=(
   [runs.list]='GET|/api/runs|no|-'
   [runs.open]='POST|/api/runs|no|-'

@@ -170,6 +170,20 @@ const sh = (script: string, input: string): Promise<string> =>
     child.on('close', () => resolve(out));
   });
 
+/** The client's own ROUTES table, read from the client. Hoisted because the
+ *  prose pin below needs the SAME derivation the row-set assertion uses — a
+ *  second copy of this slice is exactly how the two would come to disagree,
+ *  which is the fault the pin exists to catch one level up.
+ *
+ *  The class allows a HYPHEN: `runs items-list` is the first two-word verb, and
+ *  a `[a-z.]+` class silently DROPPED it (D-843) — that is the whole reason this
+ *  reads the client instead of counting the `ROWS` table below. */
+const routeKeys = (): string[] => {
+  const src = fs.readFileSync(CCRC_API, 'utf8');
+  const table = src.slice(src.indexOf('declare -A ROUTES=('));
+  return [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
+};
+
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
   // table if every row is reachable and lands where it says. The ids here are
@@ -210,12 +224,7 @@ describe('the closed route table', () => {
     // planting an eighteenth row in `ccd/ccrc-api` left `expect(ROWS).toHaveLength(17)`
     // green. So the client's own table is the input, and this asserts the two
     // sets AGREE. A new row is now red until it is exercised.
-    const src = fs.readFileSync(CCRC_API, 'utf8');
-    const table = src.slice(src.indexOf('declare -A ROUTES=('));
-    // The class allows a HYPHEN: `runs items-list` is the first two-word verb,
-    // and a `[a-z.]+` class silently DROPPED it (D-843) — this caught that,
-    // which is the whole reason it reads the client instead of counting ROWS.
-    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
+    const keys = routeKeys();
     expect(keys.sort()).toEqual(ROWS.map(([a]) => `${a[0]}.${a[1]}`).sort());
     // Stated separately so the number itself is a claim someone has to edit.
     // D-688: `POST /api/coord/pause` was inferred from routes.ts rather than
@@ -226,6 +235,38 @@ describe('the closed route table', () => {
     // the surface by imitation — it is the READ half of `runs items`, which
     // was unusable without it: settling needs ids and nothing published them.
     expect(keys).toHaveLength(18);
+  });
+
+  it('states the row count in prose as the number the table actually holds', () => {
+    const n = routeKeys().length;
+    const WORDS: Record<number, string> = {
+      15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
+      19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
+    };
+    const want = WORDS[n];
+    expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
+
+    const src = fs.readFileSync(CCRC_API, 'utf8');
+    // TWO ANCHORED SITES, not a sweep over every numeral in the file — and the
+    // difference matters: `ccrc-api` opens with "twelve permission denials in one
+    // wave", which is HISTORY and must stay exactly as written. A blanket scan
+    // would demand that sentence say eighteen. Each regex fails loudly when its
+    // own anchor moves, so a deleted sentence reds here rather than passing on an
+    // empty match — `passage()`'s lesson, applied to two one-line slices.
+    const SITES: [string, RegExp][] = [
+      ['the closed-surface bullet', /The route comes from ROUTES below, ([A-Za-z-]+) rows/],
+      ['the ROUTES table header', /\n#\s*([A-Za-z-]+) rows\b/],
+    ];
+    for (const [name, re] of SITES) {
+      const m = src.match(re);
+      expect(m, `${name}: the anchor this pin reads is gone from ccd/ccrc-api`).not.toBeNull();
+      expect(m![1]!.toLowerCase(), `${name} states a row count this table does not have`).toBe(want);
+    }
+    // The header anchor is a FIRST-match read, so it is only honest while it is
+    // unique. A second `# <word> rows` line anywhere in the client would make
+    // this pin silently watch the wrong one.
+    expect([...src.matchAll(/\n#\s*([A-Za-z-]+) rows\b/g)].length,
+      'the ROUTES-table header anchor is no longer unique in ccd/ccrc-api').toBe(1);
   });
 
   it('has no verb that reaches the pause door', async () => {
