@@ -4152,6 +4152,48 @@ stale ledger cells re-measured. Committing the two source files again would be a
   **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1454** (this
   branch's previous commit), so this entry is **D-1455**; `git grep D-1455 HEAD origin/main` is empty.
 
+- **D-1456** (2026-09-04, T4 — "every rostered home" was measured against one home) — **every
+  install suite in this tree seeds a ONE-account box, so no row could tell "every" from "at least
+  one".** `deploy/accounts.default.json` declares a single account and `_inst_roster` seeds it, so
+  `ccrc-install-graphify.test.ts`'s 52 rows measured `_inst_graph_always_on_off`, `_inst_skills` and
+  `_inst_graphify_skill` — three steps whose own report lines say "each account's" and "N home(s)" —
+  against exactly one directory. D-1244's plan wrote the gap down rather than closing it (`2026-09-02-d1244-the-read-rule-clobbered-what-it-promised-not-to.md`,
+  "Known, and deliberately not fixed here"): *"the `$n`/`$same` counters double-counting one
+  physical file is unmeasured. A two-account fixture would close all three and is the next thing to
+  do here."*
+
+  **Fixture, not implementation — the shipped behaviour was right and is now bound.** `seedTwoAccountRoster`
+  writes `$HOME/.ccrc/accounts.json` BEFORE the run, which is the supported door (`_inst_roster`
+  seeds the shipped default only when that file is absent; an existing roster is user-owned and
+  never overwritten), and `_inst_accounts_sh` then generates the `accounts.sh` every step reads
+  through `_ccrc_cfg_dir`. The second account is `exec.kind: external`: exactly one account may be
+  `upstream` (`shared/roster-json.mjs`), and `generated` would put `_inst_wrappers` to work writing
+  a launcher these rows are not about, while `external` is the kind ccrc never writes. Two fixture
+  facts were MEASURED rather than guessed: doctor's `wrappers` check FAILs on an external account
+  with no `$HOME/.local/bin/<id>` (`install` exits with doctor's code, so every row died at
+  `expected 1 to be +0` until the fixture planted that operator-owned launcher), and doctor's
+  `graphify` check reads the skill census across ALL homes, which is why truncating
+  `install-graphify-skill.sh`'s home loop fails the whole install rather than just the skill row.
+
+  Three rows: both homes' blocks removed with the count line reading `2 home(s) cleared`; the worker
+  skill and the graphify skill (bytes, plus the `.graphify_version` stamp) converged into both; and
+  the D-1244 case itself — two rostered homes sharing ONE physical `CLAUDE.md` through a symlink,
+  where the step must report `1 home(s) cleared`, leave the alias a link, add no `graphify-read-rule`
+  to `INST_DEGRADED`, and cut exactly one backup.
+
+  | mutation | measured red |
+  | --- | --- |
+  | `_inst_graph_always_on_off`'s loop header `"${CCRC_ACCOUNTS[@]}"` -> `"${CCRC_ACCOUNTS[0]}"` (stop after the first home) | `ccrc-install-graphify` — `Tests  1 failed \| 54 passed (55)`: *clears the always-on block from BOTH homes…* — `/tmp/…/.claude-second still carries the block: expected '# head\n\n- operator line\n\n<!-- ccr…' to be '# head\n\n- operator line\n\n## TAIL\…'` |
+  | the same function's symlink arm, `f="$phys"` -> `f="$phys"; n=$((n+1))` (count the alias as a second file) | `ccrc-install-graphify` — `Tests  1 failed \| 54 passed (55)`: *counts ONE physical file once…* — `expected 'install: box: /tmp/ccrc-inst-gfx-two-…' to match /always-on read rule — 1 home\(s\) cle…/` |
+  | `install-worker-skill.sh`'s home enumeration `"${CCRC_ACCOUNTS[@]}"` -> `"${CCRC_ACCOUNTS[0]}"` | `ccrc-install-graphify` — `Tests  1 failed \| 54 passed (55)`: *converges the worker skill and the graphify skill into BOTH homes* — `/tmp/…/.claude-second has no ccrc-worker skill: expected false to be true` |
+  | `install-graphify-skill.sh`'s home enumeration, same edit | `ccrc-install-graphify` — `Tests  3 failed \| 52 passed (55)`: all three new rows, each `expected 1 to be +0` — doctor's `graphify` census refuses the whole install, which is the honest shape of that defect |
+  | the broader spelling of row 2 — the census's `continue   # nothing of ours here` -> `n=$((n+1)); continue` | `ccrc-install-graphify` — `Tests  3 failed \| 52 passed (55)`: the new symlink row plus the two pre-existing count rows (*treats markers QUOTED…*, *is idempotent…*) |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1455** (this
+  branch's previous commit), so this entry is **D-1456**; `git grep D-1456 HEAD origin/main` is empty.
+  The brief proposed **D-1376**, which is already inside the range this branch has spent — the
+  standing rule (grep both trees, add one) wins over a number quoted in a brief.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
