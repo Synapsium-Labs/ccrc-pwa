@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { CoordStatus, Divergence, FleetSession, RunSummary, SessionStreamMsg } from '../../shared/api.js';
+import type { AutomationSummary, CoordStatus, Divergence, FleetSession, RunSummary, SessionStreamMsg } from '../../shared/api.js';
 
 export interface Notice { message: string }
 
@@ -31,6 +31,7 @@ export class Bus extends EventEmitter {
   override emit(event: 'fleet', sessions: FleetSession[]): boolean;
   override emit(event: 'notice', notice: Notice): boolean;
   override emit(event: 'runs', runs: RunSummary[]): boolean;
+  override emit(event: 'automations', automations: AutomationSummary[]): boolean;
   override emit(event: 'coord', coord: CoordStatus): boolean;
   override emit(event: 'divergence', divergences: Divergence[]): boolean;
   override emit(event: SessionEventName, msg: SessionStreamMsg): boolean;
@@ -41,6 +42,7 @@ export class Bus extends EventEmitter {
   override on(event: 'fleet', listener: (sessions: FleetSession[]) => void): this;
   override on(event: 'notice', listener: (notice: Notice) => void): this;
   override on(event: 'runs', listener: (runs: RunSummary[]) => void): this;
+  override on(event: 'automations', listener: (automations: AutomationSummary[]) => void): this;
   override on(event: 'coord', listener: (coord: CoordStatus) => void): this;
   override on(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override on(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
@@ -51,6 +53,7 @@ export class Bus extends EventEmitter {
   override off(event: 'fleet', listener: (sessions: FleetSession[]) => void): this;
   override off(event: 'notice', listener: (notice: Notice) => void): this;
   override off(event: 'runs', listener: (runs: RunSummary[]) => void): this;
+  override off(event: 'automations', listener: (automations: AutomationSummary[]) => void): this;
   override off(event: 'coord', listener: (coord: CoordStatus) => void): this;
   override off(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override off(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;

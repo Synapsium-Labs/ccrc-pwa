@@ -42,6 +42,11 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // `ccdargv-dec-parity.test.ts` runs the real binary; this layer only says the
   // tokens reach it.
   wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }],
+  // Task 5: the automation lane's own ws-add, same shape as wsAddWorker's
+  // sample minus `--no-rc` — same `['ws-add']` grant, no widening, proven by
+  // the reachability check below since this sample's built argv still starts
+  // with the bare `ws-add` token.
+  wsAddAuto: ['demo', { surface: 'agent', actor: 'auto:7 fire', reason: null }],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
@@ -326,6 +331,9 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // flag loop at all; it has one now, and `ccd-lifecycle-sites.test.ts` runs
     // every one of these four forms through the real binary.
     wsAddWorker: ['ws-add', '--no-rc', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // No leading flag: an automation's session keeps the box's RC default,
+    // so the dec lands immediately after the project with nothing between.
+    wsAddAuto: ['ws-add', 'demo', '--surface', 'agent', '--actor', 'auto:7 fire'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
@@ -355,5 +363,33 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'true']);
     expect(CCD_ARGV.prOpen('demo-quiet-basin', 'the work', 'Ym9keQ==', false))
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'false']);
+  });
+
+  // Task 5: `wsAddAuto` is the automations lane's own ws-add — same shape as
+  // `wsAddWorker` MINUS the leading `--no-rc`, because `--no-rc` is scoped to
+  // dispatched programme workers (the 2026-08-13 ruling) and an automation's
+  // session is one the operator opens from their phone. The two rows above
+  // already prove the exact argv and the whitelist crossing; this block pins
+  // the property those rows don't say in words — no `--no-rc` anywhere, and
+  // the dec flags are byte-identical to `wsAddWorker`'s for the same dec.
+  describe('wsAddAuto keeps the box RC default — no --no-rc, ever', () => {
+    const dec = { surface: 'agent' as const, actor: 'auto:7 fire', reason: null };
+
+    it('a null dec emits exactly the bare ws-add argv', () => {
+      expect(CCD_ARGV.wsAddAuto('demo', null)).toEqual(['ws-add', 'demo']);
+    });
+
+    it('carries no --no-rc token, with or without a dec', () => {
+      expect(CCD_ARGV.wsAddAuto('demo', null)).not.toContain('--no-rc');
+      expect(CCD_ARGV.wsAddAuto('demo', dec)).not.toContain('--no-rc');
+    });
+
+    it('the dec flags match wsAddWorker\'s for the same dec — only --no-rc and its position differ', () => {
+      const auto = CCD_ARGV.wsAddAuto('demo', dec);
+      const worker = CCD_ARGV.wsAddWorker('demo', dec);
+      // wsAddWorker: ['ws-add', '--no-rc', 'demo', ...decFlags]
+      // wsAddAuto:   ['ws-add',            'demo', ...decFlags]
+      expect(auto).toEqual(['ws-add', 'demo', ...worker.slice(3)]);
+    });
   });
 });

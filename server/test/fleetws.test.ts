@@ -50,12 +50,24 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 // a real client was pinned by a source-text grep and nothing else. The positive
 // case at the bottom of this file is what closes that, and it can only exist
 // because the drop is opt-in.
-const collect = (ws: WebSocket, opts: { dropDivergence?: boolean } = {}) => {
+// `dropAutomations` is the SAME shape and opt-in for the same reason, added
+// with Task 10's frame. `tick()` now also calls `emitAutomations`, whose
+// byte-equality guard starts at `null` — so the FIRST tick after a socket
+// opens always emits one `automations` frame, and it lands between a ticking
+// test's `runs` assertions. Two cases in this file broke on exactly that.
+//
+// It is opt-in, not blanket, for the lesson `dropDivergence` records directly
+// above: a blanket drop would make this frame untestable here by construction.
+// The positive cases live in `automations-sweep.test.ts` (the emit, the
+// byte-diff, the empty-first-measurement) and in the cold-start order case at
+// the bottom of this file, which can only exist because the drop is opt-in.
+const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; dropAutomations?: boolean } = {}) => {
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
     const m: unknown = JSON.parse(String(d));
     if (opts.dropDivergence === true && (m as { type?: unknown }).type === 'divergence') return;
+    if (opts.dropAutomations === true && (m as { type?: unknown }).type === 'automations') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);
@@ -104,7 +116,7 @@ describe('fleet REST + WS', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-    const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+    const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
     await new Promise<void>((resolve, reject) => {
       ws.on('open', () => resolve());
       ws.on('error', reject);
@@ -166,7 +178,7 @@ describe('fleet REST + WS', () => {
     const addr = app.server.address();
     const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-    const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+    const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
     await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
     const hello = await next(); // hello precedes every fleet frame — see the test above
@@ -580,7 +592,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
       expect((await next()).type).toBe('hello');
@@ -622,7 +634,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
 
       expect((await next()).type).toBe('hello');
@@ -651,7 +663,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
@@ -681,7 +693,7 @@ describe('fleet REST + WS', () => {
       const addr = app.server.address();
       const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
-      const next = collect(ws, { dropDivergence: true });   // ticks a watcher on this bus
+      const next = collect(ws, { dropDivergence: true, dropAutomations: true });   // ticks a watcher on this bus
       await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');

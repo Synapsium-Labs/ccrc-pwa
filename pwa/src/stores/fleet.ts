@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, type AccountsResponse, type AutomationSummary, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -123,6 +123,21 @@ export interface FleetState {
    *  `RunsScreen` reads `runsFrameSeen` rather than inferring "has arrived"
    *  from the payload's own shape. */
   coordFrameSeen: boolean;
+  /** Task 11 (spec §10 "The frame"): one additive frame,
+   *  `{type:'automations', automations: AutomationSummary[]}`, the SAME
+   *  full-snapshot shape `sessions`/`roster` already take — unlike `runs`,
+   *  which is active-only by construction, this one carries every
+   *  automation regardless of state (there is no server-side filter on the
+   *  emitter), so `AutomationsScreen` never needs a second cold source for
+   *  a "finished" half the way `RunsScreen` does. Default `[]`, same
+   *  "unarrived roster" stance every other frame-backed slice in this store
+   *  takes. */
+  automations: AutomationSummary[];
+  /** `runsFrameSeen`/`coordFrameSeen`'s own idiom, for the same reason:
+   *  never reset, including across a reconnect — a cold deep link to
+   *  `/automations` renders "no answer yet" until this flips, even the
+   *  first time the frame says `[]`. */
+  automationsFrameSeen: boolean;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -174,6 +189,14 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     && typeof (m as { proto?: unknown }).proto === 'number'
     && typeof (m as { min?: unknown }).min === 'number'
   ) {
+    return m as FleetMsg;
+  }
+  // Task 11, spec §10: shape-validated only at the frame level, same depth
+  // as `fleet`/`runs` above — per-ROW tolerance (a state/outcome/refusal
+  // token this build has never heard of) is `autoWords.ts`'s job, through
+  // its `is*`-guarded chip/sentence functions, exactly as `runState`/
+  // `runItems` are for `runs`.
+  if (t === 'automations' && Array.isArray((m as { automations?: unknown }).automations)) {
     return m as FleetMsg;
   }
   return null;
@@ -230,6 +253,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       fleetFrameSeen: false,
       coord: null,
       coordFrameSeen: false,
+      automations: [],
+      automationsFrameSeen: false,
       roster: snapshot?.roster ?? [],
 
       connect() {
@@ -376,6 +401,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // `coordFrameSeen` flips once and stays flipped, even the first
               // time the frame arrives.
               set({ coord: msg.coord, coordFrameSeen: true });
+            } else if (msg.type === 'automations') {
+              // Full-snapshot, sticky, same as every other frame-backed
+              // slice above — `automationsFrameSeen` flips once and stays
+              // flipped, even the first time the frame says `[]`.
+              set({ automations: msg.automations, automationsFrameSeen: true });
             }
           },
           onState: (conn) => set({ conn }),

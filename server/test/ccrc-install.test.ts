@@ -424,6 +424,23 @@ interface Result { code: number; stdout: string; stderr: string }
  *  than the fixture asked for. */
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // THE C LOCALE, PINNED, for the same reason D-1158 generalised the PATH
+  // filter below: a fixture that quotes a TOOL'S OWN SENTENCE has pinned that
+  // tool's language, and CI — which runs in C — can never catch it. `ccrc
+  // install`'s stamp step embeds git's own words on failure and the arms at
+  // :2124 and :2144 match them (`not a git repository`, `detected dubious
+  // ownership`), so on a box whose git is localised those arms fail on a clean
+  // tree. Measured, this box: `git rev-parse HEAD` in an empty directory
+  // answers `fatal: to nie jest repozytorium gita (…): .git` — exit 128, the
+  // right behaviour, the wrong language for a regex. macOS supplies that
+  // language from the SYSTEM locale, not the environment (this box has no
+  // LANG/LC_* set at all), so inheriting `process.env` does not make it
+  // deterministic; only saying so does. `LC_ALL` beats `LANGUAGE` in gettext's
+  // precedence, and `runInstall` spreads `extraEnv` AFTER this, so a fixture
+  // that ever wants another locale can still ask for one.
+  env['LC_ALL'] = 'C';
+  env['LANG'] = 'C';
+  delete env['LANGUAGE'];
   // Task 11's `graphify` doctor check makes `command -v graphify` a real
   // finding (a WARN when PATH resolves it anywhere but the pinned venv), and
   // unlike gh/curl/systemctl below there is no stub-bin entry that can

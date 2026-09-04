@@ -77,7 +77,14 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-const ROUTES: ScannedRoute[] = [...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts')];
+// Task 9: `auto/routes.ts` is a THIRD route file (spec §10 "Where the routes
+// live" — deliberately not `coord/routes.ts`, so it stays out of the
+// coordinator-skill parity scan). Left out of this array, its ten routes
+// would be invisible to the 401 sweep below — the exact hole spec:806-824
+// names and closes here, before a single one of those routes is registered.
+const ROUTES: ScannedRoute[] = [
+  ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('auto/routes.ts'),
+];
 
 /** The three websocket upgrades — the same registrations, told apart by their
  *  `{ websocket: true }` option. They are swept through `injectWS`, not
@@ -201,11 +208,18 @@ describe('the scanner is looking at something', () => {
     // coordination caps, and the first pair in this file that is neither
     // box-token gated nor one of the D-282 ungated doors (D-1240).
     expect(scanRoutes('coord/routes.ts').length).toBe(25);
-    expect(ROUTES.length).toBe(71);
+    // Task 9's ten (spec §10's table) — `get`/`post` only, none exempt, none
+    // websocket, so every count below moves by exactly ten. THE THIRD SCANNED
+    // FILE: this scan read only `server.ts` and `coord/routes.ts` before, so a
+    // route registered anywhere else was never swept for `401 no-session` at
+    // all — green suite, false property. `auto/routes.ts` was going to be that
+    // third file.
+    expect(scanRoutes('auto/routes.ts').length).toBe(10);
+    expect(ROUTES.length).toBe(81);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
-    // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
-    // is declared with exactly its three members and the sweep test below proves
+    // DERIVED, not a literal (D-1242's family, extended — F7). `WS_ROUTES` is
+    // declared with exactly its three members and the sweep test below proves
     // each was FOUND, so this equality says "the HTTP half is everything that is
     // not one of those sockets" — which is what the literal stood in for.
     //
@@ -487,8 +501,8 @@ describe('with the gate ARMED and no cookie', () => {
     // Guards the `it.each` below the same way the scanner meta-test guards the
     // scan: an EXEMPT table that had swallowed everything would leave nothing to
     // assert and report green. Exact rather than a floor, for the same reason —
-    // 71 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
-    // `GET /*`, which no `app.get('…')` registers) = 44; the gated non-exempt
+    // 81 scanned − 3 websockets − 24 exempt-and-scanned (25 EXEMPT entries less
+    // `GET /*`, which no `app.get('…')` registers) = 54; the gated non-exempt
     // routes this file reasons about by name are `POST /api/claims/:id/break`,
     // which meets the session gate on an armed box exactly as abandon and pause
     // do, — program-leverage wave 4 — `POST /api/sessions/:id/kickoff`, and —
@@ -502,6 +516,11 @@ describe('with the gate ARMED and no cookie', () => {
     // write, the browser has one, and nothing on a fleet host posts it
     // cookieless. Being gated is the whole posture, not a cost.
     //
+    // MOVED BY EXACTLY TEN by Task 9's ten automations routes — every one of
+    // them is session-gated and none is EXEMPT (spec §10 "Gating": no fourth
+    // ungated door, no `EXEMPT` entry), so the difference (`ROUTES.length -
+    // ws - gated`) still equals `EXEMPT.size - 1` below.
+    //
     // UNCHANGED at its then-value by `GET /api/runs/:id/items`, and that was the
     // arithmetic working rather than a coincidence: that route is EXEMPT, so it
     // raised the scanned count and the exempt count by one each and left the
@@ -510,6 +529,12 @@ describe('with the gate ARMED and no cookie', () => {
     // 44 since the caps pair: both are NOT exempt (an operator dial is not a
     // machine lane), so both raise the scanned count without raising the exempt
     // count — the arithmetic this comment's own paragraph above describes.
+    // Task 9's ten automations routes sit INSIDE this identity rather than
+    // beside it: session-gated, NONE added to EXEMPT, so they raise the scanned
+    // count and the gated count together and `unscanned` stays `['GET /*']`. The
+    // box-token surface is unchanged — a fleet-host session may not write a
+    // schedule, deliberately narrower than the box token's own reach.
+    //
     // DERIVED (F7), the same move as the HTTP half above. The relation on the
     // line below already WAS this arithmetic; collapsing the literal into it
     // means the count cannot disagree with the sets it is a count of.
@@ -702,7 +727,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 68 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 78 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -766,7 +791,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 68, not the 24 exempt.
+          //    is not itself flag-aware — the assertion that covers all 78, not the 24 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

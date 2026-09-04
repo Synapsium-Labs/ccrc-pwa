@@ -691,6 +691,38 @@ describe('Build 7 nouns', () => {
   });
 });
 
+// Task 9 (spec §10 "Where the routes live" / task-9-brief.md): the coord-ring
+// scan just above (`Build 7 nouns` > `the coord ring`) is directory-scoped to
+// `server/src/coord`, so a `node:sqlite` handle — or a `./db.js` import — in
+// `server/src/auto/` would pass it silently even though the SAME ring rule
+// (L1 holds no database handle) applies there: `fire.ts` and
+// `schedulepolicy.ts` are L1 (`docs/…-architecture-ddd-clean-solid.md`'s ring
+// table), and `routes.ts` is L4 but reaches the handle only THROUGH the
+// store, never by importing `coord/db.js` itself (its own file banner: "the
+// store type, and FireDeps", never a database handle).
+describe('the auto ring — server/src/auto holds no coord-db handle', () => {
+  const autoDir = path.join(ccrcRoot, 'server/src/auto');
+  const autoFiles = sources(autoDir);
+
+  it('visits the whole directory — a moved/emptied directory must turn this red, not disarm it', () => {
+    // Scanner-coverage pin, `the coord ring`'s own idiom just above: a scan
+    // over an empty or truncated list passes everything.
+    expect(autoFiles.length).toBeGreaterThanOrEqual(3);
+    for (const f of ['fire.ts', 'schedulepolicy.ts', 'routes.ts']) {
+      expect(autoFiles.map((p) => path.basename(p))).toContain(f);
+    }
+  });
+
+  it('imports neither ./db.js/../coord/db.js nor node:sqlite anywhere under server/src/auto', () => {
+    for (const f of autoFiles) {
+      const src = readFileSync(f, 'utf8');
+      expect(/from\s+'\.\/db\.js'/.test(src), `${rel(f)} imports ./db.js`).toBe(false);
+      expect(/from\s+'\.\.\/coord\/db\.js'/.test(src), `${rel(f)} imports ../coord/db.js`).toBe(false);
+      expect(/from\s+'node:sqlite'/.test(src), `${rel(f)} imports node:sqlite`).toBe(false);
+    }
+  });
+});
+
 // ── program-leverage wave 8 ────────────────────────────────────────────────
 //
 // A docstring that names its own callers is a SECOND COPY of a fact the code
@@ -1454,14 +1486,55 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     expect(holders).toEqual(['shared/api.ts']);
   });
 
-  it("'coordinator-paused' is a literal in exactly one source file", () => {
+  it("'coordinator-paused' is a MARKER literal in exactly one source file, plus one named VOCABULARY holder", () => {
     // `COORDINATOR_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
-    // definition; `dispatch.ts` and `watch.ts` both import it. A second literal
-    // is how the pause banner and the dispatch gate would come to disagree
-    // about what "paused" means — one of them reading a name the other never
-    // writes.
-    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel);
-    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+    // definition; `dispatch.ts` and `watch.ts` both import it. A second
+    // MARKER literal is how the pause banner and the dispatch gate would come
+    // to disagree about what "paused" means — one of them reading a name the
+    // other never writes.
+    //
+    // `shared/api.ts` is admitted as a second, NAMED holder for the
+    // `'mail-disabled'` test's own reason directly below: Task 2's
+    // `AutomationRefusal` (spec §7 rung 5, §10) spells the same characters
+    // for a DIFFERENT purpose — the wire refusal CODE a run row records when
+    // that rung trips — not a second definition of the marker's own name.
+    // Nothing in `auto/` reaches around `rundefs.ts` for the marker string;
+    // this is the refusal-code vocabulary, exactly the shape `'mail-disabled'`
+    // already established.
+    //
+    // `server/src/auto/fire.ts` (Task 6) is admitted as a THIRD, NAMED
+    // holder for the exact same reason `shared/api.ts` was: it spells
+    // `PostClaimRefusal`'s member (`Extract<AutomationRefusal, …
+    // 'coordinator-paused' …>` and the derived `POST_CLAIM_REFUSAL_MAP`),
+    // TypeScript's own string-literal-type spelling of the SAME wire
+    // vocabulary — it does not read `$REG/coordinator-paused` itself
+    // anywhere; rung 5's actual marker check imports `COORDINATOR_PAUSE_
+    // MARKER` from `rundefs.ts` by value, same as `dispatch.ts`/`watch.ts`.
+    //
+    // `pwa/src/auto/autoWords.ts` is the fourth NAMED holder: it keys the
+    // SENTENCE an operator reads when that rung refuses. A words table must
+    // spell every member of the union it is total over, or the entry is
+    // `undefined` and JSX renders an empty cell — so this holder is forced by
+    // the same `noUncheckedIndexedAccess` rule that makes the table total in
+    // the first place. Still not a second definition of the marker's name.
+    //
+    // `server/src/coord/store.ts` is the fifth, and it is forced by the same
+    // totality rule as the words table: `AUTOMATION_REFUSAL_LEDGER` is a
+    // `Record<AutomationRefusal, …>` answering, per member, whether that
+    // refusal is the AUTOMATION'S OWN failure — and this member's answer is
+    // `'ignore'`, because a coordinator the operator paused is not a defect in
+    // the schedule. A `Record` over the union cannot omit a key without a
+    // compile error, so the spelling is the type's, not a second vocabulary.
+    // It reads no marker file: rung 5's own check imports
+    // `COORDINATOR_PAUSE_MARKER` from `rundefs.ts` by value.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel).sort();
+    expect(holders).toEqual([
+      'pwa/src/auto/autoWords.ts',      // the refusal SENTENCE
+      'server/src/auto/fire.ts',        // the refusal CODE, returned by a rung
+      'server/src/coord/rundefs.ts',    // the marker literal (the one definition)
+      'server/src/coord/store.ts',      // whether this refusal counts as a failure
+      'shared/api.ts',                  // the refusal-code vocabulary
+    ]);
   });
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
@@ -2204,5 +2277,178 @@ describe('graphify — one pin, one census path', () => {
     const holders = holdersOf('graph-sweep.json');
     expect(holders).toEqual(
       ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
+  });
+});
+
+// Task 2 — the automations vocabulary (docs/superpowers/specs/2026-08-31-
+// automations-design.md §10 "Vocabularies"). EIGHT closed unions, each the
+// `PR_REASON_MAP` idiom: a private `Record<Union, true>` total map, a runtime
+// list DERIVED via `Object.keys` rather than restated, and an `is<Enum>`
+// guard. The task-2 brief's own suggested regex, `/Object\.keys\(AUTOMATION_
+// \w+_MAP\)/`, structurally cannot match `CADENCE_KIND_MAP` or
+// `SCHEDULE_ERROR_MAP` — those two vocabularies deliberately have NO
+// `AUTOMATION_` prefix (spec §10: "`ScheduleError` and `CadenceKind` have
+// exactly ONE home: `shared/api.ts`", named after the DB columns they mirror,
+// not after the feature). This scan's regex is widened to reach all eight,
+// checked by name below.
+describe('Task 2 — the automations vocabularies are derived, never restated', () => {
+  const VOCABS: { list: string; map: string; union: string }[] = [
+    { list: 'AUTOMATION_STATES', map: 'AUTOMATION_STATE_MAP', union: 'AutomationState' },
+    { list: 'AUTOMATION_OUTCOMES', map: 'AUTOMATION_OUTCOME_MAP', union: 'AutomationOutcome' },
+    { list: 'AUTOMATION_REFUSALS', map: 'AUTOMATION_REFUSAL_MAP', union: 'AutomationRefusal' },
+    { list: 'AUTOMATION_STEPS', map: 'AUTOMATION_STEP_MAP', union: 'AutomationStep' },
+    { list: 'AUTOMATION_TRIGGERS', map: 'AUTOMATION_TRIGGER_MAP', union: 'AutomationTrigger' },
+    { list: 'CADENCE_KINDS', map: 'CADENCE_KIND_MAP', union: 'CadenceKind' },
+    { list: 'SCHEDULE_ERRORS', map: 'SCHEDULE_ERROR_MAP', union: 'ScheduleError' },
+    { list: 'AUTOMATION_ROUTE_REFUSALS', map: 'AUTOMATION_ROUTE_REFUSAL_MAP', union: 'AutomationRouteRefusal' },
+    // NINTH, added when `mail-routes.test.ts`'s totality scan found `'never-ran'`
+    // loose in `server/src/coord`. It is a FILTER vocabulary, not an outcome:
+    // no run row can carry `'never-ran'`, so it must never join
+    // `AutomationOutcome`. Declared and derived like the other eight.
+    { list: 'AUTOMATION_LAST_FILTERS', map: 'AUTOMATION_LAST_FILTER_MAP', union: 'AutomationLastFilter' },
+  ];
+
+  // The widened regex, verified below to actually match all eight map names
+  // character by character — not just asserted to by comment.
+  const OBJECT_KEYS_AUTOMATION_MAP = /Object\.keys\((?:AUTOMATION_\w+_MAP|CADENCE_KIND_MAP|SCHEDULE_ERROR_MAP)\)/g;
+
+  it('is nine vocabularies — eight from Task 2, plus the filter union', () => {
+    expect(VOCABS).toHaveLength(9);
+    expect(new Set(VOCABS.map((v) => v.union)).size).toBe(9);
+  });
+
+  it('the widened regex matches every one of the eight map names, individually', () => {
+    for (const v of VOCABS) {
+      const re = new RegExp(`Object\\.keys\\(${v.map}\\)`);
+      expect(re.test(`Object.keys(${v.map})`), v.map).toBe(true);
+      // And the SAME widened pattern the source scan below uses:
+      expect(new RegExp(OBJECT_KEYS_AUTOMATION_MAP.source).test(`Object.keys(${v.map})`), v.map).toBe(true);
+    }
+  });
+
+  it('shared/api.ts derives each of the eight lists via Object.keys over its own map', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+    const found = [...api.matchAll(OBJECT_KEYS_AUTOMATION_MAP)].map((m) => m[0]).sort();
+    const expected = VOCABS.map((v) => `Object.keys(${v.map})`).sort();
+    expect(found).toEqual(expected);
+  });
+
+  it('none of the eight lists is a hand-written array literal beside its type', () => {
+    const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+    for (const v of VOCABS) {
+      const handWritten = new RegExp(`${v.list}\\s*:\\s*readonly ${v.union}\\[\\]\\s*=\\s*\\[`);
+      expect(api, `${v.list} must not be a literal array`).not.toMatch(handWritten);
+      // And every declaration form actually derives from THIS vocabulary's map,
+      // not some other map by coincidence of name.
+      const derives = new RegExp(
+        `${v.list}\\s*:\\s*readonly ${v.union}\\[\\]\\s*=\\s*Object\\.keys\\(${v.map}\\)`,
+      );
+      expect(api, `${v.list} must derive from ${v.map}`).toMatch(derives);
+    }
+  });
+
+  // A stricter "enumerated only where the compiler enforces exhaustiveness"
+  // scan (the PrReason/AuthVerdict shape above) was tried here and dropped:
+  // `server/src/coord/schema.ts`'s migration 7 DDL — Task 3's, already
+  // landed uncommitted in this tree — legitimately spells `'wall-clock'`,
+  // `'interval'` and `'unknown'` in SQL column comments describing the exact
+  // columns this vocabulary hydrates. That is documentation quoting the
+  // vocabulary it serves, not a second TypeScript definition, and a
+  // text-only scan cannot tell the two apart without over-fitting to
+  // schema.ts's comment style. `shared/api.ts` remains the one place a
+  // `Record<Union, …>` makes a missing member a compile error, which is the
+  // guarantee that actually matters (Task 2 report has the measurement).
+});
+
+// Timezone arithmetic is the one calculation the server and the PWA MUST agree
+// on to the minute, and the only way they can disagree is by holding two copies
+// of it. This scan exists because a second copy really was written: Task 6's
+// L1 policy needed the local-tuple and gap-shift arithmetic while
+// `shared/schedule.ts` was under concurrent edit, and reproduced the
+// `Intl.DateTimeFormat` block locally as a flagged shim rather than block. The
+// shim is gone and `shared/schedule.ts` exports `localTupleAt` and
+// `occurrenceShifted` instead — this keeps it gone.
+//
+// `shared/` is the right and only home: the PWA bundles it, so one
+// implementation reaches both sides. A second `Intl.DateTimeFormat` in
+// `server/src` would be a copy the browser never runs and therefore never
+// checks.
+describe('timezone arithmetic has exactly one home', () => {
+  // The predicate is `formatToParts`, NOT the formatter constructor, and the
+  // difference is the whole correctness of this scan. Constructing an
+  // `Intl.DateTimeFormat` to read `.resolvedOptions().timeZone` — which the
+  // cadence picker legitimately does, to default the zone to the one the
+  // operator's own browser is in — reads a NAME and computes nothing. The
+  // arithmetic is `formatToParts`: decomposing an instant into wall-clock
+  // fields is how the offset, the fold and the gap are derived, and THAT is
+  // what must not exist twice. An earlier version of this scan matched the
+  // constructor and would have failed the picker for asking what timezone it
+  // is in.
+  it('calls formatToParts in shared/schedule.ts and nowhere else under the scanned roots', () => {
+    const holders = ALL
+      .filter((f) => readFileSync(f, 'utf8').includes('formatToParts'))
+      .map(rel)
+      .sort();
+    expect(holders, 'a second copy of the zone math — the server and the PWA can now disagree')
+      .toEqual(['shared/schedule.ts']);
+  });
+
+  it('the scan can actually see a second copy — coverage floor, so an empty ALL cannot pass', () => {
+    expect(ALL.length).toBeGreaterThan(50);
+    expect(ALL.map(rel)).toContain('shared/schedule.ts');
+  });
+});
+
+// Task 10 — ONE producer for the automations frame. The scan does not exist
+// upstream: nothing in this file asserted a `bus.emit` producer before, so
+// running it green proved nothing about the new frame. A second emitter is how
+// two lanes come to disagree about what the client last saw — the byte-equality
+// guard lives on the watcher, so an emit from anywhere else bypasses it and
+// broadcasts a frame the guard then believes it already sent.
+describe('the automations frame has exactly one producer', () => {
+  it("bus.emit('automations') appears in watch.ts and nowhere else", () => {
+    const holders = ALL
+      .filter((f) => readFileSync(f, 'utf8').includes("bus.emit('automations'"))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/src/watch.ts']);
+  });
+
+  it('the scan can see a producer at all — coverage floor, so an empty ALL cannot pass', () => {
+    expect(ALL.length).toBeGreaterThan(50);
+    expect(ALL.map(rel)).toContain('server/src/watch.ts');
+  });
+});
+
+// THE MANUAL DOOR'S CUT-OVER — `fireAutomation` has exactly ONE caller.
+//
+// The property was prose only: `watch.ts:52-57`, `watch.ts:2295` and
+// `automations-sweep.test.ts`'s header all assert it and nothing measured it,
+// so a second call site could be reintroduced with the whole tree green. It is
+// not a style rule. The sweep's single-flight guard, `automationsInFlight`, is
+// a PRIVATE FIELD of the watcher (`watch.ts:649`, added only in `fireOne`), so
+// any act performed elsewhere is invisible to it: while `POST /:id/run`
+// awaited `fireAutomation` itself, every sweep landing in the spawn window
+// (`SPAWN_SETTLE_S` 240 s, sweep every 10 s) read the same `leaseRunId` as
+// un-started and fired it AGAIN, and `markAutomationSpawn` has no idempotency
+// guard, so the second identify overwrote the run row's session identity and
+// the first session became an orphan no run row names. Measured before the
+// fix: one *Run now* issued TWO `ws-add` calls.
+describe('fireAutomation has exactly one caller', () => {
+  it('is called from watch.ts and nowhere else in the tree', () => {
+    // The DECLARATION (`export async function fireAutomation`) and re-exports
+    // are not calls, so the needle is the call form itself.
+    const holders = ALL
+      .filter((f) => /\bfireAutomation\(/.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .filter((f) => f !== 'server/src/auto/fire.ts')     // its own definition site
+      .sort();
+    expect(holders).toEqual(['server/src/watch.ts']);
+  });
+
+  it('the scan can see the caller at all — coverage floor, so an empty ALL cannot pass', () => {
+    expect(ALL.length).toBeGreaterThan(50);
+    expect(ALL.map(rel)).toContain('server/src/watch.ts');
+    expect(ALL.map(rel)).toContain('server/src/auto/fire.ts');
   });
 });

@@ -1912,7 +1912,11 @@ button.sess-held {
    glow, no breathe, no box-shadow: a run is a record of a lifecycle position.
    The pane it names may well be alive — and the fleet line, which is where the
    lamp lives, is one tap away. */
-.fleet-runs-row {
+/* The automations door shares this rule rather than copying it: it is the same
+   kind of row, one tap from the same screen, and a second copy of these
+   declarations is how the two rows come to look different for no reason. */
+.fleet-runs-row,
+.fleet-automations-row {
   min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-2);
   background: none; border: 0; cursor: pointer; text-align: left;
   font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary);

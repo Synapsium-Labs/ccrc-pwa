@@ -44,6 +44,7 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { registerAutoRoutes } from './auto/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
@@ -66,6 +67,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type FloorState,
+  type AutomationStats, type AutomationSummary,
 } from '../../shared/api.js';
 
 /**
@@ -1046,6 +1048,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // must treat it as `'unknown'`, never as `'ok'` and never as an empty
     // history.
     const lifecycle = watcher?.lifecycleHealth() ?? undefined;
+    // Guarded for `emitAutomations`' reason: a synchronous `node:sqlite` read
+    // on a route with no `.catch` above it. A failed read answers ABSENT —
+    // "not measured" — which is the honest degrade and the one the wire's
+    // absence-permits rule already defines. Never a fabricated zero: an
+    // operator reading `runsEvicted: 0` would believe no history had been
+    // dropped.
+    let automations: AutomationStats | undefined;
+    if (deps.coord) {
+      try { automations = deps.coord.automationStats(); }
+      catch (err) {
+        console.warn(`ccrc-server: /api/fleet/health automationStats() failed (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       return {
         mode: 'remote',
@@ -1060,6 +1075,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // exactly as `/health` treats them.
         build: buildAgreement(deps.fleetState.build, deps.build ?? null),
         ...(lifecycle ? { lifecycle } : {}),
+        ...(automations ? { automations } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1072,6 +1088,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return {
       mode: deps.cfg.fleetMode, connected: true, downSince: null,
       roster: 'unknown', build: 'unknown',
+      ...(automations ? { automations } : {}),
       // BOTH ARMS. Local mode drives ccd on this same box and mirrors the same
       // journal — there is no second box to disagree with, but there is still a
       // journal, and a block that appeared only in remote mode would make the
@@ -1204,6 +1221,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
     const onCoord = (coord: CoordStatus) =>
       socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+    const onAutomations = (automations: AutomationSummary[]) =>
+      socket.send(JSON.stringify({ type: 'automations', automations } satisfies FleetMsg));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1253,18 +1272,34 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "running" for a state nobody has looked at (Build 4, spec §4.2).
       const coordNow = watcher?.currentCoord();
       if (coordNow) onCoord(coordNow);
+      // Chained inside this SAME `.then`, after `coord`, for the reason the
+      // `runs` cold start states: firing independently races the async
+      // `fleet` assembly and often wins, so the order every client and
+      // `fleetws.test.ts` rely on becomes hello, fleet, runs, coord,
+      // automations.
+      //
+      // Read off the WATCHER, not the store — so it needs no `try`: the
+      // store read already happened on the tick, inside `emitAutomations`'
+      // own guard. `null` means this process has never measured and sends
+      // NOTHING, the same rule `currentCoord()` follows: a fabricated empty
+      // list would claim a measurement nobody took, and the screen is
+      // required to tell "none" from "no answer yet".
+      const autoNow = watcher?.currentAutomations();
+      if (autoNow) onAutomations(autoNow);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
     bus.on('runs', onRuns);
     bus.on('coord', onCoord);
     bus.on('divergence', onDivergence);
+    bus.on('automations', onAutomations);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
       bus.off('coord', onCoord);
       bus.off('divergence', onDivergence);
+      bus.off('automations', onAutomations);
     });
   });
 
@@ -1317,6 +1352,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // cookieless from the fleet host with the box token. The session half of that
   // decision can only be made here, where `authStore` lives.
   registerCoordRoutes(app, deps, bus, sessionAuth);
+
+  // Automations (Task 9, spec §10) — its own file, deliberately NOT
+  // `coord/routes.ts`: `/api/automations` is not one of the eight
+  // coordination prefixes (`coord-routes-single-file.test.ts`). SESSION GATE
+  // ONLY — no `sessionAuth`/`bus` argument, because nothing here is EXEMPT
+  // and nothing here reads the box token; the global `installGate` hook
+  // above already covers every route in every file. See `auto/routes.ts`'s
+  // own file banner for why a fourth ungated door is never added here.
+  registerAutoRoutes(app, deps);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

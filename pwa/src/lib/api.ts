@@ -2,7 +2,8 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AutomationLastFilter, AutomationRunSummary, AutomationState, AutomationStepWire, AutomationSummary, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { Cadence } from '../../../shared/schedule';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -675,6 +676,84 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const res = await request(`${sid(id)}/upload`, { method: 'POST', body: form });
       return ((await res.json()) as { clip: StagedClip }).clip;
     },
+
+    // ── Task 11: the ten automations routes (spec §10, server/src/auto/routes.ts) ──
+    //
+    // Every write here throws `ApiError` on non-2xx, exactly like every other
+    // write in this file: the automations screen reads `err.status`/`err.body`
+    // (via `autoWords.ts`'s `automationErrorSentence`) rather than this client
+    // pre-digesting the refusal, because the refusal vocabulary is closed and
+    // typed one file over and a second copy of that translation here is the
+    // drift `autoWords.ts`'s own header warns against.
+    //
+    // `GET /api/automations` — list, with the three query filters the route
+    // itself parses (`state`/`project`/`last`, `last:'never-ran'` included —
+    // spec §11 "Never ran is its own filter value because `lastFireAt IS
+    // NULL` is its own fact"). Every param OMITTED rather than sent empty, so
+    // an unfiltered read is byte-identical to the bare route.
+    automations: (filter?: { state?: AutomationState; project?: string; last?: AutomationLastFilter }):
+      Promise<{ automations: AutomationSummary[] }> => {
+      const params = new URLSearchParams();
+      if (filter?.state !== undefined) params.set('state', filter.state);
+      if (filter?.project !== undefined && filter.project !== '') params.set('project', filter.project);
+      if (filter?.last !== undefined) params.set('last', filter.last);
+      const qs = params.toString();
+      return getJson<{ automations: AutomationSummary[] }>(`/api/automations${qs === '' ? '' : `?${qs}`}`);
+    },
+    /** `POST /api/automations` — create, ALWAYS saved `paused` server-side
+     *  (§7's arm gate): this call never carries a `state` field because the
+     *  route does not read one. */
+    createAutomation: (b: { name: string; project: string; prompt: string; cadence: Cadence; graceMs?: number }):
+      Promise<{ automation: AutomationSummary }> =>
+      postJson<{ automation: AutomationSummary }>('/api/automations', b),
+    /** `GET /api/automations/:id` — one automation, with its recent runs
+     *  (clamped to 20 server-side) — the detail panel's one read. */
+    automation: (id: number): Promise<{ automation: AutomationSummary; runs: AutomationRunSummary[] }> =>
+      getJson<{ automation: AutomationSummary; runs: AutomationRunSummary[] }>(`/api/automations/${id}`),
+    /** `POST /api/automations/:id` — edit. Same body shape as create. */
+    editAutomation: (id: number, b: { name: string; project: string; prompt: string; cadence: Cadence; graceMs?: number }):
+      Promise<{ automation: AutomationSummary }> =>
+      postJson<{ automation: AutomationSummary }>(`/api/automations/${id}`, b),
+    /** `POST /api/automations/:id/arm` — the ONE door that moves
+     *  `paused -> armed` (spec §7). No body: the route reads nothing off the
+     *  request, only the stored row. Refuses `never-run-by-hand` (409) for an
+     *  automation with no proven manual run yet. */
+    armAutomation: (id: number): Promise<{ nextRunAt: number }> =>
+      postJson<{ nextRunAt: number }>(`/api/automations/${id}/arm`),
+    /** `POST /api/automations/:id/state` — pause | retire. `'armed'` is
+     *  deliberately not a value this method can send: arming has exactly one
+     *  door (`armAutomation` above), and the route itself answers `409
+     *  bad-transition` for anything but the two live tokens. */
+    setAutomationState: (id: number, state: 'paused' | 'retired'): Promise<{ state: AutomationState }> =>
+      postJson<{ state: AutomationState }>(`/api/automations/${id}/state`, { state }),
+    /** `POST /api/automations/:id/run` — *Run now*, D-280: reads NO body,
+     *  same reason `abandonRun` reads none — every dangerous field
+     *  (`project`/`prompt`/`trigger`) is a literal at the route's own call
+     *  site, off the row the server already trusts. Answers `202 {runId}` on
+     *  success (the parallel `server/src/auto/routes.ts` change this task's
+     *  brief names: the tap returns immediately, the run's progress arrives
+     *  over the `{type:'automations'}` frame or a re-fetch) or `409` with a
+     *  refusal this client's caller renders through `automationErrorSentence`. */
+    runAutomation: (id: number): Promise<{ runId: number }> =>
+      postJson<{ runId: number }>(`/api/automations/${id}/run`),
+    /** `GET /api/automations/:id/runs` — history, clamped to
+     *  `AUTOMATION_RUN_RETENTION` server-side. Not the detail panel's
+     *  primary read (`automation` above already embeds the same rows); this
+     *  is for a caller that wants MORE than the embedded 20, or a narrower
+     *  `limit`. */
+    automationRuns: (id: number, limit?: number): Promise<{ runs: AutomationRunSummary[] }> =>
+      getJson<{ runs: AutomationRunSummary[] }>(
+        `/api/automations/${id}/runs${limit === undefined ? '' : `?limit=${limit}`}`),
+    /** `GET /api/automations/runs/:runId` — one run and its step trail (spec
+     *  §11's run detail: "the step trail in order, each with time, `ok`,
+     *  detail, and a visible marker when `truncatedBytes > 0`"). */
+    automationRun: (runId: number): Promise<{ run: AutomationRunSummary; steps: AutomationStepWire[] }> =>
+      getJson<{ run: AutomationRunSummary; steps: AutomationStepWire[] }>(`/api/automations/runs/${runId}`),
+    /** `POST /api/automations/pause` — the global kill switch, a SEPARATE
+     *  marker from the coordinator's own `coordPause` above (spec §10: it is
+     *  its own route, not a second consumer of `/api/coord/pause`). */
+    automationsPause: (paused: boolean): Promise<{ paused: boolean }> =>
+      postJson<{ paused: boolean }>('/api/automations/pause', { paused }),
   };
 }
 

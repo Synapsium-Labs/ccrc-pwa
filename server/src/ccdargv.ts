@@ -267,6 +267,20 @@ export const CCD_ARGV = {
    *  derives this builder into its probe set FROM this table and runs the verb
    *  in a fixture HOME. */
   wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)]),
+  /** The automations lane's own ws-add — same shape as `wsAddWorker` MINUS the
+   *  leading `--no-rc`. `--no-rc` is scoped by the 2026-08-13 ruling (task
+   *  #37) to DISPATCHED PROGRAMME WORKERS, and reusing `wsAddWorker` for an
+   *  automation would stamp `rc=off` on the session at creation and
+   *  PERMANENTLY suppress `--remote-control` on every later spawn AND resume
+   *  (`ccd/ccd:3798`, `:11745`), even on a box configured `on` — because an
+   *  automation's session is one the operator opens from their phone, not a
+   *  dispatched worker. So this builder carries the dec (D-410's remedy
+   *  covers `ws-add` generally, not `wsAddWorker` specifically) with no
+   *  leading flag at all: the project is the first positional and the dec
+   *  lands immediately behind it, same trailing order as every other
+   *  `--session`-flavoured entry in this table. Same `['ws-add']` grant as
+   *  `wsAdd`/`wsAddWorker` — no new agent whitelist prefix. */
+  wsAddAuto: (p: string, dec: ActorFlags | null) => argv(['ws-add', p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>

@@ -179,6 +179,16 @@ export function FleetScreen({
   const activeRuns = useStore((s) => s.runs).filter((r) => !isRunClosed(r));
   const runsLabel =
     !runsFrameSeen ? '—' : activeRuns.length > 0 ? `${activeRuns.length} active` : 'none active';
+  // The automations door's own label, in the runs label's shape: an em-dash
+  // until the frame has arrived, because `0 armed` before any answer is a
+  // claim about the fleet and `—` is the absence of one. ARMED is the number
+  // that matters on this row: a paused or unproved automation is not going to
+  // fire, and this line exists to answer "is anything going to happen".
+  const automations = useStore((s) => s.automations);
+  const automationsFrameSeen = useStore((s) => s.automationsFrameSeen);
+  const armedAutomations = automations.filter((a) => a.state === 'armed').length;
+  const automationsLabel =
+    !automationsFrameSeen ? '—' : armedAutomations > 0 ? `${armedAutomations} armed` : 'none armed';
   // Task 4's clock, for the pending child's elapsed readout — and the CADENCE
   // FOLLOWS THE CONTENT, the `SessionHeader`/`ToolCard` idiom `RunsScreen`
   // already adopted for the same window: a second-granular readout on a
@@ -360,6 +370,22 @@ export function FleetScreen({
         onClick={() => navigate('/runs')}
       >
         Runs · {runsLabel}
+      </button>
+
+      {/* The automations door. UNCONDITIONAL, for the reason the runs row
+          above states in its own comment — "D-2's rule: the only door must
+          never render nothing" — and it is the only door there is: nothing
+          else in the app navigated to `/automations`, so the screen, its ten
+          routes and its sweep were reachable only by typing the URL. A door
+          that waits for a frame is missing exactly when the operator is
+          trying to find out why nothing has run. */}
+      <button
+        type="button"
+        className="fleet-automations-row"
+        aria-label={`Automations · ${automationsLabel}`}
+        onClick={() => navigate('/automations')}
+      >
+        Automations · {automationsLabel}
       </button>
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
