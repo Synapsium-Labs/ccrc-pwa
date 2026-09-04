@@ -229,14 +229,26 @@ describe('ccrc-agent file ops', () => {
   it('stat THROUGH a file (ENOTDIR) answers missing:true with NO absent key — unmeasured is not absent', async () => {
     await open();
     // The whole of D-114 in one case. `claude.json` is a FILE, so the kernel
-    // refuses to walk THROUGH it: ENOTDIR, not ENOENT. Today this op answers
-    // `{missing:true}` — byte-identical to a genuine ENOENT — and the server
-    // reads that as proof the path is gone.
+    // refuses to walk THROUGH it: ENOTDIR, not ENOENT. This op USED to answer
+    // a bare `{missing:true}` — byte-identical to a genuine ENOENT — and the
+    // server read that as proof the path was gone. D-1396 closed it, and the
+    // two assertions below are the guarantee that close is worth, not a
+    // record of the defect: `missing: true` still rides the wire, keeping its
+    // exact pre-existing "no {mtimeMs,size} for you" meaning so an older
+    // server's reader is unaffected — and `absent`, the PROVEN-absence
+    // marker, is WITHHELD. Both halves are load-bearing. Delete the
+    // `not.toHaveProperty('absent')` line and you delete the only agent-side
+    // pin that a non-ENOENT stat failure never wears that marker; the
+    // genuine-ENOENT case two `it()`s up is its other half, asserting the
+    // marker IS worn when it is earned.
     //
     // ENOTDIR rather than `chmod 000` deliberately: chmod does not deny root,
     // so a root runner would silently assert the wrong thing (D-116, still
-    // open at server/test/coord-fingerprint.test.ts:100/:632/:650/:701, which
-    // is why nothing new here uses chmod).
+    // open at every `chmodSync(…, 0o000)` site in
+    // server/test/coord-fingerprint.test.ts — cited by the CALL rather than by
+    // line because the line set this comment first named, :100/:632/:650/:701,
+    // had moved by the time anyone read it back). Which is why nothing new
+    // here uses chmod.
     const file = path.join(fixture!.home, '.cc-limits', 'claude.json');
     writeFileSync(file, 'abcd');
     const res = await client!.req<Res>(nextId(), { op: 'stat', path: path.join(file, 'child') });

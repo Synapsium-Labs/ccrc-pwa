@@ -138,9 +138,24 @@ export async function listDir(p: string): Promise<string[] | null> {
 }
 
 /** `statMeasured`'s result — the `stat` op's half of `ReadResult` above, and
- *  a LOCAL type for the same reason (this side cannot import
- *  `server/src/io.ts`, and the reason union stays out of `shared/` because
- *  that is the PWA's bundle path).
+ *  a LOCAL type for the ONE reason that is still true: `agent/tsconfig.json`
+ *  includes only `src/**` + `../shared/**`, so this side cannot import
+ *  `server/src/io.ts`, which is where the server's own stat-shaped result
+ *  lives. It used to give a second reason — that the reason union stays out
+ *  of `shared/` because that is the PWA's bundle path — and D-1438 REVERSED
+ *  exactly that judgment: `ReadFailure` now lives once in
+ *  `shared/agent-protocol.ts` and is imported at the top of this file. Do not
+ *  carry the repealed clause forward as an argument for a local copy.
+ *
+ *  AND DO NOT READ THIS TYPE'S SILENCE AS PERMISSION. It spells the
+ *  distinction structurally (`absent: boolean`) instead of as the two string
+ *  literals of the `ReadFailure` union, and the fingerprint
+ *  `single-definition.test.ts` uses for that vocabulary is the ORDERED PAIR
+ *  of those literals — which this shape does not contain, so the scan is
+ *  structurally unable to see it, and a re-declaration written in this style
+ *  reds nothing. The shape is deliberate (a stat answers one bit, not a
+ *  reason); its invisibility to that scan is a limit of the scanner, not a
+ *  licence.
  *
  *  `absent` is true ONLY on a proven ENOENT. Every other errno — EACCES,
  *  ENOTDIR, ELOOP, EIO — and every non-errno throw leaves it false, meaning

@@ -206,10 +206,19 @@ export function queueSystemMail(
     // happens, the whole mail is withdrawn rather than accepted with the
     // placeholder envelope, which carries no `ack:` line and so names no
     // delivery id for any recipient to ack against. The throw ESCAPES
-    // `queueSystemMail` — callers `close.ts:248`, `dispatch.ts:661`,
-    // `kickoff.ts:156`, `routes.ts:1211` — deliberately: `{ queued: false }`
-    // already means "the dedupe guard suppressed it", a different and true
-    // statement this must not borrow.
+    // `queueSystemMail` — all four of its callers: `close.ts`'s `closeRun`,
+    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
+    // and `routes.ts`'s `POST /api/runs/:id/advance` handler — deliberately:
+    // `{ queued: false }` already means "the dedupe guard suppressed it", a
+    // different and true statement this must not borrow.
+    //
+    // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.
+    // It cited lines through two corrections and the second went stale inside
+    // a single wave: an edit anywhere ABOVE a call site moves it while the
+    // call itself does not change, so the cardinal rots on edits that have
+    // nothing to do with the fact being stated. The enclosing function is the
+    // property that identifies a caller; the number was only ever a way of
+    // pointing at it, and a worse one.
     if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
     out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
   });

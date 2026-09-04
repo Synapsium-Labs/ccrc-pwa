@@ -595,7 +595,11 @@ describe('Build 7 nouns', () => {
     // line on an acked row. Asserted as the CALL SHAPE, not as the identifier:
     // the identifier also appears in this file's own new docstring paragraph,
     // so a `toContain('TERMINAL_DELIVERY_STATES')` would be satisfied by the
-    // comment alone and would pass with line 167 deleted.
+    // comment alone and would pass with the GUARD deleted — the single
+    // `.includes(item.state)` early-return matched just below. Named by its
+    // call shape rather than its line: this sentence used to say "line 167",
+    // and the very commit that wrote that number had already pushed the guard
+    // off it.
     const strip = readFileSync(path.join(ccrcRoot, 'pwa/src/session/MailStrip.tsx'), 'utf8');
     expect(strip).toMatch(
       /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
@@ -666,6 +670,32 @@ describe('store.ts docstrings that describe their own callers', () => {
    *  Without it, "the ingress route\n   * ONLY" walks past every `toContain`. */
   const prose = (t: string): string =>
     t.split('\n').map((l) => l.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+  /** A named docstring slice between two literal anchors, flattened by `prose`.
+   *  `ledger-sweep.test.ts`'s `passage()`, copied for its reason as much as
+   *  its shape — and copied LATE: the three cases below shipped as a bare
+   *  `store.slice(store.indexOf(OPEN), store.indexOf(CLOSE))` pair, which this
+   *  file's own header cites the lesson against without applying it (D-1426).
+   *
+   *  The failure is worse than the `''` the header warns about, and in the
+   *  opposite direction. A lost OPENING anchor does yield `''`. A lost CLOSING
+   *  one yields `-1`, and `String.slice(a, -1)` means "to length − 1" — so the
+   *  docstring silently becomes THE WHOLE REST OF THE FILE, and every
+   *  `toContain` below is satisfied by a blob that contains the entire module.
+   *  Measured 2026-09-04 by reverting each anchor with a one-word edit to
+   *  `store.ts`: the three slices ran to 197,980 / 76,803 / 160,592 chars and
+   *  all three cases stayed GREEN. The `> 300` floor was written for the empty
+   *  case and MAKES THAT WORSE rather than catching it — a 160KB blob clears a
+   *  300-char floor without slowing down. So both anchors are asserted, and the
+   *  closing one is searched for AFTER the opening one and must follow it. */
+  const passage = (name: string, text: string, from: string, to: string): string => {
+    const a = text.indexOf(from);
+    expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+    const b = text.indexOf(to, a + from.length);
+    expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+    const out = prose(text.slice(a, b));
+    expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(300);
+    return out;
+  };
 
   it('the predicate docstring names the join kinds its callers actually carry', () => {
     const store = readFileSync(STORE, 'utf8');
@@ -679,24 +709,21 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(inner, 'no INNER-JOIN caller of the mail→run edge — the sentence under test is not yet false')
       .toBeGreaterThan(0);
 
-    const doc = store.slice(
-      store.indexOf(' * The READ-side "still needs a human'),
-      store.indexOf('const OUTSTANDING_OR_ABANDONED_SQL'));
-    expect(doc.length, 'the predicate docstring anchors moved').toBeGreaterThan(300);
-    expect(prose(doc),
+    const doc = passage('the predicate docstring', store,
+      ' * The READ-side "still needs a human', 'const OUTSTANDING_OR_ABANDONED_SQL');
+    expect(doc,
       'the predicate docstring names one join kind while its callers carry two').toContain('INNER');
   });
 
   it('setDeliveryEnvelope names every caller it has, derived from the tree', () => {
     const store = readFileSync(STORE, 'utf8');
-    const doc = store.slice(
-      store.indexOf('   * Overwrites a delivery'), store.indexOf('  setDeliveryEnvelope('));
-    expect(doc.length, "setDeliveryEnvelope's docstring anchors moved").toBeGreaterThan(300);
+    const doc = passage("setDeliveryEnvelope's docstring", store,
+      '   * Overwrites a delivery', '  setDeliveryEnvelope(');
 
     // The claim that was false for two builds. Split at the call site so this
     // needle can never match a scan of this file (`ALL` does not reach
     // `server/test`, but the idiom is cheap and the next scanner may).
-    expect(prose(doc), 'the docstring still says the ingress route is its only caller')
+    expect(doc, 'the docstring still says the ingress route is its only caller')
       .not.toContain('used by the ingress ' + 'route ONLY');
 
     const outside = ALL.filter((f) =>
@@ -705,12 +732,12 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(outside.length, 'the scan found no caller outside store.ts — nothing to check the prose against')
       .toBeGreaterThanOrEqual(2);
     for (const f of outside) {
-      expect(prose(doc), `the docstring does not name ${rel(f)}`).toContain(path.basename(rel(f)));
+      expect(doc, `the docstring does not name ${rel(f)}`).toContain(path.basename(rel(f)));
     }
 
     expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
       'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
-    expect(prose(doc), 'the docstring does not name the in-file caller')
+    expect(doc, 'the docstring does not name the in-file caller')
       .toContain('requeueAbandonedCoordinatorMail');
   });
 
@@ -746,10 +773,9 @@ describe('store.ts docstrings that describe their own callers', () => {
     // the list is derived from the same source it describes, which is the only
     // form of that claim a later edit cannot quietly falsify.
     const store = readFileSync(STORE, 'utf8');
-    const doc = store.slice(
-      store.indexOf('   * THE READERS OF BOTH PREDICATES WERE WALKED'),
-      store.indexOf('   * BOUNDED by the role-addressed reports'));
-    expect(doc.length, "the re-queue's reader-walk anchors moved").toBeGreaterThan(300);
+    const doc = passage("the re-queue's reader walk", store,
+      '   * THE READERS OF BOTH PREDICATES WERE WALKED',
+      '   * BOUNDED by the role-addressed reports');
 
     const narrow = holdersOf(store, '${OUTSTANDING_STATES' + '_SQL}');
     const wide = holdersOf(store, '${OUTSTANDING_OR_ABANDONED' + '_SQL}');
@@ -765,7 +791,7 @@ describe('store.ts docstrings that describe their own callers', () => {
     // against it, never the other way round: a tenth holder reds here until the
     // walk admits it.
     for (const name of [...new Set([...narrow, ...wide])]) {
-      expect(prose(doc), `the reader walk does not name ${name}`).toContain(name);
+      expect(doc, `the reader walk does not name ${name}`).toContain(name);
     }
     // The omission itself, called out by name, so the regression that started
     // this has a line of its own rather than only a derived one.
@@ -1738,12 +1764,15 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the
 // `'absent' | 'unreadable'` read-failure vocabulary lives once, in
-// `server/src/io.ts`'s `ReadFailure`, and `registry.ts`'s `BranchEvidence`
+// `shared/agent-protocol.ts`'s `ReadFailure` — it was `server/src/io.ts`'s
+// until D-1438 moved it, which is what the first `it()` below asserts and
+// what this paragraph went on claiming for a wave — and `registry.ts`'s
+// `BranchEvidence`
 // DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
 // pair — it used to spell `'absent' | 'unreadable'` a second time at
 // `registry.ts:20`. `oneDefinition` above is per-named-symbol and hardcodes
 // `shared/api.ts` as the one legal home, so it cannot be reused for a
-// symbol whose home is `server/src/io.ts` — this is a bespoke assertion in
+// symbol whose home is `shared/agent-protocol.ts` — this is a bespoke assertion in
 // the same style.
 //
 // The fingerprint is the ORDERED PAIR, not either word alone:
