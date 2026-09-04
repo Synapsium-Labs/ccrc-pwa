@@ -295,7 +295,7 @@ describe('sessionBucket', () => {
 
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
     const waitingHookStates = new Map<string, HookState>([
-      ['claude-a-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], interrupted: false }],
+      ['claude-a-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, interrupted: false }],
     ]);
     const withWaitingHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
@@ -488,7 +488,7 @@ describe('sessionBucket', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const sessionStartDone = new Map<string, HookState>([
       ['claude-a-MekWarLive',
-        { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], interrupted: false }],
+        { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], graphQueries: 0, interrupted: false }],
     ]);
     const fleet = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,

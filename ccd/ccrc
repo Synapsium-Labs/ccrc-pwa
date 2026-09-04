@@ -3815,7 +3815,7 @@ cmd_install() {
   _inst_hooks
   _inst_skills
   _inst_graphify_skill
-  _inst_graph_always_on
+  _inst_graph_always_on_off
   _inst_graph_noise
   _inst_graph_excludes
   _inst_graph_hooks_off
@@ -4973,8 +4973,15 @@ _inst_linger() {
   fi
   echo "install: linger: could not enable — run: sudo loginctl enable-linger $UID"
   # NAMED, so the closing line can count it rather than claim it did not happen.
-  # This is the only writer of `INST_DEGRADED` today and the only step entitled
-  # to be one: every other step converges or dies.
+  # It was the ONLY writer of `INST_DEGRADED` when this comment was first
+  # written, and that sentence stopped being true the day the graphify steps
+  # landed: `graphify-read-rule` (`_inst_graph_always_on_off`, D-1244) and
+  # `graphify-path` (`_inst_graphify_engine`, D-1348/D-1349) write it too, for
+  # the same reason and under the same rule — a step that neither converged nor
+  # is entitled to take the box down says so and is counted. Kept as a census
+  # rather than a claim, because a hand-kept "only" is exactly the sentence a
+  # later step falsifies without noticing (D-1347 is the same defect one
+  # function over).
   INST_DEGRADED+=(linger)
   return 0
 }
@@ -5032,6 +5039,153 @@ _inst_graphify_engine() {
   [ "$got" = "$GRAPHIFY_PIN" ] \
     || _ccrc_die "graphify --version reports '${got:-nothing}' but the pin is $GRAPHIFY_PIN — the venv at $venv did not converge"
   printf '%s\n' "$GRAPHIFY_PIN" > "$HOME/.ccrc/graphify.pin"
+  # ── R3: the engine SESSIONS run is the engine ccrc pins ────────────────
+  # The write side resolves this engine by ABSOLUTE PATH everywhere. The read
+  # side was never given a path at all: a session types `graphify`, PATH answers
+  # `~/.local/bin/graphify`, and on this fleet that was a pip console-script
+  # shim importing a July copy of the package with no dist-info and no
+  # `__version__`, while every graph on the box was built by the 0.9.9 venv.
+  # The drift is invisible until a query fails strangely.
+  #
+  # `cmd_wrappers`' DISCIPLINE, and no flags: write when absent; do NOTHING
+  # when the link already resolves into the venv; back up and then repoint a
+  # pip/pipx console-script shim (matched BY CONTENT — a `#!` first line and a
+  # `from graphify.__main__ import main` line, the shape measured on this
+  # fleet, never assumed); REFUSE anything else — a hand-written launcher is
+  # the operator's, a link this box cannot resolve is unmeasured, and this step
+  # has no `--force` for anyone to type.
+  #
+  # CONTENT DECIDES, AND IT DECIDES THROUGH A LINK TOO (D-1351). "Symlink" is
+  # not a verdict here — only three link SHAPES get answered as links: one that
+  # resolves into the venv (converged), one whose target cannot be reached
+  # (`-e` false: left in place), and one neither resolution could be measured
+  # for (left in place). Everything else is judged by what is at the end of the
+  # link, because `[ -f ]` and the two content probes follow it: so
+  # `~/.local/bin/graphify -> ~/.local/pipx/venvs/graphify/bin/graphify`, the
+  # single commonest state on a box that ever ran `pipx install graphify`, is a
+  # SHIM by content and is replaced like any other shim. Two consequences worth
+  # saying out loud, both pinned by the suite: the keep-aside `cp -p` cuts is a
+  # DEREFERENCED regular-file copy of the shim, not a copy of the link, and the
+  # pipx-owned file the link pointed at is left exactly where it was — ccrc
+  # unlinks its own `$HOME/.local/bin` entry and touches nothing it did not
+  # find there.
+  #
+  # ONE PATH ONLY: `$HOME/.local/bin`. The root-owned copy a shared box may
+  # carry higher up the system tree is an unprivileged install's business
+  # nowhere — the header above this function already says why — and it is not
+  # spelled out anywhere inside this body, because the guard in
+  # `server/test/ccrc-install-graphify.test.ts` whose name begins `never
+  # touches ` slices this function from `_inst_graphify_engine() {` to its
+  # closing brace and refuses that literal. The slice starts AT the signature,
+  # so the header comment is outside it; a sentence like this one is inside.
+  # CITING THE GUARD BY ITS FULL NAME IS ITSELF A VIOLATION — the name ends in
+  # the path — which is how the wording originally drafted for this paragraph
+  # went red against the guard it was describing (D-1344). Name the path in the
+  # header, never here, not even in quotation.
+  local gpath="$HOME/.local/bin/graphify" gvenv="$venv/bin/graphify"
+  local gnow="" gwant="" gbak="" gtmp=""
+  # BOTH SIDES RESOLVED ONCE, AND "COULD NOT RESOLVE" IS ITS OWN ANSWER
+  # (D-1348). The first cut of this step compared the two `readlink -f`
+  # substitutions inline, and a box whose readlink has no `-f` (macOS below
+  # 12.3 — a floor this repo accepts rather than enforces,
+  # `macos-platform.test.ts`) answers EMPTY on both sides: empty = empty is
+  # TRUE, so ANY symlink, including one pointing at a completely different
+  # engine, was declared converged and left in place. That is the overloaded
+  # null this codebase bans at a seam, in the shape D-1244 already named one
+  # step below — and `_inst_graph_always_on_off` takes the path this one now
+  # takes: an unresolvable link is LEFT IN PLACE, said out loud, and counted
+  # as a degraded step rather than acted on unmeasured.
+  #
+  # TWO TOOLS, ONE FAILURE SEMANTICS. This step resolves with `readlink -f` and
+  # `_check_graphify-path` (`ccd/ccrc-doctor-checks`) resolves with `realpath`;
+  # `macos-platform.test.ts` allows both, and neither is preferred here — the
+  # install already reaches for `readlink -f` one step below (D-1244) and the
+  # doctor's own file already reaches for `realpath`. What is NOT optional is
+  # that they agree about EMPTY: on both sides an unresolvable pair is
+  # "unmeasured", never "unequal". This step degrades and leaves the link; the
+  # doctor SKIPs and names the missing tool (D-1350). If either ever falls back
+  # to the raw path instead, the two halves start disagreeing about a box
+  # neither of them measured.
+  #
+  # AND EMPTY IS ITSELF OVERLOADED (D-1352). `readlink -f` answers empty for a
+  # userland that has no `-f` AND for a chain it cannot walk — measured with
+  # GNU coreutils 9.4: a link at `/gone/deeper/bin/graphify` exits 1 with no
+  # output, because `-f` requires every component but the last to exist. The
+  # first cut of this arm printed "(its readlink has no -f)" as the cause,
+  # which is one of the two, picked and stated as fact — the same overloaded
+  # null one paragraph up, moved into the sentence describing it. So the
+  # distinguishable half is MEASURED FIRST, the way `_check_graphify-path`
+  # measures a missing engine with `[ ! -e ]` before it compares anything: a
+  # link whose target cannot be reached gets its own arm and its own sentence,
+  # naming the target it read with a plain one-hop `readlink`. What is left
+  # after that arm — no `-f`, or something rarer — is named for what was
+  # measured and nothing else, exactly as `_inst_graph_always_on_off` says it
+  # ("is a symlink this box cannot resolve", no cause claimed).
+  if [ -L "$gpath" ]; then
+    gnow="$(readlink -f "$gpath" 2>/dev/null)" || gnow=""
+    gwant="$(readlink -f "$gvenv" 2>/dev/null)" || gwant=""
+  fi
+  if ! mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+    echo "install: graphify: cannot create \$HOME/.local/bin — bare 'graphify' still resolves to whatever is on PATH" >&2
+    INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && [ ! -e "$gpath" ]; then
+    echo "install: graphify: $gpath is a symlink whose target this box cannot reach — it points at $(readlink "$gpath" 2>/dev/null), and nothing there answers. Left in place. Remedy: inspect it (ls -l \"$gpath\"), and if you want ccrc's pinned engine on PATH, move it aside and re-run" >&2
+    INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && { [ -z "$gnow" ] || [ -z "$gwant" ]; }; then
+    echo "install: graphify: $gpath is a symlink this box cannot resolve — left in place rather than judged unmeasured. Remedy: inspect it (ls -l \"$gpath\"), and if it is not the pinned engine, move it aside and re-run" >&2
+    INST_DEGRADED+=(graphify-path)
+  elif [ -L "$gpath" ] && [ "$gnow" = "$gwant" ]; then
+    echo "install: graphify: graphify on \$PATH already points at the pinned venv"
+  elif [ ! -e "$gpath" ] && [ ! -L "$gpath" ]; then
+    ln -sfn "$gvenv" "$gpath" \
+      && echo "install: graphify: \$HOME/.local/bin/graphify -> the pinned venv engine (written)" \
+      || { echo "install: graphify: cannot write $gpath" >&2; INST_DEGRADED+=(graphify-path); }
+  else
+    # SNIFFED THROUGH A PIPE, NEVER THROUGH `$(…)`. The first cut read the file
+    # into a variable with `gcur="$(head -c 4096 …)"` and matched against that,
+    # and the candidate this arm exists to judge may be a COMPILED launcher: a
+    # command substitution over binary makes bash print `warning: command
+    # substitution: ignored null byte in input` on the install's own stderr,
+    # noise from a step that has not decided anything yet. Two piped reads cost
+    # one extra `head` on a file that is at most 4 KB and say the same thing
+    # with nothing to warn about; `grep -q` stays silent on binary input where
+    # a bare `grep` would announce `Binary file … matches`.
+    if [ -f "$gpath" ] && [ -r "$gpath" ] \
+       && head -c 4096 "$gpath" 2>/dev/null | head -n1 | grep -q '^#!' \
+       && head -c 4096 "$gpath" 2>/dev/null | grep -qxF 'from graphify.__main__ import main'; then
+      # BACKED UP FIRST, THEN SWAPPED ATOMICALLY (D-1349) — `cmd_wrappers`'
+      # discipline in FULL, which the comment above claimed while this arm did
+      # neither. A pip console-script shim is a file ccrc did not write: it is
+      # replaceable because its content proves what it is, not because it is
+      # ccrc's, so it gets `cmd_wrappers`' own `<name>.pre-ccrc-<UTC>` copy
+      # (`cp -p`, mode and timestamps preserved) BEFORE anything is unlinked,
+      # and a failed backup degrades instead of replacing unbacked — the rule
+      # `_inst_graph_always_on_off` states as "left in place rather than
+      # rewritten unbacked". The "." in the backup name is load-bearing for the
+      # reason `cmd_wrappers` gives: no legal wrapper id can carry one, so the
+      # copy is invisible to `ccrc adopt`'s scan and to `_check_wrappers`, and
+      # the leading "." on the temp name keeps a leftover out of the `*` glob
+      # `_uninst_wrappers` walks. The swap itself is `ln` to that temp name
+      # then `mv -f`, one rename, because `ln -sfn` over a live path is
+      # unlink+symlink: a session that types `graphify` in that window gets
+      # ENOENT.
+      gbak="$gpath.pre-ccrc-$(date -u +%Y%m%dT%H%M%SZ)"
+      gtmp="$HOME/.local/bin/.graphify.tmp.$$"
+      if ! cp -p -- "$gpath" "$gbak" 2>/dev/null; then
+        echo "install: graphify: cannot copy $gpath aside to $gbak — left in place rather than replaced unbacked. Remedy: make \$HOME/.local/bin writable and re-run" >&2
+        INST_DEGRADED+=(graphify-path)
+      elif ln -sfn "$gvenv" "$gtmp" 2>/dev/null && mv -f -- "$gtmp" "$gpath"; then
+        echo "install: graphify: \$HOME/.local/bin/graphify was a pip console-script shim -> repointed at the pinned venv (the shim it replaced is at $gbak)"
+      else
+        rm -f -- "$gtmp"
+        echo "install: graphify: cannot replace $gpath — the file that was there is untouched, and the copy at $gbak is the same file" >&2
+        INST_DEGRADED+=(graphify-path)
+      fi
+    else
+      echo "install: graphify: $gpath is not a pip shim and ccrc did not write it — left in place. Remedy: inspect it (ls -l \"$gpath\"), and if you want ccrc's pinned engine on PATH, move it aside and re-run; nothing here overrides that." >&2
+      INST_DEGRADED+=(graphify-path)
+    fi
+  fi
   echo "install: graphify: engine graphifyy==$GRAPHIFY_PIN in \$HOME/.ccrc/graphify-venv (pin stamped)"
 }
 
@@ -5134,206 +5288,150 @@ _inst_graphify_skill() {
 # here more than most: the sweep timer reads this file every 15 minutes, so a
 # non-atomic write has a live reader, and a plain `cp` follows a symlink at the
 # destination instead of replacing it.
-# ── _inst_graph_always_on — the READ side, which had no mechanism ─────────
-# D-1243. Everything graphify ships on the fleet until now serves the WRITE
-# path: the engine, the skill, the excludes, the noise list, the 15-minute
-# sweep. All of it keeps graphs FRESH. Nothing made a session READ one.
+# ── _inst_graph_always_on_off — take back the account-wide block (D-1245) ─
+# D-1243 installed graphify's `always_on/claude-md.md` into every rostered
+# home's config-dir `CLAUDE.md`. Two things were wrong with that, and neither is
+# a wording problem:
 #
-# Measured before this step existed: the only always-on instruction any rostered
-# home carried said "when the user types `/graphify`…" — an explicit slash
-# command, i.e. the OPPOSITE of always-on. The query-first rule appeared in
-# exactly zero of the five homes. So a graph could be rebuilt every 15 minutes,
-# perfectly current, and never once be consulted.
+#   1. The block is written for a PROJECT file. Its first sentence is "This
+#      project has a knowledge graph at graphify-out/". Planted account-wide it
+#      asserts that of every project the account ever opens, including the trees
+#      the sweep refuses.
+#   2. That file is the OPERATOR's, not ccrc's. Every one of D-1244's six
+#      data-loss classes — substring markers, a lost end marker, two blocks, the
+#      line-1 splice, the unchecked `&&` chain, the symlink fallback — existed
+#      ONLY because ccrc was rewriting a file it does not own.
 #
-# graphify ships the remedy and we had never installed it: `always_on/
-# claude-md.md` in the package, whose first rule is "for codebase questions,
-# first run `graphify query`". ASSEMBLED FROM THE PACKAGE, NEVER VENDORED —
-# `install-graphify-skill.sh`'s header states that rule for the skill (spec §B)
-# and the same reasoning binds here: a vendored copy is a second writer, and two
-# writers drift. Reading it from the pinned venv keeps the wording in lockstep
-# with the engine version the box actually runs.
+# MEASURED EFFECT, which is what settled it: graphify's own query log over the
+# one day since it was deployed (2026-09-01, measured 2026-09-02) showed 109
+# query/path/explain calls across 4 corpora, 103 of them in the one repository
+# whose PROJECT CLAUDE.md had carried graphify's block, committed, since July.
+# Zero in ccrc-pwa, the busiest project on the fleet, with five fresh graphs.
+# The design's other row is the WEEK one — 265 calls across 11 corpora over the
+# last 7 days, ccrc-pwa zero in both — and the two are named apart here because
+# this comment once paired that row's window word with this row's figures
+# (D-1357/D-1362). "5/5 homes converged" was shape; that is effect.
+# The read side now lives in `ccd/session-hook.sh`'s SessionStart card (R1),
+# worker clause 12 (R2), `_inst_graphify_engine`'s PATH converge (R3), and the
+# `graphQueries` counter in the hookstate the hook already writes (R4) —
+# artifacts ccrc installs and owns outright.
 #
-# INTO THE HOMES, NOT INTO THE REPOS, and that is the same asymmetry D-1161
-# settled for the noise list: ccrc owns its wrapper homes and may converge them;
-# it does not own the repos sessions work in, and writing this block into each
-# project's `CLAUDE.md` would be ccrc editing files it has no claim on — the
-# exact objection that killed O6(a). One block per home covers every session, in
-# every repo, touching nothing that is not ours.
+# THIS IS D-1244'S CENSUS DOING ITS LAST JOB, not a second implementation of it:
+# the same whole-line marker count, the same exactly-one-well-ordered-pair rule,
+# the same symlink resolution that SKIPS rather than falling back to the link,
+# the same `_plat_mode` preservation, the same backup-before-write. It deletes
+# lines ls..le (plus the one separating blank line the append path wrote) where
+# the converge spliced a block in.
 #
-# NEVER CLOBBERS. The block is delimited by ccrc's own markers, so convergence
-# is unambiguous; content outside them is never read or rewritten. A home whose
-# `CLAUDE.md` carries an UNMARKED `## graphify` section — what `graphify
-# install` itself writes — is REPORTED AND SKIPPED, not merged into: this
-# installer is not the author of that text and has no way to tell an operator's
-# edit of it from a stale copy of it.
-_inst_graph_always_on() {
+# `_inst_graph_hooks_off` IS THE IDIOM, not a wart: ccrc already has a step
+# whose whole job is removing what an earlier layer planted, and it states the
+# rule this one follows — anything not provably WHOLLY ccrc's own is "left in
+# place; remove by hand", counted, and reported. That is the TREE's spelling of
+# the phrase — `_inst_graph_hooks_off`'s chained-content refusal, the one other
+# place the tree says it — not the spec's em-dashed one; D-1247 records the
+# divergence, and the half-block test asserts the semicolon. Cited BY NAME, not
+# by line (D-1343): the plan prescribed `:5411 and :5249` verbatim, but :5249
+# was the converge's unmarked-`## graphify` refusal, which THIS step's commit
+# deletes, and every number in this file moves the moment a line is added above
+# it. This step stays in the tree afterwards exactly as that one does.
+_inst_graph_always_on_off() {
   [ "$INST_ROLE" = server ] && return 0
-  local pkg src n=0 kept=0 same=0 ts backups
-  # `CCRC_GRAPHIFY_PKG` first, exactly as `install-graphify-skill.sh:24` reads
-  # it — one knob with one meaning across both steps that resolve this package,
-  # rather than a second spelling of the same override.
-  pkg="${CCRC_GRAPHIFY_PKG:-}"
-  [ -n "$pkg" ] || pkg="$("$HOME/.ccrc/graphify-venv/bin/python" -c 'import graphify, pathlib; print(pathlib.Path(graphify.__file__).parent)' 2>/dev/null)" || pkg=""
-  if [ -z "$pkg" ]; then
-    # DEGRADES, NEVER DIES — `_inst_enable`'s own idiom for the sweep timer:
-    # "a systemd that will not take this one timer must not turn an otherwise-
-    # converged install into a failed one … the sweep is convenience, not the
-    # guardrail". A read RULE is the same class. The first draft used `_ccrc_die`
-    # on all three gates below, and a box with no resolvable package took the
-    # WHOLE install down with it — a fix for a missing nicety, worse than the
-    # nicety being missing.
-    echo "install: graphify: cannot resolve the graphify package from the venv — always-on read rule SKIPPED"
-    INST_DEGRADED+=(graphify-read-rule)
-    return 0
-  fi
-  src="$pkg/always_on/claude-md.md"
-  if [ ! -f "$src" ]; then
-    # NOT `INST_DEGRADED`, on `_inst_linger_darwin`'s stated distinction: a
-    # degraded step is one that was supposed to happen and did not, which a
-    # re-run might fix. A graphify build that ships no block is a fact about
-    # the build, not a shortfall of this run, and counting it would print
-    # DEGRADED on every install forever.
-    echo "install: graphify: this graphify build ships no always-on block ($src) — read rule SKIPPED, nothing invented"
-    return 0
-  fi
+  local n=0 kept=0 ts backups
   if ! source "$HOME/.ccrc/accounts.sh" 2>/dev/null || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
-    echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule SKIPPED"
+    # DEGRADES, NEVER DIES — `_inst_enable`'s rule for the sweep timer, and it
+    # binds harder here: a block ccrc failed to REMOVE is a stale instruction,
+    # not a broken box, and taking the whole install down over it would be a
+    # fix worse than the thing being fixed.
+    echo "install: graphify: no usable roster at \$HOME/.ccrc/accounts.sh — always-on read rule not cleared"
     INST_DEGRADED+=(graphify-read-rule)
     return 0
   fi
   ts=$(date +%Y%m%d-%H%M%S); backups="$HOME/ccrc-backups/$ts"
-  local a dir f start end body want cur phys ns ne ls le mode tmp
+  local a dir f start end phys ns ne ls le lb mode tmp
   start='<!-- ccrc:graphify-always-on:start -->'
   end='<!-- ccrc:graphify-always-on:end -->'
-  body="$(cat "$src")"
-  want="$start
-$body
-$end"
   for a in "${CCRC_ACCOUNTS[@]}"; do
     dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" || continue
     [ -n "$dir" ] || continue
     f="$dir/CLAUDE.md"
-    # A SYMLINK IS RESOLVED, OR THE HOME IS SKIPPED — never written through a
-    # path we failed to resolve. D-1244: the first draft fell back to the LINK
-    # path when `readlink -f` failed, so "resolved" and "could not resolve"
-    # collapsed to one value and the failure case wrote over the link — exactly
-    # the data loss the resolution exists to prevent, reached silently. That is
-    # the overloaded null at a seam this codebase forbids, and it is reachable:
-    # `readlink -f` answers empty for a link whose target's parent does not
-    # exist yet (a dotfiles repo not cloned), and has no `-f` at all on older
-    # macOS, which this repo runs a CI leg for.
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    # A SYMLINK IS RESOLVED, OR THE HOME IS SKIPPED (D-1244). `readlink -f`
+    # answers empty for a link whose target's parent does not exist yet, and
+    # falling back to the LINK path collapses "resolved" and "could not
+    # resolve" into one value — the overloaded null this codebase forbids at a
+    # seam, and here it would delete lines out of a file nobody identified.
+    # Two homes on this fleet ARE symlinks to a third's file, so this is the
+    # ordinary case, not the exotic one.
     if [ -L "$f" ]; then
       phys="$(readlink -f "$f" 2>/dev/null)" || phys=""
       if [ -z "$phys" ]; then
-        echo "install: graphify: $f is a symlink this box cannot resolve — left untouched, read rule not converged there" >&2
+        echo "install: graphify: $f is a symlink this box cannot resolve — left in place; remove the block by hand" >&2
         kept=$((kept+1)); continue
       fi
       f="$phys"
     fi
-    # THE MARKER CENSUS, ON WHOLE LINES, AND EXACTLY ONE ORDERED PAIR OR NOTHING.
-    # D-1244. The first draft matched each marker as a SUBSTRING anywhere in a
-    # line and spliced against whatever it found. Three measured consequences:
-    # a file quoting the markers in the operator's own prose was cut at the
-    # mention; a file carrying a start marker with no end marker had EVERYTHING
-    # after the start silently deleted; and a file with two blocks never
-    # measured current, so every install rewrote and re-backed it up forever
-    # while the stale copy stayed. The function's own header promised "content
-    # outside them is never read or rewritten" — false in all three.
-    ns=0; ne=0
-    if [ -f "$f" ]; then
-      ns="$(grep -cxF "$start" "$f" 2>/dev/null || true)"; ns="${ns:-0}"
-      ne="$(grep -cxF "$end" "$f" 2>/dev/null || true)"; ne="${ne:-0}"
-    fi
+    [ -f "$f" ] || continue
+    # THE MARKER CENSUS, ON WHOLE LINES, EXACTLY ONE ORDERED PAIR OR NOTHING.
+    # A substring match would cut a file at the operator's own MENTION of the
+    # markers; a missing end marker would delete everything after the start.
+    ns="$(grep -cxF "$start" "$f" 2>/dev/null || true)"; ns="${ns:-0}"
+    ne="$(grep -cxF "$end" "$f" 2>/dev/null || true)"; ne="${ne:-0}"
     if [ "$ns" -eq 0 ] && [ "$ne" -eq 0 ]; then
-      if [ -f "$f" ] && grep -qE '^## graphify[[:space:]]*$' "$f"; then
-        echo "install: graphify: $f carries an unmarked '## graphify' section — left in place; remove it by hand to let ccrc converge this block" >&2
-        kept=$((kept+1)); continue
-      fi
-    elif [ "$ns" -eq 1 ] && [ "$ne" -eq 1 ]; then
-      ls="$(grep -nxF "$start" "$f" | head -n1 | cut -d: -f1)"
-      le="$(grep -nxF "$end" "$f" | head -n1 | cut -d: -f1)"
-      if [ "$ls" -ge "$le" ]; then
-        echo "install: graphify: $f carries ccrc's end marker before its start marker — malformed, left untouched" >&2
-        kept=$((kept+1)); continue
-      fi
-      # already converged, byte for byte, over the ONE marked region -> no write
-      if [ "$(sed -n "${ls},${le}p" "$f")" = "$want" ]; then
-        same=$((same+1)); continue
-      fi
-    else
-      echo "install: graphify: $f carries $ns start and $ne end markers, and exactly one pair is required — malformed, left untouched" >&2
+      continue   # nothing of ours here; idempotence lives on this line
+    fi
+    if [ "$ns" -ne 1 ] || [ "$ne" -ne 1 ]; then
+      echo "install: graphify: $f carries $ns start and $ne end markers, and exactly one pair is required — left in place; remove by hand" >&2
       kept=$((kept+1)); continue
     fi
-    cur=""
-    [ -f "$f" ] && cur="$(cat "$f")"
-    if ! mkdir -p "$dir" 2>/dev/null; then
-      echo "install: graphify: cannot create $dir — read rule not converged there" >&2
+    ls="$(grep -nxF "$start" "$f" | head -n1 | cut -d: -f1)"
+    le="$(grep -nxF "$end" "$f" | head -n1 | cut -d: -f1)"
+    if [ "$ls" -ge "$le" ]; then
+      echo "install: graphify: $f carries ccrc's end marker before its start marker — malformed, left in place; remove by hand" >&2
       kept=$((kept+1)); continue
     fi
-    # PRESERVE THE FILE'S OWN MODE. D-1244: forcing 644 silently WIDENED a
-    # CLAUDE.md an operator had restricted — and since a symlink is resolved
-    # first, the file being re-moded may not even be inside a ccrc home. GNU
-    # and BSD `stat` spell this differently and ccrc installs on both.
-    # `_plat_mode`, NOT a bare `stat -c %a` — this file ships to macOS and
-    # `macos-platform.test.ts` refuses a GNU-only call outside the platform
-    # block. The shim already exists and already answers the harder question
-    # correctly (`%Mp%Lp` on BSD, so a setuid file does not read differently
-    # between the arms); my first cut hand-rolled a two-arm `stat` and the
-    # guard caught it.
-    mode=""
-    [ -f "$f" ] && mode="$(_plat_mode "$f" 2>/dev/null || true)"
+    # THE ONE SEPARATING BLANK LINE the append path wrote before the block
+    # (`printf '%s\n\n' "$cur"`), and only when it really is blank and really
+    # is ours to take: without this, removal leaves a growing run of blank
+    # lines behind on a home the converge had appended to.
+    lb="$ls"
+    if [ "$ls" -gt 1 ] && [ -z "$(sed -n "$((ls-1))p" "$f")" ]; then lb=$((ls-1)); fi
+    # PRESERVE THE FILE'S OWN MODE (D-1244): a symlink was resolved first, so
+    # the file being rewritten may not even sit inside a ccrc home, and forcing
+    # 644 would widen a CLAUDE.md an operator had restricted. `_plat_mode`, not
+    # a bare `stat -c %a` — this file ships to macOS and `macos-platform.test.ts`
+    # refuses a GNU-only call outside the platform block.
+    mode="$(_plat_mode "$f" 2>/dev/null || true)"
     [ -n "$mode" ] || mode=644
-    if [ -f "$f" ]; then
-      if ! { mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"; }; then
-        echo "install: graphify: cannot back up $f — left untouched rather than rewritten unbacked" >&2
-        kept=$((kept+1)); continue
-      fi
+    if ! { mkdir -p "$backups" && cp -a "$f" "$backups/$(echo "$f" | tr / _)"; }; then
+      echo "install: graphify: cannot back up $f — left in place rather than rewritten unbacked" >&2
+      kept=$((kept+1)); continue
     fi
     tmp="$f.tmp.$$"
-    # EVERY PIECE'S STATUS, NOT JUST THE LAST. D-1244: a `{ a; b; c; } > tmp`
-    # group carries only c's status, and the tail piece writes NOTHING when the
-    # block sits at end of file — the layout the append path itself creates. So
-    # a failed first piece (ENOSPC, an OOM-killed child) silently produced a
-    # file holding the block ALONE, moved it over the operator's CLAUDE.md, and
-    # reported "converged". Measured under real ENOSPC and a real SIGKILL. The
-    # `&&` chain makes the group's status the first failure.
+    # EVERY PIECE'S STATUS, NOT JUST THE LAST (D-1244): a `{ a; b; } > tmp`
+    # group carries only b's status, and b writes NOTHING when the block ends
+    # the file — the layout the append path itself creates. The `&&` chain makes
+    # the group's status the FIRST failure.
     #
-    # `sed` line addressing rather than awk marker matching: it cannot mistake a
-    # marker quoted in prose for a real one (the census above already fixed the
-    # boundaries), and it retires the BSD-awk `-v` newline hazard entirely
-    # rather than guarding against it.
-    if [ "$ns" -eq 1 ]; then
-      # `[ "$ls" -le 1 ] ||` GUARDS AN EMPTY PREFIX, and it is not defensive
-      # padding: `sed -n "1,0p"` does NOT print nothing. An addr2 at or below
-      # addr1 makes sed match the ONE line at addr1, so a block sitting at line
-      # 1 had its own start marker re-emitted and the block appended after it —
-      # two start markers, measured. That layout is not exotic: it is what the
-      # append path produces for a home that had no CLAUDE.md at all, which on
-      # the reference fleet is a real home.
-      if ! { { [ "$ls" -le 1 ] || sed -n "1,$((ls-1))p" "$f"; } &&
-             printf '%s\n' "$want" &&
-             sed -n "$((le+1)),\$p" "$f"; } > "$tmp" 2>/dev/null; then
-        rm -f "$tmp"
-        echo "install: graphify: could not rewrite $f — left untouched" >&2
-        kept=$((kept+1)); continue
-      fi
-    else
-      if ! { { [ -z "$cur" ] || printf '%s\n\n' "$cur"; } &&
-             printf '%s\n' "$want"; } > "$tmp" 2>/dev/null; then
-        rm -f "$tmp"
-        echo "install: graphify: could not write $f — left untouched" >&2
-        kept=$((kept+1)); continue
-      fi
+    # `[ "$lb" -le 1 ] ||` GUARDS AN EMPTY PREFIX and is not padding: `sed -n
+    # "1,0p"` does not print nothing — an addr2 at or below addr1 makes sed
+    # match the ONE line at addr1, so a block at line 1 would have its own
+    # start marker re-emitted. That layout is what the append path produced for
+    # a home that had no CLAUDE.md at all.
+    if ! { { [ "$lb" -le 1 ] || sed -n "1,$((lb-1))p" "$f"; } &&
+           sed -n "$((le+1)),\$p" "$f"; } > "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      echo "install: graphify: could not rewrite $f — left in place" >&2
+      kept=$((kept+1)); continue
     fi
     if ! { chmod "$mode" "$tmp" && mv -f "$tmp" "$f"; }; then
       rm -f "$tmp"
-      echo "install: graphify: could not install $f — left untouched" >&2
+      echo "install: graphify: could not replace $f — left in place" >&2
       kept=$((kept+1)); continue
     fi
     n=$((n+1))
   done
   [ "$kept" -eq 0 ] || INST_DEGRADED+=(graphify-read-rule)
-  echo "install: graphify: always-on read rule — $n home(s) converged, $same already current, $kept skipped"
+  echo "install: graphify: always-on read rule — $n home(s) cleared, $kept left in place"
 }
 
 _inst_graph_noise() {
@@ -6324,6 +6422,36 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-graph-sweep" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
   echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep and the ccrc launcher removed from \$HOME/.local/bin"
+  # ── the FIFTH entry, and the only one that is not ccrc's own binary ──────
+  # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
+  # pinned venv, and the rule the four names above follow binds here too: an
+  # uninstall that removed the engine's home (`--purge` takes `~/.ccrc` whole,
+  # a few lines below) and left the link would leave a DANGLING `graphify`
+  # first on every session's PATH — strictly worse than the box was before
+  # ccrc, because the pip shim that used to answer there was copied aside by
+  # the install and never put back (`_uninst_keep_asides` prints that `mv`).
+  # D-1347: the install grew a fifth name and this census did not, because it
+  # is hand-kept.
+  #
+  # ONLY IF IT IS OURS, which is `_uninst_wrappers`' rule one function up:
+  # "everything ccrc could not prove it wrote was left in place". Proof here is
+  # the link's own target, read with plain `readlink` — ONE HOP, no `-f`, so no
+  # box is asked for a tool it may not have (D-1348's lesson on the install
+  # side) — against the exact literal `_inst_graphify_engine` writes. A regular
+  # file (the hand-written launcher that step REFUSES to touch) and a symlink
+  # pointing anywhere else are both reported and kept.
+  local glink="$HOME/.local/bin/graphify" gtgt=""
+  if [ -L "$glink" ]; then
+    gtgt="$(readlink "$glink" 2>/dev/null)" || gtgt=""
+    if [ "$gtgt" = "$HOME/.ccrc/graphify-venv/bin/graphify" ]; then
+      rm -f -- "$glink" || _ccrc_die "removing $glink failed"
+      echo "uninstall: tree: graphify removed from \$HOME/.local/bin (it was ccrc's link into the pinned venv)"
+    else
+      echo "uninstall: tree: kept $glink — it is a symlink to ${gtgt:-something this box cannot read}, not the link ccrc wrote; remove it by hand if it is worthless"
+    fi
+  elif [ -e "$glink" ]; then
+    echo "uninstall: tree: kept $glink — ccrc never wrote it (the install refuses to touch a launcher it did not write); remove it by hand if it is worthless"
+  fi
 }
 
 # The keep-asides `_inst_keep_aside` wrote for the two operator-namespace
@@ -6331,12 +6459,21 @@ _uninst_tree_bins() {
 # operator's own edits made since the install, and a restore that ate them
 # would be the very damage the keep-aside existed to prevent. Restoring is
 # one visible `mv`, and it is theirs to run.
+#
+# THE THIRD GLOB is the graphify shim `_inst_graphify_engine` copies aside
+# before repointing `$HOME/.local/bin/graphify` (D-1349), and it belongs here
+# for exactly the reason the other two do: `_uninst_tree_bins` has just removed
+# ccrc's link from that path, so the `mv` this loop prints puts the operator's
+# own pip shim back where it was — the difference between "off ccrc" and "off
+# ccrc with a hole where your graphify used to be". It runs AFTER that step
+# (see `cmd_uninstall`'s sequence), so the target path is already free.
 _uninst_keep_asides() {
   local f said=0
   local had_nullglob=0
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
-  for f in "$HOME/.tmux.conf.pre-ccrc-"* "$HOME/.claude/statusline-command.sh.pre-ccrc-"*; do
+  for f in "$HOME/.tmux.conf.pre-ccrc-"* "$HOME/.claude/statusline-command.sh.pre-ccrc-"* \
+    "$HOME/.local/bin/graphify.pre-ccrc-"*; do
     if [ "$said" -eq 0 ]; then
       echo "uninstall: keep-asides: the files ccrc copied aside before replacing them are still there — restore any of them with:"
       said=1

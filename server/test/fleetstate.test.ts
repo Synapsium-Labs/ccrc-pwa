@@ -15,7 +15,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
   started: true, spawnState: null,
 });
@@ -110,14 +110,40 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.hookState).toBeNull();
     expect(s?.askSummary).toBeNull();
     expect(s?.subagents).toBeNull();
+    expect(s?.graphQueries).toBeNull();
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
-      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents'],
+      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries'],
     ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');
     expect(s?.status).toBe('busy');
     expect(s?.branch).toBe('ws/quiet-basin');
     expect(s?.limits).toEqual({ five: 10, seven: 40 });
+  });
+
+  it('revives a PRESENT graphQueries as the number the snapshot carried', async () => {
+    // The absent→null half is pinned above; this is the other half, and it is
+    // the half the feature lives on. `reviveFleetSessions` has exactly two
+    // callers — this loadSnapshot (the server's degraded-mode read of
+    // `~/.ccrc/state-cache.json` after a restart) and the PWA's offline cache
+    // — so a `graphQueries: optNum(o, 'graphQueries')` that regressed to a
+    // literal `null` would drop the count on every restored session and
+    // render no chip, on precisely the surface the counter exists for, with a
+    // fully green suite. Pinned here, in the consumer, not in api.ts.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphQueries: 4 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.graphQueries).toBe(4);
+  });
+
+  it('revives a persisted graphQueries of 0 as 0 — a measured zero is not an absence', async () => {
+    // The one value a truthiness-flavoured revive (`optNum(…) || null`) would
+    // silently turn back into "nothing was measured". Same distinction the
+    // chip itself draws with `!== null`.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphQueries: 0 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.graphQueries).toBe(0);
   });
 
   it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', async () => {

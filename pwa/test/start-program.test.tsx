@@ -50,7 +50,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w', workspace: null, name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, held: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null,
   // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
   // the correct value here, not merely the one that compiles.
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,

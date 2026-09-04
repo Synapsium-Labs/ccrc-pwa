@@ -42,6 +42,37 @@ cp -a "$PKG/skills/claude/references/." "$STAGE/references/"
 printf '%s' "$PIN" > "$STAGE/.graphify_version"   # graphify's own installer writes no newline
 SRC="$STAGE"
 
+# The read-side clause this artifact is credited with (spec §1, artifact table
+# row 3): the graphify skill "reaches every session — its description ALREADY
+# says 'especially when graphify-out/ exists, where the question should be
+# treated as a graphify query first'". That sentence is the PACKAGE's, copied
+# verbatim by the `cp -a` above; ccrc neither writes nor pins it. So a
+# GRAPHIFY_PIN bump whose skill.md reworded it away would delete a fifth of the
+# read side with every suite green — doctor compares `.graphify_version` stamps,
+# never content. REPORT it, never refuse: a skill whose description drifted is
+# still worth installing, and the point is to turn a silent loss into a decision
+# someone records at the pin bump. Matched on the two load-bearing tokens, not
+# the whole sentence, so a harmless rewording is not a false alarm.
+_gfx_description() {
+  local line fm=0 indesc=0 out=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $fm == 0 ]]; then
+      case "$line" in ---*) fm=1; continue ;; *) break ;; esac   # no frontmatter at all
+    fi
+    case "$line" in ---*) break ;; esac                          # end of frontmatter
+    if [[ $indesc == 1 ]]; then
+      case "$line" in [A-Za-z_]*:*) break ;; esac                # the next key ends the value
+      out="$out $line"; continue                                 # folded continuation
+    fi
+    case "$line" in description:*) indesc=1; out="${line#description:}" ;; esac
+  done < "$1"
+  printf '%s' "$out"
+}
+_gfx_desc="$(_gfx_description "$STAGE/SKILL.md")"
+if [[ "$_gfx_desc" != *graphify-out/* || "$_gfx_desc" != *"graphify query"* ]]; then
+  echo "install-graphify-skill: WARNING — the packaged skill description (pin $PIN) no longer tells a session to treat a question as a \`graphify query\` first when graphify-out/ exists. Spec §1 credits this skill with that sentence; installing anyway — record the rewording at the pin bump." >&2
+fi
+
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
 else

@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~1931 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~2165 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -196,7 +196,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, eleven clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, twelve clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the

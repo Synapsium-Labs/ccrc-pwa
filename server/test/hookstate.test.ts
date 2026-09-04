@@ -19,7 +19,7 @@ const seed = (dir: string, id: string, body: unknown): void => {
 /** A complete, valid hookstate body — the writer's own shape. */
 const base = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   v: 1, state: 'working', event: 'UserPromptSubmit', sessionId: UUID, pid: 1234,
-  updatedAt: NOW, ask: null, subagents: [],
+  updatedAt: NOW, ask: null, subagents: [], graphQueries: 0,
   ...overrides,
 });
 
@@ -54,6 +54,7 @@ describe('readHookState', () => {
         }],
       },
       subagents: [{ name: 'reviewer', startedAt: NOW - 1000 }],
+      graphQueries: 0,
       interrupted: true,
     });
   });
@@ -336,5 +337,55 @@ describe('readHookStateMeasured — the distinction readHookState folds', () => 
     seed(degraded, ID, base({ state: 'working' }));
     const io = degradedReadIO((p) => p.endsWith(`${ID}.hookstate.json`));
     expect(await readHookState(io, degraded, ID, UUID, NOW)).toBeNull();
+  });
+});
+
+// ── graphQueries: null and 0 are two different answers ────────────────────
+// An L3 adapter may not narrow a distinction it received. A session that
+// reported no queries (`0`) and a session running a hook too old to report at
+// all (`null`) are two facts the console shows differently — `graph 0` versus
+// no chip — so folding absent to 0 would invent a measurement.
+describe('graphQueries', () => {
+  it('a measured zero is 0, not null', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: 0 }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphQueries).toBe(0);
+  });
+
+  it('a count round-trips', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: 7 }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphQueries).toBe(7);
+  });
+
+  it('ABSENT is null — an older hook said nothing, which is not "said zero"', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    const body = base();
+    delete body['graphQueries'];
+    seed(reg, ID, body);
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out).not.toBeNull();
+    expect(out?.graphQueries, 'an absent counter was folded to a measured zero').toBeNull();
+  });
+
+  it('explicit null is null too', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: null }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphQueries).toBeNull();
+  });
+
+  it('a non-integer, a negative or a non-number rejects the WHOLE read', async () => {
+    // NOT `NaN`: this suite's `seed` helper `JSON.stringify`s the body, and
+    // `JSON.stringify(NaN)` is the string `null` — which reads back as a
+    // perfectly valid absent counter, so that element would fail the
+    // assertion rather than prove it. `true` is the fifth wrong TYPE and
+    // survives serialisation, which is what this loop is actually testing.
+    for (const bad of [1.5, -1, '3', true, {}]) {
+      const reg = mkTmp('ccrc-hookstate-');
+      seed(reg, ID, base({ graphQueries: bad }));
+      expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW),
+        `graphQueries: ${String(bad)} was laundered into a reading`)
+        .toEqual({ ok: false, reason: 'no-state' });
+    }
   });
 });

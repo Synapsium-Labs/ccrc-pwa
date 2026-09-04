@@ -731,6 +731,120 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
   });
 });
 
+describe('the graph-card paragraph describes the card ccd/session-hook.sh actually prints', () => {
+  // NOTHING under `server/test` read this paragraph when it landed, so it could
+  // — and did — describe a two-state freshness the hook has not had since
+  // D-1336, and a card that every session prints when the hook prints nothing at
+  // all for a tree with no graph and no census row. That is the same class the
+  // refusal-code cross-check above closes for SKILL.md: a doc that quotes
+  // another file's vocabulary and is bound to nothing drifts silently. Every
+  // word quoted here is HARVESTED from the writer, so the next hook change reds
+  // this doc instead of orphaning it.
+  const hook = readFileSync(path.join(root, 'ccd/session-hook.sh'), 'utf8');
+
+  /** The paragraph itself, by its own opening — one blank-line-delimited block. */
+  const para = (): string => {
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf("**A brief may quote the worker's graph card");
+    expect(start, 'wave-lifecycle.md carries no graph-card paragraph at all')
+      .toBeGreaterThanOrEqual(0);
+    const end = wl.indexOf('\n\n', start);
+    return flat(wl.slice(start, end === -1 ? undefined : end));
+  };
+
+  /** Every freshness word the card can carry, harvested from the hook's own
+   *  assignments, normalised over the count. Four arms, three words: `fresh`,
+   *  `<n> commit(s) behind HEAD`, and D-1336's `freshness unmeasured` — the one
+   *  the paragraph collapsed. */
+  const FRESHNESS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
+      'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
+      'looking at the wrong file');
+    return [...new Set(vals.map((v) => v.replace(/^(?:\$behind|\d+) commits? /, '')))];
+  })();
+
+  /** Every QUALIFIER the card APPENDS to a freshness word, harvested from the
+   *  hook's own `fresh+=` sites — the twin of `ccrc-install-graphify.test.ts`'s
+   *  (D-1369), mirrored here for the reason D-1372 records: the harvest above
+   *  COULD NOT SEE D-1368 LAND. That change made a squash-merged graph read
+   *  `fresh — same content as HEAD`, which is exactly the case this paragraph
+   *  went on promising would read `not an ancestor of HEAD`, and the pin stayed
+   *  green over the drift twice over — the new `fresh="fresh"` assignment left
+   *  the vocabulary SET identical after the de-dupe, and the qualifier is
+   *  APPENDED, so `/\bfresh="([^"]+)"/` never matched it at all. A qualifier is
+   *  deliberately not a state (nothing branches on it, which is why the
+   *  FRESHNESS harvest is the right shape for the states), but it IS card text
+   *  a coordinator quotes into a brief. Leading punctuation is stripped so the
+   *  pin is on the words, not on the em dash that joins them. */
+  const QUALIFIERS = ((): string[] => {
+    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+      .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
+    if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
+      'all — the card was rewritten, and the graph-card paragraph that names one has to be ' +
+      're-derived against it rather than left standing');
+    return [...new Set(vals)];
+  })();
+
+  /** Word-BOUNDARY match, never a raw substring — the same hole as the worker
+   *  suite's twin harvest (D-1342). `fresh` is a substring of `freshness
+   *  unmeasured`, so a `toContain` arm for it passes on the longer word alone
+   *  and can never fail; this paragraph carries NO verbatim pin, so that
+   *  harvest is its only binding and a vacuous arm leaves it unbound. */
+  const wordRe = (w: string): RegExp =>
+    new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+
+  it('names the qualifier the hook APPENDS, and scopes the ancestry words to a differing tree (D-1372)', () => {
+    // DERIVED FROM ORDER, the same way the README's twin arm is: the card asks
+    // a CONTENT predicate before it asks ancestry at all, so a graph whose
+    // bytes are HEAD's reads `fresh` and never reaches the `not an ancestor of
+    // HEAD` arm — which is what this paragraph promised for that very case
+    // until D-1372. Nothing here pins a spelling of either predicate, only
+    // which one decides first.
+    const content = hook.indexOf('_hook_same_tree "$cwd"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
+      'looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
+      'is looking at the wrong file').toBeGreaterThanOrEqual(0);
+    expect(content, 'ccd/session-hook.sh decides ancestry before content, so a graph whose tree ' +
+      "IS HEAD's reads `not an ancestor of HEAD` again — D-1368 was reversed")
+      .toBeLessThan(ancestry);
+    for (const q of QUALIFIERS) {
+      expect(para(), `the graph-card paragraph never names the \`${q}\` qualifier the hook ` +
+        'appends to a freshness word — a coordinator quoting the card into a brief meets text ' +
+        'this paragraph says the card cannot carry').toMatch(wordRe(q));
+    }
+    expect(para(), 'the graph-card paragraph enumerates the ancestry words without saying that ' +
+      'CONTENT is asked first — a squash-merged graph reads `fresh` where this paragraph ' +
+      'promises `not an ancestor of HEAD`').toMatch(/CONTENT decides that clause first/);
+  });
+
+  it('names every freshness state the hook can print, including the unmeasured one', () => {
+    for (const word of FRESHNESS) {
+      expect(para(), `the graph-card paragraph never names the \`${word}\` state the hook prints`)
+        .toMatch(wordRe(word));
+    }
+  });
+
+  it('does not promise a card for every session — the hook prints nothing for most trees', () => {
+    // The no-graph arm returns SILENTLY unless the sweep census carries a row
+    // for the tree, and prints a DIFFERENT sentence when it does. A coordinator
+    // told every session prints a card reads a missing one as a fault.
+    const m = /_hook_emit_context "graphify: ([^"$]+?) —/.exec(hook);
+    expect(m, 'ccd/session-hook.sh emits no no-graph sentence — this pin is looking at the ' +
+      'wrong file, or the refused-tree arm lost its one quotable line').not.toBeNull();
+    expect(para(), 'the paragraph never quotes the line a refused tree gets instead of a card')
+      .toContain(m![1]!);
+    expect(para(), 'the paragraph does not say a tree can get NO card at all')
+      .toMatch(/gets NOTHING/);
+    // The regression itself, spelled: the sentence that made this paragraph
+    // wrong is the one that generalised over every session.
+    expect(para(), 'the paragraph is back to claiming every session prints a card')
+      .not.toMatch(/Every session's `SessionStart` prints one line/);
+  });
+});
+
 describe('the coordinator docs state the oversize ceiling the brief writer actually has', () => {
   // T3 review ⚠2. Since dispatch composes `WORKER_KICKOFF_PREFIX + brief` and
   // caps the COMPOSED body, a brief in (cap - prefix, cap] is refused without

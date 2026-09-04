@@ -48,12 +48,135 @@ _gs_finish() {   # pass-status ; exit-code
   exit "$rc"
 }
 
-_gs_trees() {    # every git working tree under the two roots
-  local d
-  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
+# D-1367 — canonical path, or NOTHING. `realpath` and `readlink -f` are both
+# acceptable on both userlands (macos-platform.test.ts refuses neither), but an
+# EMPTY answer is the one thing this shim must never let a caller spend: two
+# unmeasurable paths would compare equal, and "equal" is what admits a
+# candidate as a tree. Every caller checks for empty and SKIPS.
+_gs_realpath() {   # <path> -> its canonical path, or nothing at all
+  local p=""
+  p="$(realpath "$1" 2>/dev/null)" || p=""
+  [ -n "$p" ] || p="$(readlink -f "$1" 2>/dev/null)" || p=""
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+}
+
+# D-1367 — A TREE IS A TOPLEVEL, NEVER A DIRECTORY INSIDE ONE.
+#
+# The old predicate was `git rev-parse --is-inside-work-tree`, which is true of
+# every subdirectory of every work tree — and the glob pair asked it of one
+# level under $PROJECTS_ROOT and TWO under $WORKTREES_ROOT. A worktree that
+# lives at depth 1 (`~/worktrees/<name>`, its own toplevel) was therefore never
+# discovered, while every one of its immediate subdirectories was, `.git`
+# included. The sweep then built a graph into each of them. MEASURED on the
+# live fleet 2026-09-03: 8 stray `graphify-out/` directories under one
+# worktree — `node_modules/graphify-out` and `graphify-out/graphify-out` among
+# them — plus two `failed` census rows every pass, for ever.
+#
+# The question a candidate has to answer is not "are you inside a tree" but
+# "ARE YOU A TREE": the realpath of its own `--show-toplevel` is the realpath
+# of itself. `$WORKTREES_ROOT`/*/ joins the glob so the depth-1 shape is asked
+# at all.
+#
+# D-1370 — WHAT THE DEDUPE IS ACTUALLY FOR, AND WHICH NAME SURVIVES IT. The
+# three globs are DISJOINT as paths: `~/worktrees/a/b` is never `~/worktrees/c`
+# and never `~/projects/c`, so no candidate is ever globbed twice and the
+# "the two worktree globs now overlap" rationale this comment used to carry was
+# false. The one thing that does collapse two candidates onto one tree is a
+# SYMLINK — an alias under one root pointing at a real tree under another —
+# and there the survivor must be a DECISION, because glob order alone hands it
+# to whichever root is listed first ($PROJECTS_ROOT), i.e. to the alias.
+#
+# That matters because of the contract in the next paragraph: the row keeps the
+# path AS GLOBBED, not the canonical one — `$REG/<id>.workdir` and the hook's
+# `cwd` are compared against it VERBATIM (`_gs_busy`'s string compare;
+# `ccd/session-hook.sh`'s `.path == $p` census lookup), and canonicalising the
+# census would silently unmatch every reader. A census carrying the ALIAS
+# unmatches them just as silently for a session recorded under the real name:
+# no idle-gate match (the sweep builds while that session is `working`, the one
+# thing the gate exists to prevent) and no "the sweep refused this tree" card.
+# MEASURED: with a real tree at `~/worktrees/foo` and `~/projects/foo` a
+# symlink to it, the pass carried exactly one row and it was the alias.
+#
+# D-1371 — AND THE PREDICATE THAT ASKS IT. The first spelling of that decision
+# was `[ "$d" = "$real" ]` — "is this candidate spelled as its own realpath" —
+# which is INERT on the shape the fleet actually has. `$PROJECTS_ROOT` on the
+# live box is itself a symlink (`~/projects -> /data/projects`, `/data ->
+# /mnt/…`), so NO candidate under it can ever equal its own realpath, nothing
+# is ever preferred, the survivor falls back to glob order, and the alias wins:
+# exactly the failure this entry was written to stop. It measured green only
+# because the fixture roots are real directories under /tmp.
+#
+# The question is about the candidate's OWN last component, not its ancestry:
+# prefer the name that is not ITSELF a symlink, and displace only an entry that
+# IS one. Two aliases (or two names under symlinked ancestors) leave the
+# first-seen standing — there the names are equally arbitrary and only the
+# count matters.
+_gs_trees() {    # every git working TOPLEVEL under the two roots, once each
+  local d top real i dup
+  local -a seen=() named=()
+  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
     [ -d "$d" ] || continue
-    git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 && printf '%s\n' "${d%/}"
+    d="${d%/}"
+    top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || continue
+    [ -n "$top" ] || continue
+    top="$(_gs_realpath "$top")" || continue
+    real="$(_gs_realpath "$d")" || continue
+    [ "$top" = "$real" ] || continue
+    dup=-1
+    if [ "${#seen[@]}" -gt 0 ]; then
+      for i in "${!seen[@]}"; do
+        if [ "${seen[$i]}" = "$real" ]; then dup="$i"; break; fi
+      done
+    fi
+    if [ "$dup" -ge 0 ]; then
+      # already censused under another name: the real name displaces an alias,
+      # nothing displaces the real name (D-1371).
+      if [ ! -L "$d" ] && [ -L "${named[$dup]}" ]; then named["$dup"]="$d"; fi
+      continue
+    fi
+    seen+=("$real"); named+=("$d")
   done
+  [ "${#named[@]}" -gt 0 ] && printf '%s\n' "${named[@]}"
+  return 0
+}
+
+# D-1368 — FRESHNESS IS CONTENT, NOT COMMIT IDENTITY. This file's ONE spelling
+# of that predicate; `_gs_stale` and `_gs_busy` both ask it here.
+#
+# `built_at_commit != HEAD` was spent as "the graph is of another commit", and
+# after a squash merge — or any rewrite that keeps the tree — that is false:
+# HEAD's tree is byte-identical to the built commit's, so the graph describes
+# THIS tree exactly. graphify's own `update` then writes nothing, the stamp
+# keeps the old sha, and every pass records `stale-rebuilt` for that tree for
+# ever. MEASURED on the live fleet 2026-09-03: graph.json mtime 01:18, census
+# "stale-rebuilt … head" at 16:09, built 0281e084 vs HEAD 6a26a9a3, and
+# `git rev-parse 0281e084^{tree} 6a26a9a3^{tree}` identical.
+#
+# EITHER SIDE ANSWERING EMPTY IS NOT A MATCH. The built commit may have been
+# garbage-collected, in which case the content cannot be compared at all and
+# the tree falls through to today's behaviour (stale, reason `head`) rather
+# than to a freshness nobody measured — the same rule the card's own freshness
+# clause states ("staleness is measured or it is not claimed").
+_gs_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
+  local t="$1" bt ht
+  # D-1369 — THE BUILT SHA IS REPO-CONTROLLED TEXT, AND THIS IS THE FIRST PLACE
+  # THE SWEEP SPENDS IT AS A GIT REVISION. `built_at_commit` comes out of a
+  # graph.json any tree can write; the old `[ "$built" = "$head" ]` compared it
+  # as a STRING, where a rev NAME is simply unequal and the tree rebuilds. A
+  # peel resolves it: `HEAD^{tree}` on both sides of an equality is trivially
+  # equal, so a graph stamped `"built_at_commit":"HEAD"` (or `@`, or a branch
+  # name) would read `fresh` for ever and never be rebuilt again — the mirror
+  # image of the wedge D-1368 was written to fix, and invisible in the census
+  # because `fresh` is what it reports. The card already holds this contract
+  # one line earlier than its own peel (`ccd/session-hook.sh`:
+  # `[[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""`); the sweep holds it here.
+  # MEASURED against the shipped script with a fixture HOME: `built_at_commit`
+  # `HEAD` plus a real content commit read `fresh`, engine calls 1.
+  [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || return 1
+  bt="$(git -C "$t" rev-parse --verify -q "$2^{tree}" 2>/dev/null)" || bt=""
+  ht="$(git -C "$t" rev-parse --verify -q 'HEAD^{tree}' 2>/dev/null)" || ht=""
+  [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
 }
 
 _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
@@ -63,7 +186,9 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
   built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
   stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
   [ "$stamp" = "$PIN" ] || { REASON=engine; return 0; }
-  [ "$built" = "$head" ] || { REASON=head; return 0; }
+  if [ "$built" != "$head" ]; then
+    _gs_same_tree "$tree" "$built" || { REASON=head; return 0; }
+  fi
   return 1
 }
 
@@ -97,7 +222,15 @@ _gs_busy() {
   local built commits stamp_age
   built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
   if [ -n "$built" ]; then
-    commits="$(git -C "$tree" rev-list --count "$built..HEAD" 2>/dev/null || echo 0)"
+    # D-1368: the same predicate, once more and spelled once — `rev-list
+    # --count "$built..HEAD"` for a NON-ANCESTOR counts everything since the
+    # merge-base, so a squashed history could fire the build-anyway escape
+    # against a graph that is already of HEAD's content.
+    if _gs_same_tree "$tree" "$built"; then
+      commits=0
+    else
+      commits="$(git -C "$tree" rev-list --count "$built..HEAD" 2>/dev/null || echo 0)"
+    fi
     stamp_age=$(( now - $(stat -c %Y "$tree/graphify-out/.graphify_engine" 2>/dev/null || echo "$now") ))
     if [ "$commits" -ge "$CCRC_GRAPH_STALE_ESCAPE_COMMITS" ] \
        || [ "$stamp_age" -ge "$CCRC_GRAPH_STALE_ESCAPE_SECS" ]; then

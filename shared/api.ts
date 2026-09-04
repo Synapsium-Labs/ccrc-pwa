@@ -96,6 +96,15 @@ export interface FleetSession {
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
   subagents: { name: string; startedAt: number }[] | null;
+  /** How many graph READS this session has made — `hookstate.ts`'s
+   *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
+   *  bump, and an older peer that omits it revives as `null` below.
+   *
+   *  `null` mirrors `hookState`/`subagents`: no fresh hook data, or a hook too
+   *  old to count. `0` is a MEASUREMENT — the session reported and has read
+   *  nothing — and the console shows the two differently (`graph 0` versus no
+   *  chip at all), which is the whole reason this is not a `number`. */
+  graphQueries: number | null;
   bucket: SessionBucket;
   /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
    *  record — never a watcher's memory of when it noticed, which would reset on
@@ -256,6 +265,35 @@ export function substrateFault(
     at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : 0,
     text: typeof raw.text === 'string' && raw.text !== '' ? raw.text : 'substrate fault (reason unreadable)',
   };
+}
+
+/**
+ * Tolerant read of `FleetSession.graphQueries` for a value that has NOT been
+ * through `reviveFleetSession` — the live `fleet` WS frame, cast on arrival
+ * by `pwa/src/stores/fleet.ts`'s `asFleetMsg` (`unmeasuredFields` above
+ * records the whole argument). The ONE place every PWA surface reads this
+ * field, so the fleet card and the run board cannot drift onto two different
+ * fallbacks — CLAUDE.md's wire rule, "a SINGLE reader per field".
+ *
+ * ABSENCE READS AS NULL, i.e. as "nothing measured" — the opposite degrade
+ * from `unmeasuredFields`, and deliberately so. This field is ADDITIVE with
+ * `FLEET_PROTO` held at 1 (see its docstring above), which is a promise that
+ * a server predating it keeps talking to a newer client; such a server omits
+ * the key, and a row from it is IGNORANT of the count, never a witness that
+ * the session read nothing. Read raw, `undefined !== null` is true and the
+ * chip renders `graph ` with no number under a `title` reading `undefined
+ * graphify read(s) this session` — a numberless chip on the one row the
+ * chip's whole `0`-versus-`null` split exists to keep apart (D-1251,
+ * MEASURED on both surfaces before this reader existed).
+ *
+ * A present-but-unusable value (a string, `NaN`, `Infinity` — shapes the wire
+ * type forbids and only a broken or hostile peer sends) degrades to `null`
+ * too: unmeasured is the honest answer for a count nobody can read, and it is
+ * the same rule `optNum` applies on the revival path.
+ */
+export function graphReadCount(s: { graphQueries?: number | null }): number | null {
+  const v = s.graphQueries ?? null;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -2034,6 +2072,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
       subagents: optSubagents(o, 'subagents'),
+      // Absent → null, exactly as `optSubagents` degrades: a snapshot written
+      // before this field existed is ignorant of the count, not a witness to
+      // its being zero. Present-but-not-a-finite-number throws inside
+      // `optNum`, which this function's catch turns into "reject the whole
+      // session" — the same rule every other numeric field here follows.
+      graphQueries: optNum(o, 'graphQueries'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
       statusUnmeasured: optBool(o, 'statusUnmeasured', false),
       // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the

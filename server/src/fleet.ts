@@ -429,6 +429,10 @@ export async function assembleFleet(
       hookState: hs?.state ?? null,
       askSummary: hookAskSummary(hs, liveWaitingFor),
       subagents: hs?.subagents ?? null,
+      // `?? null` and not `?? 0`: no hook data at all and a hook reporting
+      // zero reads are two conditions, and `hookstate.ts` already keeps them
+      // apart — collapsing them one layer out would undo that on the wire.
+      graphQueries: hs?.graphQueries ?? null,
       // Carried straight off the record — this IS the evidence `tick()`'s own
       // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
       // field of these very rows (one derivation of one fact — blocking
