@@ -84,11 +84,21 @@ function plantGuardPython(): void {
 # the tree root (detect.py:883-895, \`anchored = raw.startswith("/")\`); a
 # trailing '/' is a directory, excluded with everything under it by the
 # ancestor walk (detect.py:924-931), i.e. by prefix; anything else names one
-# file, matched by equality. graphify-out/memory/ bypasses the filter entirely,
-# exactly as detect.py:1160-1166 does — query results are re-added whatever the
-# ignore rules say, which is why the guard exempts them from the breach test.
+# file. graphify-out/memory/ bypasses the filter entirely, exactly as
+# detect.py:1160-1166 does — query results are re-added whatever the ignore
+# rules say, which is why the guard exempts them from the breach test.
 # A stub that ignored .graphifyignore could not tell a filter that works from
 # one that does nothing.
+#
+# D-1453: a file entry is matched by an UNQUOTED \`case\` pattern, not by
+# equality. Equality was the one place this stub could not mirror the engine —
+# and it is exactly the place where the mirror is load-bearing, because bash's
+# \`case\` lets \`*\` cross a \`/\` just as \`fnmatch.fnmatch\` does (and just as
+# \`git ls-files -X\`'s wildmatch does NOT). With equality, an entry that eats a
+# TRACKED file out of the corpus is invisible to the suite. The corpus is also
+# teed to \$HOME/seen-corpus so a row can assert what SURVIVED, not only what
+# the filter carries — a shrunk corpus is otherwise silent (no withheld line,
+# no breach, exit 0).
 [ -f "$HOME/fixture-corpus" ] || exit 0
 pats=()
 if [ -f .graphifyignore ]; then
@@ -97,18 +107,18 @@ if [ -f .graphifyignore ]; then
     pats+=("\${line#/}")
   done < .graphifyignore
 fi
-while IFS= read -r p || [ -n "$p" ]; do
+{ while IFS= read -r p || [ -n "$p" ]; do
   [ -n "$p" ] || continue
   case "$p" in graphify-out/memory/*) printf '%s\\n' "$p"; continue ;; esac
   keep=1
   for pat in \${pats[@]+"\${pats[@]}"}; do
     case "$pat" in
-      */) [ "\${p#"$pat"}" != "$p" ] && keep=0 ;;
-      *)  [ "$p" = "$pat" ] && keep=0 ;;
+      */) case "$p" in \${pat%/}/*) keep=0 ;; esac ;;
+      *)  case "$p" in $pat) keep=0 ;; esac ;;
     esac
   done
   [ "$keep" = 1 ] && printf '%s\\n' "$p"
-done < "$HOME/fixture-corpus"
+done < "$HOME/fixture-corpus"; } | tee "$HOME/seen-corpus"
 exit 0
 `, { mode: 0o755 });
 }
@@ -675,6 +685,10 @@ describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () =>
   // sides answer with one authority instead of two.
   const captureFilter = 'cp .graphifyignore "$HOME/seen-ignore" 2>/dev/null || true';
   const seen = () => fs.readFileSync(j('seen-ignore'), 'utf8');
+  // D-1453 — what the FILTER carries and what the CORPUS keeps are two
+  // different questions, and only the second can see an entry that eats a
+  // TRACKED file. plantGuardPython() tees the filtered corpus here.
+  const corpusSeen = () => fs.readFileSync(j('seen-corpus'), 'utf8');
 
   it('a NESTED .gitignore below the tree root is honoured — the tree BUILDS, and the entry is anchored', () => {
     const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
@@ -744,29 +758,73 @@ describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () =>
       .toMatch(/^\/build\/$/m);
   });
 
-  // D-1452 — the RULE-3 probe over derived entries, with its own red row. The
-  // first landing recorded it as green-under-mutation and justified that with
-  // "no reachable fixture makes the probe fire": false, and this is the
-  // fixture. git spells an entry as a PATH; detect and `ls-files -X` spend it
-  // as a GLOB. A filename carrying a glob metacharacter is where those two
-  // readings part company — the entry `a*.log` names one untracked file to
-  // git and matches the TRACKED `ab.log` as a pattern.
-  it('a derived entry whose FILENAME carries a glob metacharacter is withheld — it would hide a tracked file', () => {
+  // D-1453 — THE SILENT CLASS THE PROBE CANNOT SEE, which D-1452 mistook for
+  // the probe's own case. The seam is THREE-way: git spells an entry as a
+  // PATH, `git ls-files -X` spends it as WILDMATCH (`*` does not cross `/`),
+  // detect spends it as `fnmatch.fnmatch` (detect.py:866, anchored arm, where
+  // `*` DOES cross `/`). Put the tracked file one directory DEEPER than the
+  // derived entry and the two glob dialects disagree: the probe answers empty
+  // and KEEPS the entry, and detect then eats the tracked file — no withheld
+  // line, no breach, exit 0. MEASURED against the installed 0.9.9 on this
+  // exact fixture: corpus with no filter ['a*.py', 'ax/b.py', 'keep.py']; with
+  // the raw entry `/a*.py` ['keep.py'] — the TRACKED ax/b.py gone; with the
+  // neutralized `/a[*].py` ['ax/b.py', 'keep.py']. Neutralization is the guard
+  // this row pins, and only the CORPUS assertion can see it.
+  it('a derived entry whose FILENAME carries a glob metacharacter is made LITERAL — a tracked file one directory deeper survives', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    // `\*` in .gitignore is a LITERAL star: only the file named `a*.py` is ignored.
+    fs.writeFileSync(path.join(repo, '.gitignore'), '/a\\*.py\n');
+    fs.mkdirSync(path.join(repo, 'ax'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'ax', 'b.py'), 'b = 1\n');
+    fs.writeFileSync(path.join(repo, 'keep.py'), 'k = 1\n');
+    // makeRepo's own `a.py` has to GO: `a*.py` matches it in wildmatch too, so
+    // leaving it would fire the probe and make this row red for the loud
+    // reason instead of the silent one it exists to measure.
+    git(repo, 'rm', '-q', 'a.py');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracks ax/b.py and keep.py; ignores the literal a*.py');
+    fs.writeFileSync(path.join(repo, 'a*.py'), 'untracked\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'), 'ax/b.py\nkeep.py\na*.py\n');
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    // the CORPUS first — it is the assertion that names the harm. The filter
+    // shape below only says HOW the corpus was kept whole.
+    expect(corpusSeen().split('\n'), 'the TRACKED file one directory deeper is still in the corpus')
+      .toContain('ax/b.py');
+    expect(corpusSeen().split('\n'), 'and the ignored untracked file the entry names is still excluded')
+      .not.toContain('a*.py');
+    expect(seen(), 'the metacharacter is neutralized into a one-character class — literal in BOTH dialects')
+      .toMatch(/^\/a\[\*\]\.py$/m);
+    expect(seen(), 'the raw spelling — the one whose `*` crosses a `/` under fnmatch — never reaches the filter')
+      .not.toMatch(/^\/a\*\.py$/m);
+    expect(r.stderr, 'nothing is hidden, so nothing is withheld')
+      .not.toContain('derived ignore entries withheld');
+  });
+
+  // D-1453 — the RULE-3 probe over derived entries keeps its own red row, and
+  // after neutralization it is the OTHER half of the same three-way seam: a
+  // backslash is LITERAL to `fnmatch` but an ESCAPE to wildmatch. The entry
+  // `a\b.log` — one untracked file to git, one literal name to detect — reads
+  // as `ab.log` to `git ls-files -X`, which is TRACKED. So the probe fires on
+  // a file detect would never have hidden: a VISIBLE false positive, which is
+  // the direction a belt is allowed to fail in. MEASURED both ways on the
+  // installed 0.9.9: `_is_ignored(ab.log, root, [(root, '/a\b.log')])` is
+  // False, while `git ls-files -c -i -X` over that same entry prints `ab.log`.
+  it('the RULE-3 probe still withholds — a backslash is an escape to wildmatch and a literal to fnmatch', () => {
     const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
     fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
     fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');  // so a filter is written at all
-    // `\*` in .gitignore is a LITERAL star: only the file named `a*.log` is ignored.
-    fs.writeFileSync(path.join(repo, '.gitignore'), '/a\\*.log\n');
+    // `\\` in .gitignore is ONE literal backslash: the ignored file is `a\b.log`.
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'a\\\\b.log\n');
     fs.writeFileSync(path.join(repo, 'ab.log'), 'tracked\n');
-    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracks ab.log; ignores the literal a*.log');
-    fs.writeFileSync(path.join(repo, 'a*.log'), 'untracked\n');   // ignored, untracked
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracks ab.log; ignores the literal a-backslash-b.log');
+    fs.writeFileSync(path.join(repo, 'a\\b.log'), 'untracked\n');   // ignored, untracked
     fs.writeFileSync(j('fixture-corpus'), 'a.py\nab.log\n');
     const r = runSweep();
     expect(r.stderr, 'the probe fires, and says which entry it withheld and why')
-      .toMatch(/derived ignore entries withheld, repo tracks matching files: \/a\*\.log/);
+      .toMatch(/derived ignore entries withheld, repo tracks matching files: \/a\\b\.log/);
     expect(seen(), "the operator's pattern is still written").toMatch(/^fixtures\/$/m);
     expect(seen(), 'the withheld entry never reaches the generated filter')
-      .not.toMatch(/a\*\.log/);
+      .not.toMatch(/a\\b\.log/);
     expect(r.stderr, 'nothing survived the probe, so no count is logged')
       .not.toContain('git-ignored entries derived');
   });

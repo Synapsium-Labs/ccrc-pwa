@@ -398,28 +398,47 @@ _gs_guard() {
   # matches at EVERY depth, which is how an ignored root `build/` would hide a
   # tracked `src/build/`.
   #
-  # These entries ALMOST never hide tracked content — `--directory` collapses a
-  # directory only when it holds no tracked file, and a file entry names an
-  # untracked path — but "almost" is why every entry still goes through the same
-  # RULE-3 probe as a default pattern, withheld and reported if it would. D-1452
-  # names the reachable class the first landing said did not exist: git spells an
-  # entry as a PATH, detect and `ls-files -X` spend it as a GLOB, so a filename
-  # carrying a glob metacharacter parts the two readings. Measured — `.gitignore`
-  # `/a\*.log` (a LITERAL star) with a tracked `ab.log` and an untracked
-  # `a*.log`: git derives the entry `a*.log`, which as a pattern matches the
-  # tracked `ab.log`. The probe withholds it, and a test pins that. The probe
-  # runs ONCE over the whole set in the common case (git's answer over a union is
-  # empty iff it is empty for every member), and only falls back to one call per
-  # entry when that union is non-empty, i.e. when there is a culprit to name.
+  # The seam here is THREE-WAY, not two-way (D-1453, correcting D-1452): git
+  # spells an entry as a PATH; the RULE-3 probe spends it as a WILDMATCH glob
+  # (`git ls-files -X`, where `*` does NOT cross `/`); detect spends it as an
+  # `fnmatch.fnmatch` glob (detect.py:866, anchored arm, where `*` DOES cross
+  # `/`). A filename carrying a glob metacharacter parts all three, and the two
+  # glob dialects part from each other — so the probe alone CANNOT stand in for
+  # detect. MEASURED: `.gitignore` `/a\*.py` (a LITERAL star) with a tracked
+  # `ax/b.py` and an untracked `a*.py` — git derives `a*.py`; the probe answers
+  # EMPTY (wildmatch will not let `*` cross the `/` in `ax/b.py`), so the entry
+  # is kept; and real detect (0.9.9) then returns ['keep.py'] where it returned
+  # ['a*.py', 'ax/b.py', 'keep.py'] — the TRACKED `ax/b.py` is gone from the
+  # corpus, SILENTLY: no withheld line, no breach, exit 0. That is exactly the
+  # wedge graph-noise.default.list's D-1160/D-1161 header names (shrink guard
+  # sees an unaccounted net loss and every pass ends `refused-shrink`).
+  #
+  # So make the entry LITERAL IN BOTH DIALECTS before anyone spends it:
+  # neutralize each metacharacter into a single-character class — `[` -> `[[]`
+  # first (so the brackets the next two insert are not re-escaped), then
+  # `*` -> `[*]`, `?` -> `[?]`. Both wildmatch and fnmatch read `[*]` as one
+  # literal star. Measured on the same fixture: with `/a[*].py` the probe still
+  # reports no tracked file AND detect returns ['ax/b.py', 'keep.py'] — the
+  # tracked file survives, the untracked `a*.py` is still excluded.
+  #
+  # The RULE-3 probe stays, and is now a genuine belt rather than the load-
+  # bearing member the previous comment claimed: after neutralization an entry
+  # matches exactly the path git named (plus, for a directory, its subtree,
+  # which `--directory` only collapses when it holds no tracked file). Its one
+  # remaining reachable class is the OTHER dialect gap, and it errs SAFE there:
+  # a backslash is literal to fnmatch but an ESCAPE to wildmatch, so an ignored
+  # untracked `a\b.log` beside a tracked `ab.log` makes the probe fire on a
+  # file detect would never have hidden — withheld and reported, which is a
+  # visible false positive rather than a silent loss. A test pins that row. The
+  # probe runs ONCE over the whole set in the common case (git's answer over a
+  # union is empty iff it is empty for every member), and only falls back to one
+  # call per entry when that union is non-empty, i.e. when there is a culprit.
   #
   # Not capped: a capped list is a corpus this guard cannot explain. The count
   # is logged instead. `-z | tr` for the same reason as the tracked side above
   # (D-1450) — raw for every quoting class in one call; the one shape it cannot
   # represent, a newline inside a filename, breaks the line-based corpus side
-  # identically, so the two stay in step. A filename that CONTAINS a glob
-  # metacharacter (`*`, `?`, `[`) is pathological and is left as git spells it —
-  # the RULE-3 probe above is what keeps that spelling from hiding a tracked
-  # file, which is the one class where it is not merely a belt.
+  # identically, so the two stay in step.
   # The `foreign` skip is the one thing standing between this derivation and a
   # repo's own COMMITTED `.graphifyignore`: without it the generated filter
   # overwrites that tracked file, and `_gs_rm_generated` — reading its own
@@ -431,12 +450,11 @@ _gs_guard() {
   local dheld="" e
   if [ "$foreign" -eq 0 ]; then
     probe="$(mktemp)" || { GUARD_REASON="cannot create a temp file to test derived ignore entries"; return 1; }
-    local -a raw=() dirs=()
-    local d skip
+    local -a raw=()
+    local cur="" esc
     while IFS= read -r e; do
       [ -n "$e" ] || continue
       raw+=("$e")
-      case "$e" in */) dirs+=("$e") ;; esac
     done < <(git -C "$tree" ls-files -o -i --exclude-standard --directory -z 2>/dev/null | tr '\0' '\n')
     # D-1452 — DROP WHAT A COLLAPSED DIRECTORY ALREADY CARRIES. `--directory`
     # collapses a directory only when it holds no tracked file, but git still
@@ -450,15 +468,24 @@ _gs_guard() {
     # recomputes `relative_to(anchor)` inside the per-pattern loop,
     # detect.py:891-895), twice per tree per pass. It also inflates the count
     # logged below, which would then over-report what the filter carries.
-    # A directory entry keeps its trailing `/`, so a prefix test is exact —
-    # `"$d"*` is quoted, so a metacharacter in a directory name stays literal.
+    #
+    # ONE FORWARD PASS, not entries x directories (D-1453). git's listing is
+    # sorted, so a collapsed directory is immediately followed by every entry
+    # under it — `f/` sorts before `f/a.log`, and any `g/...` sorts after all of
+    # `f/...` — so a single `cur` prefix suffices, and nested collapsed
+    # directories fall out of the same test. The quadratic shape was never
+    # measured because the cost fixture had a tracked file in every directory,
+    # i.e. `dirs` empty and the inner loop never entered; on the shape pruning
+    # exists for (5500 entries under 500 collapsed `__pycache__/`) it cost
+    # 14555 ms of bash per tree per pass against this pass's 54 ms, same result.
+    # `"$cur"*` is quoted, so a metacharacter in a directory name stays literal.
     for e in ${raw[@]+"${raw[@]}"}; do
-      skip=0
-      for d in ${dirs[@]+"${dirs[@]}"}; do
-        [ "$e" = "$d" ] && continue
-        case "$e" in "$d"*) skip=1; break ;; esac
-      done
-      [ "$skip" -eq 0 ] && derived+=("/$e")
+      if [ -n "$cur" ]; then case "$e" in "$cur"*) continue ;; esac; fi
+      case "$e" in */) cur="$e" ;; *) cur="" ;; esac
+      # literal in BOTH glob dialects before the probe or detect sees it — see
+      # the three-way-seam note above. `[` first, then `*`, then `?`.
+      esc="${e//\[/[[]}"; esc="${esc//\*/[*]}"; esc="${esc//\?/[?]}"
+      derived+=("/$esc")
     done
     if [ "${#derived[@]}" -gt 0 ]; then
       printf '%s\n' "${derived[@]}" > "$probe"

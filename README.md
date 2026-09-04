@@ -1655,9 +1655,13 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   `.graphifyignore` derives nothing — that file is not the sweep's to write. Two D-1452 refinements:
   git prints a collapsed directory AND every ignored file under it, so the entries a directory entry
   already covers are **pruned** before the filter is written (each one costs detect a pattern match
-  per scanned path, twice per pass), and the probe is not a formality — an entry whose FILENAME
-  carries a glob metacharacter reads as a path to git and as a pattern to detect, which is how a
-  derived entry can hide a tracked file.
+  per scanned path, twice per pass — one forward pass over git's sorted listing, D-1453, after the
+  first cut shipped as a nested loop that cost 15 s of bash on a 5500-entry tree), and a filename
+  carrying a glob metacharacter reads as a path to git and as a pattern to everyone else. That last
+  seam is **three-way** (D-1453): the probe is `git ls-files -X`, i.e. wildmatch, where `*` does not
+  cross a `/`; detect is `fnmatch`, where it does. So the probe alone cannot stand in for detect — a
+  derived entry is made literal in BOTH dialects first (`*` → `[*]`, `?` → `[?]`, `[` → `[[]`), and
+  the probe is the belt behind it.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
 per-home skill drift, per-tree excludes, the census's last pass, and free space on the

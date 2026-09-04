@@ -3847,7 +3847,9 @@ stale ledger cells re-measured. Committing the two source files again would be a
   derivation against **127/151/128 ms** without it — ~20 ms on a tree whose real build is minutes.
   The per-entry fallback, which only runs when the union probe finds a culprit, costs **1063 ms** for
   those 300 entries; that is the price of naming which entry is at fault, paid only when there is one.
-  **CORRECTED by D-1452:** every number in this paragraph is the SHELL side only. In the fixture
+  **CORRECTED by D-1452:** every number in this paragraph is the SHELL side only — and **by D-1453**:
+  they are also the shell side of a fixture where the pruning loop is DEGENERATE (`dirs: 0`), so they
+  say nothing about the pruning cost. In the fixture
   detect IS the stub, so the pass timing cannot see the cost the entries impose where it is actually
   paid — inside detect, which evaluates every entry against every scanned path, twice per tree per
   pass (the guard's own `detect()` and `graphify update`). That cost is O(entries x paths); measured
@@ -3892,10 +3894,17 @@ stale ledger cells re-measured. Committing the two source files again would be a
   empty, and the tree is not `refused-by-guard`.
 
   **(2) The RULE-3 probe over derived entries has a reachable fixture; the ledger said it does not.**
+  **CORRECTED by D-1453: the seam below is THREE-way, not two-way, and this fixture measures only the
+  half where the two glob dialects happen to AGREE.** `git ls-files -X` is wildmatch (`*` does not
+  cross `/`); detect is `fnmatch.fnmatch` (`*` does). With the tracked file at the SAME depth as the
+  entry they agree and the probe fires, as below; move it one directory deeper and the probe goes
+  silent while detect still eats the tracked file. The real fix is to neutralize the metacharacter so
+  the entry is literal in BOTH dialects — see D-1453 (1).**
   D-1451's mutation table recorded the probe as green-under-mutation and justified that with "with
   `--directory` and anchoring in place no reachable fixture makes the probe fire". That sentence is a
-  measured falsehood, and the class it misses is the seam between the two readings of an entry: **git
-  spells an entry as a PATH; detect and `ls-files -X` spend it as a GLOB.** MEASURED (git 2.43.0):
+  measured falsehood, and the class it misses is the seam between the readings of an entry: **git
+  spells an entry as a PATH; detect and `ls-files -X` each spend it as a GLOB — but not the SAME glob
+  dialect (D-1453).** MEASURED (git 2.43.0):
   `.gitignore` carrying `/a\*.log` — an ESCAPED star, so only the file literally named `a*.log` is
   ignored — with a tracked, committed `ab.log` and an untracked `a*.log`. Then `ls-files -o -i
   --exclude-standard --directory` prints `a*.log`, and that entry as a probe pattern gives `ls-files
@@ -3904,7 +3913,10 @@ stale ledger cells re-measured. Committing the two source files again would be a
   /a*.log` stderr line, that the withheld entry never reaches the generated filter, and that no count
   is logged because nothing survived. The assertion sits on the stderr line and the generated file,
   not on the outcome, because the corpus stub matches file entries by EQUALITY while real detect
-  globs — the one place in this file where the stub cannot mirror the engine.
+  globs — the one place in this file where the stub cannot mirror the engine. **CORRECTED by D-1453:
+  that is exactly the place where the mirror is LOAD-BEARING — a derived entry that eats a tracked
+  file out of the corpus shows up nowhere else — so the stub now globs, tees the corpus, and this
+  row was replaced by two.**
 
   **(3) git emits REDUNDANT entries, and every one of them is paid for per scanned path.** MEASURED
   (git 2.43.0): `.gitignore` = `*.log` and a directory `f/` holding only `a.log` and `b.log` — `git
@@ -3922,7 +3934,11 @@ stale ledger cells re-measured. Committing the two source files again would be a
   what the filter carries. **Fix:** after the read loop, drop any entry already covered by a derived
   DIRECTORY entry — pure shell, no new process, `case "$e" in "$d"*)` with `$d` QUOTED so a
   metacharacter in a directory name stays literal. The count log then states the entries the filter
-  actually carries.
+  actually carries. **CORRECTED by D-1453 (2): that fix was written as a nested loop, O(entries ×
+  directories), and the 300-entry cost fixture below never entered it — a tracked file in every
+  directory means git collapses nothing, so `dirs` is empty. On the shape pruning exists for (5500
+  entries under 500 collapsed `__pycache__/`) the nested loop cost 14555 ms of bash per tree per pass.
+  It is now a single forward pass: 54 ms, identical result.**
 
   **Not done, and why.** The per-(pattern, path) cost is a defect in the installed engine, not in this
   tree — pruning cuts the multiplier, it does not fix the loop. Hoisting `relative_to(anchor)` out of
@@ -3952,6 +3968,108 @@ stale ledger cells re-measured. Committing the two source files again would be a
   this commit's files restored from `git show HEAD:<path>`: identical failure, identical summary line
   — then this commit's versions were put back and `git status --porcelain` re-checked. Recorded so
   the next reader does not attribute it to the derivation.
+
+
+- **D-1453** (2026-09-04, T2 review follow-up 2 — the seam is THREE-way, and the loop was quadratic)
+  — **D-1452 fixed the loud half of the glob seam and shipped a comment asserting it had fixed the
+  quiet half too. It had not: a derived entry can pass the RULE-3 probe and still drop a TRACKED file
+  from the corpus, silently.** Two findings, both measured on scratch fixtures before being believed.
+
+  **(1) git's path, wildmatch's glob and fnmatch's glob are THREE readings, not two.** D-1452 (2)
+  corrected D-1451's "can never hide tracked content by construction" to "git spells an entry as a
+  PATH, detect and `ls-files -X` spend it as a GLOB" — but that sentence still conflates the two
+  CONSUMERS, and the source comment D-1452 shipped went further and said outright that "the RULE-3
+  probe above is what keeps that spelling from hiding a tracked file". **Measured false.** The probe
+  is `git ls-files -X`, i.e. **wildmatch**, where `*` does NOT cross a `/`; detect is
+  **`fnmatch.fnmatch`** (`detect.py:866`, anchored arm), where `*` DOES. D-1452's own fixture put the
+  tracked file at the SAME depth as the entry (`ab.log` beside `a*.log`), which is exactly where the
+  two dialects agree — so the probe fired and the row went green. Move the tracked file **one
+  directory deeper** and the probe goes silent while detect still eats it.
+
+  MEASURED, scratch fixture, no live path touched — repo with `.gitignore` = `/a\*.py` (an ESCAPED
+  star, so only the literal name is ignored), tracked `ax/b.py` and `keep.py`, untracked ignored
+  `a*.py`:
+
+  | step | measured |
+  | --- | --- |
+  | `git ls-files -o -i --exclude-standard --directory` | `a*.py` |
+  | RULE-3 probe, `git ls-files -c -i -X <(echo /a*.py)` | **EMPTY** — the guard KEEPS the entry |
+  | real detect (installed 0.9.9), no generated filter | `['a*.py', 'ax/b.py', 'keep.py']` |
+  | real detect WITH the kept entry `/a*.py` | `['keep.py']` — the **TRACKED `ax/b.py` is gone** |
+  | `_is_ignored(root/'ax/b.py', root, [(root, '/a*.py')])` | `True` |
+
+  And unlike the probe's own case this is **SILENT**: no withheld line, no breach, the guard returns
+  0. The harm is the wedge `ccd/graph-noise.default.list`'s D-1160/D-1161 header already names — the
+  sweep drops tracked nodes from the corpus, graphify's shrink guard sees an unaccounted net loss and
+  refuses the write, and the tree wedges at `refused-shrink` on every pass, for ever.
+
+  **Fix:** make a derived entry literal in BOTH dialects before anyone spends it — neutralize each
+  glob metacharacter into a one-character class, `[` → `[[]` FIRST (so the brackets the next two
+  insert are not re-escaped), then `*` → `[*]`, then `?` → `[?]`. Pure parameter expansion, no new
+  process. MEASURED on the same fixture: with `/a[*].py` the probe still reports no tracked file AND
+  real detect returns `['ax/b.py', 'keep.py']` — the tracked file survives and the untracked `a*.py`
+  is still excluded. (`_is_ignored(ax/b.py, root, [(root,'/a[*].py')])` → `False`;
+  `_is_ignored(a*.py, …)` → `True`.)
+
+  **The probe stays, and is now honestly a belt.** After neutralization an entry matches exactly the
+  path git named, plus — for a directory — its subtree, which `--directory` only collapses when it
+  holds no tracked file. Its one remaining reachable class is the OTHER dialect gap, and it errs
+  SAFE there: a backslash is LITERAL to `fnmatch` but an ESCAPE to wildmatch. MEASURED: `.gitignore`
+  `a\\b.log` (one literal backslash) with a tracked `ab.log` and an ignored untracked `a\b.log` — git
+  derives `a\b.log`; `git ls-files -c -i -X` on that entry prints **`ab.log`** (TRACKED, so the probe
+  fires and withholds), while `_is_ignored(ab.log, root, [(root, '/a\b.log')])` is **False** — detect
+  would never have hidden it. A visible false positive, which is the direction a belt may fail in,
+  and it is that row that now pins the probe.
+
+  **The stub could not SEE the class, and that was the load-bearing gap.** D-1452 recorded the corpus
+  stub's equality match on file entries as "the one place in this file where the stub cannot mirror
+  the engine" and moved the assertions off the corpus onto stderr. That is precisely backwards: it is
+  the one place where the mirror is load-bearing, because an entry that eats a tracked file shows up
+  NOWHERE ELSE. `plantGuardPython` now matches a file entry with an UNQUOTED `case "$p" in $pat)` —
+  bash's `case` lets `*` cross a `/` exactly as `fnmatch` does — and tees the filtered corpus to
+  `$HOME/seen-corpus`, so a row can assert what SURVIVED rather than only what the filter carries.
+  MEASURED that this matters: with neutralization removed AND the stub put back to equality, the
+  corpus assertion goes GREEN (blind) and only the filter-shape assertion reddens.
+
+  **(2) The pruning loop was O(entries × directories), and D-1452's cost fixture never entered it.**
+  D-1452's 300-entry fixture is "30 directories each holding a tracked `keep.py` beside ten ignored
+  `*.log` files" — a tracked file in every directory means git collapses NOTHING, so `dirs` is empty
+  and the inner loop never runs. REPRODUCED: `raw entries 300, dirs 0`, loop **5 ms**, kept 300 —
+  which is what the ~7/6 ms shell-side numbers were measuring. The shape pruning EXISTS for is the
+  opposite one. MEASURED on it, same loop verbatim — `.gitignore` = `*.pyc`, 500 `p<i>/__pycache__/`
+  each holding 10 `.pyc`, plus a tracked `p<i>/m.py` outside them: `raw entries 5500, dirs 500`,
+  loop **14555 ms**, kept 500. Fifteen seconds of bash per tree per pass, inside the serialized sweep,
+  BEFORE the build, on a 15-minute timer, against `CCRC_GRAPH_BUDGET`. It scales as entries × dirs, so
+  2000 dirs / 20000 entries is minutes.
+
+  **Fix:** ONE FORWARD PASS. git's listing is sorted, so a collapsed directory is immediately followed
+  by every entry under it (`f/` sorts before `f/a.log`; any `g/…` sorts after all of `f/…`), and
+  nested collapsed directories fall out of the same test — so a single `cur` prefix variable suffices:
+  skip while the entry is under `cur`, else emit and set `cur` to the entry when it ends in `/`.
+  MEASURED on the same 5500-entry fixture: **IDENTICAL result (kept 500) in 54 ms against 14555 ms** —
+  ~270×, and O(n). The shipped loop, neutralization included, re-timed: 5500/500 → **64 ms**,
+  300/0 → **12 ms**, 1 entry → **2 ms**. Both numbers are the SHELL side only; the corpus-side cost
+  (~50 us per (pattern, path), 300 anchored patterns → 30.296 s over 2000 paths) is D-1452 (3)'s
+  measurement and is unchanged — pruning cuts the multiplier, and that is still the reason it matters.
+
+  **Not done, and why.** Hoisting `relative_to(anchor)` out of detect's per-pattern loop remains an
+  upstream graphify defect, out of this task's scope (D-1452 already records it). A backslash in a
+  derived filename is left as git spells it: no single string is literal to both dialects there, and
+  the failure it causes is the probe's SAFE direction — withheld and reported, never a silent loss.
+
+  Baseline `graph-sweep` after the fix: `Tests  63 passed | 2 skipped (65)` (D-1452 left it at
+  `Tests  62 passed | 2 skipped (64)`: one row replaced, two added).
+
+  | mutation | measured red |
+  | --- | --- |
+  | the glob neutralization dropped (`esc="${e//\[/[[]}"; esc="${esc//\*/[*]}"; esc="${esc//\?/[?]}"` -> `esc="$e"`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`: *a derived entry whose FILENAME carries a glob metacharacter is made LITERAL — a tracked file one directory deeper survives* — `AssertionError: the TRACKED file one directory deeper is still in the corpus: expected [ 'keep.py', '' ] to include 'ax/b.py'` |
+  | the same mutation PLUS the stub's file arm put back to equality (`case "$p" in $pat)` -> `[ "$p" = "$pat" ]`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`, but the corpus assertion is GREEN and the red is *the metacharacter is neutralized into a one-character class* — i.e. with the old stub the tracked-file loss is invisible, which is why the stub change ships with the source change |
+  | the RULE-3 probe over derived entries dropped (`if false; then`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`: *the RULE-3 probe still withholds — a backslash is an escape to wildmatch and a literal to fnmatch* — the withheld line never appears |
+  | the single-pass prefix skip dropped (`if [ -n "$cur" ]; then case "$e" in "$cur"*) continue ;; esac; fi` -> `:`) | `graph-sweep` — `Tests  1 failed \| 62 passed \| 2 skipped (65)`: *redundant entries under a COLLAPSED directory are pruned* — `expected '# generated by ccd-graph-sweep for on…' not to match /^\/f\/a\.log$/` |
+
+  **Number:** highest across `origin/main` and this branch, both `docs/` and source, is **D-1452**
+  (this branch's own previous commit), so this entry is **D-1453**; `git grep D-1453 HEAD origin/main`
+  is empty.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
