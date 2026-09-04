@@ -653,6 +653,30 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
 // the sentence and would red on a re-flow that changed nothing.
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
 
+/** A named slice between two literal anchors — `single-definition.test.ts`'s
+ *  `passage()`, copied for its REASON as much as its shape (this tree keeps the
+ *  idiom per-file on purpose: it touches nothing shared, so a copy costs one
+ *  helper and an import would cost a seam).
+ *
+ *  The bare `wl.slice(wl.indexOf(OPEN), wl.indexOf(CLOSE))` pair it replaces was
+ *  the POSITIVE-assertion form of the runaway slice, which is the quieter half of
+ *  the defect (D-1440). A lost OPENING anchor gives `''`; a lost CLOSING one gives
+ *  `-1`, and `String.slice(a, -1)` means "to length - 1" — so the block silently
+ *  becomes the whole rest of the file, a `> 0` floor is satisfied by anything at
+ *  all, and a `toMatch` can then be answered by the phrase appearing ANYWHERE
+ *  below. The assertion stops testing the block it names and stays green. So both
+ *  anchors are asserted, the closing one is searched for AFTER the opening one and
+ *  must follow it, and the floor is a real one rather than `> 0`. */
+const passage = (name: string, text: string, from: string, to: string, floor: number): string => {
+  const a = text.indexOf(from);
+  expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
+  const b = text.indexOf(to, a + from.length);
+  expect(b, `${name}: the closing anchor is gone`).toBeGreaterThan(a);
+  const out = text.slice(a, b);
+  expect(out.length, `${name} is too short to be the passage`).toBeGreaterThan(floor);
+  return out;
+};
+
 describe('the coordinator delegates the standing protocol to the worker skill', () => {
   /** The worker skill's own frontmatter `name:`, harvested — never typed here.
    *  `worker-skill.test.ts` binds that name to `WORKER_KICKOFF_PREFIX`; this
@@ -715,9 +739,9 @@ describe('the coordinator delegates the standing protocol to the worker skill', 
     // bearing BECAUSE of what it prevents, and a block that kept the
     // instruction while losing the reason is a rule a coordinator may talk
     // itself out of.
-    const block = wl.slice(wl.indexOf('One sentence from the protocol goes in every brief anyway'),
-      wl.indexOf("The workspace's name is frozen"));
-    expect(block.length, 'the branch-discipline block never closes').toBeGreaterThan(0);
+    const block = passage('the branch-discipline block', wl,
+      'One sentence from the protocol goes in every brief anyway',
+      "The workspace's name is frozen", 600);
     expect(block, 'the branch-discipline block no longer says what a feature branch costs')
       .toMatch(/refuses\s+`stale-tip` forever, with no non-abandon path to close a run/);
     expect(flat(skill)).toContain(

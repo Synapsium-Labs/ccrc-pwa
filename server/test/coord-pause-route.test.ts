@@ -441,7 +441,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
         ' *  - `POST /api/coord/pause`', 'export const EXEMPT')],
     ['CLAUDE.md, the box-token bullet',
       passage('the box-token bullet', CLAUDE_MD,
-        '- **Box token gates every coordination WRITE**', '\n- **')],
+        '- **Box token gates every coordination WRITE**',
+    '\n- **Mail delivery is idle-gated')],
     // The shipped bash client, added in wave 8 (D-1168). It is a CLIENT and not
     // a route table, so it enumerates the doors for the opposite reason the
     // sites above do: to say which ones it deliberately does not carry. The

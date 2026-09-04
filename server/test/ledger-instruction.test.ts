@@ -19,7 +19,23 @@ const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8')
 
 /** box-token-census.test.ts's `passage()` helper, copied for its REASON as much as its
  *  shape: an anchor that stopped matching yields '', and '' satisfies every
- *  negative assertion below it. This tree has been bitten by that twice. */
+ *  negative assertion below it. This tree has been bitten by that twice.
+ *
+ *  A THIRD case, measured 2026-09-04 (D-1443), and the reason both terminators
+ *  below are now DISTINCTIVE literals rather than `'\n- **'` and `'\n**Do'`:
+ *  BOTH anchors can exist and the slice still be wrong. `indexOf` stops at the
+ *  FIRST closing anchor after the opener, so a GENERIC terminator — the next
+ *  bullet, the next bold lead-in — is matched by any new bullet or paragraph
+ *  written INSIDE the region. The passage silently truncates; the length check
+ *  is a LOWER bound a truncated passage still clears; and every negative
+ *  assertion then passes because the text it exists to catch was cut away.
+ *  Measured on the live files: promoting one sentence of CLAUDE.md's ledger
+ *  bullet into its own bullet collapsed that passage 2443 -> 1582 chars with
+ *  all seven assertions still green, and a BY_SCANNING regression planted in
+ *  the cut tail went unseen. Naming the terminator actually intended closes it
+ *  — a new bullet cannot be mistaken for `Wire discipline` — and if that
+ *  neighbour is renamed or moved, the existing "closing anchor is gone"
+ *  assertion reds LOUDLY instead of the region quietly shrinking. */
 const passage = (name: string, text: string, from: string, to: string): string => {
   const a = text.indexOf(from);
   expect(a, `${name}: the opening anchor is gone`).toBeGreaterThan(-1);
@@ -71,7 +87,7 @@ describe('the allocation instruction', () => {
 
   it('CLAUDE.md tells you that you are ISSUED a number, and what the floor is', () => {
     const b = passage('CLAUDE.md, the deviation-ledger bullet', read('CLAUDE.md'),
-      '- **Deviation ledger (D-N):**', '\n- **');
+      '- **Deviation ledger (D-N):**', '\n- **Wire discipline');
     // A RATCHET, stated as one: this passage does NOT match today (measured), so
     // it is here to keep the instruction from coming back, not to go red first.
     // The liveness case above is what proves it can still fire.
@@ -93,7 +109,8 @@ describe('the allocation instruction', () => {
 
   it('CONTRIBUTING.md, the public-facing copy, says the same thing and no cardinal', () => {
     const p = passage('CONTRIBUTING.md, the ledger paragraph', read('CONTRIBUTING.md'),
-      '**`D-N` markers in comments are the deviation ledger**', '\n**Do');
+      '**`D-N` markers in comments are the deviation ledger**',
+      "\n**Don't collapse two conditions");
     expect(p, 'the public file prescribes reading a tree for a number').not.toMatch(BY_SCANNING);
     expect(p).toContain('POST /api/ledger/deviations');
     expect(p, 'the take-a-number framing is what produced the collisions')
