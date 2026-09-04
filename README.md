@@ -1652,7 +1652,12 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor over
   `.husky/_/`). Uncapped, with the entry count logged in the pass output; every derived entry goes
   through the same `ls-files -c -i -X` probe as a default pattern, and a tree that owns a foreign
-  `.graphifyignore` derives nothing — that file is not the sweep's to write.
+  `.graphifyignore` derives nothing — that file is not the sweep's to write. Two D-1452 refinements:
+  git prints a collapsed directory AND every ignored file under it, so the entries a directory entry
+  already covers are **pruned** before the filter is written (each one costs detect a pattern match
+  per scanned path, twice per pass), and the probe is not a formality — an entry whose FILENAME
+  carries a glob metacharacter reads as a path to git and as a pattern to detect, which is how a
+  derived entry can hide a tracked file.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
 per-home skill drift, per-tree excludes, the census's last pass, and free space on the

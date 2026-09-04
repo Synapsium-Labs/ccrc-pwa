@@ -743,6 +743,60 @@ describe('graph-sweep: what git IGNORES never enters the corpus (D-1451)', () =>
     expect(seen(), 'the entry names the ignored ROOT directory, not the name at every depth')
       .toMatch(/^\/build\/$/m);
   });
+
+  // D-1452 — the RULE-3 probe over derived entries, with its own red row. The
+  // first landing recorded it as green-under-mutation and justified that with
+  // "no reachable fixture makes the probe fire": false, and this is the
+  // fixture. git spells an entry as a PATH; detect and `ls-files -X` spend it
+  // as a GLOB. A filename carrying a glob metacharacter is where those two
+  // readings part company — the entry `a*.log` names one untracked file to
+  // git and matches the TRACKED `ab.log` as a pattern.
+  it('a derived entry whose FILENAME carries a glob metacharacter is withheld — it would hide a tracked file', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.mkdirSync(j('.ccrc', 'graph-noise'), { recursive: true });
+    fs.writeFileSync(j('.ccrc', 'graph-noise', 'alpha.list'), 'fixtures/\n');  // so a filter is written at all
+    // `\*` in .gitignore is a LITERAL star: only the file named `a*.log` is ignored.
+    fs.writeFileSync(path.join(repo, '.gitignore'), '/a\\*.log\n');
+    fs.writeFileSync(path.join(repo, 'ab.log'), 'tracked\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'tracks ab.log; ignores the literal a*.log');
+    fs.writeFileSync(path.join(repo, 'a*.log'), 'untracked\n');   // ignored, untracked
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nab.log\n');
+    const r = runSweep();
+    expect(r.stderr, 'the probe fires, and says which entry it withheld and why')
+      .toMatch(/derived ignore entries withheld, repo tracks matching files: \/a\*\.log/);
+    expect(seen(), "the operator's pattern is still written").toMatch(/^fixtures\/$/m);
+    expect(seen(), 'the withheld entry never reaches the generated filter')
+      .not.toMatch(/a\*\.log/);
+    expect(r.stderr, 'nothing survived the probe, so no count is logged')
+      .not.toContain('git-ignored entries derived');
+  });
+
+  // D-1452 — git emits REDUNDANT entries whenever a directory is not itself
+  // named by an ignore rule but all of its content is ignored: the collapsed
+  // directory AND every ignored file under it. Measured (git 2.43.0): with
+  // `*.log` and a directory holding only `a.log`/`b.log`, `ls-files -o -i
+  // --exclude-standard --directory` prints `f/`, `f/a.log`, `f/b.log` — three
+  // entries for one collapsed directory. Every extra entry is dead weight the
+  // corpus side pays for per scanned path (D-1452's cost note), and it inflates
+  // the number the pass logs, so the count would over-report what the filter
+  // carries.
+  it('redundant entries under a COLLAPSED directory are pruned, and the logged count states what the filter carries', () => {
+    const repo = makeRepo('alpha'); plantEngine(captureFilter); plantGuardPython();
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    git(repo, 'add', '-A'); git(repo, 'commit', '-qm', 'ignore *.log');
+    fs.mkdirSync(path.join(repo, 'f'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'f', 'a.log'), 'noise\n');
+    fs.writeFileSync(path.join(repo, 'f', 'b.log'), 'noise\n');
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\nf/a.log\nf/b.log\n');
+    const r = runSweep();
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
+    expect(seen(), 'the collapsed directory is the entry that carries the subtree')
+      .toMatch(/^\/f\/$/m);
+    expect(seen(), 'and the files under it are redundant with it — dead weight in every detect() call')
+      .not.toMatch(/^\/f\/a\.log$/m);
+    expect(r.stderr, 'the count states the entries the filter carries, not the entries git printed')
+      .toMatch(/git-ignored entries derived into the corpus filter: 1$/m);
+  });
 });
 
 describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branch review)', () => {
@@ -808,6 +862,34 @@ describe('graph-sweep: foreign .graphifyignore ownership (finding 1, whole-branc
       .toContain('.graphifyignore');
     expect(fs.readFileSync(ignorePath, 'utf8')).toBe(before);   // untouched, not overwritten
     expect(fs.existsSync(path.join(repo, 'graphify-out', 'graph.json'))).toBe(false);
+  });
+
+  // (d) D-1452 — the case the other three cannot reach. (a)/(a2)/(b) each
+  // carry a foreign `.graphifyignore` but nothing GITIGNORED and untracked, so
+  // D-1451's derivation produces an empty set and the write block never runs:
+  // all three stay green with the `foreign` skip deleted. Measured. This row
+  // supplies the missing precondition — one ignored untracked path — so the
+  // derivation has something to write, and the skip is the only thing standing
+  // between it and the repo's own committed file. Without the skip the
+  // generated filter OVERWRITES that tracked file, and `_gs_rm_generated`,
+  // reading its own marker on what is now a marker-bearing file, then DELETES
+  // it at exit: D-1161's failure one step worse, the repo left with a deleted
+  // tracked file.
+  it('(d) a foreign file plus a GITIGNORED untracked path: the derivation is skipped, and the committed file survives byte-identical', () => {
+    const repo = makeRepo('alpha'); plantEngine(); plantGuardPython();
+    const ignorePath = trackForeignIgnore(repo);
+    const before = fs.readFileSync(ignorePath, 'utf8');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+    git(repo, 'add', '.gitignore'); git(repo, 'commit', '-qm', 'ignore *.log');
+    fs.writeFileSync(path.join(repo, 'noise.log'), 'noise\n');   // ignored, untracked: derivable
+    fs.writeFileSync(j('fixture-corpus'), 'a.py\n');
+    runSweep();
+    expect(fs.existsSync(ignorePath), "the repo's own committed file must still exist").toBe(true);
+    expect(fs.readFileSync(ignorePath, 'utf8'), 'and be byte-identical — never overwritten by the derived filter').toBe(before);
+    expect(git(repo, 'status', '--porcelain'), 'and never dirtied, still less deleted').toBe('');
+    expect(outcomeOf(repo), 'no operator list applies, so RULE 2 yields and the tree still builds')
+      .not.toBe('refused-by-guard');
+    expect(['never-built', 'stale-rebuilt']).toContain(outcomeOf(repo));
   });
 
   it('(c) the sweep\'s OWN marker-bearing leftover is still swept, even with a foreign file elsewhere', () => {
