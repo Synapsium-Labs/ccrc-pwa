@@ -304,6 +304,24 @@ export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
 const DELIBERATE_CANCEL_ERRORS_SQL =
   `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}')`;
 
+/** The ABANDONMENT half of the predicate below, lifted into its own name because
+ *  it is about to have a second reader: `requeueAbandonedCoordinatorMail`
+ *  selects exactly the rows a mailbox shows as an abandoned park, and a re-queue
+ *  that respelled these clauses would drift from the thing it is meant to
+ *  mirror — the same argument `DELIBERATE_CANCEL_ERRORS_SQL` above makes about
+ *  its two literals, one level up. Pinned by `single-definition.test.ts`'s
+ *  "spells the abandonment predicate ONCE".
+ *
+ *  THE ALIASES ARE THE CALLER'S: `d` is `mail_deliveries` and `rr` is the
+ *  delivery's own run, joined on `m.runId`. `COALESCE(rr.state, '')` is what
+ *  makes the fragment indifferent to the JOIN KIND the caller brings, which is
+ *  the whole reason a read path may reach it through a LEFT join and a write
+ *  path through an inner one. */
+const ABANDONED_PARK_SQL =
+  "(d.state = 'rejected' " +
+  `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
+  "AND COALESCE(rr.state, '') NOT IN ('done','failed'))";
+
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
  * finding 2) — `OUTSTANDING_STATES_SQL` above, unioned with a `rejected`
@@ -380,9 +398,11 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
  * `m.runId IS NULL`, or a runId the `runs` table has no row for) is NULL,
  * and `NOT NULL` is NULL, not TRUE, which would silently exclude a
  * NULL-runId abandoned row instead of leaving it visible until acked —
- * exactly the outcome the ruling's own text calls out. Written entirely as
- * a `LEFT JOIN` in this one SQL definition: no writer touched, no park
- * restamped, every existing park-immutability guard in this file (`markDelivered`/
+ * exactly the outcome the ruling's own text calls out. Written entirely on the
+ * READ, in SQL, and now in two composed definitions — `ABANDONED_PARK_SQL`
+ * above is the abandonment half, and this constant is that half unioned with
+ * `OUTSTANDING_STATES_SQL`. Neither is a writer: no park restamped, every
+ * existing park-immutability guard in this file (`markDelivered`/
  * `backOff`/`rejectDelivery`'s own `NOT IN ${TERMINAL_DELIVERY_SQL}` guards)
  * unchanged.
  *
@@ -395,9 +415,7 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
  * those.
  */
 const OUTSTANDING_OR_ABANDONED_SQL =
-  `(d.state IN ${OUTSTANDING_STATES_SQL} OR (d.state = 'rejected' ` +
-  `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
-  "AND COALESCE(rr.state, '') NOT IN ('done','failed')))";
+  `(d.state IN ${OUTSTANDING_STATES_SQL} OR ${ABANDONED_PARK_SQL})`;
 
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns.

@@ -406,6 +406,49 @@ describe('Build 7 nouns', () => {
       .toBeGreaterThanOrEqual(2);
   });
 
+  // The SECOND half of the same rule, and the reason it needs its own case: the
+  // abandonment predicate is about to have two readers — the mailbox
+  // (`outstandingMailFor`) and the reclaim's re-queue — and a respelling in
+  // either is invisible to the deliberate-cancel pin above, which watches only
+  // the two `lastError` literals. This watches the run-state clause, the half a
+  // re-queue is most likely to retype because its alias (`rr`) is the caller's
+  // own join.
+  //
+  // NO SELF-MATCH RISK, stated so the next author does not "fix" a hazard that
+  // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
+  // and never itself, and `ROOTS` (:32-37) does not include `server/test`. The
+  // needles below can therefore be written whole.
+  it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+
+    // The premise, established rather than assumed: this needle really is the
+    // clause, and it really is distinct from the twelve `runs`-row predicates in
+    // the same file (those read `r.state`/`state`, never the mail join's `rr`).
+    const CLAUSE = "COALESCE(rr.state, '') NOT IN ('done','failed')";
+    expect(store, 'the abandonment clause is not in store.ts at all').toContain(CLAUSE);
+    expect(store.split(CLAUSE).length - 1,
+      'the abandonment run-state clause is written more than once').toBe(1);
+
+    // …and the one spelling lives in a named constant that the read predicate is
+    // COMPOSED from, so "written once" cannot be satisfied by deleting a reader.
+    expect(store, 'ABANDONED_PARK_SQL is not defined').toMatch(/^const ABANDONED_PARK_SQL =/m);
+    expect(store).toMatch(
+      /const OUTSTANDING_OR_ABANDONED_SQL =\s*`\(d\.state IN \$\{OUTSTANDING_STATES_SQL\} OR \$\{ABANDONED_PARK_SQL\}\)`;/);
+
+    // THE PROSE HALF. The docstring one screen up describes the composed
+    // predicate; after the split it may not still call itself ONE definition.
+    // The premise is established first — there really are two now — so this is
+    // not an absence assertion whose fixture cannot produce the presence.
+    const defs = (store.match(/^const (?:ABANDONED_PARK_SQL|OUTSTANDING_OR_ABANDONED_SQL)\b/gm) ?? []).length;
+    expect(defs, 'the two predicate definitions are not both present').toBe(2);
+    const doc = store.slice(
+      store.indexOf(' * The READ-side "still needs a human'),
+      store.indexOf('const OUTSTANDING_OR_ABANDONED_SQL'));
+    expect(doc.length, 'the predicate docstring anchors moved').toBeGreaterThan(300);
+    expect(doc, 'the predicate docstring still calls the composed predicate one SQL definition')
+      .not.toContain('in this one SQL definition');
+  });
+
   // D-7: `tasks` is Claude Code's TodoWrite vocabulary and belongs to it. A
   // coordination type that spells itself Task is the collision spec:40-44
   // exists to prevent, and it would land in the same union, the same store and
