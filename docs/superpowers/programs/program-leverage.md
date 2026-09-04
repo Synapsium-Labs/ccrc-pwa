@@ -20,7 +20,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 | 5 | F5 — `POST /api/runs/:id/reclaim` (4th ungated door, dead-proof) + PWA resume affordance; door count → four; **corrects the coordinator corpus → AGENT-FIRST** | run 18, PR #37 (merged `6458a14d`) | done 2026-08-31 ~18:57 UTC — fix round `8262d2b3` verified hunk-by-hunk (all 11 rulings landed with measured reds), CI 5/5, merged, deployed **AGENT-FIRST** (fleet host then server; `ccd` and `/health` both report `6458a14d`, all live sessions verified active through it). Review was SHIP-WITH-FIXES: 3 majors + 1 raised to must-fix, 7 minors, 2 refuted. D-1123..D-1156 spent, floor 1157 |
 | 6 | F6+F7a — `COORD_QUIET_MS`/`COORD_COOLDOWN_MS` for coordinator recipients + `POST /api/coord/caps` operator dial + D-1156's derived box-token census | run 19, PR #39 (merged `6ee36ca5`) | done 2026-09-01 ~22:48 UTC — TWO fix rounds plus a renumber. Round 1 (`ff85c514`) answered 3 must-fixes; the worker then AUDITED ITS OWN FIX ROUND (88 agents) and found **4 majors, 3 of them the same guard-with-no-mechanism fault** (`eee5fa1a`). Coordinator verification: 13 lenses, 7 running real mutations in isolated checkouts — **3/3 must-fixes and 4/4 self-audit majors hold**, zero code majors. Then BLOCKED: PR #41 merged at 21:54 taking D-1159/1160/1161, so `deviation-refs` red on the merged tree; renumbered to D-1240..D-1242 (`1c7ccb06`). CI 5/5, merged, deployed **server lane** from the merge sha; `/health` reports `6ee36ca5` (NOT agent-first). D-1163..D-1172 + D-1208..D-1242 spent, floor 1243 |
 | 7 | F7 — program health on the board (parked mail, replay high-water, rejection counts, un-briefed coordinator) **+ the ledger-allocation guard, three incidents behind it** | run 28, PR #43 (merged `5e9f650d`) | **done 2026-09-02 12:43 UTC** — THREE rounds. Review SHIP-WITH-FIXES (5 must-fix, 1 major, 1 minor); fix round verified all six HOLD under mutation; a third bounded round of six with the merge committed in advance, which the worker answered plus a seventh it found scanning its own diff for the class. Final verification: **zero not-landed, zero blocking**, all four earlier-round mutations still red. CI 5/5 on `36859151`, merged, deployed **server lane** from the merge sha; `/health` reports `5e9f650d`. D-1293..D-1332 — **40 allocated, 40 defined, zero collisions** |
-| 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit **+ THE LEDGER PROCEDURE: root CLAUDE.md's grep instruction is the generator of all three collisions**. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm, `ccd/ccrc-api:32-38`'s stale two-door census, and wave 7's twelve prose/guard carries | run 30 | dispatched 2026-09-02 12:45 UTC (resumed quiet-meadow, `briefQueued:true`, `skillState:present` — wave 7's own durable dispatch record, live in production) |
+| 8 | F8 — measured-read completion (`readFileB64`/`readFileFrom`, agent `stat` EACCES lie) + `MailDeliveryState` terminality audit **+ THE LEDGER PROCEDURE: root CLAUDE.md's grep instruction is the generator of all three collisions**. AGENT-FIRST deploy. **Inherits three:** the fifth repoint arm, `ccd/ccrc-api:32-38`'s stale two-door census, and wave 7's twelve prose/guard carries | run 30 | dispatched 2026-09-02 12:45 UTC (resumed quiet-meadow, `briefQueued:true`, `skillState:present` — wave 7's own durable dispatch record, live in production). **IN FLIGHT 2026-09-04 08:50 UTC: 3/5 items, 49 commits, 53 files, +11,283/−319, tree clean at `4a8828dc`.** Items 1–3 closed (D-1396..D-1424, plus D-1438 allocated mid-item-1); items 4–5 not started. Run advanced `dispatched`→`working` and the board settled 3/5 by me — the worker never advanced it. Idle 10.5 h at an empty prompt after closing item 3; nudged (mail 200). |
 
 ## Decisions & deviations
 
@@ -844,3 +844,45 @@ reports spurious failures.
 
 **This is the last wave.** At its merge the program closes: the ledger and spec PR to main from
 `ws/brisk-meadow`, and run 30 closes `final:true`.
+
+## Wave 8 — mid-flight measurement, 2026-09-04 08:50 UTC
+
+Measured, not reported: 49 commits on `ws/quiet-meadow`, 53 files, +11,283/−319, working tree clean
+at `4a8828dc`. Work items 1–3 done, 4–5 not started. The commit log carries D-1396..D-1424 in three
+contiguous blocks that match the three closed items one-for-one, and the only ref above the plan's
+allocated ceiling is **D-1438**, taken mid-item-1 for a shared `ReadFailure` declaration — allocated
+after the plan's `D-1396..D-1437` act, exactly as the wave's own brief instructs (allocate at the
+moment you need the number, never from a document's floor).
+
+**Two coordinator corrections to my own bookkeeping, both mine and neither the worker's:**
+
+- Run 30 sat in `dispatched` for 44 hours while 49 commits landed on its branch. Nothing reads that
+  state as a gate, so nothing broke — but the board lied to the operator for two days. Advanced to
+  `working` here.
+- The work-item board read 0/5 for the same period. Settled to 3/5 on the commit evidence above.
+  This is a PROGRESS settlement on measured D-ranges, **not** the wave-done re-measure: the suites
+  have not been run by me, and the worker's claimed gate (251 files / 6425 passed / 56 skipped) is
+  its own measurement, carried here as a claim.
+
+**The idle.** The worker stopped at 2026-09-03 22:28 UTC having closed item 3, and sat at an empty
+prompt for 10.5 hours. `hookstate` read `state:done event:Stop ask:null` the whole time — a clean
+turn end with no pending ask, i.e. not blocked, not limit-locked, just unprompted. Its 5h window was
+at 2% and three migration targets sat idle (`claude-corp` 0/0, `claude2` and `claude-dev0` both 7d
+53%) against its own wrapper's 7d 83%. **The loop has no self-resume:** a worker that finishes a turn
+mid-wave waits for a nudge that only arrives if a human or the coordinator is watching. Wave 7 hid
+this because every turn ended on a report; wave 8's five-item shape ends three turns short of one.
+Cost here: 10.5 h of wall clock on a wave that had ~14 h of work in it. Worth a mechanism — the
+coordinator polling `hookstate.updatedAt` against `run.state='working'` and nudging on a stale pair
+is a small guard and would have cost one mail.
+
+**The wave's sharpest finding so far is the worker's, on Task 48.** Its own migration — the one that
+un-lands ledger rows a citation wrongly stamped — was specified against a safety argument measured on
+2026-09-02, and the file that argument measured merged on 2026-09-03. Shipped as written it would
+have un-landed up to 34 legitimately-landed rows on the live database. It was caught only because the
+worker re-measured the plan's claims at dispatch time rather than trusting its line numbers, and the
+fix it chose is the durable one: the stamp is wrong because the file **cites** the range and defines
+none of it — a fact that does not depend on what merged when. Four further sites making the same
+mistake in miniature (Task 46's own comments asserting a file "sits on no merged ref", true when
+written and false a day later) were corrected in the same pass. This is the third wave running in
+which the recurring defect class is **a true sentence that stopped being true**, and the second in
+which the fix was to restate the claim on a footing time cannot move.
