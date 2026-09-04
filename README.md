@@ -1660,7 +1660,13 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   D-1451..D-1453 derived git's WHOLE ignored census instead, and the cost was measured and then
   accepted rather than removed: 308 entries on custom-tools, of which 22 covered a file detect would
   ingest at all — and on a 2000-file scratch fixture, 300 derived entries cost detect **43.3 s**
-  against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458).
+  against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458). The
+  second detect() is the one cost this shape ADDS, and it is measured too: on a tree that DOES derive
+  the first run sees the ignored subtree unfiltered, so a 2000-file tree with a nested `.gitignore`
+  over a 5000-file ignored subtree pays **4.4 s + 1.4 s** where the old shape paid one **1.4 s** run.
+  That is **~+3 s**, paid exactly on the trees the derivation serves — a tree that derives nothing
+  still runs detect() once — and bounded by the size of the nested-ignored subtree, not the corpus
+  (the same subtree at 1000 files: 1.9 s).
   Uncapped, with the entry count logged in the pass output; every derived entry goes through the same
   `ls-files -c -i -X` probe as a default pattern, and a tree that owns a foreign `.graphifyignore`
   derives nothing — that file is not the sweep's to write. A filename carrying a glob metacharacter

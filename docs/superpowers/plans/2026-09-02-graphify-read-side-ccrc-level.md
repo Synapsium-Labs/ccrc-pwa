@@ -4306,6 +4306,35 @@ stale ledger cells re-measured. Committing the two source files again would be a
   ~40%: that number came from calling `_is_ignored` directly over synthetic paths, not from
   `detect()` over a real tree.
 
+  **TIMING — the cost this fix ADDS, on a tree that DOES derive.** The table above measures the
+  ZERO-derivation case, where the narrowing is free, and that is not the whole bill. On a tree the
+  derivation exists FOR, the FIRST `detect()` now runs with the nested-ignored subtree still
+  UNFILTERED — before this entry, the census-derived entries were already in the file when the single
+  `detect()` ran — and the second, filtered run is added on top. Recording only the free case would be
+  the same omission this entry exists to condemn, so: MEASURED on the same box and engine as the table
+  above (read-only scratch fixture under the scratchpad, graphify 0.9.9; 2000 tracked `.py` across 40
+  directories plus a TRACKED `sub/.gitignore` carrying `vendor/` over an untracked 5000-file
+  `sub/vendor/` — the nested-`.gitignore` shape D-1451 was written for; two runs each, warm):
+
+  | pass | corpus `detect()` ingests | wall clock |
+  | --- | --- | --- |
+  | NEW step 1 — noise patterns only, the ignored subtree unfiltered | 7000 files | **4.55 s**, **4.24 s** |
+  | NEW step 4 — `/sub/vendor/` derived and appended, re-measured | 2000 files | **1.40 s**, **1.38 s** |
+  | OLD — ONE run, the census-derived `/sub/vendor/` already in the filter | 2000 files | **1.40 s**, **1.38 s** |
+
+  So ~5.9 s where the old shape paid ~1.4 s: **+~3 s on this fixture**, and that extra pass is the
+  WHOLE of the new cost — the bash side is strictly cheaper than it was, because the prefix walk is
+  O(breach) where the old prune loop was O(the whole census). Two properties bound it. It is paid
+  EXACTLY on the trees the derivation serves: a tree that derives nothing — custom-tools, and every
+  tree with no nested `.gitignore` — still runs `detect()` once, which is the row above. And it scales
+  with the size of the NESTED-IGNORED SUBTREE, not with the corpus: shrinking `sub/vendor/` from 5000
+  files to 1000 takes step 1 from 4.55 s / 4.24 s to **1.89 s**, **1.86 s** against the same 1.38 s
+  floor — ~0.6 ms per ignored file. ACCEPTED, and the reason is stated rather than assumed: measuring
+  the corpus BEFORE deriving from it is what makes the derivation narrow at all, and the only way to
+  skip the unfiltered pass is to know what to filter before anything has been measured — which is the
+  census-wide derivation this entry removed, at 43.3 s on the fixture above. An order of magnitude
+  more, on every pass, on every tree, including the ones that need no derivation at all.
+
   **Consequences pinned, not asserted.** Two existing rows changed shape because a withheld or
   underivable path is now, by construction, a path already IN the corpus: the RULE-3 backslash row
   (`a\b.log`) now puts that path in the fixture corpus and asserts the tree is REFUSED over it — the
@@ -4408,6 +4437,31 @@ stale ledger cells re-measured. Committing the two source files again would be a
   reader chasing D-1453's own "single forward pass: 54 ms" through the annotation was told the pass
   still existed. Both clauses now separate effect from algorithm. No source change; no new number
   (the correction is to D-1458's own annotations).
+
+- **D-1458 timing completion** (2026-09-04, D-1459 review follow-up — the one cost the fix ADDS went
+  unmeasured) — **D-1458's timing table recorded only the case where the narrowing is free.** It
+  measured a tree that derives NOTHING (43.30 s -> 1.35 s) and signed the new shape off with the
+  prose "at most one extra `detect()` run, and only when something was derived" — a sentence with no
+  number against it. On a tree that DOES derive, that extra run is not the whole change either: the
+  FIRST `detect()` now runs over the nested-ignored subtree UNFILTERED, where the old shape had the
+  census-derived entries in the file before its single run. An unmeasured cost stated as a bound is
+  the same omission D-1458 exists to condemn, one level up.
+
+  Now MEASURED and recorded in D-1458's own entry, in a second table beside the first: on a 2000-file
+  tree with a tracked nested `.gitignore` over a 5000-file ignored subtree, step 1 costs **4.55 s /
+  4.24 s** (7000 files ingested) and step 4 **1.40 s / 1.38 s** (2000), against **1.40 s / 1.38 s**
+  for the old single filtered run — **+~3 s**, paid exactly on the trees the derivation serves, and
+  bounded by the size of the nested-ignored subtree rather than the corpus (the same subtree at 1000
+  files: **1.89 s / 1.86 s**, ~0.6 ms per ignored file over a 1.38 s floor). Same box, same engine
+  (graphify 0.9.9), same read-only scratch-fixture method as the first table, two runs each. The
+  README bullet gained the same sentence, since it quotes the 43.3 s / 1.4 s pair.
+
+  **No source change, and none is called for:** the two-step order is what makes the derivation narrow
+  — the corpus has to be measured before anything can be derived from it — and the only way to skip
+  the unfiltered pass is to know what to filter before measuring, which is the census-wide derivation
+  D-1458 removed at 43.3 s. **No new number** (the correction completes D-1458's own measurements),
+  and no new mutation row: nothing executable moved, so the `graph-sweep` mutation table stands as
+  measured under D-1458 and D-1459.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

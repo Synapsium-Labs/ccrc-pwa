@@ -642,6 +642,13 @@ _gs_guard() {
   # is appended and nothing is re-measured — `breach_all` stands and the tree is
   # refused below over the very path the derivation would have filtered away,
   # which is the honest outcome for a repo whose filter this sweep may not touch.
+  # WHAT IT COSTS, measured, not bounded by adjective (D-1458's timing table,
+  # completed on review): on a deriving tree the FIRST run also pays, because it
+  # sees the ignored subtree unfiltered. 2000 tracked files with a nested
+  # `.gitignore` over a 5000-file ignored subtree — 4.4 s (step 1, 7000 files
+  # ingested) + 1.4 s (here, 2000) against 1.4 s for the old single run, i.e.
+  # ~+3 s, scaling with the IGNORED SUBTREE and paid only where the derivation
+  # earns it. A tree that derives nothing runs detect() once, as it always did.
   if [ "${#derived[@]}" -gt 0 ] && _gs_open_filter "$tree"; then
     printf '%s\n' "${derived[@]}" >> "$tree/.graphifyignore"
     corpus="$(_gs_detect "$tree")" || { GUARD_REASON="detect() failed in $tree"; return 1; }
