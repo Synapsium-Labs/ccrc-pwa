@@ -4120,6 +4120,38 @@ stale ledger cells re-measured. Committing the two source files again would be a
   branch was cut.
   `git grep D-1454 HEAD origin/main` is empty.
 
+- **D-1455** (2026-09-04, T3 review — a one-pass fixture cannot tell "the last pass" from "every pass")
+  — **D-1454's row census shipped with its LAST-pass dimension unpinned.** Both new fixtures planted a
+  census holding exactly ONE pass, so `.passes[-1].trees[]` and `.passes[].trees[]` had identical
+  answers and nothing in the suite could tell them apart. MEASURED by the reviewer and reproduced
+  here: rewriting all three jq filters at `ccd/ccrc-doctor-checks:2879-2881` to `.passes[]` left
+  `ccrc-doctor-graphify` fully green at `Tests  27 passed (27)`.
+
+  That is not a cosmetic gap. The census keeps **ten** passes (`ccd/ccd-graph-sweep:44`,
+  `.passes = ((.passes // []) + $p | .[-10:])`), so on the reference fleet the mutant would count
+  roughly ten passes of rows — ~110 refused, ~20 failed — and keep naming repositories that were
+  fixed nine passes ago, while the line still ends `— of N tree(s) in the last graph-sweep pass`. A
+  false sentence carrying an inflated number is precisely the shape D-1454(b)'s own prose objects to,
+  and the fix for a refusal is a commit in the REPOSITORY, so the pass right after the repair is
+  clean while the census still carries the old rows: reading every pass would warn forever about a
+  tree already fixed.
+
+  **Fixture, not implementation.** The guard was right; only its binding was missing. Both D-1454
+  tests now plant a SECOND, older pass whose rows would change the answer if they were counted:
+  the WARN test's older pass carries four more `refused-by-guard` rows (so `.passes[]` reads
+  `7 refused … of 10 tree(s)` instead of `3 refused … of 6 tree(s)`), and the clean-rows test's
+  older pass carries one refused and one failed row (so `.passes[]` WARNs on a census whose last
+  pass is spotless). A third assertion, `of 6 tree(s)`, pins the TOTAL against the same drift — it
+  was the one number on the line no test read.
+
+  | mutation | measured red |
+  | --- | --- |
+  | all three jq filters `.passes[-1].trees[]?` -> `.passes[].trees[]?` (`ccd/ccrc-doctor-checks:2879-2881`) | `ccrc-doctor-graphify` — `Tests  2 failed \| 25 passed (27)`: *WARNs, naming both counts…* — `expected 'WARN graphify: 7 refused (untracked p…' to contain '3 refused'`; and *says nothing new when every row of the last pass is clean* — `expected 'WARN graphify: 1 refused (untracked p…' to match /^PASS graphify:/` |
+  | the TOTAL filter alone, line 2881 `.passes[-1].trees[]?]` -> `.passes[].trees[]?]` | `ccrc-doctor-graphify` — `Tests  1 failed \| 26 passed (27)`: *WARNs, naming both counts…* — `expected 'WARN graphify: 3 refused (untracked p…' to contain 'of 6 tree(s)'` |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1454** (this
+  branch's previous commit), so this entry is **D-1455**; `git grep D-1455 HEAD origin/main` is empty.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).

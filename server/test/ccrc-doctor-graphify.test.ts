@@ -367,7 +367,20 @@ describe('ccrc doctor: graphify', () => {
   it('WARNs, naming both counts, when the last pass carries refused-by-guard and failed rows (D-1454)', () => {
     const home = healthy('ccrc-doctor-gfx-rows-'); graphifyHealthy(home);
     const now = new Date().toISOString();
+    // TWO passes, and the older one is dirty in a way that would CHANGE every
+    // number on the line if the check read `.passes[]` instead of `.passes[-1]`
+    // (7 refused, of 10 trees). The census keeps ten passes
+    // (`ccd-graph-sweep`: `.passes = ((.passes // []) + $p | .[-10:])`), so
+    // reading them all would name repositories fixed nine passes ago while
+    // still saying "in the last graph-sweep pass" — a false sentence with an
+    // inflated count. One fixture pass cannot tell the two filters apart.
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/p', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: p.py', duration_ms: 3 },
+        { path: '/h/projects/q', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: q.py', duration_ms: 3 },
+        { path: '/h/projects/r', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: r.py', duration_ms: 3 },
+        { path: '/h/projects/s', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: s.py', duration_ms: 3 },
+      ] }, {
       started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
         { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: x.py', duration_ms: 3 },
         { path: '/h/projects/b', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: y.py', duration_ms: 3 },
@@ -378,8 +391,9 @@ describe('ccrc doctor: graphify', () => {
       ] }] }));
     const line = lineFor(runDoctor(home).stdout, 'graphify');
     expect(line, 'a refused tree is the guard working — never a FAIL').toMatch(/^WARN graphify:/);
-    expect(line, 'the refused count is not named').toContain('3 refused');
+    expect(line, 'the refused count is not the LAST pass\'s three').toContain('3 refused');
     expect(line, 'the failed count is not named').toContain('2 failed');
+    expect(line, 'the total counts trees the last pass never saw').toContain('of 6 tree(s)');
     expect(line, 'the remedy an operator can act on is not on the line').toContain('graph-noise');
   });
 
@@ -389,7 +403,16 @@ describe('ccrc doctor: graphify', () => {
   it('says nothing new when every row of the last pass is clean (D-1454)', () => {
     const home = healthy('ccrc-doctor-gfx-rows-clean-'); graphifyHealthy(home);
     const now = new Date().toISOString();
+    // …and an EARLIER pass that was dirty, since the repair that clears a
+    // refusal is a commit in the repository: the pass after it is clean while
+    // the census still carries the old rows. Reading every pass would keep
+    // warning about a tree fixed an hour ago — so this fixture pins the
+    // window as well as the silence.
     writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
+      started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
+        { path: '/h/projects/a', outcome: 'refused-by-guard', reason: 'untracked paths entered the corpus: a.py', duration_ms: 3 },
+        { path: '/h/projects/b', outcome: 'failed', reason: 'build failed', duration_ms: 9 },
+      ] }, {
       started: now, finished: now, pin: '0.9.9', status: 'ok', trees: [
         { path: '/h/projects/a', outcome: 'fresh', reason: '', duration_ms: 1 },
         { path: '/h/projects/b', outcome: 'stale-rebuilt', reason: '', duration_ms: 40 },
