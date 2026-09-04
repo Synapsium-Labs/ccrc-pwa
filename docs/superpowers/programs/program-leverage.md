@@ -38,7 +38,7 @@ fetching that ref (D-108 precedent). At close the docs PR to main with the final
 - **Run-open (2026-08-28 ~15:45 UTC):** wave 1 opened as **run 10** (`state:planned`,
   `claimedBy:ccrc-pwa-brisk-meadow`). Deviation block allocated: **D-999..D-1046** (48 numbers,
   floor 1047 after) — every wave records its deviations inside this block; a worker with no
-  server access writes `D-TBD-program-leverage` and it is reconciled at wave review.
+  server access writes `D-TBD-<slug>` and it is reconciled at wave review.
 
 - **Adjacent lane (operator flag, 2026-08-28): `ws/ccrc-with-graphify-integration`**
   (`ccrc-pwa-amber-cove`, wrapper claude2) — graphify fleet integration, spec rev 3
