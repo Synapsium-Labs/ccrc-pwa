@@ -602,6 +602,31 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
     expect(para).toMatch(/prove|provenance|its own/i);
   });
 
+  // A handover now puts the corpse's unacked ROLE mail in the heir's box as a
+  // new delivery. Unsaid, the heir reads item 4 above, concludes the reports are
+  // gone, and re-dispatches finished work — exactly the harm `resume.md`'s "read
+  // outstanding mail before deciding anything" exists to prevent.
+  //
+  // ANCHORED ON A PHRASE THE PARAGRAPH OWNS, NOT ON THE ROUTE, and that is not a
+  // style choice: the `never names the reclaim door` case at the foot of this
+  // file forbids that route string corpus-wide, so a paragraph anchored on it
+  // could not exist. The phrase is paren-free so it is also safe as a `-t`
+  // pattern, and `find` returning `undefined` is what makes a deleted passage
+  // red instead of silently passing.
+  it('tells the heir a handover re-queues the reports the dead coordinator never acked', () => {
+    const para = envelope().split('\n\n')
+      .find((p) => p.includes('hands the program to a new coordinator'));
+    expect(para,
+      'no paragraph in mail-envelope.md says what a handover does to a parked report').toBeDefined();
+    expect(para, 'the passage does not say the heir gets a NEW delivery').toMatch(/new delivery/i);
+    // The distinction that must survive any rewrite: a NEW delivery, not the old
+    // park reopened — item 4's own "the park is terminal" is still true and this
+    // paragraph must not read as a retraction of it. One exact phrase, not a
+    // disjunction with alternatives no prose here can satisfy.
+    expect(para, 'the passage does not say the old park is left unreopened')
+      .toContain('is not reopened');
+  });
+
   // NO CENSUS ASSERTION HERE, and the reason is worth recording so it is not
   // re-added: this file ALREADY pins it exactly —
   //   `expect(hits).toBe(CONTRACT[2].split(verb).length - 1)`
