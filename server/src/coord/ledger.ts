@@ -353,11 +353,16 @@ export function crossTreeCollisions(
  * allocator issues something lower, which it never does.
  *
  * THE COUNT THAT USED TO SIT IN THAT SENTENCE — "the SAME four orphans
- * (D-1066..1069)" — WAS FALSIFIED BY THIS WAVE'S OWN NEXT MEASUREMENT (D-1332).
- * It was true when written and there are six today, because two merged plans
- * defined numbers the allocator never issued (D-1325). The property is what the
- * sentence is for; the enumeration was decoration that went stale in nine days,
- * in the file whose subject is exactly that.
+ * (D-1066..1069)" — WAS FALSIFIED BY THIS WAVE'S OWN NEXT MEASUREMENT (D-1332),
+ * because two merged plans defined numbers the allocator never issued (D-1325).
+ * ITS REPLACEMENT THEN NAMED A COUNT OF ITS OWN, and that one is gone too
+ * (D-1436). This set is a JOIN of a live `coord.db` no suite may open against a
+ * plan corpus that grows with every merge, so nothing in this repo can pin it,
+ * and any number written here is a snapshot waiting to go stale in a file whose
+ * subject is exactly that. The property is what the sentence is for — the
+ * hardcoded pair and this derivation report the SAME SET, whatever it is at the
+ * time. The dated snapshots live in the wave's plan, which is what a document is
+ * for (D-1328).
  *
  * `null` — a project with no allocations at all — reports nothing: there is no
  * era, so no definition can be below or above it.

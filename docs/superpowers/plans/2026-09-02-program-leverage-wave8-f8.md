@@ -8337,17 +8337,32 @@ and the draft was wrong.
   the first and dropped entirely from the second, since no suite can pin a live-`coord.db` fact and a cardinal
   restated in a second place is D-1331's defect.
 - **D-1436** (Task 84): `projectEra`'s docstring, rewritten by D-1332 to remove a falsified four-orphan
-  enumeration, replaced it with a count of its own — "there are six today" at `ledger.ts:343` — which reads a
-  live `coord.db` no suite may open and had already moved from four to six in nine days; the count is deleted
-  from shipped source and the property kept, with the dated snapshot moved into the wave plan, which is the
-  treatment D-1328 ruled and the standard this program states.
+  enumeration, replaced it with a count of its own — "there are six today", at `ledger.ts:357` and not the
+  `:343` this plan predicted — which reads a live `coord.db` no suite may open, joined against a plan corpus
+  that grows with every merge. It had moved four → six in nine days when wave 8 was planned, and re-derived on
+  2026-09-04 by the shipped `unallocatedDefinitions` it reads **fifty-four** on `origin/main` `1c19787f`, one
+  merged plan since having hand-numbered forty-eight numbers the allocator never issued. So it moved again
+  inside the two days between this task being written and being executed. The count is deleted from shipped
+  source and the property kept, with the dated snapshots moved into the wave-7 plan — the treatment D-1328
+  ruled and the standard this program states.
 - **D-1437** (Task 84): the wave-7 plan carried TEN stale counts and ranges at ELEVEN sites, not the seven the
-  wave-8 brief named — 243 rows (270, twice), 65 batches (74), four orphans in three places (six), six sub-211
-  collisions (four), D-1326..D-1331 for a section spanning D-1332 (twice), and two undated total pairs
-  (394/388 and 405/399, both now 421/415) — all eleven fixed in one act, with the two figures the crosscheck
-  proved still true (the delta 27, and "in one act of six") deliberately KEPT and one anchor, one prose claim
-  and one inapplicable mutation row fixed alongside, because fixing seven of ten of one class is the shape
-  D-1326 records.
+  wave-8 brief named — and by execution day **the plan's own re-measured replacements were stale too**, which
+  is the finding rather than an aside. Measured 2026-09-04 against the allocator (a read-only GET) and the
+  corpus: 243 rows became 270 on 2026-09-02 and **313** today (stated twice); 65 batches became 74 and then
+  **76**; four orphans in three places became six and then **fifty-four**; six sub-211 collisions are **four**,
+  and that one is now derived by a suite rather than written down, so it is the only figure here that cannot go
+  stale again; D-1326..D-1331 names a section spanning D-1332 (twice). Two of the plan's crosscheck rulings
+  were re-measured rather than taken: *"in one act of six"* is TRUE and was KEPT with its `allocatedAt`
+  (D-1326..D-1331 share 1788347619644, D-1332 sits at 1788349510260), but *"the delta 27 is NOT stale"* is
+  FALSE twice over — 27 was re-derived from the entry-shape pattern `ed81ad85` shipped, which D-1322 has since
+  replaced (the shipped pattern read 51 at `5e9f650d`, where the plan reported 27), and under EITHER pattern
+  the delta moved at HEAD `f28bcaf6` to 68 and 92 respectively, because this branch's own wave-8 plan opens all
+  forty-one of its entries in the colon form `ENTRY` cannot see. A delta is therefore not a property of a regex
+  pair; it is a joint property of two patterns AND the corpus, and it went stale inside the wave that certified
+  it as durable. Every figure written by this task is dated 2026-09-04 and carries the sha or the allocator
+  call it came from. One anchor (a `shared/api.ts` line number that has now gone stale three times, replaced by
+  the constant's NAME), one prose claim and one inapplicable mutation row were fixed alongside, because fixing
+  seven of ten of one class is the shape D-1326 records.
 - **D-1438** (found during execution, after Task 6, fixed in its own commit): Task 6 gave the agent's
   `readB64Measured`/`readFromMeasured` the failure vocabulary `'absent' | 'unreadable'`, spelling the
   ORDERED PAIR twice in `agent/src/fileops.ts` while `server/src/io.ts`'s `ReadFailure` already declared
