@@ -142,6 +142,30 @@ describe('CoordStore: automations — the lease CAS', () => {
     expect(row.leaseHardUntil).not.toBeNull();
   });
 
+  it('renewAutomationLeaseForRun refuses to renew a lease that no longer names that run', () => {
+    // The whole reason the sweep's renewal is keyed on the RUN and not on the
+    // automation. The sweep renews every act it still has in flight, and an
+    // entry can go stale — the run settled, the lease was released, and a new
+    // claim took it. Keyed on the automation, that renewal would silently
+    // extend a DIFFERENT run's lease by another full soft period; keyed on the
+    // run, it correctly does nothing and says so.
+    const s = store();
+    const t0 = 1_000;
+    const id = makeArmed(s, t0, t0);
+    const first = s.claimAndOpenRun({ automationId: id, now: t0 + 10, occurrence: manualOccurrence() });
+    if (!('runId' in first)) throw new Error('unreachable');
+    expect(s.renewAutomationLeaseForRun(first.runId, t0 + 20), 'its own lease renews').toBe(true);
+
+    s.settleAutomationRun({ runId: first.runId, settlement: { outcome: 'ok' }, now: t0 + 30 });
+    const second = s.claimAndOpenRun({ automationId: id, now: t0 + 40, occurrence: manualOccurrence() });
+    if (!('runId' in second)) throw new Error('unreachable');
+    const heldBySecond = s.automation(id)!.leaseUntil;
+
+    expect(s.renewAutomationLeaseForRun(first.runId, t0 + 50),
+      "the settled run must not be able to extend the lease that replaced it").toBe(false);
+    expect(s.automation(id)!.leaseUntil, "and the second run's lease is untouched").toBe(heldBySecond);
+  });
+
   it('renewAutomationLease moves leaseUntil only, leaves leaseHardUntil byte-identical, and returns false once the lease is gone', () => {
     const s = store();
     const t0 = 1_700_000_000_000;

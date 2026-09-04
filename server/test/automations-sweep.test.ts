@@ -129,6 +129,76 @@ async function rig(): Promise<{
   return { w, coord, home, calls, deps, log };
 }
 
+describe('the soft lease is renewed while the act is in flight', () => {
+  /** `makeRunner` with a gate the fixture opens, so an act can be held across
+   *  the soft-lease horizon the way a real 240 s spawn holds it. */
+  function gatedRunner(home: string): { run: Runner; calls: string[][]; open: () => void } {
+    const calls: string[][] = [];
+    let open = (): void => { /* replaced below, before anything can await it */ };
+    const gate = new Promise<void>((resolve) => { open = () => resolve(); });
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') { await gate; return { code: 0, stdout: '', stderr: '' }; }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { run, calls, open };
+  }
+
+  it('keeps both overlap guards awake past the horizon the lease would otherwise have lapsed at', async () => {
+    // THE PROPERTY, not the mechanism: while one act is in flight, a second
+    // claim on the same automation must keep refusing `overlap`. Both guards
+    // read the SOFT bound — `checkPreClaim` rung 1 and `claimAndOpenRun`'s
+    // in-transaction CAS, whose docstring says "the SOFT bound, never the hard
+    // one" precisely BECAUSE renewal moves it — and `AUTOMATION_LEASE_MS` is
+    // documented as "Twelve sweep ticks of renewal tolerance", twelve being
+    // 120 s over a 10 s lane gate. Nothing renewed it during the act, so at
+    // 120 s into a spawn ccd allows 240 s for, both guards went blind and a
+    // due occurrence could open a SECOND run for the same automation.
+    const home = mkTmp('ccrc-auto-renew-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const r = gatedRunner(home);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, r.run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      // The act is now held inside `ws-add`, so this run is in flight.
+      await vi.waitFor(() => {
+        expect(r.calls.filter((c) => c.includes('ws-add')).length).toBeGreaterThanOrEqual(1);
+      });
+      const firstHorizon = coord.automation(id)!.leaseUntil;
+      expect(firstHorizon).not.toBeNull();
+
+      // Past the ORIGINAL soft horizon, with the act still held. Several lane
+      // gates' worth of ticks, which is exactly the tolerance the constant's
+      // own docstring describes.
+      for (let i = 0; i < 13; i++) {
+        advance(10_000 + 1);
+        await w.sweepAutomations();
+      }
+      expect(Date.now(), 'the clock really is past the first horizon').toBeGreaterThan(firstHorizon!);
+
+      expect(coord.automation(id)!.leaseUntil!,
+        'the soft bound must have moved with the ticks').toBeGreaterThan(firstHorizon!);
+      const second = coord.claimAndOpenRun({
+        automationId: id, now: Date.now(), occurrence: { trigger: 'manual' },
+      });
+      expect(second, 'a second claim during one act is the overlap this lease exists to refuse')
+        .toMatchObject({ refused: 'overlap' });
+      // And the HARD bound is untouched, or a wedged act would hold the
+      // automation for ever instead of lapsing.
+      expect(coord.automation(id)!.leaseHardUntil).toBe(NOW + 600_000);
+    } finally {
+      r.open();
+      w.stop();
+    }
+  });
+});
+
 describe('a restart is not a second spawn', () => {
   it('never re-performs the act for a run that already bound a session', async () => {
     // THE WINDOW. Pass 3 fires "every open lease this process has not already

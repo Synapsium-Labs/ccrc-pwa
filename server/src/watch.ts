@@ -2402,6 +2402,29 @@ export class FleetWatcher {
     if (this.lastAutomationSweep !== 0 && now - this.lastAutomationSweep < AUTOMATION_SWEEP_MS) return;
     this.lastAutomationSweep = now;
 
+    // RENEW THE SOFT LEASE OF EVERY ACT THIS PROCESS IS STILL PERFORMING,
+    // with THIS tick's clock. `AUTOMATION_LEASE_MS` is documented as "Twelve
+    // sweep ticks of renewal tolerance" — twelve because the lane's gate is
+    // 10 s and the soft lease is 120 s — and `claimAndOpenRun`'s CAS docstring
+    // says it reads "the SOFT bound, never the hard one" precisely BECAUSE
+    // renewal moves it. Nothing moved it: the only renewal call sat in
+    // `fireAutomation`'s post-prompt `pending` arm, so at 120 s into a spawn
+    // ccd allows 240 s for, rung 1 AND the in-transaction CAS both went blind
+    // and a due occurrence could claim the same automation a second time.
+    //
+    // `automationsInFlight` is exactly the right set: membership is added
+    // synchronously before any await and removed only on a terminal settle,
+    // so it names the acts in progress and nothing else. The renewal is keyed
+    // on the RUN, so a stale entry whose lease was released and re-claimed
+    // renews nothing rather than extending someone else's.
+    for (const runId of this.automationsInFlight) {
+      try {
+        store.renewAutomationLeaseForRun(runId, now);
+      } catch (err) {
+        console.warn(`ccrc-server: lease renewal failed for automation run ${runId} (${err instanceof Error ? err.message : String(err)}) — one bad renewal must not kill the sweep`);
+      }
+    }
+
     // ONE LINE, ONCE PER PROCESS, and only on a build that cannot keep a wall
     // clock. `icuHasZones()` is true on a full-ICU node, so on every ordinary
     // box this costs a single boolean and never touches the store. L4 decides

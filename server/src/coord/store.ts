@@ -4372,6 +4372,35 @@ export class CoordStore {
    *  settled, or never held by this automation) — a `void` return would be
    *  `markDelivered`'s defect: the caller must stop renewing, not believe it
    *  still holds one. */
+  /** THE SAME RENEWAL, KEYED ON THE RUN — which is what the sweep has, and
+   *  what the renewal actually means.
+   *
+   *  Both overlap guards read the SOFT bound: `checkPreClaim` rung 1
+   *  (`nowMs < a.leaseUntil`) and `claimAndOpenRun`'s in-transaction CAS
+   *  (`row.leaseUntil > input.now`), the latter's own docstring saying "the
+   *  SOFT bound, never the hard one" precisely BECAUSE renewal moves it. And
+   *  `AUTOMATION_LEASE_MS` is documented as "Twelve sweep ticks of renewal
+   *  tolerance" — twelve, because the lane sweeps every 10 s and the soft
+   *  lease is 120 s. Nothing renewed it during the act, so at 120 s into a
+   *  spawn that ccd allows 240 s for, BOTH guards went blind and a scheduled
+   *  occurrence (or a second *Run now*) could claim the SAME automation while
+   *  its first act was still running — two sessions, one automation, neither
+   *  aware of the other.
+   *
+   *  Keyed on `leaseRunId` rather than on the automation so a renewal cannot
+   *  land on a DIFFERENT run's lease: if this run's lease was released and
+   *  re-claimed meanwhile, the row no longer names this run and the renewal
+   *  correctly does nothing. `leaseHardUntil` is never moved — the hard bound
+   *  is the one thing renewal must not be able to extend, or a wedged act
+   *  holds an automation for ever. */
+  renewAutomationLeaseForRun(runId: number, now: number): boolean {
+    const res = this.db.prepare(
+      'UPDATE automations SET leaseUntil = MIN(?, leaseHardUntil) ' +
+      'WHERE leaseRunId = ? AND leaseHardUntil > ?',
+    ).run(now + AUTOMATION_LEASE_MS, runId, now);
+    return Number(res.changes) > 0;
+  }
+
   renewAutomationLease(automationId: number, now: number): boolean {
     const res = this.db.prepare(
       'UPDATE automations SET leaseUntil = MIN(?, leaseHardUntil) ' +
