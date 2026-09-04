@@ -1541,6 +1541,8 @@ describe('ccrc install: EVERY rostered home, measured against two of them (D-145
     const [a, b] = seedTwoAccountRoster(home);
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
     for (const d of [a, b]) {
       expect(existsSync(join(d, 'skills', 'ccrc-worker', 'SKILL.md')),
         `${d} has no ccrc-worker skill`).toBe(true);
@@ -1571,6 +1573,15 @@ describe('ccrc install: EVERY rostered home, measured against two of them (D-145
     symlinkSync(real, join(b, 'CLAUDE.md'));
     const r = runInstall(home, ['install']);
     expect(r.code, r.stderr).toBe(0);
+    // THE PREMISE, ASSERTED BEFORE THE EFFECT (D-1457) — this row is the one that cannot
+    // see its own fixture degrade. Every assertion below is satisfied by a
+    // ONE-home run: with only `.claude` rostered the remover clears the real
+    // file, leaves `b/CLAUDE.md` an untouched symlink, prints the same
+    // `1 home(s) cleared, 0 left in place`, and cuts the same single backup.
+    // Rows 1 and 2 are bound by effect (two files, two skill trees); this one
+    // is bound only by this line.
+    expect(rosteredAccounts(home), 'the two-account roster never reached the box')
+      .toMatch(/claude.*second/);
     expect(readFileSync(real, 'utf8')).toBe('# shared\n');
     expect(lstatSync(join(b, 'CLAUDE.md')).isSymbolicLink(), 'the alias was replaced by a file')
       .toBe(true);

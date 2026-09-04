@@ -4194,6 +4194,35 @@ stale ledger cells re-measured. Committing the two source files again would be a
   The brief proposed **D-1376**, which is already inside the range this branch has spent — the
   standing rule (grep both trees, add one) wins over a number quoted in a brief.
 
+- **D-1457** (2026-09-04, T4 review — the row that closed D-1244 could not see its own fixture
+  degrade) — **a two-account fixture is a premise, and a row that does not assert its premise is
+  measuring something else.** D-1456's symlink row (`counts ONE physical file once when two homes
+  share it through a symlink`) is bound entirely by EFFECTS that a ONE-home box produces
+  byte-identically: with only `.claude` rostered the remover visits one home, clears the real file,
+  leaves `b/CLAUDE.md` an untouched symlink, prints the same `1 home(s) cleared, 0 left in place`,
+  adds no `graphify-read-rule`, and cuts exactly one backup. Its two siblings are self-guarding —
+  row 1 already asserted `rosteredAccounts(home)`, row 2 asserts files inside `.claude-second`,
+  which a one-home box does not have — so the one row whose entire subject is TWO homes sharing ONE
+  file was the one row that would have stayed green if the roster never reached the box. Measured,
+  not argued: deleting the `{ id: 'second', … }` entry from `seedTwoAccountRoster` reddened rows 1
+  and 2 and left row 3 **passing**.
+
+  Fix: the premise assertion `expect(rosteredAccounts(home), 'the two-account roster never reached
+  the box').toMatch(/claude.*second/)` now sits immediately after the `r.code` check in the symlink
+  row, and in the skills row for symmetry (that one was already bound by effect; the line costs
+  nothing and states the premise out loud). No production change — the shipped behaviour was and is
+  correct.
+
+  | mutation | measured red |
+  | --- | --- |
+  | the FIXTURE degraded: drop the `{ id: 'second', … }` account from `seedTwoAccountRoster` (a roster that never reaches the box) | `ccrc-install-graphify` — `Tests  3 failed \| 52 skipped (55)`: all three D-1456 rows, the symlink row now among them — `the two-account roster never reached the box: expected '(claude)' to match /claude.*second/` (before this fix that row PASSED) |
+  | re-measured, `_inst_graph_always_on_off`'s symlink arm `f="$phys"` -> `f="$phys"; n=$((n+1))` | `ccrc-install-graphify` — `Tests  1 failed \| 2 passed \| 52 skipped (55)`: *counts ONE physical file once…* — `expected 'install: box: /tmp/ccrc-inst-gfx-two-…' to match /always-on read rule — 1 home\(s\) cle…/` |
+  | re-measured, the census's `continue   # nothing of ours here` -> `n=$((n+1)); continue` | `ccrc-install-graphify` — `Tests  3 failed \| 52 passed (55)`: the symlink row plus the two pre-existing count rows |
+  | re-measured, `install-worker-skill.sh`'s home enumeration `"${CCRC_ACCOUNTS[@]}"` -> `"${CCRC_ACCOUNTS[0]}"` (row 2 still reddens on EFFECT, not on the new premise line) | `ccrc-install-graphify` — `Tests  1 failed \| 2 passed \| 52 skipped (55)`: *converges the worker skill and the graphify skill into BOTH homes* — `/tmp/…/.claude-second has no ccrc-worker skill: expected false to be true` |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1456** (this
+  branch's previous commit), so this entry is **D-1457**; `git grep D-1457 HEAD origin/main` is empty.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
