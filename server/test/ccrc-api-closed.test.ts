@@ -88,14 +88,24 @@ describe('the client stays closed', () => {
     }
   });
 
-  it('offers no way to claim someone else’s identity', () => {
-    // Identity on this fleet is attribution, not authentication — one UNIX
-    // user, no caller auth. A client that made forging it convenient would be
-    // the worst possible place on the box to add that.
-    for (const flag of ['--as', '--from-id', '--from-uuid', '--impersonate']) {
+  it('has exactly ONE identity flag, and it declares rather than forges', () => {
+    // Identity here is attribution, not authentication — one UNIX user, no
+    // caller auth. `--by` exists because CONTRIBUTING.md:66-70 sends outside
+    // contributors to this allocator and auth/gate.ts:256-259 keeps that route
+    // EXEMPT so the door stays open: it is a DECLARATION by a caller with no
+    // pane, refused on every other row, while a session in a pane is filled from
+    // its pane. These spellings would be something else — a way to answer AS
+    // another session on a route that checks attribution.
+    for (const flag of ['--as', '--from-id', '--from-uuid', '--impersonate',
+                        '--as-session', '--identity', '--who']) {
       expect(clientCode(), `ccrc-api grew a ${flag} argument`)
         .not.toMatch(new RegExp(`['"\`\\s]\\${flag}\\b`));
     }
+    // DERIVED from the client's own case labels, not a hand-kept list: a second
+    // identity-bearing flag reds here the day it lands. (`--*)` is not matched —
+    // `*` is outside the class.)
+    const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
+    expect(cases.sort()).toEqual(['--by', '--json']);
   });
 
   it('never hands the token to anything that prints', () => {

@@ -116,6 +116,19 @@ What to do, in order:
    delivery, not for the conversation: the mail row is untouched and nothing you
    said is lost.
 
+   You do not have to do that for a report addressed to the CHAIR after the
+   operator hands the program to a new coordinator. That handover queues the new
+   coordinator a new delivery — a fresh row, with its own `ack:` id — for every
+   role-addressed report the lane had already given up on, so
+   `GET /api/mail?to=<your id>` is the whole recovery, and `resume.md`'s "read
+   outstanding mail before deciding anything" holds even for a chair that changed
+   hands an hour after the report was sent. The old park is not reopened: it
+   stays exactly as it is, a true record that the delivery to that session was
+   abandoned. Nothing is re-queued for a delivery the run's own close cancelled,
+   for a run that has since finished, for mail addressed to a session by name
+   rather than to the chair, or for a report the new coordinator can already
+   read. The door itself is the operator's, and this corpus does not name it.
+
 You do not have to poll for any of this. The first `draft-present` back-off and
 the park each raise **one** notification addressed to you, the sender — the
 first one only, not one per tick, because the tray is not a ticker. What stays

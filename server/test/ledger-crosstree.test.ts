@@ -19,7 +19,13 @@
 //      D-1158 among them — one of the five numbers this program actually lost.
 //      No cardinal here, deliberately (D-1320): the totals move with every plan,
 //      and a count in a comment is stale by its own commit. What is stable is the
-//      SHAPE, and every shape below is copied from a real plan.
+//      SHAPE. Provenance is stated PER FIXTURE below and is NOT uniform: some
+//      shapes are ABRIDGED from real lines on main, the nesting fixture is
+//      CONSTRUCTED and says so in its own paragraph, and the unabridged lines are
+//      pinned by `deviation-refs.test.ts`'s corpus classification table, which
+//      reads them out of HEAD. The blanket "every shape below is copied from a
+//      real plan" that stood here was false of at least four fixtures and was
+//      refuted by this file's own nesting paragraph (D-1432).
 import { describe, it, expect } from 'vitest';
 import { crossTreeCollisions, definitionsIn, LEDGER_ALLOCATOR_ERA, projectEra,
          unallocatedDefinitions } from '../src/coord/ledger.js';
@@ -42,12 +48,19 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
 
   it('reads the colon form and the WRAPPED form that ENTRY cannot see (D-1294)', () => {
     // Exactly PR #38's spelling of D-1158 — an em-dash at end of line with the
-    // subject on the next — and build 9b's colon form. deviation-refs' ENTRY
-    // matches neither, which is why half of the first incident was undetectable
-    // even in a fully merged tree.
+    // subject on the next — and the colon form this repo's stage-5 ledger uses,
+    // copied verbatim from that plan. ENTRY matches neither, which is why half
+    // of the first incident was undetectable even in a fully merged tree.
+    //
+    // The colon exemplar was attributed to build 9b until D-1329 refuted it;
+    // that retraction reached ledger.ts only, so this fixture carried the refuted
+    // spelling for a wave. `deviation-refs.test.ts` now reads the marker below
+    // and checks the named plan against the corpus, in both directions.
+    // COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md
     expect(definitionsIn([f('a.md', '- **D-1158** (2026-08-31, found by running the suite) —\n  the subject')])
       .map((d) => d.n)).toEqual([1158]);
-    expect(definitionsIn([f('b.md', '- **D-211** (Task 3): the entry')]).map((d) => d.n)).toEqual([211]);
+    expect(definitionsIn([f('b.md', '- **D-189** (Task 1): the duckdns placeholder set shipped as')])
+      .map((d) => d.n)).toEqual([189]);
   });
 
   it('is not fooled by a prose REFERENCE — this scans entries, not mentions', () => {
@@ -58,9 +71,13 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
   it('is not fooled by a LINE-INITIAL BOLDED citation, which is the shape this repo writes', () => {
     // The first version of this suite tested only MID-LINE mentions, and a
     // prefix-only DEFINITION called all four of these definitions. Every string
-    // here is copied from a real plan on main. The second is the exact prose a
-    // wave writes when it RECORDS a ledger collision — so a prefix-only rule reds
-    // on the narrative describing the incident this guard exists to detect, and
+    // here is ABRIDGED from a real citation on main — only the D-172 one is
+    // present as written, as a prefix of a line in
+    // `2026-08-23-stage5-oss-polish.md`; the other three are shortened or
+    // reworded, and the unabridged lines are pinned against HEAD by the corpus
+    // table in `deviation-refs.test.ts`. The second is the exact prose a wave
+    // writes when it RECORDS a ledger collision — so a prefix-only rule reds on
+    // the narrative describing the incident this guard exists to detect, and
     // tells the author to renumber a deviation they only cited.
     expect(definitionsIn([f('a.md', '- **D-149 sweep:** any task that touches the EXEMPT table')])).toEqual([]);
     expect(definitionsIn([f('a.md', '- **D-172, D-173 and D-174 were re-used** by this branch')])).toEqual([]);
@@ -106,10 +123,14 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
   });
 
   it('reads the BARE-BOLD entry, which both ENTRY and the first draft were blind to', () => {
-    // Four plans on main open every entry this way — build 8, stage 2e, the
-    // worker skill, upstream-launcher-locks. A re-definition of any of those
-    // numbers was silently missed by a guard whose subject is not missing one.
-    // Strings copied verbatim from `origin/main`.
+    // Four plans on main open entries this way — build 8 (which uses BOTH forms:
+    // most of its entries are bare-bold and the rest are heading/bullet ones),
+    // stage 2e, the worker skill, upstream-launcher-locks. A re-definition of any
+    // of those numbers was silently missed by a guard whose subject is not
+    // missing one. Strings ABRIDGED from real entries on `origin/main` — not
+    // verbatim, as this comment claimed for a wave: the real lines are longer,
+    // and the corpus table in `deviation-refs.test.ts` pins them unabridged at
+    // HEAD.
     expect(definitionsIn([f('a.md', '**D-297 — the `_spawn` split demoted a process-fatal error.** Task 3 gave')])
       .map((d) => d.n)).toEqual([297]);
     expect(definitionsIn([f('a.md', '**D-301 (was D-B8-5) — four guards were decorated, not pinned.** Review')])
@@ -150,6 +171,46 @@ describe('definitionsIn — what counts as DEFINING a number', () => {
     // in, asserted rather than described.
     const stray = ['```', 'an opened block nobody closed', '- **D-1300** — a real entry after it'].join('\n');
     expect(definitionsIn([f('a.md', stray)]).map((d) => d.n)).toEqual([1300]);
+  });
+
+  // ── D-1430 ───────────────────────────────────────────────────────
+  // CommonMark 4.5 allows up to three SPACES before an opening fence; §2.2
+  // expands a tab to the next 4-column tab stop, so a TAB-indented run is four
+  // columns of indentation — an indented code block, and not a fence at all.
+  //
+  // BOTH DIRECTIONS ARE REAL, and the second is the dangerous one. The brief
+  // that sent this back called it a hide-only under-report; it is not.
+  //   (A) HIDE — a tab-indented pair opens and closes a block that does not
+  //       exist, and a real entry between them is dropped IN SILENCE.
+  //   (B) OVER-REPORT — a tab-indented run CLOSES a real fence early, leaving
+  //       an odd fence at EOF; the whole-file fail-loud arm then scans the file
+  //       whole and every QUOTED entry reads as a definition. That prints
+  //       "renumber NOW" at a quotation — the false positive D-1310 and D-1322
+  //       were both written to close, arriving through the guard that closes it.
+  //
+  // No line in today's corpus is affected: the narrowing was measured over the
+  // plans `plansAt` feeds before it was made, and the dated figures live in the
+  // wave plan, not here — this file's own header forbids a cardinal in a comment
+  // (D-1320), and this fix does not get an exemption from it.
+  it('does not read a TAB-indented run as a fence — the HIDE direction', () => {
+    const hidden = [
+      '\t```',
+      '- **D-1231** — an entry inside what is really an indented code block',
+      '\t```',
+      '- **D-1300** — this plan’s own entry, after it',
+    ].join('\n');
+    expect(definitionsIn([f('a.md', hidden)]).map((d) => d.n)).toEqual([1231, 1300]);
+  });
+
+  it('and the same class OVER-reports: a tab run closing a real fence exposes a quotation', () => {
+    const quoting = [
+      '```',
+      '- **D-1231** — the entry another plan defines, quoted',
+      '\t```',
+      '- **D-1232** — and the one after it, still quoted',
+      '```',
+    ].join('\n');
+    expect(definitionsIn([f('b.md', quoting)]).map((d) => d.n)).toEqual([]);
   });
 
   it('lets a longer fence quote a shorter one — a CONSTRUCTED case, and here is why', () => {
@@ -275,9 +336,14 @@ describe('crossTreeCollisions — one merge earlier', () => {
   });
 
   it('leaves the pre-allocator era alone — GRANDFATHERED must never have to grow', () => {
-    // Widening the SUBJECT extraction instead would have surfaced six sub-211
-    // collisions (D-73/142/143/144/149/172), every one of which would have had to
-    // join a set whose own rule says it may only SHRINK.
+    // Widening the SUBJECT extraction instead would have surfaced sub-211
+    // collisions outside GRANDFATHERED, every one of which would have had to
+    // join a set whose own rule says it may only SHRINK. The set is DERIVED,
+    // never remembered: `deviation-refs.test.ts` reads the line below and checks
+    // it against the corpus. It read SIX until D-1310 found that D-149 and D-172
+    // are citations the shipped DEFINITION drops — a retraction that reached two
+    // plan entries and not this file (D-1433).
+    // SUB-211 COLLISIONS: D-73, D-142, D-143, D-144
     expect(crossTreeCollisions([f('a.md', '- **D-72** — x')], [f('b.md', '- **D-72** — y')])).toEqual([]);
     expect(crossTreeCollisions([f('a.md', '- **D-210** — x')], [f('b.md', '- **D-210** — y')])).toEqual([]);
     // 211 is the first allocator-era number and IS in scope.

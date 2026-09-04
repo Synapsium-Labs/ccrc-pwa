@@ -20,6 +20,12 @@ import type { FleetClient } from './client.js';
  * `absent` — `checkPath` refuses a path that very often also does not exist,
  * and conflating the two would let a whitelist refusal masquerade as
  * evidence the path is clear.
+ *
+ * `statMeasured` is the second such reader, on the `stat` op's `absent?:
+ * true`, and it is the reason D-114 could be closed at all: a bare
+ * `missing: true` is what an OLDER agent sends for EVERY stat failure and
+ * what a NEWER one sends for EACCES/ENOTDIR/ELOOP, so it means UNMEASURED,
+ * never proof. Only `absent: true` proves.
  */
 
 function isTailReset(msg: TailData | TailReset): msg is TailReset {
@@ -58,25 +64,41 @@ export function createIo(client: FleetClient): FleetIO {
       return r.ok ? r.content : null;
     },
 
-    async readFileFrom(path, offset) {
+    async readFileFromMeasured(path, offset) {
       try {
         const res = await client.request({ t: 'req', op: 'readFrom', path, offset });
-        const r = res as { data?: unknown; size?: unknown };
-        if (typeof r.data !== 'string') return null;
-        return { data: r.data, size: typeof r.size === 'number' ? r.size : Buffer.byteLength(r.data, 'utf8') };
+        const r = res as { data?: unknown; size?: unknown; absent?: unknown };
+        if (typeof r.data === 'string') {
+          return { ok: true, data: r.data, size: typeof r.size === 'number' ? r.size : Buffer.byteLength(r.data, 'utf8') };
+        }
+        return { ok: false, reason: r.absent === true ? 'absent' : 'unreadable' };
       } catch {
-        return null;
+        return { ok: false, reason: 'unreadable' };
+      }
+    },
+
+    async readFileFrom(path, offset) {
+      const r = await this.readFileFromMeasured(path, offset);
+      return r.ok ? { data: r.data, size: r.size } : null;
+    },
+
+    async readFileB64Measured(path) {
+      try {
+        const res = await client.request({ t: 'req', op: 'readB64', path });
+        const r = res as { dataB64?: unknown; absent?: unknown; tooLarge?: unknown; size?: unknown };
+        if (typeof r.dataB64 === 'string') return { ok: true, dataB64: r.dataB64 };
+        // `tooLarge` first: an over-cap file is present, so it must never be
+        // reported as absent even if a future agent sent both markers.
+        if (r.tooLarge === true) return { ok: false, reason: 'too-large', size: typeof r.size === 'number' ? r.size : null };
+        return { ok: false, reason: r.absent === true ? 'absent' : 'unreadable' };
+      } catch {
+        return { ok: false, reason: 'unreadable' };
       }
     },
 
     async readFileB64(path) {
-      try {
-        const res = await client.request({ t: 'req', op: 'readB64', path });
-        const data = (res as { dataB64?: unknown }).dataB64;
-        return typeof data === 'string' ? data : null;
-      } catch {
-        return null;
-      }
+      const r = await this.readFileB64Measured(path);
+      return r.ok ? r.dataB64 : null;
     },
 
     async readdir(path) {
@@ -89,16 +111,24 @@ export function createIo(client: FleetClient): FleetIO {
       }
     },
 
-    async stat(path) {
+    async statMeasured(path) {
       try {
         const res = await client.request({ t: 'req', op: 'stat', path });
-        const r = res as { missing?: unknown; mtimeMs?: unknown; size?: unknown };
-        if (r.missing === true) return null;
-        if (typeof r.mtimeMs !== 'number' || typeof r.size !== 'number') return null;
-        return { mtimeMs: r.mtimeMs, size: r.size };
+        const r = res as { missing?: unknown; absent?: unknown; mtimeMs?: unknown; size?: unknown };
+        if (typeof r.mtimeMs === 'number' && typeof r.size === 'number') {
+          return { ok: true, mtimeMs: r.mtimeMs, size: r.size };
+        }
+        return { ok: false, reason: r.absent === true ? 'absent' : 'unreadable' };
       } catch {
-        return null;
+        // Disconnected / timeout / forbidden / bad-request — none of these is
+        // proof the path is absent, same reasoning as `readFileMeasured`.
+        return { ok: false, reason: 'unreadable' };
       }
+    },
+
+    async stat(path) {
+      const r = await this.statMeasured(path);
+      return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
     },
 
     async writeFileB64(path, dataB64) {

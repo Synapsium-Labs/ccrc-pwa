@@ -45,7 +45,6 @@ mode.
      "runId":$runid}
     JSON
     )
-    body="${resp%$'\n'*}"
 
 `byId`/`byUuid` here, NOT the mail ingress's `fromId`/`fromUuid` — a claim
 is attributed, not sent, and the route 400s the wrong spelling. All-or-
@@ -124,7 +123,7 @@ time, never stored.
 ## The allocator — `POST /api/ledger/deviations`
 
     body=$("$API" ledger allocate --json - <<JSON
-    {"project":"$project","count":8,"title":"program $slug D-block"}
+    {"byId":"$id","project":"$project","count":8,"title":"program $slug D-block"}
     JSON
     )
 
@@ -144,3 +143,10 @@ that finds an unplanned deviation with no server reachable writes
 `D-TBD` land, which turns a server outage into a loud mechanical blocker
 instead of a judgement call. Inventing a number is the root cause this
 allocator exists to delete.
+
+`byId` is who asked, and it is stored unverified — attribution, not authentication,
+the claims table's stance one section up. Omit it and the row records no holder at
+all: at least 101 of this project's allocations were in that state when this was
+written (2026-09-02), and nothing can put a holder back on them. The client fills it
+from your pane when the body leaves it out, and refuses rather than sending a blank
+one; `--by <id>` is for a caller that has no pane at all.

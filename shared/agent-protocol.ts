@@ -102,9 +102,35 @@ export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
 export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 export interface ResErr { t: 'res'; id: number; ok: false; err: string }
-// exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null};
-// readB64 → {dataB64: string|null}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true};
+// exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
+// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
+
+/** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —
+ *  the ONE vocabulary both ends of this wire fold the op's boolean
+ *  `absent?: true` flag into once they have it. `absent` means a PROVEN
+ *  ENOENT: the path genuinely does not exist. `unreadable` means everything
+ *  else — EACCES, EISDIR, ENOTDIR, ELOOP, a non-errno failure, a rejected
+ *  request (disconnected/timeout/forbidden/bad-request) — the path IS there
+ *  (or this box can't even tell) and this box just can't read it. Fail-shut
+ *  on purpose: only a proven ENOENT is allowed to answer `absent`.
+ *
+ *  Declared ONCE here (D-1438) rather than twice on the two sides of the
+ *  pair: `agent/src/fileops.ts`'s `readB64Measured`/`readFromMeasured` derive
+ *  from this instead of re-spelling the union locally, and
+ *  `server/src/io.ts`'s `ReadFailure` re-exports this rather than declaring
+ *  it. Before D-1438 the earlier plan (`docs/superpowers/plans/2026-08-20-
+ *  fleetio-measured-read.md`, "the seam's shape") deliberately kept this
+ *  union OUT of `shared/` — `agent/tsconfig.json` includes only `src/**` +
+ *  `../shared/**`, so the agent side could not import `server/src/io.ts`,
+ *  and the plan judged putting the union in `shared/` not worth also putting
+ *  it on the PWA's bundle path. `single-definition.test.ts` caught the
+ *  predicted drift instead: the pair got spelled twice anyway. Both ends
+ *  already import this file (`agent/src/server.ts`, `server/src/remote/
+ *  io.ts`), so this is the natural single home, and a type-only export adds
+ *  nothing to the PWA's bundle unless the PWA starts importing this file. */
+export type ReadFailure = 'absent' | 'unreadable';
+
 export interface TailData  { t: 'tail'; tailId: number; dataB64: string }       // appended bytes
 export interface TailReset { t: 'tail'; tailId: number; reset: true; size: number } // file truncated/rotated
 export interface PtyData   { t: 'pty'; ptyId: number; ev: 'data'; dataB64: string }

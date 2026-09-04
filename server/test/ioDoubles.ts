@@ -71,3 +71,29 @@ export function absentReadIO(predicate: (path: string) => boolean): FleetIO {
 export function absentField(id: string, field: string): FleetIO {
   return absentReadIO((p) => p.endsWith(`${id}.${field}`));
 }
+
+/**
+ * The `stat` half of `degradedReadIO`: every `statMeasured` whose path
+ * matches `predicate` answers `{ ok: false, reason: 'unreadable' }` — a path
+ * that IS there and could not be measured, which is what one dropped
+ * agent-WS round trip produces (and what an EACCES produced silently before
+ * D-114 was closed). Overrides `statMeasured` ONLY: `localIO.stat` derives
+ * from it through `this`, so spreading `localIO` carries the derivation and
+ * the two can never drift.
+ */
+export function degradedStatIO(predicate: (path: string) => boolean): FleetIO {
+  return {
+    ...localIO,
+    statMeasured: async (p) => (predicate(p) ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+  };
+}
+
+/** The `stat` half of `absentReadIO`: a PROVEN ENOENT for matching paths,
+ *  whatever is actually on disk — so a test can model a path the fixture
+ *  seeded and a race then unlinked. */
+export function absentStatIO(predicate: (path: string) => boolean): FleetIO {
+  return {
+    ...localIO,
+    statMeasured: async (p) => (predicate(p) ? { ok: false, reason: 'absent' } : localIO.statMeasured(p)),
+  };
+}

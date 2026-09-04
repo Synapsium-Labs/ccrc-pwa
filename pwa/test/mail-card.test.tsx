@@ -194,7 +194,7 @@ describe('MailCard', () => {
     const empty: SessionSnapshot = {
       events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
       dialog: null, ask: null, tasks: [], mail: [], missingFile: null,
-      strandedAccount: null, searchComplete: true, file: null,
+      strandedAccount: null, searchComplete: true, fileMeasured: true, file: null,
     };
     const backlog: SessionStreamMsg = {
       type: 'backlog', uuid: 'u1', events: [mailTurn()], offset: 40,
@@ -416,7 +416,7 @@ describe('MailCard from the live lane: a fetched envelope', () => {
     const empty: SessionSnapshot = {
       events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
       dialog: null, ask: null, tasks: [], mail: [], missingFile: null,
-      strandedAccount: null, searchComplete: true, file: null,
+      strandedAccount: null, searchComplete: true, fileMeasured: true, file: null,
     };
     const backlog: SessionStreamMsg = {
       type: 'backlog', uuid: 'u1', events: fetchOf(RAW), offset: 40,

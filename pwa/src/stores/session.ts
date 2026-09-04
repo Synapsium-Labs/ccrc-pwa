@@ -105,6 +105,13 @@ export interface SessionState {
    *  the wire reads as `true`: every pre-ladder server did complete its
    *  (shorter) search. */
   searchComplete: boolean;
+  /** Whether the transcript itself was MEASURED. False means the server's
+   *  stat (or, since the body read is measured too, its read) failed for a
+   *  reason that is not a proven ENOENT — rule (b) again, one seam further
+   *  in than `searchComplete`: the search may well have finished and still
+   *  have measured nothing. Absent on the wire reads as `true`: every
+   *  pre-field server did stat the file. */
+  fileMeasured: boolean;
   pending: PendingSend[]; // optimistic sends
   conn: 'connecting' | 'open' | 'down';
   apply(msg: SessionStreamMsg): void;
@@ -125,6 +132,7 @@ export type SessionSnapshot = Pick<
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
+  fileMeasured: boolean;
   file: string | null;
 };
 
@@ -188,6 +196,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         // one place the rename happens.
         strandedAccount: msg.foreignAccount ?? null,
         searchComplete: msg.searchComplete ?? true,
+        fileMeasured: msg.fileMeasured ?? true,
       };
     }
     case 'events':
@@ -220,8 +229,9 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'ask_cleared':
       return { ...s, ask: null };
     case 'rotated':
-      // Four transcript facts die with the transcript. Final review, Minor 6:
-      // only `events`/`uuid`/`offset` were reset here, so a rotation left
+      // FIVE transcript facts die with the transcript (final review, Minor 6;
+      // `fileMeasured` joined them with the measured-read completion) — only
+      // `events`/`uuid`/`offset` were reset here, so a rotation left
       // `strandedAccount` still naming the account the PREVIOUS file was
       // stranded under and `searchComplete` still reporting the PREVIOUS
       // search. The server normally follows `rotated` with a backlog on the
@@ -231,7 +241,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       // now. `missingFile` (the can't-find banner's path) and `file` (the
       // resume echo) go with them for the same reason; carrying `file`
       // forward in particular would echo a path belonging to the OLD uuid.
-      // Every one of the four is re-stated by the backlog that follows.
+      // Every one of the five is re-stated by the backlog that follows.
       return {
         ...s,
         events: [localDivider('Session context reset')],
@@ -241,6 +251,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         missingFile: null,
         strandedAccount: null,
         searchComplete: true,
+        fileMeasured: true,
       };
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
@@ -272,6 +283,7 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
   searchComplete: s.searchComplete,
+  fileMeasured: s.fileMeasured,
   file: s.file,
 });
 
@@ -444,6 +456,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       missingFile: null,
       strandedAccount: null,
       searchComplete: true,
+      fileMeasured: true,
       file: null,
       pending: [],
       conn: 'connecting',

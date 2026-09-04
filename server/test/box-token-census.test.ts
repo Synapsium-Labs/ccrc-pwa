@@ -19,13 +19,18 @@
 // to speak that set rather than the scanner widened to tolerate three
 // vocabularies.
 //
-// HOW TO ADD A SITE, because the next one is already known. Wave 8 inherits
-// `ccd/ccrc-api:32-38`, which states the ungated set as TWO against the four in
-// `UNGATED` (D-1168) — out of scope here because `ccd/` is on the coordinator's
-// agent-first deploy lane. Pointing this mechanism at it is meant to be a few
-// lines, not a redesign: read the file, slice the passage with `passage()`, and
-// compare `numeralsIn()` against `word(<the derived size>)` — the same
-// set-naming, one more site. Nothing about the derivation needs to change.
+// HOW TO ADD A SITE — and the next one is now done. Wave 8 corrected
+// `ccd/ccrc-api`'s deliberately-absent block, which stated the ungated set as
+// two against the four in `UNGATED` (D-1168), and put it under a scanner. It
+// landed in `coord-pause-route.test.ts`'s `enumerations()` rather than here, and
+// the reason is the same one that sent D-1223 to `auth-gate.test.ts`: the
+// stronger home is the file that already derives the thing being checked.
+// `enumerations()` feeds BOTH the count test and the lists-ALL test, so that
+// block must now name every door as well as state the count; the recipe this
+// note used to prescribe (slice with `passage()`, compare `numeralsIn()` against
+// `word(<the derived size>)`) reads number words and nothing else. The rule the
+// sites share is unchanged: the number is derived where it is derivable, and the
+// prose beside it is checked against that.
 //
 // THAT NOTE HAS NOW BEEN EXERCISED ONCE, which is the only way to know it is
 // true. `auth-gate.test.ts` stated "all 55 HTTP routes" and "the 15 exempt ones"
@@ -42,9 +47,11 @@
 // states a census. NOT `docs/superpowers/{plans,specs,programs}`, whose archived
 // generations say TWO doors, THREE doors and "all six coordinator write routes"
 // BY DESIGN — correcting them would falsify the history the D-N ledger depends
-// on. NOT `graphify-out/`, a generated artefact. NOT `ccd/`, which is out of
-// scope this wave and on the coordinator's agent-first deploy lane (D-1168:
-// `ccd/ccrc-api` states the ungated set as TWO and is reported, not fixed).
+// on. NOT `graphify-out/`, a generated artefact. NOT `ccd/`, which was out of
+// scope in wave 6 and is on the coordinator's agent-first deploy lane — its one
+// census site, `ccd/ccrc-api`'s deliberately-absent block, was corrected in wave
+// 8 and is now scanned by `coord-pause-route.test.ts`'s `enumerations()`, which
+// reads the door names and the CAPS cardinal together (D-1168, closed).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

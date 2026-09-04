@@ -1,8 +1,9 @@
 // GET /api/peers — discovery reports the contradiction instead of resolving it
 // (build 9 D9). No `addressable` boolean anywhere: `archivedAt` rides verbatim
 // and decides nothing; `archivedStale` NAMES archived-but-live; `projects[]`
-// replaces a `projectKnown` boolean because the obvious `io.stat` probe is
-// built on the one call the tree already knows lies (D-114).
+// replaces a `projectKnown` boolean: the obvious `io.stat` probe was built on
+// the one call the tree then knew lied (D-114, closed by `statMeasured`), and
+// `projects[]` is the free measurement this pass already makes.
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './db.js';
+import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
 import type { LedgerLog } from './ledgerlog.js';
@@ -16,7 +17,7 @@ import {
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   PROGRAM_KICKOFF_SUBJECT,
-  RUN_TRANSITIONS,
+  RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleGap, type LifecycleGapReason,
@@ -209,6 +210,45 @@ const RUN_ROW_COLUMNS =
  */
 const OUTSTANDING_STATES_SQL = "('queued','delivered')";
 
+/** The WRITE-side complement of `OUTSTANDING_STATES_SQL` above, built from L0's
+ *  `TERMINAL_DELIVERY_STATES` by the same `.join` interpolation
+ *  `CoordStore.TERMINAL_SQL` already uses for work items. Every delivery-row
+ *  `UPDATE` in this file names one of these two fragments and never a literal —
+ *  pinned in both directions by `single-definition.test.ts`'s two pair scans and
+ *  by `mail-hardening.test.ts`'s writer scan.
+ *
+ *  NOT the complement of `OUTSTANDING_STATES_SQL` for a token in NEITHER list: a
+ *  row holding an out-of-vocabulary `state` is not-outstanding to the positive
+ *  form and still-live to this one. That asymmetry is deliberate, unchanged by
+ *  this wave, and recorded as an open design question
+ *  (D-1406). */
+const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
+
+/** `setDeliveryEnvelope`'s answer — `SetWorkItemResult`'s shape, for
+ *  `SetWorkItemResult`'s reason. `'absent'` and `'terminal'` are kept apart
+ *  because the first says this transaction has already lost the row it just
+ *  inserted and the second says another writer finished the delivery: no
+ *  overloaded null at a seam (D-1409). */
+export type SetEnvelopeResult =
+  | { ok: true }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'terminal'; state: MailDeliveryState };
+
+/** `markAcked`'s answer. The boolean it replaces collapsed the store's refusal
+ *  reasons into one value, and at the HTTP seam collapsed ALREADY-ACKED with
+ *  PARKED — `already: !landed` said the same thing about "somebody already
+ *  acked this" and "this delivery was parked and your ack changed nothing".
+ *  Worker-skill clause 3 is "Ack before you act", so the second one, read as
+ *  the first, is a worker starting a wave on a brief the lane has abandoned.
+ *  Same remedy as `bumpReplayCount`'s union below and `SetWorkItemResult`
+ *  above: the union is the fix; the guard alone is not
+ *  (D-1410). */
+export type MarkAckedResult =
+  | { ok: true; state: 'acked' }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'already-acked'; state: MailDeliveryState }
+  | { ok: false; why: 'parked'; state: MailDeliveryState; lastError: string | null };
+
 /** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
  *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
  *  where a value would slip into the statement text. One home, and it can emit
@@ -264,6 +304,24 @@ export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
  *  keep visible. */
 const DELIBERATE_CANCEL_ERRORS_SQL =
   `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}')`;
+
+/** The ABANDONMENT half of the predicate below, lifted into its own name because
+ *  it is about to have a second reader: `requeueAbandonedCoordinatorMail`
+ *  selects exactly the rows a mailbox shows as an abandoned park, and a re-queue
+ *  that respelled these clauses would drift from the thing it is meant to
+ *  mirror — the same argument `DELIBERATE_CANCEL_ERRORS_SQL` above makes about
+ *  its two literals, one level up. Pinned by `single-definition.test.ts`'s
+ *  "spells the abandonment predicate ONCE".
+ *
+ *  THE ALIASES ARE THE CALLER'S: `d` is `mail_deliveries` and `rr` is the
+ *  delivery's own run, joined on `m.runId`. `COALESCE(rr.state, '')` is what
+ *  makes the fragment indifferent to the JOIN KIND the caller brings, which is
+ *  the whole reason a read path may reach it through a LEFT join and a write
+ *  path through an inner one. */
+const ABANDONED_PARK_SQL =
+  "(d.state = 'rejected' " +
+  `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
+  "AND COALESCE(rr.state, '') NOT IN ('done','failed'))";
 
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
@@ -334,31 +392,33 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
  * survived both acking and run close, forever. Rather than teach a writer to
  * chase this (another mutation, another race with the same close-time park
  * this file's other comments spend so many words guarding against), the
- * READ derives it: `rr.state` (via the `LEFT JOIN runs rr ON rr.id =
- * m.runId` every caller of this fragment now carries) is checked directly,
+ * READ derives it: `rr.state` (via the `runs rr ON rr.id = m.runId` join each
+ * caller of this fragment brings — LEFT in the read paths, INNER in
+ * `requeueAbandonedCoordinatorMail`, and `COALESCE` below is what makes the
+ * predicate indifferent to which) is checked directly,
  * and `COALESCE(rr.state, '')` — not a bare `rr.state NOT IN (...)` — is
  * deliberate: SQLite's `IN` against a NULL `rr.state` (no run named at all,
  * `m.runId IS NULL`, or a runId the `runs` table has no row for) is NULL,
  * and `NOT NULL` is NULL, not TRUE, which would silently exclude a
  * NULL-runId abandoned row instead of leaving it visible until acked —
- * exactly the outcome the ruling's own text calls out. Written entirely as
- * a `LEFT JOIN` in this one SQL definition: no writer touched, no park
- * restamped, every existing park-immutability guard in this file (`markDelivered`/
- * `backOff`/`rejectDelivery`'s own `NOT IN ('acked','rejected')` guards)
+ * exactly the outcome the ruling's own text calls out. Written entirely on the
+ * READ, in SQL, and now in two composed definitions — `ABANDONED_PARK_SQL`
+ * above is the abandonment half, and this constant is that half unioned with
+ * `OUTSTANDING_STATES_SQL`. Neither is a writer: no park restamped, every
+ * existing park-immutability guard in this file (`markDelivered`/
+ * `backOff`/`rejectDelivery`'s own `NOT IN ${TERMINAL_DELIVERY_SQL}` guards)
  * unchanged.
  *
  * DELIBERATELY NOT threaded through `hasOutstandingMail` (the dedupe guard
  * on `queueSystemMail`'s own retry loop) or `dueDeliveries`/`markDelivered`/
- * `rejectDelivery`'s own `NOT IN ('acked','rejected')` write-guards — this
+ * `rejectDelivery`'s own `NOT IN ${TERMINAL_DELIVERY_SQL}` write-guards — this
  * predicate answers "is this worth a human's attention", a UI-facing
  * question, not "should the delivery lane act on this again", which stays
  * exactly `'rejected'`-is-terminal (bounded context 5) for every one of
  * those.
  */
 const OUTSTANDING_OR_ABANDONED_SQL =
-  `(d.state IN ${OUTSTANDING_STATES_SQL} OR (d.state = 'rejected' ` +
-  `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
-  "AND COALESCE(rr.state, '') NOT IN ('done','failed')))";
+  `(d.state IN ${OUTSTANDING_STATES_SQL} OR ${ABANDONED_PARK_SQL})`;
 
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns.
@@ -583,6 +643,20 @@ export class CoordStore {
    *   (d) role-addressed with `mail.runId` NULL -> LEFT. See D-1142 on
    *       `repointCoordinatorMail` below: it cannot be PROVEN to be this
    *       program's, and the fold is recorded rather than opened.
+   *   (e) role-addressed, naming a run of THIS program, ABANDONED against a
+   *       displaced claimant — a park this lane GAVE UP on, never a deliberate
+   *       cancel, on a run that is not itself terminal -> the heir is queued a
+   *       NEW delivery for the same `mail` row. Arm (c) stands exactly as
+   *       written and is not weakened by this: the parked row is not moved and
+   *       not reopened. What the heir gets is a SECOND delivery of one mail,
+   *       which is what two delivery attempts to two recipients have always
+   *       looked like in this schema — `mail` and `mail_deliveries` are separate
+   *       tables for exactly that reason. The set is not hand-written here
+   *       either: it is `ABANDONED_PARK_SQL`, the same predicate
+   *       `outstandingMailFor(<corpse>)` uses to decide a park still needs a
+   *       human, so "what the heir inherits" and "what the corpse's box was
+   *       showing" cannot drift apart. (D-1425,
+   *       `requeueAbandonedCoordinatorMail` below.)
    * …and, in the opposite direction, an outstanding `program-kickoff` to a
    * displaced claimant is CANCELLED rather than repointed (D-1143,
    * `cancelKickoffsTo`): a re-kickoff queued minutes before a reclaim would
@@ -603,9 +677,12 @@ export class CoordStore {
    * mail to a provably-dead coordinator parks itself `undeliverable` about
    * fifteen and a half minutes after it was queued. Past that window there is
    * nothing outstanding left to repoint and the report stays on the corpse,
-   * visible to `outstandingMailFor(<corpse>)` and to nobody else. Reopening a
-   * parked row is a different decision, on a different door, and this one does
-   * not make it.
+   * visible to `outstandingMailFor(<corpse>)` and to nobody else — and that is
+   * now arm (e)'s half of the job rather than a hole:
+   * `requeueAbandonedCoordinatorMail` queues the heir a NEW delivery for exactly
+   * the parks that mailbox was showing. Reopening the parked row is still a
+   * decision this store does not make. The row stays `rejected`, and the reason
+   * it parked stays readable on it.
    *
    * THE ENVELOPE IS NOT RE-RENDERED, deliberately (D-1142). `renderEnvelope`
    * runs exactly ONCE, at queue time (spec:174-177, "verbatim, never
@@ -657,6 +734,14 @@ export class CoordStore {
       if (displaced.length > 0) {
         this.cancelKickoffsTo(displaced);
         this.repointCoordinatorMail(run.program, to, displaced);
+        // LAST, and the position is LOAD-BEARING — but not for `cancelKickoffsTo`'s
+        // reason above, which is about a narrowing statement running before a
+        // widening one and does not apply here. This statement's `NOT EXISTS`
+        // clause reads `mail_deliveries` as the two above left it, so a mail the
+        // repoint just moved to `to` is SEEN and skipped. Run first, that row
+        // would still name the corpse, the guard would miss it, and the heir
+        // would be handed two copies of one report.
+        this.requeueAbandonedCoordinatorMail(run.program, to, displaced);
       }
       return {
         ok: true as const, program: run.program,
@@ -766,6 +851,207 @@ export class CoordStore {
       'SELECT m.id FROM mail m JOIN runs r ON r.id = m.runId ' +
       "WHERE m.toId = 'coordinator' AND r.program = ?)",
     ).run(to, ...displaced, program);
+  }
+
+  /**
+   * D-1425 — the arm (a) could not reach. A role-addressed report the
+   * lane had ALREADY GIVEN UP on is delivered to the heir as a NEW row.
+   *
+   * WHY A SECOND DELIVERY AND NOT AN UN-PARK. Un-parking is one statement and
+   * three problems. It would be the first writer in this tree to return a
+   * terminal row to a NON-TERMINAL state — not the first to reopen a terminal
+   * row, which `markAcked` below already does for one park, and the broader
+   * sentence would itself be a false claim. It would force a ruling on
+   * `deliveredAt` that has no true answer: `sweepMail` branches on it (the
+   * replay bump and the session-dead rung both read it), so keeping the corpse's
+   * value counts the HEIR's first receipt as a replay, and nulling it denies a
+   * delivery that happened — one column carrying two conditions a consumer
+   * handles differently. And it would falsify arm (c) here, the bound paragraph
+   * above, and `ccd/coordinator-skill/references/mail-envelope.md`'s "the park
+   * is terminal for that delivery". A new row makes every one of those sentences
+   * stay true, and its zeroed counters are TRUE OF IT rather than reset.
+   *
+   * NOT A RE-RENDER OF A REPLAY. spec:176-177 is "Until acked, the delivery
+   * replays — verbatim, never re-rendered". That binds a DELIVERY replaying;
+   * this is a second delivery, so it renders its own envelope, naming the heir
+   * in `to:` and its own id in `ack:` — the `queueDelivery(…, '') ->
+   * renderEnvelope(delivery.id) -> setDeliveryEnvelope` pair `routes.ts` and
+   * `rundefs.ts` already use, for the same reason (the delivery id does not
+   * exist until the row does).
+   *
+   * THE PREDICATE IS NOT HAND-WRITTEN. `ABANDONED_PARK_SQL` is the mailbox's own
+   * "this park still needs a human" clause, so the deliberate-cancel parks (a
+   * run closing, a chair changing hands) and the parks whose own run has since
+   * finished are excluded BY THE CONSTANT rather than by three more words here.
+   * The rest are the repoint's clauses, unchanged in meaning: `d.toId IN
+   * (<displaced>)` (never `to`, never a bystander), `m.toId = 'coordinator'`
+   * (arm (b)), the INNER join to `runs` (arm (d) — every `m.runId IS NULL` row
+   * drops out on the way), and `rr.program = ?`.
+   *
+   * TWO CLAUSES ARE THIS METHOD'S OWN, and they exist because this is the FIRST
+   * writer in the tree to give one `mail` row a second delivery. Nothing else
+   * ever did — `queueDelivery` has exactly two other call sites and each follows
+   * an `insertMail` — and `mail_deliveries` carries no unique key on
+   * `(mailId, toId)` to fall back on (`schema.ts`: the one index is
+   * `mail_deliveries_due`). So:
+   *   `GROUP BY m.id` — a program whose rows disagree about the claimant (the
+   *     hand-recovered row the caller's own comment describes) puts TWO
+   *     displaced ids in `displaced`, and one mail parked against both would
+   *     otherwise be queued to the heir twice. SQLite's bare-column rule makes
+   *     the selected `m.*`/`rr.*` values well defined here: `m.id` is the
+   *     grouping key and `rr` joins it one-to-one on `m.runId`.
+   *   `NOT EXISTS (… x.toId = ? AND x.state IN OUTSTANDING_STATES_SQL)` — the
+   *     heir may ALREADY be able to read this message, most often because
+   *     `repointCoordinatorMail` handed it to them one statement ago. This is
+   *     why this call is last: run before the repoint, the guard would look at a
+   *     row still naming the corpse and mint a duplicate.
+   *   `ORDER BY MIN(d.id)` is NOT a third dedupe clause, and it is deliberately
+   *     NOT pinned. SQLite promises no row order for a `GROUP BY`, and this loop
+   *     mints one delivery id per row it walks, so without it the heir's new ids
+   *     would come back in whatever order the planner chose. No test can red on
+   *     its removal, because on REACHABLE state there is nothing to observe:
+   *     `insertMail` and `queueDelivery` are adjacent at every call site in this
+   *     tree, so `m.id` order and `MIN(d.id)` order are the same order, and a
+   *     fixture that pulled them apart would exist only to be ordered. Said out
+   *     loud rather than guarded by a test that would be green either way.
+   *
+   * THE READERS OF BOTH PREDICATES WERE WALKED, as `OUTSTANDING_OR_ABANDONED_SQL`'s
+   * own docstring does for D-1143 — and the walk is DERIVED, not typed.
+   * `single-definition.test.ts`'s "the re-queue's reader walk names every holder
+   * the file actually has" scans this file for both interpolations, maps each hit
+   * to the declaration it sits in, and reds if any name is missing from the list
+   * below: the same move as the two cases beside it, one level up from a
+   * duplicated VALUE to a duplicated CLAIM. It is derived because the hand-typed
+   * first version was WRONG (D-1426) — it claimed "all four", named a reader on
+   * the narrow side (`dueDeliveries`) that does not use the constant at all, and
+   * omitted `runHealth`, which is the single reader whose OUTPUT this arm moves.
+   *
+   * On the composed `OUTSTANDING_OR_ABANDONED_SQL` — three readers:
+   *   `outstandingMailFor(<heir>)` — the point. Reached from `GET /api/mail?to=`
+   *     and from `sessionws.ts`'s `checkMail`, so the heir's live socket shows
+   *     it with no wire change.
+   *   `unreadMailCount(runId, sessionId)` — NOT reached, and not by luck:
+   *     `hydrateRun` calls it with `row.sessionId`, the run's WORKER, never with
+   *     `claimedBy`. A delivery to the heir CHAIR therefore leaves
+   *     `RunSummary.unreadMail` — the badge the MailStrip renders — exactly
+   *     where it was. Measured by "the re-queue leaves the wave unread badge
+   *     alone" in `coord-store.test.ts`.
+   *   `runHealth`'s coordinator-kickoff-wedge query — unreachable: it is
+   *     `m.runId IS NULL`-scoped, and every row this method inserts belongs to a
+   *     mail that survived an INNER join on `m.runId`. (The hand-typed version
+   *     put this query in `healthFor`, which only CALLS `runHealth`.)
+   *
+   * On the narrower `OUTSTANDING_STATES_SQL` — nine holders, in file order:
+   *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
+   *     no reader of its own.
+   *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
+   *     method inside the one `reclaimProgram` transaction, so neither can see a
+   *     row it inserted; that ordering is argued above and at each of their own
+   *     definitions. A LATER reclaim is the reachable case, and both stay right:
+   *     the cancel matches `mail.runId IS NULL` kickoffs only and every row here
+   *     has a run, and the repoint moving a still-outstanding re-queued row on
+   *     to the NEXT heir is arm (a) doing exactly its job.
+   *   `requeueAbandonedCoordinatorMail` — this method's own `NOT EXISTS` dedupe,
+   *     above.
+   *   `cancelOutstandingDeliveries` — reached, and correctly. A new row belongs
+   *     to a mail with a run, so when that run closes the row is parked like any
+   *     other outstanding delivery, with `MAIL_RUN_CLOSED_ERROR` — a DELIBERATE
+   *     cancel, which `ABANDONED_PARK_SQL` excludes, so it cannot come back
+   *     round through this arm on a later reclaim.
+   *   `runHealth`'s outstanding-vs-parked count — THE ONE READER WHOSE OUTPUT
+   *     THIS ARM CHANGES, and the one the hand-typed walk omitted. Both halves
+   *     of that query are per-DELIVERY, exactly as `RunHealth.mailOutstanding`
+   *     and `mailParked` are documented (`shared/api.ts`), so for a single
+   *     re-queued report the run's `mailOutstanding` goes 0 -> 1 while
+   *     `mailParked` stays 1, and `pwa/src/fleet/runWords.ts` renders
+   *     "1 parked ... (1 still outstanding)" about ONE message. Nothing here is
+   *     wrong: the park is still a park, the new delivery is still outstanding,
+   *     each field says what it is documented to say, and the outstanding half
+   *     clears on the heir's ack. It is written down because the sentence an
+   *     operator READS counts one message twice, and a walk that skipped this
+   *     reader would have shipped that surprise unannounced.
+   *   `hasOutstandingMail` — its slot cannot be swallowed, but NOT for the
+   *     reason this walk first gave. That version said the slot is "keyed by
+   *     SENDER" and then argued from `queueSystemMail`'s ADDRESSEE ("no call
+   *     site addressing the ROLE") — two different axes, so a true premise sat
+   *     under a conclusion it did not carry. The key is
+   *     `(m.fromId, m.runId, d.toId, m.subject)`; `m.toId`, the column THIS
+   *     query selects on, is not in it at all. What protects the slot is that a
+   *     re-queued row is the opposite of a system mail on BOTH keyed axes.
+   *     RECIPIENT: `queueSystemMail`'s four call sites (`dispatch.ts:661`,
+   *     `close.ts:248`, `routes.ts:1235`, `kickoff.ts:156`) each pass a WORKER
+   *     session id — `run.sessionId`, or the id the kickoff route was given —
+   *     never the chair, while `d.toId` here is `to`, the heir CHAIR. SENDER:
+   *     the probe's `fromId` is a `SystemMailSender`, the role pair, whereas
+   *     every row this method can select arrived through `POST /api/mail`, which
+   *     refuses a `fromId` with no registry row (`routes.ts:543-558`) — so
+   *     `m.fromId` on it is a session id. The SENDER axis is the load-bearing
+   *     one: `to` is operator-typed free text (`POST /api/runs/:id/reclaim`
+   *     reads `claimedBy` off the body), so nothing structurally stops an
+   *     operator naming a run's own worker as the heir, and the recipient axis
+   *     alone would then be resting on `m.subject` happening to differ.
+   *   `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
+   *     `m.runId IS NULL`-scoped and therefore unreachable too.
+   *
+   * BOUNDED by the role-addressed reports of ONE program that parked while its
+   * coordinator was dead, at most one new row per `mail` row, and deliberately
+   * NOT capped beyond that: a cap here would drop mail silently, which is the
+   * failure this method exists to end.
+   */
+  // THIS SIGNATURE IS MULTI-LINE, AND THAT IS A DECLARED EXEMPTION, NOT AN
+  // OVERSIGHT. Task 24 requires delivery-row WRITERS to keep their signature on
+  // one line, because Task 26's writer census walks back from each prepared
+  // statement to the nearest single-line signature and a wrapped one silently
+  // mis-attributes. This method is not such a writer: it prepares a SELECT and
+  // reaches the delivery rows only through `queueDelivery` and
+  // `setDeliveryEnvelope`, each of which carries its own one-line signature and
+  // is named by the census in its own right. The exemption is stated rather
+  // than relied on: `mail-hardening.test.ts` — Task 26's census, which landed
+  // earlier in this wave — is re-run AFTER this method exists, so if the walk
+  // ever does reach back past this signature, it reds here rather than in the
+  // field.
+  private requeueAbandonedCoordinatorMail(
+    program: string, to: string, displaced: readonly string[],
+  ): number {
+    const rows = this.db.prepare(
+      'SELECT m.id AS mailId, m.fromId AS fromId, m.kind AS kind, m.subject AS subject, ' +
+      'm.body AS body, m.artifacts AS artifacts, m.runId AS runId, ' +
+      'rr.program AS program, rr.wave AS wave, rr.waveOf AS waveOf ' +
+      'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+      'JOIN runs rr ON rr.id = m.runId ' +
+      `WHERE ${ABANDONED_PARK_SQL} AND d.toId IN (${placeholders(displaced.length)}) ` +
+      "AND m.toId = 'coordinator' AND rr.program = ? " +
+      'AND NOT EXISTS (SELECT 1 FROM mail_deliveries x ' +
+      `WHERE x.mailId = m.id AND x.toId = ? AND x.state IN ${OUTSTANDING_STATES_SQL}) ` +
+      'GROUP BY m.id ORDER BY MIN(d.id)',
+    ).all(...displaced, program, to) as {
+      mailId: number; fromId: string; kind: string; subject: string; body: string;
+      artifacts: string; runId: number; program: string; wave: number; waveOf: number | null;
+    }[];
+    for (const r of rows) {
+      const delivery = this.queueDelivery(r.mailId, to, '');
+      // THE RESULT IS READ, NOT DROPPED. Task 24 gave `setDeliveryEnvelope` a
+      // `SetEnvelopeResult` precisely because "a writer whose safety rests on its
+      // two callers' shape breaks silently the day a third one appears" — this IS
+      // that third caller, and TypeScript does not complain about a discarded
+      // return, so dropping it here would re-mint the defect one task after it was
+      // fixed. Same handling as the other two: unstampable is a bug, not a state.
+      const stamped = this.setDeliveryEnvelope(delivery.id, renderEnvelope({
+        id: delivery.id, fromId: r.fromId, toId: to, runId: r.runId,
+        program: r.program, wave: r.wave, waveOf: r.waveOf,
+        // Narrowed the way `hydrateMail` narrows it, not cast: `kind` is a
+        // CLOSED union and `'unknown'` is a real member. The branch is dead in
+        // practice (`insertMail`'s parameter is already `MailKind`), and a cast
+        // would have been this method quietly asserting what it did not check.
+        kind: isMailKind(r.kind) ? r.kind : 'unknown',
+        subject: r.subject, body: r.body,
+        artifacts: JSON.parse(r.artifacts) as string[],
+      }));
+      if (!stamped.ok) {
+        throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
+      }
+    }
+    return rows.length;
   }
 
   /**
@@ -2045,8 +2331,17 @@ export class CoordStore {
   }
 
   /**
-   * Overwrites a delivery's stored `envelope` — used by the ingress route
-   * ONLY, once, immediately after `queueDelivery`, to close a bug fix-round
+   * Overwrites a delivery's stored `envelope`, once, immediately after
+   * `queueDelivery`. THREE callers, each doing exactly that and none of them a
+   * re-render: the ingress route in `routes.ts`, the system-mail queue in
+   * `rundefs.ts` (which has called it since Build 7 — this sentence said "the
+   * ingress route ONLY" for two builds while it did:
+   * D-1426) and `requeueAbandonedCoordinatorMail`
+   * in this file, which renders
+   * the heir's own envelope for a second delivery of one mail. Pinned by
+   * `single-definition.test.ts`'s "setDeliveryEnvelope names every caller it
+   * has", which derives the caller set from `server/src` rather than reading
+   * this sentence. It exists to close a bug fix-round
    * finding 5 / D-41 named: the envelope's own `ack:` line has to name the
    * DELIVERY id (what `delivery(id)`/`markAcked` resolve by, both above),
    * but `mail.id` and `mail_deliveries.id` are two SEPARATE `AUTOINCREMENT`
@@ -2060,9 +2355,37 @@ export class CoordStore {
    * re-render: `renderEnvelope` itself still runs exactly once, at queue
    * time (spec:176-177, "verbatim, never re-rendered"), and this method
    * never re-derives its argument — it only stores what the caller already
-   * computed. */
-  setDeliveryEnvelope(id: number, envelope: string): void {
-    this.db.prepare('UPDATE mail_deliveries SET envelope = ? WHERE id = ?').run(envelope, id);
+   * computed.
+   *
+   * GUARDED, and the guard is a no-op on every reachable path — deliberately.
+   * EVERY call site runs inside the SAME `tx()` as the `queueDelivery` above
+   * it, and `tx` is `BEGIN IMMEDIATE` over a synchronous `DatabaseSync`, so
+   * the row this stamps is provably `'queued'` and no concurrent writer can see
+   * it. The clause is here anyway because a writer whose safety rests on its
+   * callers' shape is a writer that breaks silently the day a third one
+   * appears — and one does, in Task 61 of this same wave — and because an
+   * audit with one exception in it is an audit nobody
+   * finishes. DO NOT "simplify" it away: it costs one `AND`, and it is what
+   * lets `mail-hardening.test.ts`'s writer scan say EVERY with no carve-out
+   * (D-1409).
+   *
+   * The result is a union rather than `void` for the reason `bumpReplayCount`
+   * states below — "the union is the fix; the guard alone is not". Adding a
+   * guard and keeping `void` would have put a caller-invisible refusal into one
+   * of the very methods this wave exists to fix. `'absent'` and `'terminal'`
+   * are separated because they are two conditions a caller handles differently:
+   * the first means the row this transaction just inserted is gone, the second
+   * means someone else finished this delivery. */
+  setDeliveryEnvelope(id: number, envelope: string): SetEnvelopeResult {
+    const res = this.db.prepare(
+      `UPDATE mail_deliveries SET envelope = ? WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
+    ).run(envelope, id);
+    if (Number(res.changes) > 0) return { ok: true };
+    const row = this.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string } | undefined;
+    if (!row) return { ok: false, why: 'absent' };
+    return { ok: false, why: 'terminal',
+             state: isMailDeliveryState(row.state) ? row.state : 'unknown' };
   }
 
   /**
@@ -2154,7 +2477,7 @@ export class CoordStore {
     ).all() as { id: number; toId: string; deliveredAt: number | null; ingestedAt: number | null }[];
   }
 
-  /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22,
+  /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — review finding 22,
    *  widened by a scoped-verify fix — a park must not be reopened either):
    *  `sweepMail` reads the row it is about to (re)send BEFORE
    *  `await sendPrompt(...)`, and writes the outcome AFTER — a window of
@@ -2174,8 +2497,8 @@ export class CoordStore {
    *  build's only two states a send racing a concurrent writer must never
    *  reopen; every other three-writers-of-this-column guard
    *  (`rejectDelivery` below) carries the identical `NOT IN` list for the
-   *  same reason. `markAcked` itself already reads-before-writing for the
-   *  identical reason (see its own docstring). */
+   *  same reason. `markAcked` itself refuses a terminal row in its own
+   *  `WHERE` for the identical reason (see its own docstring). */
   markDelivered(id: number, at: number): void {
     this.db.prepare(
       // The gate columns clear IN THE SAME STATEMENT as the move (D-792), so
@@ -2183,7 +2506,7 @@ export class CoordStore {
       // guard skips keeps its gate. A second UPDATE could clear a gate off a
       // row this one declined to touch.
       "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, " +
-      "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(at, id);
   }
 
@@ -2202,7 +2525,7 @@ export class CoordStore {
    * `rejected('undeliverable')` — the spec's own terminal state, otherwise
    * structurally unreachable for exactly the deliveries that succeed.
    *
-   * `AND state NOT IN ('acked','rejected')` — the same guard every other
+   * `AND state NOT IN ${TERMINAL_DELIVERY_SQL}` — the same guard every other
    * writer of this table carries (`markDelivered`/`backOff`/`rejectDelivery`
    * above and below), closing the same seconds-to-half-a-minute window in
    * which an ack or a park lands from a separate code path between the
@@ -2220,7 +2543,7 @@ export class CoordStore {
    */
   bumpReplayCount(id: number): { state: 'counted'; replayCount: number } | { state: 'terminal' } {
     const res = this.db.prepare(
-      "UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `UPDATE mail_deliveries SET replayCount = replayCount + 1 WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(id);
     if (res.changes === 0) return { state: 'terminal' };
     return {
@@ -2234,7 +2557,7 @@ export class CoordStore {
    *  NOT touch `deliveredAt` — a REPLAY re-dates the clock through its own
    *  fresh `markDelivered` call, and `dueDeliveries`'s `MAX(...)` above is
    *  what combines the two rather than either writer clobbering the other's
-   *  column. `AND state NOT IN ('acked','rejected')` (Build 9b wave 0, D10
+   *  column. `AND state NOT IN ${TERMINAL_DELIVERY_SQL}` (Build 9b wave 0, D10
    *  hole 3): shielded until now only by its caller's query filter
    *  (`deliveredUnacked()` selects `delivered` rows) — a filter is a
    *  courtesy of one caller, a guard is a property of the row; the same
@@ -2242,28 +2565,30 @@ export class CoordStore {
    *  guards against. */
   markIngested(id: number, at: number): void {
     this.db.prepare(
-      "UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `UPDATE mail_deliveries SET ingestedAt = ? WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(at, id);
   }
 
-  /** false when already acked, absent, or PARKED — an ack is idempotent, but
-   *  the CALLER (the ack route) needs to know whether ITS call was the one
-   *  that landed, so a double-ack (or a late ack racing a park) answers
-   *  honestly rather than reporting success twice. `'rejected'` joins
-   *  `'acked'` in the refusal (fix — scoped-verify H2): a park is a DECISION
-   *  that this delivery is done — undeliverable, and terminal — the same
-   *  reason `markDelivered` above and `rejectDelivery` below both refuse to
-   *  reopen a `'rejected'` row; an ack landing after `POST /api/runs/:id/close` ->
+  /** Refuses — and NAMES the refusal — when already acked, absent, or PARKED
+   *  (D-1410). An ack is idempotent, but the CALLER (the ack route) needs to
+   *  know whether ITS call was the one that landed, so a double-ack (or a late
+   *  ack racing a park) answers honestly rather than reporting success twice;
+   *  and it needs the two refusals APART, which one boolean could not give it.
+   *  `'rejected'` joins `'acked'` in the refusal (fix — scoped-verify H2): a
+   *  park is a DECISION that this delivery is done — undeliverable, and
+   *  terminal — the same reason `markDelivered` above and `rejectDelivery`
+   *  below both refuse to reopen a `'rejected'` row; an ack landing after
+   *  `POST /api/runs/:id/close` ->
    *  `cancelOutstandingDeliveries` (or a replay-ceiling/reaped-recipient
    *  park) already committed had no such guard, so it flipped the row to
    *  `{state:'acked', rejectCode:'undeliverable'}` — self-contradictory, and
    *  the gap `markDelivered`'s own docstring already claimed shut ("`acked`
    *  and `rejected` are this build's only two states a concurrent writer
-   *  must never reopen... `markAcked` itself already reads-before-writing
-   *  for the identical reason") before this fix made that claim true here
-   *  too. Harmless for replay either way (`dueDeliveries` selects neither
-   *  `acked` nor `rejected`), but a row is not allowed to claim both an ack
-   *  and a park happened to it.
+   *  must never reopen... `markAcked` itself refuses a terminal row in its
+   *  own `WHERE` for the identical reason") before this fix made that claim
+   *  true here too. Harmless for replay either way (`dueDeliveries` selects
+   *  neither `acked` nor `rejected`), but a row is not allowed to claim both
+   *  an ack and a park happened to it.
    *
    *  ONE NAMED EXCEPTION (orchestrator ruling I2, part (b)): a row whose
    *  rejection is EXACTLY the replay-ceiling park — `rejectCode:'undeliverable'`
@@ -2279,21 +2604,40 @@ export class CoordStore {
    *  (both columns, not merely `state='rejected'`) so no OTHER park —
    *  `cancelOutstandingDeliveries`'s `'run closed'`, the never-delivered
    *  `MAIL_MAX_ATTEMPTS` park, an `enter-ignored` park — is ever let back in
-   *  through this door; every one of those stays refused, unchanged. */
-  markAcked(id: number, at: number): boolean {
-    const row = this.db.prepare('SELECT state, rejectCode, lastError FROM mail_deliveries WHERE id = ?')
-      .get(id) as { state: string; rejectCode: string | null; lastError: string | null } | undefined;
-    if (!row || row.state === 'acked') return false;
-    const isAbandonedReplayPark = row.state === 'rejected'
-      && row.rejectCode === 'undeliverable' && row.lastError === MAIL_REPLAY_CEILING_ERROR;
-    if (row.state === 'rejected' && !isAbandonedReplayPark) return false;
-    this.db.prepare('UPDATE mail_deliveries SET state = ?, ackedAt = ?, '
-      + 'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ?')
-      .run('acked', at, id);
-    return true;
+   *  through this door; every one of those stays refused, unchanged.
+   *
+   *  THE GUARD IS NOW IN THE `WHERE`, not in the two `if`s that used to precede
+   *  the write, and the I2(b) exception rides in the same clause as an `OR` on
+   *  both columns. The SELECT no longer DECIDES — it only LABELS a refusal the
+   *  UPDATE already made, which closes the read-then-write window this method
+   *  carried: in-process it was airtight (synchronous `DatabaseSync`, no
+   *  `await` between the two statements), but that safety was a property of the
+   *  runtime, not of the row, and one added `await` would have removed it
+   *  silently. An out-of-vocabulary `state` token still passes — the negative
+   *  form is true of anything that is not in `TERMINAL_DELIVERY_STATES` — which
+   *  is exactly the behaviour this method had before and is deliberately NOT
+   *  changed here: whether an unnameable state is terminal is an open design
+   *  question (D-1406), and answering it inside a refactor
+   *  would be deciding it by accident. */
+  markAcked(id: number, at: number): MarkAckedResult {
+    // UPDATE FIRST, then label. One statement decides; the read that follows is
+    // only there to say WHICH refusal it was.
+    const res = this.db.prepare(
+      'UPDATE mail_deliveries SET state = ?, ackedAt = ?, '
+      + 'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL '
+      + `WHERE id = ? AND (state NOT IN ${TERMINAL_DELIVERY_SQL} `
+      + "OR (state = 'rejected' AND rejectCode = 'undeliverable' AND lastError = ?))",
+    ).run('acked', at, id, MAIL_REPLAY_CEILING_ERROR);
+    if (Number(res.changes) > 0) return { ok: true, state: 'acked' };
+    const row = this.db.prepare('SELECT state, lastError FROM mail_deliveries WHERE id = ?')
+      .get(id) as { state: string; lastError: string | null } | undefined;
+    if (!row) return { ok: false, why: 'absent' };
+    const state: MailDeliveryState = isMailDeliveryState(row.state) ? row.state : 'unknown';
+    if (row.state === 'acked') return { ok: false, why: 'already-acked', state };
+    return { ok: false, why: 'parked', state, lastError: row.lastError };
   }
 
-  /** `WHERE state NOT IN ('acked','rejected')` (fix — scoped-verify H1, the
+  /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — scoped-verify H1, the
    *  same guard `markDelivered`/`rejectDelivery` below carry): this is the
    *  sweep's own SEND-FAILURE path, resolving on `sendPrompt`'s own delayed
    *  timeline, so a send that was in flight when a SEPARATE park
@@ -2323,7 +2667,7 @@ export class CoordStore {
   backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
       'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
-      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
   }
 
@@ -2351,11 +2695,11 @@ export class CoordStore {
     this.db.prepare(
       'UPDATE mail_deliveries SET lastGate = ?, gateAt = ?, ' +
       'gateCount = CASE WHEN ? THEN gateCount + 1 ELSE 1 END, gateSince = ? ' +
-      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(gate, now, same ? 1 : 0, same ? (sinceIfSame ?? now) : now, id);
   }
 
-  /** `WHERE state NOT IN ('acked','rejected')` (fix — review finding 22, the
+  /** `WHERE state NOT IN ${TERMINAL_DELIVERY_SQL}` (fix — review finding 22, the
    *  same ack-race guard `markDelivered` above now carries, applied to this
    *  writer's own unconditional `state` overwrite, and widened for the same
    *  reason): a `sendPrompt` failure resolving after a concurrent ack landed
@@ -2372,7 +2716,7 @@ export class CoordStore {
     this.db.prepare(
       "UPDATE mail_deliveries SET state = 'rejected', rejectCode = ?, lastError = ?, " +
       "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL " +
-      "WHERE id = ? AND state NOT IN ('acked','rejected')",
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(code, lastError, id);
   }
 
@@ -3320,8 +3664,6 @@ export class CoordStore {
     return rows.map((r) => this.hydrateLedger(r));
   }
 
-  /** allocated -> landed, once — `landed` genuinely means "in a merged plan"
-   *  (D13), so the guard keeps a re-scan from re-stamping the date. */
   /** Every project the allocator has ever issued a number for. The reconcile
    *  sweep's own project list used to be derived from OPEN allocations alone,
    *  which is the right corpus for "did this number land" and the wrong one for
@@ -3339,6 +3681,10 @@ export class CoordStore {
       .all(project) as unknown as { n: number }[]).map((r) => r.n));
   }
 
+  /** allocated -> landed, once. `landed` means the number was seen DEFINED in a
+   *  plan file of the main checkout's working tree (D13) — not proof of a merge —
+   *  and the `state = 'allocated'` guard makes it TERMINAL, so a re-scan never
+   *  re-stamps the date and a wrong stamp is never re-decided. */
   markLanded(project: string, n: number, landedIn: string, at: number): void {
     this.db.prepare(
       "UPDATE ledger_alloc SET state = 'landed', landedAt = ?, landedIn = ? " +

@@ -60,6 +60,8 @@ export function SessionScreen({
   const missingFile = useStore((s) => s.missingFile);
   const strandedAccount = useStore((s) => s.strandedAccount);
   const searchComplete = useStore((s) => s.searchComplete);
+  const fileMeasured = useStore((s) => s.fileMeasured);
+  const file = useStore((s) => s.file);
   const tasks = useStore((s) => s.tasks);
   const mail = useStore((s) => s.mail);
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
@@ -167,10 +169,12 @@ export function SessionScreen({
   // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
   // in remote mode) the banner below states the real fact and this screen
   // says nothing further — "No messages yet" over a host nobody could read is
-  // exactly the confident empty chat this spec exists to delete. A COMPLETE
-  // search that found nothing keeps the empty state: there genuinely is no
+  // exactly the confident empty chat this spec exists to delete. `fileMeasured`
+  // gates the same way, one seam further in: a search can finish and still not
+  // have measured the transcript itself (D-114). A COMPLETE, MEASURED search
+  // that found nothing keeps the empty state: there genuinely is no
   // transcript, and that is worth saying.
-  const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete;
+  const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete && fileMeasured;
 
   // The substrate gate (spec §4): under a standing fault the console cannot
   // SEE this session, so the two destructive controls this screen owns — the
@@ -298,18 +302,22 @@ export function SessionScreen({
         </div>
       )}
 
-      {/* Two different facts, two different sentences. A COMPLETE search that
-          found nothing keeps today's wording. An INCOMPLETE one says the host
-          could not be read — never "there is no transcript", which is the
-          overloaded-null rule (b) forbids at a seam. */}
-      {missingFile !== null && (
+      {/* Two different facts, two different sentences. A COMPLETE, MEASURED
+          search that found nothing keeps today's wording. An INCOMPLETE
+          search, or a complete one that could not measure the transcript
+          itself (D-114), says the host could not be read — never "there is
+          no transcript", which is the overloaded-null rule (b) forbids at a
+          seam. `!fileMeasured` alone (missingFile === null, missing: false)
+          reaches this banner too — the fourth combination, a present
+          transcript whose bytes could not be read. */}
+      {(missingFile !== null || !fileMeasured) && (
         <div className="chat-banner chat-banner--missing" role="status">
           <span>
-            {searchComplete
+            {searchComplete && fileMeasured
               ? "Can't find this session's transcript"
               : "Can't read the fleet host right now"}
           </span>
-          <span className="banner-path">{missingFile}</span>
+          <span className="banner-path">{missingFile ?? file ?? ''}</span>
           <button type="button" className="btn-ghost" onClick={openTerminal}>
             Open terminal
           </button>

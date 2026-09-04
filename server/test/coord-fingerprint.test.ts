@@ -5,9 +5,9 @@
 // carry: the D-2 correspondence check, and the "the run is not touched here"
 // guarantee the docstring makes.
 import { describe, it, expect } from 'vitest';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { readBranchTip } from '../src/coord/gitref.js';
 import { verifyDone, type DoneClaim } from '../src/coord/fingerprint.js';
 import type { Runner } from '../src/exec.js';
@@ -116,6 +116,52 @@ describe('readBranchTip', () => {
     writeFileSync(path.join(git, 'packed-refs'),
       `# pack-refs with: peeled fully-peeled sorted\n${OTHER} refs/heads/ws/quiet-mesa\n`);
     expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBeNull();
+  });
+  it('refuses when the loose ref can be NEITHER read NOR measured, rather than settle from a stale packed-refs entry', async () => {
+    // One dropped agent round trip hits both calls — which is exactly what
+    // remote mode does, and what the agent's stat used to HIDE by answering
+    // EACCES as {missing:true} (D-114). packed-refs holds the stale OTHER;
+    // the loose ref holds the true TIP and can be neither read nor measured.
+    // "I could not tell" must answer null, never OTHER.
+    const root = project(TIP, OTHER);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    const unmeasurable: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => (p === loosePath ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
+      statMeasured: async (p) => (p === loosePath ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    expect(await readBranchTip(unmeasurable, root, 'demo', 'ws/quiet-mesa')).toBeNull();
+  });
+  it('a real ENOENT on the loose ref still falls through to packed-refs — the outer absent fast path, never entering the unreadable arm', async () => {
+    // NOT the unreadable arm's own pole — `rmSync` makes `readFileMeasured`
+    // itself answer `absent` (a real ENOENT), which is caught by the OUTER
+    // `if (loose.reason === 'unreadable')` gate failing to match, so this
+    // never reaches `statMeasured` at all. It pins the ordinary "packed and
+    // never re-committed" branch, and it is a hole-check on the guard above
+    // it, not on the arm below — the case below is the arm's own other pole.
+    const root = project(TIP, OTHER);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    rmSync(loosePath);
+    expect(await readBranchTip(localIO, root, 'demo', 'ws/quiet-mesa')).toBe(OTHER);
+  });
+  it('inside the unreadable arm, a stat that PROVES absence still falls through to packed-refs (the arm\'s own other pole)', async () => {
+    // The FALSE branch of `if (st.reason !== 'absent') return null` — covered
+    // by nothing until this test: the loose ref's bytes could not be read
+    // (`unreadable`), but a stat on the SAME path proves it genuinely does
+    // not exist (`absent`) — the TOCTOU shape `ioDoubles.ts` already names as
+    // real (a race between listing and byte-read). Unlike the fixture above,
+    // this double forces BOTH calls on `loosePath` so the arm is actually
+    // entered and its own fall-through, not the outer gate's, is what's
+    // under test. Must red under mutation 2 (the unconditional `return null`)
+    // applied literally, with no other code touched.
+    const root = project(TIP, OTHER);
+    const loosePath = path.join(root, 'demo', '.git', 'refs', 'heads', 'ws', 'quiet-mesa');
+    const toctou: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p) => (p === loosePath ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
+      statMeasured: async (p) => (p === loosePath ? { ok: false, reason: 'absent' } : localIO.statMeasured(p)),
+    };
+    expect(await readBranchTip(toctou, root, 'demo', 'ws/quiet-mesa')).toBe(OTHER);
   });
   it('refuses a branch name that could climb out of the ref tree', async () => {
     const root = project(TIP, null);

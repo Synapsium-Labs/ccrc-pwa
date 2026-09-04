@@ -121,7 +121,7 @@ describe('queueProgramKickoff — the kickoff is MAIL, and it says which kind of
     const first = queued(s, ID);
     if (!first.queued) throw new Error('fixture: first kickoff was not queued');
     s.markDelivered(first.deliveryId, NOW);
-    expect(s.markAcked(first.deliveryId, NOW)).toBe(true);
+    expect(s.markAcked(first.deliveryId, NOW)).toEqual({ ok: true, state: 'acked' });
     expect(queued(s, ID).queued).toBe(true);
     expect((s.db.prepare('SELECT COUNT(*) AS n FROM mail').get() as { n: number }).n).toBe(2);
   });

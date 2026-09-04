@@ -119,16 +119,28 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   (measured before/after, not a comment). Doctrine: "A comment is a request; a red suite is a mechanism." TDD
   red-first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
-  monotonic across project history — not reset per plan; a build-scoped `D-B4-N` series runs alongside).
-  **Allocate from the allocator and DEFINE IN THE SAME ACT** — read the floor from
-  `POST /api/ledger/deviations`, never from a document (a brief once said 1243 while the allocator said 1292,
-  D-1293), and never predict or reuse a number. Source runs ahead of the plans' ledgers, so a number taken
-  from a plan alone collides with shipped refs. The parallel-branch collision (three incidents: D-1157/1158
-  via PR #38, D-1159/1160/1161 via PR #41) is now MEASURED rather than remembered — `git fetch origin main`
-  then `cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts`, which compares this branch's
-  entries against `origin/main`'s **without merging** and reds on any allocator-era number defined in two
-  plans. It fires before the merge that would otherwise decide it; the older one-tree scan could only name the
-  loser afterwards. Source files carry `D-N` refs in comments; **read them
+  monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
+  were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
+  text, measured).
+  **You are ISSUED a number — you never look one up.** `POST /api/ledger/deviations` MINTS a contiguous block,
+  and those are the only numbers you may define; allocate and DEFINE IN THE SAME ACT. It is box-token gated, so
+  a session that cannot reach it writes `D-TBD-<slug>` and reports (worker clause 11) rather than guessing.
+  `GET /api/ledger?project=` is the READ, and its `floor` is what the next POST would mint, not a number you
+  may take (a brief once said 1243 while the allocator said 1292, D-1293).
+  **WHAT THE FLOOR IS.** It is seeded from PROSE — the highest `D-<n>` token anywhere in this project's
+  `docs/superpowers/{plans,specs}`, a mere mention counting, plus `LEDGER_SEED_GAP` — and it ONLY EVER RISES
+  (`raiseLedgerFloor`'s `WHERE excluded.floor > ledger_floor.floor`; no lowering path exists). So every
+  publish-then-sweep burns `LEDGER_SEED_GAP - 1` numbers by design, which costs nothing, and a number WRITTEN
+  without being ISSUED seals its own band forever: it never enters the ledger, and it raises this project's
+  floor anyway. Measured 2026-09-02: the live floor stood well ABOVE the highest number the allocator has ever
+  issued, raised off a plan file that is on no merged ref — every number between is unissuable for good.
+  The parallel-branch collision — two branches each measuring a checkout and each taking the same next number —
+  is now MEASURED rather than remembered: `git fetch origin main` then `cd server &&
+  ./node_modules/.bin/vitest run test/deviation-refs.test.ts`, which compares this branch's entries against
+  `origin/main`'s **without merging** and reds on any allocator-era number defined in two plans. It fires before
+  the merge that would otherwise decide it; the older one-tree scan could only name the loser afterwards. It
+  cannot see the other shape — one plan defining a number NOBODY was issued — which `sweepLedgerReconcile`'s
+  orphan warning reports and nothing refuses. Source files carry `D-N` refs in comments; **read them
   as authoritative history, don't delete them.** Anchors in plans are snapshots — trust shipped source's own
   comments over a plan document.
 - **Wire discipline — additive-only, absence-permits:** frames are ADDITIVE; do NOT bump `FLEET_PROTO`
@@ -192,11 +204,31 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   skill reaches a home only once its installer has run there.
 
 ## Open on `main` — do NOT assume these are fixed
-`MailDeliveryState` terminality is incomplete (some writers lack the guard); `FleetIO.readFile`'s docstring now
-ADMITS the collapse instead of denying it, and `readFileMeasured` (`MeasuredRead`/`ReadFailure`,
-`server/src/io.ts`) ships a result-returning read that tells absent from unreadable — but the collapse
-isn't gone from the tree: `readFile`, `readFileB64` and `readFileFrom` still fold every failure to one `null`
-(the agent's half of `readFileB64` folds in a THIRD condition, an over-cap file — `localIO`'s has no cap), and the agent's `stat` op answers EACCES
-as `{missing: true}`, so that wire's own absent-marker already lies for non-ENOENT failures (D-114,
-`docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
+`MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in
+`server/src/coord/store.ts` names one of two shared guard fragments — `OUTSTANDING_STATES_SQL` or
+`TERMINAL_DELIVERY_SQL`, the latter built by `.join` from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`) —
+pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-written copy in SQL or in JS, by
+two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
+that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
+`markDelivered`, `markIngested`, `backOff`, `noteGate` and `rejectDelivery`. Their guard is invisible to the
+caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered` as the archetype of,
+and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its
+replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
+that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
+ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
+this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:
+`readFileMeasured`, `readFileFromMeasured`, `readFileB64Measured` and `statMeasured` (`server/src/io.ts`)
+each tell absent from unreadable, and the B64 arm tells a THIRD condition, over-cap, with the measured
+size beside it. The four convenience reads — `readFile`, `readFileFrom`, `readFileB64`, `stat` — still
+fold every failure to one `null`, DELIBERATELY, so an older caller keeps its exact meaning; each now
+names its own collapse in `io.ts` and points at its measured sibling, and each derives from it, so no
+adapter narrows a distinction it received. **The one read left with no measured sibling is `readdir`.**
+The agent's wire no longer lies either: `absent` is a separate positive marker spread ONLY on a proven
+ENOENT (`statPayload`, `agent/src/server.ts`), so EACCES answers a bare `{missing: true}` and a newer
+server reads that as UNMEASURED rather than as absence (D-1396) — the sentence here previously said the
+opposite. And `ReadFailure` lives in **`shared/agent-protocol.ts`**, not `server/src/io.ts`: D-1438 moved
+it there so both sides declare the vocabulary once, and `single-definition.test.ts` pins that home
+(`expect(holders).toEqual(['shared/agent-protocol.ts'])`). Read the interface, not this paragraph
+(D-114, `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`). **Live build/roadmap state is NOT tracked here** — it lives in the orchestrator
 task list and `docs/superpowers/plans/`, so this file never goes stale on it.

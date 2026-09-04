@@ -31,10 +31,12 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 1
-// quotes `tmux display-message -p '#S'` and clause 3 quotes `toId:'coordinator'`
-// — both carry single quotes, and the sibling suite's single-quoted style would
-// need escaping exactly where a copy-paste from SKILL.md is most useful.
+// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
+// since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
+// `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
+// Both therefore hold a single quote, and the sibling suite's single-quoted style
+// would need escaping exactly where a copy-paste from SKILL.md is most useful.
 // For the same reason SKILL.md is written with STRAIGHT apostrophes throughout:
 // `coordinator-skill.test.ts`'s literals carry curly ones (`operator’s`,
 // `judgement`) because its prose does, and a straight/curly mismatch is a
@@ -45,7 +47,7 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 // SKILL.md reds this pin without looking like a change. SKILL.md's contract
 // section states the same rule where an editor of the prose will see it.
 const CONTRACT = [
-  "Learn who you are on EVERY call: `fromId` is your own `cc-<id>` from `tmux display-message -p '#S'`, and `fromUuid` is the current contents of `$REG/<id>.uuid`, re-read each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
+  "Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
   // D-105: this clause used to name the 6 for BOTH lanes. It is the
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
@@ -168,13 +170,12 @@ describe('the worker skill: its contract', () => {
     }
   });
 
-  it('tells the session how to learn its own id the ONE way that works on this box', () => {
-    // ccd/session-hook.sh:15-19 — derived from tmux, never from a `from:`
-    // field, and never cached: `/clear` rotates `$REG/<id>.uuid`, and dispatch
-    // clears this session on every wave >= 2.
-    expect(skill).toContain("tmux display-message -p '#S'");
+  it('tells the session how to learn its own id the ONE way that is actually its own', () => {
+    expect(skill).toContain('ccrc-api" whoami');
     expect(skill).toContain('cc-');
     expect(skill).toContain('.uuid');
+    expect(skill, 'the unchecked derivation is back')
+      .not.toContain("tname=$(tmux display-message -p '#S')");
   });
 
   it('has YAML frontmatter with exactly a name and a description that says when NOT to use it', () => {

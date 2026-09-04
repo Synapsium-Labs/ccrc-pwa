@@ -34,7 +34,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
  *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
-  opts: { status?: 'busy' | 'idle' } = {},
+  opts: { status?: 'busy' | 'idle'; io?: FleetIO } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -63,7 +63,10 @@ async function makeApp(
   };
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
-  const app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, bus);
+  const app = await buildServer(
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue() },
+    bus,
+  );
   return { app, calls, bus, home };
 }
 
@@ -576,6 +579,35 @@ describe('clip route', () => {
       method: 'GET', url: `/api/sessions/${ID}/clip/clip-20260726-150340-a1b2.png`,
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('413s an over-cap clip with its size — a real file this transport cannot carry is not a missing one', async () => {
+    // The measured local/remote divergence, at the only surface that shows
+    // it: `ccd clip` (ccd/ccd:13416) files an image of any size, the agent
+    // refuses >12 MB, and this route used to call that "not-found".
+    const io: FleetIO = {
+      ...localIO,
+      readFileB64Measured: async () => ({ ok: false, reason: 'too-large', size: 12582913 }),
+    };
+    const { app } = await makeApp([null], { io });
+    const res = await app.inject({
+      method: 'GET', url: `/api/sessions/${ID}/clip/clip-20260726-150340-a1b2.png`,
+    });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: 'too-large', bytes: 12582913 });
+  });
+
+  it('502s a clip the fleet host could not be asked about, rather than asserting it is gone', async () => {
+    const io: FleetIO = {
+      ...localIO,
+      readFileB64Measured: async () => ({ ok: false, reason: 'unreadable' }),
+    };
+    const { app } = await makeApp([null], { io });
+    const res = await app.inject({
+      method: 'GET', url: `/api/sessions/${ID}/clip/clip-20260726-150340-a1b2.png`,
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'clip-unmeasurable' });
   });
 
   it('404s a well-formed clip name under an unknown session', async () => {
