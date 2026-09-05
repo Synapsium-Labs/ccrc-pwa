@@ -1371,6 +1371,114 @@ describe('graph-sweep: freshness is CONTENT, not commit identity (D-1368)', () =
   });
 });
 
+describe('graph-sweep: a rebuild is a CLAIM until the stamp advances (D-1509, D-1512)', () => {
+  /** Engine invocations across every pass so far — the effect, not the word. */
+  const engineCalls = (): number =>
+    (fs.readFileSync(j('engine-calls'), 'utf8').match(/^cwd=/gm) ?? []).length;
+  const reasonOf = (tree: string) =>
+    lastPass().trees.find((t: { path: string }) => t.path === tree)?.reason;
+  const stampOf = (repo: string): string =>
+    JSON.parse(fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8')).built_at_commit;
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // graphify 0.9.9's `_rebuild_code` short-circuit in the shape the live fleet
+  // measured (D-1509): the engine re-extracts the whole corpus, finds the
+  // topology unchanged, SAYS SO ON STDOUT and exits 0 WITHOUT rewriting
+  // graph.json — so `built_at_commit` keeps the sha of the last write while
+  // `graphify update` still prints "Code graph updated." and exits 0. The cold
+  // call still writes, exactly as the real engine does with no graph on disk.
+  const SHORTCIRCUIT = `if [ -f graphify-out/graph.json ]; then
+  echo "[graphify watch] No code-graph topology changes detected; outputs left untouched."
+  exit 0
+fi`;
+  // Same exit code, no verdict: an engine that returns 0 having written and
+  // said nothing at all. Nobody vouched for the stamp on disk.
+  const SILENT = `if [ -f graphify-out/graph.json ]; then exit 0; fi`;
+
+  // The restamp spends `$VENV/bin/python` WITH ARGUMENTS; `_gs_detect` spends
+  // the same interpreter with none (its script arrives on stdin). One stub
+  // serves both roles: vacuous for detect (an empty corpus never breaches the
+  // corpus guard, which is what every other Task 6/7 fixture relies on), and
+  // the real interpreter for the restamp — whose whole job is rewriting bytes
+  // on disk, so a stub that faked it would pin nothing.
+  function plantRestampPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+exec python3 "$@"
+`, { mode: 0o755 });
+  }
+
+  it('graphify says "left untouched", so the sweep RESTAMPS rather than claiming a rebuild', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    expect(stampOf(repo)).toBe(old);
+    // the report graphify writes beside the graph, carrying the same commit
+    const report = path.join(repo, 'graphify-out', 'GRAPH_REPORT.md');
+    fs.writeFileSync(report, `# Code graph\n\n- Built from commit: \`${old.slice(0, 8)}\`\n- Nodes: 0\n`);
+    const before = fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8');
+    bump(repo);
+    const head = git(repo, 'rev-parse', 'HEAD');
+
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo), 'an exit 0 that wrote nothing was recorded as a rebuild').toBe('restamped');
+    expect(reasonOf(repo)).toBe(`unchanged topology; ${old.slice(0, 8)} -> ${head.slice(0, 8)}`);
+    expect(stampOf(repo)).toBe(head);
+    expect(fs.readFileSync(report, 'utf8'))
+      .toContain(`- Built from commit: \`${head.slice(0, 8)}\``);
+    expect(engineCalls()).toBe(2);
+    // the stamp is ALL that moved: the graph the engine wrote is byte-identical
+    // everywhere else (the restamp splices a value, it does not re-serialize).
+    expect(fs.readFileSync(path.join(repo, 'graphify-out', 'graph.json'), 'utf8'))
+      .toBe(before.replace(old, head));
+
+    // and the restamp is read by the freshness predicate that already exists —
+    // no marker, no second spelling. The wedge is that this pass rebuilds.
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('fresh');
+    expect(engineCalls(), 'the restamped tree was rebuilt again — the every-15-minutes wedge').toBe(2);
+  });
+
+  it('the restamp reason names the tracked files commit-keyed freshness cannot see (D-1511)', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    bump(repo);
+    fs.writeFileSync(path.join(repo, 'a.py'), 'x = 2  # uncommitted\n');   // tracked, dirty
+    runSweep();
+    expect(outcomeOf(repo)).toBe('restamped');
+    expect(reasonOf(repo))
+      .toMatch(/^unchanged topology; [0-9a-f]{8} -> [0-9a-f]{8}; 1 tracked file\(s\) modified$/);
+  });
+
+  it('exit 0, no advance and NO verdict is a failed build — and nothing is written', () => {
+    const repo = makeRepo('alpha'); plantEngine(SILENT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo), 'a stamp nobody verified was recorded as a build').toBe('failed');
+    expect(reasonOf(repo)).toContain('did not advance');
+    expect(stampOf(repo), 'the sweep restamped a graph graphify never vouched for').toBe(old);
+  });
+
+  it('the log names the tree and the UTC instant BEFORE the engine speaks (D-1512)', () => {
+    const repo = makeRepo('alpha'); plantEngine('echo "ENGINE-SPEAKS-HERE"'); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const log = fs.readFileSync(j('.ccrc', 'graph-sweep.log'), 'utf8');
+    const header = log.search(
+      new RegExp(`^graph-sweep: build ${esc(repo)} at 20\\d\\d-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$`, 'm'));
+    expect(header, 'the log attributes its build to no tree and no time').toBeGreaterThanOrEqual(0);
+    expect(log.indexOf('ENGINE-SPEAKS-HERE'),
+      'the header did not precede the output it attributes').toBeGreaterThan(header);
+  });
+});
+
 describe('graph-sweep: idle gate (Task 9)', () => {
   // seedAccountsSh gives the fixture HOME a real ~/.ccrc/accounts.sh so the
   // sweep's `source "$HOME/.ccrc/accounts.sh"` + `_ccrc_cfg_dir` resolve.

@@ -179,13 +179,24 @@ _gs_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
   [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
 }
 
+# D-1509 — ONE SPELLING OF "THE STAMP". `built_at_commit` is read by the
+# freshness predicate, by the idle gate's escape hatch and — since D-1509 — by
+# the build itself, which re-measures it to find out whether the engine wrote
+# anything at all. Three hand-written `jq -r '.built_at_commit // empty'` reads
+# are three places a later change can part; the restamp splices the value this
+# helper reads, so a second spelling here is a restamp that verifies one field
+# and rewrites another.
+_gs_stamp() {    # <tree> -> graph.json's built_at_commit, or nothing
+  jq -r '.built_at_commit // empty' "$1/graphify-out/graph.json" 2>/dev/null
+}
+
 _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
-  local tree="$1" head built stamp
+  local tree="$1" head built pin_stamp
   head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || { REASON=unreadable-head; return 0; }
   [ -f "$tree/graphify-out/graph.json" ] || { REASON=never-built; return 0; }
-  built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
-  stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
-  [ "$stamp" = "$PIN" ] || { REASON=engine; return 0; }
+  built="$(_gs_stamp "$tree")"
+  pin_stamp="$(cat "$tree/graphify-out/.graphify_engine" 2>/dev/null || true)"
+  [ "$pin_stamp" = "$PIN" ] || { REASON=engine; return 0; }
   if [ "$built" != "$head" ]; then
     _gs_same_tree "$tree" "$built" || { REASON=head; return 0; }
   fi
@@ -220,7 +231,7 @@ _gs_busy() {
   [ "$(jq -r '.state // empty' "$sf" 2>/dev/null)" = working ] || return 1
   # O3 escape hatch: bounded staleness beats politeness past the thresholds.
   local built commits stamp_age
-  built="$(jq -r '.built_at_commit // empty' "$tree/graphify-out/graph.json" 2>/dev/null)"
+  built="$(_gs_stamp "$tree")"
   if [ -n "$built" ]; then
     # D-1368: the same predicate, once more and spelled once — `rev-list
     # --count "$built..HEAD"` for a NON-ANCESTOR counts everything since the
@@ -679,6 +690,97 @@ _gs_guard() {
   return 0
 }
 
+# D-1509 — THE SWEEP WRITES THE STAMP GRAPHIFY WOULD HAVE WRITTEN, AND ONLY
+# THAT. Reached from `_gs_build` alone, and only after the engine exited 0 AND
+# printed one of its two "left untouched" verdicts, each of which is a full
+# fresh extraction of the disk compared against the graph on disk. graphify's
+# own stamp is `_git_head()` at build time (export.py:537) whatever the working
+# tree holds, so this splices exactly the value the engine skipped writing —
+# it invents no freshness of its own (D-1511 records the hole that leaves, and
+# the row names the dirty count so the census does not hide it).
+#
+# WHAT IT MAY TOUCH: `graph.json`'s last `built_at_commit` and
+# `GRAPH_REPORT.md`'s "- Built from commit:" line. NEVER `manifest.json`,
+# `cache/` or `.graphify_labels.json` — those are the engine's own fingerprints
+# of the corpus, and a stamp is not a fingerprint.
+#
+# HOW IT WRITES: copy, splice, ONE rename. The card reads this file with
+# `tail -c 4096` while the sweep runs (`ccd/session-hook.sh`:131), so an
+# in-place rewrite of an 8 MB file is a torn read waiting for a session hook;
+# `mv -f` over the same directory is atomic and a concurrent reader sees either
+# file whole. The splice itself seeks to the tail's base offset and truncates,
+# so a shorter or longer replacement sha is fine.
+#
+# WHAT IT REFUSES: a graph.json whose last `built_at_commit` in the tail is
+# absent, or is not the value `_gs_stamp` measured before the engine ran (the
+# file moved under us). Refusal writes NOTHING and the build reads `failed`.
+# The report's absence is not a failure — it is graphify's human echo, not the
+# stamp any reader in ccrc spends.
+_gs_restamp() {   # <tree> <old-sha> <new-sha> -> 0 rewrote / 1 refused (RESTAMP_WHY)
+  local tree="$1" old="$2" new="$3" out="$1/graphify-out" f res rc
+  RESTAMP_WHY=""
+  [[ "$new" =~ ^[0-9a-f]{7,40}$ ]] || { RESTAMP_WHY="HEAD unreadable"; return 1; }
+  [[ "$old" =~ ^[0-9a-f]{7,40}$ ]] || { RESTAMP_WHY="no built_at_commit to replace"; return 1; }
+  for f in graph.json GRAPH_REPORT.md; do
+    if [ ! -f "$out/$f" ]; then
+      [ "$f" = graph.json ] || continue
+      RESTAMP_WHY="no graph.json"; return 1
+    fi
+    # stdout is the temp path (or the refusal line); stderr — a traceback from
+    # a python that could not run at all — goes to the log, never swallowed.
+    res="$("$VENV/bin/python" - "$out/$f" "$old" "$new" 2>>"$HOME/.ccrc/graph-sweep.log" <<'GFXPY'
+import os, re, shutil, sys, tempfile
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+name = os.path.basename(path)
+is_graph = name == 'graph.json'
+try:
+    size = os.path.getsize(path)
+except OSError:
+    print('cannot measure %s' % name); sys.exit(1)
+# graph.json is 8 MB on a real tree and `built_at_commit` is its LAST key, so
+# it is read from the tail exactly as the card reads it; the report is small.
+base = max(0, size - 4096) if is_graph else 0
+pat = (re.compile(rb'"built_at_commit"\s*:\s*"([0-9a-f]+)"') if is_graph
+       else re.compile(rb'- Built from commit: `([0-9a-f]+)`'))
+with open(path, 'rb') as fh:
+    fh.seek(base); tail = fh.read()
+m = None
+for m in pat.finditer(tail):
+    pass
+if m is None:
+    if is_graph:
+        print('no built_at_commit in the last %d bytes of graph.json' % len(tail)); sys.exit(1)
+    sys.exit(0)
+val = m.group(1).decode()
+if val != (old if is_graph else old[:len(val)]):
+    if is_graph:
+        print('graph.json holds %s, not the %s this build measured' % (val, old)); sys.exit(1)
+    sys.exit(0)
+repl = (new if is_graph else new[:len(val)]).encode()
+fd, tmp = tempfile.mkstemp(prefix='.' + name + '.', dir=os.path.dirname(path) or '.')
+os.close(fd)
+shutil.copy2(path, tmp)          # mode and mtime of the engine's own file
+with open(tmp, 'r+b') as fh:
+    fh.seek(base)
+    fh.write(tail[:m.start(1)] + repl + tail[m.end(1):])
+    fh.truncate()
+print(tmp)
+GFXPY
+    )"; rc=$?
+    if [ "$rc" -ne 0 ]; then RESTAMP_WHY="${res:-python refused ($f)}"; return 1; fi
+    if [ -z "$res" ]; then
+      # nothing to rewrite: only ever the report (graph.json either printed a
+      # path or exited non-zero), and only when its line is absent or already
+      # carries another commit.
+      [ "$f" = graph.json ] || continue
+      RESTAMP_WHY="no replacement written for graph.json"; return 1
+    fi
+    [ -f "$res" ] || { RESTAMP_WHY="replacement for $f is not a file"; return 1; }
+    mv -f "$res" "$out/$f" || { rm -f "$res"; RESTAMP_WHY="rename failed ($f)"; return 1; }
+  done
+  return 0
+}
+
 _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 1 build-failed / 2 skipped-locked
   local tree="$1" out="$tree/graphify-out"
   # Non-blocking lock probe (spec §C.3): graphify's own updates block on this
@@ -687,17 +789,35 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
   if [ -e "$out/.rebuild.lock" ] && ! flock -n -E 99 "$out/.rebuild.lock" true 2>/dev/null; then
     BUILD_OUTCOME=skipped-locked; BUILD_REASON="rebuild lock held"; return 2
   fi
-  local before_sz=0 before_mt=0 errf
+  local before_sz=0 before_mt=0 errf outf head
   if [ -f "$out/graph.json" ]; then
     before_sz=$(stat -c %s "$out/graph.json"); before_mt=$(stat -c %Y "$out/graph.json")
   fi
   errf="$(mktemp "${TMPDIR:-/tmp}/gfx-stderr.XXXXXX")"
+  # D-1509 — STDOUT IS EVIDENCE NOW, not only log freight. graphify announces
+  # its two short-circuits there ("... left untouched."), and that announcement
+  # is the only thing that earns a restamp, so it is captured to a temp and
+  # appended to the log afterwards rather than streamed straight into it.
+  outf="$(mktemp "${TMPDIR:-/tmp}/gfx-stdout.XXXXXX")"
+  # HEAD as it stood when the engine started — the value graphify's own
+  # `_git_head()` would have stamped (export.py:537). Measured BEFORE the build
+  # because a commit landing mid-build must not be claimed by it.
+  head="$(git -C "$tree" rev-parse HEAD 2>/dev/null)" || head=""
+  # D-1512 — THE LOG NAMES ITS TREE. Attributing "No code-graph topology
+  # changes detected" to a tree used to mean correlating re-extracted file
+  # counts and durations against the census; one header line ends that.
+  printf 'graph-sweep: build %s at %s\n' "$tree" "$(date -u +%FT%TZ)" \
+    >> "$HOME/.ccrc/graph-sweep.log"
   ( cd "$tree" && GRAPHIFY_NO_BACKUP=1 PYTHONHASHSEED=0 \
       GRAPHIFY_MAX_WORKERS="$CCRC_GRAPH_MAX_WORKERS" \
       nice -n 15 timeout "$CCRC_GRAPH_BUILD_TIMEOUT" "$ENGINE" update . ) \
-      >>"$HOME/.ccrc/graph-sweep.log" 2>"$errf"
-  local rc=$? first full
+      >"$outf" 2>"$errf"
+  local rc=$? first full said
+  # NB `head` above is the local sha; `head -n1` here is the command — bash
+  # keeps variables and commands in different namespaces.
   first="$(head -n1 "$errf" 2>/dev/null || true)"
+  said="$(cat "$outf" 2>/dev/null || true)"
+  cat "$outf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$outf"
   # Full stderr, not just the first line: a real `graphify update` can print
   # conditional warnings BEFORE the shrink refusal on the same invocation
   # (e.g. build.py:384's extraction-warning line, watch.py:510's invalid-
@@ -708,7 +828,43 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
   cat "$errf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$errf"
   if [ "$rc" -eq 0 ]; then
     printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
-    BUILD_OUTCOME=""; BUILD_REASON=""; return 0
+    # D-1509 — A REBUILD IS A CLAIM UNTIL THE STAMP ADVANCES. graphify's full
+    # rebuild exits 0 without writing anything when the candidate graph's
+    # topology equals the existing one (watch.py `_rebuild_code`, 0.9.9: two
+    # short-circuits, `save_manifest` then `to_json` to a temp), and `graphify
+    # update` still prints "Code graph updated." So rc 0 alone said only that
+    # the engine ran; the loop wrote `stale-rebuilt`, `_gs_stale` read the same
+    # old stamp against the same HEAD on the next pass, and the tree rebuilt
+    # every 15 minutes for ever (MEASURED on the live fleet, six consecutive
+    # passes 2026-09-04T23:19Z -> 2026-09-05T00:35Z, 6.8 s and 73.8 s a pass).
+    # The success of a build is now re-measured on the stamp itself.
+    local stamp; stamp="$(_gs_stamp "$tree")"
+    if [ -n "$stamp" ] && { [ "$stamp" = "$head" ] || _gs_same_tree "$tree" "$stamp"; }; then
+      BUILD_OUTCOME=""; BUILD_REASON=""; return 0    # advanced: the loop's own words
+    fi
+    # Not advanced. graphify's own verdict — a full fresh extraction of the
+    # disk compared against the graph — is what earns the stamp it skipped.
+    if grep -qF 'left untouched' <<<"$said"; then
+      if _gs_restamp "$tree" "$stamp" "$head"; then
+        BUILD_OUTCOME=restamped
+        BUILD_REASON="unchanged topology; ${stamp:0:8} -> ${head:0:8}"
+        # D-1511 — commit-keyed freshness cannot see a working tree that
+        # differs from HEAD, and the engine's verdict is TRUE OF THE DISK. The
+        # count is named in the row so the census does not hide the gap.
+        local dirty
+        dirty="$(git -C "$tree" status --porcelain --untracked-files=no 2>/dev/null | wc -l)"
+        dirty="${dirty//[![:digit:]]/}"            # BSD `wc` pads its count
+        [ "${dirty:-0}" -gt 0 ] && BUILD_REASON="$BUILD_REASON; $dirty tracked file(s) modified"
+        return 0
+      fi
+      BUILD_OUTCOME=failed; BUILD_REASON="restamp refused: $RESTAMP_WHY"; return 1
+    fi
+    # Exit 0, nothing written, nothing said: a stamp nobody verified is not a
+    # stamp. Write NOTHING and report it — `failed` is already in the doctor's
+    # WARN set, where a silent forever-rebuild never was.
+    BUILD_OUTCOME=failed
+    BUILD_REASON="exit 0 but built_at_commit did not advance and graphify reported no unchanged verdict"
+    return 1
   fi
   if [ "$rc" -eq 124 ]; then
     BUILD_OUTCOME=timed-out; BUILD_REASON="exceeded ${CCRC_GRAPH_BUILD_TIMEOUT}s"; return 1
@@ -798,7 +954,11 @@ while IFS= read -r tree; do
   _gs_rm_generated "$tree"; _gs_disarm
   case "$rc" in
     0)   BUILT=$((BUILT+1))
-         if [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
+         # D-1509: `restamped` still counts toward BUILT — the engine RAN (it
+         # re-extracted the whole corpus and compared), it merely had nothing
+         # to write, and that cost is what the budget is for.
+         if [ "$BUILD_OUTCOME" = restamped ]; then _gs_row "$tree" restamped "$BUILD_REASON" "$dur"
+         elif [ "$stale_reason" = never-built ]; then _gs_row "$tree" never-built "cold build" "$dur"
          else _gs_row "$tree" stale-rebuilt "$stale_reason" "$dur"; fi ;;
     2)   _gs_row "$tree" skipped-locked "$BUILD_REASON" 0 ;;   # deferred; never counts against the budget
     *)   BUILT=$((BUILT+1)); _gs_row "$tree" "$BUILD_OUTCOME" "$BUILD_REASON" "$dur" ;;
