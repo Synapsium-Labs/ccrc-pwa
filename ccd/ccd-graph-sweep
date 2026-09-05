@@ -61,6 +61,41 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
   printf '%s' "$p"
 }
 
+# D-1562 — WHICH REGISTERED SESSION LIVES ON THIS TREE, ASKED ONCE AND ASKED BY
+# REALPATH. The idle gate used to answer it inline with
+# `[ "$(cat "$wd")" = "$tree" ]` — the registry's `<id>.workdir` TEXT against
+# the census's glob spelling of the tree — and those two are the same string
+# only by luck. `$PROJECTS_ROOT` on the live box is a symlink (`~/projects ->
+# /data/projects`, itself a symlink onto the volume), so a project-root
+# session's workdir reads the canonical name while the sweep names that same
+# tree through `$HOME`. MEASURED 2026-09-05 against the live registry: 13 of 18
+# workdirs match a census path as a string, 18 of 18 match by realpath — and
+# the five that never matched are the five project-root and `.claude/worktrees`
+# sessions, EXACTLY the trees the gate exists to protect from a build under a
+# working session. Every one had read `idle` on every pass since the gate
+# shipped; the O3 escape hatch never got a say. Same shape as D-1367's realpath
+# dedupe and D-1449's "compare git's truth, not its quoting".
+#
+# An unreadable or unresolvable workdir is SKIPPED, never matched: _gs_realpath
+# answers nothing rather than empty-equals-empty (its own contract), and two
+# unmeasurable paths comparing equal is what would hand a tree the wrong
+# session. D-1563 asks this same question of a `.claude/worktrees` candidate,
+# which is why it lives here and not inside the gate.
+_gs_session_on() {   # <tree> -> the session id whose workdir names it, or nothing
+  local tree="$1" want wd txt
+  want="$(_gs_realpath "$tree")" || return 1
+  for wd in "$REG"/*.workdir; do
+    [ -f "$wd" ] || continue
+    txt="$(cat "$wd" 2>/dev/null)" || continue
+    [ -n "$txt" ] || continue
+    txt="$(_gs_realpath "$txt")" || continue
+    [ "$txt" = "$want" ] || continue
+    basename "$wd" .workdir
+    return 0
+  done
+  return 1
+}
+
 # D-1367 — A TREE IS A TOPLEVEL, NEVER A DIRECTORY INSIDE ONE.
 #
 # The old predicate was `git rev-parse --is-inside-work-tree`, which is true of
@@ -88,13 +123,13 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # to whichever root is listed first ($PROJECTS_ROOT), i.e. to the alias.
 #
 # That matters because of the contract in the next paragraph: the row keeps the
-# path AS GLOBBED, not the canonical one — `$REG/<id>.workdir` and the hook's
-# `cwd` are compared against it VERBATIM (`_gs_busy`'s string compare;
-# `ccd/session-hook.sh`'s `.path == $p` census lookup), and canonicalising the
-# census would silently unmatch every reader. A census carrying the ALIAS
-# unmatches them just as silently for a session recorded under the real name:
-# no idle-gate match (the sweep builds while that session is `working`, the one
-# thing the gate exists to prevent) and no "the sweep refused this tree" card.
+# path AS GLOBBED, not the canonical one — the hook's `cwd` is compared against
+# it VERBATIM (`ccd/session-hook.sh`'s `.path == $p` census lookup), and
+# canonicalising the census would silently unmatch that reader. A census
+# carrying the ALIAS unmatches it just as silently for a session recorded under
+# the real name: no "the sweep refused this tree" card. (The idle gate was the
+# other such reader until D-1562 taught it to compare realpaths; the card's
+# lookup still is.)
 # MEASURED: with a real tree at `~/worktrees/foo` and `~/projects/foo` a
 # symlink to it, the pass carried exactly one row and it was the alias.
 #
@@ -128,6 +163,23 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # `--git-common-dir`'s parent, so it already resolves to the PARENT project, and
 # the default noise list withholds `.claude/` from the parent's own corpus
 # unless that repo tracks files there).
+#
+# D-1563 — AND ONE IS A TREE ONLY WHILE A SESSION LIVES IN IT. D-1510's three
+# globs found 15 directories on the live fleet, 14 of them git toplevels: ONE
+# named worktree with a registered session (the tree D-1510 was written for),
+# three named ones with no session, and TEN minted by Claude Code's own
+# isolation — `agent-<hex>` subagent worktrees and `wf_<run>-<n>` workflow
+# ones, six touched within the hour and five a fortnight old. The pass built
+# eight of them cold at ~75 s each, ran eleven minutes against the two it took
+# before, and recorded `skipped-budget` for eight trees — the one the rule was
+# written for among them. Every future workflow with worktree isolation would
+# mint more. The rule that was missing is the one the idle gate already states:
+# A TREE IS WORTH A BUILD BECAUSE A SESSION LIVES IN IT. So a candidate under
+# `.claude/worktrees/` is kept only while some `$REG/<id>.workdir` names it,
+# `_gs_realpath` on both sides (D-1562's comparison, spelled once). The
+# project roots and the ccd workspaces are unchanged — the operator put those
+# there. A subagent's `agent-*` worktree is never a session's workdir, so it is
+# never built; a named worktree a session later enters is picked up next pass.
 _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
   local d top real i dup
   local -a seen=() named=()
@@ -142,6 +194,12 @@ _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
     top="$(_gs_realpath "$top")" || continue
     real="$(_gs_realpath "$d")" || continue
     [ "$top" = "$real" ] || continue
+    # D-1563: the path decides, not which glob produced it — a candidate under
+    # `.claude/worktrees/` is Claude Code's, and it is a tree only while a
+    # registered session lives in it.
+    case "$d" in
+      */.claude/worktrees/*) _gs_session_on "$d" >/dev/null || continue ;;
+    esac
     dup=-1
     if [ "${#seen[@]}" -gt 0 ]; then
       for i in "${!seen[@]}"; do
@@ -230,11 +288,10 @@ _gs_stale() {    # tree -> 0 stale / 1 fresh ; REASON set
 : "${CCRC_GRAPH_HOOKSTATE_FRESH_SECS:=1800}"
 BUSY_OUTCOME=""; BUSY_REASON=""
 _gs_busy() {
-  local tree="$1" id="" wd hs pid wrapper cfg sf now age
-  for wd in "$REG"/*.workdir; do
-    [ -f "$wd" ] || return 1
-    if [ "$(cat "$wd")" = "$tree" ]; then id="$(basename "$wd" .workdir)"; break; fi
-  done
+  local tree="$1" id="" hs pid wrapper cfg sf now age
+  # D-1562 — one spelling of "which session lives here", and it compares
+  # realpaths: the registry and the census need not spell a tree alike.
+  id="$(_gs_session_on "$tree")" || id=""
   [ -n "$id" ] || return 1                       # no session on this tree -> idle
   hs="$REG/$id.hookstate.json"
   [ -f "$hs" ] || return 1

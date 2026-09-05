@@ -310,12 +310,15 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
       .toBe(realTree);
   });
 
-  // The EFFECT the row's spelling decides, not just the spelling. `_gs_busy`
-  // matches a session by raw string compare of `$REG/<id>.workdir` against the
-  // as-globbed path, so an alias row means the idle gate never fires and the
-  // sweep builds under a working session — the one thing that gate exists to
-  // prevent.
-  it('an alias row would unmatch the idle gate — a session on the real path still defers it', () => {
+  // The EFFECT the row's spelling decides, not just the spelling: an alias row
+  // is the row every reader that matches BY STRING is unmatched by — the
+  // card's `.path == $p` census lookup (`ccd/session-hook.sh`) chief among
+  // them, so a session on the real path gets no "the sweep refused this tree"
+  // card at all. Until D-1562 the idle gate was such a reader too and an alias
+  // row meant it never fired; the gate now compares realpaths, so what this
+  // case still measures is the SPELLING the pass records for a tree a session
+  // is working in.
+  it('an alias row would unmatch the census readers — a session on the real path still defers it', () => {
     seedAccountsSh(home);
     const realTree = makeWorktreeRoot('foo'); plantEngine();
     fs.mkdirSync(j('projects'), { recursive: true });
@@ -329,7 +332,8 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
     fs.writeFileSync(path.join(cfg, 'sessions', '4242.json'), JSON.stringify({ state: 'working' }));
     expect(runSweep().status).toBe(0);
     expect(outcomeOf(realTree), 'the sweep built a graph under a WORKING session because its ' +
-      'census row named the alias and the idle gate matches by string').toBe('skipped-busy');
+      'census row named the alias, so no reader that matches by string finds this tree')
+      .toBe('skipped-busy');
     expect(fs.existsSync(j('engine-calls')),
       'the engine ran on a tree the idle gate should have deferred').toBe(false);
   });
@@ -378,11 +382,27 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
 describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (D-1510)', () => {
   const paths = (): string[] => lastPass().trees.map((t: { path: string }) => t.path);
 
+  // D-1563 — AND ONLY WHILE A SESSION LIVES IN ONE. A `.claude/worktrees`
+  // candidate is discovered only while some `$REG/<id>.workdir` names it, so
+  // every positive case below registers a session on the tree it expects to
+  // find. Nothing else about the session matters here: with no hookstate
+  // beside the workdir the idle gate reads idle and the tree still builds —
+  // this is a DISCOVERY rule, not the gate.
+  function registerSession(id: string, tree: string): void {
+    const reg = j('.cc-sessions'); fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${id}.workdir`), tree + '\n');
+  }
+
   it('discovers one under $PROJECTS_ROOT, keeps the parent, and skips a plain sibling', () => {
     const repo = makeRepo('alpha'); plantEngine();
     const wt = path.join(repo, '.claude', 'worktrees', 'x');
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     git(repo, 'worktree', 'add', '-q', '-b', 'x', wt);
+    // D-1562's comparison, spelled once: the registry names this tree through
+    // a symlinked root and the census names it through $HOME — realpath on
+    // both sides is what makes them the same tree.
+    fs.symlinkSync(j('projects'), j('data'));
+    registerSession('alpha-x', path.join(j('data'), 'alpha', '.claude', 'worktrees', 'x'));
     // a plain directory in the same place, with content and no git of its own
     const notatree = path.join(repo, '.claude', 'worktrees', 'notatree');
     fs.mkdirSync(notatree, { recursive: true });
@@ -406,6 +426,7 @@ describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (
     const wt = path.join(ws, '.claude', 'worktrees', 'y');
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     git(ws, 'worktree', 'add', '-q', '-b', 'y', wt);
+    registerSession('alpha-y', wt);                     // D-1563: a session lives in it
 
     expect(runSweep().status).toBe(0);
     expect(paths(), 'a Claude Code worktree inside a ccd workspace is invisible to the sweep')
@@ -431,6 +452,7 @@ describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (
     const wt = path.join(solo, '.claude', 'worktrees', 'z');
     fs.mkdirSync(path.dirname(wt), { recursive: true });
     git(solo, 'worktree', 'add', '-q', '-b', 'z', wt);
+    registerSession('solo-z', wt);                      // D-1563: a session lives in it
     // the same plain directory beside it: content, no git of its own
     const notatree = path.join(solo, '.claude', 'worktrees', 'notatree');
     fs.mkdirSync(notatree, { recursive: true });
@@ -443,6 +465,32 @@ describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (
     expect(paths(), 'a plain directory under .claude/worktrees was censused as a tree')
       .not.toContain(notatree);
     expect(paths(), 'the workspace that holds it lost its own row').toContain(solo);
+  });
+
+  // D-1563 — THE RULE D-1510 WAS MISSING. The three globs found 15 directories
+  // on the live fleet, 14 of them git toplevels, and TEN were minted by Claude
+  // Code's own isolation — `agent-<hex>` subagent worktrees and `wf_<run>-<n>`
+  // workflow ones. The pass built eight of them cold at ~75 s each, ran eleven
+  // minutes against the two it took before, and recorded `skipped-budget` for
+  // the one named worktree D-1510 was written for. A tree is worth a build
+  // because a SESSION LIVES IN IT — the rule the idle gate already states.
+  // The parent projects and the ccd workspaces are unaffected: the operator
+  // put those there, session or not.
+  it('D-1563 — a .claude/worktrees tree NO session lives in gets no row at all', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const x = path.join(repo, '.claude', 'worktrees', 'x');
+    fs.mkdirSync(path.dirname(x), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'x', x);
+    const y = path.join(repo, '.claude', 'worktrees', 'y');   // the throwaway: a real toplevel…
+    git(repo, 'worktree', 'add', '-q', '-b', 'y', y);
+    registerSession('alpha-x', x);                            // …that no session names
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), 'the worktree a session LIVES in lost its row').toContain(x);
+    expect(paths(), 'a throwaway worktree no registered session lives in was censused, and a cold '
+      + 'build of it is what starved the tree the rule was written for').not.toContain(y);
+    expect(paths(), 'the parent project lost its own row — the operator put THAT there')
+      .toContain(repo);
   });
 });
 
@@ -1865,6 +1913,31 @@ describe('graph-sweep: idle gate (Task 9)', () => {
     runSweep({ CCRC_GRAPH_STALE_ESCAPE_SECS: '1' });                // threshold well under the 10s age
     expect(outcomeOf(repo)).toBe('stale-rebuilt');
   });
+  // D-1562 — THE GATE COMPARES REALPATHS, NOT SPELLINGS. `_gs_busy` used to
+  // find the session on a tree with `[ "$(cat "$wd")" = "$tree" ]`: the
+  // registry's `<id>.workdir` TEXT against the census's glob spelling. On the
+  // live box `$PROJECTS_ROOT` is itself a symlink onto the volume, so a
+  // project-root session's workdir reads the canonical name while the sweep
+  // names the same tree through `$HOME`. MEASURED 2026-09-05 against the live
+  // registry: 13 of 18 workdirs match a census path as a string, 18 of 18
+  // match by realpath — and the five that never matched were the five
+  // project-root and `.claude/worktrees` sessions, exactly the trees the gate
+  // was written to protect. Every one had read `idle` on every pass since the
+  // gate shipped.
+  it('D-1562 — a workdir that names the tree through a SYMLINKED root still defers it', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    runSweep();                                                     // seed a fresh build + stamp
+    bump(repo);                                                     // stale again; 1 commit behind
+    fs.symlinkSync(j('projects'), j('data'));                       // $HOME/data -> $HOME/projects
+    plantSession(path.join(j('data'), 'alpha'), 'working');         // the OTHER spelling
+    runSweep();
+    expect(outcomeOf(repo), 'the sweep built a graph under a WORKING session because the session '
+      + "registry spells the tree through a symlinked root and the gate compared the two spellings "
+      + 'as strings').toBe('skipped-busy');
+    expect(fs.readFileSync(j('engine-calls'), 'utf8').trim().split('\n'),
+      'the engine ran a second time on a tree the idle gate should have deferred').toHaveLength(1);
+  });
+
   it('O3 — a LARGE escape-secs threshold still defers a busy stale tree (SECONDS arm, negative case)', () => {
     const repo = makeRepo('alpha'); plantEngine();
     runSweep();
