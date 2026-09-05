@@ -4753,6 +4753,17 @@ the reading, below D-1613.
   specifies (the gate in the existing `PreToolUse` arm, fail-open, bounded at 3 denials, counted beside
   the queries, kill-switch `$HOME/.ccrc/graph-gate-off`), Task 7 above. The next reading is the
   gate's own effect: denials beside queries, on a dated day after the deploy.
+  **Deployed 2026-09-05 21:57 UTC** — PR #54 squash-merged as `fb45c5dd`, agent lane first, then the
+  server; both lanes report that sha; the installed hook carries the gate; `ccrc doctor` on the fleet
+  box reads `gate on`; no kill-switch file. **Baseline at deploy, so the reading has something to be
+  read against:** the query log holds 40 queries since the ruling at 11:08 UTC (swift-harbor 26,
+  custom-tools 6, rp-llm 5, plain-hollow 3) against 4 in the two days before it — the ruling itself
+  moved the number before the gate did, which the reading must not credit to the gate. Of 19
+  hookstates: `graphQueries` 26, 7, 4, 4, 3, 1 in six sessions, 0 in eight, `null` in five; within
+  twelve minutes of the deploy four sessions had written `graphGateDenials: 0` (each had queried
+  before the gate arrived), and no zero-query session had searched yet, so no denial existed to read.
+  The reading proper — denials beside queries across the fleet on a dated day after the deploy, read
+  against D-1690's four bounded false positives — is still the act this entry names.
 - **D-1689** (2026-09-05, review of PR #54, MAJOR, FIXED) — THE DENY WAS SAID BEFORE IT WAS COUNTED. The
   arm emitted the envelope at once and the hookstate write came ~45 lines later, and every path out
   of the write is `exit 0`. Measured with `$REG` at 0500: four searches, four denials, every one
