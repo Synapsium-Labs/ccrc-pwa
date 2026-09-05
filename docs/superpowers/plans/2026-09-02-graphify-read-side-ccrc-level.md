@@ -4537,12 +4537,60 @@ stale ledger cells re-measured. Committing the two source files again would be a
   one with no commit at all, which no discovery fixture builds. Both are guarded downstream by the
   `restamp refused: …` arm the last row measures.
 
-  **One shape the pinning surfaced and did NOT fix**, marked `D-TBD-restamp-report-arm-writes` in
-  the comment block itself: "Refusal writes NOTHING" holds for every refusal a fixture can reach —
-  all raised for graph.json, before its rename — but graph.json is renamed at the END of its own
-  loop iteration, so a refusal raised for `GRAPH_REPORT.md` (unreadable file, interpreter death,
-  failed rename) leaves graph.json already carrying HEAD while the row reads `failed`. No number
-  issued; reported to the operator.
+  **Completed 2026-09-05 (review findings 1–4; no new number — these are D-1509's own arms, the
+  way D-1458's timing completion was).** The pinning above measured what the restamp REFUSES; the
+  review then measured what it WRITES, and four things did not hold.
+
+  **(1) A failed build still stamped the engine pin.** `printf '%s\n' "$PIN" >
+  graphify-out/.graphify_engine` ran at the TOP of the rc-0 arm, before the stamp was re-measured,
+  so BOTH `failed` arms — "exit 0 … no unchanged verdict" and "restamp refused: …" — advanced
+  `.graphify_engine` for a build that wrote nothing. The next pass then reads the engine dimension
+  as fresh, falls through to `head`, and `_gs_busy`'s O3 SECONDS hatch measures the age of a stamp
+  no build ever earned. This entry's own spec says of that arm "nothing written". The pin is now
+  written on the two arms that return 0 — advanced, restamped — and nowhere else.
+
+  **(2) `failed` was carrying two conditions at once.** graph.json is renamed at the END of its own
+  loop iteration, so a refusal raised for GRAPH_REPORT.md returned 1 over a graph.json ALREADY
+  carrying HEAD: the row read `failed` — the word the doctor's WARN set counts — for a tree whose
+  stamp HAD advanced and which `_gs_stale` and the card both then read as fresh ("no overloaded
+  null at a seam", CLAUDE.md). This is the shape the paragraph this one replaces reported as an
+  unfixed `D-TBD-<slug>` marker in `_gs_restamp`'s own comment block: fixed, not deferred, and the
+  marker is gone from the source — where, being a CONCRETE placeholder, it was reddening
+  `server/test/dtbd.test.ts` on every commit it stood.
+  graph.json is the stamp every reader in ccrc spends; GRAPH_REPORT.md's "- Built from commit" line
+  is graphify's human echo (the card reads only the node count, from its head). So the report step
+  is best-effort: any failure there — python rc≠0, no file printed, a failed rename — appends one
+  line `graph-sweep: <tree>: GRAPH_REPORT.md not restamped (<why>)` to `~/.ccrc/graph-sweep.log`
+  and the row stays `restamped`. `_gs_restamp_refuse` is the single place that decides which of the
+  two files may refuse, so "refusal writes NOTHING" is now true of every refusal without exception.
+
+  **(3) A python that died after `mkstemp` leaked its temp copy INSIDE graphify-out/.** A copy of an
+  8 MB graph.json, left by an ENOSPC or a killed interpreter, that the sweep never names again and
+  that sits in the very directory the corpus guard measures. Everything after `mkstemp` now runs
+  under a try/except that unlinks the temp and prints the reason on stdout, so the census names it
+  (`restamp refused: graph.json: <errno text>`) instead of a bare "python refused (graph.json)".
+
+  **(4) `shutil.copy2` → `copyfile` + `copymode` — and the finding that prompted it does NOT hold.**
+  The review read `copy2` as carrying the old build's mtime onto the restamped graph.json, which
+  would make a healthy restamped tree read exactly like the wedge this entry was FOUND by
+  (graph.json's mtime frozen while manifest.json moves every pass). MEASURED, twice — standalone and
+  as a mutation: the splice write that FOLLOWS the copy resets the mtime to now, so copy2's
+  preservation never survived it, and reverting the shipped code to `copy2` leaves the new mtime row
+  GREEN (`Tests 85 passed | 2 skipped (87)`). What was actually wrong is the COMMENT — "mode and
+  mtime of the engine's own file" claimed a preservation the code did not perform. The primitive now
+  says what it does, and the row is kept as a pin on the operator signal rather than dropped: the
+  mutation that really implements the finding — `os.utime(tmp, …)` after the splice — reds it.
+
+  Baseline before these five rows: `Tests 80 passed | 2 skipped (82)`; after: `85 passed | 2 skipped
+  (87)`. Each row was red before its fix.
+
+  | mutation | measured red |
+  | --- | --- |
+  | the pin write moved back to the top of the rc-0 arm | `graph-sweep` — `Tests  1 failed \| 84 passed \| 2 skipped (87)`: *a FAILED build does not advance the engine pin* — `expected true to be false` |
+  | `_gs_restamp_refuse` refuses for BOTH files (`RESTAMP_WHY="$3"; return 1`) | `graph-sweep` — `Tests  1 failed \| 84 passed \| 2 skipped (87)`: *a restamp whose GRAPH_REPORT.md cannot be rewritten is still a restamp* — `expected 'failed' to be 'restamped'` |
+  | the `os.unlink(tmp)` cleanup deleted from the except arm (the reason still printed) | `graph-sweep` — `Tests  1 failed \| 84 passed \| 2 skipped (87)`: *a python that dies after mkstemp leaves no temp copy* — `expected [ '.graph.json.fu4qxvv6' ] to deeply equal []` |
+  | `copyfile` + `copymode` reverted to `copy2` (the finding AS STATED) | **GREEN** — `Tests  85 passed \| 2 skipped (87)`. The finding is not observable: the splice write resets the mtime the copy preserved |
+  | the old build's mtime carried onto the restamp (`os.utime(tmp, (st.st_atime, st.st_mtime))` after the splice) | `graph-sweep` — `Tests  1 failed \| 84 passed \| 2 skipped (87)`: *a restamped graph.json carries the mtime of the restamp* — `expected 1788487101526.999 to be greater than or equal to 1788573499545` |
 
 - **D-1510** (2026-09-05, same measurement — DISCOVERY DOES NOT REACH CLAUDE CODE'S OWN WORKTREES) —
   `ccd ls` 2026-09-05 shows `claude-corp-intake-platform` running in
@@ -4560,6 +4608,18 @@ stale ledger cells re-measured. Committing the two source files again would be a
   default noise list already withholds `.claude/` unless the parent tracks files there.
   **Mutation:** remove the globs → a fixture `git worktree add .claude/worktrees/x` leaves the census
   (the test asserts it is a row; a plain subdirectory `.claude/worktrees/notatree` is not).
+
+  **Completed 2026-09-05 (review finding 5; no new number — this is D-1510's own glob list).** The
+  two globs above miss the DEPTH-1 workspace shape D-1367 exists to support: `$WORKTREES_ROOT/<name>`
+  is ITSELF a git toplevel there, so a session's `.claude/worktrees/<x>` sits one level shallower
+  than under a depth-2 workspace and `$WORKTREES_ROOT/*/*/.claude/worktrees/*/` never reaches it —
+  the same class of miss this entry was written about, one shape further in. Three
+  `.claude/worktrees` globs now, one per shape of workspace the fleet actually has: `$PROJECTS_ROOT/*/`,
+  `$WORKTREES_ROOT/*/` and `$WORKTREES_ROOT/*/*/`, each suffixed `.claude/worktrees/*/`. The
+  toplevel predicate, the realpath dedupe and the noise-list key are untouched.
+  **Mutation:** remove the depth-1 glob → `graph-sweep` — `Tests  1 failed | 84 passed | 2 skipped
+  (87)`: *discovers one under a DEPTH-1 workspace as well* — `expected [ Array(1) ] to include
+  '…/worktrees/solo/.claude/worktrees/z'`.
 
 - **D-1511** (2026-09-05, recorded LIMITATION, not fixed — COMMIT-KEYED FRESHNESS CANNOT SEE A
   WORKING TREE THAT DIFFERS FROM HEAD) — session-identity's working tree differs from HEAD in 70
