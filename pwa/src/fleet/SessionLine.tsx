@@ -20,7 +20,7 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  graphReadCount, substrateFault, unmeasuredFields,
+  graphGateCount, graphReadCount, substrateFault, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -174,6 +174,18 @@ export function SessionLine({
   // predating this ADDITIVE field omits the key and the raw `!== null` test
   // is true for `undefined` — a `graph ` chip with no number (D-1251).
   const graphReads = graphReadCount(session);
+
+  // The gate's own counter (R5, D-1613), through `graphGateCount` for exactly
+  // the reason its sibling above gives: the frame is cast, not revived, and a
+  // server predating this ADDITIVE field omits the key. `> 0` and NOT
+  // `!== null`, which is the inverse of the read counter's rule and
+  // deliberate: a measured `gated 0` is the ordinary state of a session that
+  // queried its graph first, so rendering it would put a permanent suffix on
+  // every healthy row and bury the rows where the gate actually fired. Zero
+  // and null differ on the WIRE, where R5's reading is taken; they do not
+  // differ in what this chip has to say.
+  const gateDenials = graphGateCount(session);
+  const graphGated = gateDenials !== null && gateDenials > 0 ? gateDenials : null;
 
   // Dead sessions stay silent about limits: they are meaningless when nothing runs.
   const five = session.limits?.five ?? null;
@@ -451,9 +463,21 @@ export function SessionLine({
               `.sess-meta > *:not(:first-child)::before` rule punctuates it
               like every sibling; no disclosure, because there is nothing
               underneath a count to open. */}
+          {/* The gate's suffix (R5, D-1613) rides THIS chip rather than
+              claiming one of its own: R5's whole reading is denials beside
+              queries, and two cells would let a row show one without the
+              other. See `graphGated` above for why the suffix is `> 0` while
+              the chip itself is `!== null`. */}
           {!dead && graphReads !== null && (
-            <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
-              graph {graphReads}
+            <span
+              className="sess-graph"
+              title={
+                graphGated === null
+                  ? `${graphReads} graphify read(s) this session`
+                  : `${graphReads} graphify read(s) this session · ${graphGated} search call(s) denied by the graphify gate`
+              }
+            >
+              graph {graphReads}{graphGated === null ? '' : ` · gated ${graphGated}`}
             </span>
           )}
 

@@ -19,7 +19,7 @@ const seed = (dir: string, id: string, body: unknown): void => {
 /** A complete, valid hookstate body — the writer's own shape. */
 const base = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   v: 1, state: 'working', event: 'UserPromptSubmit', sessionId: UUID, pid: 1234,
-  updatedAt: NOW, ask: null, subagents: [], graphQueries: 0,
+  updatedAt: NOW, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0,
   ...overrides,
 });
 
@@ -55,6 +55,7 @@ describe('readHookState', () => {
       },
       subagents: [{ name: 'reviewer', startedAt: NOW - 1000 }],
       graphQueries: 0,
+      graphGateDenials: 0,
       interrupted: true,
     });
   });
@@ -387,5 +388,72 @@ describe('graphQueries', () => {
         `graphQueries: ${String(bad)} was laundered into a reading`)
         .toEqual({ ok: false, reason: 'no-state' });
     }
+  });
+});
+
+// ── graphGateDenials: the same field, the same discipline (D-1613) ────────
+// R5's gate counts its denials beside the queries R4 counts, in the same
+// hookstate write, and the two numbers answer two different questions: how
+// often this session asked the graph, and how often the gate had to tell it
+// to. The adapter rule does not soften for the second one — `null` is a hook
+// too old to have a gate at all (every hookstate written before this build),
+// `0` is a gate that armed and never had to fire, and the chip renders those
+// two differently (`graph 0` alone versus `graph 0 · gated 3`).
+describe('graphGateDenials', () => {
+  it('a measured zero is 0, not null', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphGateDenials: 0 }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphGateDenials).toBe(0);
+  });
+
+  it('a count round-trips', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphGateDenials: 3 }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphGateDenials).toBe(3);
+  });
+
+  it('ABSENT is null — a hook that predates the gate said nothing, which is not "said zero"', async () => {
+    // The whole live fleet is this case on the day R5 ships: every hookstate
+    // on disk was written by the pre-gate hook. Folding those to `0` would
+    // paint an un-upgraded box as a box whose gate never fired.
+    const reg = mkTmp('ccrc-hookstate-');
+    const body = base();
+    delete body['graphGateDenials'];
+    seed(reg, ID, body);
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out).not.toBeNull();
+    expect(out?.graphGateDenials, 'an absent denial counter was folded to a measured zero').toBeNull();
+  });
+
+  it('explicit null is null too', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphGateDenials: null }));
+    expect((await readHookState(localIO, reg, ID, UUID, NOW))?.graphGateDenials).toBeNull();
+  });
+
+  it('a non-integer, a negative or a non-number rejects the WHOLE read', async () => {
+    // `NaN` is excluded for `reviveGraphQueries`' own reason: `JSON.stringify`
+    // writes it as `null`, which is a valid absent counter and would fail this
+    // assertion rather than prove it.
+    for (const bad of [1.5, -1, '3', true, {}]) {
+      const reg = mkTmp('ccrc-hookstate-');
+      seed(reg, ID, base({ graphGateDenials: bad }));
+      expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW),
+        `graphGateDenials: ${String(bad)} was laundered into a reading`)
+        .toEqual({ ok: false, reason: 'no-state' });
+    }
+  });
+
+  it('the two counters are read APART — a session that queried once and was denied three times', async () => {
+    // The mutation this catches: one reviver call reused for both keys
+    // (`graphGateDenials: reviveGraphQueries(raw['graphQueries'])`), which
+    // typechecks, keeps every test above green, and reports the query count
+    // twice. R5's next reading is denials BESIDE queries; a seam that copies
+    // one onto the other makes that reading unfalsifiable.
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ graphQueries: 1, graphGateDenials: 3 }));
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out?.graphQueries).toBe(1);
+    expect(out?.graphGateDenials).toBe(3);
   });
 });

@@ -15,7 +15,7 @@ const session = (id: string): FleetSession => ({
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, held: null, bucket: 'idle', bucketSince: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
   started: true, spawnState: null,
 });
@@ -111,8 +111,10 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.askSummary).toBeNull();
     expect(s?.subagents).toBeNull();
     expect(s?.graphQueries).toBeNull();
+    expect(s?.graphGateDenials).toBeNull();
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
-      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries'],
+      ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries',
+       'graphGateDenials'],
     ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');
@@ -144,6 +146,31 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphQueries: 0 }]);
     const s = (await loadSnapshot(cachePath))?.sessions[0];
     expect(s?.graphQueries).toBe(0);
+  });
+
+  it('revives the two graph counters INDEPENDENTLY — no key-swap between them (D-1613)', async () => {
+    // Same shape, same reason, as the archivedAt/archivedBytes proof below:
+    // every other test in this file leaves the two counters equal (both
+    // absent, or both the same number), so `graphGateDenials: optNum(o,
+    // 'graphQueries')` — the copy-paste a two-line addition invites — would
+    // pass all of them. Distinct values here, and the denial count is the
+    // SMALLER one so a swap cannot be read as a coincidence.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphQueries: 9, graphGateDenials: 3 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.graphQueries).toBe(9);
+    expect(s?.graphGateDenials).toBe(3);
+  });
+
+  it('revives a persisted graphGateDenials of 0 as 0 — an armed gate that never fired', async () => {
+    // `optNum(…) || null` is the regression: it turns the one number the
+    // whole counter exists to report on the day R5 ships — a live gate that
+    // has not had to stop anybody — back into "nothing was measured", and the
+    // chip then hides it. Same distinction the chip itself draws with `!== null`.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphGateDenials: 0 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.graphGateDenials).toBe(0);
   });
 
   it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', async () => {

@@ -433,6 +433,14 @@ export async function assembleFleet(
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.
       graphQueries: hs?.graphQueries ?? null,
+      // R5's counter beside R4's (D-1613), and read off its OWN field: the
+      // two numbers answer two different questions, so a carry that copied
+      // `hs?.graphQueries` onto both would ship a board on which the gate's
+      // effect is indistinguishable from the queries it is meant to cause.
+      // `?? null` for the same reason as its sibling — no hook data and a
+      // hook too old to have a gate both mean "nothing measured", and a
+      // measured 0 means the gate is armed and has not had to fire.
+      graphGateDenials: hs?.graphGateDenials ?? null,
       // Carried straight off the record — this IS the evidence `tick()`'s own
       // `unmeasuredIds` (watch.ts) now derives its Set from directly, one
       // field of these very rows (one derivation of one fact — blocking

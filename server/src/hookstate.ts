@@ -49,6 +49,25 @@ export interface HookState {
    *  adapter may not do, and it would make an un-upgraded fleet box look like
    *  a fleet that ignores its graphs. */
   graphQueries: number | null;
+  /** How many search calls (`Grep`, `Glob`, a `Bash` command that HEADS with
+   *  a search) the `PreToolUse` gate has denied this session since it last
+   *  started or cleared — R5 of the read-side design, D-1613. It is counted
+   *  in the same hookstate write as `graphQueries` and it resets with it, and
+   *  it is bounded: after `GRAPH_GATE_MAX_DENIALS` the gate opens anyway, so
+   *  this number never exceeds that bound and a session that cannot run the
+   *  engine at all still gets through.
+   *
+   *  Two counters, not one, because they answer two different questions —
+   *  how often this session ASKED the graph, and how often the gate had to
+   *  tell it to. R5's own next reading is the second beside the first.
+   *
+   *  `null` is NO FIELD, exactly as for `graphQueries`: a hookstate written
+   *  by a hook that predates the gate — which, on the day R5 ships, is every
+   *  hookstate on the fleet. `0` is a MEASUREMENT: the gate is live in this
+   *  session and has not had to fire. Folding the first into the second is
+   *  the narrowing an adapter may not do, and here it would report a fleet
+   *  that has never met the gate as a fleet the gate never had to stop. */
+  graphGateDenials: number | null;
   interrupted: boolean;
 }
 
@@ -134,16 +153,31 @@ function reviveSubagents(raw: unknown): { name: string; startedAt: number }[] {
   });
 }
 
-/** `graphQueries` — absent or explicitly null reads as `null` (the writer did
+/** The two hook-written counters — `graphQueries` (R4) and `graphGateDenials`
+ *  (R5, D-1613). Absent or explicitly null reads as `null` (the writer did
  *  not carry the field), any non-integer or negative number rejects the whole
  *  read. Same split `reviveSubagents` takes: degrade for a field an older
- *  writer never wrote, reject a value this build cannot parse. */
-function reviveGraphQueries(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
-    throw new Malformed('graphQueries');
+ *  writer never wrote, reject a value this build cannot parse.
+ *
+ *  ONE ladder, parameterised by the field it is reading, rather than a second
+ *  copy for the second counter — `io.ts`'s own rule beside `readFileMeasured`:
+ *  two hand-kept ladders over the same gates drift, and the one that drifts is
+ *  always the one nobody is reading. It takes the RECORD and the key, not the
+ *  value, so each counter's key is spelled exactly once at the call site: a
+ *  copy-paste that read `graphQueries` twice would report the query count as
+ *  the denial count, which typechecks and would make R5's own reading —
+ *  denials beside queries — unfalsifiable. `Malformed` still names the field
+ *  that was bad, so a corrupt file's reason survives the sharing. */
+function reviveGraphCount(
+  raw: Record<string, unknown>,
+  field: 'graphQueries' | 'graphGateDenials',
+): number | null {
+  const v = raw[field];
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+    throw new Malformed(field);
   }
-  return raw;
+  return v;
 }
 
 /**
@@ -257,7 +291,8 @@ export async function readHookStateMeasured(
         event: typeof eventRaw === 'string' && eventRaw !== '' ? eventRaw : null,
         ask,
         subagents,
-        graphQueries: reviveGraphQueries(raw['graphQueries']),
+        graphQueries: reviveGraphCount(raw, 'graphQueries'),
+        graphGateDenials: reviveGraphCount(raw, 'graphGateDenials'),
         interrupted: interruptedRaw === true,
       },
     };

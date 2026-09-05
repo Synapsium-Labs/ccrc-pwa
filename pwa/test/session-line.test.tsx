@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession } from '../../shared/api';
+import { graphGateCount, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -19,7 +19,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
   tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
 });
@@ -947,5 +947,92 @@ describe('the graph chip', () => {
     render(<SessionLine session={s({ graphQueries: 4, status: 'dead', bucket: 'dead' })}
       onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText(/^graph /)).toBeNull();
+  });
+
+  // ── the gate's own half of the chip (R5, D-1613) ────────────────────────
+  // The gate denies a search call and counts the denial beside the queries.
+  // The chip is where that count becomes visible, and the whole point of R5's
+  // next reading is denials BESIDE queries — so the suffix rides the existing
+  // chip rather than claiming a second one.
+  it('appends · gated k when the gate has denied search calls', () => {
+    render(<SessionLine session={s({ graphQueries: 0, graphGateDenials: 3 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 0 · gated 3')).toBeInTheDocument();
+  });
+
+  it('appends nothing when the gate is armed and has never fired — gated 0 is not a finding', () => {
+    // `> 0`, not `!== null`: a measured zero here says the gate had nothing to
+    // stop, which is the ordinary state of a session that queried its graph
+    // first. Rendering `· gated 0` on it would put a permanent suffix on every
+    // healthy row and make the k>0 rows unfindable — the chip's job is the
+    // exception, not the census.
+    render(<SessionLine session={s({ graphQueries: 2, graphGateDenials: 0 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 2')).toBeInTheDocument();
+    expect(screen.queryByText(/gated/)).toBeNull();
+  });
+
+  it('appends nothing when the denial count is null — a hook too old to have a gate', () => {
+    render(<SessionLine session={s({ graphQueries: 5, graphGateDenials: null })}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('graph 5')).toBeInTheDocument();
+    expect(screen.queryByText(/gated/)).toBeNull();
+  });
+
+  it('appends nothing when the server omits the key entirely — an older server (D-1613)', () => {
+    // The same cast-not-revived seam `graphReadCount`'s own D-1251 test above
+    // pins, one field over: a server predating R5 omits the key, and a raw
+    // `session.graphGateDenials > 0` would read `undefined > 0` as false —
+    // quietly right today, and wrong the moment anybody writes `!== null` or
+    // `!= null` instead. This is the test that pins the read going through
+    // `graphGateCount` (shared/api.ts) rather than the raw field.
+    const raw = s({ graphQueries: 5 }) as unknown as Record<string, unknown>;
+    delete raw['graphGateDenials'];
+    expect(() => render(
+      <SessionLine session={raw as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />,
+    )).not.toThrow();
+    const chip = document.querySelector('.sess-graph');
+    expect(chip?.textContent, `a gated suffix rendered: ${chip?.outerHTML}`).toBe('graph 5');
+  });
+
+  it('appends nothing when the denial count arrives as a non-number an older peer never promised', () => {
+    // `graphGateCount`'s other degrade, mirroring `graphReadCount`'s: a broken
+    // peer sending a string or a NaN is ignorant of the count, not a witness
+    // that the gate fired `NaN` times. `'3' > 0` is TRUE in JS, so a raw read
+    // would render `· gated 3` off a string the wire type forbids.
+    for (const bad of ['3', Number.NaN, Number.POSITIVE_INFINITY]) {
+      cleanup();
+      render(<SessionLine session={{ ...s({ graphQueries: 5 }), graphGateDenials: bad } as unknown as FleetSession}
+                          onOpen={() => {}} onActions={() => {}} />);
+      const chip = document.querySelector('.sess-graph');
+      expect(chip?.textContent, `${String(bad)} rendered a gated suffix: ${chip?.outerHTML}`)
+        .toBe('graph 5');
+    }
+  });
+
+  it('the title names the denials too, so the number has a sentence behind it', () => {
+    render(<SessionLine session={s({ graphQueries: 0, graphGateDenials: 3 })}
+      onOpen={() => {}} onActions={() => {}} />);
+    const chip = document.querySelector('.sess-graph');
+    expect(chip?.getAttribute('title')).toContain('0 graphify read(s) this session');
+    expect(chip?.getAttribute('title')).toContain('3 search call(s) denied by the graphify gate');
+  });
+});
+
+describe('graphGateCount — the one reader of graphGateDenials, pinned directly (D-1691)', () => {
+  // The chip renders on `> 0`, so through it `null` and `0` are the same
+  // pixel, and a reader that folded the one into the other passed every chip
+  // test — measured by the review of PR #54. The wire contract is `null` ≠
+  // `0` (nothing measured is not a measured none), and the next consumer
+  // written with `!== null` would inherit whatever fallback this reader
+  // actually has. So the reader is pinned on its own, the way its sibling
+  // `graphReadCount` is pinned through a chip that renders on `!== null`.
+  it('reads absent and null as null, a finite number as itself, and junk as null', () => {
+    expect(graphGateCount({})).toBeNull();
+    expect(graphGateCount({ graphGateDenials: null })).toBeNull();
+    expect(graphGateCount({ graphGateDenials: 0 })).toBe(0);
+    expect(graphGateCount({ graphGateDenials: 3 })).toBe(3);
+    expect(graphGateCount({ graphGateDenials: Number.NaN })).toBeNull();
+    expect(graphGateCount({ graphGateDenials: '2' as unknown as number })).toBeNull();
   });
 });

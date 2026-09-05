@@ -781,7 +781,12 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
    *  `<n> commit(s) behind HEAD`, and D-1336's `freshness unmeasured` — the one
    *  the paragraph collapsed. */
   const FRESHNESS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    // D-1613 moved these assignments out of `_hook_graph_card` and into
+    // `_hook_graph_measure`, which the card and the R5 search gate both read,
+    // and the locals became `GM_*` globals with them. The harvest follows the
+    // spelling — it threw the error below on the rename, which is the mechanism
+    // working: a doc pinned to words the hook no longer prints is the failure.
+    const vals = [...hook.matchAll(/\bGM_FRESH="([^"]+)"/g)].map((m) => m[1]!);
     if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
       'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
       'looking at the wrong file');
@@ -802,7 +807,9 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
    *  a coordinator quotes into a brief. Leading punctuation is stripped so the
    *  pin is on the words, not on the em dash that joins them. */
   const QUALIFIERS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+    // The qualifier's spelling followed the same D-1613 rename as the words
+    // above: one measurement, `_hook_graph_measure`, read by the card and the gate.
+    const vals = [...hook.matchAll(/\bGM_FRESH\+="([^"]+)"/g)]
       .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
     if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
       'all — the card was rewritten, and the graph-card paragraph that names one has to be ' +
@@ -826,7 +833,7 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
     // until D-1372. Nothing here pins a spelling of either predicate, only
     // which one decides first.
     const content = hook.indexOf('_hook_same_tree "$cwd"');
-    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$GM_BUILT...HEAD"');
     expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
       'looking at the wrong file').toBeGreaterThanOrEqual(0);
     expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +

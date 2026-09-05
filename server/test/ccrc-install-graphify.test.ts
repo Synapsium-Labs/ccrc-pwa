@@ -598,7 +598,7 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
     expect(m![2], 'the two counts in the same sentence disagree with each other').toBe(WORDS[n]);
   });
 
-  it('the README documents the read side as it now is — hook, skill, PATH, counter', () => {
+  it('the README documents the read side as it now is — hook, skill, PATH, counter, gate', () => {
     // The whole point of this plan, and the thing the canonical overview would
     // otherwise still describe as a block in somebody else's CLAUDE.md.
     //
@@ -637,16 +637,42 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
       // reader for both chips, so an older server's omitted field cannot paint
       // an ignorant row as one that reported.
       'graphReadCount',
+      // R5's two, for the same reason (D-1613). `graphGateDenials` is the
+      // counter the gate keeps beside `graphQueries` — named nowhere else in
+      // the file — and `graph-gate-off` is the operator's kill-switch file,
+      // the one thing in the whole mechanism that has no writer in this tree
+      // and therefore nothing but prose to tell an operator it exists. A
+      // README that describes the gate without naming the file that turns it
+      // off documents a switch nobody can find.
+      'graphGateDenials',
+      'graph-gate-off',
     ]) {
       expect(readme, `the README never mentions ${token}`).toContain(token);
     }
-    // R5 is a DECISION, and the spec asks for it in writing ("Recorded so it
-    // is not re-derived", §2 R5) for the same reason the ledger exists: a
-    // decline nobody wrote down is re-proposed by the next reader of the same
-    // design. It is the one read-side item with no code to point at, so
-    // nothing but this asserts it survives an edit.
-    expect(readme.replace(/\s+/g, ' '),
-      'the README does not record the DECLINED PreToolUse speed bump — an undocumented decline gets re-derived')
+    // R5 IS A DECISION THAT WAS TAKEN TWICE, and both halves have to survive an
+    // edit. The spec asked for the DECLINE in writing ("Recorded so it is not
+    // re-derived", §2 R5) for the reason the ledger exists: a decline nobody
+    // wrote down is re-proposed by the next reader of the same design. The
+    // operator then REVERSED it on R4's own reading (D-1613, 2026-09-05), and a
+    // ruling nobody wrote down is re-litigated exactly as readily — the three
+    // grounds are still good arguments, and the next reader who meets them with
+    // no record of what answered them will make them again. So this pins BOTH,
+    // in the same 240-character window the decline was pinned within: the
+    // README records that the gate was BUILT, and it still carries the decline
+    // as the history the ruling reversed.
+    const flatReadme = readme.replace(/\s+/g, ' ');
+    expect(flatReadme,
+      'the README still records the PreToolUse speed bump only as declined — the ruling that ' +
+      'built it is not written down, and an unrecorded reversal is re-litigated')
+      .toMatch(/PreToolUse[\s\S]{0,240}?(built|ruling)/i);
+    // ANCHORED on the same window, not the whole file: the bare word is
+    // satisfied 470 lines away by an unrelated paragraph ("declined, not
+    // forgotten", the unread bucket), so a whole-file /declined/ stayed green
+    // with the R5 history deleted — measured, D-1691. The sliced guard in the
+    // describe below caught it; this one now catches it on its own too.
+    expect(flatReadme,
+      'the README no longer says the gate was declined first — without that history the three ' +
+      'grounds get re-derived as if nothing had ever answered them')
       .toMatch(/PreToolUse[\s\S]{0,240}?declined/i);
   });
 
@@ -673,7 +699,7 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
-describe("R5's decline defers to a number nobody was told to take (D-1365)", () => {
+describe("R5's decline deferred to a reading nobody was told to take — it was taken (D-1365, D-1613)", () => {
   // THE GAP THIS CLOSES. §2 R5 declines the `PreToolUse` speed bump on three
   // grounds, and the third is CONDITIONAL ON A MEASUREMENT: "R4 makes adoption
   // measurable. Gate **after** the number says the card and the clause did not
@@ -691,6 +717,21 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
   // criterion nobody can evaluate is the same shape as the state the spec
   // criticises three sections earlier ("5/5 homes converged was shape; this is
   // effect"). Both R5 texts now say how the figure is actually taken.
+  //
+  // AND THEN SOMEBODY TOOK IT (D-1613, 2026-09-05). The act this guard forced
+  // both texts to state was performed two days after the read side deployed —
+  // 4 graph queries fleet-wide, 10 of 18 live sessions still at `graphQueries`
+  // 0 — recorded in the ledger each text names, and the operator ruled on that
+  // reading: the gate is built. So the criterion is no longer the live half of
+  // this pin; the RECORD is. A text that still defers to a reading nobody has
+  // taken describes a decision this tree has already reversed, which is the
+  // same staleness one step on, so each text must now name the entry the
+  // reading was recorded under and that entry must be IN the ledger it names.
+  // Everything else here is unchanged and still load-bearing: the premise is
+  // still measured off the tree (nothing persists either counter, so the next
+  // reading — the gate's own effect — is another sample), the destination is
+  // still extracted and checked on disk, and the reset word is still
+  // harvested from the hook.
   //
   // DERIVED THREE WAYS, so this is not a spelling test:
   //  1. THE PREMISE is measured off the tree. If somebody later persists the
@@ -740,19 +781,27 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
     return body;
   };
 
-  it('graphQueries lives only in the two live-state sites — the premise both texts state', () => {
-    const root = path.resolve(REPO, 'server/src');
-    const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
-      .filter((f) => f.endsWith('.ts'))
-      .filter((f) => readFileSync(path.join(root, f), 'utf8').includes('graphQueries'))
-      .map((f) => f.split(path.sep).join('/'))
-      .sort();
-    expect(hits,
-      'a third server-side site now names graphQueries — if it PERSISTS the count (a run row, ' +
-      "coord.db, a log), R5's revisit reads a series rather than a sample and both R5 texts " +
-      'must be re-derived against it')
-      .toEqual(['fleet.ts', 'hookstate.ts']);
-  });
+  // BOTH counters, since D-1613: the gate's denials are the next reading, and
+  // they are kept exactly the way the queries are — live state on the hookstate
+  // the hook rewrites, carried onto `FleetSession`, and nowhere else. If either
+  // one grows a third server-side site that PERSISTS it, the reading stops
+  // being a sample and both R5 texts have to be re-derived against the series
+  // that then exists.
+  for (const field of ['graphQueries', 'graphGateDenials']) {
+    it(`${field} lives only in the two live-state sites — the premise both texts state`, () => {
+      const root = path.resolve(REPO, 'server/src');
+      const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
+        .filter((f) => f.endsWith('.ts'))
+        .filter((f) => readFileSync(path.join(root, f), 'utf8').includes(field))
+        .map((f) => f.split(path.sep).join('/'))
+        .sort();
+      expect(hits,
+        `a third server-side site now names ${field} — if it PERSISTS the count (a run row, ` +
+        "coord.db, a log), R5's readings are a series rather than a sample and both R5 texts " +
+        'must be re-derived against it')
+        .toEqual(['fleet.ts', 'hookstate.ts']);
+    });
+  }
 
   for (const c of R5) {
     it(`${c.label}: the revisit criterion names an act, and the ledger it is recorded in exists`, () => {
@@ -777,12 +826,41 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
       expect(readFileSync(destPath, 'utf8'),
         `${dest![0]} carries no "## Deviations found" ledger for the reading to land in`)
         .toContain('## Deviations found');
+      // D-1613 — AND THE READING LANDED THERE. The act is done, so a text that
+      // describes it in the future tense is describing a decision that has
+      // already been reversed. Each text names the entry, and the entry is
+      // read back out of the ledger the text itself pointed at: naming a
+      // number that is not in that file is the same defect as naming a file
+      // that does not exist, one turn later.
+      expect(flat,
+        `${c.label} says the reading is recorded in ${dest![0]} but never names the entry — the ` +
+        'reader is sent to a ledger of some 200 deviations with nothing to look up')
+        .toContain('D-1613');
+      expect(readFileSync(destPath, 'utf8'),
+        `${dest![0]} carries no D-1613 entry, so the reading ${c.label} points at is not there`)
+        .toMatch(/\*\*D-1613\*\*/);
     });
   }
 
+  it('the spec records the RULING as a section of its own, not a footnote to the decline', () => {
+    // The decline stays (this guard's whole first half depends on it), so the
+    // ruling cannot be a rewrite of it — it is a second section, and the slice
+    // above deliberately spans both. Delete the heading and the built design
+    // reads as an appendix to the argument against it: the next reader meets
+    // the three grounds first and the answer to them as commentary.
+    expect(spec, "the spec's `### R5 — built` section is gone — the decline is left standing as " +
+      'the design of a gate this tree ships')
+      .toMatch(/^### R5 — built\b/m);
+    expect(spec, 'the spec no longer carries the decline the ruling reversed')
+      .toMatch(/^### R5 — declined\b/m);
+  });
+
   it('both R5 texts explain the sampling by the source the hook actually exempts (harvested)', () => {
     const m = hook.match(
-      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0; fi/);
+      // D-1613 put the gate's denial counter on this same line (`gq=0; gd=0;`),
+      // so what is pinned is the reset and the source it exempts, not how many
+      // counters ride it.
+      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0;[^\n]*fi/);
     expect(m, "the hook's graphQueries reset moved or was rewritten — re-derive this guard")
       .not.toBeNull();
     for (const c of R5) {
@@ -824,7 +902,12 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
    *  exports it, and a helper module extracted for three call sites would put
    *  the vocabulary one indirection away from the file that WRITES it. */
   const FRESHNESS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    // D-1613 moved these assignments out of `_hook_graph_card` and into
+    // `_hook_graph_measure`, which the card and the R5 search gate both read,
+    // and the locals became `GM_*` globals with them. The harvest follows the
+    // spelling — it threw the error below on the rename, which is the mechanism
+    // working: a doc pinned to words the hook no longer prints is the failure.
+    const vals = [...hook.matchAll(/\bGM_FRESH="([^"]+)"/g)].map((m) => m[1]!);
     if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
       'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
       'looking at the wrong file');
@@ -845,7 +928,9 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
    *  reason the states are. Leading punctuation is stripped so the pin is on
    *  the words, not on the em dash that joins them. */
   const QUALIFIERS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+    // The qualifier's spelling followed the same D-1613 rename as the words
+    // above: one measurement, `_hook_graph_measure`, read by the card and the gate.
+    const vals = [...hook.matchAll(/\bGM_FRESH\+="([^"]+)"/g)]
       .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
     if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
       'all — the card was rewritten, and the README bullet that names one has to be re-derived ' +
@@ -894,7 +979,7 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     // the `if/elif` chain decides them, and the claim is only that the `ahead`
     // arm is first. `-gt 0` could become `-ge 1` without changing the rule, and
     // a guard that reddens on that teaches the next editor to delete it.
-    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then fresh=/g)]
+    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then GM_FRESH=/g)]
       .map((m) => m[1]!);
     expect(arms.length, 'ccd/session-hook.sh no longer decides freshness on an `ahead`/`behind` ' +
       'chain — this pin is looking at the wrong file').toBeGreaterThan(1);
@@ -912,7 +997,7 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     // README promised for that very case until D-1369. Nothing here pins a
     // spelling of either predicate, only which one decides first.
     const content = hook.indexOf('_hook_same_tree "$cwd"');
-    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$GM_BUILT...HEAD"');
     expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
       'looking at the wrong file').toBeGreaterThanOrEqual(0);
     expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +

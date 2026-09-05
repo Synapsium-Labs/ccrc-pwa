@@ -39,12 +39,17 @@ _hook_epoch_ms() {
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
-# ── THE GRAPH CARD (R1) — the only printf to stdout in this file ─────────
-# Claude Code reads a hook's stdout as a PER-EVENT CONTRACT, and on PreToolUse
-# that contract is a permission decision. A card that leaked onto another event
-# would not be noise; it would be an answer to a question nobody asked. So the
-# emitter is called from inside the SessionStart arm and nowhere else, and
-# every failure path in here prints NOTHING and returns 0 — this file's
+# ── THE TWO PRINTFS: R1's card, R5's deny ───────────────────────────────
+# Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
+# is context to inject, on PreToolUse it is a permission decision — and those
+# two events are the only ones this file prints on. Until D-1613 there was one
+# printf and the rule was "the card, and nothing else, ever"; now there are two,
+# so each has its OWN emitter and each emitter names its own `hookEventName`,
+# which is what stops a card being delivered as a decision or the other way
+# round. A card that leaked onto another event would not be noise; it would be
+# an answer to a question nobody asked. So this emitter is called from inside
+# the SessionStart arm and nowhere else, the deny emitter from the gate and
+# nowhere else, and every failure path in either prints NOTHING — this file's
 # standing contract (exit 0 on every path, no network, no locks, no waiting) is
 # unchanged. Every read below is a local file or a git ref.
 _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
@@ -52,6 +57,22 @@ _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
   j=$(jq -cn --arg c "$1" \
     '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
     || return 0
+  printf '%s\n' "$j"
+}
+
+# R5's emitter (D-1613). PreToolUse's own contract shape, built with `jq -cn` so
+# a reason carrying backticks, quotes and an em dash is quoted by the tool that
+# will parse it. A jq that cannot build it returns 1 and the caller says nothing
+# AND counts nothing — the fail-open the whole gate is written under.
+_hook_deny_json() {   # <reason> -> the deny envelope, one line; 1 when it could not be built
+  # Called ONLY inside a $( ) capture: the envelope is printed to the hook's
+  # real stdout at the very end of this file, after the hookstate rename has
+  # landed, never from here (D-1689).
+  local j=""
+  j=$(jq -cn --arg r "$1" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny",
+      permissionDecisionReason:$r}}' 2>/dev/null) \
+    || return 1
   printf '%s\n' "$j"
 }
 
@@ -67,7 +88,9 @@ _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
 # holds the number (D-1246). `git rev-parse` and `git rev-list --left-right
 # --count` are ref reads. Any failure omits its clause; a total failure prints nothing.
 # D-1368 — FRESHNESS IS CONTENT, NOT COMMIT IDENTITY. This file's ONE spelling
-# of that predicate, asked by the card below and nowhere else.
+# of that predicate, asked by `_hook_graph_measure` below and nowhere else —
+# and through it by BOTH readers, the card and the search gate (D-1613), which
+# is why the measurement is a function and not two copies of a git call.
 #
 # `built != HEAD` was spent as "the graph is of another commit", and after a
 # squash merge — or any rewrite that keeps the tree — that is false: HEAD's
@@ -91,74 +114,70 @@ _hook_same_tree() {   # <tree> <built-sha> -> 0 iff built's tree == HEAD's tree
   [ -n "$bt" ] && [ -n "$ht" ] && [ "$bt" = "$ht" ]
 }
 
-_hook_graph_card() {
-  local cwd="" row="" nodes="" built="" tip="" lr="" ahead="" behind="" engine="" pin="" fresh="" line="" bcommit=""
+# ── ONE MEASUREMENT, TWO READERS (D-1613) ───────────────────────────────
+# The R1 card and the R5 search gate ask the SAME question of the SAME tree,
+# and freshness has exactly ONE spelling in this file (D-1368's rule, kept). So
+# the measurement is factored out here and SETS GLOBALS rather than printing:
+# the card renders them, the gate compares them against its bounds, and neither
+# can drift from the other by an edit to one of them.
+#
+# THE RETURN CODE IS THREE-VALUED, deliberately — no overloaded null at a seam:
+#   0  a graph is there and was measured (`GM_BUILT` may still be empty: an
+#      unstamped graph is a MEASURED absence, and the gate reads it as one)
+#   1  the tree resolved and carries no `graphify-out/graph.json` — the card's
+#      census branch, which the gate has nothing to say about
+#   2  no tree at all: no cwd anywhere, or a cwd that is not a directory
+# 1 and 2 collapsed would hand the card a `$GM_CWD` it must not speak about.
+_hook_graph_measure() {   # -> GM_CWD GM_BUILT GM_NODES GM_ENGINE GM_PIN GM_FRESH GM_BEHIND
+  GM_CWD=""; GM_BUILT=""; GM_NODES=""; GM_ENGINE=""; GM_PIN=""; GM_FRESH=""; GM_BEHIND=""
+  local tip="" lr="" ahead="" behind="" bcommit="" cwd=""
   cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
   # `$REG/<id>.workdir` is the registry's own durable answer, and the fallback
-  # for a harness whose SessionStart payload carries no cwd at all.
+  # for a harness whose payload carries no cwd at all.
   [ -n "$cwd" ] || cwd=$(cat "$REG/$id.workdir" 2>/dev/null) || cwd=""
-  [ -n "$cwd" ] || return 0
-  [ -d "$cwd" ] || return 0
+  [ -n "$cwd" ] || return 2
+  [ -d "$cwd" ] || return 2
+  GM_CWD="$cwd"
+  [ -f "$cwd/graphify-out/graph.json" ] || return 1
 
-  if [ ! -f "$cwd/graphify-out/graph.json" ]; then
-    # SILENCE IS THE TRUE ANSWER for a tree the sweep has not reached: a card
-    # asserting a graph that is not there is worse than no card. The one thing
-    # worth saying instead is the sweep's OWN last word about this tree, when
-    # its census carries one — a session that knows the tree was REFUSED does
-    # not go hunting for a graph that is never going to appear. The census is
-    # `{passes:[…]}`, last 10, newest LAST.
-    row=$(jq -r --arg p "$cwd" \
-      '(.passes // []) | last | (.trees // [])
-       | map(select(.path == $p and ((.reason // "") != "")))
-       | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
-      "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
-    [ -n "$row" ] || return 0
-    # CLIP BEFORE INTERPOLATING (D-1335). `.reason` is repo-controlled text the
-    # sweep copied off an engine's stderr LINE (`BUILD_REASON="$first"`, one
-    # `head -n1`, unbounded) or off a whole matched refusal line, and it lands
-    # verbatim in this session's `additionalContext`. Every other payload this
-    # file emits is already capped — `.[0:200]` on the approval summary, 64KB on
-    # the state envelope — and this one was not. 400 characters keeps the
-    # outcome and the head of the reason, which is the part that says what to do
-    # about it. The other arm needs no cap: each of its fields is bounded at the
-    # read (a validated 7-40 hex sha sliced to 8, digits off a 4096-byte head,
-    # `head -c 64` on engine and pin).
-    row="${row:0:400}"
-    _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
-    return 0
-  fi
-
-  built=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
-    | grep -oE '"built_at_commit"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' | tail -n1) || built=""
+  GM_BUILT=$(tail -c 4096 "$cwd/graphify-out/graph.json" 2>/dev/null \
+    | grep -oE '"built_at_commit"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' | tail -n1) || GM_BUILT=""
   # ONE CLAUSE DECIDES WHICH MATCH WINS, and it is `| tail -n1` above (D-1361).
-  # `${built#*:}` takes the FIRST colon because the key it strips carries none;
-  # the older `##*:` took the last, which silently re-implemented the pipeline's
-  # last-wins decision inside the field split — two mechanisms for one decision,
-  # and the effect was that `| tail -n1` could be deleted with the whole suite
-  # green (measured), because on a two-match read the parameter expansion went
-  # on quietly answering the right sha. Behaviour is unchanged for every single
-  # match, which is every read `tail -n1` survives; what changes is that the
-  # clause is now a mechanism a test can redden.
-  built="${built#*:}"; built="${built//\"/}"; built="${built// /}"
-  [[ "$built" =~ ^[0-9a-f]{7,40}$ ]] || built=""
+  # `${GM_BUILT#*:}` takes the FIRST colon because the key it strips carries
+  # none; the older `##*:` took the last, which silently re-implemented the
+  # pipeline's last-wins decision inside the field split — two mechanisms for
+  # one decision, and the effect was that `| tail -n1` could be deleted with the
+  # whole suite green (measured), because on a two-match read the parameter
+  # expansion went on quietly answering the right sha. Behaviour is unchanged
+  # for every single match, which is every read `tail -n1` survives; what
+  # changes is that the clause is now a mechanism a test can redden.
+  GM_BUILT="${GM_BUILT#*:}"; GM_BUILT="${GM_BUILT//\"/}"; GM_BUILT="${GM_BUILT// /}"
+  [[ "$GM_BUILT" =~ ^[0-9a-f]{7,40}$ ]] || GM_BUILT=""
 
-  nodes=$(head -c 4096 "$cwd/graphify-out/GRAPH_REPORT.md" 2>/dev/null \
-    | grep -oE '[0-9]+ nodes' | head -n1) || nodes=""
-  nodes="${nodes% nodes}"
-  [[ "$nodes" =~ ^[0-9]+$ ]] || nodes=""
+  GM_NODES=$(head -c 4096 "$cwd/graphify-out/GRAPH_REPORT.md" 2>/dev/null \
+    | grep -oE '[0-9]+ nodes' | head -n1) || GM_NODES=""
+  GM_NODES="${GM_NODES% nodes}"
+  [[ "$GM_NODES" =~ ^[0-9]+$ ]] || GM_NODES=""
 
-  engine=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || engine=""
-  pin=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || pin=""
+  GM_ENGINE=$(head -c 64 "$cwd/graphify-out/.graphify_engine" 2>/dev/null | tr -d '[:space:]') || GM_ENGINE=""
+  GM_PIN=$(head -c 64 "$HOME/.ccrc/graphify.pin" 2>/dev/null | tr -d '[:space:]') || GM_PIN=""
 
   # STALENESS IS MEASURED OR IT IS NOT CLAIMED. A tree with no git, or a
   # rev-list that will not answer, gets no freshness clause rather than a
   # "fresh" nobody checked — a session querying a graph 97 commits stale gets
   # confident wrong answers, which is the whole reason this clause exists.
+  #
+  # GM_BEHIND (D-1613) is the DISTANCE the word above is a rendering of, and it
+  # is set ONLY where that word IS a distance — 0 for both fresh arms. It stays
+  # empty for `not an ancestor of HEAD`, for `freshness unmeasured`, for a tree
+  # with no git and for a graph with no acceptable stamp: four conditions
+  # GM_FRESH still tells apart, and which the GATE treats alike because a graph
+  # the card has already called not-this-tree's is not one to push a session at.
   tip=$(git -C "$cwd" rev-parse HEAD 2>/dev/null) || tip=""
-  if [ -n "$built" ] && [ -n "$tip" ]; then
-    if [ "$tip" = "$built" ]; then
-      fresh="fresh"
-    elif _hook_same_tree "$cwd" "$built"; then
+  if [ -n "$GM_BUILT" ] && [ -n "$tip" ]; then
+    if [ "$tip" = "$GM_BUILT" ]; then
+      GM_FRESH="fresh"; GM_BEHIND=0
+    elif _hook_same_tree "$cwd" "$GM_BUILT"; then
       # D-1368. THE STATE IS STILL `fresh`; the rest is a qualifier on it.
       # `— same content as HEAD` is APPENDED to the word rather than replacing
       # it, and that is a decision about the contract, not about the code:
@@ -171,9 +190,9 @@ _hook_graph_card() {
       # when the graph was built at a DIFFERENT commit — an abbreviated sha
       # naming this very HEAD resolves to `$tip` and keeps the bare word — so a
       # reader can still tell "built here" from "built elsewhere, same bytes".
-      fresh="fresh"
-      bcommit=$(git -C "$cwd" rev-parse --verify -q "$built^{commit}" 2>/dev/null) || bcommit=""
-      [ "$bcommit" = "$tip" ] || fresh+=" — same content as HEAD"
+      GM_FRESH="fresh"; GM_BEHIND=0
+      bcommit=$(git -C "$cwd" rev-parse --verify -q "$GM_BUILT^{commit}" 2>/dev/null) || bcommit=""
+      [ "$bcommit" = "$tip" ] || GM_FRESH+=" — same content as HEAD"
     else
       # ANCESTRY, NOT DISTANCE (D-1353). `rev-list --count "$built..HEAD"` asks
       # ONE side of the question — how many commits HEAD carries that the
@@ -194,7 +213,7 @@ _hook_graph_card() {
       # rather than collapsing onto a word that means something else, because a
       # reading session does the same thing in both: the graph is not of this
       # tree, so every answer is a lead.
-      lr=$(git -C "$cwd" rev-list --left-right --count "$built...HEAD" 2>/dev/null) || lr=""
+      lr=$(git -C "$cwd" rev-list --left-right --count "$GM_BUILT...HEAD" 2>/dev/null) || lr=""
       # NOT SILENCE (D-1336). Silence here would collapse two conditions a
       # reading session handles differently onto one value, which this repo
       # calls a defect and not a style ("no overloaded null at a seam"): a
@@ -206,28 +225,86 @@ _hook_graph_card() {
       # number standing in for both sides.
       if [[ "$lr" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then
         ahead="${BASH_REMATCH[1]}"; behind="${BASH_REMATCH[2]}"
-        if   [ "$ahead"  -gt 0 ]; then fresh="not an ancestor of HEAD"
-        elif [ "$behind" -eq 0 ]; then fresh="fresh"
-        elif [ "$behind" -eq 1 ]; then fresh="1 commit behind HEAD"
-        else                           fresh="$behind commits behind HEAD"
+        if   [ "$ahead"  -gt 0 ]; then GM_FRESH="not an ancestor of HEAD"
+        elif [ "$behind" -eq 0 ]; then GM_FRESH="fresh"; GM_BEHIND=0
+        elif [ "$behind" -eq 1 ]; then GM_FRESH="1 commit behind HEAD"; GM_BEHIND="$behind"
+        else                           GM_FRESH="$behind commits behind HEAD"; GM_BEHIND="$behind"
         fi
       else
-        fresh="freshness unmeasured"
+        GM_FRESH="freshness unmeasured"
       fi
     fi
   fi
+  return 0
+}
+
+# CONDITIONS 2 AND 3 OF THE ARM (spec §2 "R5 — built"), asked of the last
+# measurement and spelled ONCE (D-1613): the card's gate sentence and the gate
+# itself must agree about which trees the gate is armed for, or the card
+# promises a deny that never comes (or, worse, stays silent about one that does).
+# GM_BEHIND is set only where a stamp the tail read accepted could be dated
+# against HEAD, so its emptiness carries condition 2's failure as well as the
+# freshness states that do not gate.
+_hook_gate_tree() {   # -> 0 iff the measured tree carries a graph fresh enough to gate on
+  [ -n "$GM_BEHIND" ] && [ "$GM_BEHIND" -le "$GRAPH_GATE_MAX_BEHIND" ]
+}
+
+_hook_graph_card() {
+  local row="" line="" rc=0
+  _hook_graph_measure || rc=$?
+  [ "$rc" -ne 2 ] || return 0
+
+  if [ "$rc" -eq 1 ]; then
+    # SILENCE IS THE TRUE ANSWER for a tree the sweep has not reached: a card
+    # asserting a graph that is not there is worse than no card. The one thing
+    # worth saying instead is the sweep's OWN last word about this tree, when
+    # its census carries one — a session that knows the tree was REFUSED does
+    # not go hunting for a graph that is never going to appear. The census is
+    # `{passes:[…]}`, last 10, newest LAST.
+    row=$(jq -r --arg p "$GM_CWD" \
+      '(.passes // []) | last | (.trees // [])
+       | map(select(.path == $p and ((.reason // "") != "")))
+       | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
+      "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
+    [ -n "$row" ] || return 0
+    # CLIP BEFORE INTERPOLATING (D-1335). `.reason` is repo-controlled text the
+    # sweep copied off an engine's stderr LINE (`BUILD_REASON="$first"`, one
+    # `head -n1`, unbounded) or off a whole matched refusal line, and it lands
+    # verbatim in this session's `additionalContext`. Every other payload this
+    # file emits is already capped — `.[0:200]` on the approval summary, 64KB on
+    # the state envelope — and this one was not. 400 characters keeps the
+    # outcome and the head of the reason, which is the part that says what to do
+    # about it. The other arm needs no cap: each of its fields is bounded at the
+    # read (a validated 7-40 hex sha sliced to 8, digits off a 4096-byte head,
+    # `head -c 64` on engine and pin).
+    row="${row:0:400}"
+    _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
+    return 0
+  fi
 
   line="graphify: this tree has a knowledge graph — graphify-out/"
-  [ -z "$nodes" ]  || line="$line, $nodes nodes"
-  [ -z "$built" ]  || line="$line, built at ${built:0:8}"
-  [ -z "$fresh" ]  || line="$line ($fresh)"
+  [ -z "$GM_NODES" ] || line="$line, $GM_NODES nodes"
+  [ -z "$GM_BUILT" ] || line="$line, built at ${GM_BUILT:0:8}"
+  [ -z "$GM_FRESH" ] || line="$line ($GM_FRESH)"
   # The engine/pin pair earns its place: sessions were measured running an
   # unversioned July copy of graphify against 0.9.9 graphs, and that drift is
   # invisible until a query fails strangely.
-  [ -z "$engine" ] || line="$line, engine $engine"
-  [ -z "$pin" ]    || line="$line (pin $pin)"
+  [ -z "$GM_ENGINE" ] || line="$line, engine $GM_ENGINE"
+  [ -z "$GM_PIN" ]    || line="$line (pin $GM_PIN)"
   # Single-quoted: the sentence carries backticks and double quotes verbatim.
   line="$line"'. Answer codebase questions with `graphify query "<question>"` first; `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for one concept; read `graphify-out/GRAPH_REPORT.md` only for broad architecture. Do not run `graphify update` or any build here — the ccrc sweep owns the write side.'
+  # R5 (D-1613): the card says what the gate will DO in this tree, and it says
+  # it only where the gate is actually armed — a card promising a deny that
+  # never comes teaches the session to ignore the card. The kill-switch arm is
+  # the same predicate with the operator's file on top of it, because "off" is
+  # only worth saying where "on" would otherwise have been true.
+  if _hook_gate_tree; then
+    if [ -e "$GRAPH_GATE_OFF" ]; then
+      line="$line Search tools are not gated here: the search gate is off (operator file)."
+    else
+      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated until this session's first graph query."
+    fi
+  fi
   _hook_emit_context "$line"
   return 0
 }
@@ -242,6 +319,28 @@ REG="$HOME/.cc-sessions"
 # stops `mygraphify query` and prose mentioning the command from counting;
 # the trailing one stops `graphify querying-something-else`.
 GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
+
+# ── R5: the search gate's bounds, its kill-switch and what it gates ─────
+# D-1613. Every one of these is named ONCE and read everywhere it is needed —
+# the card's gate sentence, the arm condition and the deny reason all take the
+# bounds from here, so the sentence a session reads and the rule it meets can
+# not say different numbers.
+#
+# The kill-switch is a FILE the operator touches by hand, in a directory ccrc
+# owns and nothing in this tree writes: same shape as `$REG/coordinator-paused`
+# and `$REG/mail-disabled` — a convention with a speed bump, releasable without
+# a deploy and without a token.
+GRAPH_GATE_OFF="$HOME/.ccrc/graph-gate-off"
+GRAPH_GATE_MAX_BEHIND=10
+GRAPH_GATE_MAX_DENIALS=3
+# A search at the HEAD of the line is a codebase question; a search at the tail
+# of a pipeline (`vitest run | grep Tests`) is filtering output this session
+# already produced, and gating that would be the gate answering a question
+# nobody asked. So the head is what is matched: after at most one `cd <dir> &&`
+# / `cd <dir>;` prefix and any run of `FOO=bar ` assignments, the first word.
+# `graphify` is not in the list and so is never gated — the gate must never
+# stand between a session and the very command that opens it.
+GRAPH_SEARCH_RE='^[[:space:]]*(cd[[:space:]]+[^;&|]+(&&|;)[[:space:]]*)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(rg|grep|egrep|fgrep|ugrep|ag|ack|find|fd|git[[:space:]]+grep)([[:space:]]|$)'
 
 payload=$(cat 2>/dev/null) || exit 0
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
@@ -355,10 +454,10 @@ esac
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
-# ONE fork for all three fields (was two, and the counter would have made
-# three). Same hot-path budget as the arm above: `$f` is read on every event,
-# and `subs`/`prev_state` were already two forks over one file. Three values on
-# three LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
+# ONE fork for all four fields (was two, and each counter would have added one).
+# Same hot-path budget as the arm above: `$f` is read on every event, and
+# `subs`/`prev_state` were already two forks over one file. Four values on
+# four LINES, not `@tsv` — `@tsv` escapes a tab or newline inside a subagent
 # name as a backslash sequence, which would hand `--argjson subagents` a string
 # that is no longer JSON. `tostring` of a compact ARRAY contains no newline, so
 # line-splitting is safe where tab-splitting is not.
@@ -372,23 +471,35 @@ f="$REG/$id.hookstate.json"
 # leads (bounded set, and the shifted-into value it would otherwise take has no
 # guard — an out-of-set `state` reaches `hookstate.ts:233` and degrades to
 # NO_STATE, but it should never be reachable from another field's overflow),
-# and `gq` sits in the middle behind its own `^[0-9]+$` guard.
+# and the two counters sit in the middle, each behind its own `^[0-9]+$` guard.
 #
-# The read counter survives state transitions exactly as `subs` does, and a
-# file that never carried the field reads as 0 — this is the WRITER, where 0
+# Both counters survive state transitions exactly as `subs` does, and a file
+# that never carried either field reads as 0 — this is the WRITER, where 0
 # is the honest start; `hookstate.ts` is the reader, and there absent stays
 # `null` rather than folding to 0. A jq that fails (no file, corrupt file)
-# prints nothing, all three `read`s come up empty, and each falls back to the
-# degrade it already had. This file runs under `set -uo pipefail` and NOT
+# prints nothing, all four `read`s come up empty, and each falls back to the
+# degrade it already had (D-1613 measures that failure separately for the gate,
+# just below: for the WRITE the degrade is unchanged). This file runs under `set -uo pipefail` and NOT
 # `set -e`, so a `read` hitting EOF is inert.
-subs=""; prev_state=""; gq=""
-{ read -r prev_state; read -r gq; read -r subs; } < <(jq -r \
+subs=""; prev_state=""; gq=""; gd=""
+{ read -r prev_state; read -r gq; read -r gd; read -r subs; } < <(jq -r \
   '(.state // ""),
    (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
+   (if (.graphGateDenials | type) == "number" then (.graphGateDenials | floor) else 0 end),
    (.subagents // [] | tostring)' \
   "$f" 2>/dev/null)
+# A HOOKSTATE THAT EXISTS AND WILL NOT PARSE IS NOT A SESSION THAT COUNTED ZERO
+# (D-1613). Both degrade to 0 for the WRITE — that is the honest start, and it
+# is what this file has always done — but only one of them may arm the gate: a
+# corrupt file means this session's query count is UNKNOWN, and the gate denies
+# on a measured zero or not at all. The probe is `gq`, because the jq program
+# above emits a number on that line for every object it can read at all, so an
+# empty `gq` beside a file that IS there can only be a read that failed.
+hs_unreadable=0
+[[ -f "$f" && -z "$gq" ]] && hs_unreadable=1
 [[ "$subs" == \[* ]] || subs="[]"
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0
+[[ "$gd" =~ ^[0-9]+$ ]] || gd=0
 # `startup` and `clear` are new sessions; `resume` and `compact` are the SAME
 # session still going, and a counter that reset on compaction would erase the
 # evidence at precisely the moment the session most needed the card (R1).
@@ -408,8 +519,79 @@ subs=""; prev_state=""; gq=""
 # previous sessions' reads as this one's. A future `source` this build has
 # never heard of lands on the same side as absence — a new boundary resets,
 # which is the degrade that costs a count rather than inventing one.
-if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; fi
+# The denial count resets WITH the query count and for the same reason: the
+# gate meets a session once per new context, so a dispatched worker meets it
+# once per wave (dispatch `/clear`s it from wave 2 on) and a `/clear` by hand
+# re-arms it. A `resume` is the same session still going, and re-arming there
+# would deny a search the session had already paid for once.
+if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; fi
 if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
+
+# ── R5: THE SEARCH GATE (D-1613) ────────────────────────────────────────
+# The spec DECLINED this gate and the operator reversed it on R4's own reading:
+# 4 graph queries fleet-wide in the two days after the read side deployed, 10 of
+# 18 live sessions still at `graphQueries` 0. The card and the worker skill's
+# clause 12 moved nothing a counter could see, so the ask became a deny.
+#
+# THE ONLY THING THIS FILE PRINTS ON A NON-SessionStart EVENT, and it is the
+# one shape PreToolUse defines: a permission decision. Silence is the default on
+# every other path, so every read that will not answer costs the session nothing
+# — a hook that can wedge a turn is worse than no hook. The envelope is BUILT
+# here and PRINTED at the end of the file, after the hookstate write lands
+# (D-1689): a deny that has gone out is a denial the next event must be able to
+# see, or the bound of three is a promise this file cannot keep.
+#
+# ORDER IS BUDGET (the same argument the PostToolUse prefilter above makes).
+# The cheap conjuncts run first: the counters are already in hand, the
+# kill-switch is one stat, the tool name was read by the arm above, and only a
+# GATED call in an ARMED session pays for the jq that reads the command or the
+# git that dates the graph. A session that has queried once, or that has spent
+# its three denials, never pays anything again.
+deny_json=""
+if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
+      && "$gq" -eq 0 && "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] \
+   && [ ! -e "$GRAPH_GATE_OFF" ]; then
+  gated=0
+  case "${tool:-}" in
+    Grep|Glob) gated=1 ;;
+    Bash)
+      # The prefilter is the PostToolUse arm's budget argument, in the other
+      # direction: a command that HEADS with one of the search words cannot
+      # fail to put that word somewhere in the payload, so a payload without
+      # any of the six substrings needs no jq at all. A false negative is
+      # impossible, which is the only direction that would matter; a false
+      # positive costs one jq fork the regex then refuses, and the substrings
+      # DO occur inside ordinary words — `npm run package` carries `ack`,
+      # `manage.py migrate` carries `ag` (2 of 14 ordinary commands measured,
+      # D-1691) — so a session that never searches pays that one fork on each
+      # such call for as long as it sits at zero queries. One fork, not a jq
+      # on every Bash call: that is the whole of the budget claim.
+      if [[ "$payload" =~ (rg|grep|ag|ack|find|fd) ]]; then
+        scmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
+          <<<"$payload" 2>/dev/null) || scmd=""
+        [[ -n "$scmd" && "$scmd" =~ $GRAPH_SEARCH_RE ]] && gated=1
+      fi ;;
+  esac
+  if [[ "$gated" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
+    # The card's own vocabulary — node count and freshness word, measured by the
+    # card's own function — plus the act, plus the bound. A session that cannot
+    # run Bash at all still gets through on its fourth search, and the board
+    # shows the denials it spent getting there.
+    greason="graphify gate: this tree has a knowledge graph ("
+    [ -z "$GM_NODES" ] || greason+="$GM_NODES nodes, "
+    greason+="$GM_FRESH) and this session has not queried it yet."
+    greason+=' Search tools open after one graph query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a relationship, `graphify explain "<concept>"` for one concept).'
+    greason+=" Denial $((gd + 1)) of $GRAPH_GATE_MAX_DENIALS; after $GRAPH_GATE_MAX_DENIALS the gate opens anyway."
+    # COUNTED ONLY IF IT CAN BE SAID, SAID ONLY ONCE IT IS COUNTED (D-1689).
+    # A builder that could not make its JSON has denied nothing, and charging
+    # the session for it would spend the bound on denials it never saw. And the
+    # envelope it did make goes out at the END of this file, after the rename:
+    # measured on the branch before the fix, with the registry unwritable every
+    # search read "Denial 1 of 3" forever, and the one graphify query that
+    # would have opened the gate was lost by the same failed write.
+    if deny_json=$(_hook_deny_json "$greason"); then gd=$((gd + 1)); else deny_json=""; fi
+  fi
+fi
 
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
@@ -437,8 +619,10 @@ out=$(jq -cn \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
   --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
+  --argjson graphGateDenials "$gd" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries}
+    updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
+    graphGateDenials:$graphGateDenials}
    + (if $interrupted then {interrupted:true} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
@@ -448,7 +632,13 @@ if (( ${#out} > 65536 )); then
   (( ${#out} <= 65536 )) || exit 0
 fi
 
+# The braces put the REDIRECTION's own failure under the 2>/dev/null too: with
+# `> "$tmp" 2>/dev/null` bash reports an unopenable "$tmp" on the hook's real
+# stderr before the second redirection is applied (D-1691).
 tmp="$REG/.$id.$$.hookstate.tmp"
-printf '%s\n' "$out" > "$tmp" 2>/dev/null || { rm -f "$tmp"; exit 0; }
-mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+{ printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
+mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+# The one deny this file ever prints, and only now: the count it names is on
+# disk, so the next event will see it (D-1689).
+[ -z "$deny_json" ] || printf '%s\n' "$deny_json"
 exit 0

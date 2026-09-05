@@ -21,7 +21,7 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
 };
 
 const mkHookState = (over: Partial<HookState> = {}): HookState =>
-  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, interrupted: false, ...over });
+  ({ state: 'working', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false, ...over });
 
 describe('idHomeWrapper', () => {
   const roster = parseRoster(DEFAULT_TEST_ROSTER);
@@ -528,7 +528,7 @@ describe('archived size on the wire', () => {
 });
 
 describe('hook state on the wire', () => {
-  it('a fresh hookstate carries all four fields — hookState, askSummary, subagents and graphQueries — onto the session', async () => {
+  it('a fresh hookstate carries all five fields — hookState, askSummary, subagents, graphQueries and graphGateDenials — onto the session', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -538,6 +538,7 @@ describe('hook state on the wire', () => {
         ask: { questions: [{ question: 'Pick one', header: 'Choose', options: [{ label: 'A' }, { label: 'B' }] }] },
         subagents: [{ name: 'reviewer', startedAt: 1000 }],
         graphQueries: 7,
+        graphGateDenials: 2,
       })],
     ]);
     const fleet = await assembleFleet(
@@ -555,6 +556,12 @@ describe('hook state on the wire', () => {
     // replaced by a literal `null` — the count silently dropped for every live
     // session — and the entire server suite would stay green (D-1249).
     expect(s.graphQueries).toBe(7);
+    // R5's own counter, D-1613, and the number is deliberately DIFFERENT from
+    // the query count above: a seam that carried `hs?.graphQueries` onto both
+    // wire fields would pass with two 7s. The gate's next reading is denials
+    // beside queries, so a carry that copies one onto the other reports a
+    // fleet nobody can read.
+    expect(s.graphGateDenials).toBe(2);
   });
 
   it('carries a hookstate graphQueries of 0 onto the session as 0 — a measured zero is not an absence', async () => {
@@ -577,7 +584,46 @@ describe('hook state on the wire', () => {
     expect(s.graphQueries).toBe(0);
   });
 
-  it('a hookless session carries all four fields as null', async () => {
+  it('carries a hookstate graphGateDenials of 0 onto the session as 0 — an armed gate that never fired', async () => {
+    // The half a `hs ? 0 : null`, or a truthiness-flavoured carry, would still
+    // survive: "the gate is live here and has not had to stop anybody" is a
+    // MEASUREMENT, and the one this whole counter exists to report on the day
+    // R5 ships. The hookless sibling below pins the null (D-1613).
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([
+      ['claude-demo', mkHookState({ state: 'working', graphGateDenials: 0 })],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.graphGateDenials).toBe(0);
+  });
+
+  it('carries a hookstate graphGateDenials of NULL onto the session as null — a hook too old to have a gate', async () => {
+    // A hook that predates R5 writes no denial counter at all, and
+    // `hookstate.ts` reads that as `null`. The carry must not launder it into
+    // a 0, which is what a `?? 0` here would do — and which would paint every
+    // un-upgraded fleet box as a box whose gate is armed and quiet.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const hookStates = new Map<string, HookState>([
+      ['claude-demo', mkHookState({ state: 'working', graphQueries: 4, graphGateDenials: null })],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })), 1784600000,
+      undefined, undefined, undefined, undefined, hookStates,
+    );
+    const s = fleet.find((x) => x.id === 'claude-demo')!;
+    expect(s.graphQueries).toBe(4);
+    expect(s.graphGateDenials).toBeNull();
+  });
+
+  it('a hookless session carries all five fields as null', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -591,6 +637,7 @@ describe('hook state on the wire', () => {
     expect(s.askSummary).toBeNull();
     expect(s.subagents).toBeNull();
     expect(s.graphQueries).toBeNull();
+    expect(s.graphGateDenials).toBeNull();
   });
 
   it('dialogPending is true when only the pane detector says so', async () => {

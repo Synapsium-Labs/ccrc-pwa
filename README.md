@@ -1559,8 +1559,10 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
   by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
-  reads. **Stdout stays empty on every other event** — on `PreToolUse` a stdout JSON is a permission
-  decision — and that is pinned in both directions by `server/test/session-hook.test.ts`.
+  reads. **Stdout is this card on `SessionStart` and the search gate's deny on a gated `PreToolUse`
+  (R5, below) — and empty on every other event**, because a stdout JSON on `PreToolUse` *is* a
+  permission decision and this hook says nothing there unless it means one. Both halves are pinned in
+  both directions by `server/test/session-hook.test.ts`.
 - **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
@@ -1592,21 +1594,68 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `~/.cache/graphify-queries.log`: it is not under the agent whitelist and this design adds no read
   root.
 
-The `PreToolUse` speed bump — one deny on a session's first `Grep` in a tree with a fresh graph and a
-`graphQueries` of 0 — was considered and **declined**: `PreToolUse` fires for subagents, which never
-saw the card; a deny path would be the first thing in the hook that can wedge a turn; and the counter
-above is what makes adoption measurable, so the gate belongs *after* there is a number, not before.
-**And that number is a sample somebody takes, not a series the tree keeps** (D-1365). `graphQueries`
-is live state only: the hook rewrites it in `~/.cc-sessions/<id>.hookstate.json` on every event and
-the server carries it onto `FleetSession` and the `~/.ccrc/state-cache.json` snapshot — nothing
-writes it to `coord.db`, to a run row or to any log, and it resets on every `SessionStart` that is
-not a `resume`, which for a dispatched worker means per-wave (dispatch `/clear`s the worker from
-wave 2 on). So *"revisit with one week of R4 data"* names an act somebody performs: a week or more
-after this branch deploys, read the `graph N` chips across the live fleet on one dated day — how
-many sessions carry a chip, how many read `graph 0`, and the total — and record that reading in
-`docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s `## Deviations found`, the
-way §0 of the design recorded the retired block's own effect. Until that entry exists the revisit
-has no number, and a decline whose condition nobody can evaluate is re-derived rather than revisited.
+**The search gate (R5).** The `PreToolUse` speed bump — one deny on a session's first `Grep` in a
+tree with a fresh graph and a `graphQueries` of 0 — was **declined** on 2026-09-02 and **built** on
+2026-09-05 by operator ruling, on R4's own number (**D-1613**). The decline stands as the history
+that ruling reversed, and its three grounds were good ones: `PreToolUse` fires for subagents, which
+never saw the card; a deny path would be the first thing in the hook that can wedge a turn; and R4
+is what makes adoption measurable, so a gate belongs *after* the number says the card and the clause
+did not move it, not before there is a number. The number was taken two days after the read side
+deployed and recorded as D-1613 in
+`docs/superpowers/plans/2026-09-02-graphify-read-side-ccrc-level.md`'s `## Deviations found`: 4
+graph queries fleet-wide over 3 corpora, and of 18 live sessions 10 carried `graphQueries` 0, two
+carried 1, one carried 2 and five carried nothing at all. The card and clause 12 had moved nothing
+the counter could see, so the ask became a deny — and each of the three grounds is answered by the
+mechanism rather than by prose.
+
+**What it gates:** `Grep`, `Glob`, and a `Bash` command that *heads* with a search — `rg`, `grep`,
+`egrep`, `fgrep`, `ugrep`, `ag`, `ack`, `find`, `fd` or `git grep`, after at most one `cd … &&`
+prefix and any run of `FOO=bar` assignments. A search at the *tail* of a pipeline
+(`vitest run | grep Tests`) filters output this session already produced and is not a codebase
+question, so it is not gated; `Read` is not gated either, because a named file is not a question;
+and `graphify` itself is never gated — the gate must not stand between a session and the one command
+that opens it.
+
+**When it is armed — all five, or the hook prints nothing and the call proceeds:** the operator's
+kill-switch `~/.ccrc/graph-gate-off` is absent; the session's tree carries a `graphify-out/graph.json`
+whose stamp the card's own `tail` read accepts; that graph reads `fresh`, `fresh — same content as
+HEAD`, or at most 10 commits behind `HEAD` (further behind, `not an ancestor of HEAD` and `freshness
+unmeasured` do **not** gate — the card has already told that session its graph is stale, and gating
+on it would be enforcing a bad answer); `graphQueries` is 0; and `graphGateDenials` is under 3. The
+`SessionStart` card says which of the two it will be, and says it only where the gate is really
+armed: a card promising a deny that never comes teaches the session to ignore the card.
+
+The deny is the one shape `PreToolUse` defines — a `permissionDecision` of `deny` with a reason —
+and the reason is the card's own vocabulary plus the act: this tree has a knowledge graph (node
+count and freshness word), this session has not queried it yet, search opens after one
+`graphify query` (`path` and `explain` spelled out beside it), and *Denial k of 3; after 3 the gate
+opens anyway.* **Everything else fails open, and so does the bound.** An unreadable hookstate, a
+missing `jq`, an unresolvable tree, an unparseable stamp, a graph that is not there: no stdout, and
+the call proceeds. Three denials without a query and the fourth search passes — a session that
+cannot run `Bash` at all is never wedged by a hook it has no way to satisfy — and a denial is
+counted only when its JSON could be built, and *said* only once it is counted: the envelope is built
+in the arm and printed after the hookstate write lands, because a deny the next event cannot see
+reads `Denial 1 of 3` forever on a registry that will not take the write, and the one query that
+would open the gate is lost by the same failed write (D-1689, measured before the fix). What the gate
+cannot tell is bounded and recorded rather than fixed (D-1690): it measures the tree named by the
+call's `cwd`, not the directory a `cd` inside a `Bash` command will land in; `find … -delete` heads
+with `find`; and two subagents denied in the same instant can each count the same denial once. All
+three stop at three. Nothing but a gated call in an armed session pays for any of it: every other
+event, and every other tool call, costs the two integers the hook already had in hand.
+
+`graphGateDenials` rides beside `graphQueries` in the same hookstate and through its own single
+tolerant reader (`null`, an older hook, is never folded into `0`), resets with it on any
+`SessionStart` that is not a `resume` — so a dispatched worker meets the gate once per wave, and a
+`/clear` by hand re-arms it — and reaches the board additively on `FleetSession`: the `graph N` chip
+reads `graph N · gated k` when k > 0, and only then, because a measured `gated 0` is the ordinary
+state of a session that queried first and a suffix on every healthy row would bury the rows where
+the gate actually fired. `ccrc doctor`'s `graphify` line carries `gate on` or `gate off (operator
+file $HOME/.ccrc/graph-gate-off)`, whatever else that check has to report. The kill-switch is the
+operator's, nothing in this tree writes it, and it needs neither a deploy nor a token:
+`touch ~/.ccrc/graph-gate-off` opens every search on the box, `rm` closes them again —
+`$REG/coordinator-paused`'s own shape, a convention with a speed bump. The next reading is the
+gate's own effect: denials beside queries, on a dated day after this deploys, recorded under D-1613
+in the same ledger.
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
@@ -1784,8 +1833,11 @@ untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 The file carries one of three states — `working`, `waiting`, `done` — plus a
 structured **ask envelope** for a waiting session: either
 `{questions: [...]}` (an `AskUserQuestion`, copied verbatim from the tool call's
-own JSON) or `{approval: {tool, summary}}` (a permission prompt), and the
-subagents the hooks have seen start and stop.
+own JSON) or `{approval: {tool, summary}}` (a permission prompt), the
+subagents the hooks have seen start and stop, and the two graph counters the
+read side keeps — `graphQueries` (R4) and `graphGateDenials` (R5), each reset on
+a `SessionStart` that is not a `resume`, and each read back with `null` (no
+field, an older hook) kept apart from `0` (measured none).
 
 `server/src/hookstate.ts` reads it and **fails to null** on anything it cannot
 vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
