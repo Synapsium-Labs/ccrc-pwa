@@ -598,7 +598,7 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
     expect(m![2], 'the two counts in the same sentence disagree with each other').toBe(WORDS[n]);
   });
 
-  it('the README documents the read side as it now is — hook, skill, PATH, counter', () => {
+  it('the README documents the read side as it now is — hook, skill, PATH, counter, gate', () => {
     // The whole point of this plan, and the thing the canonical overview would
     // otherwise still describe as a block in somebody else's CLAUDE.md.
     //
@@ -637,17 +637,38 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
       // reader for both chips, so an older server's omitted field cannot paint
       // an ignorant row as one that reported.
       'graphReadCount',
+      // R5's two, for the same reason (D-1613). `graphGateDenials` is the
+      // counter the gate keeps beside `graphQueries` — named nowhere else in
+      // the file — and `graph-gate-off` is the operator's kill-switch file,
+      // the one thing in the whole mechanism that has no writer in this tree
+      // and therefore nothing but prose to tell an operator it exists. A
+      // README that describes the gate without naming the file that turns it
+      // off documents a switch nobody can find.
+      'graphGateDenials',
+      'graph-gate-off',
     ]) {
       expect(readme, `the README never mentions ${token}`).toContain(token);
     }
-    // R5 is a DECISION, and the spec asks for it in writing ("Recorded so it
-    // is not re-derived", §2 R5) for the same reason the ledger exists: a
-    // decline nobody wrote down is re-proposed by the next reader of the same
-    // design. It is the one read-side item with no code to point at, so
-    // nothing but this asserts it survives an edit.
-    expect(readme.replace(/\s+/g, ' '),
-      'the README does not record the DECLINED PreToolUse speed bump — an undocumented decline gets re-derived')
-      .toMatch(/PreToolUse[\s\S]{0,240}?declined/i);
+    // R5 IS A DECISION THAT WAS TAKEN TWICE, and both halves have to survive an
+    // edit. The spec asked for the DECLINE in writing ("Recorded so it is not
+    // re-derived", §2 R5) for the reason the ledger exists: a decline nobody
+    // wrote down is re-proposed by the next reader of the same design. The
+    // operator then REVERSED it on R4's own reading (D-1613, 2026-09-05), and a
+    // ruling nobody wrote down is re-litigated exactly as readily — the three
+    // grounds are still good arguments, and the next reader who meets them with
+    // no record of what answered them will make them again. So this pins BOTH,
+    // in the same 240-character window the decline was pinned within: the
+    // README records that the gate was BUILT, and it still carries the decline
+    // as the history the ruling reversed.
+    const flatReadme = readme.replace(/\s+/g, ' ');
+    expect(flatReadme,
+      'the README still records the PreToolUse speed bump only as declined — the ruling that ' +
+      'built it is not written down, and an unrecorded reversal is re-litigated')
+      .toMatch(/PreToolUse[\s\S]{0,240}?(built|ruling)/i);
+    expect(flatReadme,
+      'the README no longer says the gate was declined first — without that history the three ' +
+      'grounds get re-derived as if nothing had ever answered them')
+      .toMatch(/declined/i);
   });
 
   it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {
@@ -673,7 +694,7 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   });
 });
 
-describe("R5's decline defers to a number nobody was told to take (D-1365)", () => {
+describe("R5's decline deferred to a reading nobody was told to take — it was taken (D-1365, D-1613)", () => {
   // THE GAP THIS CLOSES. §2 R5 declines the `PreToolUse` speed bump on three
   // grounds, and the third is CONDITIONAL ON A MEASUREMENT: "R4 makes adoption
   // measurable. Gate **after** the number says the card and the clause did not
@@ -691,6 +712,21 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
   // criterion nobody can evaluate is the same shape as the state the spec
   // criticises three sections earlier ("5/5 homes converged was shape; this is
   // effect"). Both R5 texts now say how the figure is actually taken.
+  //
+  // AND THEN SOMEBODY TOOK IT (D-1613, 2026-09-05). The act this guard forced
+  // both texts to state was performed two days after the read side deployed —
+  // 4 graph queries fleet-wide, 10 of 18 live sessions still at `graphQueries`
+  // 0 — recorded in the ledger each text names, and the operator ruled on that
+  // reading: the gate is built. So the criterion is no longer the live half of
+  // this pin; the RECORD is. A text that still defers to a reading nobody has
+  // taken describes a decision this tree has already reversed, which is the
+  // same staleness one step on, so each text must now name the entry the
+  // reading was recorded under and that entry must be IN the ledger it names.
+  // Everything else here is unchanged and still load-bearing: the premise is
+  // still measured off the tree (nothing persists either counter, so the next
+  // reading — the gate's own effect — is another sample), the destination is
+  // still extracted and checked on disk, and the reset word is still
+  // harvested from the hook.
   //
   // DERIVED THREE WAYS, so this is not a spelling test:
   //  1. THE PREMISE is measured off the tree. If somebody later persists the
@@ -740,19 +776,27 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
     return body;
   };
 
-  it('graphQueries lives only in the two live-state sites — the premise both texts state', () => {
-    const root = path.resolve(REPO, 'server/src');
-    const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
-      .filter((f) => f.endsWith('.ts'))
-      .filter((f) => readFileSync(path.join(root, f), 'utf8').includes('graphQueries'))
-      .map((f) => f.split(path.sep).join('/'))
-      .sort();
-    expect(hits,
-      'a third server-side site now names graphQueries — if it PERSISTS the count (a run row, ' +
-      "coord.db, a log), R5's revisit reads a series rather than a sample and both R5 texts " +
-      'must be re-derived against it')
-      .toEqual(['fleet.ts', 'hookstate.ts']);
-  });
+  // BOTH counters, since D-1613: the gate's denials are the next reading, and
+  // they are kept exactly the way the queries are — live state on the hookstate
+  // the hook rewrites, carried onto `FleetSession`, and nowhere else. If either
+  // one grows a third server-side site that PERSISTS it, the reading stops
+  // being a sample and both R5 texts have to be re-derived against the series
+  // that then exists.
+  for (const field of ['graphQueries', 'graphGateDenials']) {
+    it(`${field} lives only in the two live-state sites — the premise both texts state`, () => {
+      const root = path.resolve(REPO, 'server/src');
+      const hits = readdirSync(root, { recursive: true, encoding: 'utf8' })
+        .filter((f) => f.endsWith('.ts'))
+        .filter((f) => readFileSync(path.join(root, f), 'utf8').includes(field))
+        .map((f) => f.split(path.sep).join('/'))
+        .sort();
+      expect(hits,
+        `a third server-side site now names ${field} — if it PERSISTS the count (a run row, ` +
+        "coord.db, a log), R5's readings are a series rather than a sample and both R5 texts " +
+        'must be re-derived against it')
+        .toEqual(['fleet.ts', 'hookstate.ts']);
+    });
+  }
 
   for (const c of R5) {
     it(`${c.label}: the revisit criterion names an act, and the ledger it is recorded in exists`, () => {
@@ -777,8 +821,34 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
       expect(readFileSync(destPath, 'utf8'),
         `${dest![0]} carries no "## Deviations found" ledger for the reading to land in`)
         .toContain('## Deviations found');
+      // D-1613 — AND THE READING LANDED THERE. The act is done, so a text that
+      // describes it in the future tense is describing a decision that has
+      // already been reversed. Each text names the entry, and the entry is
+      // read back out of the ledger the text itself pointed at: naming a
+      // number that is not in that file is the same defect as naming a file
+      // that does not exist, one turn later.
+      expect(flat,
+        `${c.label} says the reading is recorded in ${dest![0]} but never names the entry — the ` +
+        'reader is sent to a ledger of some 200 deviations with nothing to look up')
+        .toContain('D-1613');
+      expect(readFileSync(destPath, 'utf8'),
+        `${dest![0]} carries no D-1613 entry, so the reading ${c.label} points at is not there`)
+        .toMatch(/\*\*D-1613\*\*/);
     });
   }
+
+  it('the spec records the RULING as a section of its own, not a footnote to the decline', () => {
+    // The decline stays (this guard's whole first half depends on it), so the
+    // ruling cannot be a rewrite of it — it is a second section, and the slice
+    // above deliberately spans both. Delete the heading and the built design
+    // reads as an appendix to the argument against it: the next reader meets
+    // the three grounds first and the answer to them as commentary.
+    expect(spec, "the spec's `### R5 — built` section is gone — the decline is left standing as " +
+      'the design of a gate this tree ships')
+      .toMatch(/^### R5 — built\b/m);
+    expect(spec, 'the spec no longer carries the decline the ruling reversed')
+      .toMatch(/^### R5 — declined\b/m);
+  });
 
   it('both R5 texts explain the sampling by the source the hook actually exempts (harvested)', () => {
     const m = hook.match(
