@@ -1612,12 +1612,15 @@ has no number, and a decline whose condition nobody can evaluate is re-derived r
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
 own flock, and writes a rolling census to `~/.ccrc/graph-sweep.json` (last 10 passes). A pass status
 is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`; each tree's row
-carries an outcome (`never-built · fresh · stale-rebuilt · refused-no-exclude · skipped-busy ·
-skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink · failed`) and a
-reason. A tree with a live, working session on it is deferred (the idle gate, tmux-free — read off
-the session registry and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape
-hatch. `touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
-operator who needs the fleet host quiet.
+carries an outcome (`never-built · fresh · stale-rebuilt · restamped · refused-no-exclude ·
+skipped-busy · skipped-budget · skipped-locked · refused-by-guard · timed-out · refused-shrink ·
+failed`) and a reason. `restamped` is D-1509's: graphify's full rebuild exits 0 without writing
+anything when the candidate graph's topology equals the existing one, so a build is re-measured on
+`built_at_commit` — advanced, or the engine said "left untouched" and the sweep splices in the stamp
+it skipped, or nothing is written and the row reads `failed`. A tree with a live, working session on
+it is deferred (the idle gate, tmux-free — read off the session registry and its status file)
+unless it is ≥20 commits or ≥6h stale, the O3 escape hatch. `touch ~/.ccrc/graph-sweep-paused`
+short-circuits every pass until removed — the brake for an operator who needs the fleet host quiet.
 
 **Noise lists.** Two sources, unioned, and they are not the same kind of thing.
 `~/.ccrc/graph-noise/_default.list` is **ccrc's own**, converged by `ccrc install` and shipped on
