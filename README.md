@@ -1617,10 +1617,15 @@ skipped-busy · skipped-budget · skipped-locked · refused-by-guard · timed-ou
 failed`) and a reason. `restamped` is D-1509's: graphify's full rebuild exits 0 without writing
 anything when the candidate graph's topology equals the existing one, so a build is re-measured on
 `built_at_commit` — advanced, or the engine said "left untouched" and the sweep splices in the stamp
-it skipped, or nothing is written and the row reads `failed`. A tree with a live, working session on
-it is deferred (the idle gate, tmux-free — read off the session registry and its status file)
-unless it is ≥20 commits or ≥6h stale, the O3 escape hatch. `touch ~/.ccrc/graph-sweep-paused`
-short-circuits every pass until removed — the brake for an operator who needs the fleet host quiet.
+it skipped, or nothing is written and the row reads `failed`. A Claude Code worktree under a repo's
+`.claude/worktrees/` is discovered too, but **only while a registered session's workdir names it**
+(`~/.cc-sessions/<id>.workdir`, compared by realpath — Claude Code mints `agent-*` and `wf_*`
+worktrees for its own isolation, and eight cold builds of throwaways starved the tree the rule was
+written for, D-1563); project roots and ccd workspaces are discovered session or not. A tree with a
+live, working session on it is deferred (the idle gate, tmux-free — read off the session registry
+and its status file) unless it is ≥20 commits or ≥6h stale, the O3 escape hatch.
+`touch ~/.ccrc/graph-sweep-paused` short-circuits every pass until removed — the brake for an
+operator who needs the fleet host quiet.
 
 **Noise lists.** Two sources, unioned, and they are not the same kind of thing.
 `~/.ccrc/graph-noise/_default.list` is **ccrc's own**, converged by `ccrc install` and shipped on
