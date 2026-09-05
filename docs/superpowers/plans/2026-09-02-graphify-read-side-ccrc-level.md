@@ -4463,6 +4463,92 @@ stale ledger cells re-measured. Committing the two source files again would be a
   and no new mutation row: nothing executable moved, so the `graph-sweep` mutation table stands as
   measured under D-1458 and D-1459.
 
+- **D-1509** (2026-09-05, post-#51 live measurement — a REBUILD WAS RECORDED AS A FACT WHEN IT WAS A
+  CLAIM) — **graphify's full rebuild exits 0 without writing anything when the candidate graph's
+  topology equals the existing one, and the sweep took that exit code for a rebuild.** `watch.py`'s
+  `_rebuild_code` (0.9.9) has two short-circuits on the full path: `same_topology` → `save_manifest` →
+  "No code-graph topology changes detected; outputs left untouched." → `return True`, and after
+  `to_json` to a temp file, "No code-graph changes detected; graph.json/GRAPH_REPORT.md left
+  untouched." Neither rewrites `graph.json`, so `built_at_commit` keeps the sha of the LAST write, and
+  `graphify update` still prints "Code graph updated." and exits 0. `_gs_build` reads rc 0 as built;
+  the loop writes `stale-rebuilt`; `_gs_stale` on the next pass reads the same old stamp against the
+  same HEAD; and the tree is rebuilt again — every 15 minutes, for ever.
+
+  **Measured on the live fleet, six consecutive passes 2026-09-04T23:19Z → 2026-09-05T00:35Z:**
+  `worktrees/data-internal/session-identity` and `worktrees/expoAI-assistant/quiet-meadow` read
+  `stale-rebuilt … head` on every pass, 6806 ms and 73830 ms respectively; their `graph.json` mtimes
+  stayed 2026-08-14 18:50 and 2026-09-02 14:57 while `manifest.json` and `.graphify_engine` were
+  rewritten each pass; `~/.ccrc/graph-sweep.log` carried "No code-graph topology changes detected;
+  outputs left untouched." for both (195 and 2483 files re-extracted). The doctor said PASS — it
+  counts only `refused-by-guard` and `failed`. The card in quiet-meadow said "1 commit behind HEAD",
+  in session-identity "16 commits behind HEAD". D-1368's own comment already named this shape
+  ("graphify's own `update` then writes nothing, the stamp keeps the old sha") and fixed the one case
+  where the trees are EQUAL; this is the general case — the trees differ, and graphify says the
+  difference has no topology. quiet-meadow's is a `.html` doc (`DOC_EXTENSIONS` lists it,
+  `_get_extractor` has no extractor for it, so it yields no node); session-identity's is D-1511.
+
+  **Fix: a build's success is re-measured on the stamp, and graphify's own verdict is what earns a
+  restamp.** `_gs_build` now captures the engine's stdout to a temp file (still appended to the log)
+  and, after rc 0, re-reads `built_at_commit`. Stamp advanced to HEAD → `stale-rebuilt`/`never-built`
+  as before. Stamp not advanced AND stdout carries either "left untouched" verdict → the sweep
+  restamps: `graph.json` is copied, the 40-hex value of its last `"built_at_commit"` key is spliced in
+  place (same length; the key is the last one, read from the tail exactly as the card reads it), and
+  the copy is renamed over the original — one atomic rename, no torn read for a concurrent
+  `tail -c 4096`; `GRAPH_REPORT.md`'s "- Built from commit: `<8hex>`" line is rewritten the same way.
+  Row outcome `restamped`, reason `unchanged topology; <old8> -> <head8>`, plus `; N tracked file(s)
+  modified` when `git status --porcelain --untracked-files=no` is non-empty (D-1511). Stamp not
+  advanced AND no verdict in stdout → row `failed`, reason "exit 0 but built_at_commit did not
+  advance and graphify reported no unchanged verdict", nothing written: a stamp nobody verified is not
+  a stamp. The restamp asserts exactly what graphify would have written had it not short-circuited:
+  its stamp is `_git_head()` at build time (`export.py:537`), and its verdict is a full fresh
+  extraction of the disk compared against the graph. Both readers — `_gs_stale` and the card — then
+  read `fresh` through the predicate they already have; no marker, no second spelling.
+  **Mutation:** delete the restamp arm → the fixture's second pass rebuilds again and reads
+  `stale-rebuilt` (the test asserts `restamped` then `fresh` with engine calls 1, then 1). Delete
+  the verdict test → an engine that exits 0 with a stale stamp and no verdict reads `restamped`
+  (the test asserts `failed`, stamp untouched). README's census vocabulary gains `restamped`; the
+  doctor's WARN set is unchanged (`failed` was already in it).
+
+- **D-1510** (2026-09-05, same measurement — DISCOVERY DOES NOT REACH CLAUDE CODE'S OWN WORKTREES) —
+  `ccd ls` 2026-09-05 shows `claude-corp-intake-platform` running in
+  `$PROJECTS_ROOT/intake-platform/.claude/worktrees/board-phase-1` — the directory Claude Code's
+  EnterWorktree creates — and `_gs_trees` globs only `$PROJECTS_ROOT/*/`, `$WORKTREES_ROOT/*/` and
+  `$WORKTREES_ROOT/*/*/`. That tree has a `graph.json` dated 2026-08-28 11:21 with no
+  `.graphify_engine` beside it (not the sweep's build) and reads fresh today only because no commit
+  has landed since; its card will say stale at the first commit and nothing will ever rebuild it. Its
+  session is one of 18 live ones; the other 17 sit in swept trees (5 under `$PROJECTS_ROOT`, spelled
+  `$HOME/projects/<x>` in the census — the symlink form — 12 under `$WORKTREES_ROOT`).
+  **Fix:** two more globs, `$PROJECTS_ROOT/*/.claude/worktrees/*/` and
+  `$WORKTREES_ROOT/*/*/.claude/worktrees/*/`; the toplevel predicate and the realpath dedupe apply
+  unchanged, and the noise-list key already resolves to the parent project (it is the basename of
+  `--git-common-dir`'s parent, not of the path). The parent project's own corpus is unaffected: the
+  default noise list already withholds `.claude/` unless the parent tracks files there.
+  **Mutation:** remove the globs → a fixture `git worktree add .claude/worktrees/x` leaves the census
+  (the test asserts it is a row; a plain subdirectory `.claude/worktrees/notatree` is not).
+
+- **D-1511** (2026-09-05, recorded LIMITATION, not fixed — COMMIT-KEYED FRESHNESS CANNOT SEE A
+  WORKING TREE THAT DIFFERS FROM HEAD) — session-identity's working tree differs from HEAD in 70
+  tracked files, all staged (51 modified, 18 deleted, 1 added); the 179 functions and classes HEAD
+  added since the built commit are absent from the DISK, and a cold rebuild in a scratch copy
+  produced a graph without them too. graphify's "unchanged" is TRUE of the disk. ccrc's freshness
+  is `built^{tree} == HEAD^{tree}` (D-1368) and reads the tree as 16 commits stale; no reader in ccrc
+  measures the disk. graphify's own stamp is HEAD at build time whatever the disk holds
+  (`export.py:537`), so a REAL rebuild on a dirty tree stamps HEAD exactly as D-1509's restamp does —
+  the restamp adopts the engine's semantics rather than inventing stricter ones, and names the dirty
+  count in the row so the census does not hide it. **The hole this leaves, pre-existing for every
+  real rebuild on a dirty tree:** a tree built or restamped at HEAD while dirty, then reset to HEAD's
+  content, reads fresh while describing the old disk until the next commit moves HEAD. Disk-keyed
+  freshness (graphify's `manifest.json` is the engine's own mtime+hash fingerprint of the corpus;
+  `graphify check-update` exists) is a design pass, ledgered here so the next reader does not
+  rediscover it from a census row.
+
+- **D-1512** (2026-09-05, same measurement — THE SWEEP LOG NAMES NO TREE) — `~/.ccrc/graph-sweep.log`
+  holds the engine's stdout and stderr for every build with no tree name and no timestamp;
+  attributing "No code-graph topology changes detected" to a tree took correlating re-extracted file
+  counts and durations against the census. **Fix:** `_gs_build` writes one header line,
+  `graph-sweep: build <tree> at <UTC>`, before the engine's output. **Mutation:** remove it → the
+  test that reads the fixture tree's name from the log goes red.
+
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
 - The engine install step is **`_inst_graphify_engine`**, not `_inst_graph_engine` (`ccd/ccrc`).
