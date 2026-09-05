@@ -119,16 +119,21 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # nothing ever rebuilt its graph. MEASURED on the live fleet 2026-09-05: a
 # session in `$PROJECTS_ROOT/<repo>/.claude/worktrees/<name>` over a graph.json
 # a week old with no `.graphify_engine` beside it — not this sweep's build —
-# reading fresh only because no commit had landed there yet. The last two globs
-# below ask the same toplevel question of that shape; nothing else changes (the
-# noise-list key is the basename of `--git-common-dir`'s parent, so it already
-# resolves to the PARENT project, and the default noise list withholds
-# `.claude/` from the parent's own corpus unless that repo tracks files there).
+# reading fresh only because no commit had landed there yet. The last THREE
+# globs below ask the same toplevel question of that shape — one per shape of
+# workspace the fleet has, because `$WORKTREES_ROOT/<name>` is itself a toplevel
+# (D-1367) and its `.claude/worktrees/<x>` therefore sits one level shallower
+# than a depth-2 workspace's (review finding: the depth-1 shape was missed).
+# Nothing else changes (the noise-list key is the basename of
+# `--git-common-dir`'s parent, so it already resolves to the PARENT project, and
+# the default noise list withholds `.claude/` from the parent's own corpus
+# unless that repo tracks files there).
 _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
   local d top real i dup
   local -a seen=() named=()
   for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/ \
            "$PROJECTS_ROOT"/*/.claude/worktrees/*/ \
+           "$WORKTREES_ROOT"/*/.claude/worktrees/*/ \
            "$WORKTREES_ROOT"/*/*/.claude/worktrees/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
@@ -733,13 +738,29 @@ _gs_guard() {
 # a test spends (D-1509's second mutation table): outcome `failed`, a reason
 # that NAMES it, graph.json byte-identical to what the pass found.
 #
-# D-TBD-restamp-report-arm-writes — "Refusal writes NOTHING" is true of every
-# refusal a fixture can reach, all of which are raised for graph.json before
-# any rename; it is NOT true of one nobody has ruled on. graph.json is renamed
+# AND WHAT IT NO LONGER REFUSES (D-1509, review finding). graph.json is renamed
 # at the END of its own loop iteration, so a refusal raised for GRAPH_REPORT.md
-# (unreadable file, an interpreter that dies, a failed rename) leaves graph.json
-# already carrying HEAD while the row reads `failed` — the census understates a
-# stamp that moved. Reported, unfixed, no number issued.
+# (unreadable file, an interpreter that dies, a failed rename) used to return 1
+# over a graph.json ALREADY carrying HEAD: `failed` — a word the doctor's WARN
+# set counts — for a tree whose stamp had advanced and which both readers then
+# read as fresh. Two conditions on one census word. The report step is
+# best-effort now (`_gs_restamp_refuse`): a miss there is one line in
+# `graph-sweep.log` and the row still reads `restamped`. Every refusal that
+# remains is raised for graph.json BEFORE its rename, so "refusal writes
+# NOTHING" is now true of all of them without exception.
+
+# D-1509 (review finding) — GRAPH.JSON IS THE STAMP; THE REPORT IS AN ECHO.
+# graph.json is what every reader in ccrc spends (`_gs_stale`, and the session
+# card's `tail -c 4096`); GRAPH_REPORT.md's "- Built from commit" line is
+# graphify's human echo — the card reads only the node count, from its head. So
+# a failure rewriting the report is named in the log and the restamp stands,
+# while the same failure on graph.json is still a refusal the census reads.
+_gs_restamp_refuse() {   # <tree> <file> <why> -> 0 the caller goes on / 1 refuse the restamp
+  if [ "$2" = graph.json ]; then RESTAMP_WHY="$3"; return 1; fi
+  printf 'graph-sweep: %s: GRAPH_REPORT.md not restamped (%s)\n' "$1" "$3" \
+    >> "$HOME/.ccrc/graph-sweep.log"
+  return 0
+}
 _gs_restamp() {   # <tree> <old-sha> <new-sha> -> 0 rewrote / 1 refused (RESTAMP_WHY)
   local tree="$1" old="$2" new="$3" out="$1/graphify-out" f res rc
   RESTAMP_WHY=""
@@ -781,17 +802,40 @@ if val != (old if is_graph else old[:len(val)]):
         print('graph.json holds %s, not the %s this build measured' % (val, old)); sys.exit(1)
     sys.exit(0)
 repl = (new if is_graph else new[:len(val)]).encode()
+# D-1509 (review finding) — THE TEMP LIVES INSIDE graphify-out/, SO NOTHING
+# AFTER THIS LINE MAY DIE HOLDING IT: a copy of an 8 MB graph.json left by an
+# ENOSPC or a killed interpreter is never named by the sweep again, and it sits
+# in the very directory the corpus guard measures. The reason travels on stdout
+# like every other refusal, so the census names it instead of a bare
+# "python refused".
+#
+# `copyfile` + `copymode`, not `copy2`: the mode is the engine's, the mtime is
+# the RESTAMP's. (copy2's mtime never survived the splice write below anyway —
+# MEASURED — so the old comment claimed a preservation the code did not do;
+# graph.json's mtime is the signal D-1509 was found by, and it now says when
+# the stamp last moved.)
 fd, tmp = tempfile.mkstemp(prefix='.' + name + '.', dir=os.path.dirname(path) or '.')
 os.close(fd)
-shutil.copy2(path, tmp)          # mode and mtime of the engine's own file
-with open(tmp, 'r+b') as fh:
-    fh.seek(base)
-    fh.write(tail[:m.start(1)] + repl + tail[m.end(1):])
-    fh.truncate()
+try:
+    shutil.copyfile(path, tmp)
+    shutil.copymode(path, tmp)
+    with open(tmp, 'r+b') as fh:
+        fh.seek(base)
+        fh.write(tail[:m.start(1)] + repl + tail[m.end(1):])
+        fh.truncate()
+except Exception as exc:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    print('%s: %s' % (name, exc)); sys.exit(1)
 print(tmp)
 GFXPY
     )"; rc=$?
-    if [ "$rc" -ne 0 ]; then RESTAMP_WHY="${res:-python refused ($f)}"; return 1; fi
+    if [ "$rc" -ne 0 ]; then
+      _gs_restamp_refuse "$tree" "$f" "${res:-python refused ($f)}" || return 1
+      continue
+    fi
     if [ -z "$res" ]; then
       # nothing to rewrite: only ever the report (graph.json either printed a
       # path or exited non-zero), and only when its line is absent or already
@@ -799,8 +843,15 @@ GFXPY
       [ "$f" = graph.json ] || continue
       RESTAMP_WHY="no replacement written for graph.json"; return 1
     fi
-    [ -f "$res" ] || { RESTAMP_WHY="replacement for $f is not a file"; return 1; }
-    mv -f "$res" "$out/$f" || { rm -f "$res"; RESTAMP_WHY="rename failed ($f)"; return 1; }
+    if [ ! -f "$res" ]; then
+      _gs_restamp_refuse "$tree" "$f" "replacement for $f is not a file" || return 1
+      continue
+    fi
+    if ! mv -f "$res" "$out/$f"; then
+      rm -f "$res"
+      _gs_restamp_refuse "$tree" "$f" "rename failed ($f)" || return 1
+      continue
+    fi
   done
   return 0
 }
@@ -851,7 +902,14 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
   full="$(cat "$errf" 2>/dev/null || true)"
   cat "$errf" >> "$HOME/.ccrc/graph-sweep.log"; rm -f "$errf"
   if [ "$rc" -eq 0 ]; then
-    printf '%s\n' "$PIN" > "$tree/graphify-out/.graphify_engine"
+    # D-1509 (review finding) — THE PIN IS A RECEIPT, NOT AN ANNOUNCEMENT. It
+    # was written HERE, before the stamp was re-measured, so both `failed` arms
+    # below still advanced `.graphify_engine` for a build that wrote nothing:
+    # the next pass reads the engine dimension as fresh and falls through to
+    # `head`, and `_gs_busy`'s O3 seconds hatch measures the age of a stamp no
+    # build ever earned. It is written on the two arms that return 0 — the
+    # stamp advanced, or the sweep restamped it — and nowhere else.
+    #
     # D-1509 — A REBUILD IS A CLAIM UNTIL THE STAMP ADVANCES. graphify's full
     # rebuild exits 0 without writing anything when the candidate graph's
     # topology equals the existing one (watch.py `_rebuild_code`, 0.9.9: two
@@ -864,12 +922,14 @@ _gs_build() {    # contained build; sets BUILD_OUTCOME/BUILD_REASON; rc: 0 ok / 
     # The success of a build is now re-measured on the stamp itself.
     local stamp; stamp="$(_gs_stamp "$tree")"
     if [ -n "$stamp" ] && { [ "$stamp" = "$head" ] || _gs_same_tree "$tree" "$stamp"; }; then
+      printf '%s\n' "$PIN" > "$out/.graphify_engine"
       BUILD_OUTCOME=""; BUILD_REASON=""; return 0    # advanced: the loop's own words
     fi
     # Not advanced. graphify's own verdict — a full fresh extraction of the
     # disk compared against the graph — is what earns the stamp it skipped.
     if grep -qF 'left untouched' <<<"$said"; then
       if _gs_restamp "$tree" "$stamp" "$head"; then
+        printf '%s\n' "$PIN" > "$out/.graphify_engine"
         BUILD_OUTCOME=restamped
         BUILD_REASON="unchanged topology; ${stamp:0:8} -> ${head:0:8}"
         # D-1511 — commit-keyed freshness cannot see a working tree that

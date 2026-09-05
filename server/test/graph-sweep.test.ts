@@ -414,6 +414,36 @@ describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (
     expect(paths(), 'the workspace that holds it lost its own row').toContain(ws);
     expect(paths(), 'the parent project lost its own row').toContain(repo);
   });
+
+  // D-1510 (review finding) — AND UNDER THE DEPTH-1 WORKSPACE SHAPE TOO.
+  // `$WORKTREES_ROOT/<name>` is its own toplevel (D-1367's measured shape), so
+  // a session's `.claude/worktrees/<x>` sits ONE level shallower there than in
+  // the case above and `$WORKTREES_ROOT/*/*/.claude/worktrees/*/` never reaches
+  // it. The two shapes of workspace the fleet actually has need one glob each.
+  it('discovers one under a DEPTH-1 workspace as well ($WORKTREES_ROOT/<name> is its own toplevel)', () => {
+    const solo = j('worktrees', 'solo');
+    fs.mkdirSync(solo, { recursive: true });
+    execFileSync('git', ['init', '-q', solo]);
+    fs.writeFileSync(path.join(solo, 'a.py'), 'x = 1\n');
+    git(solo, 'add', '.'); git(solo, 'commit', '-qm', 'init');
+    fs.appendFileSync(path.join(solo, '.git', 'info', 'exclude'), 'graphify-out/\n.graphifyignore\n');
+    plantEngine();
+    const wt = path.join(solo, '.claude', 'worktrees', 'z');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(solo, 'worktree', 'add', '-q', '-b', 'z', wt);
+    // the same plain directory beside it: content, no git of its own
+    const notatree = path.join(solo, '.claude', 'worktrees', 'notatree');
+    fs.mkdirSync(notatree, { recursive: true });
+    fs.writeFileSync(path.join(notatree, 'a.py'), 'x = 1\n');
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), "a Claude Code worktree inside a DEPTH-1 workspace is invisible to the sweep")
+      .toContain(wt);
+    expect(outcomeOf(wt)).toBe('never-built');
+    expect(paths(), 'a plain directory under .claude/worktrees was censused as a tree')
+      .not.toContain(notatree);
+    expect(paths(), 'the workspace that holds it lost its own row').toContain(solo);
+  });
 });
 
 describe('graph-sweep: build discriminators (Task 7)', () => {
@@ -1521,6 +1551,26 @@ exec python3 "$@"
     expect(stampOf(repo), 'the sweep restamped a graph graphify never vouched for').toBe(old);
   });
 
+  // D-1509 (review finding) — THE PIN IS A RECEIPT, NOT AN ANNOUNCEMENT. The
+  // rc-0 arm wrote `.graphify_engine` at its TOP, before the stamp was
+  // re-measured, so both `failed` arms — this one and `restamp refused:` —
+  // advanced the pin for a build that wrote nothing. The next pass then reads
+  // the engine dimension as fresh and falls through to `head`, and `_gs_busy`'s
+  // O3 seconds hatch measures the age of a stamp no build ever earned.
+  it('a FAILED build does not advance the engine pin — only the two arms that return 0 write it', () => {
+    const repo = makeRepo('alpha'); plantEngine(SILENT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    const pin = path.join(repo, 'graphify-out', '.graphify_engine');
+    expect(fs.existsSync(pin), 'the cold build earned its pin').toBe(true);
+    fs.rmSync(pin);                       // pass 2 is stale by the engine dimension
+    bump(repo);                           // ... and by head, so the stamp cannot advance
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(fs.existsSync(pin), 'a build that wrote nothing and vouched for nothing still stamped '
+      + 'the engine pin').toBe(false);
+  });
+
   // D-1509 — THE REFUSAL SET IS A MECHANISM, NOT A COMMENT (review finding).
   // The restamp splices bytes into an 8 MB file the engine wrote and the card
   // reads live; what makes that admissible is what it REFUSES, and the whole
@@ -1629,6 +1679,105 @@ exit 3
     expect(reasonOf(repo)).toBe('restamp refused: python refused (graph.json)');
     expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before);
     expect(stampOf(repo)).toBe(old);
+  });
+
+  /** A venv `python` that is the real interpreter with `shutil.copyfile` and
+   *  `shutil.copy2` raising — the disk filling in the window between mkstemp
+   *  and the copy. The patch fires ONLY when argv carries the restamp's three
+   *  trailing arguments, so `_gs_detect`'s stdin script (no arguments at all)
+   *  and every other call run untouched, exactly as `plantRestampPython`'s
+   *  dispatcher distinguishes them. */
+  function plantENOSPCPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    const fix = j('pyfix');
+    fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(fix, { recursive: true });
+    fs.writeFileSync(path.join(fix, 'sitecustomize.py'), `import shutil, sys
+def _boom(name):
+    real = getattr(shutil, name)
+    def wrapper(*a, **k):
+        # argv is \`- <path> <old> <new>\`: the restamp's own call, nothing else
+        if len(sys.argv) == 4:
+            raise OSError('simulated ENOSPC')
+        return real(*a, **k)
+    setattr(shutil, name, wrapper)
+for _n in ('copyfile', 'copy2'):
+    _boom(_n)
+`);
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+exec env PYTHONPATH=${JSON.stringify(fix)} python3 "$@"
+`, { mode: 0o755 });
+  }
+
+  // D-1509 (review finding) — A REFUSAL THAT LEAKS IS NOT A REFUSAL. Everything
+  // after `mkstemp` writes into a copy of an 8 MB graph.json that lives INSIDE
+  // graphify-out/, and a python that dies there (ENOSPC, a killed interpreter)
+  // left it behind for ever: the sweep never names it again, and it is inside
+  // the very directory the corpus guard measures.
+  it('a python that dies after mkstemp leaves no temp copy behind in graphify-out', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantENOSPCPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(reasonOf(repo)).toMatch(/^restamp refused:/);
+    expect(fs.readFileSync(graphOf(repo), 'utf8'), 'the graph moved under a refused restamp')
+      .toBe(before);
+    expect(fs.readdirSync(path.join(repo, 'graphify-out')).filter((n) => n.startsWith('.graph.json.')),
+      'the interpreter died holding a temp copy of the graph and nothing ever removes it')
+      .toEqual([]);
+  });
+
+  // D-1509 (review finding) — THE MTIME IS THE OPERATOR'S OWN SIGNAL. D-1509
+  // was FOUND by reading graph.json's mtime frozen while manifest.json moved
+  // every pass. `copy2` carries the old build's mtime onto the restamped file,
+  // so a healthy restamped tree reads exactly like the wedge it replaced.
+  it('a restamped graph.json carries the mtime of the restamp, not the old build\'s', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const graph = graphOf(repo);
+    const day = Date.now() / 1000 - 86400;
+    fs.utimesSync(graph, day, day);                 // the build the restamp inherits from
+    bump(repo);
+    const t0 = Date.now();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('restamped');
+    expect(fs.statSync(graph).mtimeMs, 'the restamp preserved the OLD build\'s mtime, so the one '
+      + 'signal this whole entry was found by now reads the same on a healthy tree')
+      .toBeGreaterThanOrEqual(t0 - 2000);
+  });
+
+  // D-1509 (review finding) — TWO CONDITIONS, ONE CENSUS WORD. graph.json is
+  // renamed at the END of its own loop iteration, so a refusal raised for
+  // GRAPH_REPORT.md left graph.json already carrying HEAD while the row read
+  // `failed`: the doctor's WARN set counts a tree whose stamp DID advance, and
+  // both readers (`_gs_stale`, the session card) read that graph as fresh. The
+  // report's "- Built from commit" line is graphify's human echo — the card
+  // reads only the node count from its head — so it is best-effort, and the
+  // log is where the miss is named.
+  it('a restamp whose GRAPH_REPORT.md cannot be rewritten is still a restamp — the miss goes to the log', (ctx) => {
+    // root reads a 0000-mode file, so the fixture cannot exist there.
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    const report = path.join(repo, 'graphify-out', 'GRAPH_REPORT.md');
+    fs.writeFileSync(report, `# Code graph\n\n- Built from commit: \`${old.slice(0, 8)}\`\n- Nodes: 0\n`);
+    fs.chmodSync(report, 0o000);                    // readable to nobody: the splice cannot open it
+    bump(repo);
+    const head = git(repo, 'rev-parse', 'HEAD');
+    runSweep();
+    expect(outcomeOf(repo), 'graph.json already carries HEAD and the census calls the build failed')
+      .toBe('restamped');
+    expect(stampOf(repo), 'the graph the readers consult is the one that moved').toBe(head);
+    expect(fs.readFileSync(j('.ccrc', 'graph-sweep.log'), 'utf8'),
+      'the report was silently left at the old commit')
+      .toContain(`graph-sweep: ${repo}: GRAPH_REPORT.md not restamped`);
+    fs.chmodSync(report, 0o644);                    // let the fixture HOME be removed cleanly
   });
 
   it('the log names the tree and the UTC instant BEFORE the engine speaks (D-1512)', () => {
