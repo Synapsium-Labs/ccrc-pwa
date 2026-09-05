@@ -554,27 +554,27 @@ The three per-id fields need no manifest entry of their own: they are registry f
 
 ## 12. Defects found during design
 
-Deviation numbers are allocated from `POST /api/ledger/deviations` **at plan time** and defined in the same act; none is predicted here. Provisional labels `P-N` are this document's own and must not be copied into a plan as if they were ledger numbers.
+Deviation numbers are allocated from `POST /api/ledger/deviations` **at plan time** and defined in the same act; none is predicted here. **Numbered 2026-09-05 at plan time:** one allocator call issued D-1663–D-1688 for the six wave plans (floor now 1689); the `Ledger` column below is that mapping, and each number is DEFINED in the wave plan whose task closes it, never here. The other nine numbers of the block — D-1664, D-1669, D-1670, D-1672, D-1680–D-1684 — are plan-time findings with no label in this table. Provisional labels `P-N` are this document's own and must not be copied into a plan as if they were ledger numbers.
 
-| | Defect | Source |
-|---|---|---|
-| P-1 | `shared/roster-json.mjs` never mirrored `hidden`; accepts `hidden: "false"` behind a green deploy | probe (§3.4) |
-| P-2 | `cmd_prefer` writes `.home` and never journals | design |
-| P-3 | Silent strand at `ccd/ccd:11243` — reachable today with every account at ceiling | adversarial review |
-| P-4 | `server/src/config.ts:197-201` claims deploy ships one `accounts.json` to both boxes; it seeds once | probe |
-| P-5 | `ccd/ccd:3547-3552` says telemetry does not reach bash; `CCRC_MEASURED` does | probe |
-| P-6 | `README.md` account-entry sentence lacks `hidden` | design |
-| P-7 | Registry `pool` field (a candidate list, no writer) vs roster `pool` name — two meanings of one word in one file; renaming the field is out of scope | design |
-| P-8 | Retag racing a dispatched unit's ≤120 s jitter can stall ≤900 s; accepted rather than clearing `lastswap` | adversarial review |
-| P-9 | `README.md` "manual placement bypasses the gate entirely" superseded | design |
-| P-10 | `_swap_target`'s stdout overload resolved at the caller, not the callee | design |
-| P-11 | `swap.log` gains lines with a project where every other line has an id (`pool-tag`) | design |
-| P-12 | Two-language spelling of `pools` and `POOL_NAME_RE`, pinned by text extraction | design |
-| P-13 | `_ws_least_loaded`'s empty answer folds "all at ceiling" and "undecidable tag"; resolved in the caller's reason | author (§6) |
-| P-14 | Deploy-window strand: old supervisor inode + new on-disk `ccd` → silent in-unit refusal every 900 s | adversarial review |
-| P-15 | Rulings 4 and 5 conflicted as first designed; reconciled by the crossing marker (ruling 8) | adversarial review |
-| P-16 | `isSafeProjectSegment` refuses a leading `-`/`_` that `_ws_project_valid` accepts; not on this design's path (Map lookup), recorded for alignment | judges |
-| P-17 | `cmd_ensure` strand-clear placement was specified three incompatible ways in the panel's design; resolved inside the guard | adversarial review |
+| | Defect | Source | Ledger |
+|---|---|---|---|
+| P-1 | `shared/roster-json.mjs` never mirrored `hidden`; accepts `hidden: "false"` behind a green deploy | probe (§3.4) | D-1663 |
+| P-2 | `cmd_prefer` writes `.home` and never journals | design | D-1677 |
+| P-3 | Silent strand at `ccd/ccd:11243` — reachable today with every account at ceiling | adversarial review | D-1671 |
+| P-4 | `server/src/config.ts:197-201` claims deploy ships one `accounts.json` to both boxes; it seeds once | probe | D-1687 |
+| P-5 | `ccd/ccd:3547-3552` says telemetry does not reach bash; `CCRC_MEASURED` does | probe | D-1688 |
+| P-6 | `README.md` account-entry sentence lacks `hidden` | design | D-1686 |
+| P-7 | Registry `pool` field (a candidate list, no writer) vs roster `pool` name — two meanings of one word in one file; renaming the field is out of scope | design | D-1666 |
+| P-8 | Retag racing a dispatched unit's ≤120 s jitter can stall ≤900 s; accepted rather than clearing `lastswap` | adversarial review | D-1675 |
+| P-9 | `README.md` "manual placement bypasses the gate entirely" superseded | design | D-1685 |
+| P-10 | `_swap_target`'s stdout overload resolved at the caller, not the callee | design | D-1673 |
+| P-11 | `swap.log` gains lines with a project where every other line has an id (`pool-tag`) | design | D-1667 |
+| P-12 | Two-language spelling of `pools` and `POOL_NAME_RE`, pinned by text extraction | design | D-1665 |
+| P-13 | `_ws_least_loaded`'s empty answer folds "all at ceiling" and "undecidable tag"; resolved in the caller's reason | author (§6) | D-1668 |
+| P-14 | Deploy-window strand: old supervisor inode + new on-disk `ccd` → silent in-unit refusal every 900 s | adversarial review | D-1676 |
+| P-15 | Rulings 4 and 5 conflicted as first designed; reconciled by the crossing marker (ruling 8) | adversarial review | D-1674 |
+| P-16 | `isSafeProjectSegment` refuses a leading `-`/`_` that `_ws_project_valid` accepts; not on this design's path (Map lookup), recorded for alignment | judges | D-1679 |
+| P-17 | `cmd_ensure` strand-clear placement was specified three incompatible ways in the panel's design; resolved inside the guard | adversarial review | D-1678 |
 
 Also corrected from the panel's designs (line anchors that were wrong, substance true): `REQUIRED_VERB_FLAG` is at `agent/src/whitelist.ts:240`, not `:230`; the PWA's unknown-frame drop is `asFleetMsg` in `pwa/src/stores/fleet.ts`; `FleetClient.state`'s literal is at `server/src/remote/client.ts:85-87`; `swap.log` has one comment mention in shipped source, not two; `auth-gate.test.ts`'s route table is **not** derived (hard literals at `:195` and `:204`).
 
@@ -592,7 +592,7 @@ Also corrected from the panel's designs (line anchors that were wrong, substance
 | A detail string for unreadable/malformed on the wire | The chip carries the path; the doctor carries the bytes. |
 | A new agent op, handshake field, or `FleetSession.projectPool` | Approach B needs none; the `pools` frame is the fleet-level carrier. |
 | A `pool-tag` lifecycle act | The vocabulary is per-session; `cmd_coord_pause` journals nothing. |
-| Renaming the registry `pool` field | Out of scope; P-7 records the collision. |
+| Renaming the registry `pool` field | Out of scope; P-7 (D-1666) records the collision. |
 | Provenance flags on the verb | Additive later (tokens after the granted prefix are unconstrained); the session gate is the authorization today. |
 | `fs.watch` on `pools/` | The 2 s tick and the request-time re-read make it unnecessary. |
 
