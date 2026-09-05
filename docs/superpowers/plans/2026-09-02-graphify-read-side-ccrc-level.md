@@ -3853,7 +3853,12 @@ stale ledger cells re-measured. Committing the two source files again would be a
   detect IS the stub, so the pass timing cannot see the cost the entries impose where it is actually
   paid — inside detect, which evaluates every entry against every scanned path, twice per tree per
   pass (the guard's own `detect()` and `graphify update`). That cost is O(entries x paths); measured
-  against the installed 0.9.9 in D-1452.
+  against the installed 0.9.9 in D-1452. **SUPERSEDED by D-1458: the whole paragraph measures the
+  cost of a derivation that no longer exists.** The derivation is no longer driven by git's ignored
+  census at all — it is driven by the BREACH, so the 300-entry fixture derives ZERO entries and the
+  shell numbers above are the cost of a code path that is not entered. What replaces them: 300
+  derived entries cost the REAL detect **43.3 s** on a 2000-file tree against **1.4 s** with none,
+  and the narrowed derivation costs **1.4 s** — the same as a tree with no ignored files at all.
 
   Baseline `graph-sweep` after the fix: `Tests  59 passed | 2 skipped (61)` (four new rows; D-1450
   left it at `Tests  55 passed | 2 skipped (57)`).
@@ -3939,6 +3944,13 @@ stale ledger cells re-measured. Committing the two source files again would be a
   directory means git collapses nothing, so `dirs` is empty. On the shape pruning exists for (5500
   entries under 500 collapsed `__pycache__/`) the nested loop cost 14555 ms of bash per tree per pass.
   It is now a single forward pass: 54 ms, identical result.**
+  **SUPERSEDED by D-1458 — and this is the paragraph that got it wrong.** It measured 30.296 s of
+  added detect time for 300 entries, named `CCRC_GRAPH_BUILD_TIMEOUT=600` as the thing that had not
+  been breached, and moved on. A measured cost was ACCEPTED instead of REMOVED. What the pruning
+  ACHIEVED — one entry per collapsed subtree — stays; the code that achieved it does not (see
+  D-1453's own correction below). What it could not fix either way is that the multiplier was 308 on
+  custom-tools where the corpus needed 0. Since D-1458 the derivation reads the breach, not the
+  census, and the collapse applies to the handful of entries that survive.
 
   **Not done, and why.** The per-(pattern, path) cost is a defect in the installed engine, not in this
   tree — pruning cuts the multiplier, it does not fix the loop. Hoisting `relative_to(anchor)` out of
@@ -4051,6 +4063,17 @@ stale ledger cells re-measured. Committing the two source files again would be a
   300/0 → **12 ms**, 1 entry → **2 ms**. Both numbers are the SHELL side only; the corpus-side cost
   (~50 us per (pattern, path), 300 anchored patterns → 30.296 s over 2000 paths) is D-1452 (3)'s
   measurement and is unchanged — pruning cuts the multiplier, and that is still the reason it matters.
+  **SUPERSEDED in part by D-1458:** cutting the multiplier was never enough, because on custom-tools
+  the multiplier after pruning was still 308 against a corpus that needed 0. The pruning's EFFECT and the neutralization both stay
+  — but the FORWARD PASS ITSELF IS GONE, deleted rather than narrowed (`grep -n 'forward pass'
+  ccd/ccd-graph-sweep` returns nothing). It could not survive the narrowing: it is a property of
+  git's SORTED `--directory` listing, and D-1458 no longer walks that listing — it walks the breach,
+  in corpus order. Since D-1458 each breach path walks its OWN prefixes against a hash of the
+  collapsed directories (`local -A dirset`, `acc="$acc${rest%%/*}/"`), which is O(depth) per path and
+  never entries x directories either. The neutralization is unchanged and still runs last, over
+  whatever the collapse mapped. The sentence "pruning cuts the multiplier, and that is still the
+  reason it matters" was the last place this ledger let a measured 30 s stand as acceptable. Re-measured with the REAL detect on a 2000-file
+  tree: 300 derived entries **43.3 s**, none **1.4 s**, and the narrowed derivation **1.4 s**.
 
   **Not done, and why.** Hoisting `relative_to(anchor)` out of detect's per-pattern loop remains an
   upstream graphify defect, out of this task's scope (D-1452 already records it). A backslash in a
@@ -4222,6 +4245,223 @@ stale ledger cells re-measured. Committing the two source files again would be a
 
   **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1456** (this
   branch's previous commit), so this entry is **D-1457**; `git grep D-1457 HEAD origin/main` is empty.
+
+- **D-1458** (2026-09-04, T6 follow-up — a measured cost was ACCEPTED instead of REMOVED) —
+  **D-1451..D-1453 derived EVERY path git ignores into the generated `.graphifyignore`, D-1452
+  measured what that costs detect, and the ledger signed the number off as "inside the timeout". That
+  acceptance was the mistake.** A cost you have measured and can remove is not a cost you get to
+  keep, and this one was 30 s per pass for a value of approximately zero.
+
+  **MEASURED on the live fleet (2026-09-04 21:43, `custom-tools`, read-only).** The generated filter
+  carried **308 derived entries**: 211 individual files under `.superpowers/`, 59 under `tools/`, 24
+  under `.remember/` — individual files rather than directories because `--directory` collapses a
+  directory only when it holds no TRACKED file, and every one of those directories holds one.
+  detect's matcher costs **~50 us per (pattern, path)** and re-resolves `target.relative_to(anchor)`
+  INSIDE the per-pattern loop (`detect.py:891-895`), so 308 entries over that tree's **1938-file**
+  corpus is ~600k matches — **~30 s added to EVERY rebuild of that tree**, twice per pass (the
+  guard's own `detect()` and `graphify update`). **And the value was near zero:** `detect()` run
+  read-only over that tree with no ephemeral filter shows only **22 of the 308** entries cover a file
+  graphify would ingest at all — **all 22 under `.remember/`**, which the DEFAULT noise list already
+  excludes. The three cases the derivation exists for (`.astro/`, `.husky/_/`,
+  `apps/web/static/parts/`) are **one directory entry each**.
+
+  **Fix — derive only what the corpus needs.** `_gs_guard` already computes the breach (corpus ∖
+  tracked) it would refuse on; that set is exactly where detect and git disagree, and every other
+  ignored path in the tree is a pattern detect evaluates against 1938 files to no effect. So the
+  guard now runs as: (1) write the noise-list patterns and run `detect()` ONCE, as before; (2)
+  compute the breach; (3) ask git whether each BREACH path is ignored — `git check-ignore --no-index
+  -z --stdin`, ONE call over the whole breach — and derive ONE entry per ignored one: the path
+  itself, anchored, or the collapsed directory that is a prefix of it when git's `--directory` census
+  names one, so a whole ignored tree still costs one line; D-1453's metachar neutralisation and the
+  RULE-3 probe run on every derived entry, unchanged; (4) only if entries were derived, append them
+  and re-run `detect()` ONCE more for the census. Zero derived entries and zero extra cost on a tree
+  like custom-tools; one to three entries on the trees this was written for; at most one extra
+  `detect()` run, and only when something was derived. The ownership marker, `_gs_open_filter`'s
+  header and `_gs_rm_generated`'s cleanup are unchanged — the filter is now opened once and appended
+  to twice instead of written once.
+
+  **`--no-index` is load-bearing, and it is a genuine finding.** Without it `check-ignore` first
+  drops every input the INDEX matches — and it matches it as a **pathspec**, not as a pathname, so a
+  filename carrying a glob metacharacter is dropped because some OTHER, tracked file matches it.
+  MEASURED (git 2.43.0) on D-1453's own fixture: with a tracked `ax/b.py` and an ignored untracked
+  `a*.py`, `check-ignore --stdin` answers NOTHING for `a*.py` (exit 1) while `--no-index` answers
+  `.gitignore:1:/a\*.py`; identically for `a\b.log` beside a tracked `ab.log`, where the backslash
+  is a pathspec escape. Both of D-1453's rows went red on the first cut for exactly this reason.
+  Skipping the index costs nothing: the input IS the breach, i.e. corpus paths git does not track, so
+  a tracked path can never reach that call.
+
+  **TIMING — the ledger's 300-entry fixture, re-run with the REAL `detect()`** (read-only, scratch
+  fixture under the scratchpad; `~/.ccrc/graphify-venv/bin/python`, graphify 0.9.9; 2000 tracked
+  `.py` files across 40 directories, 300 ignored `*.tmp` at a root that holds tracked content so
+  `--directory` collapses nothing — the shape custom-tools has). Two runs each, wall clock:
+
+  | tree / filter | detect() |
+  | --- | --- |
+  | BEFORE — 300 derived entries (the census-wide derivation) | **43.30 s**, **43.45 s** |
+  | AFTER — 0 derived entries (the breach on this tree is empty) | **1.35 s**, **1.38 s** |
+  | control — a tree with NO ignored files at all | **1.41 s**, **1.37 s** |
+
+  The after number is **within 0.06 s** of a tree with no ignored files at all, against the required
+  "within a second". The 43.3 s also says D-1452's own 30.296 s under-measured the real thing by
+  ~40%: that number came from calling `_is_ignored` directly over synthetic paths, not from
+  `detect()` over a real tree.
+
+  **TIMING — the cost this fix ADDS, on a tree that DOES derive.** The table above measures the
+  ZERO-derivation case, where the narrowing is free, and that is not the whole bill. On a tree the
+  derivation exists FOR, the FIRST `detect()` now runs with the nested-ignored subtree still
+  UNFILTERED — before this entry, the census-derived entries were already in the file when the single
+  `detect()` ran — and the second, filtered run is added on top. Recording only the free case would be
+  the same omission this entry exists to condemn, so: MEASURED on the same box and engine as the table
+  above (read-only scratch fixture under the scratchpad, graphify 0.9.9; 2000 tracked `.py` across 40
+  directories plus a TRACKED `sub/.gitignore` carrying `vendor/` over an untracked 5000-file
+  `sub/vendor/` — the nested-`.gitignore` shape D-1451 was written for; two runs each, warm):
+
+  | pass | corpus `detect()` ingests | wall clock |
+  | --- | --- | --- |
+  | NEW step 1 — noise patterns only, the ignored subtree unfiltered | 7000 files | **4.55 s**, **4.24 s** |
+  | NEW step 4 — `/sub/vendor/` derived and appended, re-measured | 2000 files | **1.40 s**, **1.38 s** |
+  | OLD — ONE run, the census-derived `/sub/vendor/` already in the filter | 2000 files | **1.40 s**, **1.38 s** |
+
+  So ~5.9 s where the old shape paid ~1.4 s: **+~3 s on this fixture**, and that extra pass is the
+  WHOLE of the new cost — the bash side is strictly cheaper than it was, because the prefix walk is
+  O(breach) where the old prune loop was O(the whole census). Two properties bound it. It is paid
+  EXACTLY on the trees the derivation serves: a tree that derives nothing — custom-tools, and every
+  tree with no nested `.gitignore` — still runs `detect()` once, which is the row above. And it scales
+  with the size of the NESTED-IGNORED SUBTREE, not with the corpus: shrinking `sub/vendor/` from 5000
+  files to 1000 takes step 1 from 4.55 s / 4.24 s to **1.89 s**, **1.86 s** against the same 1.38 s
+  floor — ~0.6 ms per ignored file. ACCEPTED, and the reason is stated rather than assumed: measuring
+  the corpus BEFORE deriving from it is what makes the derivation narrow at all, and the only way to
+  skip the unfiltered pass is to know what to filter before anything has been measured — which is the
+  census-wide derivation this entry removed, at 43.3 s on the fixture above. An order of magnitude
+  more, on every pass, on every tree, including the ones that need no derivation at all.
+
+  **Consequences pinned, not asserted.** Two existing rows changed shape because a withheld or
+  underivable path is now, by construction, a path already IN the corpus: the RULE-3 backslash row
+  (`a\b.log`) now puts that path in the fixture corpus and asserts the tree is REFUSED over it — the
+  probe's safe direction is still a visible false positive, and it is now visible in the census row
+  rather than costing nothing; and ownership row (d) does the same, so it keeps its power to catch a
+  deleted `foreign` skip (with the skip gone the derived filter overwrites the repo's committed
+  `.graphifyignore` and the exit trap deletes it). The stub gained two capabilities the narrowing
+  needs a test to see: it appends one line per invocation to `$HOME/detect-calls` (a detect() CALL
+  COUNT is otherwise unobservable) and copies the filter as detect saw it to `$HOME/detect-ignore`
+  (the engine's own capture is unreachable on a refused tree).
+
+  Baseline `graph-sweep` after the fix: `Tests  68 passed | 2 skipped (70)` (three new rows;
+  `origin/main` at `f6fb08f2` leaves it at `Tests  65 passed | 2 skipped (67)`, measured).
+
+  RED FIRST, measured: the new rows against `origin/main`'s `ccd/ccd-graph-sweep` —
+  `Tests  2 failed | 66 passed | 2 skipped (70)`: *a NESTED .gitignore below the tree root is
+  honoured* (its new `detectCalls()` assertion — the census-wide derivation runs detect once, having
+  derived before measuring) and *a tree with hundreds of ignored files NONE of which reach the corpus
+  derives nothing, and detect() runs once*.
+
+  | mutation | measured red |
+  | --- | --- |
+  | derive every ignored path — the breach gate dropped (`if [ -n "$breach_all" ] && …` -> `if …`) AND the `check-ignore` call replaced by `git ls-files -o -i --exclude-standard -z`, i.e. the census-wide derivation restored | `graph-sweep` — `Tests  3 failed \| 65 passed \| 2 skipped (70)`: *a tree with hundreds of ignored files NONE of which reach the corpus derives nothing* (`not one of the 300 covers a file detect would ingest, so not one is derived: expected [ '/n000.tmp', …' ] to deeply equal []`), *a repo with nothing ignored gets no derived entries at all*, *the RULE-3 probe still withholds* |
+  | the `check-ignore` step dropped (`done < <(printf '%s\n' "$breach_all")` — every breach path treated as ignored) | `graph-sweep` — `Tests  6 failed \| 62 passed \| 2 skipped (70)`: *a breach path git does NOT ignore is never derived*, *row 2 — an untracked corpus path refuses the BUILD*, *an UNTRACKED non-ASCII path still refuses*, *a guard refusal after the filter was written leaves no armed trap*, and both D-1454 cap rows — the guard would filter away the very paths it exists to refuse |
+  | the SECOND `detect()` run dropped (the `corpus=`/`breach_all=` pair after the append removed, the append kept) | `graph-sweep` — `Tests  7 failed \| 61 passed \| 2 skipped (70)`: *a NESTED .gitignore below the tree root is honoured*, *a directory holding BOTH a tracked and an ignored file is NOT collapsed*, *a breach path git does NOT ignore is never derived*, *a NON-ASCII ignored corpus path survives the check-ignore round trip*, *a derived entry is ANCHORED*, *a derived entry whose FILENAME carries a glob metacharacter is made LITERAL*, *redundant entries under a COLLAPSED directory are pruned* — the filter is written and nothing re-reads it, so the census still sees the breach |
+  | the collapsed-directory mapping dropped (`if [ -n "${dirset["$acc"]+x}" ]` -> `if false`) | `graph-sweep` — `Tests  3 failed \| 65 passed \| 2 skipped (70)`: *a NESTED .gitignore below the tree root is honoured* (the entry is `/frontend/.astro/settings.json`, not `/frontend/.astro/`), *a derived entry is ANCHORED*, *redundant entries under a COLLAPSED directory are pruned* |
+  | `--no-index` dropped from the `check-ignore` call | `graph-sweep` — `Tests  2 failed \| 66 passed \| 2 skipped (70)`: *a derived entry whose FILENAME carries a glob metacharacter is made LITERAL* and *the RULE-3 probe still withholds* — git drops both inputs because the index matches them as pathspecs |
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1457** (PR #50,
+  merged), so this entry is **D-1458**; `git grep D-1458 HEAD origin/main` was empty before this
+  commit.
+
+- **D-1459** (2026-09-04, D-1458 review follow-up — a guard that became a comment when its write site
+  moved) — **D-1458 gave the two write steps a SHARED helper, `_gs_open_filter`, and in doing so
+  turned an inline ownership test into prose.** Before it, the one place that wrote the generated
+  `.graphifyignore` carried the "is this file ours?" condition on the same line as the write. After
+  it, the helper writes the marker header whenever the file is not already ours — and "present but
+  FOREIGN" takes that branch identically to "absent". The header goes over a TRACKED file the repo
+  committed, and `_gs_rm_generated`, reading its own marker on what is now a marker-bearing file,
+  DELETES it at exit: D-1161's failure one step worse.
+
+  **Not reachable on `main`, and the review verified why:** RULE 2 sets `foreign=1` and empties
+  `noise_files` in the same branch, so `patterns` is empty and call site 1 is skipped; call site 2
+  sits inside `if [ -n "$breach_all" ] && [ "$foreign" -eq 0 ]`. The helper's own header said so —
+  and that is the defect. The safety had become a non-local invariant asserted in a comment across
+  ~250 lines and TWO call sites, an enumeration that goes stale the moment a third appears, against
+  this repo's own doctrine that a comment is a request and a red suite is a mechanism.
+
+  **Fix — structural, not documented.** `_gs_owns_ignore "$1" || return 1` is now the FIRST line of
+  `_gs_open_filter`, which therefore returns `0 filter open (trap armed) / 1 foreign, nothing
+  written`; the inner `[ -f ] && _gs_owns_ignore` compound collapses to `[ ! -f ]`, since by then
+  "absent or ours" is all that can reach it, and the happy paths are unchanged. Both call sites
+  became `if <precondition> && _gs_open_filter "$tree"; then`, so a refusal means "append nothing"
+  rather than "append to a file the repo owns". The `foreign` skip at the derivation stays — it no
+  longer owns the FILE's safety (deleting it now costs the file nothing, measured) but it still owns
+  the WORK: on a tree the sweep may not filter, none of the derivation is worth doing.
+
+  **The rows this needed, and why they are unit-level.** No caller can reach the helper on a foreign
+  tree, so rows (a)-(d) all stay GREEN with the new line deleted — measured. Row **(e)** therefore
+  exercises `_gs_open_filter` DIRECTLY, `eval`-ing the two function definitions out of the SHIPPED
+  file (`sed -n '/^_gs_owns_ignore() {/,/^}/p; /^_gs_open_filter() {/,/^}/p'`) rather than retyping
+  them, and asserts rc=1, the committed file byte-identical, the tree undirtied, `GS_FILTER_TREE`
+  still carrying its sentinel and NO `EXIT` trap armed. Row **(f)** pins the happy paths the guard
+  must not cost: absent gets the header (rc=0, trap armed), ours is appended to without a second
+  header. `trap -p EXIT` runs at TOP LEVEL, never inside `$( )` — bash resets non-ignored traps in a
+  subshell, so a command substitution prints nothing either way and could not tell armed from
+  disarmed. Row **(d)** gains one line, `expect(r.stderr).not.toContain('derived into the corpus
+  filter')`: with the helper now refusing structurally, that count log is the only thing that still
+  reddens when the outer `foreign` skip alone is deleted.
+
+  Baseline `graph-sweep` after the fix: `Tests  70 passed | 2 skipped (72)` (two new rows; D-1458
+  left it at `Tests  68 passed | 2 skipped (70)`).
+
+  RED FIRST, measured: the new rows against this branch's own pre-fix `ccd/ccd-graph-sweep`
+  (`e0ea3e60`) — `Tests  1 failed | 69 passed | 2 skipped (72)`: *(e) `_gs_open_filter` REFUSES a
+  foreign tree itself* — `expected 'rc=0\ntree=/tmp/ccrc-gfxsweep-…' to contain 'rc=1'`. Row (f) is
+  green pre-fix by construction: it characterises the paths the fix must NOT change.
+
+  | mutation | measured red |
+  | --- | --- |
+  | `_gs_owns_ignore "$1" || return 1` deleted from `_gs_open_filter` (the guard itself) | `graph-sweep` — `Tests  1 failed \| 69 passed \| 2 skipped (72)`: *(e) … REFUSES a foreign tree itself* — the helper answers rc=0 on a file the repo committed |
+  | the outer skip dropped (`if [ -n "$breach_all" ] && [ "$foreign" -eq 0 ]` -> `if [ -n "$breach_all" ]`) | `graph-sweep` — `Tests  1 failed \| 69 passed \| 2 skipped (72)`: *(d) …* — `expected 'graph-sweep: /tmp/ccrc-gfxsweep-…' not to contain 'derived into the corpus filter'`. **Sub-measurement, with row (d)'s stderr line alone muted: `Tests  70 passed \| 2 skipped (72)`** — i.e. the committed file survives byte-identical and the tree is undirtied even with the skip gone, which is precisely what D-1459 bought. On `e0ea3e60` this same mutation destroyed the file. |
+  | call site 2 ignores the refusal (`&& _gs_open_filter "$tree"` -> a bare call on its own line), outer skip also dropped, row (d) stderr line muted | `graph-sweep` — `Tests  1 failed \| 69 passed \| 2 skipped (72)`: *(d) …* — `and be byte-identical — never overwritten by the derived filter: expected 'upstream-owned-rule/\n/noise.log\n' to be 'upstream-owned-rule/\n'`. The helper's refusal is only worth what the caller does with it. |
+
+  **Call site 1's `&&` is unmeasurable and ships anyway.** RULE 2 empties `patterns` on every foreign
+  tree, so no fixture can make that site run there; it is symmetry with call site 2 rather than a
+  guard with a test, and is recorded as such instead of being claimed as covered.
+
+  **Number:** highest across `origin/main` and this branch, `docs/` and source, is **D-1458** (this
+  branch's previous commit), so this entry is **D-1459**; `git grep D-1459 HEAD origin/main` was
+  empty before this commit.
+
+- **D-1458 annotation corrections** (same commit, review finding 2) — the two D-1458 annotations on
+  the D-1452 and D-1453 entries claimed the pruning IMPLEMENTATION survived the narrowing. It did
+  not: the single forward pass over git's sorted `--directory` listing was DELETED, not narrowed —
+  it is a property of that sorted listing, and D-1458 walks the breach in corpus order instead. Only
+  the EFFECT (one entry per collapsed subtree) and the metacharacter neutralisation survive, over an
+  O(depth) prefix walk of each breach path against a `dirset` hash. The in-code comment was already
+  accurate ("Walking prefixes is O(depth), never entries x dirs"); only the ledger misdirected, and a
+  reader chasing D-1453's own "single forward pass: 54 ms" through the annotation was told the pass
+  still existed. Both clauses now separate effect from algorithm. No source change; no new number
+  (the correction is to D-1458's own annotations).
+
+- **D-1458 timing completion** (2026-09-04, D-1459 review follow-up — the one cost the fix ADDS went
+  unmeasured) — **D-1458's timing table recorded only the case where the narrowing is free.** It
+  measured a tree that derives NOTHING (43.30 s -> 1.35 s) and signed the new shape off with the
+  prose "at most one extra `detect()` run, and only when something was derived" — a sentence with no
+  number against it. On a tree that DOES derive, that extra run is not the whole change either: the
+  FIRST `detect()` now runs over the nested-ignored subtree UNFILTERED, where the old shape had the
+  census-derived entries in the file before its single run. An unmeasured cost stated as a bound is
+  the same omission D-1458 exists to condemn, one level up.
+
+  Now MEASURED and recorded in D-1458's own entry, in a second table beside the first: on a 2000-file
+  tree with a tracked nested `.gitignore` over a 5000-file ignored subtree, step 1 costs **4.55 s /
+  4.24 s** (7000 files ingested) and step 4 **1.40 s / 1.38 s** (2000), against **1.40 s / 1.38 s**
+  for the old single filtered run — **+~3 s**, paid exactly on the trees the derivation serves, and
+  bounded by the size of the nested-ignored subtree rather than the corpus (the same subtree at 1000
+  files: **1.89 s / 1.86 s**, ~0.6 ms per ignored file over a 1.38 s floor). Same box, same engine
+  (graphify 0.9.9), same read-only scratch-fixture method as the first table, two runs each. The
+  README bullet gained the same sentence, since it quotes the 43.3 s / 1.4 s pair.
+
+  **No source change, and none is called for:** the two-step order is what makes the derivation narrow
+  — the corpus has to be measured before anything can be derived from it — and the only way to skip
+  the unfiltered pass is to know what to filter before measuring, which is the census-wide derivation
+  D-1458 removed at 43.3 s. **No new number** (the correction completes D-1458's own measurements),
+  and no new mutation row: nothing executable moved, so the `graph-sweep` mutation table stands as
+  measured under D-1458 and D-1459.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 

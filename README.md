@@ -1644,24 +1644,38 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   guard, which measures corpus *minus* tracked — and graphify's shrink guard would then refuse the
   write, wedging the tree at `refused-shrink` on every pass. An **operator** pattern is honoured as
   written, tracked content included: that is the escape hatch, and the only one.
-- **What git already ignores is derived into the same generated file** (D-1451) —
-  `git ls-files -o -i --exclude-standard --directory`, one entry per line, each anchored at the tree
-  root with a leading `/`. detect() reads `.gitignore` only along the ancestor chain from the VCS
-  root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied and
-  its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy on
-  the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor over
-  `.husky/_/`). Uncapped, with the entry count logged in the pass output; every derived entry goes
-  through the same `ls-files -c -i -X` probe as a default pattern, and a tree that owns a foreign
-  `.graphifyignore` derives nothing — that file is not the sweep's to write. Two D-1452 refinements:
-  git prints a collapsed directory AND every ignored file under it, so the entries a directory entry
-  already covers are **pruned** before the filter is written (each one costs detect a pattern match
-  per scanned path, twice per pass — one forward pass over git's sorted listing, D-1453, after the
-  first cut shipped as a nested loop that cost 15 s of bash on a 5500-entry tree), and a filename
-  carrying a glob metacharacter reads as a path to git and as a pattern to everyone else. That last
-  seam is **three-way** (D-1453): the probe is `git ls-files -X`, i.e. wildmatch, where `*` does not
-  cross a `/`; detect is `fnmatch`, where it does. So the probe alone cannot stand in for detect — a
-  derived entry is made literal in BOTH dialects first (`*` → `[*]`, `?` → `[?]`, `[` → `[[]`), and
-  the probe is the belt behind it.
+- **What git ignores AND the corpus actually picked up is derived into the same generated file**
+  (D-1451, narrowed by D-1458). detect() reads `.gitignore` only along the ancestor chain from the
+  VCS root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied
+  and its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy
+  on the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor
+  over `.husky/_/`). So the guard runs in two steps: write the noise patterns, run detect() **once**,
+  and compute the breach (corpus ∖ tracked) it would refuse on. Then ask git whether each **breach**
+  path is ignored (`git check-ignore --no-index -z --stdin`, one call, NUL-framed so a non-ASCII or
+  backslash-bearing name round-trips raw; `--no-index` because git otherwise drops an input the index
+  matches **as a pathspec**, i.e. a filename carrying a metacharacter), and derive one entry per
+  ignored one — the path itself, anchored at the tree root with a leading `/`, or the **collapsed
+  directory** containing it when git's `--directory` census names one, so a whole ignored tree costs
+  one line. Only if something was derived is it appended and detect() run a **second** time.
+  D-1451..D-1453 derived git's WHOLE ignored census instead, and the cost was measured and then
+  accepted rather than removed: 308 entries on custom-tools, of which 22 covered a file detect would
+  ingest at all — and on a 2000-file scratch fixture, 300 derived entries cost detect **43.3 s**
+  against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458). The
+  second detect() is the one cost this shape ADDS, and it is measured too: on a tree that DOES derive
+  the first run sees the ignored subtree unfiltered, so a 2000-file tree with a nested `.gitignore`
+  over a 5000-file ignored subtree pays **4.4 s + 1.4 s** where the old shape paid one **1.4 s** run.
+  That is **~+3 s**, paid exactly on the trees the derivation serves — a tree that derives nothing
+  still runs detect() once — and bounded by the size of the nested-ignored subtree, not the corpus
+  (the same subtree at 1000 files: 1.9 s).
+  Uncapped, with the entry count logged in the pass output; every derived entry goes through the same
+  `ls-files -c -i -X` probe as a default pattern, and a tree that owns a foreign `.graphifyignore`
+  derives nothing — that file is not the sweep's to write. A filename carrying a glob metacharacter
+  reads as a path to git and as a pattern to everyone else, and that seam is **three-way** (D-1453):
+  the probe is `git ls-files -X`, i.e. wildmatch, where `*` does not cross a `/`; detect is
+  `fnmatch`, where it does. So the probe alone cannot stand in for detect — a derived entry is made
+  literal in BOTH dialects first (`*` → `[*]`, `?` → `[?]`, `[` → `[[]`), and the probe is the belt
+  behind it; since D-1458 a withheld entry always means the tree is then refused over that path in
+  the open, because it is only ever derived from something already in the corpus.
 
 `ccrc doctor`'s `graphify` check (SKIP on a server box) reads the engine version against the pin,
 per-home skill drift, per-tree excludes, the census's last pass, and free space on the
