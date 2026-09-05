@@ -361,6 +361,61 @@ describe('graph-sweep: a tree is a TOPLEVEL, never a subdirectory of one (D-1367
   });
 });
 
+// D-1510 — CLAUDE CODE'S OWN WORKTREES ARE TREES TOO.
+//
+// `EnterWorktree` puts a session's worktree at `<repo>/.claude/worktrees/<name>`
+// — a real git toplevel, at a depth NONE of the three globs above reaches
+// (`$PROJECTS_ROOT/*/`, `$WORKTREES_ROOT/*/`, `$WORKTREES_ROOT/*/*/`).
+// MEASURED on the live fleet 2026-09-05: one of 18 live sessions was running in
+// `$PROJECTS_ROOT/<repo>/.claude/worktrees/<name>` over a graph.json a week old
+// with no `.graphify_engine` beside it — not the sweep's build, and nothing in
+// the sweep would ever refresh it. It reads fresh only until the first commit
+// lands there, and stale for ever after.
+//
+// The predicate and the dedupe are unchanged: what makes this a tree is the
+// same `--show-toplevel`-is-itself question every other candidate answers, and
+// a plain subdirectory beside it must still be nothing at all.
+describe('graph-sweep: Claude Code worktrees under .claude/worktrees are trees (D-1510)', () => {
+  const paths = (): string[] => lastPass().trees.map((t: { path: string }) => t.path);
+
+  it('discovers one under $PROJECTS_ROOT, keeps the parent, and skips a plain sibling', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const wt = path.join(repo, '.claude', 'worktrees', 'x');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'x', wt);
+    // a plain directory in the same place, with content and no git of its own
+    const notatree = path.join(repo, '.claude', 'worktrees', 'notatree');
+    fs.mkdirSync(notatree, { recursive: true });
+    fs.writeFileSync(path.join(notatree, 'a.py'), 'x = 1\n');
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), "the session's own worktree is invisible to the sweep — its graph is never "
+      + 'refreshed by anything').toContain(wt);
+    expect(outcomeOf(wt)).toBe('never-built');
+    expect(paths(), 'a plain directory under .claude/worktrees was censused as a tree')
+      .not.toContain(notatree);
+    expect(paths(), 'the parent project lost its own row').toContain(repo);
+    expect(outcomeOf(repo)).toBe('never-built');
+  });
+
+  it('discovers one under $WORKTREES_ROOT as well (depth-2 workspace, then .claude/worktrees)', () => {
+    const repo = makeRepo('alpha'); plantEngine();
+    const ws = j('worktrees', 'alpha', 'wt1');
+    fs.mkdirSync(path.dirname(ws), { recursive: true });
+    git(repo, 'worktree', 'add', '-q', '-b', 'wt1-branch', ws);
+    const wt = path.join(ws, '.claude', 'worktrees', 'y');
+    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    git(ws, 'worktree', 'add', '-q', '-b', 'y', wt);
+
+    expect(runSweep().status).toBe(0);
+    expect(paths(), 'a Claude Code worktree inside a ccd workspace is invisible to the sweep')
+      .toContain(wt);
+    expect(outcomeOf(wt)).toBe('never-built');
+    expect(paths(), 'the workspace that holds it lost its own row').toContain(ws);
+    expect(paths(), 'the parent project lost its own row').toContain(repo);
+  });
+});
+
 describe('graph-sweep: build discriminators (Task 7)', () => {
   it('row 7 — a wedged engine is timed-out by the knob, not a hung pass', () => {
     const repo = makeRepo('alpha');

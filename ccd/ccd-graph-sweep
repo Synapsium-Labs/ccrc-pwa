@@ -112,10 +112,24 @@ _gs_realpath() {   # <path> -> its canonical path, or nothing at all
 # IS one. Two aliases (or two names under symlinked ancestors) leave the
 # first-seen standing — there the names are equally arbitrary and only the
 # count matters.
+#
+# D-1510 — AND CLAUDE CODE'S OWN WORKTREES ARE TREES. `EnterWorktree` puts a
+# session's worktree at `<repo>/.claude/worktrees/<name>`, a real toplevel at a
+# depth none of the first three globs reaches, so the sweep never saw it and
+# nothing ever rebuilt its graph. MEASURED on the live fleet 2026-09-05: a
+# session in `$PROJECTS_ROOT/<repo>/.claude/worktrees/<name>` over a graph.json
+# a week old with no `.graphify_engine` beside it — not this sweep's build —
+# reading fresh only because no commit had landed there yet. The last two globs
+# below ask the same toplevel question of that shape; nothing else changes (the
+# noise-list key is the basename of `--git-common-dir`'s parent, so it already
+# resolves to the PARENT project, and the default noise list withholds
+# `.claude/` from the parent's own corpus unless that repo tracks files there).
 _gs_trees() {    # every git working TOPLEVEL under the two roots, once each
   local d top real i dup
   local -a seen=() named=()
-  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/; do
+  for d in "$PROJECTS_ROOT"/*/ "$WORKTREES_ROOT"/*/ "$WORKTREES_ROOT"/*/*/ \
+           "$PROJECTS_ROOT"/*/.claude/worktrees/*/ \
+           "$WORKTREES_ROOT"/*/*/.claude/worktrees/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
     top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || continue
