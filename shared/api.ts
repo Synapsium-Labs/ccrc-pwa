@@ -105,6 +105,19 @@ export interface FleetSession {
    *  nothing — and the console shows the two differently (`graph 0` versus no
    *  chip at all), which is the whole reason this is not a `number`. */
   graphQueries: number | null;
+  /** How many search calls the `PreToolUse` graphify gate has DENIED this
+   *  session — `hookstate.ts`'s `graphGateDenials`, carried through
+   *  unchanged. R5 of the read-side design, D-1613. ADDITIVE exactly as
+   *  `graphQueries` above: no `FLEET_PROTO` bump, and an older peer that
+   *  omits it revives as `null` below.
+   *
+   *  Beside the query count, never instead of it: R4 measures how often a
+   *  session ASKED its graph, R5 how often it had to be told to, and the
+   *  gate's own next reading is the second number beside the first. `null`
+   *  mirrors `graphQueries` — no fresh hook data, or a hook too old to have a
+   *  gate at all — and `0` is a MEASUREMENT: the gate is live in this session
+   *  and has not had to fire. Read through `graphGateCount`, never raw. */
+  graphGateDenials: number | null;
   bucket: SessionBucket;
   /** Epoch ms this session ENTERED `bucket`, as evidenced by the underlying
    *  record — never a watcher's memory of when it noticed, which would reset on
@@ -292,8 +305,45 @@ export function substrateFault(
  * the same rule `optNum` applies on the revival path.
  */
 export function graphReadCount(s: { graphQueries?: number | null }): number | null {
-  const v = s.graphQueries ?? null;
+  return tolerantCount(s.graphQueries);
+}
+
+/**
+ * The ladder both graph counters climb, spelled once. Absent, explicitly
+ * null, or present-but-unusable (a string, `NaN`, `Infinity` — shapes the
+ * wire type forbids and only a broken or hostile peer sends) all read as
+ * `null`, "nothing measured"; a finite number reads as itself, `0` included.
+ *
+ * Private, and derived from rather than replacing the two named readers
+ * above and below: CLAUDE.md's wire rule is a SINGLE reader per FIELD, which
+ * is about every surface agreeing on one fallback, not about the two fields
+ * sharing none of their mechanics. Two hand-kept copies of one four-condition
+ * ladder drift, and the one that drifts is the one nobody is reading —
+ * `io.ts`'s own rule beside `readFileMeasured`. Each field keeps its own
+ * exported name, its own docstring and its own key, so no call site can
+ * accidentally read the other's number.
+ */
+function tolerantCount(raw: number | null | undefined): number | null {
+  const v = raw ?? null;
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Tolerant read of `FleetSession.graphGateDenials` — R5's counter, D-1613 —
+ * for a value that has NOT been through `reviveFleetSession`. Every word of
+ * `graphReadCount`'s argument above applies here unchanged, and for the same
+ * measured reason (D-1251): the live `fleet` frame is CAST, not revived, this
+ * field is ADDITIVE with `FLEET_PROTO` held at 1, and a server predating it
+ * omits the key entirely. Read raw, `undefined > 0` is FALSE, so that older
+ * server's rows would silently lose the suffix rather than paint a broken
+ * one — the quiet direction of the same bug, and the one that makes a gate
+ * nobody can see look like a gate that never fires.
+ *
+ * The ONE place every PWA surface reads this field, so the fleet card and any
+ * later surface cannot drift onto two different fallbacks.
+ */
+export function graphGateCount(s: { graphGateDenials?: number | null }): number | null {
+  return tolerantCount(s.graphGateDenials);
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -2078,6 +2128,11 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // `optNum`, which this function's catch turns into "reject the whole
       // session" — the same rule every other numeric field here follows.
       graphQueries: optNum(o, 'graphQueries'),
+      // Its own key, read by its own `optNum` call — the same absent→null
+      // degrade as `graphQueries` above, and deliberately NOT derived from
+      // it. A snapshot written before R5 is ignorant of the denial count, not
+      // a witness that the gate never fired (D-1613).
+      graphGateDenials: optNum(o, 'graphGateDenials'),
       unmeasured: optUnmeasured(o, 'unmeasured'),
       statusUnmeasured: optBool(o, 'statusUnmeasured', false),
       // `lifecycleRaw` is already narrowed to `SessionLifecycle | null` by the
