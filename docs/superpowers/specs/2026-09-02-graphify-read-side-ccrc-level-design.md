@@ -235,7 +235,11 @@ once per wave (dispatch `/clear`s it from wave 2 on), and `/clear` by hand re-ar
 2. *A hook that can wedge a turn.* Fail-open everywhere: every read failure, an unreadable hookstate,
    a missing `jq`, an unresolvable tree, an unparseable stamp — no stdout. And the bound: after 3
    denials without a query the gate opens anyway, so a session that cannot run `Bash` at all gets
-   through on its fourth search call, and the board shows `gated 3` for it.
+   through on its fourth search call, and the board shows `gated 3` for it. **The deny is said only
+   once it is counted** — built in the arm, printed after the hookstate rename lands (D-1689): a
+   deny the next event cannot see is unbounded. Bounded false positives, recorded rather than fixed
+   (D-1690): the gate measures the call's `cwd` tree, not where a `cd` inside a `Bash` command lands;
+   `find … -delete` heads with `find`; concurrent subagent denials can under-count the bound by one.
 3. *Gate after the number.* The number is D-1613. It keeps being taken: denials are counted beside
    queries, so the gate's own effect is the next reading.
 

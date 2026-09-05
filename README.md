@@ -1633,9 +1633,15 @@ opens anyway.* **Everything else fails open, and so does the bound.** An unreada
 missing `jq`, an unresolvable tree, an unparseable stamp, a graph that is not there: no stdout, and
 the call proceeds. Three denials without a query and the fourth search passes — a session that
 cannot run `Bash` at all is never wedged by a hook it has no way to satisfy — and a denial is
-counted only when the JSON was actually emitted, so an emitter that could not build one charges the
-session nothing. Nothing but a gated call in an armed session pays for any of it: every other event,
-and every other tool call, costs the two integers the hook already had in hand.
+counted only when its JSON could be built, and *said* only once it is counted: the envelope is built
+in the arm and printed after the hookstate write lands, because a deny the next event cannot see
+reads `Denial 1 of 3` forever on a registry that will not take the write, and the one query that
+would open the gate is lost by the same failed write (D-1689, measured before the fix). What the gate
+cannot tell is bounded and recorded rather than fixed (D-1690): it measures the tree named by the
+call's `cwd`, not the directory a `cd` inside a `Bash` command will land in; `find … -delete` heads
+with `find`; and two subagents denied in the same instant can each count the same denial once. All
+three stop at three. Nothing but a gated call in an armed session pays for any of it: every other
+event, and every other tool call, costs the two integers the hook already had in hand.
 
 `graphGateDenials` rides beside `graphQueries` in the same hookstate and through its own single
 tolerant reader (`null`, an older hook, is never folded into `0`), resets with it on any
