@@ -2696,6 +2696,23 @@ _check_graphify() {
   if [ -r "$pin_file" ]; then IFS= read -r pin < "$pin_file" || true; fi
   pin="$(_dr_trim "$pin")"
 
+  # ── the search gate's state (R5, D-1613) ────────────────────────────────
+  # NOT a bucket and NOT a finding: the gate is armed by default and its
+  # kill-switch is an operator switch deliberately set, which this fleet
+  # reports rather than warns about (`$REG/coordinator-paused` reaches the
+  # wire, not a doctor line). But nothing else on the box reports it at all —
+  # the file has no writer in the tree and no verb prints it — so it rides
+  # every verdict line this check prints, PASS and WARN and FAIL alike: which
+  # class the rest of the measurement lands in must not decide whether the
+  # operator can see whether sessions are being gated.
+  # The path is `ccd/session-hook.sh`'s `GRAPH_GATE_OFF`, whose hook is the
+  # only reader; `ccrc-doctor-graphify.test.ts` HARVESTS it from there and
+  # plants its fixture at whatever the hook now says, so the two spellings
+  # cannot drift apart in silence.
+  local gfx_gate=", gate on"
+  [ ! -e "$HOME/.ccrc/graph-gate-off" ] \
+    || gfx_gate=", gate off (operator file \$HOME/.ccrc/graph-gate-off)"
+
   local -a gfx_install_fail=() gfx_excludes_warn=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
   local -a gfx_rows_warn=()
@@ -2950,27 +2967,27 @@ _check_graphify() {
   # ── the verdict, one line per bucket that has something to say ───────────
   local rc=0
   if [ "${#gfx_install_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_install_fail[@]}")" \
+    _dr_fail graphify "$(_dr_join "${gfx_install_fail[@]}")$gfx_gate" \
       "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill"
     rc=1
   fi
   if [ "${#gfx_census_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_census_fail[@]}")" \
+    _dr_fail graphify "$(_dr_join "${gfx_census_fail[@]}")$gfx_gate" \
       "read \$HOME/.ccrc/graph-sweep.log for what the pass hit, and check the timer: systemctl --user status ccd-graph-sweep.timer"
     rc=1
   fi
   if [ "${#gfx_disk_fail[@]}" -gt 0 ]; then
-    _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")" \
+    _dr_fail graphify "$(_dr_join "${gfx_disk_fail[@]}")$gfx_gate" \
       "free space on that filesystem before the next sweep pass — under 2 GiB a graph build fails the same way a ccd clone does"
     rc=1
   fi
   if [ "${#gfx_excludes_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_excludes_warn[@]}")$gfx_gate" \
       "run: ccrc install — it writes the graphify-out/ exclude into every tree the sweep walks"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_census_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_census_warn[@]}")$gfx_gate" \
       "check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)"
     [ "$rc" -eq 1 ] || rc=2
   fi
@@ -2979,12 +2996,12 @@ _check_graphify() {
     # TIMER (is the sweep still firing), and `systemctl status` answers nothing
     # here — these rows are per-repository work. No verb prints the census, so
     # the remedy names the file itself rather than inventing one.
-    _dr_warn graphify "$(_dr_join "${gfx_rows_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_rows_warn[@]}")$gfx_gate" \
       "read the rows — each carries its own reason — in \$HOME/.ccrc/graph-sweep.json (.passes[-1].trees[]); a refused tree keeps its last graph and builds again as soon as its corpus is clean"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#gfx_disk_warn[@]}" -gt 0 ]; then
-    _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_disk_warn[@]}")$gfx_gate" \
       "clear room on that filesystem while it is still cheap"
     [ "$rc" -eq 1 ] || rc=2
   fi
@@ -2992,14 +3009,14 @@ _check_graphify() {
     # Its own bucket, its own remedy: "clear room" (the bucket above) fixes
     # nothing here — this is "the measurement could not be taken at all",
     # `_check_disk`'s own remedy wording for the identical shape, adapted.
-    _dr_warn graphify "$(_dr_join "${gfx_disk_unread_warn[@]}")" \
+    _dr_warn graphify "$(_dr_join "${gfx_disk_unread_warn[@]}")$gfx_gate" \
       "check by hand: df -Pk <the root named above> — a filesystem df cannot stat answers exactly this way; install df first if it is not on PATH (coreutils on a GNU box, util-linux on some minimal images)"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
-  _dr_pass graphify "engine $pin, skills converged, census ok"
+  _dr_pass graphify "engine $pin, skills converged, census ok$gfx_gate"
 }
 
 # ── graphify-path: what a session runs when it types `graphify` (R3) ──────
