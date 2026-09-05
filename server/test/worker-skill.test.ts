@@ -360,7 +360,12 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
    *  failure that a doc three files away drifted into (R2 review). */
   const FRESHNESS = ((): string[] => {
     const hook = readFileSync(path.join(root, 'ccd/session-hook.sh'), 'utf8');
-    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    // D-1613 moved these assignments out of `_hook_graph_card` and into
+    // `_hook_graph_measure`, which the card and the R5 search gate both read,
+    // and the locals became `GM_*` globals with them. The harvest follows the
+    // spelling — it threw the error below on the rename, which is the mechanism
+    // working: a doc pinned to words the hook no longer prints is the failure.
+    const vals = [...hook.matchAll(/\bGM_FRESH="([^"]+)"/g)].map((m) => m[1]!);
     if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
       'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
       'looking at the wrong file');

@@ -37,6 +37,85 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
 const stateFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json');
 const readState = (): any => JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
 
+// ── The graph fixtures. Module scope, not inside one describe: the R1 card
+// and the R5 gate (D-1613) ask the SAME question of the same tree, and a second
+// copy of `plantGraph`/`gitTree` for the gate would be exactly the drift this
+// repo's single-definition doctrine forbids.
+/** A tree with a graph in it. `built` is the sha the graph claims; the DECOY
+ *  at the head of graph.json is the mutation this fixture exists to catch —
+ *  `built_at_commit` is the file's LAST key on a real 8 MB graph, and a
+ *  reader that parses from the head answers the decoy.
+ *
+ *  `pad` IS THE DISTANCE BETWEEN THE DECOY AND THE END OF THE FILE, and the
+ *  hook's `built` read defends that distance with TWO clauses that each cover
+ *  the other at 9000 (D-1361): `tail -c 4096` puts the decoy outside the
+ *  bytes read at all, and `| tail -n1` takes the last match of however many
+ *  were read. Pass `pad: 0` for a graph.json small enough that the whole file
+ *  is inside the byte window — the only shape in which the second clause is
+ *  the one deciding, and so the only shape that measures it. */
+const plantGraph = (dir: string, opts: {
+  built?: string; nodes?: number; engine?: string | null; report?: boolean;
+  pad?: number;
+} = {}): void => {
+  const out = path.join(dir, 'graphify-out');
+  fs.mkdirSync(out, { recursive: true });
+  const built = opts.built ?? 'a'.repeat(40);
+  const pad = opts.pad ?? 9000;
+  const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
+  const filler = pad > 0 ? `  "pad": "${'x'.repeat(pad)}",\n` : '';
+  fs.writeFileSync(path.join(out, 'graph.json'),
+    `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
+  if (opts.report !== false) {
+    fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'),
+      `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
+      + `- ${opts.nodes ?? 7662} nodes · 15645 edges · 423 communities\n`);
+  }
+  // `engine: null` plants an UNSTAMPED graph — the fleet design says outright
+  // that one is legal ("`unstamped` is not an outcome"). `??` cannot express
+  // it (it would keep ''), so the absence is its own branch (D-1334).
+  if (opts.engine !== null) {
+    fs.writeFileSync(path.join(out, '.graphify_engine'), `${opts.engine ?? '0.9.9'}\n`);
+  }
+};
+
+/** A git repo whose HEAD is returned. `-c` on every commit so the box's own
+ *  identity is never needed and never used. */
+const gitTree = (dir: string, commits = 1): string => {
+  fs.mkdirSync(dir, { recursive: true });
+  const git = (...args: string[]): string =>
+    execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
+      '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
+  git('init', '-q');
+  const shas: string[] = [];
+  for (let i = 0; i < commits; i++) {
+    // EACH COMMIT CHANGES THE TREE (D-1368). `--allow-empty` moves HEAD and
+    // leaves `HEAD^{tree}` byte-identical to every other commit's, which is
+    // now the definition of FRESH — so a distance fixture built out of empty
+    // commits would be measuring the arm it means to leave alone.
+    fs.writeFileSync(path.join(dir, `c${i}.txt`), `${i}\n`);
+    git('add', '-A');
+    git('commit', '-q', '-m', `c${i}`);
+    shas.push(git('rev-parse', 'HEAD'));
+  }
+  return shas[0]!;
+};
+
+/** Raw git inside a fixture tree, for the tests that have to MOVE HEAD after
+ *  the graph was planted. Identity supplied per call, as `gitTree`'s does, so
+ *  the box's own is never needed and never used. */
+const git = (dir: string, ...args: string[]): string =>
+  execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
+    '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
+
+const card = (stdout: string): string => {
+  expect(stdout.trim(), 'the hook printed nothing').not.toBe('');
+  const lines = stdout.trim().split('\n');
+  expect(lines, 'the hook printed more than one line on stdout').toHaveLength(1);
+  const j = JSON.parse(lines[0]!);
+  expect(j.hookSpecificOutput.hookEventName).toBe('SessionStart');
+  return String(j.hookSpecificOutput.additionalContext);
+};
+
 describe('event → state mapping', () => {
   it('UserPromptSubmit writes working with identity fields', () => {
     run({ hook_event_name: 'UserPromptSubmit', session_id: 'uuid-1' });
@@ -391,72 +470,6 @@ describe('graphQueries — the read counter the console can see', () => {
 // leaked onto another event would not be noise — it would answer a question
 // nobody asked.
 describe('the SessionStart graph card', () => {
-  /** A tree with a graph in it. `built` is the sha the graph claims; the DECOY
-   *  at the head of graph.json is the mutation this fixture exists to catch —
-   *  `built_at_commit` is the file's LAST key on a real 8 MB graph, and a
-   *  reader that parses from the head answers the decoy.
-   *
-   *  `pad` IS THE DISTANCE BETWEEN THE DECOY AND THE END OF THE FILE, and the
-   *  hook's `built` read defends that distance with TWO clauses that each cover
-   *  the other at 9000 (D-1361): `tail -c 4096` puts the decoy outside the
-   *  bytes read at all, and `| tail -n1` takes the last match of however many
-   *  were read. Pass `pad: 0` for a graph.json small enough that the whole file
-   *  is inside the byte window — the only shape in which the second clause is
-   *  the one deciding, and so the only shape that measures it. */
-  const plantGraph = (dir: string, opts: {
-    built?: string; nodes?: number; engine?: string | null; report?: boolean;
-    pad?: number;
-  } = {}): void => {
-    const out = path.join(dir, 'graphify-out');
-    fs.mkdirSync(out, { recursive: true });
-    const built = opts.built ?? 'a'.repeat(40);
-    const pad = opts.pad ?? 9000;
-    const decoy = `  "built_at_commit": "${'0'.repeat(40)}",\n`;
-    const filler = pad > 0 ? `  "pad": "${'x'.repeat(pad)}",\n` : '';
-    fs.writeFileSync(path.join(out, 'graph.json'),
-      `{\n${decoy}${filler}  "hyperedges": [],\n  "built_at_commit": "${built}"\n}\n`);
-    if (opts.report !== false) {
-      fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'),
-        `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
-        + `- ${opts.nodes ?? 7662} nodes · 15645 edges · 423 communities\n`);
-    }
-    // `engine: null` plants an UNSTAMPED graph — the fleet design says outright
-    // that one is legal ("`unstamped` is not an outcome"). `??` cannot express
-    // it (it would keep ''), so the absence is its own branch (D-1334).
-    if (opts.engine !== null) {
-      fs.writeFileSync(path.join(out, '.graphify_engine'), `${opts.engine ?? '0.9.9'}\n`);
-    }
-  };
-
-  /** A git repo whose HEAD is returned. `-c` on every commit so the box's own
-   *  identity is never needed and never used. */
-  const gitTree = (dir: string, commits = 1): string => {
-    fs.mkdirSync(dir, { recursive: true });
-    const git = (...args: string[]): string =>
-      execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
-        '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
-    git('init', '-q');
-    const shas: string[] = [];
-    for (let i = 0; i < commits; i++) {
-      // EACH COMMIT CHANGES THE TREE (D-1368). `--allow-empty` moves HEAD and
-      // leaves `HEAD^{tree}` byte-identical to every other commit's, which is
-      // now the definition of FRESH — so a distance fixture built out of empty
-      // commits would be measuring the arm it means to leave alone.
-      fs.writeFileSync(path.join(dir, `c${i}.txt`), `${i}\n`);
-      git('add', '-A');
-      git('commit', '-q', '-m', `c${i}`);
-      shas.push(git('rev-parse', 'HEAD'));
-    }
-    return shas[0]!;
-  };
-
-  /** Raw git inside a fixture tree, for the tests that have to MOVE HEAD after
-   *  the graph was planted. Identity supplied per call, as `gitTree`'s does, so
-   *  the box's own is never needed and never used. */
-  const git = (dir: string, ...args: string[]): string =>
-    execFileSync('git', ['-C', dir, '-c', 'user.email=f@example.invalid',
-      '-c', 'user.name=fixture', ...args], { encoding: 'utf8' }).trim();
-
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
    *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
    *  and run in a bash subshell against this fixture HOME, because the hook is
@@ -492,15 +505,6 @@ describe('the SessionStart graph card', () => {
     execFileSync('bash', ['-c', script, 'sweep',
       ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
-  };
-
-  const card = (stdout: string): string => {
-    expect(stdout.trim(), 'the hook printed nothing').not.toBe('');
-    const lines = stdout.trim().split('\n');
-    expect(lines, 'the hook printed more than one line on stdout').toHaveLength(1);
-    const j = JSON.parse(lines[0]!);
-    expect(j.hookSpecificOutput.hookEventName).toBe('SessionStart');
-    return String(j.hookSpecificOutput.additionalContext);
   };
 
   it('prints a card naming the graph, its node count, its engine and the pin', () => {
@@ -744,12 +748,19 @@ describe('the SessionStart graph card', () => {
     expect(readState().event, 'the compact SessionStart wrote state after all').toBe('PreCompact');
   });
 
+  // R5 (D-1613) made PreToolUse the ONE other event this file may print on, and
+  // only for a gated call in an armed session — so the silence pinned here is
+  // now the silence of the calls the gate does not touch: a shell line that is
+  // not a search, a named file, an edit. The gated shapes have their own
+  // describe below; what this row keeps is that nothing else ever prints.
   it('prints NOTHING on every other event, even with a graph right there', () => {
     const tree = path.join(home, 'tree');
     const first = gitTree(tree, 1);
     plantGraph(tree, { built: first });
     for (const payload of [
       { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
+      { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'a.ts' }, cwd: tree },
+      { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: 'a.ts' }, cwd: tree },
       { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
       { hook_event_name: 'Stop', cwd: tree },
       { hook_event_name: 'UserPromptSubmit', cwd: tree },
@@ -845,6 +856,48 @@ describe('the SessionStart graph card', () => {
     expect(text, 'an empty pin clause was printed anyway').not.toContain('pin');
   });
 
+  // ── R5's half of the card (D-1613) ──────────────────────────────────────
+  // The card and the gate ask ONE measurement (`_hook_graph_measure`) and one
+  // arm predicate (`_hook_gate_tree`), so what the card promises and what the
+  // gate does cannot drift. A card that promised a deny that never came would
+  // teach the session to stop reading the card.
+  it('tells the session the gate is armed, in the trees where it IS armed', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('Search tools (Grep, Glob, shell grep/rg/find) are gated '
+      + "until this session's first graph query.");
+    // …and the gate itself agrees, in the same tree, on the next call.
+    const out = run({ hook_event_name: 'PreToolUse', tool_name: 'Grep',
+      tool_input: { pattern: 'x' }, cwd: tree });
+    expect(JSON.parse(out.trim()).hookSpecificOutput.permissionDecision,
+      'the card promised a gate the hook does not apply').toBe('deny');
+  });
+
+  it('says the gate is off — and does not gate — while the operator file exists', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first });
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-gate-off'), '');
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('the search gate is off (operator file)');
+    expect(text, 'the card announced a gate the kill-switch had already lifted')
+      .not.toContain('are gated until');
+  });
+
+  it('says nothing about the gate for a tree the gate will not gate', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 12);          // 11 commits past the graph
+    plantGraph(tree, { built: first });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text).toContain('11 commits behind HEAD');
+    expect(text, 'a stale tree was told about a gate that will never fire')
+      .not.toContain('gate');
+    expect(text).not.toContain('are gated until');
+  });
+
   it('omits the node count rather than inventing one when GRAPH_REPORT.md is absent', () => {
     const tree = path.join(home, 'tree');
     const first = gitTree(tree, 1);
@@ -852,5 +905,197 @@ describe('the SessionStart graph card', () => {
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('graphify-out/');
     expect(text).not.toContain('nodes');
+  });
+});
+
+// ── R5: the PreToolUse search gate (D-1613) ───────────────────────────────
+// The spec's first R5 section DECLINED this gate; the operator's ruling on the
+// R4 reading — 4 graph queries fleet-wide in the two days after the read side
+// deployed, 10 of 18 live sessions at `graphQueries` 0 — reversed it. What the
+// card and clause 12 could not move, a deny does.
+//
+// On PreToolUse a stdout JSON is a PERMISSION DECISION, so this is the one arm
+// in the file allowed to print there, and only for a GATED call in an ARMED
+// session. Every other event's silence is pinned in the card describe above,
+// and the non-gated PreToolUse calls are pinned here beside it.
+describe('the PreToolUse search gate (R5, D-1613)', () => {
+  const NODES = 4242;
+
+  /** A tree whose graph is fresh at HEAD — the armed shape, for the tests that
+   *  are about something else. `commits` past the graph makes it stale. */
+  const gatedTree = (commits = 1): string => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, commits);
+    plantGraph(tree, { built: first, nodes: NODES });
+    return tree;
+  };
+  const pre = (tool: string, input: object, cwd: string): object =>
+    ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd });
+  const bashPre = (command: string, cwd: string): object => pre('Bash', { command }, cwd);
+  const grepPre = (cwd: string): object => pre('Grep', { pattern: 'assembleFleet' }, cwd);
+  const query = (cwd: string): object =>
+    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'graphify query "who calls assembleFleet"' }, cwd });
+
+  /** The deny envelope on stdout, asserted to be exactly one line of JSON. */
+  const deny = (stdout: string): any => {
+    const lines = stdout.trim().split('\n').filter((l) => l !== '');
+    expect(lines, 'the hook printed nothing, or more than one line').toHaveLength(1);
+    return JSON.parse(lines[0]!);
+  };
+  /** The spec's reason, spelled here so a drift in either direction is red. */
+  const reasonFor = (nodes: number, fresh: string, k: number): string =>
+    `graphify gate: this tree has a knowledge graph (${nodes} nodes, ${fresh}) and this session `
+    + 'has not queried it yet. Search tools open after one graph query — run: '
+    + '`graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a '
+    + 'relationship, `graphify explain "<concept>"` for one concept). '
+    + `Denial ${k} of 3; after 3 the gate opens anyway.`;
+
+  it('denies the first Grep in a fresh-graph tree, with the whole envelope byte-exact', () => {
+    const tree = gatedTree();
+    const j = deny(run(grepPre(tree)));
+    expect(j).toEqual({ hookSpecificOutput: {
+      hookEventName: 'PreToolUse', permissionDecision: 'deny',
+      permissionDecisionReason: reasonFor(NODES, 'fresh', 1) } });
+    // …and the three things the reason has to CARRY, named one by one, so a
+    // rewording that keeps the shape and loses the content is still red.
+    const reason = String(j.hookSpecificOutput.permissionDecisionReason);
+    expect(reason, 'the reason does not say how big the graph is').toContain('4242 nodes');
+    expect(reason, 'the reason does not say how fresh the graph is').toContain('fresh');
+    expect(reason, 'the reason does not say the gate is bounded').toContain('Denial 1 of 3');
+    // The denial is COUNTED, in the state file the hook was already writing.
+    expect(readState().graphGateDenials).toBe(1);
+    expect(readState().state, 'the deny path skipped the state write').toBe('working');
+  });
+
+  it('is silent once the session has run one graphify query — the gate opens on the READ', () => {
+    const tree = gatedTree();
+    run(query(tree));
+    expect(readState().graphQueries).toBe(1);
+    expect(run(grepPre(tree)), 'a session that queried the graph was gated anyway').toBe('');
+    expect(readState().graphGateDenials).toBe(0);
+  });
+
+  it('is silent in a tree with no graph at all', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    expect(run(grepPre(tree))).toBe('');
+  });
+
+  it('gates at 10 commits behind HEAD and is silent at 11', () => {
+    const ten = gatedTree(11);                 // graph built at c0, HEAD at c10
+    const j = deny(run(grepPre(ten)));
+    expect(String(j.hookSpecificOutput.permissionDecisionReason))
+      .toBe(reasonFor(NODES, '10 commits behind HEAD', 1));
+    fs.rmSync(ten, { recursive: true, force: true });
+    const eleven = gatedTree(12);
+    expect(run(grepPre(eleven)), 'a graph 11 commits stale gated a search anyway').toBe('');
+  });
+
+  it('is silent while the operator kill-switch file exists', () => {
+    const tree = gatedTree();
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-gate-off'), '');
+    expect(run(grepPre(tree))).toBe('');
+    fs.rmSync(path.join(home, '.ccrc', 'graph-gate-off'));
+    expect(deny(run(grepPre(tree))).hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
+  // A search at the HEAD of the line is a codebase question. A search at the
+  // tail of a pipeline is filtering something this session already produced,
+  // and gating it would be the gate answering a question nobody asked.
+  it('denies a Bash line that HEADS with a search, and only that', () => {
+    const tree = gatedTree();
+    for (const cmd of ['grep -rn x src', 'rg x', 'FOO=1 rg x', 'cd a && find . -name y',
+      'cd a; rg x', 'git grep x', 'egrep x f', 'fgrep x f', 'ugrep x f', 'ag x', 'ack x',
+      'fd -e ts']) {
+      const j = deny(run(bashPre(cmd, tree)));
+      expect(j.hookSpecificOutput.permissionDecision, `${cmd} was not gated`).toBe('deny');
+      // Undo the denial this probe just counted, so twelve probes do not walk
+      // into the bound the next assertions depend on.
+      fs.rmSync(stateFile());
+    }
+    for (const cmd of ['vitest run | grep Tests', 'graphify query "x"', 'ls', 'echo find',
+      'git status', 'cat f | ag x', 'grepper x', 'findutils --help', 'echo hi && grep x']) {
+      expect(run(bashPre(cmd, tree)), `${cmd} was gated`).toBe('');
+    }
+  });
+
+  it('gates Glob, and never Read or Edit — a named file is not a question', () => {
+    const tree = gatedTree();
+    expect(deny(run(pre('Glob', { pattern: '**/*.ts' }, tree)))
+      .hookSpecificOutput.permissionDecision).toBe('deny');
+    fs.rmSync(stateFile());
+    expect(run(pre('Read', { file_path: `${tree}/c0.txt` }, tree))).toBe('');
+    expect(run(pre('Edit', { file_path: `${tree}/c0.txt` }, tree))).toBe('');
+  });
+
+  // Ground 2 of the decline, answered by a bound rather than by a promise: a
+  // session that cannot run Bash at all gets through on its fourth search.
+  it('opens after 3 denials, and the count stops there', () => {
+    const tree = gatedTree();
+    for (const k of [1, 2, 3]) {
+      const j = deny(run(grepPre(tree)));
+      expect(String(j.hookSpecificOutput.permissionDecisionReason)).toContain(`Denial ${k} of 3`);
+      expect(readState().graphGateDenials).toBe(k);
+    }
+    expect(run(grepPre(tree)), 'the gate denied a fourth search — the bound is not bounding').toBe('');
+    expect(readState().graphGateDenials, 'the bound was passed and the counter kept climbing').toBe(3);
+  });
+
+  it('carries the denial count across other events, and a non-gated call leaves it alone', () => {
+    const tree = gatedTree();
+    run(grepPre(tree));
+    expect(readState().graphGateDenials).toBe(1);
+    run({ hook_event_name: 'UserPromptSubmit', cwd: tree });
+    expect(readState().graphGateDenials).toBe(1);
+    run(bashPre('ls', tree));
+    expect(readState().graphGateDenials).toBe(1);
+    run({ hook_event_name: 'Stop', cwd: tree });
+    expect(readState().graphGateDenials).toBe(1);
+  });
+
+  it('resets both counters on a SessionStart that is not a resume, and keeps them on one', () => {
+    const tree = gatedTree();
+    run(grepPre(tree)); run(grepPre(tree));
+    run(query(tree)); run(query(tree));
+    expect(readState()).toMatchObject({ graphQueries: 2, graphGateDenials: 2 });
+    run({ hook_event_name: 'SessionStart', source: 'resume', cwd: tree });
+    expect(readState(), 'a resume is the SAME session — it re-armed the gate')
+      .toMatchObject({ graphQueries: 2, graphGateDenials: 2 });
+    run({ hook_event_name: 'SessionStart', source: 'clear', cwd: tree });
+    expect(readState(), '/clear did not re-arm the gate')
+      .toMatchObject({ graphQueries: 0, graphGateDenials: 0 });
+    run(grepPre(tree)); run(grepPre(tree));
+    run({ hook_event_name: 'SessionStart', source: 'startup', cwd: tree });
+    expect(readState()).toMatchObject({ graphQueries: 0, graphGateDenials: 0 });
+  });
+
+  // FAIL-OPEN, ground 2 of the decline. A hook that can wedge a turn is worse
+  // than no hook, so every read that will not answer prints NOTHING — and the
+  // state write, which is this file's whole job, happens anyway.
+  it('is silent when the hookstate exists and will not parse — an UNKNOWN count is not a zero', () => {
+    const tree = gatedTree();
+    fs.writeFileSync(stateFile(), '{nope');
+    expect(run(grepPre(tree)), 'the gate denied on a count it could not read').toBe('');
+    expect(readState().state, 'the corrupt file cost the state write too').toBe('working');
+  });
+
+  it('is silent when cwd is not a directory, and when the graph carries no stamp', () => {
+    const notADir = path.join(home, 'afile');
+    fs.writeFileSync(notADir, 'x\n');
+    expect(run(grepPre(notADir))).toBe('');
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    fs.mkdirSync(path.join(tree, 'graphify-out'), { recursive: true });
+    fs.writeFileSync(path.join(tree, 'graphify-out', 'graph.json'), '{"hyperedges": []}\n');
+    expect(run(grepPre(tree)), 'a graph nobody could date gated a search').toBe('');
+    expect(readState().state).toBe('working');
+  });
+
+  it('is silent when the payload names no tree at all', () => {
+    gatedTree();
+    expect(run({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x' } }))
+      .toBe('');
   });
 });

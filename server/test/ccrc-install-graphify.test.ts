@@ -782,7 +782,10 @@ describe("R5's decline defers to a number nobody was told to take (D-1365)", () 
 
   it('both R5 texts explain the sampling by the source the hook actually exempts (harvested)', () => {
     const m = hook.match(
-      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0; fi/);
+      // D-1613 put the gate's denial counter on this same line (`gq=0; gd=0;`),
+      // so what is pinned is the reset and the source it exempts, not how many
+      // counters ride it.
+      /if \[\[ "\$event" == SessionStart && "\$src" != ([a-z]+) \]\]; then gq=0;[^\n]*fi/);
     expect(m, "the hook's graphQueries reset moved or was rewritten — re-derive this guard")
       .not.toBeNull();
     for (const c of R5) {
@@ -824,7 +827,12 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
    *  exports it, and a helper module extracted for three call sites would put
    *  the vocabulary one indirection away from the file that WRITES it. */
   const FRESHNESS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh="([^"]+)"/g)].map((m) => m[1]!);
+    // D-1613 moved these assignments out of `_hook_graph_card` and into
+    // `_hook_graph_measure`, which the card and the R5 search gate both read,
+    // and the locals became `GM_*` globals with them. The harvest follows the
+    // spelling — it threw the error below on the rename, which is the mechanism
+    // working: a doc pinned to words the hook no longer prints is the failure.
+    const vals = [...hook.matchAll(/\bGM_FRESH="([^"]+)"/g)].map((m) => m[1]!);
     if (vals.length < 4) throw new Error('ccd/session-hook.sh assigns fewer than the four ' +
       'freshness words this pin was written against — the card was rewritten, or this harvest is ' +
       'looking at the wrong file');
@@ -845,7 +853,9 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
    *  reason the states are. Leading punctuation is stripped so the pin is on
    *  the words, not on the em dash that joins them. */
   const QUALIFIERS = ((): string[] => {
-    const vals = [...hook.matchAll(/\bfresh\+="([^"]+)"/g)]
+    // The qualifier's spelling followed the same D-1613 rename as the words
+    // above: one measurement, `_hook_graph_measure`, read by the card and the gate.
+    const vals = [...hook.matchAll(/\bGM_FRESH\+="([^"]+)"/g)]
       .map((m) => m[1]!.replace(/^[^A-Za-z0-9]+/, '').trim());
     if (vals.length < 1) throw new Error('ccd/session-hook.sh appends no freshness qualifier at ' +
       'all — the card was rewritten, and the README bullet that names one has to be re-derived ' +
@@ -894,7 +904,7 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     // the `if/elif` chain decides them, and the claim is only that the `ahead`
     // arm is first. `-gt 0` could become `-ge 1` without changing the rule, and
     // a guard that reddens on that teaches the next editor to delete it.
-    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then fresh=/g)]
+    const arms = [...hook.matchAll(/\[ "\$(ahead|behind)"\s+-\w+\s+\d+ \]; then GM_FRESH=/g)]
       .map((m) => m[1]!);
     expect(arms.length, 'ccd/session-hook.sh no longer decides freshness on an `ahead`/`behind` ' +
       'chain — this pin is looking at the wrong file').toBeGreaterThan(1);
@@ -912,7 +922,7 @@ describe("README R1's freshness vocabulary is HARVESTED from the hook, not remem
     // README promised for that very case until D-1369. Nothing here pins a
     // spelling of either predicate, only which one decides first.
     const content = hook.indexOf('_hook_same_tree "$cwd"');
-    const ancestry = hook.indexOf('rev-list --left-right --count "$built...HEAD"');
+    const ancestry = hook.indexOf('rev-list --left-right --count "$GM_BUILT...HEAD"');
     expect(content, "ccd/session-hook.sh's card asks no content predicate at all — this pin is " +
       'looking at the wrong file').toBeGreaterThanOrEqual(0);
     expect(ancestry, 'ccd/session-hook.sh no longer asks the two-sided ancestry count — this pin ' +
