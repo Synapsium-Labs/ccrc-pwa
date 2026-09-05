@@ -184,6 +184,77 @@ record that reading in `docs/superpowers/plans/2026-09-02-graphify-read-side-ccr
 instead (stamping a worker's `graphQueries` into its run row at wave close, so the week's figure is
 re-derivable rather than sampled) is the alternative, and is not in this round's scope.
 
+### R5 — built, by operator ruling 2026-09-05: the `PreToolUse` gate
+
+The decline above stands as history. The revisit it asked for was taken on 2026-09-05 at 11:08 UTC,
+two days after the read side deployed, and recorded as D-1613: **4 queries fleet-wide across 3
+corpora; of 18 live sessions, 10 carried `graphQueries` 0, 2 carried 1, 1 carried 2, 5 carried
+`null`** (no `SessionStart` since the deploy). The card and clause 12 moved nothing the counter could
+see. The operator's ruling on that reading: *"WE WANT TO ENFORCE."* R5 is therefore built, and each
+of the three grounds gets its answer in the mechanism rather than in prose.
+
+**Where it lives.** The existing `PreToolUse` arm of `ccd/session-hook.sh`. That event is already
+registered with matcher `*` in every wrapper HOME by `_inst_hooks`, and the script is re-executed per
+event, so an agent deploy makes the gate live in every session with no restart and no
+`settings.json` change.
+
+**Gated calls.** `Grep`; `Glob`; and `Bash` whose command **heads** with a search — after optional
+leading environment assignments and at most one `cd <dir> &&` / `cd <dir>;` prefix, the first word is
+one of `rg grep egrep fgrep ugrep ag ack find fd`, or the pair `git grep`. A search that is not at the
+head of the pipeline (`vitest run | grep Tests`) is not a codebase question and is not gated.
+`graphify …` itself is never gated. `Read` is not gated: a named file is not a question.
+
+**Arm condition — ALL true, or the hook prints nothing and the call proceeds.**
+1. `$HOME/.ccrc/graph-gate-off` is absent (the operator's kill-switch; ccrc-owned directory, nothing
+   in the tree writes it).
+2. The tree named by the payload's `cwd` (fallback `$REG/<id>.workdir`, as the card) has
+   `graphify-out/graph.json` with a stamp the card's own tail read accepts.
+3. Freshness, by the card's own predicate, reads `fresh`, `fresh — same content as HEAD`, or at most
+   `GRAPH_GATE_MAX_BEHIND` (10) commits behind HEAD. `not an ancestor`, `unmeasured` and further behind
+   do not gate: the card already tells the session the graph is stale.
+4. The session's `graphQueries` is 0.
+5. The session's `graphGateDenials` is below `GRAPH_GATE_MAX_DENIALS` (3).
+
+**Effect.** stdout, exit 0:
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
+The reason is the card's vocabulary plus the act: *graphify gate: this tree has a knowledge graph
+(<N> nodes, <freshness>) and this session has not queried it yet. Search tools open after one graph
+query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a
+relationship, `graphify explain "<concept>"` for one concept). Denial <k> of 3; after 3 the gate
+opens anyway.* The hookstate written on that event carries `graphGateDenials: k`.
+
+**Opening.** Any `graphify query|path|explain` attempt — the existing `GRAPH_QUERY_RE`, counted on
+the command and never on its exit code — lifts the gate for the session. `graphGateDenials` resets
+with `graphQueries`, on a `SessionStart` that is not a `resume`, so a dispatched worker meets the gate
+once per wave (dispatch `/clear`s it from wave 2 on), and `/clear` by hand re-arms it.
+
+**The three grounds, answered.**
+1. *Subagents.* The hook fires for a subagent's tool calls too (the harness documents it) and the
+   subagent shares the session's hookstate, so its first search is denied with a reason that carries
+   everything the card carried, and one query by anyone opens the gate for everyone in the session.
+2. *A hook that can wedge a turn.* Fail-open everywhere: every read failure, an unreadable hookstate,
+   a missing `jq`, an unresolvable tree, an unparseable stamp — no stdout. And the bound: after 3
+   denials without a query the gate opens anyway, so a session that cannot run `Bash` at all gets
+   through on its fourth search call, and the board shows `gated 3` for it.
+3. *Gate after the number.* The number is D-1613. It keeps being taken: denials are counted beside
+   queries, so the gate's own effect is the next reading.
+
+**Surfaces.** The `SessionStart` card ends with *Search tools (Grep, Glob, shell grep/rg/find) are
+gated until this session's first graph query.* when conditions 1–3 hold for the session's tree, and
+with *the search gate is off (operator file)* when the kill-switch exists. `graphGateDenials: number |
+null` sits beside `graphQueries` in the hookstate (`null` ≠ 0, one reader, same discipline);
+`FleetSession.graphGateDenials` is additive with one tolerant reader `graphGateCount`; the `graph N`
+chip reads `graph N · gated k` when k > 0. The doctor's `graphify` line adds `gate on` or `gate off
+(operator file)`. README documents the gate, the kill-switch and the bound, and re-derives its R5
+paragraph from decline to ruling.
+
+**Mutation targets.** Each with a test that goes red when the guard is deleted: the deny JSON,
+byte-exact; opens after one query; silent without a graph; silent at 11 behind, gated at 10; silent
+with the kill-switch file; `Bash` head-search denied and pipeline-tail search allowed; the bound at 3;
+counters reset on startup and `/clear`, kept on `resume`; silent when the hookstate is unreadable;
+the card sentence; `hookstate.ts` revives `null` and `0` apart; `FleetSession` carries the field;
+the chip; the doctor line.
+
 ## 3. Rings and invariants
 
 - The hook is shell at the harness seam: it measures and reports, it does not decide. No network, no
@@ -223,6 +294,7 @@ zero on every project but the one whose project file already carried it; retired
 ## 6. Operator decisions
 
 1. **R5** is declined by this design. Say so if you want the speed bump regardless.
+   **Reversed 2026-09-05 (D-1613):** the operator said so, on the R4 reading. R5 is built — §2 "R5 — built".
 2. **R0** removes the block from the three physical files ccrc wrote, on the next `ccrc install`. If you
    would rather remove them by hand, R0 ships report-only.
 3. **PR #44** is merged on green — it hardens `main` against the data-loss classes for the interim and its

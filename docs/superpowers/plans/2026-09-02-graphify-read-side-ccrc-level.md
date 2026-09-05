@@ -4,7 +4,7 @@
 
 **Goal:** Move graphify's read side out of the account-wide `CLAUDE.md` block ccrc does not own and into the five artifacts ccrc installs outright — the session hook, the worker skill, the pinned venv on `PATH`, the hookstate file — and make its effect measurable instead of asserted.
 
-**Architecture:** Five mechanisms, each landing in an artifact ccrc already owns and already tests. R4 puts a `graphQueries` counter in the hookstate the session hook already writes, carries it onto `FleetSession` additively and renders it as a `graph N` chip. R1 makes the hook print one `SessionStart` context card measured for the session's own tree. R2 adds clause 12 to the worker skill. R0 retires `_inst_graph_always_on` and replaces it with `_inst_graph_always_on_off`, a remover built from PR #44's own marker census. R3 converges `~/.local/bin/graphify` onto the pinned venv and gives the PATH question its own doctor check. R5 (the `PreToolUse` speed bump) is declined by the spec and has **no task here**.
+**Architecture:** Five mechanisms, each landing in an artifact ccrc already owns and already tests. R4 puts a `graphQueries` counter in the hookstate the session hook already writes, carries it onto `FleetSession` additively and renders it as a `graph N` chip. R1 makes the hook print one `SessionStart` context card measured for the session's own tree. R2 adds clause 12 to the worker skill. R0 retires `_inst_graph_always_on` and replaces it with `_inst_graph_always_on_off`, a remover built from PR #44's own marker census. R3 converges `~/.local/bin/graphify` onto the pinned venv and gives the PATH question its own doctor check. R5 (the `PreToolUse` speed bump) was declined by the spec and had no task here; **reversed by operator ruling 2026-09-05 (D-1613) — Task 7 builds it** as §2 "R5 — built" specifies.
 
 **Tech Stack:** bash 4.4+ (`ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`), `jq`, TypeScript 7 strict (`server/`, `shared/`, `pwa/`), vitest, React 19, node `>=22.13.0`.
 
@@ -2312,6 +2312,44 @@ carries **only** `docs/superpowers/plans/` — the ticks above, Step 6's measure
 stale ledger cells re-measured. Committing the two source files again would be an empty diff.
 
 ---
+
+## Task 7: R5 — the `PreToolUse` gate (operator ruling 2026-09-05, D-1613)
+
+**Spec:** `docs/superpowers/specs/2026-09-02-graphify-read-side-ccrc-level-design.md` §2 "R5 — built".
+Every predicate, string and bound below is spelled there; this task lists where each lands.
+
+**Files:**
+- Modify: `ccd/session-hook.sh` — the `PreToolUse` arm gains the gate; `_hook_graph_card` gains the
+  gate sentence; the hookstate write gains `graphGateDenials`; the three-field read becomes four.
+- Modify: `server/src/hookstate.ts` — `graphGateDenials: number | null`, revived like `graphQueries`.
+- Modify: `shared/api.ts` — `FleetSession.graphGateDenials` (additive), `graphGateCount` reader,
+  `reviveFleetSession` literal.
+- Modify: `server/src/fleet.ts` — carry `hs?.graphGateDenials ?? null`.
+- Modify: `pwa/src/fleet/SessionLine.tsx` — `graph N · gated k`.
+- Modify: `ccd/ccrc-doctor-checks` — `_check_graphify` PASS/WARN line adds `gate on|off`.
+- Modify: `README.md` — the R5 paragraph (decline → ruling), the kill-switch, the bound.
+- Tests: `server/test/session-hook.test.ts` (the gate describe), `server/test/hookstate.test.ts`,
+  `server/test/fleet*.test.ts` (the carry), `pwa/src/fleet/SessionLine.test.tsx`,
+  `server/test/ccrc-doctor-graphify.test.ts`, and the two derived doc guards in
+  `server/test/ccrc-install-graphify.test.ts` that today pin the DECLINE — re-derived to pin the
+  ruling and D-1613's reading instead (the decline stays in both docs as history).
+
+**Steps (each red first, each guard with a measured mutation):**
+1. Gate deny JSON on `Grep` in a fresh-graph tree with `graphQueries` 0 — byte-exact stdout.
+2. Silent after one `graphify query` (PostToolUse counted it); silent with no graph; silent at 11
+   commits behind, gated at 10; silent with `$HOME/.ccrc/graph-gate-off`.
+3. `Bash` head-search (`grep -rn x src`, `rg x`, `FOO=1 rg x`, `cd a && find . -name y`,
+   `git grep x`) denied; pipeline-tail (`vitest run | grep Tests`), `graphify query "x"`, `ls` allowed.
+4. Bound: three denials, the fourth call passes, hookstate reads `graphGateDenials: 3`.
+5. Reset: startup and `/clear` set both counters to 0; `resume` keeps them.
+6. Fail-open: unreadable hookstate JSON, `cwd` outside any tree, stamp unparseable → no stdout.
+7. Card sentence present when armed, the off-sentence when the kill-switch exists, absent when stale.
+8. `hookstate.ts`: `null` ≠ 0 for `graphGateDenials`; `fleet.ts` carry pinned; `graphGateCount`
+   tolerant reader; chip renders `gated k` only for k > 0; doctor line.
+9. README + the two doc guards re-derived; `single-definition`, `topology-clean`, `dtbd`,
+   `deviation-refs` green; full server + pwa suites green.
+10. Commit per step group; AGENT-FIRST deploy after merge; then take the reading: denials and queries
+    across the live fleet on a dated day, recorded under D-1613.
 
 ## Deviations found
 
@@ -4678,6 +4716,19 @@ stale ledger cells re-measured. Committing the two source files again would be a
   workdir, so it is never built; a named worktree a session later enters is picked up on the next
   pass. **Mutation:** remove the registry test → a fixture `.claude/worktrees/x` with no session
   gains a row (the test asserts none; a sibling `y` named by a `<id>.workdir` keeps its row).
+
+- **D-1613** (2026-09-05, THE R4 READING, AND THE RULING THAT REVERSES R5'S DECLINE) — §2 R5 declined
+  the `PreToolUse` speed bump until "one week of R4 data", and D-1365 made the revisit an act: read
+  the chips across the live fleet on one dated day and record it here. **Taken 2026-09-05 11:08 UTC,
+  two days after the read side deployed (PR #45, 2026-09-03):** graphify's own query log holds 4
+  queries since the deploy, across 3 corpora (custom-tools 2, rp-llm 1, MekWarLive 1), and the 18 live
+  sessions' hookstates agree — `graphQueries` 0 in 10 sessions, 1 in 2, 2 in 1, `null` in 5 (no
+  `SessionStart` since the deploy). The counter and the log agree, so R4 measures; what it measures is
+  that the card and clause 12 moved nothing. **Operator ruling on that reading:** *"WHY IS IT NOT
+  ENFORCED?! WE WANT TO ENFORCE."* §6 decision 1 is reversed; R5 is built as §2 "R5 — built"
+  specifies (the gate in the existing `PreToolUse` arm, fail-open, bounded at 3 denials, counted beside
+  the queries, kill-switch `$HOME/.ccrc/graph-gate-off`), Task 7 above. The next reading is the
+  gate's own effect: denials beside queries, on a dated day after the deploy.
 
 ### Corrections to the brief's facts, recorded so nobody re-derives them
 
