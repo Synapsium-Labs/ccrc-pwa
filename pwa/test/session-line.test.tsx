@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession } from '../../shared/api';
+import { graphGateCount, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -1016,5 +1016,23 @@ describe('the graph chip', () => {
     const chip = document.querySelector('.sess-graph');
     expect(chip?.getAttribute('title')).toContain('0 graphify read(s) this session');
     expect(chip?.getAttribute('title')).toContain('3 search call(s) denied by the graphify gate');
+  });
+});
+
+describe('graphGateCount — the one reader of graphGateDenials, pinned directly (D-1691)', () => {
+  // The chip renders on `> 0`, so through it `null` and `0` are the same
+  // pixel, and a reader that folded the one into the other passed every chip
+  // test — measured by the review of PR #54. The wire contract is `null` ≠
+  // `0` (nothing measured is not a measured none), and the next consumer
+  // written with `!== null` would inherit whatever fallback this reader
+  // actually has. So the reader is pinned on its own, the way its sibling
+  // `graphReadCount` is pinned through a chip that renders on `!== null`.
+  it('reads absent and null as null, a finite number as itself, and junk as null', () => {
+    expect(graphGateCount({})).toBeNull();
+    expect(graphGateCount({ graphGateDenials: null })).toBeNull();
+    expect(graphGateCount({ graphGateDenials: 0 })).toBe(0);
+    expect(graphGateCount({ graphGateDenials: 3 })).toBe(3);
+    expect(graphGateCount({ graphGateDenials: Number.NaN })).toBeNull();
+    expect(graphGateCount({ graphGateDenials: '2' as unknown as number })).toBeNull();
   });
 });

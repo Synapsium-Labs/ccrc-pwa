@@ -875,7 +875,7 @@ describe('the SessionStart graph card', () => {
       'the card promised a gate the hook does not apply').toBe('deny');
   });
 
-  it('says the gate is off — and does not gate — while the operator file exists', () => {
+  it('says the gate is off while the operator file exists — the arm\'s own silence under it is pinned in the gate describe', () => {
     const tree = path.join(home, 'tree');
     const first = gitTree(tree, 1);
     plantGraph(tree, { built: first });
@@ -1079,6 +1079,33 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     fs.writeFileSync(stateFile(), '{nope');
     expect(run(grepPre(tree)), 'the gate denied on a count it could not read').toBe('');
     expect(readState().state, 'the corrupt file cost the state write too').toBe('working');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'says a denial only once it is COUNTED — an unwritable registry means no deny at all (D-1689)', () => {
+    // The dual of "counted only if it was said". A deny that goes out before
+    // the hookstate lands is a denial the next event cannot see: with the
+    // registry unwritable every search reads "Denial 1 of 3" forever, and the
+    // documented escape — one graphify query — is lost by the same failed
+    // write, so the bound of 3 is a promise the hook cannot keep. Measured on
+    // the branch before this test: four searches, four denials, all "1 of 3".
+    // The reorder this pins is one line — the envelope is built in the arm
+    // and PRINTED only after the rename lands — and the mutation is putting it
+    // back where it was. Root writes through 0500, so root skips this.
+    const tree = gatedTree();
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);
+    try {
+      expect(run(grepPre(tree)), 'the hook denied a search it could not count').toBe('');
+      expect(fs.existsSync(stateFile()), 'nothing could be written, so nothing should exist').toBe(false);
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    // And once the registry writes again the first denial IS the first: the
+    // one that could not be counted was never said, so it is never charged.
+    const j = deny(run(grepPre(tree)));
+    expect(j.hookSpecificOutput.permissionDecisionReason).toBe(reasonFor(NODES, 'fresh', 1));
+    expect(readState().graphGateDenials).toBe(1);
   });
 
   it('is silent when cwd is not a directory, and when the graph carries no stamp', () => {

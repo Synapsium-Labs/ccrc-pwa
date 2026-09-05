@@ -665,10 +665,15 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
       'the README still records the PreToolUse speed bump only as declined — the ruling that ' +
       'built it is not written down, and an unrecorded reversal is re-litigated')
       .toMatch(/PreToolUse[\s\S]{0,240}?(built|ruling)/i);
+    // ANCHORED on the same window, not the whole file: the bare word is
+    // satisfied 470 lines away by an unrelated paragraph ("declined, not
+    // forgotten", the unread bucket), so a whole-file /declined/ stayed green
+    // with the R5 history deleted — measured, D-1691. The sliced guard in the
+    // describe below caught it; this one now catches it on its own too.
     expect(flatReadme,
       'the README no longer says the gate was declined first — without that history the three ' +
       'grounds get re-derived as if nothing had ever answered them')
-      .toMatch(/declined/i);
+      .toMatch(/PreToolUse[\s\S]{0,240}?declined/i);
   });
 
   it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {

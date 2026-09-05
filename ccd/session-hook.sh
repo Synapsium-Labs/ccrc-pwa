@@ -64,7 +64,10 @@ _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
 # a reason carrying backticks, quotes and an em dash is quoted by the tool that
 # will parse it. A jq that cannot build it returns 1 and the caller says nothing
 # AND counts nothing — the fail-open the whole gate is written under.
-_hook_emit_deny() {   # <reason> -> one JSON line on stdout; 1 when it could not be built
+_hook_deny_json() {   # <reason> -> the deny envelope, one line; 1 when it could not be built
+  # Called ONLY inside a $( ) capture: the envelope is printed to the hook's
+  # real stdout at the very end of this file, after the hookstate rename has
+  # landed, never from here (D-1689).
   local j=""
   j=$(jq -cn --arg r "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny",
@@ -530,10 +533,13 @@ if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 # 18 live sessions still at `graphQueries` 0. The card and the worker skill's
 # clause 12 moved nothing a counter could see, so the ask became a deny.
 #
-# THE ONLY PLACE THIS FILE PRINTS ON A NON-SessionStart EVENT, and it prints the
+# THE ONLY THING THIS FILE PRINTS ON A NON-SessionStart EVENT, and it is the
 # one shape PreToolUse defines: a permission decision. Silence is the default on
 # every other path, so every read that will not answer costs the session nothing
-# — a hook that can wedge a turn is worse than no hook.
+# — a hook that can wedge a turn is worse than no hook. The envelope is BUILT
+# here and PRINTED at the end of the file, after the hookstate write lands
+# (D-1689): a deny that has gone out is a denial the next event must be able to
+# see, or the bound of three is a promise this file cannot keep.
 #
 # ORDER IS BUDGET (the same argument the PostToolUse prefilter above makes).
 # The cheap conjuncts run first: the counters are already in hand, the
@@ -541,6 +547,7 @@ if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 # GATED call in an ARMED session pays for the jq that reads the command or the
 # git that dates the graph. A session that has queried once, or that has spent
 # its three denials, never pays anything again.
+deny_json=""
 if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
       && "$gq" -eq 0 && "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] \
    && [ ! -e "$GRAPH_GATE_OFF" ]; then
@@ -551,9 +558,14 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
       # The prefilter is the PostToolUse arm's budget argument, in the other
       # direction: a command that HEADS with one of the search words cannot
       # fail to put that word somewhere in the payload, so a payload without
-      # any of them needs no jq at all and the ordinary Bash call pays nothing.
-      # A false positive here costs one fork the regex then refuses; a false
-      # negative is impossible, which is the only direction that would matter.
+      # any of the six substrings needs no jq at all. A false negative is
+      # impossible, which is the only direction that would matter; a false
+      # positive costs one jq fork the regex then refuses, and the substrings
+      # DO occur inside ordinary words — `npm run package` carries `ack`,
+      # `manage.py migrate` carries `ag` (2 of 14 ordinary commands measured,
+      # D-1691) — so a session that never searches pays that one fork on each
+      # such call for as long as it sits at zero queries. One fork, not a jq
+      # on every Bash call: that is the whole of the budget claim.
       if [[ "$payload" =~ (rg|grep|ag|ack|find|fd) ]]; then
         scmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
           <<<"$payload" 2>/dev/null) || scmd=""
@@ -570,10 +582,14 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
     greason+="$GM_FRESH) and this session has not queried it yet."
     greason+=' Search tools open after one graph query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a relationship, `graphify explain "<concept>"` for one concept).'
     greason+=" Denial $((gd + 1)) of $GRAPH_GATE_MAX_DENIALS; after $GRAPH_GATE_MAX_DENIALS the gate opens anyway."
-    # COUNTED ONLY IF IT WAS SAID: an emitter that could not build its JSON has
-    # denied nothing, and charging the session for it would spend the bound on
-    # denials it never saw.
-    if _hook_emit_deny "$greason"; then gd=$((gd + 1)); fi
+    # COUNTED ONLY IF IT CAN BE SAID, SAID ONLY ONCE IT IS COUNTED (D-1689).
+    # A builder that could not make its JSON has denied nothing, and charging
+    # the session for it would spend the bound on denials it never saw. And the
+    # envelope it did make goes out at the END of this file, after the rename:
+    # measured on the branch before the fix, with the registry unwritable every
+    # search read "Denial 1 of 3" forever, and the one graphify query that
+    # would have opened the gate was lost by the same failed write.
+    if deny_json=$(_hook_deny_json "$greason"); then gd=$((gd + 1)); else deny_json=""; fi
   fi
 fi
 
@@ -616,7 +632,13 @@ if (( ${#out} > 65536 )); then
   (( ${#out} <= 65536 )) || exit 0
 fi
 
+# The braces put the REDIRECTION's own failure under the 2>/dev/null too: with
+# `> "$tmp" 2>/dev/null` bash reports an unopenable "$tmp" on the hook's real
+# stderr before the second redirection is applied (D-1691).
 tmp="$REG/.$id.$$.hookstate.tmp"
-printf '%s\n' "$out" > "$tmp" 2>/dev/null || { rm -f "$tmp"; exit 0; }
-mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
+{ printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
+mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
+# The one deny this file ever prints, and only now: the count it names is on
+# disk, so the next event will see it (D-1689).
+[ -z "$deny_json" ] || printf '%s\n' "$deny_json"
 exit 0
