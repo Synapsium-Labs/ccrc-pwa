@@ -729,7 +729,17 @@ _gs_guard() {
 # absent, or is not the value `_gs_stamp` measured before the engine ran (the
 # file moved under us). Refusal writes NOTHING and the build reads `failed`.
 # The report's absence is not a failure — it is graphify's human echo, not the
-# stamp any reader in ccrc spends.
+# stamp any reader in ccrc spends. Every refusal below is now a census reading
+# a test spends (D-1509's second mutation table): outcome `failed`, a reason
+# that NAMES it, graph.json byte-identical to what the pass found.
+#
+# D-TBD-restamp-report-arm-writes — "Refusal writes NOTHING" is true of every
+# refusal a fixture can reach, all of which are raised for graph.json before
+# any rename; it is NOT true of one nobody has ruled on. graph.json is renamed
+# at the END of its own loop iteration, so a refusal raised for GRAPH_REPORT.md
+# (unreadable file, an interpreter that dies, a failed rename) leaves graph.json
+# already carrying HEAD while the row reads `failed` — the census understates a
+# stamp that moved. Reported, unfixed, no number issued.
 _gs_restamp() {   # <tree> <old-sha> <new-sha> -> 0 rewrote / 1 refused (RESTAMP_WHY)
   local tree="$1" old="$2" new="$3" out="$1/graphify-out" f res rc
   RESTAMP_WHY=""

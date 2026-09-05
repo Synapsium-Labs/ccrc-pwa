@@ -4509,6 +4509,41 @@ stale ledger cells re-measured. Committing the two source files again would be a
   (the test asserts `failed`, stamp untouched). README's census vocabulary gains `restamped`; the
   doctor's WARN set is unchanged (`failed` was already in it).
 
+  **The refusal set was a comment, not a mechanism — pinned 2026-09-05 (review finding, no new
+  number: this completes D-1509's own measurements).** `_gs_restamp`'s "WHAT IT REFUSES" block is
+  what makes splicing bytes into an 8 MB file the engine wrote admissible at all, and nothing
+  measured any of it: the stamp-mismatch guard could be neutralised (`if val != …` →
+  `if False and val != …`) with `graph-sweep` at `Tests  76 passed | 2 skipped (78)`, ZERO red —
+  the mutated sweep splices HEAD into a graph.json whose `built_at_commit` is not the value this
+  build measured, i.e. exactly the racing write the block says it refuses. Four rows now put a
+  census reading behind the refusals a fixture can reach: outcome `failed`, a reason that NAMES the
+  refusal, and a graph.json byte-identical to what the pass found. The mismatch row's fixture is a
+  venv `python` shim that rewrites graph.json's stamp before exec'ing the real interpreter — the
+  window between `_gs_stamp` and the splice is the guard's whole reason to exist, and the shim is
+  the only injection point inside it. Baseline after: `Tests  80 passed | 2 skipped (82)`.
+
+  | mutation | measured red |
+  | --- | --- |
+  | the stamp-mismatch guard neutralised (`if val != (old if is_graph …)` -> `if False and val != …`) | `graph-sweep` — `Tests  1 failed \| 79 passed \| 2 skipped (82)`: *a graph.json that MOVED under the sweep is refused* — `expected 'restamped' to be 'failed'`, and the racing writer's bytes are overwritten with HEAD |
+  | `[[ "$old" =~ ^[0-9a-f]{7,40}$ ]] \|\| …` deleted (the sweep's OWN measurement of the stamp) | `graph-sweep` — `Tests  1 failed \| 79 passed \| 2 skipped (82)`: *a graph.json with NO built_at_commit is refused* — `expected 'restamp refused: no built_at_commit in the last 23 bytes of graph.json' to be '…: no built_at_commit to replace'`. A refusal survives; the DISTINCTION between "the sweep measured nothing" and "the tail holds nothing" does not |
+  | the tail-window refusal deleted (`if m is None: if is_graph: print(…); sys.exit(1)` -> `sys.exit(0)` for both files) | `graph-sweep` — `Tests  1 failed \| 79 passed \| 2 skipped (82)`: *a built_at_commit outside the tail the CARD reads is refused* — `… to be 'restamp refused: no replacement written for graph.json'`, i.e. the vacuous-python arm (`[ -z "$res" ]`) is what stops a silent interpreter reading as success |
+  | the interpreter's exit code ignored (`if [ "$rc" -ne 0 ]` -> `if false`) | `graph-sweep` — `Tests  3 failed \| 77 passed \| 2 skipped (82)`: three of the four rows, each falling through to `replacement for graph.json is not a file` / `no replacement written for graph.json` — a python that dies is refused by the arm AFTER it, but with the wrong reason |
+  | a refused restamp recorded as one (`BUILD_OUTCOME=failed` -> `restamped` in `_gs_build`'s `restamp refused:` arm) | `graph-sweep` — `Tests  4 failed \| 76 passed \| 2 skipped (82)`: all four rows — the arm that turns a refusal into the census reading the doctor's WARN set counts |
+
+  **Two refusals ship unmeasured and are recorded as such rather than claimed.** `no graph.json`:
+  `_gs_stamp` reads that same file, so a valid `old` with the file gone is a race whose window holds
+  no fixture-controlled command (the shim above cannot help — the check is bash, before the
+  interpreter runs). `HEAD unreadable`: reaching it wants a tree whose `rev-parse HEAD` fails, i.e.
+  one with no commit at all, which no discovery fixture builds. Both are guarded downstream by the
+  `restamp refused: …` arm the last row measures.
+
+  **One shape the pinning surfaced and did NOT fix**, marked `D-TBD-restamp-report-arm-writes` in
+  the comment block itself: "Refusal writes NOTHING" holds for every refusal a fixture can reach —
+  all raised for graph.json, before its rename — but graph.json is renamed at the END of its own
+  loop iteration, so a refusal raised for `GRAPH_REPORT.md` (unreadable file, interpreter death,
+  failed rename) leaves graph.json already carrying HEAD while the row reads `failed`. No number
+  issued; reported to the operator.
+
 - **D-1510** (2026-09-05, same measurement — DISCOVERY DOES NOT REACH CLAUDE CODE'S OWN WORKTREES) —
   `ccd ls` 2026-09-05 shows `claude-corp-intake-platform` running in
   `$PROJECTS_ROOT/intake-platform/.claude/worktrees/board-phase-1` — the directory Claude Code's

@@ -1521,6 +1521,116 @@ exec python3 "$@"
     expect(stampOf(repo), 'the sweep restamped a graph graphify never vouched for').toBe(old);
   });
 
+  // D-1509 — THE REFUSAL SET IS A MECHANISM, NOT A COMMENT (review finding).
+  // The restamp splices bytes into an 8 MB file the engine wrote and the card
+  // reads live; what makes that admissible is what it REFUSES, and the whole
+  // set shipped pinned by nothing — deleting the mismatch guard left the suite
+  // 76/76 green. Each row below deletes one refusal and reads the census. They
+  // share a shape: outcome `failed`, a reason that NAMES the refusal, and a
+  // graph.json byte-for-byte what it was before the pass.
+
+  /** `plantRestampPython`'s interpreter with a WRITER racing it: before python
+   *  opens graph.json it replaces the very value the sweep measured ($2),
+   *  standing in for graphify — or a second sweep — landing a write in the
+   *  window between `_gs_stamp` and the splice. That window is the only thing
+   *  the mismatch guard exists for, and the stub is the fixture's one
+   *  injection point inside it. */
+  const FOREIGN = 'f'.repeat(40);
+  function plantRacingPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+# argv is \`- <path> <old> <new>\`: the script itself arrives on stdin.
+case "$2" in *graph.json) sed -i "s/$3/${FOREIGN}/" "$2" ;; esac
+exec python3 "$@"
+`, { mode: 0o755 });
+  }
+
+  /** A venv interpreter that runs and fails — the half-installed venv, or a
+   *  python whose traceback goes to the log. It answers the corpus guard
+   *  vacuously (no arguments) so the pass still reaches the build. */
+  function plantBrokenPython(): void {
+    const bin = j('.ccrc', 'graphify-venv', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'python'), `#!/bin/bash
+[ "$#" -gt 1 ] || exit 0
+exit 3
+`, { mode: 0o755 });
+  }
+
+  const graphOf = (repo: string) => path.join(repo, 'graphify-out', 'graph.json');
+
+  it('a graph.json that MOVED under the sweep is refused — the stamp is not this build\'s', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRacingPython();
+    expect(runSweep().status).toBe(0);
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo), 'a graph written by somebody else was stamped as this build\'s')
+      .toBe('failed');
+    expect(reasonOf(repo))
+      .toBe(`restamp refused: graph.json holds ${FOREIGN}, not the ${old} this build measured`);
+    // and the racing writer's file survives untouched: the sweep spliced
+    // nothing over a write it never measured.
+    expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before.replace(old, FOREIGN));
+    expect(stampOf(repo)).toBe(FOREIGN);
+  });
+
+  it('a graph.json with NO built_at_commit is refused — a stamp is replaced, never invented', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    fs.writeFileSync(graphOf(repo), JSON.stringify({ nodes: [], links: [] }));   // stamp-less
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    runSweep();
+    expect(outcomeOf(repo), 'a graph with no stamp at all was recorded as restamped').toBe('failed');
+    // the sweep's OWN measurement is what refuses, before the splice reads a
+    // byte — a graph with no stamp and one whose stamp is out of the tail's
+    // reach are different conditions and read differently.
+    expect(reasonOf(repo)).toBe('restamp refused: no built_at_commit to replace');
+    expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before);
+  });
+
+  it('a built_at_commit outside the tail the CARD reads is refused, not appended to', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantRestampPython();
+    runSweep();
+    const old = git(repo, 'rev-parse', 'HEAD');
+    // `_gs_stamp` reads the whole document (jq) while the splice reads the last
+    // 4096 bytes — exactly the window the session card reads it through
+    // (`tail -c 4096`, ccd/session-hook.sh). A graph whose stamp is not its
+    // last key puts the two out of each other's reach; the splice refuses
+    // rather than writing a stamp the card could never see.
+    fs.writeFileSync(graphOf(repo), JSON.stringify(
+      { built_at_commit: old, nodes: [], links: [], pad: 'p'.repeat(8192) }));
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo)).toBe('failed');
+    expect(reasonOf(repo))
+      .toBe('restamp refused: no built_at_commit in the last 4096 bytes of graph.json');
+    expect(fs.readFileSync(graphOf(repo), 'utf8'),
+      'the splice wrote into a file it could not find the stamp in').toBe(before);
+  });
+
+  it('a python that cannot run at all is a refusal, never a silent success', () => {
+    const repo = makeRepo('alpha'); plantEngine(SHORTCIRCUIT); plantBrokenPython();
+    runSweep();
+    expect(outcomeOf(repo)).toBe('never-built');
+    const old = git(repo, 'rev-parse', 'HEAD');
+    const before = fs.readFileSync(graphOf(repo), 'utf8');
+    bump(repo);
+    runSweep();
+    expect(outcomeOf(repo), 'an interpreter that never spoke was read as a restamp').toBe('failed');
+    // it said nothing, so the sweep names the interpreter and the file rather
+    // than reporting an empty reason.
+    expect(reasonOf(repo)).toBe('restamp refused: python refused (graph.json)');
+    expect(fs.readFileSync(graphOf(repo), 'utf8')).toBe(before);
+    expect(stampOf(repo)).toBe(old);
+  });
+
   it('the log names the tree and the UTC instant BEFORE the engine speaks (D-1512)', () => {
     const repo = makeRepo('alpha'); plantEngine('echo "ENGINE-SPEAKS-HERE"'); plantRestampPython();
     expect(runSweep().status).toBe(0);
