@@ -30,9 +30,25 @@ const ccdSrc = readFileSync(CCD, 'utf8');
  *  repeated three-line block, because this file makes the same claim about
  *  three literals in two files. */
 const exactlyOne = (src: string, re: RegExp, what: string): string => {
-  const all = [...src.matchAll(re)];
-  expect(all.length, `${what}: expected exactly one occurrence, found ${all.length}`).toBe(1);
-  return all[0]![1]!;
+  // The COUNT is taken over ANY assignment to the name `re` pins — any
+  // indentation, any quoting, or none — never over `re` itself. A scan that
+  // counted only the canonical shape would count ZERO for a second
+  // assignment written indented or double-quoted, and a guard that answers
+  // "exactly one" by finding zero of the wrong thing and zero of the right
+  // thing is not measuring anything. The bare name is read off `re`'s own
+  // source (`^NAME=…`) so the broad scan and the canonical scan can never
+  // name two different identifiers by accident.
+  const name = /^\^([A-Za-z_][A-Za-z0-9_]*)=/.exec(re.source)?.[1];
+  expect(name, `${what}: could not read a bare NAME= off the canonical regex`).toBeTruthy();
+  const broad = [...src.matchAll(new RegExp(`^[ \\t]*${name}=.*$`, 'gm'))];
+  expect(broad.length, `${what}: expected exactly one occurrence, found ${broad.length}`).toBe(1);
+  // Only once exactly one assignment exists, in ANY spelling, is it worth
+  // asking whether THAT ONE is the canonical, unindented, single-quoted
+  // form — a first assignment in the wrong spelling must red here, not
+  // silently pass because there happened to be only one of it.
+  const canon = [...src.matchAll(re)];
+  expect(canon.length, `${what}: the one assignment found is not in the canonical spelling`).toBe(1);
+  return canon[0]![1]!;
 };
 
 describe('the pool-name grammar is one grammar in two languages', () => {

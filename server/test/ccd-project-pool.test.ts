@@ -59,10 +59,13 @@ describe('_project_pool_state — four words, always rc 0', () => {
     expect(state('demo')).toBe('named pool-a');
   });
 
-  it('answers `malformed` for two tokens, for uppercase, and for empty', () => {
+  it('answers `malformed` for two tokens, for uppercase, for empty, and for LEADING whitespace', () => {
     // Each is a DIFFERENT bad shape and they share one word because they share
-    // one remedy: rewrite the file as a single lowercase token.
-    for (const bytes of ['pool a', 'Pool-a', '', 'pool_a', '-pool-a']) {
+    // one remedy: rewrite the file as a single lowercase token. The trailing
+    // strip (`v=${v%"${v##*[![:space:]]}"}`) removes only a TRAILING run, so
+    // ' pool-a' and '\tpool-a' must still fail the anchored `^[a-z]…` grammar
+    // — this row measures the comment's claim instead of leaving it asserted.
+    for (const bytes of ['pool a', 'Pool-a', '', 'pool_a', '-pool-a', ' pool-a', '\tpool-a']) {
       plantTag('demo', bytes);
       expect(state('demo'), JSON.stringify(bytes)).toBe('malformed');
     }
@@ -84,6 +87,42 @@ describe('_project_pool_state — four words, always rc 0', () => {
         expect(state('demo')).toBe('unreadable');
       } finally {
         fs.chmodSync(p, 0o600);
+      }
+    });
+
+  it('answers `unreadable` for a broken symlink at the tag path, never `untagged`', () => {
+    // THE DEFECT THIS IS ABOUT: a bare `[[ -e "$f" ]]` reads false for a
+    // broken symlink exactly as it does for genuine absence. Folding the two
+    // together would silently lift the constraint on a project whose tag was
+    // never removed — only its target was — which is not "nobody tagged
+    // this" at all.
+    fs.mkdirSync(POOLS(), { recursive: true });
+    fs.symlinkSync(path.join(POOLS(), 'nowhere'), path.join(POOLS(), 'demo'));
+    expect(state('demo')).toBe('unreadable');
+  });
+
+  it('answers `unreadable` for a symlink LOOP at the tag path, never `untagged`', () => {
+    // A link whose own target is itself resolves nowhere (ELOOP), and `-e`
+    // reads that exactly like absence too — same defect as the broken-symlink
+    // case above, different cause.
+    fs.mkdirSync(POOLS(), { recursive: true });
+    const p = path.join(POOLS(), 'demo');
+    fs.symlinkSync(p, p);
+    expect(state('demo')).toBe('unreadable');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'answers `unreadable` for an unsearchable $POOLS_DIR, not `untagged` for every project on the box', () => {
+      // THE DEFECT THIS IS ABOUT: once `$POOLS_DIR` itself cannot be
+      // searched, nothing can be proven about any `$f` under it — reading
+      // that as `untagged` would silently unconstrain EVERY project on the
+      // box from one bad chmod, not just the one this test names.
+      plantTag('demo', 'pool-a');
+      fs.chmodSync(POOLS(), 0o000);
+      try {
+        expect(state('demo')).toBe('unreadable');
+      } finally {
+        fs.chmodSync(POOLS(), 0o700);
       }
     });
 

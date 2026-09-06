@@ -2449,3 +2449,28 @@ is never a ledger number.
   predicate, placement, grant, caps, doctor, the `rehome` vocabulary) and 2b (tick, strand, crossing,
   manual verbs) — six PRs, not five, each merged before the next is cut; 2b's branch is cut from 2a's
   merged tip because every 2b test calls 2a's reader and predicate.
+
+### Found during execution
+
+Allocated in their own act at the moment they were found, never taken from a gap in the
+D-1663–D-1688 block. A `D-TBD-<slug>` here is a number REQUESTED and not yet issued; it is
+substituted before wave-done.
+
+- **D-TBD-reader-e-folds-unreadable-into-untagged** (Task 1) — `_project_pool_state`'s
+  `[[ -e "$f" ]] || { echo untagged; return 0; }` — this plan's own Step 8 body, transcribed
+  verbatim from spec §5.4.3 — treats "not `-e`" as ABSENCE, and `-e` is false for three
+  conditions that are not absence: a symlink LOOP at the tag path, a BROKEN symlink at the tag
+  path, and an unsearchable `$POOLS_DIR` (mode 000), the last of which answers `untagged` for
+  EVERY project on the box at once. Each silently LIFTS the placement constraint, which is the
+  defect the four-word reader exists to refuse, and the shipped comment names "a symlink loop"
+  as an `unreadable` case the code does not deliver.
+  The spec defeats itself here rather than being deviated from: §10's failure table answers
+  "Tag silently lifted because a read failed" with "Four-word reader; `unreadable != untagged`
+  pinned on both sides", and §5.4.3's comment on the `cat` line claims ELOOP is caught there
+  when `-e` has already returned false and `cat` is never reached. Fixed in wave 2a, in the
+  reader itself, with a test per condition: absence is now PROVEN, not assumed.
+  WHY NOT DEFERRED TO A LATER WAVE: wave 3's `readProjectPools` (spec §5.4.4) mirrors this
+  reader's four states in TypeScript, so a fold left standing here is a fold copied into the
+  server. **Obligation on wave 3:** its `readFileMeasured` arm has the same shape and must be
+  checked for the same collapse — `absent` from a `readdir` listing plus a per-file measured
+  read is a different mechanism from `-e`, but the polarity question is identical.
