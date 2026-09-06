@@ -274,6 +274,23 @@ describe('_project_pool_state — four words, always rc 0', () => {
     expect(state('demo')).toBe('malformed');
   });
 
+  it.skipIf(!fs.existsSync('/proc/self/mem'))(
+    'PINS A KNOWN RESIDUAL: a symlink to /proc/self/mem (EIO on read) answers `malformed`, not a desired property', () => {
+      // This test PINS the CURRENT behaviour so a future change to it is
+      // visible rather than accidental — it does NOT assert the fold is
+      // correct. `read -d ''` cannot tell a genuine read failure (EIO here)
+      // from ordinary EOF-with-no-NUL, so this lands in the same branch as
+      // any other unremarkable content and answers `malformed`. Parked, not
+      // fixed, by coordinator ruling 2026-09-06 — see `_project_pool_state`'s
+      // own "DISCLOSED, NOT CLOSED" comment for why. Do NOT "fix" this test
+      // into expecting `unreadable`; that would require a fork this function
+      // deliberately does not have, to improve a diagnostic message on a
+      // condition `_pool_ok` (Task 2) does not even branch on differently.
+      fs.mkdirSync(POOLS(), { recursive: true });
+      fs.symlinkSync('/proc/self/mem', path.join(POOLS(), 'demo'));
+      expect(state('demo')).toBe('malformed');
+    });
+
   it('answers `untagged` for an EMPTY project argument, never resolving to the directory', () => {
     // A pre-2026 registry row with no `.project` field hands this function the
     // empty string. Without the `-n "$1"` guard the path is `$POOLS_DIR/`, the
