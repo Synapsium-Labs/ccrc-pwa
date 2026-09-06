@@ -1415,7 +1415,17 @@ describe('shared/poolrule.ts is the pure L0 module its ring requires', () => {
   /** Comments blanked, positions preserved — `coord-caps-policy.test.ts`'s
    *  helper, kept for its reason: this module's own header NAMES `node:` and
    *  `server/src` while promising not to import them, and would red every
-   *  assertion below on its own prose. */
+   *  assertion below on its own prose.
+   *
+   *  IF THIS FILE REDS WITH `no imports found — the scan is over nothing`, READ
+   *  THIS BEFORE DOUBTING THE MODULE. Block comments are blanked FIRST, with a
+   *  lazy `/\*[\s\S]*?\*\/`. So a `/*` written inside a LINE comment — the easiest
+   *  way being to type a path glob like `shared/` followed by a star and `.ts` —
+   *  opens a match that runs to the next real `*\/`, swallowing every line
+   *  between, the `import type` line included. The scan then measures nothing and
+   *  says so. That is not a false alarm: it is this assertion doing the one job
+   *  it exists for, and the fix is in `shared/poolrule.ts`'s prose, not here.
+   *  (D-TBD-poolrule-header-blanks-import, found before this file first landed.) */
   const code = (): string => SRC
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
