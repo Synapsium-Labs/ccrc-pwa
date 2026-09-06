@@ -40,7 +40,13 @@ const exactlyOne = (src: string, re: RegExp, what: string): string => {
   // name two different identifiers by accident.
   const name = /^\^([A-Za-z_][A-Za-z0-9_]*)=/.exec(re.source)?.[1];
   expect(name, `${what}: could not read a bare NAME= off the canonical regex`).toBeTruthy();
-  const broad = [...src.matchAll(new RegExp(`^[ \\t]*${name}=.*$`, 'gm'))];
+  // `export`/`declare`/`local`/`readonly` in front of the name is still an
+  // ASSIGNMENT to it, not a different name — a duplicate spelled
+  // `export POOL_NAME_RE=…` must count too, or this scan is exactness in
+  // name only.
+  const broad = [...src.matchAll(
+    new RegExp(`^[ \\t]*(?:(?:export|declare|local|readonly)[ \\t]+)?${name}=.*$`, 'gm'),
+  )];
   expect(broad.length, `${what}: expected exactly one occurrence, found ${broad.length}`).toBe(1);
   // Only once exactly one assignment exists, in ANY spelling, is it worth
   // asking whether THAT ONE is the canonical, unindented, single-quoted

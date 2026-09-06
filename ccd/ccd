@@ -1068,19 +1068,30 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # must never resolve to the DIRECTORY: `$POOLS_DIR/` would `cat` a directory
   # and read `unreadable` for every such session.
   [[ -n "${1-}" ]] || { echo untagged; return 0; }
-  # ABSENCE HAS TO BE PROVEN, NOT ASSUMED FROM A BARE `-e` BEING FALSE. `-e` is
-  # false for the genuine case (nothing tagged) AND for three others that are
-  # not absence at all: a broken symlink, a symlink LOOP, and a `$POOLS_DIR`
-  # that cannot even be searched — the last of which would answer `untagged`
-  # for EVERY project on the box from one bad chmod, not just this one. So
-  # existence is decided top-down instead of by one test: no `$POOLS_DIR` at
-  # all is the genuine "nobody has tagged anything yet" case (`untagged`); a
-  # `$POOLS_DIR` that exists but is not searchable can prove nothing about
-  # `$f` and is `unreadable`, never `untagged`; only once the directory is
-  # known searchable does `-e "$f"` mean what it says, and even then a path
-  # `-e` refuses to resolve while `-L` says a link sits there is `unreadable`
-  # — broken or looping, `-e` cannot tell which and neither needs to.
-  [[ -d "$POOLS_DIR" ]] || { echo untagged; return 0; }
+  # ABSENCE HAS TO BE PROVEN AT EVERY LEVEL IT IS CLAIMED, NOT ASSUMED FROM
+  # ONE TEST BEING FALSE — first for `$REG` (the level `$POOLS_DIR` sits in),
+  # then for `$POOLS_DIR` (the level `$f` sits in). A bare `-d "$POOLS_DIR"`
+  # is false for the genuine "nobody has tagged anything yet" case AND for at
+  # least three others that are not absence at all: a regular FILE sitting at
+  # `$POOLS_DIR`, a broken symlink or a symlink LOOP there, and `$REG` itself
+  # unsearchable (so `-d` cannot even stat the path) — the identical fold
+  # this function already refused one level down (`$f`), one level up. `ccd`
+  # is spec §5.1's AUTHORITY on this question: answering `untagged` on any of
+  # those three would place work freely on a box the server (spec §6) and the
+  # doctor (Task 8's `pools-unlistable`) both already read as `unreadable` —
+  # three spellings of one rule with the authoritative one as the odd one
+  # out. `$REG` missing entirely gets the SAME `unreadable` verdict as every
+  # other anomaly checked here, on purpose: `ccd` runs `mkdir -p "$REG"` at
+  # source time, so this branch should be unreachable, but an unconstrained
+  # default is the wrong side to fail on for a condition that should never
+  # happen — this reader does not get to be the one place that trusts an
+  # impossible state instead of refusing it.
+  [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  if [[ ! -e "$POOLS_DIR" ]]; then
+    [[ -L "$POOLS_DIR" ]] && { echo unreadable; return 0; }
+    echo untagged; return 0
+  fi
+  [[ -d "$POOLS_DIR" ]] || { echo unreadable; return 0; }
   [[ -x "$POOLS_DIR" ]] || { echo unreadable; return 0; }
   f="$POOLS_DIR/$1"
   if [[ ! -e "$f" ]]; then

@@ -126,6 +126,58 @@ describe('_project_pool_state — four words, always rc 0', () => {
       }
     });
 
+  it('answers `unreadable` for a regular FILE sitting at $POOLS_DIR, not `untagged` for every project on the box', () => {
+    // THE DEFECT THIS IS ABOUT, one directory up from the broken-symlink case
+    // above: spec §6 has the server answer `listed:false` (-> unreadable to
+    // every project) for exactly this shape, and Task 8's doctor FAILS it as
+    // `pools-unlistable`. `ccd` is the spec's stated AUTHORITY (§5.1) — it
+    // must not be the one voice saying `untagged` while the other two agree
+    // it is `unreadable`.
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(POOLS(), 'not a directory');
+    expect(state('demo')).toBe('unreadable');
+  });
+
+  it('answers `unreadable` for a broken symlink AT $POOLS_DIR, never `untagged`', () => {
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.symlinkSync(path.join(REG(), 'nowhere'), POOLS());
+    expect(state('demo')).toBe('unreadable');
+  });
+
+  it('answers `unreadable` for a symlink LOOP AT $POOLS_DIR, never `untagged`', () => {
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.symlinkSync(POOLS(), POOLS());
+    expect(state('demo')).toBe('unreadable');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'answers `unreadable` when $REG itself is unsearchable, not `untagged` for every project on the box', () => {
+      plantTag('demo', 'pool-a');
+      fs.chmodSync(REG(), 0o000);
+      try {
+        expect(state('demo')).toBe('unreadable');
+      } finally {
+        fs.chmodSync(REG(), 0o700);
+      }
+    });
+
+  it('answers `unreadable` when $REG itself is entirely absent, not `untagged` for every project on the box', () => {
+    // `ccd` runs `mkdir -p "$REG"` at source time, so this state should be
+    // UNREACHABLE through normal use — reached here only by removing $REG
+    // AFTER sourcing (inside the same shell invocation `h.sh` builds), since
+    // sourcing again would just recreate it. DECISION, recorded because the
+    // coordinator asked for it explicitly: `unreadable`, not `untagged`.
+    // Every other anomaly this reader can observe already answers
+    // `unreadable`; a condition that should never happen at all is the wrong
+    // place for this reader to default to "unconstrained" — that would make
+    // the single state nobody expects to occur the one state where a chmod
+    // gone wrong (or a botched migration, or a co-tenant's stray `rm -rf`)
+    // silently lifts the constraint on every project on the box, which is
+    // the exact failure mode this whole function exists to refuse.
+    const out = h.sh('rm -rf "$HOME/.cc-sessions"; { _project_pool_state demo; } 2>&1');
+    expect(out).toBe('unreadable');
+  });
+
   it('answers `untagged` for an EMPTY project argument, never resolving to the directory', () => {
     // A pre-2026 registry row with no `.project` field hands this function the
     // empty string. Without the `-n "$1"` guard the path is `$POOLS_DIR/`,
