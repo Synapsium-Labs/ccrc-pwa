@@ -54,7 +54,7 @@ describe('the table this drives is a real table', () => {
   // narrowed fixture list passes everything, so THIS goes red rather than every
   // assertion above going quietly vacuous.
   it('has a floor of rows, unique names, and covers every project state', () => {
-    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(13);
+    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(14);
     expect(new Set(POOL_RULE_CASES.map((c) => c.name)).size).toBe(POOL_RULE_CASES.length);
     expect([...new Set(POOL_RULE_CASES.map((c) => c.expect))].sort())
       .toEqual(['mismatch', 'serve', 'undecidable']);
@@ -78,9 +78,19 @@ describe('the table this drives is a real table', () => {
       expect(rows.some((c) => c.accountPool === null), `${state} over an UNTAGGED account`).toBe(true);
       expect(rows.some((c) => c.accountPool !== null), `${state} over a TAGGED account`).toBe(true);
     }
-    // Both directions plus the prefix row: an inverted comparison and a
-    // `startsWith` are the two mutations one mismatch row alone survives.
-    expect(POOL_RULE_CASES.filter((c) => c.expect === 'mismatch').length).toBeGreaterThanOrEqual(3);
+    // FOUR mismatch rows, because each kills something none of the others
+    // does. The two direction rows (`mismatch-a-into-b`, `mismatch-b-into-a`)
+    // kill a comparison that only refuses one way round. The two prefix rows
+    // kill CONTAINMENT, one direction each: a prefix or substring test only
+    // reds where the string it is called on is the LONGER of the pair, so
+    // `mismatch-on-a-prefix` (short account, long project) is the only row
+    // that kills `projectPool.name.startsWith(accountPool)`, and
+    // `mismatch-on-a-project-prefix` (long account, short project) is the only
+    // row that kills either `accountPool.startsWith(projectPool.name)` or a
+    // bare `accountPool.includes(projectPool.name)` — measured: each of those
+    // three mutations passes every row except its own. Drop one row and one
+    // mutation walks the whole table.
+    expect(POOL_RULE_CASES.filter((c) => c.expect === 'mismatch').length).toBeGreaterThanOrEqual(4);
     // Two DIFFERENT names must agree-and-serve, not one. A rule that hard-coded
     // a single pool passes `same-pool-a` alone, and the floor above cannot see
     // one row leaving — so the pair is counted rather than assumed.

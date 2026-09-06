@@ -47,6 +47,35 @@ for (const id of Object.keys(POOL_BY_ID)) {
   }
 }
 
+// Second agreement check, at import: the map has to still MEAN what the
+// docstring above claims. The loop above catches a key that names nothing —
+// a RENAME. It cannot see the map being emptied or cut down, and neither can
+// anything downstream: `POOLED_TEST_ROSTER` would simply tag fewer accounts,
+// or none, and no consumer would say so. `gen-accounts.test.ts`'s ACCEPT row
+// for the pooled roster compares the CLI's stdout against the TypeScript
+// pipeline's byte-for-byte, so it passes just as green over a roster with no
+// `pool` key anywhere in it — comparing two agreeing renderings of nothing,
+// with the generator's `_ccrc_pool` arm no longer exercised on either side.
+// A vacuous ACCEPT row is worse than an absent one, because it reports.
+//
+// The two floors are the docstring's own argument made checkable, not round
+// numbers: at least three tagged ids, because a pool of one cannot tell "the
+// rule picked the in-pool account" from "the rule picked the only account
+// left" and two accounts sharing `pool-a` is what buys that; and at least two
+// distinct names, because one name cannot tell a rule that COMPARES names
+// from one that hard-codes the only name it has ever seen.
+const TAGGED_POOL_IDS = Object.keys(POOL_BY_ID).filter((id) => POOL_BY_ID[id] !== undefined);
+const TAGGED_POOL_NAMES = new Set(TAGGED_POOL_IDS.map((id) => POOL_BY_ID[id]!));
+if (TAGGED_POOL_IDS.length < 3 || TAGGED_POOL_NAMES.size < 2) {
+  throw new Error(
+    `poolRule: POOL_BY_ID carries ${TAGGED_POOL_IDS.length} tagged id(s) across ` +
+      `${TAGGED_POOL_NAMES.size} pool name(s), and needs at least 3 across at least 2. ` +
+      'Restore the tags rather than lowering this floor: below it POOLED_TEST_ROSTER ' +
+      'stops tagging enough to distinguish anything, and gen-accounts.test.ts keeps ' +
+      'passing over a roster whose `_ccrc_pool` arm nothing runs.',
+  );
+}
+
 /**
  * `DEFAULT_TEST_ROSTER`, tagged. Raw JSON shape, not a parsed `Roster`: it is
  * fed to `parseRoster`, `seedRoster` and `seedAccountsSh`, all of which take
@@ -132,8 +161,26 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   },
   {
     name: 'mismatch-on-a-prefix', accountPool: 'pool-a', project: { state: 'tagged', name: 'pool-ab' }, expect: 'mismatch',
-    why: 'the comparison is EQUALITY, not a prefix or glob match — a TS `startsWith`, or a bash `==` with an '
-      + 'unquoted right side, passes every other row in this table',
+    why: 'the comparison is EQUALITY, not containment — but this row kills ONE direction only, the one that asks '
+      + 'the PROJECT name whether it starts with (or contains) the account\'s: its account name is the SHORTER '
+      + 'string, so `projectPool.name.startsWith(accountPool)` answers serve here and reds, while the same test '
+      + 'written the other way round answers mismatch and walks. The mirror row below is the other direction, and '
+      + 'only the PAIR closes the class',
+  },
+  {
+    // D-1743 — the row above shipped claiming to pin the comparison as
+    // equality against "a TS `startsWith`", unqualified. It catches one of the
+    // two ways to write one; measured across all thirteen original rows,
+    // `accountPool.startsWith(projectPool.name)` and
+    // `accountPool.includes(projectPool.name)` both survived the whole table.
+    // This row is the mirror that kills them, and neither prefix row is
+    // redundant: each is the only row here that reds for its own direction.
+    name: 'mismatch-on-a-project-prefix', accountPool: 'pool-ab', project: { state: 'tagged', name: 'pool-a' }, expect: 'mismatch',
+    why: 'the same prefix pair with the LONGER name on the ACCOUNT, which is the direction that kills '
+      + '`accountPool.startsWith(projectPool.name)` and `accountPool.includes(projectPool.name)` — both of which '
+      + 'pass every other row in this table, measured. What the pair still does NOT catch is a bash `==` with an '
+      + 'unquoted right side: no fixture pool name carries a glob metacharacter for it to expand, so wave 2a owes '
+      + 'that hazard a quoting assertion of its own rather than a row here',
   },
   {
     name: 'unreadable-tagged-account', accountPool: 'pool-a', project: { state: 'unreadable' }, expect: 'undecidable',
