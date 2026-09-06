@@ -2570,7 +2570,8 @@ substituted before wave-done.
   **THIS WAVE OWES THE PIN, AND SHIPS IT.** The mechanism existed but nothing in the wave that
   CREATES the exposure measured it: wave 3 pins that its builders EMIT a leading flag, and that is
   a different claim from today's `ccd` REFUSING one — only the second makes the early token safe.
-  Three assertions ship here, one per verb. The wave that creates an exposure owes the proof it is
+  Four assertions ship here, not three — `swap` gets two, one per lock, once the count above
+  stopped being one-per-verb. The wave that creates an exposure owes the proof it is
   safe rather than borrowing one from a wave that has not been written.
   Nuance, because this program has twice been bitten by disclosures claiming slightly more than
   they measured: `cmd_enable` runs `_lc_done enable "$id" ""` BEFORE delegating to `cmd_start`, so

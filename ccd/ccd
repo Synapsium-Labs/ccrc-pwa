@@ -5427,24 +5427,16 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # for `named`. Claiming a NAMED tag survives outright ("is STILL tagged")
     # would also be wrong for `unreadable`/`malformed`, where there is no
     # genuine, readable tag to name at all.
+    # `rm -f` SWALLOWS ENOTDIR and ENOENT exactly as it swallows genuine
+    # "already gone" (fix round 3, Finding 6): when $POOLS_DIR ITSELF is a
+    # regular file or a dangling symlink, `$POOLS_DIR/$project` is
+    # unreachable and `rm -f` returns 0 regardless. Round 2 made the reader
+    # authoritative for the DECISION to remove; trusting THIS call's rc for
+    # the OUTCOME was the same mistake one level out. Fixed below, once, as
+    # the verb's unconditional LAST ACT (fix round 4, Finding 10) rather than
+    # here — see that comment for why inline was not enough either.
     if [[ "$oldstate" != untagged ]]; then
       rm -f -- "$POOLS_DIR/$project" \
-        || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
-      # RE-MEASURE RATHER THAN TRUST `rm`'s EXIT CODE — fix round 3 (Finding
-      # 6), a THIRD shape of the identical false success, one level further
-      # out. `rm -f` SWALLOWS ENOTDIR and ENOENT exactly as it swallows
-      # genuine "already gone": when $POOLS_DIR ITSELF is a regular file or a
-      # dangling symlink, `$POOLS_DIR/$project` is unreachable, `rm -f`
-      # returns 0 regardless, and this verb would report `untagged` while
-      # `_project_pool_state` still answers `unreadable`. Round 2 made the
-      # reader authoritative for the DECISION to remove; this closes the same
-      # mistake one level out — the verb acted, then reported on the strength
-      # of an rc rather than re-asking the authority. Ask again, and refuse
-      # to report success unless the one reader agrees nothing is left. This
-      # is this repo's own house style — the done-fingerprint discipline
-      # re-measures rather than trusts a claim — applied here.
-      local newstate; newstate=$(_project_pool_state "$project")
-      [[ "$newstate" == untagged ]] \
         || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
     fi
   else
@@ -5485,8 +5477,45 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # file names a session id. Deliberate: the retag is the CAUSE of the
   # `rehome`/`auto-pool` lines that follow it within a tick, and a reader who
   # cannot see the cause beside its effects has to correlate two files.
+  #
+  # THIS LINE MUST LAND BEFORE THE FINAL RE-MEASUREMENT BELOW — fix round 4
+  # (Finding 10). Reproduced: `ln -s "$REG/pools/$project" "$REG/swap.log"`
+  # makes this verb's OWN audit line alias the tag it just decided to remove
+  # (or, on the no-op `--clear` path, the tag it never had to touch at all).
+  # Where the append ran AFTER the round-3 re-measurement, the append
+  # RE-CREATED the tag — as unparseable, date-stamped content, so the next
+  # reader sees `malformed` — while the verb had already certified `untagged`
+  # and could only report the answer it already had. Round 1 parked the
+  # unchecked append on the reasoning that losing a line does not make any
+  # exit code lie; round 3 then moved the last WRITE past the last
+  # MEASUREMENT, which silently made that reasoning false — nothing announced
+  # the change, the same question just got asked again. Writing this line
+  # BEFORE the measurement below, rather than adding a guard AROUND this
+  # line, is the fix: the invariant that actually holds is not "this write is
+  # harmless" (an argument that keeps expiring as this function grows one
+  # more write after the one it was made about) but THE VERB'S LAST ACT IS A
+  # MEASUREMENT, so nothing this function does can outrun what it reports.
   echo "$(date '+%F %T') pool-tag $project: $old -> $new" >> "$REG/swap.log"
-  if (( clear )); then echo "untagged $project"; else echo "tagged $project $new"; fi
+
+  # THE FINAL RE-MEASUREMENT, UNCONDITIONAL, ON BOTH BRANCHES — the verb's
+  # actual last act (fix round 4, Finding 10; generalises fix round 3's
+  # Finding-6 re-measure, which ran only inside the `--clear` arm's `rm`
+  # branch and only ahead of the line above). Nothing after this call can
+  # falsify what it reports, because nothing runs after it: this reads the
+  # same authority every other decision in this file defers to
+  # (`_project_pool_state`, spec §5.1) one last time, over the state as it
+  # exists after every write this call has made, log line included, and
+  # refuses to echo success unless that reader agrees.
+  local finalstate; finalstate=$(_project_pool_state "$project")
+  if (( clear )); then
+    [[ "$finalstate" == untagged ]] \
+      || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
+    echo "untagged $project"
+  else
+    [[ "$finalstate" == "named $pool" ]] \
+      || die "could not write the pool tag for $project — it is NOT tagged"
+    echo "tagged $project $new"
+  fi
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace

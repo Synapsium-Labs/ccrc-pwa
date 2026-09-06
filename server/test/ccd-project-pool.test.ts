@@ -522,6 +522,47 @@ describe('ccd project-pool — the writer verb', () => {
     expect(r.stdout).not.toContain('untagged');
   });
 
+  it('the swap.log write cannot resurrect a tag behind the final re-measure’s back — rm branch (Fix round 4, Finding 10)', () => {
+    // Reproduced: `ln -s "$REG/pools/demo" "$REG/swap.log"` makes the
+    // verb's OWN audit-log append the SAME FILE as the tag it just removed.
+    // Where that append runs AFTER the last measurement, it RE-CREATES the
+    // tag (unparseable, date-stamped content — reads back `malformed`)
+    // and the verb still reports the answer it already had, which is now
+    // false. The fix moves the append before the final re-measurement, so
+    // the append's own effect on the tag is what gets measured, not
+    // skipped past.
+    plantTag('demo', 'pool-a');
+    fs.symlinkSync(path.join(POOLS(), 'demo'), path.join(REG(), 'swap.log'));
+    const r = shFail('cmd_project_pool --project demo --clear');
+    // Either honest outcome is acceptable in principle (round 1's "no lying"
+    // bar) — but as actually implemented, the audit line's own content does
+    // not parse as a pool name, so the re-measure reads `malformed` and the
+    // verb REFUSES rather than reporting a now-false `untagged`.
+    if (r.code === 0) {
+      expect(r.stdout).toBe('untagged demo');
+      expect(state('demo')).toBe('untagged');
+    } else {
+      expect(r.stdout).not.toContain('untagged');
+    }
+  });
+
+  it('the swap.log write cannot resurrect a tag behind the final re-measure’s back — no-rm branch, project already untagged (Fix round 4, Finding 10)', () => {
+    // The path a reader would assume is safe: nothing is tagged, so `--clear`
+    // never calls `rm` at all. The audit line still writes — even a no-op
+    // clear logs `pool-tag $project: - -> -` — and through the same alias it
+    // still creates a file at the tag path. Before this fix there was no
+    // re-measurement anywhere on this path at all.
+    fs.mkdirSync(POOLS(), { recursive: true });
+    fs.symlinkSync(path.join(POOLS(), 'demo'), path.join(REG(), 'swap.log'));
+    const r = shFail('cmd_project_pool --project demo --clear');
+    if (r.code === 0) {
+      expect(r.stdout).toBe('untagged demo');
+      expect(state('demo')).toBe('untagged');
+    } else {
+      expect(r.stdout).not.toContain('untagged');
+    }
+  });
+
   it('retags cleanly over a dangling symlink and over a symlink loop — the --pool arm has no analogous `-e` gate', () => {
     // Checked per the coordinator's ask: the write arm never tests `-e` on
     // the tag path at all. It goes straight from `mkdir -p` to an atomic
