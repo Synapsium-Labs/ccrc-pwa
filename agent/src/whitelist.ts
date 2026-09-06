@@ -384,8 +384,9 @@ export const EXEC_WHITELIST = {
     // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
     // then some: prefix matching leaves everything after the granted tokens
     // unconstrained, so an unenrolled `['project-pool']` would admit every
-    // positional form the verb might grow — and this verb changes where work
-    // may be PLACED, not merely whether it is paused.
+    // positional form the verb might grow — and once Task 5 and wave 2b wire
+    // it in, this verb will decide WHERE work may be PLACED, not merely
+    // whether it is paused.
     ['project-pool', '--project'],
     // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what

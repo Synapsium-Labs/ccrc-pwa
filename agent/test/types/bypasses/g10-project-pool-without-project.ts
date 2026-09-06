@@ -15,9 +15,12 @@
 // module load.
 //
 // A bare `project-pool` is not a narrower grant. It permits every positional
-// form the verb might ever grow — and this verb REWRITES A PLACEMENT POLICY
-// for a whole project, reached (wave 3) from a route the PWA will hit with no
-// token of any kind.
+// form the verb might ever grow. TODAY the verb only WRITES the tag —
+// `_pool_ok` has no caller in `ccd/ccd` yet (Task 5 wires it into fresh
+// placement, wave 2b into the swap tick and the manual verbs) — but the
+// grant is narrow NOW because the policy WILL bind placement for a whole
+// project once those land, reached (wave 3) from a route the PWA will hit
+// with no token of any kind.
 import type { ExecWhitelist, LawfulGrants } from '../../../src/whitelist.js';
 
 const table = {
