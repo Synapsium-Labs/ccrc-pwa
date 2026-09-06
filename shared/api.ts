@@ -1427,15 +1427,17 @@ export interface ProjectRow {
  * FOUR states, and no reader may fold one into another. `unreadable` (the file
  * is there and could not be read — EACCES, a directory planted at the path, a
  * symlink loop) and `malformed` (it was read and is not one pool name) are the
- * two ways NOBODY DECIDES: creation refuses naming the file, the auto-swapper
- * holds, the server answers 503. Folding either into `untagged` would silently
- * LIFT the constraint — the overloaded-null defect this tree refuses at a seam,
- * in its most expensive form, because the direction of the mistake is always
- * "run the work somewhere it was not allowed to run".
+ * two ways NOBODY DECIDES: creation must refuse naming the file (wave 2a), the
+ * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
+ * Folding either into `untagged` would silently LIFT the constraint — the
+ * overloaded-null defect this tree refuses at a seam, in its most expensive
+ * form, because the direction of the mistake is always "run the work somewhere
+ * it was not allowed to run".
  *
- * No detail string beside the state, deliberately: the PWA's warning chip
- * carries the full path and `ccrc doctor` carries the bytes, so a third
- * rendering of the same fact would be a third thing to keep true.
+ * No detail string beside the state, deliberately: the detail belongs in
+ * exactly two places once they land — `ccrc doctor` will carry the bytes
+ * (wave 2a) and the PWA's warning chip will carry the full path (wave 4) — so
+ * a third rendering of the same fact would be a third thing to keep true.
  *
  * Declared ahead of its consumers so both ends of the wire import ONE spelling
  * rather than each inventing its own.
@@ -1452,9 +1454,9 @@ export type ProjectPoolWire =
  * `unknown` means "this server has not measured", and a two-state answer would
  * make that look like one of the other two.
  *
- * `unavailable` is what arms the PWA's host banner ("the fleet host's ccd does
- * not honour project pools yet"); `unknown` arms nothing, because a banner on
- * no evidence is a banner nobody can act on.
+ * `unavailable` is what will arm the PWA's host banner (wave 4) ("the fleet
+ * host's ccd does not honour project pools yet"); `unknown` arms nothing,
+ * because a banner on no evidence is a banner nobody can act on.
  */
 export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
 
@@ -2714,10 +2716,10 @@ export interface RosterWire {
    *
    *  ADDITIVE, and `FLEET_PROTO` is deliberately not bumped for it, on
    *  `hidden`'s exact terms. A server built before this field omits it, and the
-   *  PWA's SINGLE reader (`accountPool`, `pwa/src/lib/accounts.ts`) tests
-   *  `typeof v === 'string'` and answers `null` for anything else — so an older
-   *  payload reads as untagged, which is the permissive direction and today's
-   *  behaviour. A reader that trusted the static type here would be trusting a
+   *  PWA's SINGLE reader (`accountPool`, `pwa/src/lib/accounts.ts`, wave 4)
+   *  MUST test `typeof v === 'string'` and answer `null` for anything else —
+   *  so an older payload will read as untagged, which is the permissive
+   *  direction. A reader that trusted the static type here would be trusting a
    *  cast: the offline snapshot's `isRosterWireLike` does not check this field,
    *  any more than it checks `hidden`.
    *

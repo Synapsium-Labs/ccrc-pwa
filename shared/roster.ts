@@ -240,12 +240,13 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * `[a-z0-9-]` then leaves no room for whitespace, which `ccd` would word-split
  * when it reads the value back through an unquoted `$( … )`.
  *
- * EXPORTED, unlike `ID_RE`, because it has three readers outside this file: the
- * bare-`node` mirror (`shared/roster-json.mjs`) copies the literal, the
- * project-pool route validates a request body against this object, and `ccd`
- * will carry its own `POOL_NAME_RE=` bash literal (wave 2a), pinned equal to
- * `POOL_NAME_RE.source` by text extraction once wave 2a's parity scan lands.
- * One grammar, one definition, three readers.
+ * EXPORTED, unlike `ID_RE`, because it has one reader outside this file today
+ * — the bare-`node` mirror (`shared/roster-json.mjs`) copies the literal — and
+ * two more coming: the project-pool route (wave 3) will validate a request
+ * body against this object, and `ccd` will carry its own `POOL_NAME_RE=` bash
+ * literal (wave 2a), pinned equal to `POOL_NAME_RE.source` by text extraction
+ * once wave 2a's parity scan lands. One grammar, one definition, three readers
+ * once both land.
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 

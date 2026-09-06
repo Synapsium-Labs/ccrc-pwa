@@ -27,6 +27,24 @@ const POOL_BY_ID: Readonly<Record<string, string | undefined>> = {
   'claude-b': 'pool-b',
 };
 
+// One-directional agreement check, at import: a `POOL_BY_ID` key naming no
+// account in `DEFAULT_TEST_ROSTER` is not one more untagged account — the
+// `.map` below looks a renamed or removed id up by `a.id` and gets `undefined`
+// back, indistinguishable from a deliberate miss, so a stale key would
+// silently cost `gen-accounts.test.ts`'s ACCEPT row one of its three
+// `_ccrc_pool` arms with nothing to say so. The reverse direction needs no
+// check: an id absent from `POOL_BY_ID` is meant to stay untagged, which is
+// exactly what a miss here already means.
+for (const id of Object.keys(POOL_BY_ID)) {
+  if (!DEFAULT_TEST_ROSTER.accounts.some((a) => a.id === id)) {
+    throw new Error(
+      `poolRule: POOL_BY_ID names "${id}", which is not an account in ` +
+        'DEFAULT_TEST_ROSTER (server/test/helpers.ts). Rename or remove this ' +
+        'key, or POOLED_TEST_ROSTER silently stops tagging the intended account.',
+    );
+  }
+}
+
 /**
  * `DEFAULT_TEST_ROSTER`, tagged. Raw JSON shape, not a parsed `Roster`: it is
  * fed to `parseRoster`, `seedRoster` and `seedAccountsSh`, all of which take

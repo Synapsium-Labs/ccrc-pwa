@@ -290,10 +290,11 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a pool name containing an underscore', roster(acct({ pool: 'pool_a' }))],
     // The CAP, measured rather than assumed (D-1742). No text scan
     // pins a regex literal in a `.mjs`, so this table is the only thing holding the
-    // two copies of the grammar equal, and a cap that drifted — `{0,31}` against
-    // `{0,63}` — is the one drift every other row in this block survives: 33
-    // lowercase letters are legal under both spellings of the charset and illegal
-    // under only one of the lengths.
+    // two copies of the grammar equal: 33 lowercase letters are legal under both
+    // spellings of the charset and illegal under only one of the lengths, so an
+    // over-cap name is the row that catches a widened `{0,31}` (against `{0,63}`)
+    // — beside the rows above that catch a lost leading-letter anchor, an
+    // admitted underscore and an uppercase letter.
     ['a pool name one character past the 32-character cap', roster(acct({ pool: 'a'.repeat(33) }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],

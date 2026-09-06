@@ -211,9 +211,9 @@ describe('GET /api/accounts', () => {
 
   // The account half of project pools reaches the phone here and nowhere else.
   // `null` for an untagged account is a VALUE on this wire, not an omission:
-  // the PWA's single reader answers `null` for an absent key too (an older
-  // server), and both mean "untagged" — the permissive direction, and today's
-  // behaviour. What must never happen is a handler that quietly drops the field
+  // the PWA's single reader (wave 4) must answer `null` for an absent key too
+  // (an older server), and both must mean "untagged" — the permissive
+  // direction. What must never happen is a handler that quietly drops the field
   // and makes every account look untagged on a fleet where pools are enforced.
   it('carries each account\'s pool, and null for the untagged ones', async () => {
     const { roster } = await getPayloadWithRoster(
