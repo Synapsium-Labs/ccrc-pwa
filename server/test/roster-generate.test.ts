@@ -198,3 +198,71 @@ describe('generateAccountsSh — the statusline projection', () => {
       .toBe(false);
   });
 });
+
+// The account half of project pools. `_ccrc_pool` is the ONE thing on the
+// account side that crosses into bash, and it is emitted rather than
+// hand-written for the reason the whole of this file exists: a hand-kept `case`
+// is a roster copy, and a roster copy is a silently unplaced account.
+describe('generateAccountsSh — the pool projection', () => {
+  // Some accounts tagged, some not — the only shape that can tell "one arm per
+  // TAGGED account" from "one arm per account".
+  const pooledRoster = parseRoster({ version: 1, accounts: [
+    { id: 'a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: 'pool-a' },
+    { id: 'a-b-c', label: 'ABC', configDirSuffix: '.abc', exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic', pool: 'pool-b' },
+    { id: 'a-b', label: 'AB', configDirSuffix: '.ab', exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none' },
+  ] });
+
+  const pooledHome = mkTmp('roster-gen-pool-');
+  mkdirSync(path.join(pooledHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(pooledHome, '.ccrc', 'accounts.sh'), generateAccountsSh(pooledRoster));
+
+  // The module-level `roster` (a, a-b-c, a-b) carries no pool at all — every
+  // roster on every box, the day this ships.
+  const untaggedHome = mkTmp('roster-gen-untagged-pool-');
+  mkdirSync(path.join(untaggedHome, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(untaggedHome, '.ccrc', 'accounts.sh'), generateAccountsSh(roster));
+
+  it('is defined even when NO account is tagged, so `declare -F` is a version probe', () => {
+    // Two independent things depend on the unconditional emission: ccd asks
+    // `declare -F _ccrc_pool` to learn whether this box's accounts.sh knows
+    // about pools at all, and a new ccd calls the function every 5 seconds — a
+    // conditional emission would be `command not found` on the supervisor's hot
+    // loop, on every box whose roster has no tags yet.
+    expect(sh(untaggedHome, 'declare -F _ccrc_pool >/dev/null && echo yes')).toBe('yes');
+    expect(sh(untaggedHome, "_ccrc_pool 'a' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('emits an EMPTY case for an all-untagged roster, not a missing function and not a default arm', () => {
+    const body = generateAccountsSh(roster);
+    expect(body).toContain('_ccrc_pool() {');
+    const block = body.slice(body.indexOf('_ccrc_pool() {'));
+    expect(block.slice(0, block.indexOf('esac'))).not.toMatch(/\) echo /);
+  });
+
+  it('answers the pool name for a tagged account', () => {
+    expect(sh(pooledHome, "_ccrc_pool 'a'")).toBe('pool-a');
+    expect(sh(pooledHome, "_ccrc_pool 'a-b-c'")).toBe('pool-b');
+  });
+
+  it('answers empty at rc 0 for an untagged account AND for an unknown id — the caller decides what silence means', () => {
+    // `_ccrc_cfg_dir`'s contract, restated: the two silences are deliberately
+    // one value here, and that fold is safe only because `_is_valid_wrapper`
+    // gates every id before any pool question is asked (design §6).
+    expect(sh(pooledHome, "_ccrc_pool 'a-b' ; echo \"rc=$?\"")).toBe('rc=0');
+    expect(sh(pooledHome, "_ccrc_pool 'nosuch' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
+
+  it('emits one arm per TAGGED account only, in byIdLengthDesc order', () => {
+    const body = generateAccountsSh(pooledRoster);
+    const block = body.slice(body.indexOf('_ccrc_pool() {'));
+    const arms = [...block.slice(0, block.indexOf('esac'))
+      .matchAll(/^ {4}([a-z0-9-]+)\) echo ([a-z0-9-]+) ;;$/gm)].map((m) => [m[1]!, m[2]!]);
+    // `a-b` is untagged and has NO arm; the two that remain are longest-first.
+    expect(arms).toEqual([['a-b-c', 'pool-b'], ['a', 'pool-a']]);
+  });
+
+  it('sits after _ccrc_hue, where the roster projection ends', () => {
+    const body = generateAccountsSh(pooledRoster);
+    expect(body.indexOf('_ccrc_pool() {')).toBeGreaterThan(body.indexOf('_ccrc_hue() {'));
+  });
+});

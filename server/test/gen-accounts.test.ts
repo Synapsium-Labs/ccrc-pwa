@@ -39,6 +39,7 @@ import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -163,6 +164,7 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
 
   it.each([
     ["the five-account test default roster", DEFAULT_TEST_ROSTER],
+    ['the test default roster with pool tags on some accounts', POOLED_TEST_ROSTER],
     ['a roster with no explicit hues', HUELESS_ROSTER],
     ['a roster mixing explicit and auto-assigned hues', MIXED_HUE_ROSTER],
     ['seven hueless accounts against six hues', OVERFLOW_HUE_ROSTER],

@@ -164,6 +164,34 @@ function idArray(ids) {
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
+ * ── `_ccrc_pool` ──
+ *
+ * The account half of project pools. Emitted ALWAYS, even when no account is
+ * tagged — an empty `case` — for two reasons that are not the same reason:
+ * `declare -F _ccrc_pool` is how `ccd` asks whether this box's `accounts.sh`
+ * knows about pools at all, and a new `ccd` calls this function on the
+ * supervisor's 5-second loop, where `command not found` would be the answer on
+ * every box whose roster has no tags yet. An empty `case … esac` is valid bash
+ * and answers empty at rc 0, which is exactly the contract below.
+ *
+ * That contract is `_ccrc_cfg_dir`'s, restated: empty stdout at exit 0 for an
+ * untagged id AND for an unknown one, with the caller deciding what silence
+ * means. Folding those two silences together is a real fold and is disclosed
+ * rather than assumed — it is safe only because `_is_valid_wrapper` gates every
+ * id before a pool question is ever asked of it.
+ *
+ * Values are emitted RAW, like ids and hues and for the same reason:
+ * `POOL_NAME_RE` (`shared/roster.ts`) is `ID_RE`'s shape, so a pool name holds
+ * no whitespace and no shell metacharacter, and `echo` is safe because the name
+ * must begin with a lowercase letter and so can never be `-n`/`-e`/`-E`.
+ *
+ * This emission is also why `pool` is in `accounts.sh` at all rather than only
+ * in the JSON: `rosterAgreement` compares digests of the GENERATED file
+ * (`server/src/fleetstate.ts`), so a roster field that is never emitted is a
+ * field whose disagreement between the box's two hand-owned `accounts.json`
+ * copies nobody can see. `hidden` is deliberately outside the digest and stays
+ * there.
+ *
  * @param {import('./roster.js').Roster} roster
  * @returns {string}
  */
@@ -203,6 +231,23 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.hue} ;;`)
     .join('\n');
 
+  // One arm per TAGGED account, in `byIdLengthDesc` order like `_ccrc_cfg_dir`
+  // above. `typeof a.pool === 'string'` rather than a truthiness test and rather
+  // than `!= null`: `generateAccountsSh` consumes a `Roster` STRUCTURALLY, with no
+  // runtime check that its argument ever passed through `parseRoster` or
+  // `rosterFromJson` (see the header). `!= null` would already exclude both
+  // `null` and `undefined`, so that is NOT the distinction being drawn here — what
+  // `typeof === 'string'` adds is refusing a non-string that reached this function
+  // without being validated by either producer, which `.mjs` callers are not
+  // typechecked against. `a.pool = 7` under `!= null` emits `id) echo 7 ;;`; under
+  // this predicate it emits no arm. Untagged, unvalidated and junk all produce no
+  // arm, which is the only answer this emitter can honestly give for a value it
+  // was never allowed to see.
+  const poolArms = roster.byIdLengthDesc
+    .filter((a) => typeof a.pool === 'string')
+    .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
+    .join('\n');
+
   return `#!/usr/bin/env bash
 # Generated from ~/.ccrc/accounts.json. Do not edit — \`ccrc install\` rewrites it.
 CCRC_ACCOUNTS=${idArray(ids)}
@@ -233,6 +278,11 @@ ${labelArms}
 _ccrc_hue() {
   case "$1" in
 ${hueArms}
+  esac
+}
+_ccrc_pool() {
+  case "$1" in
+${poolArms}
   esac
 }
 `;
