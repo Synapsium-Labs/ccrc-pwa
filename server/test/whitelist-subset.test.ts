@@ -59,9 +59,9 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
   coordPause: ['on'],
   // Two ENTRIES, not one parameterised by `pool: string | null` — the
-  // `start`/`enable` rule at `ccdargv.ts:180`: the route picks between two
-  // words, the argv shapes differ in their tail, and layer 3 fails outright if
-  // nothing builds one of them.
+  // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
+  // picks between two words, the argv shapes differ in their tail, and layer
+  // 3 fails outright if nothing builds one of them.
   projectPoolSet: ['demo', 'pool-a'],
   projectPoolClear: ['demo'],
 };

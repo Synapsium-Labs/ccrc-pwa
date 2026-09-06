@@ -235,11 +235,14 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  *
  * `project-pool` (account pools) is the fourth, and it is `coord-pause`'s
  * argument again with a sharper edge: `--project` is not a confirmation token,
- * it is the verb's whole argument surface, and the verb REWRITES A PLACEMENT
- * POLICY — after it runs, ccd will refuse to put a session on an account that
- * was legal a second earlier. A one-token `['project-pool']` grant would permit
- * every positional form the verb might ever grow, for a route the PWA reaches
- * with no box token of any kind.
+ * it is the verb's whole argument surface. TODAY the verb only WRITES the tag
+ * — ccd's `_pool_ok` has no caller anywhere in `ccd/ccd` yet, so running
+ * `project-pool` refuses no placement. Wiring `_pool_ok` into fresh placement
+ * is this same wave's Task 5; wiring it into the swap tick and the manual
+ * verbs is wave 2b's. The grant is narrow NOW because the policy WILL bind
+ * placement once those land: a one-token `['project-pool']` grant would
+ * permit every positional form the verb might ever grow, reached (wave 3)
+ * from a route the PWA will hit with no box token of any kind.
  *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking

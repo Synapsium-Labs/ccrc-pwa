@@ -16,7 +16,8 @@
 //
 // A bare `project-pool` is not a narrower grant. It permits every positional
 // form the verb might ever grow — and this verb REWRITES A PLACEMENT POLICY
-// for a whole project, from a route the PWA reaches with no token of any kind.
+// for a whole project, reached (wave 3) from a route the PWA will hit with no
+// token of any kind.
 import type { ExecWhitelist, LawfulGrants } from '../../../src/whitelist.js';
 
 const table = {

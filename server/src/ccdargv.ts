@@ -313,9 +313,11 @@ export const CCD_ARGV = {
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
-   *  `enable` rule above: the route picks between two words, the agent grants
-   *  the one prefix that covers both, and `whitelist-subset` enumerates each
-   *  separately so a shape nothing builds cannot hide behind its sibling.
+   *  `enable` rule above: a route picks between two words rather than
+   *  parameterising one builder. No route calls either of these yet (wave
+   *  3's); the agent grants the one prefix that covers both, and
+   *  `whitelist-subset` enumerates each separately so a shape nothing builds
+   *  cannot hide behind its sibling.
    *
    *  `project` reaches ccd UNVALIDATED, exactly as `/api/projects/:project/
    *  workspaces` sends it: `_ws_project_valid` on the box is the authority,
