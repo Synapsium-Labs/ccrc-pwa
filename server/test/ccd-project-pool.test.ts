@@ -13,7 +13,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-project-pool-'); });
@@ -36,6 +37,33 @@ function plantTag(project: string, bytes: string): string {
  *  distinguishable. `h.sh` returns stdout only. */
 const state = (project: string): string =>
   h.sh(`{ _project_pool_state ${JSON.stringify(project)}; } 2>&1`);
+
+/** Like `state()`, but with the CHILD PROCESS ITSELF bounded — for the cases
+ *  that, if Finding 6's hang-closing guard ever regressed, would otherwise
+ *  hang this whole worker process rather than fail one test. Vitest's own
+ *  per-test timeout cannot save us here: `h.sh`'s `execFileSync` is
+ *  SYNCHRONOUS and blocks the very event loop the timeout timer needs to
+ *  fire on, so the bound has to live on the child process itself. Node's
+ *  `timeout` option on `execFileSync` SIGTERMs the child and throws an error
+ *  with `.code === 'ETIMEDOUT'` (verified directly — `.killed` is NOT set on
+ *  that error, despite what the name suggests) — that is the one thing this
+ *  helper turns into a normal, readable test failure instead of a real hang. */
+function boundedState(project: string, ms = 5000): string {
+  try {
+    return execFileSync(
+      'bash', ['-c', `source "${CCD}"; { _project_pool_state ${JSON.stringify(project)}; } 2>&1`],
+      { encoding: 'utf8', cwd: h.home, timeout: ms,
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) },
+    ).trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+      throw new Error(
+        `_project_pool_state(${JSON.stringify(project)}) did not return within ${ms}ms — `
+        + 'this is Finding 6\'s hang regressing, not a flake');
+    }
+    throw err;
+  }
+}
 
 describe('_project_pool_state — four words, always rc 0', () => {
   it('answers `untagged` when the pools directory does not exist at all', () => {
@@ -178,10 +206,78 @@ describe('_project_pool_state — four words, always rc 0', () => {
     expect(out).toBe('unreadable');
   });
 
+  it('answers `unreadable` for a FIFO at the tag path, PROMPTLY — never hangs', () => {
+    // THE MOST SERIOUS DEFECT THIS FILE HAS HAD: `cat -- "$f"` opening a FIFO
+    // with no writer blocks in `open(2)` FOREVER — measured independently at
+    // 6s with no word on stdout at all. A hang inside `cmd_supervise`'s loop
+    // is worse than a `die`: it stops the supervisor permanently, with no
+    // exit code for anything to notice. `boundedState` turns a regression
+    // here into a normal test failure instead of a real hang; the explicit
+    // vitest timeout below is a second, independent bound in case that ever
+    // stops being true — a hanging test is the same defect as the one this
+    // fixes, so it may never be allowed to hang CI either.
+    fs.mkdirSync(POOLS(), { recursive: true });
+    execFileSync('mkfifo', [path.join(POOLS(), 'demo')]);
+    expect(boundedState('demo')).toBe('unreadable');
+  }, 10000);
+
+  it('answers `unreadable` for a symlink TO a FIFO, PROMPTLY — never hangs', () => {
+    fs.mkdirSync(POOLS(), { recursive: true });
+    const real = path.join(POOLS(), 'realfifo');
+    execFileSync('mkfifo', [real]);
+    fs.symlinkSync(real, path.join(POOLS(), 'demo'));
+    expect(boundedState('demo')).toBe('unreadable');
+  }, 10000);
+
+  it('answers `unreadable` for a symlink to an infinite character device (/dev/zero), PROMPTLY — never hangs, never reads unboundedly', () => {
+    fs.mkdirSync(POOLS(), { recursive: true });
+    fs.symlinkSync('/dev/zero', path.join(POOLS(), 'demo'));
+    expect(boundedState('demo')).toBe('unreadable');
+  }, 10000);
+
+  it('answers `unreadable` for a symlink to a character device that does NOT block (/dev/null) — DECISION, see report', () => {
+    // A type check (`-f`/`-c`) cannot tell a BOUNDED device (`/dev/null`,
+    // EOFs immediately) from an UNBOUNDED one (`/dev/zero`, blocks forever)
+    // without attempting the read this guard exists to avoid attempting —
+    // so every character device gets the SAME answer, `unreadable`, on
+    // purpose. It no longer reaches the `read`/validation step where the
+    // pre-fix code would have landed it on `malformed` (empty content).
+    fs.mkdirSync(POOLS(), { recursive: true });
+    fs.symlinkSync('/dev/null', path.join(POOLS(), 'demo'));
+    expect(boundedState('demo')).toBe('unreadable');
+  }, 10000);
+
+  it('answers `named <n>` through a symlink to an ORDINARY regular file — the indirection case is not broken by the FIFO/device fix', () => {
+    fs.mkdirSync(POOLS(), { recursive: true });
+    const real = path.join(POOLS(), 'realtag');
+    fs.writeFileSync(real, 'pool-a\n');
+    fs.symlinkSync(real, path.join(POOLS(), 'demo'));
+    expect(state('demo')).toBe('named pool-a');
+  });
+
+  it('answers `malformed` for content containing an embedded NUL byte — no stderr leak, no silent splice', () => {
+    // TWO findings pinned by ONE assertion. `state()` folds stderr into the
+    // same captured string (`2>&1`), so an exact `toBe('malformed')` fails if
+    // ANYTHING extra reaches stderr — which is exactly what closes Finding 7:
+    // the old `v=$(cat -- "$f")` triggered bash's OWN
+    // `warning: command substitution: ignored null byte in input` from the
+    // PARENT shell doing the substitution (never covered by `2>/dev/null` ON
+    // `cat`), and the `read -d ''` replacement has no command substitution to
+    // trigger it — measured directly, not assumed. Finding 8 is closed the
+    // same motion: bash cannot hold a NUL in a string at all, so
+    // `pool-a\0junk\n` would otherwise splice into the single legal-looking
+    // token `pool-ajunk` (appearing nowhere in the file) once the NUL is
+    // dropped — `read -d ''`'s own exit status (0 iff it found the NUL
+    // delimiter before EOF) catches this BEFORE the splice ever reaches
+    // `_pool_name_valid`, at no extra fork/subshell cost.
+    plantTag('demo', 'pool-a\0junk\n');
+    expect(state('demo')).toBe('malformed');
+  });
+
   it('answers `untagged` for an EMPTY project argument, never resolving to the directory', () => {
     // A pre-2026 registry row with no `.project` field hands this function the
-    // empty string. Without the `-n "$1"` guard the path is `$POOLS_DIR/`,
-    // `cat` on a directory fails, and every such session reads `unreadable` —
+    // empty string. Without the `-n "$1"` guard the path is `$POOLS_DIR/`, the
+    // `-f` check below refuses it, and every such session reads `unreadable` —
     // fail-shut on a row whose project is merely unknown (spec §10).
     fs.mkdirSync(POOLS(), { recursive: true });
     expect(h.sh('{ _project_pool_state ""; } 2>&1')).toBe('untagged');

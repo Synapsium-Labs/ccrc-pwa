@@ -40,12 +40,17 @@ const exactlyOne = (src: string, re: RegExp, what: string): string => {
   // name two different identifiers by accident.
   const name = /^\^([A-Za-z_][A-Za-z0-9_]*)=/.exec(re.source)?.[1];
   expect(name, `${what}: could not read a bare NAME= off the canonical regex`).toBeTruthy();
-  // `export`/`declare`/`local`/`readonly` in front of the name is still an
-  // ASSIGNMENT to it, not a different name — a duplicate spelled
+  // `export`/`declare`/`local`/`readonly`/`typeset` in front of the name is
+  // still an ASSIGNMENT to it, not a different name — a duplicate spelled
   // `export POOL_NAME_RE=…` must count too, or this scan is exactness in
-  // name only.
+  // name only. `declare` and `typeset` (its synonym) also take FLAGS before
+  // the name (`declare -r NAME=…`, `declare -g NAME=…`), so the keyword may
+  // be followed by any number of `-x`-shaped flag tokens before the name.
   const broad = [...src.matchAll(
-    new RegExp(`^[ \\t]*(?:(?:export|declare|local|readonly)[ \\t]+)?${name}=.*$`, 'gm'),
+    new RegExp(
+      `^[ \\t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \\t]+-[A-Za-z]+)*[ \\t]+)?${name}=.*$`,
+      'gm',
+    ),
   )];
   expect(broad.length, `${what}: expected exactly one occurrence, found ${broad.length}`).toBe(1);
   // Only once exactly one assignment exists, in ANY spelling, is it worth

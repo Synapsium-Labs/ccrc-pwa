@@ -1051,13 +1051,14 @@ _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is 
 # those deciders is `_auto_swap_check`, inside the long-lived `cmd_supervise`
 # loop — a reader that exited there would stop the supervisor.
 #
-# FOUR WORDS, NOT THREE. `unreadable` (permissions on the file, a directory
-# where the file belongs, a broken symlink, a symlink LOOP, or `$POOLS_DIR`
-# itself unsearchable) and `malformed` (bytes that are not one legal token)
-# have DIFFERENT REMEDIES, and neither is ever folded into `untagged`: folding
-# would silently LIFT the constraint, so a chmod would quietly make a project
-# unconstrained. `_pool_ok` answers rc 2 for both — nobody decides — and the
-# callers branch three ways.
+# FOUR WORDS, NOT THREE. `unreadable` (permissions on the file, a directory or
+# a FIFO or a character device — or a symlink to any of those — at the tag
+# path, a broken symlink, a symlink LOOP, or `$POOLS_DIR`/`$REG` themselves
+# unsearchable) and `malformed` (bytes that are not one legal token, an
+# embedded NUL byte included) have DIFFERENT REMEDIES, and neither is ever
+# folded into `untagged`: folding would silently LIFT the constraint, so a
+# chmod would quietly make a project unconstrained. `_pool_ok` answers rc 2
+# for both — nobody decides — and the callers branch three ways.
 #
 # WORD ON STDOUT, NOT AN EXIT CODE. An rc-based reader splits the fourth state
 # across two functions, and a `$(…)` capture that forgot `$?` reads unreadable
@@ -1065,8 +1066,9 @@ _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is 
 _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | malformed ; always rc 0
   local f v
   # A registry row with no `.project` field (pre-2026-07-28 rows have none)
-  # must never resolve to the DIRECTORY: `$POOLS_DIR/` would `cat` a directory
-  # and read `unreadable` for every such session.
+  # must never resolve to the DIRECTORY: `$POOLS_DIR/` would trip the `-f`
+  # check below (a directory is never a regular file) and read `unreadable`
+  # for every such session.
   [[ -n "${1-}" ]] || { echo untagged; return 0; }
   # ABSENCE HAS TO BE PROVEN AT EVERY LEVEL IT IS CLAIMED, NOT ASSUMED FROM
   # ONE TEST BEING FALSE — first for `$REG` (the level `$POOLS_DIR` sits in),
@@ -1098,7 +1100,58 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
     [[ -L "$f" ]] && { echo unreadable; return 0; }
     echo untagged; return 0
   fi
-  v=$(cat -- "$f" 2>/dev/null) || { echo unreadable; return 0; }
+  # THE READER MAY NEVER BLOCK, NOT JUST NEVER `die`. `cat -- "$f"` opens
+  # whatever is at `$f` with no regard for its TYPE: a FIFO with no writer
+  # blocks in `open(2)` forever, and a symlink to an infinite character
+  # device (`/dev/zero`) blocks in `read(2)` forever — both HANG the
+  # `cmd_supervise` loop this runs inside, permanently, with no exit code and
+  # no word on stdout for anything to notice. `-f "$f"` (which follows
+  # symlinks, exactly like `-e`/`-d`) is required BEFORE any attempt to open
+  # `$f` at all: true only for a regular file or a symlink chain that resolves
+  # to one, so an ordinary indirection (`ln -s realtag pools/demo`) still
+  # reads normally, while a FIFO, a device node, or a symlink to either is
+  # refused on a type check alone — no open, no read, no possibility of
+  # blocking. This also SUBSUMES the old directory case (`-f` is false for a
+  # directory too), so `cat`'s own "Is a directory" error is no longer the
+  # mechanism; it is measured directly instead. A character device that does
+  # NOT block, such as `/dev/null`, is refused by the SAME check, on purpose:
+  # a type check cannot tell a bounded device from an unbounded one without
+  # attempting the read this whole guard exists to avoid attempting, so every
+  # character device gets the one answer that is safe for all of them.
+  # `-r "$f"` is checked in the SAME breath: without it, a permission-denied
+  # file falls through to the NUL-delimited read below, which finds no
+  # delimiter (same as ordinary content), so `$v` stays empty and the
+  # function answers `malformed` instead of `unreadable` — measured, not
+  # assumed; see `ccd-project-pool.test.ts`'s mode-000 case.
+  [[ -f "$f" && -r "$f" ]] || { echo unreadable; return 0; }
+  # NO COMMAND SUBSTITUTION, NO SUBSHELL, AND NO FORK: `v=$(cat -- "$f")`
+  # spawns `cat` AND opens a subshell to capture its output — both gone here.
+  # `read -d ''` (NUL-delimited, not newline-delimited) reads the WHOLE file
+  # into `$v` in the ordinary case (no NUL present, so EOF is reached before
+  # any delimiter is found, exactly mirroring what `cat` used to hand the
+  # trailing-whitespace strip below), and its OWN exit status — 0 iff a NUL
+  # delimiter was actually found before EOF — is a free, zero-cost detector
+  # for an embedded NUL byte: a legal tag file can never contain one, so
+  # finding one here is answered `malformed` directly, before the spliced
+  # string (bash drops the NUL, so `pool-a\0junk` would otherwise read as the
+  # single legal-looking token `pool-ajunk`, appearing nowhere in the file)
+  # ever reaches `_pool_name_valid`. The redirection ORDER is load-bearing and
+  # was measured, not guessed: `2>/dev/null` MUST come before `< "$f"`, because
+  # bash applies a command's redirections left-to-right and reports a FAILING
+  # one on whatever stderr is current AT THAT POINT — `< "$f" 2>/dev/null`
+  # (redirect stdin first) lets a permission error escape before the stderr
+  # redirection is ever applied, while `2>/dev/null < "$f"` (this order)
+  # is already in place when the open is attempted. (`-r` above means this
+  # order only matters for a TOCTOU race, but it is the same race `-e`/`-d`
+  # above already accept, and getting the order right costs nothing.) `cat`'s
+  # own `warning: command substitution: ignored null byte in input` — which
+  # `2>/dev/null` ON CAT never caught, because it comes from the PARENT
+  # SHELL'S command substitution, not from `cat` — cannot occur here at all:
+  # there is no command substitution.
+  v=
+  if { IFS= read -r -d '' v; } 2>/dev/null < "$f"; then
+    echo malformed; return 0
+  fi
   # A shell `echo pool-a > pools/demo` is a legal writer (ruling 2), so a
   # trailing newline is not malformed. Leading whitespace IS: the grammar is
   # anchored, and a leading space is a hand-edit nobody meant.
