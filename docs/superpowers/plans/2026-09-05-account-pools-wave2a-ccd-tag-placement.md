@@ -2722,3 +2722,46 @@ substituted before wave-done.
   agent. `io.readdir` and `readFileMeasured` do not share bash's `-e` semantics, so the mechanism
   differs — but the QUESTION is identical, and the answer is settled here: a path that exists and
   cannot be resolved is `unreadable`, never absent.
+
+- **D-1849** (Task 3, found by macOS CI on PR #59 — its OWN number, not a fourth shape of
+  D-1848) — `cmd_project_pool`'s
+  `--clear` guard carries the comment "`rm -f` SWALLOWS ENOTDIR and ENOENT exactly as it swallows
+  genuine absence". That is GNU `rm` behaviour. On the BSD userland it is false: with a plain FILE
+  at `$POOLS_DIR`, `rm -f "$POOLS_DIR/$project"` takes ENOTDIR and RETURNS NON-ZERO, so the
+  `|| die` fires — and it fires BEFORE the `swap.log` append, which is why `ccd-project-pool`'s
+  Finding-13 test reads an EMPTY log on macOS and the line it expects on Linux.
+  **THE BEHAVIOUR IS NOT WRONG ON EITHER PLATFORM** — and that is what makes this worth recording
+  rather than patching away. macOS refuses EARLIER, with `could not clear the pool tag …
+  placement may still be constrained`, and writes nothing misleading; Linux writes the line and
+  then voids it. Both are honest. They differ only in WHERE the refusal happens, and the test had
+  encoded one platform's path as the property.
+  **THIS IS THE WAVE'S DEFINING DEFECT ON A THIRD AXIS.** D-1848 was a claim true of one FILE and
+  false of a sibling. The ripened-comment class was a claim true at one TIME and false later. This
+  is a claim true on the PLATFORM it was measured on and false on the other — in a repo that runs
+  macOS CI precisely because `ccd` executes on both userlands, and that already carries
+  `_plat_mv_notdir` because `mv` diverges the same way. The rule the three share: **a claim is
+  scoped to what was measured, and the axes it can be wrong on are file, time and platform.**
+  Fixed by asserting the INVARIANT the finding actually established — `swap.log` never carries a
+  `pool-tag` line for a refused call without a following `pool-tag-void` line — which holds
+  vacuously on BSD and by the corrective line on GNU, rather than by encoding either path. The
+  test names BOTH outcomes exactly (`''` or `pool-tag,pool-tag-void`) rather than filtering for
+  violations, so the BSD arm must be EXACTLY empty and cannot pass vacuously; both routes were
+  mutation-proven, the GNU one by deleting the void line and the BSD one by forcing `rm` to fail
+  on Linux and hoisting the append.
+  **WHY ITS OWN NUMBER AND NOT A FOURTH SHAPE OF D-1848** (coordinator's ruling): D-1848 is a
+  specific greppable PREDICATE rule with a SCAN behind it; this is a different predicate, a
+  different mechanism, caught by neither that scan nor that pairing. What the two share is not a
+  rule — it is an EPISTEMIC. Folding an epistemic into a numbered predicate rule would dilute the
+  one thing that makes D-1848 worth more than three instance numbers: that a machine enforces it.
+  D-1848 is enforced by a scan, D-1849 by macOS CI, and each is exactly as strong as its own
+  mechanism.
+  **TWO FINDINGS CONVERGING ON ONE CORRECTION SHAPE, which is worth a reader's attention.** The
+  fix here is the LADDER again (D-1847): a platform-specific PATH was standing in for the
+  GUARANTEE, exactly as an exit code stood in for the state. Both were fixed by asserting the
+  property rather than the route to it.
+  **AND THE AXIS WAS NOT UNKNOWN HERE — it was known and not generalised.** `_plat_mv_notdir`
+  exists in this very file because `mv` diverges between the userlands the same way. The wave used
+  that precedent for `mv` and then wrote a fresh GNU-only assumption for `rm` a few hundred lines
+  away. The same GNU-only claim was also found in two MORE places by the fix — a test's TITLE and
+  its comment, both passing on macOS while asserting something false there, because their
+  assertions only checked the outcome the two userlands share.
