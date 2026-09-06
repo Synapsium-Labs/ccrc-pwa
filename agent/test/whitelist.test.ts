@@ -116,6 +116,21 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(p, cfg, 'write'), `${p} must NOT be writable`).toBeNull();
     }
   });
+
+  it('the pools directory is READ-allowed and WRITE-forbidden — the server can never set a tag directly', async () => {
+    // Account pools, spec §5.1: the server READS `$REG/pools/` through the
+    // agent (wave 3's `readProjectPools`) and writes it ONLY by asking ccd to
+    // run `project-pool`. The write root stays `.cc-clips` and nothing else,
+    // so a future refactor that reached for `io.writeFile` on a tag would be
+    // structurally incapable rather than merely discouraged.
+    seed();
+    const cfg = { home, projectsRoot };
+    const dir = path.join(home, '.cc-sessions', 'pools');
+    for (const p of [dir, path.join(dir, 'demo'), path.join(dir, 'acct-a-demo')]) {
+      expect(await checkPath(p, cfg, 'read'), `${p} must be readable`).not.toBeNull();
+      expect(await checkPath(p, cfg, 'write'), `${p} must NOT be writable`).toBeNull();
+    }
+  });
 });
 
 describe('whitelist.isExecAllowed', () => {
@@ -167,6 +182,18 @@ describe('whitelist.isExecAllowed', () => {
     // without naming a session.
     expect(isExecAllowed('ccd', ['ws-hold', '--session', 'x', '--reason', 'program:evals wave:1/4'])).toBe(true);
     expect(isExecAllowed('ccd', ['ws-release', '--session', 'x'])).toBe(true);
+  });
+
+  it('grants project-pool ONLY with --project, in both directions', () => {
+    // The flag is not a confirmation token here, it is the verb's whole
+    // argument surface — and prefix matching leaves everything after it
+    // unconstrained, so the two forms below are the entire difference the
+    // grant can express.
+    expect(isExecAllowed('ccd', ['project-pool', '--project', 'demo', '--pool', 'pool-a'])).toBe(true);
+    expect(isExecAllowed('ccd', ['project-pool', '--project', 'demo', '--clear'])).toBe(true);
+    expect(isExecAllowed('ccd', ['project-pool', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-pool'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-pool', '--pool', 'pool-a'])).toBe(false);
   });
 
   it('is still a whitelist — plausible adjacent subcommands stay refused', () => {

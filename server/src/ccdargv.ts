@@ -311,6 +311,19 @@ export const CCD_ARGV = {
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
    *  site, so no route can invent a third word the verb would `die` on. */
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
+  /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
+   *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
+   *  `enable` rule above: the route picks between two words, the agent grants
+   *  the one prefix that covers both, and `whitelist-subset` enumerates each
+   *  separately so a shape nothing builds cannot hide behind its sibling.
+   *
+   *  `project` reaches ccd UNVALIDATED, exactly as `/api/projects/:project/
+   *  workspaces` sends it: `_ws_project_valid` on the box is the authority,
+   *  and nothing server-side joins a request-supplied name into a path. */
+  projectPoolSet:   (project: string, pool: string) =>
+                      argv(['project-pool', '--project', project, '--pool', pool]),
+  projectPoolClear: (project: string) =>
+                      argv(['project-pool', '--project', project, '--clear']),
 } as const;
 
 /**

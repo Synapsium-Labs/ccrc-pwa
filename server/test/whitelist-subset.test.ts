@@ -58,6 +58,12 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
   coordPause: ['on'],
+  // Two ENTRIES, not one parameterised by `pool: string | null` — the
+  // `start`/`enable` rule at `ccdargv.ts:180`: the route picks between two
+  // words, the argv shapes differ in their tail, and layer 3 fails outright if
+  // nothing builds one of them.
+  projectPoolSet: ['demo', 'pool-a'],
+  projectPoolClear: ['demo'],
 };
 
 /**
@@ -343,6 +349,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
     coordPause: ['coord-pause', '--state', 'on'],
+    projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
+    projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

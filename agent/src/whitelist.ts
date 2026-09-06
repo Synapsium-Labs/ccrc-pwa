@@ -233,12 +233,21 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * green diff: `isExecAllowed` is prefix-matching ("tokens after the prefix are
  * unconstrained"), so no subset test can tell the two grants apart.
  *
+ * `project-pool` (account pools) is the fourth, and it is `coord-pause`'s
+ * argument again with a sharper edge: `--project` is not a confirmation token,
+ * it is the verb's whole argument surface, and the verb REWRITES A PLACEMENT
+ * POLICY — after it runs, ccd will refuse to put a session on an account that
+ * was legal a second earlier. A one-token `['project-pool']` grant would permit
+ * every positional form the verb might ever grow, for a route the PWA reaches
+ * with no box token of any kind.
+ *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
  * different questions) is the one to avoid while fixing P1.
  */
 export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
+  'project-pool': '--project',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -361,6 +370,20 @@ export const EXEC_WHITELIST = {
     // every positional form it might ever grow — reached from a route that
     // carries no token of any kind (D-282).
     ['coord-pause', '--state'],
+    // The project pool tag's writer (account pools, spec §5.4.2), granted on
+    // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
+    // write/unlink, non-destructive, and granting it widens nothing that
+    // deletes. The server may write only `~/.cc-clips` on the fleet host and
+    // `FleetIO` has no unlink at all, so setting or clearing a tag is not a
+    // mutation that exists server-side — the same gap `ws-hold`/`ws-release`
+    // and `coord-pause` were minted for.
+    //
+    // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
+    // then some: prefix matching leaves everything after the granted tokens
+    // unconstrained, so an unenrolled `['project-pool']` would admit every
+    // positional form the verb might grow — and this verb changes where work
+    // may be PLACED, not merely whether it is paused.
+    ['project-pool', '--project'],
     // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
     // makes losing it a boot refusal rather than a widening nobody notices.
