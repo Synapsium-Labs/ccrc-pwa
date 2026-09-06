@@ -275,11 +275,23 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a non-string pool', roster(acct({ pool: 7 }))],
     ['a pool name carrying a shell metacharacter', roster(acct({ pool: 'a$(id)' }))],
     ['an explicit null pool — absence means untagged, a written null is a half-edit', roster(acct({ pool: null }))],
+    // The leading-letter anchor and the charset, measured on BOTH sides rather than
+    // on the parser alone. Three one-character drifts of the mirrored literal — a
+    // first-character class that admits a hyphen or a digit, and a charset that
+    // admits an underscore — are each survived by every other row in this block,
+    // and each makes this file LAXER than `parseRoster`, which is the one direction
+    // its header forbids. The hyphen row is the load-bearing one: a leading `-` is
+    // what `POOL_NAME_RE`'s first-character class exists to refuse, because bash's
+    // `echo` swallows an argument of `-` followed by `n`/`e`/`E` and prints nothing.
+    ['a pool name starting with a hyphen — what the leading-letter rule exists for', roster(acct({ pool: '-pool' }))],
+    ['a pool name starting with a digit', roster(acct({ pool: '1pool' }))],
+    ['a pool name containing an underscore', roster(acct({ pool: 'pool_a' }))],
     // The CAP, measured rather than assumed (D-TBD-mjs-regex-unpinned). No text scan
-    // reads a `.mjs`, so this table is the only thing holding the two copies of the
-    // grammar equal, and a cap that drifted — `{0,31}` against `{0,63}` — is the one
-    // drift every other row in this block survives: 33 lowercase letters are legal
-    // under both spellings of the charset and illegal under only one of the lengths.
+    // pins a regex literal in a `.mjs`, so this table is the only thing holding the
+    // two copies of the grammar equal, and a cap that drifted — `{0,31}` against
+    // `{0,63}` — is the one drift every other row in this block survives: 33
+    // lowercase letters are legal under both spellings of the charset and illegal
+    // under only one of the lengths.
     ['a pool name one character past the 32-character cap', roster(acct({ pool: 'a'.repeat(33) }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],

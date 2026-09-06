@@ -113,20 +113,23 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 
 /** Mirrors `shared/roster.ts`'s exported `POOL_NAME_RE`. Kept here as a literal
  *  rather than imported for this file's standing reason: a bare `node` cannot
- *  import the TypeScript. `ccd` carries a third copy in bash.
+ *  import the TypeScript. `ccd` will carry a third copy in bash (wave 2a).
  *
  *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
  *  so matters more than the tidy sentence this comment used to carry
- *  (D-TBD-mjs-regex-unpinned). `ccd`'s bash literal is pinned against
- *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file.
- *  THIS copy is pinned by BEHAVIOUR instead: no text scan reads a `.mjs`
- *  (`single-definition.test.ts` filters `/\.tsx?$/`, and wave 2a's parity test
- *  reads `ccd/ccd` and `ccrc-doctor-checks`), so what measures the agreement is
- *  `server/test/gen-accounts.test.ts`'s REJECT table, which drives the same
- *  malformed pool names — empty, uppercase, non-string, shell metacharacter,
- *  written `null`, and one character past the cap — through the CLI and the
- *  parser and requires both to refuse. A grammar drift big enough to matter
- *  reds a row there. Read that table; it is the census. */
+ *  (D-TBD-mjs-regex-unpinned). `ccd`'s bash literal will be pinned against
+ *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file —
+ *  once wave 2a's parity scan lands. THIS copy is pinned by BEHAVIOUR instead:
+ *  no text scan pins a regex literal in a `.mjs` (`single-definition.test.ts`
+ *  filters `/\.tsx?$/`, wave 2a's parity test reads `ccd/ccd` and
+ *  `ccrc-doctor-checks`, and `server/test/source-bytes.test.ts` does walk this
+ *  file — but only for control bytes, not for grammar), so what measures the
+ *  agreement is `server/test/gen-accounts.test.ts`'s REJECT table, which drives
+ *  the same malformed pool names — empty, uppercase, non-string, shell
+ *  metacharacter, written `null`, a leading hyphen or digit, an embedded
+ *  underscore, and one character past the cap — through the CLI and the parser
+ *  and requires both to refuse. A grammar drift big enough to matter reds a row
+ *  there. Read that table; it is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);

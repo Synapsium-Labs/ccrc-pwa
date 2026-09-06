@@ -242,9 +242,10 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *
  * EXPORTED, unlike `ID_RE`, because it has three readers outside this file: the
  * bare-`node` mirror (`shared/roster-json.mjs`) copies the literal, the
- * project-pool route validates a request body against this object, and `ccd`'s
- * own `POOL_NAME_RE=` bash literal is pinned equal to `POOL_NAME_RE.source` by
- * text extraction. One grammar, one definition, three readers.
+ * project-pool route validates a request body against this object, and `ccd`
+ * will carry its own `POOL_NAME_RE=` bash literal (wave 2a), pinned equal to
+ * `POOL_NAME_RE.source` by text extraction once wave 2a's parity scan lands.
+ * One grammar, one definition, three readers.
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
