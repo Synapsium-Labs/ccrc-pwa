@@ -19,6 +19,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { WS_ADD } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => {
@@ -173,5 +176,156 @@ describe('_acct_pool — the roster read, over the real generated accounts.sh', 
     // Without this the previous case proves nothing — an accounts.sh that
     // never had the function would make `unset -f` a no-op.
     expect(h.sh('declare -F _ccrc_pool >/dev/null && echo yes || echo no')).toBe('yes');
+  });
+});
+
+const writeLimits = (w: string, five: number, seven: number): void =>
+  fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+    JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
+
+const disable = (w: string): void =>
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${w}-disabled`), '');
+
+const tag = (project: string, bytes: string): void => {
+  const dir = path.join(h.home, '.cc-sessions', 'pools');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, project), bytes);
+};
+
+const shFail2 = (snippet: string): { code: number; stderr: string; stdout: string } => {
+  try { return { code: 0, stderr: '', stdout: h.sh(snippet) }; }
+  catch (e) {
+    const err = e as { status?: number; stderr?: Buffer; stdout?: Buffer };
+    return { code: err.status ?? 1, stderr: String(err.stderr ?? ''), stdout: String(err.stdout ?? '') };
+  }
+};
+
+describe('_ws_least_loaded [project] — placement honours the tag', () => {
+  // POOLED_TEST_ROSTER: claude -> pool-a, claude-a -> pool-a, claude-b ->
+  // pool-b, claude-d untagged, gpt untagged and NOT home-able.
+  it('zero-arg is byte-identical to today: the cheapest home-able lane wins', () => {
+    writeLimits('claude', 50, 50);
+    writeLimits('claude-a', 60, 60);
+    writeLimits('claude-b', 1, 1);
+    writeLimits('claude-d', 70, 70);
+    expect(h.sh('_ws_least_loaded')).toBe('claude-b');
+  });
+
+  it('zero-arg is unchanged even when the same project IS tagged elsewhere', () => {
+    // `${1-}` reads as `untagged`, so every pre-existing caller keeps its exact
+    // meaning without knowing pools exist. The parity harness's zero-arg calls
+    // depend on it.
+    tag('demo', 'pool-a');
+    writeLimits('claude', 50, 50);
+    writeLimits('claude-b', 1, 1);
+    expect(h.sh('_ws_least_loaded')).toBe('claude-b');
+  });
+
+  it('with a tagged project it skips other-pool lanes, however cheap they are', () => {
+    tag('demo', 'pool-a');
+    writeLimits('claude', 50, 50);
+    writeLimits('claude-a', 60, 60);
+    writeLimits('claude-b', 1, 1);      // cheapest, and in the WRONG pool
+    writeLimits('claude-d', 70, 70);
+    expect(h.sh('_ws_least_loaded demo')).toBe('claude');
+  });
+
+  it('an UNTAGGED account serves a tagged project — it is not "in no pool", it is unconstrained', () => {
+    tag('demo', 'pool-a');
+    writeLimits('claude', 90, 90);
+    writeLimits('claude-a', 90, 90);
+    writeLimits('claude-b', 1, 1);      // wrong pool
+    writeLimits('claude-d', 5, 5);      // untagged, and cheapest of the eligible
+    expect(h.sh('_ws_least_loaded demo')).toBe('claude-d');
+  });
+
+  it('falls back to the first IN-POOL account when nothing eligible is measured', () => {
+    // The `first` fallback sits AFTER the pool filter, so an all-unmeasured
+    // in-pool set falls back to the first IN-POOL account in roster order —
+    // never to a cheaper-looking account in another pool.
+    tag('demo', 'pool-b');
+    writeLimits('claude', 1, 1);        // pool-a: must not be the fallback
+    expect(h.sh('_ws_least_loaded demo')).toBe('claude-b');
+  });
+
+  it('answers EMPTY when every in-pool lane is disabled', () => {
+    tag('demo', 'pool-b');
+    disable('claude-b');
+    disable('claude-d');
+    expect(h.sh('_ws_least_loaded demo')).toBe('');
+  });
+
+  it('answers EMPTY when the tag is undecidable — nobody decides, not "everyone may"', () => {
+    // The mutant this kills is the one that matters most: an undecidable tag
+    // that let placement proceed would put work on whatever account is
+    // cheapest, i.e. it would silently LIFT the constraint on a chmod.
+    for (const bytes of ['Pool a', '']) {
+      tag('demo', bytes);
+      writeLimits('claude-b', 1, 1);
+      expect(h.sh('_ws_least_loaded demo'), JSON.stringify(bytes)).toBe('');
+    }
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'pools', 'demo'));
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', 'pools', 'demo'));
+    expect(h.sh('_ws_least_loaded demo')).toBe('');
+  });
+});
+
+describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', () => {
+  it('names the pool, each accounts own first failing predicate, and the remedies', () => {
+    h.makeRepo('demo');
+    tag('demo', 'pool-b');
+    disable('claude-b');
+    disable('claude-d');
+    const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('in pool pool-b');
+    // FIRST FAILING PREDICATE IN LOOP ORDER, mirroring `_ws_least_loaded`'s own
+    // order: missing, then disabled, then pool. An account that is BOTH
+    // disabled and in the wrong pool is reported as disabled, because that is
+    // the check that ran first and the one the operator fixes first.
+    expect(r.stderr).toContain('claude:pool=pool-a');
+    expect(r.stderr).toContain('claude-a:pool=pool-a');
+    expect(r.stderr).toContain('claude-b:disabled');
+    expect(r.stderr).toContain('claude-d:disabled');
+    expect(r.stderr).toContain('nothing was touched');
+    // …and it really touched nothing.
+    expect(fs.existsSync(path.join(h.home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+  });
+
+  it('names the TAG, not the accounts, when the tag is undecidable', () => {
+    // The two empties `_ws_least_loaded` cannot tell apart, told apart here.
+    // Without this the operator is sent to enable a lane for a project whose
+    // problem is a permission bit on one file.
+    h.makeRepo('demo');
+    tag('demo', 'Pool a');
+    const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('tag:malformed');
+    expect(r.stderr).toContain('.cc-sessions/pools/demo');
+    expect(r.stderr).not.toContain(':disabled');
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+  });
+
+  it('still places into a tagged project when the pool has an account', () => {
+    // The other direction: the refusal must not have become the only outcome.
+    h.makeRepo('demo');
+    tag('demo', 'pool-b');
+    writeLimits('claude', 1, 1);        // cheapest, wrong pool
+    writeLimits('claude-b', 90, 90);
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(h.reg('demo-quiet-mesa', 'home')).toBe('claude-b');
+  });
+
+  it('an untagged project keeps the pre-existing refusal sentence exactly', () => {
+    // No pool words where there is no pool. The reason list is unchanged for
+    // every project on the box that nobody has tagged.
+    h.makeRepo('demo');
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) disable(w);
+    const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('no account available for placement —');
+    expect(r.stderr).not.toContain('in pool');
+    expect(r.stderr).not.toContain(':pool=');
   });
 });

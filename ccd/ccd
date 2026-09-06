@@ -3724,7 +3724,7 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
-_ws_least_loaded() {   # -> the home-able account with the most headroom, or "" if none is placeable
+_ws_least_loaded() {   # [project] -> the home-able account with the most headroom, or "" if none is placeable
   # UNKNOWN IS NOT ZERO. This used to read `[[ -z "$sc" ]] && sc=0`, so an
   # account _limit_score knows nothing about — no ~/.cc-limits/<w>.json at all —
   # scored 0 and beat every account that had honestly reported its pressure.
@@ -3777,9 +3777,34 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   # `first` fallback below takes the first placeable account, and the tie-break
   # is a STRICT `<`, so the first home-able account also wins every tie. The
   # server's `projectHome` ranks ties by the same declaration order.
+  #
+  # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
+  # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
+  # `untagged` by its own first guard, `_pool_ok` returns 0 for `untagged`, and
+  # every pre-existing caller — the parity harness included — is byte-identical.
+  #
+  # THE STATE IS READ ONCE, before the loop, and the WORD is passed to each
+  # candidate: a loop over five accounts costs one `cat`, not five.
+  #
+  # ONE PREDICATE, NO SECOND EXIT. An UNDECIDABLE tag needs no early return of
+  # its own: `_pool_ok` answers 2 for every candidate, every candidate
+  # `continue`s, `first` stays empty and this function answers "" — which is
+  # the right answer (nobody may decide) reached by the same line that skips a
+  # wrong-pool lane. Deleting that line therefore reds BOTH the skip cases and
+  # the undecidable cases, which is why there is no second guard here to keep
+  # in step with it.
+  #
+  # THE EMPTY ANSWER IS OVERLOADED and stays that way: "" is both "every
+  # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
+  # is no second channel on this seam — stdout carries a wrapper name — so the
+  # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  local pps; pps=$(_project_pool_state "${1-}")
   local best="" bs=1000 first="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
+    # AFTER `_account_ok`, BEFORE `first`: the fallback below must land on the
+    # first IN-POOL account, never on a cheaper-looking lane in another pool.
+    _pool_ok "$w" "$pps" || continue
     [[ -z "$first" ]] && first="$w"
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
@@ -3901,14 +3926,33 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # all-excluded refusal leave the box exactly as it found it. Pressure alone
   # never refuses (the all-pinned fixture rule stands); only every lane
   # failing _account_ok gets here.
-  local hw; hw=$(_ws_least_loaded)
+  local hw; hw=$(_ws_least_loaded "$project")
   if [[ -z "$hw" ]]; then
-    local w why=""
-    for w in "${CCRC_HOME_ABLE[@]}"; do
-      if [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
-      elif ! _lane_enabled "$w"; then why+=" $w:disabled"; fi
-    done
-    die "no account available for placement —${why}; enable one (rm $REG/<w>-disabled) and retry — nothing was touched"
+    # TWO EMPTIES, TOLD APART HERE (spec §6). `_ws_least_loaded` answers "" for
+    # "every in-pool lane is unusable" AND for "the tag is undecidable", and
+    # the two have completely different remedies — enable a lane versus fix one
+    # file's bytes. Re-reading the state costs one `cat` on a path that is
+    # already refusing.
+    local w why="" pps ppn=""
+    pps=$(_project_pool_state "$project")
+    case "$pps" in "named "*) ppn=${pps#named } ;; esac
+    if [[ "$pps" != untagged && -z "$ppn" ]]; then
+      why=" tag:$pps $POOLS_DIR/$project"
+    else
+      for w in "${CCRC_HOME_ABLE[@]}"; do
+        # FIRST FAILING PREDICATE IN LOOP ORDER — `_ws_least_loaded`'s own
+        # order, so the reason names the check that actually stopped this
+        # account rather than the last one that would have.
+        if   [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
+        elif ! _lane_enabled "$w";       then why+=" $w:disabled"
+        # `pps` is `untagged` or `named …` in this branch, so `_pool_ok` can
+        # only answer 0 or 1 here, and an account reported with `pool=` is
+        # always a TAGGED one — the empty answer never reaches this string.
+        elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
+        fi
+      done
+    fi
+    die "no account available for placement${ppn:+ in pool $ppn} —${why}; enable one (rm $REG/<w>-disabled)${ppn:+, tag an account into pool $ppn in ~/.ccrc/accounts.json and redeploy the agent lane, or untag the project (ccd project-pool --project $project --clear)} and retry — nothing was touched"
   fi
 
   # PER PROJECT, and it spans slug selection through the last registry write —
