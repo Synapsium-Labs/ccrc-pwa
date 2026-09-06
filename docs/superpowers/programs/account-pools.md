@@ -160,6 +160,42 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   Found by the worker's own sweep for "comments asserting a mechanism that is not there" — the class its
   brief told it to watch, caught in the code it was transcribing rather than reproduced into it.
 
+- **D-1796 (wave 2a, 2026-09-06 15:13 UTC) — PARKED WITH DISCLOSURE, and the park is CONDITIONAL.** `read -d ''` returns
+  non-zero for both end-of-file and a read FAILURE, so a failure past the `-f && -r` guard answers `malformed`
+  where the truth is `unreadable`. The worker parked rather than fixed, and asked to be checked because it is
+  the opposite call from D-1744 on a similar shape. **Endorsed, and the distinction is the durable rule: the
+  overloaded-null invariant is about CALLERS, not vocabulary.** D-1744 folded into the PERMISSIVE direction
+  across a seam whose sides are handled differently (`untagged` places freely, `unreadable` refuses); this
+  folds into the REFUSING direction across a seam whose sides are handled identically. Same shape, opposite
+  verdict. Closing it needs a distinction bash does not expose, i.e. a fork on the 5-second supervise path —
+  the one round 3 removed — to improve a MESSAGE. Wrong trade; not spent.
+  **Three corrections I required in the entry, no code.** (a) The load-bearing premise — "every decider maps
+  both to rc 2" — rests on `_pool_ok`, which I measured as having ZERO definitions on the branch: Task 2 is
+  unwritten. That is the wave's own recurring class (an argument resting on machinery that does not exist,
+  stated as fact), except the owing wave is the worker's own next task, so it must re-measure and say so
+  rather than hedge. (b) The two cases differ in SEVERITY and were filed under one heading: a zero-byte
+  failure is a wrong MESSAGE (placement refuses either way), while a partial read that errors after delivering
+  a grammatically valid prefix answers `named <prefix>` — a POSITIVE answer permitting placement onto a pool
+  the file does not name, which is decision-level. (c) A park needs an unreachability ARGUMENT, not
+  "unconstructed": after the `-f` type guard the path resolves to a regular file, and for a regular file on a
+  local filesystem the kernel returns a short read at EOF rather than erroring mid-stream (the `/proc/self/mem`
+  case delivers zero bytes; devices and FIFOs never open); and `$REG` is not a trust boundary — whoever can
+  plant a partially-erroring path there can write a wrong pool name directly.
+  **THE CONDITION, to be written as a trip-wire in the entry:** the park holds only while every decider maps
+  `unreadable` and `malformed` to the SAME refusal. Different MESSAGES are fine and expected. A different
+  DECISION in any later wave retroactively makes this a decision-level fold and the entry must be revisited.
+  **Carried to wave 3** alongside D-1744 — that file now owes TWO polarity obligations, and its
+  `readFileMeasured` has the mechanism bash lacks: a failed read is `unreadable`, never `malformed`, never a
+  name. Both go in wave 3's brief so they arrive twice.
+  Note: the allocator floor moved 1745 -> 1797 between this wave's two requests, so another lane published and
+  swept in between. Never predict a number.
+- **Wave 2a Task 1 took three fix rounds, and they were earned.** The spec's reader body was wrong three
+  levels deep: the tag FILE (D-1744), then `$POOLS_DIR` and `$REG` one level up, then open(2) TYPE — a FIFO or
+  a symlink to `/dev/zero` made the read BLOCK FOREVER, hanging `cmd_supervise` with no exit code and no word
+  on stdout, which defeats the never-dies contract harder than dying would (a supervisor that exits gets
+  noticed; one that blocks does not). All closed and reproduced, and round 3 removed a fork and a subshell
+  from the hot path rather than adding any.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
