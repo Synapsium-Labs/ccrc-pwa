@@ -2536,3 +2536,49 @@ substituted before wave-done.
   nicety:** `readFileMeasured` distinguishes a failed read from a complete one, so the TypeScript
   mirror answers `unreadable` on a failed read and can NEVER answer a name from one. With D-1744
   that file now owes wave 3 two polarity obligations.
+
+- **D-TBD-poolsv1-advertised-before-crosspool-exists** (Task 3) — `cmd_caps` echoes the
+  capability token `pools-v1` in wave 2a, one wave BEFORE the capability it gates exists. The
+  token gates exactly ONE server decision — whether the server may build a `--cross-pool` argv
+  (wave 3) — and `capSupported` refuses on no evidence precisely because the wrong guess there is
+  a SILENT SUCCESS. MEASURED on this branch: `_pool_ok` has ZERO call sites (it gains exactly one,
+  `_ws_least_loaded`, by this wave's end — not "every account decision", which waits for wave 2b's
+  `_swap_target`/`_auto_swap_check`), and `--cross-pool` appears in `ccd/ccd` only as comment text.
+  So a wave-3 server meeting a 2a-only fleet box would build `ccd swap --cross-pool …` against a
+  `ccd` that does not know the flag; where that does not die, `runCcdOr502` renders exit 0 as
+  `200 {ok:true}` for a crossing that never happened — the exact hazard the token's own comment
+  says it exists to prevent.
+  WHAT CLOSES THE WINDOW TODAY IS ORDERING, NOT MECHANISM: waves merge in sequence and agent-first
+  ships `ccd` before the server (Task 9). That is process, and a partial deploy or a `ccd`
+  rollback reopens it.
+  The alternative considered and NOT taken in this wave — moving `echo pools-v1` to wave 2b, where
+  `--cross-pool` lands — is strictly safer because it uses the mechanism already present (absent
+  token, `capSupported` refuses, no argv is built). It was left in place because the plan sites it
+  here deliberately and moving it rewrites two other waves' plans plus this wave's pinned rows 18
+  and 47; the question was referred to the coordinator rather than decided unilaterally, since a
+  capability token is a cross-wave contract.
+  The comment above `echo pools-v1` is corrected in this wave to state what is true as of 2a and
+  to name the owing wave for the rest, rather than asserting later-wave machinery as present fact.
+  **Obligation on wave 2b:** when `--cross-pool` lands, this token's promise becomes true — check
+  this entry and close it.
+
+- **D-TBD-clear-over-dangling-symlink-reports-success** (Task 3) — `cmd_project_pool --clear`
+  guards its unlink with `[[ -e "$POOLS_DIR/$project" ]]`, and `-e` is FALSE for a dangling
+  symlink, so the `rm` is SKIPPED — there is no failure for the `|| die` to catch. Measured in a
+  fixture HOME: `ln -s /nonexistent/t $REG/pools/demo` then `--clear` prints `untagged demo` and
+  exits 0, the symlink SURVIVES, `_project_pool_state` still answers `unreadable`, `_pool_ok`
+  still answers rc 2, and placement stays BLOCKED while the operator has been told the tag is
+  gone. This is the exact `--clear` polarity the plan names as worst ("a caller told the project
+  was untagged while the constraint still binds every placement"), reached by a path the plan's
+  own `|| die` cannot see, because nothing failed.
+  It is also **an adapter narrowing a distinction it received**: the verb computes
+  `oldstate=$(_project_pool_state "$project")` and therefore HOLDS `unreadable` at the moment it
+  decides, then discards it and asks `-e` instead.
+  The reader already solved this two lines apart (`[[ ! -e "$f" ]]` paired with `[[ -L "$f" ]]`,
+  D-1744); the writer must pair them too. Fixed in wave 2a with a red-first test — the existing
+  `--clear` failure test plants a DIRECTORY, which `-e` does see, so it could never have caught
+  this.
+  **Obligation on wave 3:** its route re-reads the tag through the agent after calling the verb
+  and answers a MEASURED state, so it would have reported `unreadable` while `ccd` exited 0 —
+  the two would have disagreed. That re-read is what makes the server's answer right; it does
+  not make the verb's exit code right, and the verb is what a shell operator sees.

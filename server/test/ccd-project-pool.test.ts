@@ -395,6 +395,24 @@ describe('ccd project-pool — the writer verb', () => {
     expect(fs.statSync(path.join(POOLS(), 'demo')).isFile()).toBe(true);
   });
 
+  it('pins the write-arm tmp file as DOT-LEADING (Fix round 1, Finding 3)', () => {
+    // The comment above the write arm calls the leading dot load-bearing —
+    // "every reader skips dot-leading entries, which is exact because no
+    // project may lead with a dot" — but nothing pinned the shape: the
+    // post-success directory listing above is identical whether the tmp file
+    // was dot-leading or not, because it is gone either way by the time
+    // anyone reads the directory. Interposing `_plat_mv_notdir` to record ITS
+    // OWN first argument, and forcing it to fail so cleanup runs afterward
+    // rather than before, is the only way to see the name at all.
+    h.makeRepo('demo');
+    h.sh(
+      '_plat_mv_notdir() { basename -- "$1" > "$HOME/tmpname-seen"; return 1; }; '
+      + '( cmd_project_pool --project demo --pool pool-a >/dev/null 2>&1 ); true');
+    const seen = fs.readFileSync(path.join(h.home, 'tmpname-seen'), 'utf8').trim();
+    expect(seen.startsWith('.')).toBe(true);
+    expect(seen).toMatch(/^\.demo\.\d+\.tmp$/);
+  });
+
   it('creates $REG/pools lazily on the first --pool', () => {
     h.makeRepo('demo');
     expect(fs.existsSync(POOLS())).toBe(false);
@@ -423,6 +441,57 @@ describe('ccd project-pool — the writer verb', () => {
     expect(fs.existsSync(path.join(POOLS(), 'acct-a-demo'))).toBe(false);
     expect(h.sh('cmd_project_pool --project acct-a-demo --clear')).toBe('untagged acct-a-demo');
     expect(h.sh('cmd_project_pool --project never-existed --clear')).toBe('untagged never-existed');
+  });
+
+  it('a dangling symlink at the tag path is REMOVED by --clear, not silently skipped (Fix round 1, Finding 1)', () => {
+    // `-e` follows the link to a target that is not there and reads FALSE for
+    // a dangling symlink — exactly as it reads false for genuine absence. A
+    // bare `[[ -e "$POOLS_DIR/$project" ]]` guard on the removal therefore
+    // SKIPS the whole block: the link survives, and the operator is told
+    // `untagged` while `_project_pool_state` still answers `unreadable` and
+    // `_pool_ok` still answers 2 (undecidable) — the constraint still binds
+    // every placement, exactly the polarity the plan calls worst. `fs.existsSync`
+    // ALSO follows symlinks, so it cannot prove the fix either way; `lstatSync`
+    // throwing is what proves the link itself is gone, not merely its target.
+    fs.mkdirSync(POOLS(), { recursive: true });
+    fs.symlinkSync('/nonexistent/target', path.join(POOLS(), 'demo'));
+    expect(h.sh('cmd_project_pool --project demo --clear')).toBe('untagged demo');
+    expect(() => fs.lstatSync(path.join(POOLS(), 'demo'))).toThrow();
+    expect(state('demo')).toBe('untagged');
+  });
+
+  it('a symlink LOOP at the tag path is likewise removed by --clear, not silently skipped', () => {
+    // Same defect, different cause: a self-referencing symlink also reads
+    // `-e` FALSE (ELOOP), and `rm -f` removes it by `unlink(2)` on its OWN
+    // directory entry either way — it never follows the link and never cares
+    // whether the target exists or loops.
+    fs.mkdirSync(POOLS(), { recursive: true });
+    const p = path.join(POOLS(), 'demo');
+    fs.symlinkSync(p, p);
+    expect(h.sh('cmd_project_pool --project demo --clear')).toBe('untagged demo');
+    expect(() => fs.lstatSync(p)).toThrow();
+    expect(state('demo')).toBe('untagged');
+  });
+
+  it('retags cleanly over a dangling symlink and over a symlink loop — the --pool arm has no analogous `-e` gate', () => {
+    // Checked per the coordinator's ask: the write arm never tests `-e` on
+    // the tag path at all. It goes straight from `mkdir -p` to an atomic
+    // `_plat_mv_notdir` (`mv -fT` / `rename(2)`), which replaces WHATEVER
+    // directory entry is at the destination — dangling symlink, loop, or
+    // ordinary file — without needing to resolve it. Only a real DIRECTORY at
+    // the destination is refused (covered by the existing "rename cannot
+    // land" case above); a dangling link or a loop is not that shape.
+    h.makeRepo('demo');
+    fs.mkdirSync(POOLS(), { recursive: true });
+    fs.symlinkSync('/nonexistent/target', path.join(POOLS(), 'demo'));
+    expect(h.sh('cmd_project_pool --project demo --pool pool-a')).toBe('tagged demo pool-a');
+    expect(state('demo')).toBe('named pool-a');
+
+    fs.rmSync(path.join(POOLS(), 'demo'));
+    const p = path.join(POOLS(), 'demo');
+    fs.symlinkSync(p, p);
+    expect(h.sh('cmd_project_pool --project demo --pool pool-b')).toBe('tagged demo pool-b');
+    expect(state('demo')).toBe('named pool-b');
   });
 
   it('accepts a registry-only project on --pool — a custom workdir has no directory', () => {

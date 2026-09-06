@@ -353,10 +353,16 @@ export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
  *  spellings, and that test's `toContain` assertion is what keeps THIS one
  *  equal to them.
  *
- *  It gates ONE decision, and only one: whether the server may build a
- *  `--cross-pool` argv (wave 3). The tag route is gated on the VERB's presence
- *  instead, and the 409 pre-check and the placement forecast are the server's
- *  own decisions over data it reads and are not gated at all. */
+ *  It gates ONE decision, and only one, and that decision does not exist
+ *  yet: whether the server may build a `--cross-pool` argv, wave 3's. None
+ *  of the following exists today either — this names what each will be,
+ *  not what any is. The tag route (wave 3) will be gated on the VERB's
+ *  presence instead of on this token, and wave 3's 409 pre-check and its
+ *  placement forecast will be the server's own decisions over data they
+ *  read — gated by neither this token nor any other. Fix round 1 (Finding
+ *  2c): a prior version of this docstring stated the pre-check and the
+ *  forecast in the present tense, as if they already existed ungated;
+ *  they do not exist at all yet. */
 export const POOLS_CAP = 'pools-v1';
 
 /**

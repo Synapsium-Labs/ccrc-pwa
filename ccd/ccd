@@ -5000,16 +5000,25 @@ EOF
   # renders exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
   # argument, same polarity, as `stop-surface` above.
   echo actor-flags-v1
-  # `pools-v1` says THIS copy of ccd honours project pool tags: it reads
-  # `$POOLS_DIR/<project>`, applies `_pool_ok` at every account decision, and
-  # understands `--cross-pool` on the manual verbs. It gates exactly ONE server
-  # decision — "may I build a `--cross-pool` argv" — and `capSupported` refuses
-  # on no evidence, because the wrong guess there is a SILENT SUCCESS: an old
-  # ccd meets a trailing `--cross-pool` as a positional and, where it does not
-  # die, `runCcdOr502` renders exit 0 as `200 {ok:true}` for a crossing that
-  # never happened. The TAG ROUTE needs no token: the verb and every reader
-  # ship in one ccd inode, so `project-pool`'s presence in `ccdVerbs` IS the
-  # evidence. Same argument, same polarity, as `actor-flags-v1` above.
+  # `pools-v1` says THIS copy of ccd honours project pool tags. What that
+  # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
+  # it reads `$POOLS_DIR/<project>` (Task 1). `_pool_ok` (Task 2) has NO
+  # CALLER anywhere in this file yet — wiring it into fresh placement
+  # (`_ws_least_loaded [project]`) is this same wave's Task 5; wiring it into
+  # the auto-swap candidate loop and the 5-second tick (`_swap_target`,
+  # `_auto_swap_check`) is wave 2b's, a separate later wave, and so is
+  # `--cross-pool`, which appears in `ccd/ccd` only as comment text until
+  # then — no verb parses it. Fix round 1 (Finding 2a): a prior version of
+  # this comment claimed the last two in the present tense.
+  #
+  # It gates exactly ONE server decision — "may I build a `--cross-pool`
+  # argv" (wave 3) — and `capSupported` refuses on no evidence, because the
+  # wrong guess there is a SILENT SUCCESS: an old ccd meets a trailing
+  # `--cross-pool` as a positional and, where it does not die, `runCcdOr502`
+  # renders exit 0 as `200 {ok:true}` for a crossing that never happened. The
+  # TAG ROUTE needs no token: the verb and every reader ship in one ccd
+  # inode, so `project-pool`'s presence in `ccdVerbs` IS the evidence. Same
+  # argument, same polarity, as `actor-flags-v1` above.
   echo pools-v1
 }
 
@@ -5325,10 +5334,18 @@ cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
 }
 
 cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
-  # THE PROJECT SIDE of the pool rule gets a writer a phone can reach. The tag
-  # is `$POOLS_DIR/<project>` — one file, one token — and until this verb
+  # THE PROJECT SIDE of the pool rule gains a writer here. The tag is
+  # `$POOLS_DIR/<project>` — one file, one token — and until this verb
   # existed the only writer was an ssh session and an `echo`, which ruling 2
   # rules out as the only way in.
+  #
+  # THIS VERB ALONE DOES NOT REACH A PHONE — fix round 1 (Finding 2b): a
+  # prior version of this comment said it did. The exec-whitelist grant that
+  # lets the agent's PWA-facing path invoke it at all is this same wave's
+  # Task 4; the server route that calls the grant is wave 3's; the PWA
+  # control the operator actually taps is wave 4's. Until all three land,
+  # this verb is reachable the same way the `echo` it replaces was — a
+  # session running `ccd` directly, over ssh or a script, not yet the phone.
   #
   # MODELLED LINE FOR LINE ON `cmd_coord_pause` ABOVE: flag-led, EXACT arity
   # (usage die otherwise), validation before anything on disk is touched, and
@@ -5364,7 +5381,19 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # remedy IS this command run against a project whose directory and registry
     # rows are both gone; a remedy that refused on the very state it cures
     # would leave the finding unfixable.
-    if [[ -e "$POOLS_DIR/$project" ]]; then
+    #
+    # PAIRED WITH `-L`, THE FIX FOR FINDING 1 (fix round 1): a bare `-e`
+    # follows the link to a target that is not there and reads FALSE for a
+    # dangling symlink — same as genuine absence — which would skip this
+    # whole block and leave the link in place while `untagged` is echoed. The
+    # verb already HELD the honest answer a moment earlier (`oldstate`,
+    # above) and this bare `-e` discarded it — the exact shape `_project_pool_state`
+    # itself refuses two lines apart, pairing `[[ ! -e "$f" ]]` with `[[ -L "$f" ]]`.
+    # `rm -f` removes a symlink by `unlink(2)` on its OWN directory entry,
+    # which never follows the link and never cares whether the target exists
+    # or loops — so once the guard stops skipping the attempt, removal just
+    # works, and `untagged` becomes true rather than merely echoed.
+    if [[ -e "$POOLS_DIR/$project" || -L "$POOLS_DIR/$project" ]]; then
       rm -f -- "$POOLS_DIR/$project" \
         || die "could not remove the pool tag for $project — it is STILL tagged ($POOLS_DIR/$project)"
     fi
