@@ -1,6 +1,7 @@
-// The pool fixtures every language's copy of the pool machinery is driven
-// through. Two exports with two different jobs, in one file because they are
-// one subject:
+// The pool fixtures every language's copy of the pool machinery will be driven
+// through — a charter, not a census; `PoolRuleCase`'s docstring below says who
+// is driven through them today. Two exports with two different jobs, in one
+// file because they are one subject:
 //
 //  - `POOLED_TEST_ROSTER` — `DEFAULT_TEST_ROSTER` with pool tags, DERIVED from
 //    it rather than retyped, so an account added to or renamed in the root test

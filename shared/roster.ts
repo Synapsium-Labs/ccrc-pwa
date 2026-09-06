@@ -111,7 +111,8 @@ export interface AccountDef {
   /** The operator's optional grouping of accounts — a billing or tenancy pool.
    *  An account may serve a project when either side is untagged or the two
    *  names agree; `shared/poolrule.ts` is the one place that rule is spelled in
-   *  TypeScript, and `ccd`'s `_pool_ok` is the one place it is spelled in bash.
+   *  TypeScript, and `ccd`'s `_pool_ok` will be the one place it is spelled in
+   *  bash (wave 2a) — nothing under `ccd/` spells it yet.
    *
    *  REQUIRED on the type, with `null` as the untagged answer, so every
    *  constructor of an `AccountDef` has to say which it means. The field is
@@ -240,13 +241,24 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * `[a-z0-9-]` then leaves no room for whitespace, which `ccd` would word-split
  * when it reads the value back through an unquoted `$( … )`.
  *
- * EXPORTED, unlike `ID_RE`, because it has one reader outside this file today
- * — the bare-`node` mirror (`shared/roster-json.mjs`) copies the literal — and
- * two more coming: the project-pool route (wave 3) will validate a request
- * body against this object, and `ccd` will carry its own `POOL_NAME_RE=` bash
- * literal (wave 2a), pinned equal to `POOL_NAME_RE.source` by text extraction
- * once wave 2a's parity scan lands. One grammar, one definition, three readers
- * once both land.
+ * EXPORTED, unlike `ID_RE`, because something outside this file IMPORTS the
+ * object today: `server/test/roster.test.ts` value-imports it to pin the
+ * grammar's BOUNDARY — the 32-character cap and the shapes just outside it —
+ * which is an assertion only a reader of the one definition can make. Two more
+ * importers are coming: the project-pool route (wave 3) will validate a request
+ * body against this object, and wave 2a's parity scan will read
+ * `POOL_NAME_RE.source` to pin `ccd`'s own hand-typed `POOL_NAME_RE=` bash
+ * literal equal to it by text extraction.
+ *
+ * The bare-`node` mirror (`shared/roster-json.mjs`) is NOT one of those readers
+ * and is NOT why this is exported: it hand-COPIES the literal, because a bare
+ * `node` cannot import TypeScript (that file's own header says so) — exactly
+ * the relationship it also has with the module-PRIVATE `ID_RE`, so it cannot
+ * be what distinguishes the two. A copy that cannot import cannot be held equal
+ * by the compiler either, which is why the two are held equal by BEHAVIOUR
+ * instead: `server/test/gen-accounts.test.ts`'s REJECT table drives the same
+ * malformed pool names through the CLI and the parser and requires both to
+ * refuse.
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 

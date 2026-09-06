@@ -266,4 +266,49 @@ describe('generateAccountsSh — the pool projection', () => {
     const body = generateAccountsSh(pooledRoster);
     expect(body.indexOf('_ccrc_pool() {')).toBeGreaterThan(body.indexOf('_ccrc_hue() {'));
   });
+
+  // The arms above are filtered by `typeof a.pool === 'string'`, not by
+  // `!= null`, and the 12-line comment on that predicate in
+  // `shared/generate.mjs` argues the difference. Nothing measured it: every
+  // case above is reachable with `!= null` too, because `parseRoster` cannot
+  // build a non-string pool. So this roster is built BY HAND and never parsed,
+  // the same way `hostileRoster` exercises `dqEscape` independent of the
+  // parser — `generateAccountsSh` consumes a `Roster` structurally, and its
+  // `.mjs` callers are not typechecked against that type at all.
+  //
+  // Under `!= null` the emitter would answer `junk) echo 7 ;;` for a value it
+  // was never allowed to see; under `typeof === 'string'` it emits no arm, and
+  // the account reads as untagged — the only honest answer for an unvalidated
+  // value. Mutate the predicate and both assertions below red.
+  it('emits NO arm for a non-string pool that reached the generator unvalidated', () => {
+    const junkAccount = {
+      id: 'junk', label: 'Junk', configDirSuffix: '.junk',
+      exec: { kind: 'upstream' as const }, homeAble: true,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false,
+      // `shared/generate.d.mts` types the parameter as `Roster`, so the cast is
+      // what lets an unvalidated value past the compiler here the way an
+      // untypechecked `.mjs` caller would let one past in production.
+      pool: 7 as unknown as string,
+    };
+    const junkRoster = {
+      version: 1 as const,
+      accounts: [junkAccount],
+      byId: new Map([['junk', junkAccount]]),
+      byIdLengthDesc: [junkAccount],
+      homeAble: [junkAccount],
+      upstreamId: 'junk',
+    };
+
+    const body = generateAccountsSh(junkRoster);
+    const block = body.slice(body.indexOf('_ccrc_pool() {'));
+    const caseBody = block.slice(0, block.indexOf('esac'));
+    expect(caseBody).not.toMatch(/^ {4}junk\)/m);
+
+    // And the generated file in a real bash, which is what ccd will source:
+    // silence at rc 0, indistinguishable from an untagged account.
+    const junkHome = mkTmp('roster-gen-junk-pool-');
+    mkdirSync(path.join(junkHome, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(junkHome, '.ccrc', 'accounts.sh'), body);
+    expect(sh(junkHome, "_ccrc_pool 'junk' ; echo \"rc=$?\"")).toBe('rc=0');
+  });
 });
