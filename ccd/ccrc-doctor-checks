@@ -2679,7 +2679,48 @@ _pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of hays
   return 1
 }
 _check_pools() {
+  # THE `pools` SEGMENT BELOW IS THE THIRD SPELLING of a name TypeScript holds
+  # as `POOLS_DIR_NAME` (`server/src/pools.ts`) and `ccd/ccd` as
+  # `POOLS_DIR="$REG/pools"`. It is spelled out rather than derived for the
+  # reason `POOL_NAME_RE` above gives — this file is sourced under `set -u` by
+  # things that are not `ccrc`, so it can reference no other tool's variable —
+  # and, like that one, it is PINNED: `pool-name-parity.test.ts` extracts every
+  # `.cc-sessions/<segment>` literal in this file, holds the one it finds equal
+  # to `POOLS_DIR_NAME`, and then RUNS this check against a tag planted at the
+  # directory that constant names. Renaming the directory in the two files that
+  # already had pins, and not here, is red twice over.
   local dir="$HOME/.cc-sessions/pools" reg="$HOME/.cc-sessions" proot="$HOME/projects"
+  # `$REG` UNSEARCHABLE IS NOT `$REG` ABSENT, and the absence branch below
+  # cannot tell them apart — checked FIRST, ahead of it, because that branch
+  # is the one that answers. `-e "$dir"` and `-L "$dir"` are BOTH false when
+  # `$reg` itself is mode 000: neither predicate can stat OR lstat through a
+  # directory it may not search, so the pair D-1848 requires (which closes the
+  # dangling-symlink and loop shapes on `$dir` itself, and does close them)
+  # sails straight into the PASS. Measured before this guard: with `$reg` at
+  # mode 000 and a legal tag under it, this check printed `PASS pools: no
+  # project pools tagged (…/pools does not exist) — every project is
+  # unconstrained` while `_project_pool_state demo` answered `unreadable` and
+  # every placement decision on the box REFUSED. That is the reassuring-PASS
+  # inversion D-1848 was numbered for, one level up from where it looked.
+  #
+  # NOT THE READER'S WHOLE TEST, DELIBERATELY — and this is the one place this
+  # check may not mirror `_project_pool_state`. That reader answers
+  # `unreadable` for an ABSENT `$REG` too (`[[ -d "$REG" && -x "$REG" ]]`), on
+  # a branch its own comment calls unreachable, because `ccd` runs `mkdir -p
+  # "$REG"` at source time. `ccrc doctor` has no such guarantee: it runs on the
+  # SERVER box as well, which owns no `~/.cc-sessions` at all, and there
+  # "nothing is tagged, every project is unconstrained" is the truth rather
+  # than an unmeasured guess. So this refuses only what it can positively
+  # measure as PRESENT and unusable — a `$reg` that exists (or is a symlink
+  # that exists as one) and is not a searchable directory — and leaves genuine
+  # absence to the branch below. Both halves are pinned: `ccrc-doctor.test.ts`
+  # has a mode-000-`$reg` case that must FAIL and a no-`$reg` case that must
+  # PASS.
+  if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -x "$reg" ]; }; then
+    _dr_fail pools "pools-unlistable: $reg is not a searchable directory, so nothing under it — $dir included — can be reached, and ccd answers unreadable for EVERY project on a box shaped like this" \
+      "fix what is at that path — check with: ls -ld $reg"
+    return 1
+  fi
   # `-e` alone is FALSE for a DANGLING symlink — the same defect this wave has
   # already fixed twice in `ccd/ccd` (its reader, `_project_pool_state`, and
   # its writer verb): "not `-e`" reads as absence when it is not. A
@@ -2745,29 +2786,73 @@ _check_pools() {
       .*) p_leak+=("$n"); continue ;;
     esac
     # UNREADABLE and MALFORMED below mirror `_project_pool_state`'s own
-    # `unreadable`/`malformed` arms exactly — a doctor that measured a
-    # WELL-FORMED tag differently from the file that obeys it would report on
-    # a rule nobody enforces. That mapping stops there, though: `untagged` has
-    # no bucket here (an untagged project has no file for this loop to see at
-    # all), and STALE/ORPHAN/TMP-LEAK below have no counterpart in
-    # `_project_pool_state` — they answer "should this tag exist", not "what
-    # does this tag mean", and only the doctor asks that question.
+    # PER-TAG arms — its `-f`/`-r` type-and-permission gate, its NUL test, its
+    # trailing-whitespace strip and its grammar check, in that order, reaching
+    # the same word for the same bytes. A doctor that measured a WELL-FORMED
+    # tag differently from the file that obeys it would report on a rule
+    # nobody enforces.
     #
-    # `-f`/`-r` are checked FIRST and SEPARATELY from the read itself, not
-    # folded into it: `$(< "$f")` is bash's own no-fork slurp (this file's
+    # "PER-TAG" IS THE WHOLE OF THE CLAIM, and it is narrower than the
+    # sentence that stood here until this fix round, which said the arms
+    # mirrored the reader's "exactly" and was falsified twice over. The
+    # DIRECTORY-level arms deliberately differ: an unreadable `$reg` or `$dir`
+    # is `pools-unlistable` here and `unreadable` there, and an ABSENT `$reg`
+    # is a PASS here and `unreadable` there (see the guard at the top of this
+    # function for why). And until this round the NUL arm did not mirror
+    # anything at all — see below. That mapping also stops at the three arms
+    # named: `untagged` has no bucket here (an untagged project has no file
+    # for this loop to see at all), and STALE/ORPHAN/TMP-LEAK below have no
+    # counterpart in `_project_pool_state` — they answer "should this tag
+    # exist", not "what does this tag mean", and only the doctor asks that
+    # question.
+    #
+    # `-f`/`-r` are checked FIRST and SEPARATELY from the read, exactly as the
+    # reader checks them and for its two reasons: `-f` is a TYPE gate that
+    # must precede any attempt to OPEN `$f` (a FIFO under `pools/` blocks in
+    # `open(2)` forever, and `read < "$f"` blocks there no less than `cat`
+    # would), and `-r` settles the permission question BEFORE the read, so a
+    # mode-000 tag is answered `pools-unreadable` rather than falling through
+    # to a read that finds no delimiter and looks exactly like empty content.
+    #
+    # THE READ IS `read -r -d ''`, NOT `$(< "$f")` — fix round 6. Bash DROPS a
+    # NUL byte wherever it lands in a variable, so once the bytes are inside
+    # `$v` the NUL is gone and no later test can find it: `printf 'pool-\0a'`
+    # spliced to the legal-looking token `pool-a`, this check PASSED "every
+    # project tag … is one legal pool name" while `_project_pool_state`
+    # answered `malformed`, and the command substitution ALSO printed
+    # `warning: command substitution: ignored null byte in input` straight to
+    # the operator's stderr — from the PARENT SHELL, so no redirection on the
+    # read could have caught it (all measured). The only builtin that can SEE
+    # a NUL is `read -d ''`, whose exit status is 0 iff a delimiter was found
+    # before EOF and 1 at EOF — a free detector, and the one the reader
+    # already uses. Using it removes the command substitution, so both halves
+    # of the defect close in one change, and it stays fork-free (this file's
     # PATH is not guaranteed to carry `cat` — measured under
-    # `ccrc-doctor.test.ts`'s harness, exit 127), and its OWN exit status does
-    # correctly report a permission failure same as `cat`'s would — but adding
-    # ANY other redirection to that special form (e.g. `2>/dev/null`, to
-    # silence the "Permission denied" it prints straight to stderr) breaks
-    # bash's fast-path recognition of it and returns EMPTY EVEN ON A
-    # SUCCESSFUL READ (measured). So the permission question has to be settled
-    # by a plain `-r` test beforehand, which costs no fork either, rather than
-    # answered by wrapping the read itself.
+    # `ccrc-doctor.test.ts`'s harness, exit 127; see `_pool_has_line`'s
+    # header).
+    #
+    # THE REDIRECTION ORDER IS THE READER'S, and load-bearing for the same
+    # reason it states there: bash applies redirections LEFT TO RIGHT and
+    # reports a failing one on whatever stderr is current AT THAT POINT, so
+    # `2>/dev/null` must come BEFORE `< "$f"` or a permission error escapes
+    # before the silencer is in place. (`-r` above means that only matters for
+    # a TOCTOU race, and getting it right costs nothing.)
+    #
+    # DISCLOSED, NOT CLOSED, exactly as the reader discloses it: `read -d ''`
+    # returns 1 for a read FAILURE and for EOF alike, so a failure past
+    # `-f && -r` reads as ordinary content. A zero-byte result lands in
+    # `p_malformed`; a partial read leaving a legal prefix is reported as a
+    # well-formed tag this file never held. Both are the reader's parked arms,
+    # inherited here rather than re-argued, because a doctor that measured
+    # them differently would be the second reader of one fact this comment
+    # exists to prevent.
     if [ ! -f "$f" ] || [ ! -r "$f" ]; then
       p_unread+=("$n"); continue
     fi
-    v="$(< "$f")"
+    v=
+    if { IFS= read -r -d '' v; } 2>/dev/null < "$f"; then
+      p_malformed+=("$n"); continue
+    fi
     v="${v%"${v##*[![:space:]]}"}"
     if ! [[ "$v" =~ $POOL_NAME_RE ]]; then
       p_malformed+=("$n"); continue

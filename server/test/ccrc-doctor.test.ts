@@ -3776,6 +3776,76 @@ describe('ccrc doctor: pools', () => {
     expect(lineFor(runDoctor(home).stdout, 'pools')).not.toMatch(/^PASS pools: /);
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    'FAILS pools-unlistable when the REGISTRY cannot be searched, never PASS "no project pools tagged"', () => {
+      // THE PARENT'S BLIND SPOT, not the tag's. `-e` and `-L` on
+      // `~/.cc-sessions/pools` are BOTH false when `~/.cc-sessions` itself is
+      // mode 000 — neither predicate can stat OR lstat through a directory it
+      // may not search — so the absence branch fires and the doctor prints its
+      // most reassuring PASS on a box where `ccd`'s own reader answers
+      // `unreadable` for EVERY project (measured: `_project_pool_state demo`
+      // -> `unreadable`) and every placement REFUSES. Pairing `-e` with `-L`
+      // (D-1848) does not close this one; only a searchability test on the
+      // PARENT does. Skipped as root: root searches any directory, so the
+      // fixture cannot be built.
+      const home = healthy('ccrc-doctor-pools-reg-unsearchable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      tag(home, 'demo', 'pool-a');
+      const reg = join(home, '.cc-sessions');
+      chmodSync(reg, 0o000);
+      try {
+        const out = runDoctor(home).stdout;
+        const lines = out.split('\n');
+        const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unlistable'));
+        expect(i, `no pools-unlistable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+        expect(lines[i]).toContain(reg);
+        expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+        expect(lineFor(out, 'pools')).not.toMatch(/^PASS pools: /);
+      } finally {
+        chmodSync(reg, 0o755);
+      }
+    });
+
+  it('still PASSES when the registry is ABSENT — the server box owns no ~/.cc-sessions at all', () => {
+    // The other side of the guard above, and the reason it does NOT simply
+    // copy `_project_pool_state`'s `[[ -d "$REG" && -x "$REG" ]]`: that reader
+    // answers `unreadable` for an ABSENT `$REG` too, on a branch its own
+    // comment calls unreachable (`ccd` runs `mkdir -p "$REG"` at source time).
+    // `ccrc doctor` has no such guarantee — it runs on the server box, which
+    // owns no registry at all — and there "nothing is tagged, every project is
+    // unconstrained" is measured, not assumed. `healthy()` builds exactly that
+    // box: it never creates `~/.cc-sessions`.
+    const home = healthy('ccrc-doctor-pools-reg-absent-');
+    expect(existsSync(join(home, '.cc-sessions')), 'the fixture is not the no-registry box').toBe(false);
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('no project pools tagged');
+  });
+
+  it('FAILS pools-malformed for a tag holding an embedded NUL byte, and leaks no warning to stderr', () => {
+    // Bash DROPS a NUL wherever it lands in a variable, so `$(< "$f")` spliced
+    // `pool-\0a` into the legal-looking token `pool-a` and the check PASSED
+    // "every project tag … is one legal pool name" — while the command
+    // substitution ALSO printed `warning: command substitution: ignored null
+    // byte in input` straight to the operator's stderr. `ccd`'s reader answers
+    // `malformed` for this file. The only builtin that can SEE the NUL is
+    // `read -d ''`, whose exit status distinguishes "found a delimiter" from
+    // "hit EOF" — which is what the check now uses, so both halves are fixed
+    // by one change.
+    const home = healthy('ccrc-doctor-pools-nul-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-\u0000a');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-malformed'));
+    expect(i, `no pools-malformed line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+    expect(r.stderr).not.toContain('null byte');
+    expect(r.stderr).toBe('');
+  });
+
   it('gives each class its OWN line and its OWN remedy, never one joined verdict', () => {
     // Two classes with two different remedies on one box: `pools-malformed` is
     // "rewrite the file", `pools-stale` is "clear the tag". Joining them hands

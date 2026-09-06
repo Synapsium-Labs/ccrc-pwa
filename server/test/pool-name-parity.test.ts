@@ -4,8 +4,10 @@
 // `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`
 // does exactly that), so neither can import a TypeScript constant. This is the
 // `CCRC_RC_FILE` mechanism from `single-definition.test.ts`, applied to the two
-// values the pool design puts in two languages: the NAME GRAMMAR and the
-// DIRECTORY NAME.
+// values the pool design puts in more than one language: the NAME GRAMMAR
+// (three spellings — TypeScript, `ccd/ccd`, `ccrc-doctor-checks`) and the
+// DIRECTORY NAME (three as well, and the third of those was pinned by nothing
+// until the last describe below was written; see its own header).
 //
 // The precedent this improves on is `ccd/ccrc-wrapper-shape:67`, which holds a
 // hand-written bash copy of `shared/roster.ts`'s `ID_RE` and discloses that
@@ -15,6 +17,7 @@
 // same file is the drift this exists to refuse, and a scan that took the first
 // match would not see it.
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,10 +25,18 @@ import { fileURLToPath } from 'node:url';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
 import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const ccdSrc = readFileSync(CCD, 'utf8');
+/** bash's absolute path, resolved ONCE under this process's real PATH. The one
+ *  run below hands its child an EMPTY PATH — `_check_pools` forks nothing, and
+ *  an empty PATH is the strongest statement of that — and libuv resolves the
+ *  executable against the CHILD's environment, so a bare `bash` would be
+ *  ENOENT. `ccrc-doctor.test.ts:66` resolves it the same way for the same
+ *  reason. */
+const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 /** The single capture, with the count asserted first — a helper rather than a
  *  repeated three-line block, because this file makes the same claim about
@@ -89,7 +100,7 @@ describe('the pool-name grammar is one grammar in two languages', () => {
   });
 });
 
-describe('the pools directory is one name in two languages', () => {
+describe('the pools directory is one name in two languages (the third spelling is below)', () => {
   it('ccd/ccd holds exactly one POOLS_DIR, and its tail is POOLS_DIR_NAME', () => {
     const tail = exactlyOne(ccdSrc, /^POOLS_DIR="\$REG\/([^"]*)"$/gm, 'ccd/ccd POOLS_DIR');
     expect(tail).toBe(POOLS_DIR_NAME);
@@ -102,7 +113,56 @@ describe('the pools directory is one name in two languages', () => {
   });
 });
 
-describe('the two directory-name spellings are the same directory on a real box', () => {
+describe('the pools directory has a THIRD spelling, and it is pinned too', () => {
+  // `pool-name-parity.test.ts` was titled "one name in two languages" while
+  // there were three: `ccd/ccrc-doctor-checks`'s `_check_pools` opens with its
+  // own literal `$HOME/.cc-sessions/pools`, pinned by nothing. A rename would
+  // have reddened the two describes above, been "fixed" in both, and left the
+  // doctor silently reading the old directory — and answering `PASS pools: no
+  // project pools tagged … every project is unconstrained` for a box where
+  // every project IS tagged, which is this file's worst verdict shape.
+  //
+  // TEXT FIRST, THEN EFFECT. The text scan proves there is exactly ONE
+  // `.cc-sessions/<segment>` literal in that file and that its segment is
+  // `POOLS_DIR_NAME`; the run below proves the running check actually reads
+  // the directory that constant names, which no text scan can show.
+  const checks = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+
+  it('ccd/ccrc-doctor-checks names .cc-sessions/<dir> exactly once, and <dir> is POOLS_DIR_NAME', () => {
+    // Comment lines are excluded: this file's prose names the path in its own
+    // header, and a comment cannot make the check read anywhere.
+    const hits = checks.split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .flatMap((l) => [...l.matchAll(/\.cc-sessions\/([A-Za-z0-9._-]+)/g)].map((m) => m[1]!));
+    expect(hits.length, `expected exactly one .cc-sessions/<dir> literal, found ${hits.length}: ${hits.join(', ')}`).toBe(1);
+    expect(hits[0]).toBe(POOLS_DIR_NAME);
+  });
+
+  it('the doctor check READS the directory POOLS_DIR_NAME names', () => {
+    // Sourced standalone under `set -u`, the way `ccrc-doctor.test.ts`'s own
+    // `tableNames()` does it — `_check_pools` forks nothing, so this needs no
+    // stub binaries and no PATH beyond bash's own.
+    const home = mkTmp('ccrc-pools-doctor-parity-');
+    try {
+      const d = path.join(home, '.cc-sessions', POOLS_DIR_NAME);
+      fs.mkdirSync(d, { recursive: true });
+      fs.mkdirSync(path.join(home, 'projects', 'demo'), { recursive: true });
+      // Bytes no grammar accepts, so a check that READS this file must FAIL
+      // `pools-malformed`. A check reading some OTHER directory finds nothing
+      // and PASSes "no project pools tagged" — the two are never confusable.
+      fs.writeFileSync(path.join(d, 'demo'), 'Pool a');
+      const r = spawnSync(BASH, ['-c',
+        `set -uo pipefail; . ${JSON.stringify(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'))}; _check_pools`],
+        { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: '' } });
+      expect(r.stdout, `doctor did not read ${d}:\n${r.stdout}${r.stderr}`)
+        .toContain('FAIL pools: pools-malformed: demo');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the VERB writes where POOLS_DIR_NAME says, on a real box', () => {
   it('the verb writes where POOLS_DIR_NAME says the server will look', () => {
     // Text extraction proves the two LITERALS agree. This proves the running
     // bash actually joins them the way the TypeScript will: a `POOLS_DIR` that

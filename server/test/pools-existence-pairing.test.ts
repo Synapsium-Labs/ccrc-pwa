@@ -35,6 +35,32 @@
 // a pools path in that function. Both fixes are valid; a fresh, unpaired
 // `-e` is not.
 //
+// PAIRING IS NECESSARY, NOT SUFFICIENT — and that is a statement about this
+// scan's own limits, added after site 3 was found to be STILL WRONG with its
+// pairing in place. `-e`/`-L` on `$dir` answer for `$dir`; NEITHER can stat
+// or lstat through a PARENT the process may not search, so with
+// `~/.cc-sessions` at mode 000 the correctly-paired guard in `_check_pools`
+// read "absent" for a tag that was present and printed the reassuring PASS
+// all over again (measured; `ccrc-doctor.test.ts` now pins both directions).
+// The cure is a searchability test on the PARENT, one level up, and this
+// scan deliberately does NOT require one:
+//   - It would be REDUNDANT at most sites. Every per-tag `-e`/`-L` in both
+//     files sits inside `for f in "$dir"/*`, and the glob only yielded `$f`
+//     because `$dir` was already proven listable — demanding a second proof
+//     there trains authors to add noise, which is how a guard stops being
+//     read.
+//   - It is not TEXTUALLY DECIDABLE in the general case. The scan would have
+//     to know that `$reg` is `$dir`'s parent (here: one literal is a prefix
+//     of the other; in general, neither), and WHERE the parent guard belongs
+//     differs per caller — `_project_pool_state` refuses an absent `$REG`
+//     too, while `_check_pools` must NOT, because `ccrc doctor` runs on the
+//     server box, which owns no registry at all. A scan cannot choose
+//     between those; only the caller's contract can.
+// So the parent-guard class is mechanised where it can actually be measured:
+// as BEHAVIOUR, by the two `ccrc-doctor.test.ts` cases that go red when the
+// `$reg` guard is deleted and when it is widened to the reader's own test.
+// This scan keeps the narrower rule it can enforce on text, and says so.
+//
 // THE RULE (D-1848): a bare `-e` may only be used where "absent" and
 // "present but unresolvable" are handled IDENTICALLY. On a pools path they
 // never are here, so every `-e` test whose subject is a pools path must
