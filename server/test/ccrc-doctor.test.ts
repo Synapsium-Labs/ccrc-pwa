@@ -3631,8 +3631,9 @@ describe('ccrc doctor: pools', () => {
 
   /** A project directory under `$HOME/projects`, which is where the check
    *  looks for one — the same spelling `_check_graphify` uses (`:2764`). */
-  const project = (home: string, name: string): void =>
+  const project = (home: string, name: string): void => {
     mkdirSync(join(home, 'projects', name), { recursive: true });
+  };
 
   /** The roster projection ccd obeys, so the orphan arm has a pool vocabulary
    *  to measure against. Generated, never hand-written — a fixture accounts.sh
