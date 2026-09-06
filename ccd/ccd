@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0fdee0a0c31ffd8b67055ce3c91203d67224f3a4d20c669ded00ba04ba248e15
+# ccrc:generated 1 sha256=1695c2665aa905b74963ecdf8cdbe2e9a587966f9501972b1ea12a8d2b20bcd5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5598,7 +5598,8 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # `auto-pool` lines that will follow it within a tick, and that a reader who
   # cannot see the cause beside its effects has to correlate two files. Neither
   # effect exists yet: measured, `rehome` appears in this file ONLY as a member
-  # of `_LC_ACTS` (:1868) with no `_lc_emit` naming it, and `auto-pool` appears
+  # of the `_LC_ACTS` vocabulary array (`grep -n '_LC_ACTS\|rehome' ccd/ccd`)
+  # with no `_lc_emit` naming it, and `auto-pool` appears
   # nowhere in this file at all — it is spec-only (§5.5.4). Until wave 2b emits
   # them, this line's justification is a promise; the line itself is still the
   # only record a project-scoped retag leaves anywhere.

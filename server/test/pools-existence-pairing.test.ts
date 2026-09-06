@@ -44,11 +44,24 @@
 // all over again (measured; `ccrc-doctor.test.ts` now pins both directions).
 // The cure is a searchability test on the PARENT, one level up, and this
 // scan deliberately does NOT require one:
-//   - It would be REDUNDANT at most sites. Every per-tag `-e`/`-L` in both
-//     files sits inside `for f in "$dir"/*`, and the glob only yielded `$f`
-//     because `$dir` was already proven listable — demanding a second proof
-//     there trains authors to add noise, which is how a guard stops being
-//     read.
+//   - It would be REDUNDANT at every per-tag site there is — each already
+//     sits where its parent has been PROVEN, by two different constructions.
+//     In `ccrc-doctor-checks` the test is INSIDE `for f in "$dir"/*`, and the
+//     glob only yielded `$f` because the `-d`/`-r`/`-x` refusal above the
+//     loop had already returned otherwise. In `ccd/ccd` there is no loop at
+//     all: `_project_pool_state` sets `f="$POOLS_DIR/$1"` on the line
+//     DIRECTLY UNDER its own `[[ -d "$POOLS_DIR" ]]` and
+//     `[[ -x "$POOLS_DIR" ]]` tests, and reads `$f` on the next two.
+//     Demanding a second proof at either site trains authors to add noise,
+//     which is how a guard stops being read.
+//
+//     (An earlier draft of this very paragraph said EVERY per-tag `-e`/`-L`
+//     in both files sat inside `for f in "$dir"/*`. Measured false:
+//     `grep -n 'for f in' ccd/ccd` puts the nearest loop hundreds of lines
+//     from `_project_pool_state`, which has none. A universal claim inside
+//     the paragraph that exists to correct a universal claim — noted here
+//     rather than quietly rewritten, because that is the failure mode this
+//     whole file is about.)
 //   - It is not TEXTUALLY DECIDABLE in the general case. The scan would have
 //     to know that `$reg` is `$dir`'s parent (here: one literal is a prefix
 //     of the other; in general, neither), and WHERE the parent guard belongs

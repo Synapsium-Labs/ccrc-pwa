@@ -4753,8 +4753,9 @@ export type LifecycleAct =
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
   | 'rehome'        // RESERVED, and nothing emits it yet — measured, `rehome`
-                    // appears in `ccd/ccd` only as a member of `_LC_ACTS`
-                    // (:1868), with no `_lc_emit` naming it. The act it is
+                    // appears in `ccd/ccd` only as a member of its `_LC_ACTS`
+                    // vocabulary array (`grep -n '_LC_ACTS\|rehome' ccd/ccd`),
+                    // with no `_lc_emit` naming it. The act it is
                     // reserved FOR is a session's HOME account moving: the
                     // pool re-seed (account pools §5.5.4, wave 2b) and `ccd
                     // prefer`, which writes `.home` and journals nothing.
