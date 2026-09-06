@@ -391,7 +391,7 @@ git commit -m "feat(roster): an account carries an optional pool name, refused r
 - Test: `server/test/gen-accounts.test.ts` — the `CASES` REJECT table (`:222`–`:277`)
 
 **Interfaces:**
-- Consumes: `POOL_NAME_RE`'s grammar from Task 1 (copied as a literal, not imported — a bare `node` cannot import TypeScript). **What pins THIS copy is behaviour, not text** (D-1742): wave 2a's text-extraction parity test reads `ccd/ccd` and `ccrc-doctor-checks`, never a `.mjs`, and `single-definition.test.ts` filters `/\.tsx?$/`, so it cannot see this file either. The mechanism is the REJECT table in this task's own suite, which drives the same malformed pool names through both sides — which is why the table gains an over-the-cap row here as well as the five grammar rows.
+- Consumes: `POOL_NAME_RE`'s grammar from Task 1 (copied as a literal, not imported — a bare `node` cannot import TypeScript). **What pins THIS copy is BOTH, and the sentence here first said only the second** (D-1742, and its second round): no GENERIC scan reaches a regex literal in a `.mjs` — wave 2a's parity test reads `ccd/ccd` and `ccrc-doctor-checks`, and `single-definition.test.ts` filters `/\.tsx?$/` — so a scan had to be written for these literals BY NAME, and eventually was. `gen-accounts.test.ts`'s last block lifts `POOL_NAME_RE`, `ID_RE` and `LABEL_UNSAFE_RE` out of both files' text and requires each to equal the parser's. The REJECT table in this task's own suite is the other half and is not superseded by it: text equality proves the two files hold the same pattern and says nothing about whether either side APPLIES it, and the table also covers what is no regex at all (the type check, the refusal of a written `null`). This plan shipped with only the table, and three tail-charset widenings walked every row of it — see D-1742's entry.
 - Produces: `checkAccount` returns `pool: string | null` on every account, which `generateAccountsSh` reads in Task 3. `checkAccount` also VALIDATES `hidden` without returning it — the emitter has no use for the value, and the file's own contract is "reject anything the SERVER would reject", not "reject anything the generator would trip over".
 
 **Spec:** §5.3 (the `shared/roster-json.mjs` paragraph), §3.4, §12 P-1 (D-1663).
@@ -447,11 +447,17 @@ In `server/test/gen-accounts.test.ts`, add SEVEN rows to the `CASES` array (decl
     ['a non-string pool', roster(acct({ pool: 7 }))],
     ['a pool name carrying a shell metacharacter', roster(acct({ pool: 'a$(id)' }))],
     ['an explicit null pool — absence means untagged, a written null is a half-edit', roster(acct({ pool: null }))],
-    // The CAP, measured rather than assumed (D-1742). No text scan
-    // reads a `.mjs`, so this table is the only thing holding the two copies of the
-    // grammar equal, and a cap that drifted — `{0,31}` against `{0,63}` — is the one
-    // drift every other row in this block survives: 33 lowercase letters are legal
-    // under both spellings of the charset and illegal under only one of the lengths.
+    // The CAP, measured rather than assumed (D-1742). A cap that drifted —
+    // `{0,31}` against `{0,63}` — is the one drift every other row in this block
+    // survives: 33 lowercase letters are legal under both spellings of the charset
+    // and illegal under only one of the lengths.
+    //
+    // THE SENTENCE THIS COMMENT ORIGINALLY CARRIED — "no text scan reads a `.mjs`,
+    // so this table is the only thing holding the two copies of the grammar equal"
+    // — WAS TRUE WHEN WRITTEN AND IS NOW FALSE, and it was false as an argument
+    // even then: a table of rows cannot hold a CHARSET equal, because the class of
+    // widenings is open. D-1742's second round wrote the scan by name. Read the
+    // shipped file for what actually ships here.
     ['a pool name one character past the 32-character cap', roster(acct({ pool: 'a'.repeat(33) }))],
 ```
 
@@ -491,6 +497,18 @@ In `shared/roster-json.mjs`, after `LABEL_UNSAFE_RE` (`:99`):
  *  written `null`, and one character past the cap — through the CLI and the
  *  parser and requires both to refuse. A grammar drift big enough to matter
  *  reds a row there. Read that table; it is the census. */
+```
+
+> **DO NOT WRITE THE PARAGRAPH ABOVE.** It is kept as the record of what this plan
+> mandated, and its middle claim is false: THIS copy is pinned by text extraction too,
+> written by name in `gen-accounts.test.ts`'s last block, because a generic scan cannot
+> see a `.mjs` — which is a reason to write one, not a reason to settle for rows. "A
+> grammar drift big enough to matter reds a row there" is the specific sentence that
+> failed: three tail-charset widenings are drifts that matter and reded nothing. The
+> shipped docstring says what actually holds the copies equal, in both directions and
+> without ranking one as the census. Read it, not this.
+
+```ts
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 ```
 
@@ -609,15 +627,45 @@ rows that name that drift go red.** Measured in fix round 1, each restored betwe
 | `/^[a-z][a-z0-9-]{0,63}$/` — cap widened | the over-cap row |
 
 Every one of those drifts makes this file LAXER than `parseRoster`, which is the single direction its
-header forbids — which is why the census is behavioural rows and not a comment.
+header forbids.
+
+**And that table is itself incomplete — measured in ROUND 2, and it is the reason this file stopped
+being pinned by rows at all.** Every drift above is caught because some row NAMES the character it
+admits. The whole TAIL CHARSET was pinned by nothing, because no row in the block paired a legal first
+character with an illegal tail one — they all fail on the first character (`Corp`, `-pool`, `1pool`),
+on length, or on type. Measured, each restored between:
+
+| further drift of `shared/roster-json.mjs`'s literal | reds |
+|---|---|
+| `/^[a-z][a-zA-Z0-9-]{0,31}$/` — uppercase admitted in the tail | NOTHING (107 of 108 green) |
+| `/^[a-z][a-z0-9.-]{0,31}$/` — `.` admitted | NOTHING (107 of 108 green) |
+| `/^[a-z][a-z0-9+-]{0,31}$/` — `+` admitted | NOTHING (107 of 108 green) |
+
+Adding one row (`aCorp`) catches the FIRST of those three and neither of the others, because a row only
+pins the character it names and the class of tail widenings is open. So rows are the wrong mechanism
+for a charset, and the answer is the text-extraction block D-1742's first round said did not exist:
+lift the literal out of both files and require them equal. With it in place each of the three drifts
+above reds — and every REJECT row still stays green under them, which is the contrast that shows the
+two mechanisms measure different things rather than one being redundant.
 
 Restore it.
 
-> **Revised after this task landed.** Fix round 1 added three more REJECT rows (`-pool`, `1pool`,
-> `pool_a`), hedged the `ccd` sentences, and narrowed "no text scan reads a `.mjs`" to "no text scan
-> pins a regex literal in a `.mjs`" — `source-bytes.test.ts` does read this file, for bytes rather than
-> for grammar. The shipped `shared/roster-json.mjs` and `server/test/gen-accounts.test.ts` are
-> authoritative over the pastes above.
+> **Revised after this task landed, TWICE.** Fix round 1 added three more REJECT rows (`-pool`,
+> `1pool`, `pool_a`), hedged the `ccd` sentences, and narrowed "no text scan reads a `.mjs`" to "no
+> text scan pins a regex literal in a `.mjs`" — `source-bytes.test.ts` does read this file, for bytes
+> rather than for grammar.
+>
+> Round 2, at the closing review, replaced the mechanism rather than adding to it. "No text scan pins a
+> regex literal in a `.mjs`" was a true observation about GENERIC scans and the wrong conclusion to draw
+> from it: the answer to no scan existing is to write one. `gen-accounts.test.ts` now ends with a block
+> that lifts all THREE literals this `.mjs` mirrors — `POOL_NAME_RE`, `ID_RE`, `LABEL_UNSAFE_RE` — out
+> of both files' text and requires each to equal the parser's, with a vacuity tripwire that reds by name
+> if it finds no literal to lift. One `aCorp` row went in beside it as a reader's example, explicitly
+> not as the guard. The REJECT table stays, as the behavioural half: text equality never shows that
+> either side APPLIES the pattern it holds.
+>
+> The shipped `shared/roster-json.mjs` and `server/test/gen-accounts.test.ts` are authoritative over
+> the pastes above.
 
 - [ ] **Step 9: Commit**
 
@@ -722,6 +770,25 @@ export const POOLED_TEST_ROSTER = {
   }),
 };
 ```
+
+> **Reconciled with what shipped — this listing has no guards and the file has two.** Both are
+> import-time throws sitting between `POOL_BY_ID` and `POOLED_TEST_ROSTER`, and both exist because a
+> stale or shrunken map costs a downstream assertion its subject WITHOUT costing it its green:
+>
+> 1. A rename check (added in Task 4's fix round): a `POOL_BY_ID` key naming no account in
+>    `DEFAULT_TEST_ROSTER` throws. The `.map` looks a renamed id up by `a.id` and gets `undefined`,
+>    which is indistinguishable from a deliberate miss, so without this a rename would quietly cost
+>    `gen-accounts.test.ts`'s ACCEPT row one of its three `_ccrc_pool` arms.
+> 2. A floor on what the map still MEANS (added in the closing review's fix round): at least three
+>    tagged ids across at least two distinct names. The rename check cannot see the map being emptied
+>    or cut down — and an emptied map leaves that same ACCEPT row comparing two agreeing renderings of
+>    a roster with no `pool` key in it, which is green over nothing. The two floors are the docstring's
+>    own argument made checkable rather than round numbers: three ids because a pool of one cannot tell
+>    "the rule picked the in-pool account" from "the rule picked the only account left", and two names
+>    because one name cannot tell a rule that COMPARES names from one that hard-codes the only name it
+>    has ever seen.
+>
+> Read the shipped file; it is authoritative over this paste.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -1335,8 +1402,26 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   },
   {
     name: 'mismatch-on-a-prefix', accountPool: 'pool-a', project: { state: 'tagged', name: 'pool-ab' }, expect: 'mismatch',
-    why: 'the comparison is EQUALITY, not a prefix or glob match — a TS `startsWith`, or a bash `==` with an '
-      + 'unquoted right side, passes every other row in this table',
+    why: 'the comparison is EQUALITY, not containment — but this row kills ONE direction only, the one that asks '
+      + 'the PROJECT name whether it starts with (or contains) the account\'s: its account name is the SHORTER '
+      + 'string, so `projectPool.name.startsWith(accountPool)` answers serve here and reds, while the same test '
+      + 'written the other way round answers mismatch and walks. The mirror row below is the other direction, and '
+      + 'only the PAIR closes the class',
+  },
+  {
+    // D-1743 — the row above shipped claiming to pin the comparison as
+    // equality against "a TS `startsWith`", unqualified. It catches one of the
+    // two ways to write one; measured across all thirteen original rows,
+    // `accountPool.startsWith(projectPool.name)` and
+    // `accountPool.includes(projectPool.name)` both survived the whole table.
+    // This row is the mirror that kills them, and neither prefix row is
+    // redundant: each is the only row here that reds for its own direction.
+    name: 'mismatch-on-a-project-prefix', accountPool: 'pool-ab', project: { state: 'tagged', name: 'pool-a' }, expect: 'mismatch',
+    why: 'the same prefix pair with the LONGER name on the ACCOUNT, which is the direction that kills '
+      + '`accountPool.startsWith(projectPool.name)` and `accountPool.includes(projectPool.name)` — both of which '
+      + 'pass every other row in this table, measured. What the pair still does NOT catch is a bash `==` with an '
+      + 'unquoted right side: no fixture pool name carries a glob metacharacter for it to expand, so wave 2a owes '
+      + 'that hazard a quoting assertion of its own rather than a row here',
   },
   {
     name: 'unreadable-tagged-account', accountPool: 'pool-a', project: { state: 'unreadable' }, expect: 'undecidable',
@@ -1418,7 +1503,7 @@ describe('the table this drives is a real table', () => {
   // narrowed fixture list passes everything, so THIS goes red rather than every
   // assertion above going quietly vacuous.
   it('has a floor of rows, unique names, and covers every project state', () => {
-    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(13);
+    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(14);
     expect(new Set(POOL_RULE_CASES.map((c) => c.name)).size).toBe(POOL_RULE_CASES.length);
     expect([...new Set(POOL_RULE_CASES.map((c) => c.expect))].sort())
       .toEqual(['mismatch', 'serve', 'undecidable']);
@@ -1442,9 +1527,19 @@ describe('the table this drives is a real table', () => {
       expect(rows.some((c) => c.accountPool === null), `${state} over an UNTAGGED account`).toBe(true);
       expect(rows.some((c) => c.accountPool !== null), `${state} over a TAGGED account`).toBe(true);
     }
-    // Both directions plus the prefix row: an inverted comparison and a
-    // `startsWith` are the two mutations one mismatch row alone survives.
-    expect(POOL_RULE_CASES.filter((c) => c.expect === 'mismatch').length).toBeGreaterThanOrEqual(3);
+    // FOUR mismatch rows, because each kills something none of the others
+    // does. The two direction rows (`mismatch-a-into-b`, `mismatch-b-into-a`)
+    // kill a comparison that only refuses one way round. The two prefix rows
+    // kill CONTAINMENT, one direction each: a prefix or substring test only
+    // reds where the string it is called on is the LONGER of the pair, so
+    // `mismatch-on-a-prefix` (short account, long project) is the only row
+    // that kills `projectPool.name.startsWith(accountPool)`, and
+    // `mismatch-on-a-project-prefix` (long account, short project) is the only
+    // row that kills either `accountPool.startsWith(projectPool.name)` or a
+    // bare `accountPool.includes(projectPool.name)` — measured: each of those
+    // three mutations passes every row except its own. Drop one row and one
+    // mutation walks the whole table.
+    expect(POOL_RULE_CASES.filter((c) => c.expect === 'mismatch').length).toBeGreaterThanOrEqual(4);
     // Both untagged disjuncts, separately — one of them alone leaves the other
     // deletable.
     expect(POOL_RULE_CASES.some((c) => c.accountPool === null && c.project.state === 'tagged')).toBe(true);
@@ -1598,7 +1693,7 @@ export function poolRule(accountPool: string | null, projectPool: ProjectPoolWir
 
 Run: `cd server && ./node_modules/.bin/vitest run test/pool-rule-core.test.ts`
 
-Expected: PASS — 13 table rows plus 9 standalone assertions, **22 tests**.
+Expected: PASS — 14 table rows plus 9 standalone assertions, **23 tests**.
 
 **Do not write the phrase `` `shared/*.ts` `` (or any other `/*` sequence) into a LINE comment in
 this module (D-1741).** The purity scan's `code()` helper blanks BLOCK
@@ -1619,18 +1714,27 @@ Each of these is restored before the next.
    Expected: FAIL — also `an undecidable carries WHICH state`, plus `malformed-untagged-account` (`expected 'serve' to be 'undecidable'`) and `malformed-tagged-account` (`expected 'mismatch' to be 'undecidable'` — the malformed row falls through to the name comparison against a `tagged`-only field, which does not exist, so the comparison sees `undefined` and takes the mismatch arm). `tsc` also refuses this mutation, since `projectPool.name` no longer narrows; vitest's esbuild strips types, so the suite still runs it and the assertion above is what you will see.
 3. Invert the comparison to `accountPool !== projectPool.name`:
    Expected: FAIL — `same-pool-a`, `same-pool-b`, `mismatch-a-into-b`, `mismatch-b-into-a`,
-   `mismatch-on-a-prefix`, and the two shape assertions that name the arms directly:
-   `a mismatch carries BOTH names` and `names every serve REASON`.
-4. Replace the comparison with `projectPool.name.startsWith(accountPool)`:
-   Expected: FAIL — `mismatch-on-a-prefix` alone. This is the row that exists for exactly this mutation.
+   `mismatch-on-a-prefix`, `mismatch-on-a-project-prefix`, and the two shape assertions that name
+   the arms directly: `a mismatch carries BOTH names` and `names every serve REASON`.
+4. Replace the comparison with a CONTAINMENT test — three of them, one at a time. A prefix or
+   substring test only reds where the string it is called on is the LONGER of the pair, so each
+   prefix row kills one direction and neither is redundant (D-1743; the table shipped with only the
+   first of these rows, and the other two mutations walked all thirteen of them):
+   - `projectPool.name.startsWith(accountPool)` — Expected: FAIL, `mismatch-on-a-prefix` alone.
+   - `accountPool.startsWith(projectPool.name)` — Expected: FAIL, `mismatch-on-a-project-prefix` alone.
+   - `accountPool.includes(projectPool.name)` — Expected: FAIL, `mismatch-on-a-project-prefix` alone.
+   What none of them measures is a bash `==` with an unquoted right side: no fixture pool name
+   carries a glob metacharacter for such a right side to expand, so the pair cannot catch it and
+   the rows say so rather than claiming it. That hazard is wave 2a's, and it wants a quoting
+   assertion against `ccd`, not a row here.
 5. Delete four rows from `POOL_RULE_CASES` — delete the LAST four, so the two undecidable-state
    classes are the ones that go:
    Expected: FAIL — `has a floor of rows, unique names, and covers every project state`
-   (`expected 9 to be greater than or equal to 13`), and, because those four rows are also the only
+   (`expected 10 to be greater than or equal to 14`), and, because those four rows are also the only
    carriers of two other guarantees, `exercises all five verdicts the rule can produce` and
    `carries a REJECT per rule`. The floor test is the row-count guard; the other two are why "any
-   four" is the wrong instruction — no four-row deletion from a 13-row table leaves the floor test
-   as the ONLY red, since the surviving assertions jointly require ten specific rows.
+   four" is the wrong instruction — no four-row deletion from a 14-row table leaves the floor test
+   as the ONLY red, since the surviving assertions jointly require eleven specific rows.
 6. Add `import { readFileSync } from 'node:fs';` to `shared/poolrule.ts`, beside the existing import:
    Expected: FAIL — `takes TYPE imports only`, ONCE. Both of that test's guards see the mutation
    (`imports` becomes the two lines, and the `node:` scan matches), but the value-import loop's
@@ -1659,8 +1763,11 @@ Expected: exit 0. (`../shared` is in the PWA's `include`, so this is where an L0
 >    assertion, and its `node:` scan is `/from\s+['\"]node:/` — widened from single quotes only, because
 >    `import type { Stats } from "node:fs";` satisfied the type-only loop AND escaped the old scan.
 >
-> The row floor is 13, not 12: a floor one below the row count let five single-row deletions red nothing,
-> `same-pool-b` among them — and that row exists to kill an implementation hard-coding one pool name.
+> The row floor is 14, not 12 and no longer 13: a floor one below the row count let five single-row
+> deletions red nothing, `same-pool-b` among them — and that row exists to kill an implementation
+> hard-coding one pool name. The review that closed this wave then raised it again, to 14, when the
+> mirror prefix row landed (D-1743); the mismatch-count guard went 3 -> 4 in the same act. A floor is
+> only worth the row count it is measured against, so it moves every time the table does.
 
 - [ ] **Step 7: Commit**
 
@@ -1712,7 +1819,7 @@ git fetch origin main
 cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
 ```
 
-Expected: PASS. This wave defines D-1663 and D-1664 in `## Deviations found`, both issued by the allocator in the plan-commit call, so the suite has something real to measure: it reds if an allocator-era number is defined by a DIFFERENT plan file across HEAD and the fetched base. Note what green does NOT mean here: **this plan file is itself already on `origin/main`** (`ece7597a`, PR #56), so the block is not "this branch's alone" and never was — the same file defining the same numbers on both sides is one definition, not a collision. Green means no OTHER plan has taken one of them. It is run rather than assumed because green-trivially and green-because-nobody-looked are the same output and only one of them is a measurement.
+Expected: PASS. This wave defines D-1663 and D-1664 in `## Deviations found`, both issued by the allocator in the plan-commit call, plus D-1741, D-1742 and D-1743 issued in their own calls at the moments they were found, so the suite has something real to measure: it reds if an allocator-era number is defined by a DIFFERENT plan file across HEAD and the fetched base. Note what green does NOT mean here: **this plan file is itself already on `origin/main`** (`ece7597a`, PR #56), so the block is not "this branch's alone" and never was — the same file defining the same numbers on both sides is one definition, not a collision. Green means no OTHER plan has taken one of them. It is run rather than assumed because green-trivially and green-because-nobody-looked are the same output and only one of them is a measurement.
 
 - [ ] **Step 4: The tree-wide scans**
 
@@ -1723,7 +1830,7 @@ cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/
 Expected: PASS.
 
 What each is actually checking here:
-- `single-definition` scans `shared/`, `server/src`, `pwa/src`, `agent/src` (NOT `server/test`) for a second copy of a single-sourced value and for any source file restating the roster as an array literal. `POOL_NAME_RE` exists once under those roots — `sources()` filters `/\.tsx?$/`, so `shared/roster-json.mjs`'s deliberate cross-language mirror is invisible to this scan and is held equal behaviourally instead, by `gen-accounts.test.ts`'s REJECT table (D-1742; wave 2a's text extraction covers `ccd`'s bash copy, not this one).
+- `single-definition` scans `shared/`, `server/src`, `pwa/src`, `agent/src` (NOT `server/test`) for a second copy of a single-sourced value and for any source file restating the roster as an array literal. `POOL_NAME_RE` exists once under those roots — `sources()` filters `/\.tsx?$/`, so `shared/roster-json.mjs`'s deliberate cross-language mirror is invisible to THIS scan. It is not invisible to every scan: `gen-accounts.test.ts`'s last block reads that file by name and requires its three mirrored literals to equal the parser's, character for character (D-1742, second round — the first concluded the REJECT table's behaviour was enough, and three tail-charset widenings walked every row of it). Wave 2a's text extraction covers `ccd`'s bash copy, which is a third copy and still nobody's yet.
 - `topology-clean` walks `git ls-files` — every tracked file, code and document alike — for an operator's real host, account or label. The fixture names this wave introduced (`pool-a`, `pool-b`, `pool-ab`) are the only new name-shaped literals.
 - `dtbd` git-greps the tracked tree for a concrete `D-TBD` placeholder. This plan defines none at rest; any `D-TBD-<slug>` written into `## Deviations found` during execution must be substituted with an allocated number before this gate can pass, which is the mechanism that makes the placeholder a promise rather than a note.
 
@@ -1814,11 +1921,13 @@ was issued.
   `single-definition.test.ts`'s `sources()` filters `/\.tsx?$/`, so it cannot see the file either. A
   comment asserting a mechanism that does not exist is the failure mode this tree names outright
   ("a comment is a request; a red suite is a mechanism"), and it was about to ship in the same file
-  whose LAST false header claim is D-1663. Closed both ways: the comment now says what actually holds
-  the copies equal — behaviour, via `gen-accounts.test.ts`'s REJECT table, for this copy, and text
-  extraction for `ccd`'s (hedged to the future tense it belongs in, here and in Task 1's docstring) —
-  and that table grew from five pool rows to NINE, so the two copies of the grammar are held equal by
-  behaviour across four drift classes rather than by a sentence.
+  whose LAST false header claim is D-1663. **Round 1 closed it the wrong way** — recorded here rather
+  than rewritten, because the wrong way was reasonable and the reason it failed is the useful part.
+  The comment was made to say what was then believed to hold the copies equal: behaviour, via
+  `gen-accounts.test.ts`'s REJECT table, for this copy, and text extraction for `ccd`'s (hedged to the
+  future tense it belongs in, here and in Task 1's docstring). That table grew from five pool rows to
+  NINE, and the entry claimed the two copies were therefore "held equal by behaviour across four drift
+  classes rather than by a sentence". They were not.
 
   **The first attempt at this fix was itself overstated, which is the part worth recording.** It added
   ONE row — one character past the 32-character cap — and a comment calling the table "the census".
@@ -1831,3 +1940,67 @@ was issued.
   DRIFTING THE MIRRORED LITERAL rather than by deleting the gate — each drift reding exactly the rows
   that name it and nothing else. A census claim is worth exactly the mutation that was run against it,
   and the first one had not been run.
+
+  **ROUND 2 — the closing review refuted the round-1 closure, and the mechanism changed rather than
+  grew.** Three tail-charset widenings of the mirrored literal — `[a-zA-Z0-9-]`, `[a-z0-9.-]` and
+  `[a-z0-9+-]` — each SURVIVE every row of the nine-row table. The cause is structural, not a gap in
+  one row: every pool row fails on its FIRST character (`Corp`, `-pool`, `1pool`), on length (33), on
+  type (`7`, a written `null`), or on a character none of the three admit (`a$(id)`, `pool_a`). Not one
+  row paired a legal first character with an illegal TAIL one, so the entire tail charset was pinned by
+  nothing — and each widening makes the mirror LAXER than `parseRoster`, the one direction that file's
+  header forbids and the exact shape that shipped D-1663's gap behind a green deploy.
+
+  Adding rows does not fix it, and that was measured too: an `aCorp` row catches the first widening and
+  neither of the other two, because a row pins the character it names and the class of tail widenings is
+  open. A table of rows cannot make a claim about a CHARSET. So the fix is the mechanism this entry's
+  own round 1 said did not exist and stopped one step short of building: `gen-accounts.test.ts` now ends
+  with a block that lifts `POOL_NAME_RE`, `ID_RE` and `LABEL_UNSAFE_RE` out of the text of BOTH
+  `shared/roster-json.mjs` and `shared/roster.ts` and requires each pair equal — the `POOL_NAME_RE` row
+  against the IMPORTED object's `.source` and `.flags`, so at least one row measures the regex the
+  parser actually runs rather than two strings agreeing about nothing. It carries a vacuity tripwire
+  that reds BY NAME if it finds no literal to lift, which is D-1741's lesson applied before the fact.
+
+  Measured, each mutation restored between: every one of the three widenings reds the extraction row and
+  **nothing else — 107 of 108 tests stay green, every REJECT row included**. That contrast is the point.
+  It is also why the REJECT table is NOT superseded and is not described as redundant anywhere: text
+  equality proves the two files hold the same pattern and says nothing about whether either side APPLIES
+  it — a `checkAccount` that dropped its `.test` call would leave every extraction assertion green — and
+  the table still covers what is no regex at all, the type check and the refusal of a written `null`.
+  Two mechanisms, two different claims, neither one the census.
+
+  **Why this is round 2 of D-1742 and not a new number.** The finding was always "the mirrored grammar
+  is held equal by a comment claiming a mechanism nobody built". It did not become a second finding by
+  taking two attempts to close; what happened is that it was closed twice on measurements that had not
+  been taken. A new number would tell a later reader a distinct class was discovered, and none was. Also
+  closed here: the coupling `shared/roster.ts`'s docstring asserts between `POOL_NAME_RE` and the
+  module-private `ID_RE` ("deliberately `ID_RE`'s exact shape") had nothing enforcing it, and is now one
+  assertion built on the same extractor — present to make a future divergence deliberate, not to forbid
+  one.
+- **D-1743** (Task 5) — the `mismatch-on-a-prefix` row LISTED IN THIS PLAN (and shipped from it)
+  carried a `why` claiming it pins the comparison as EQUALITY against "a TS `startsWith`", unqualified.
+  It catches one of the two ways to write one. The row's `accountPool` is `pool-a` against a project
+  `pool-ab` — the account is the SHORTER string — and a prefix or substring test only reds where the
+  string it is called on is the LONGER of the pair. Measured across all thirteen rows of the table as
+  it shipped, against four comparison implementations: `===` survives (correct);
+  `projectPool.name.startsWith(accountPool)` reds on this row; `accountPool.startsWith(projectPool.name)`
+  and `accountPool.includes(projectPool.name)` each SURVIVE every row in the table. So two of the three
+  mutations the sentence claims to cover walked the whole suite, and wave 2a — which drives its bash
+  `_pool_ok` through these same rows — would have inherited the hole in a second language.
+
+  This is D-1741's class rather than a shipped-fixture slip, which is why it took its own number: the
+  defective sentence is IN THIS DOCUMENT, on a ref already merged to `main`, so a later reader
+  re-implementing from the listing would re-open the hole. Closed with the mirror row
+  (`mismatch-on-a-project-prefix`, `pool-ab` against `pool-a`), the row floor 13 -> 14, the
+  mismatch-count guard 3 -> 4, and BOTH rows' `why` rewritten to name the single direction each one
+  kills and to say that only the pair closes the class. Measured: each of the three containment
+  mutations above now reds exactly one row, and neither prefix row is redundant.
+
+  **A second overclaim in the same sentence, found while fixing the first.** The original `why` also
+  said the row catches "a bash `==` with an unquoted right side". It does not, and neither does the
+  new row: `[[ pool-a == pool-ab ]]` and `[[ pool-ab == pool-a ]]` both answer false whether or not
+  the right side is quoted, because no fixture pool name carries a glob metacharacter (`*`, `?`, `[`)
+  for an unquoted right side to expand — and the fixture-name constraint (`pool-a`/`pool-b`/`pool-ab`
+  only, spec §8) means no row here could ever carry one. The rows now name that hazard as UNCOVERED
+  and hand it to wave 2a as a quoting assertion against `ccd`, which is where it can actually be
+  measured. Recording it because it is the same defect as the first: a `why` is a claim about which
+  mutations red, and a claim nobody ran is worth nothing.
