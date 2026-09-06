@@ -368,6 +368,11 @@ Run: `cd server && ./node_modules/.bin/vitest run test/roster.test.ts test/roste
 
 Expected: PASS. (`typecheck-tests` is on the known-load-flake list; if it reds on a timeout rather than a `TS` code, re-run it alone before treating it as a break.)
 
+> **Revised after this task landed.** Fix round 1 of Task 2 hedged the `POOL_NAME_RE` docstring's
+> `ccd` sentence — `ccd` *will* carry a bash literal, pinned *once* wave 2a's parity scan lands — because
+> the present-tense form asserted a mechanism that does not exist until wave 2a. The shipped
+> `shared/roster.ts` is authoritative over the paste in Step 3 above.
+
 - [ ] **Step 9: Commit**
 
 ```bash
@@ -586,9 +591,32 @@ Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts`
 Expected: FAIL — `a non-boolean hidden … — the CLI exits nonzero and writes NO bash`, `expected 0 not to be 0`.
 
 Restore it, delete the `pool` `bad()` block, re-run:
-Expected: FAIL — all six `pool` rows of the second `it.each`, the over-cap row included; if the over-cap row alone stays green while the other five red, the mirrored literal's CAP has drifted from `shared/roster.ts`'s and that is the exact drift this row exists to catch.
+Expected: FAIL — all NINE `pool` rows of the second `it.each`.
+
+**And note what this mutation does NOT measure** (D-TBD-mjs-regex-unpinned, fix round 1). Deleting the
+gate means the mirrored `POOL_NAME_RE` is never consulted at all, so every pool row reds whatever the
+literal reads — this mutation proves the GATE rejects those shapes, and nothing about the literal. The
+plan first wrote a conditional here ("if the over-cap row alone stays green…") naming an outcome its
+own mutation cannot produce. The measurement that actually pins the mirrored literal is a different
+one, and it is the one to run: **drift the literal, one character at a time, and confirm exactly the
+rows that name that drift go red.** Measured in fix round 1, each restored between:
+
+| drift of `shared/roster-json.mjs`'s literal | reds, and nothing else |
+|---|---|
+| `/^[a-z0-9-][a-z0-9-]{0,31}$/` — leading-letter anchor lost | `-pool`, `1pool` |
+| `/^[a-z][a-z0-9_-]{0,31}$/` — underscore admitted | `pool_a` |
+| `/^[a-z][a-z0-9-]{0,63}$/` — cap widened | the over-cap row |
+
+Every one of those drifts makes this file LAXER than `parseRoster`, which is the single direction its
+header forbids — which is why the census is behavioural rows and not a comment.
 
 Restore it.
+
+> **Revised after this task landed.** Fix round 1 added three more REJECT rows (`-pool`, `1pool`,
+> `pool_a`), hedged the `ccd` sentences, and narrowed "no text scan reads a `.mjs`" to "no text scan
+> pins a regex literal in a `.mjs`" — `source-bytes.test.ts` does read this file, for bytes rather than
+> for grammar. The shipped `shared/roster-json.mjs` and `server/test/gen-accounts.test.ts` are
+> authoritative over the pastes above.
 
 - [ ] **Step 9: Commit**
 
@@ -1753,6 +1781,18 @@ go green while these read `D-TBD`.
   ("a comment is a request; a red suite is a mechanism"), and it was about to ship in the same file
   whose LAST false header claim is D-1663. Closed both ways: the comment now says what actually holds
   the copies equal — behaviour, via `gen-accounts.test.ts`'s REJECT table, for this copy, and text
-  extraction for `ccd`'s — and that table gains a row one character past the 32-character cap, which
-  is the single drift every other row in the block survives (33 lowercase letters are legal under both
-  spellings of the charset and illegal under only one of the lengths).
+  extraction for `ccd`'s (hedged to the future tense it belongs in, here and in Task 1's docstring) —
+  and that table grew from five pool rows to NINE, so the two copies of the grammar are held equal by
+  behaviour across four drift classes rather than by a sentence.
+
+  **The first attempt at this fix was itself overstated, which is the part worth recording.** It added
+  ONE row — one character past the 32-character cap — and a comment calling the table "the census".
+  The task review measured that claim and refuted it: the six pool rows of that draft survived
+  `/^[a-z0-9-][a-z0-9-]{0,31}$/` (leading-letter anchor lost) and `/^[a-z][a-z0-9_-]{0,31}$/`
+  (underscore admitted), and each of those drifts makes this file LAXER than `parseRoster` — the one
+  direction its header forbids. The leading-letter clause is the safety-load-bearing one: it is what
+  makes the generated `echo` safe, because bash swallows a first argument of `-` followed by
+  `n`/`e`/`E`. Fix round 1 added `-pool`, `1pool` and `pool_a`, and measured all four drift classes by
+  DRIFTING THE MIRRORED LITERAL rather than by deleting the gate — each drift reding exactly the rows
+  that name it and nothing else. A census claim is worth exactly the mutation that was run against it,
+  and the first one had not been run.
