@@ -24,7 +24,7 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first (touches nothing under `ccd/`). | run 32; docs PR #56 (merged `ece7597a`) carried the plans first | dispatched 2026-09-05 23:46 UTC — `sessionId:ccrc-pwa-clear-meadow`, `briefQueued:true`, `adopted:false`, `spawnState:null` (not recorded), `skillState:present`; 6 items declared; run `working` 2026-09-06 06:12 UTC on the worker's `underway` mail |
+| 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first (touches nothing under `ccd/`). | run 32; docs PR #56 (merged `ece7597a`) carried the plans first | dispatched 2026-09-05 23:46 UTC — `sessionId:ccrc-pwa-clear-meadow`, `briefQueued:true`, `adopted:false`, `spawnState:null` (not recorded), `skillState:present`; 6 items declared; run `working` 2026-09-06 06:12 UTC on the worker's `underway` mail; wave-done claimed `4c92b0b4` (PR #57, 5/5 CI green), server re-measurement ok, items 6/6; REVIEWED and returned for one fix round 2026-09-06 09:21 UTC |
 | 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | — | not opened |
 | 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | — | not opened |
 | 3 | Server L1/L3 (`pools.ts`, `poolrule.ts` wrapper), registry `stranded`, routes, watcher frame, health. | — | not opened |
@@ -75,6 +75,33 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   the `gen-accounts` REJECT table — and adding a row one character past the 32-char cap, the one drift that
   separates the two spellings. Ruling: both are real and worth numbers; the nine prose corrections are not.
   Cost if wrong: two ledger numbers spent on findings a reviewer would have called plan-only.
+
+- **Wave 1 review (coordinator, 2026-09-06 09:21 UTC):** three independent lenses on the branch package — contract/spec,
+  test integrity, safety/topology — none shown the others' output. Contract and safety returned MERGE with
+  nothing above Minor: all nine produced names exist with the spelling later waves import, `poolRule` decides
+  all eight spec cases identically with the undecidable-before-untagged precedence measured, the wire is
+  additive with `FLEET_PROTO` untouched, no real identifier reaches a tracked file, and the `ccd/`+`deploy/`
+  diff is genuinely empty. Test integrity returned two I re-measured and confirmed myself, both the wave's own
+  recurring class in its last unswept corner — a table whose `why` claims a discrimination its rows do not
+  make. **(1)** `POOL_RULE_CASES`'s `mismatch-on-a-prefix` row claims to catch a TypeScript `startsWith`; it
+  catches only the project-prefixes-account direction. Measured over all 13 rows: `a.startsWith(p)` and
+  `a.includes(p)` both SURVIVE; only `p.startsWith(a)` reds. The account is the shorter string, so the mirror
+  row is missing. Wave 2a drives its bash `_pool_ok` through this same table, so the hole is in two languages.
+  **(2)** the `gen-accounts` REJECT block is the only thing holding `roster-json.mjs`'s hand-copied
+  `POOL_NAME_RE` equal to the parser's — D-1742's own conclusion — and it does not hold: three tail-charset
+  widenings of the mirrored literal survive every row, because every pool row fails on its FIRST character or
+  on length or type and none pairs a legal first character with an illegal tail one. Each widening makes the
+  mirror LAXER than the parser, which is `hidden`'s shape exactly (D-1663). Ruling: rows are the wrong
+  mechanism — I measured that no single row closes it, the class of tail widenings being open — so the fix is
+  the text extraction D-1742 stopped one step short of building: extract the `.mjs` literal and assert it
+  equals `POOL_NAME_RE.source`. Run returned to `working`, findings mailed as 223, one fix round.
+  **Ruled NOT a fix:** a hostile string pool reaching `generate.mjs`'s emitter unescaped. Both producers refuse
+  shell metacharacters before a value can arrive, `id` and `hue` ship on identical terms in the same emitter,
+  and the safety lens independently called it house style. Cost if wrong: an unescaped `case` arm behind two
+  validators that both refuse the inputs that would reach it. Carried here rather than fixed.
+  **Not findings:** unticked plan checkboxes are this repo's norm (the last two executed plans merged to `main`
+  carry them unticked); the offline-snapshot revive gap is already implemented and mutation-pinned in wave 4's
+  plan.
 
 ## Carried constraints
 
