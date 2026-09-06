@@ -494,6 +494,34 @@ describe('ccd project-pool — the writer verb', () => {
       }
     });
 
+  it('refuses --clear when $POOLS_DIR ITSELF is a regular FILE — `rm -f` swallows ENOTDIR silently (Fix round 3, Finding 6)', () => {
+    // A THIRD shape of the same false success, one level further out.
+    // `oldstate` is `unreadable` here (correctly), so round 2's guard
+    // decides to remove — but `$POOLS_DIR/$project` is not a resolvable path
+    // when $POOLS_DIR is a plain file (ENOTDIR), and `rm -f` SWALLOWS that
+    // exactly like it swallows genuine "already gone": `rm -f` returns 0
+    // either way, so trusting rm's exit code alone reports `untagged` while
+    // `_project_pool_state` still answers `unreadable`. The fix re-measures
+    // with the same reader after a successful `rm` and refuses to report
+    // success unless it agrees.
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(POOLS(), 'not a directory\n');
+    const r = shFail('cmd_project_pool --project demo --clear');
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toContain('untagged');
+  });
+
+  it('refuses --clear when $POOLS_DIR ITSELF is a dangling symlink — `rm -f` swallows ENOENT silently (Fix round 3, Finding 6)', () => {
+    // Same shape, different cause: $POOLS_DIR resolving nowhere makes
+    // `$POOLS_DIR/$project` unreachable (ENOENT through the missing
+    // directory component), which `rm -f` also swallows.
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.symlinkSync(path.join(REG(), 'nowhere'), POOLS());
+    const r = shFail('cmd_project_pool --project demo --clear');
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toContain('untagged');
+  });
+
   it('retags cleanly over a dangling symlink and over a symlink loop — the --pool arm has no analogous `-e` gate', () => {
     // Checked per the coordinator's ask: the write arm never tests `-e` on
     // the tag path at all. It goes straight from `mkdir -p` to an atomic
@@ -698,17 +726,42 @@ describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (
   // `echo pools-v1` comment argues that a wave-3 server meeting a 2a-only
   // fleet box gets a LOUD failure rather than a silent `200 {ok:true}`,
   // because `--cross-pool` is specified LEADING, before the positionals: on
-  // a `ccd` that does not know the flag it lands in a slot `_is_valid_wrapper`
-  // refuses, and the verb DIES. Wave 3 will pin that its own builders EMIT a
-  // leading flag — a different claim from THIS one, that today's `ccd`
-  // REFUSES a leading one, and only this second claim makes advertising the
-  // token early actually safe. Nothing here asserts what the flag DOES
-  // (there is no `--cross-pool` behaviour yet); each case only asserts a
-  // nonzero exit, which is the entire safety property this early token
-  // depends on.
-  it('a leading --cross-pool on `swap` dies loudly — the `*)` arm collects it as a positional, `_is_valid_wrapper` refuses it', () => {
+  // a `ccd` that does not know the flag it lands in a POSITIONAL slot some
+  // existing validation refuses (which check fires depends on the verb and
+  // is measured per case below — see Finding 8's correction on `swap`), and
+  // the verb DIES. Wave 3 will pin that its own builders EMIT a leading
+  // flag — a different claim from THIS one, that today's `ccd` REFUSES a
+  // leading one, and only this second claim makes advertising the token
+  // early actually safe. Nothing here asserts what the flag DOES (there is
+  // no `--cross-pool` behaviour yet); each case only asserts a nonzero exit,
+  // which is the entire safety property this early token depends on.
+  it('a leading --cross-pool on `swap` dies loudly — but not because `_is_valid_wrapper` sees the flag itself', () => {
+    // Corrected in fix round 3 (Finding 8): the flag lands in the `id` slot
+    // (the `*)` arm collects it as the first positional) and `id` is never
+    // passed to `_is_valid_wrapper` at all — only checked against
+    // `$REG/$id.uuid`'s existence, further down. What actually refuses HERE
+    // is the SECOND positional, shifted one slot right by the flag's
+    // presence: `target` becomes the string meant to be the session id
+    // ("demo"), and THAT fails `_is_valid_wrapper` (a session id string is
+    // not a wrapper name).
     const r = shFail('cmd_swap --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("unknown wrapper 'demo'");
+  });
+
+  it('a leading --cross-pool on `swap` still dies when the shifted target happens to be a real wrapper — a different lock catches it', () => {
+    // The realistic skew, added per fix round 3 (Finding 8): a session id
+    // that COLLIDES with a roster wrapper id (`claude-a`/`claude-b`, both
+    // real fixture wrappers). Here `_is_valid_wrapper "$target"` PASSES
+    // ("claude-a" is a genuine wrapper) — the refusal instead comes from
+    // the FIRST lock further down: `[[ -f "$REG/$id.uuid" ]] || die "no
+    // registry for '$id'"`, where `$id` is still the literal flag
+    // `--cross-pool`. Still nonzero, but by a DIFFERENT lock than the case
+    // above — the pin covers both paths, not only the one where the target
+    // happens to be invalid.
+    const r = shFail('cmd_swap --cross-pool claude-a claude-b');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("no registry for '--cross-pool'");
   });
 
   it('a leading --cross-pool on `start` dies loudly — `$# -ge 2` makes `wrapper` the flag itself, `_is_valid_wrapper` refuses it', () => {

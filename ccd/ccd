@@ -5013,11 +5013,23 @@ EOF
   #
   # It gates exactly ONE server decision — "may I build a `--cross-pool`
   # argv" (wave 3) — and `capSupported` refuses on no evidence, because the
-  # wrong guess there is a SILENT SUCCESS: an old ccd meets a trailing
-  # `--cross-pool` as a positional and, where it does not die, `runCcdOr502`
-  # renders exit 0 as `200 {ok:true}` for a crossing that never happened. The
-  # TAG ROUTE needs no token: the verb and every reader ship in one ccd
-  # inode, so `project-pool`'s presence in `ccdVerbs` IS the evidence. Same
+  # wrong guess there is a SILENT SUCCESS IF THE FLAG WERE TRAILING: a
+  # trailing flag is just a fourth positional nobody reads, so an old ccd
+  # would silently ignore it and `runCcdOr502` would render exit 0 as
+  # `200 {ok:true}` for a crossing that never happened. Spec §5.6 rejects
+  # that shape for exactly this reason: `--cross-pool` is specified LEADING,
+  # before the positionals, so on an old ccd it lands in a slot an existing
+  # check refuses instead (measured per verb by the pins in
+  # `ccd-project-pool.test.ts`'s "pools-v1 is safe to advertise" describe —
+  # e.g. `swap`'s shifted target failing `_is_valid_wrapper`, or `start`'s
+  # `wrapper` becoming the literal flag). Fix round 3 (Finding 9): a prior
+  # version of this sentence said "trailing", the opposite of what the
+  # position mechanism and every one of those pins actually rely on — this
+  # comment and that describe block must agree, since both argue the same
+  # safety property. LOUD failure either way (an old ccd dies nonzero,
+  # `runCcdOr502` renders a real error), never a silent success. The TAG
+  # ROUTE needs no token: the verb and every reader ship in one ccd inode,
+  # so `project-pool`'s presence in `ccdVerbs` IS the evidence. Same
   # argument, same polarity, as `actor-flags-v1` above.
   echo pools-v1
 }
@@ -5400,16 +5412,39 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # and every future fix to the reader inherited for free.
     #
     # THE MESSAGE ON FAILURE says "may still be constrained" rather than "is
-    # STILL tagged": for `named` the two mean the same thing, but for
-    # `unreadable`/`malformed` nothing is a genuine, readable tag — an
-    # unsearchable $POOLS_DIR or a corrupt file — so claiming a NAMED tag
-    # survives would itself be a claim this verb cannot back. "May still be
-    # constrained" is true across all three: `_pool_ok` answers non-serve
-    # (mismatch or undecidable) for every one of them, which is what actually
-    # binds placement, and the wording never overclaims certainty for the two
-    # states where the verb genuinely cannot see what is there.
+    # STILL tagged" — corrected in fix round 3 (Finding 7): a prior version
+    # of this comment claimed `_pool_ok` answers non-serve for EVERY
+    # non-`untagged` state, which is false for `named`. Measured against
+    # `_pool_ok`'s own rule ("account untagged, OR project untagged, OR names
+    # equal"): for `unreadable`/`malformed` it answers non-serve (rc 2,
+    # undecidable) for EVERY candidate, unconditionally — nobody decides
+    # while the tag cannot be read. For `named <pool>` it answers SERVE (rc
+    # 0) for any candidate whose own account pool is unset or already equals
+    # `<pool>`, and only mismatches (rc 1) a candidate tagged with a
+    # DIFFERENT pool — a named tag does not block every account, only some.
+    # "May still be constrained" is honest for both shapes: universally true
+    # for `unreadable`/`malformed`, and genuinely possible — not certain —
+    # for `named`. Claiming a NAMED tag survives outright ("is STILL tagged")
+    # would also be wrong for `unreadable`/`malformed`, where there is no
+    # genuine, readable tag to name at all.
     if [[ "$oldstate" != untagged ]]; then
       rm -f -- "$POOLS_DIR/$project" \
+        || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
+      # RE-MEASURE RATHER THAN TRUST `rm`'s EXIT CODE — fix round 3 (Finding
+      # 6), a THIRD shape of the identical false success, one level further
+      # out. `rm -f` SWALLOWS ENOTDIR and ENOENT exactly as it swallows
+      # genuine "already gone": when $POOLS_DIR ITSELF is a regular file or a
+      # dangling symlink, `$POOLS_DIR/$project` is unreachable, `rm -f`
+      # returns 0 regardless, and this verb would report `untagged` while
+      # `_project_pool_state` still answers `unreadable`. Round 2 made the
+      # reader authoritative for the DECISION to remove; this closes the same
+      # mistake one level out — the verb acted, then reported on the strength
+      # of an rc rather than re-asking the authority. Ask again, and refuse
+      # to report success unless the one reader agrees nothing is left. This
+      # is this repo's own house style — the done-fingerprint discipline
+      # re-measures rather than trusts a claim — applied here.
+      local newstate; newstate=$(_project_pool_state "$project")
+      [[ "$newstate" == untagged ]] \
         || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
     fi
   else

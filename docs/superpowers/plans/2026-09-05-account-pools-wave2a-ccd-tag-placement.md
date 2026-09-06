@@ -2554,10 +2554,16 @@ substituted before wave-done.
   answer is both stronger and measurable. Spec §5.6 puts `--cross-pool` **LEADING**, before the
   positionals, precisely so an old `ccd` cannot silently ignore it: a TRAILING flag is a fourth
   positional nobody reads, while a LEADING one lands in a slot `_is_valid_wrapper` refuses.
-  MEASURED on this wave's own `ccd`, all three verbs: `swap --cross-pool <id> <w>` collects it in
-  the `*)` arm so `id` becomes `--cross-pool` and is refused; `start --cross-pool <w> <p>` has
-  `$# >= 2` so `wrapper` becomes `--cross-pool` and is refused; `enable` delegates to `cmd_start`
-  and dies there. All three exit NONZERO, so `runCcdOr502` renders a 502 carrying `ccd`'s own
+  MEASURED on this wave's own `ccd`, all three verbs, and **the swap arm's lock is not the one an
+  earlier draft of this entry named** — corrected after reproduction: `swap --cross-pool <id> <w>`
+  collects the flag in the `*)` arm so it lands in the `id` slot, where it is NEVER
+  wrapper-validated; what `_is_valid_wrapper` rejects is the shifted TARGET. On a skew whose
+  session id happens to collide with a roster id (`swap --cross-pool claude-a claude-b`)
+  `_is_valid_wrapper` PASSES and the refusal comes from `no registry for '--cross-pool'` instead.
+  Both paths exit nonzero, so the guarantee holds — by two different locks, and this wave pins
+  both rather than the one that happens to fire on a convenient fixture. `start --cross-pool
+  <w> <p>` has `$# >= 2` so `wrapper` becomes `--cross-pool` and IS refused by
+  `_is_valid_wrapper`; `enable` delegates to `cmd_start` and dies there. All three exit NONZERO, so `runCcdOr502` renders a 502 carrying `ccd`'s own
   stderr — a wave-3 server meeting a 2a-only fleet box gets a LOUD failure, never a silent
   `200 {ok:true}`. That guarantee holds on every `ccd` that has ever shipped, which is stronger
   than anything this program could add.
@@ -2607,6 +2613,19 @@ substituted before wave-done.
   Fixed in wave 2a, red-first, with the mode-000 case pinned specifically so the next person to
   touch this does not reach for `-L` for the same good reason. The pre-existing `--clear` failure
   test plants a DIRECTORY, which `-e` DOES see, so it could never have caught either shape.
+  **A THIRD SHAPE, found by the round-2 re-review, and it is why deciding from `$oldstate` was
+  only half the answer.** When the anomaly is at `$POOLS_DIR` ITSELF — a regular file there, or a
+  dangling symlink — `oldstate` is `unreadable` so the verb correctly decides to remove, and then
+  `rm -f` takes ENOTDIR/ENOENT and **`-f` SWALLOWS IT**, returning 0. Exit 0, `untagged` echoed,
+  state still `unreadable`. Deciding from the reader fixed WHICH ACTION to take; success was still
+  INFERRED from `rm`'s exit code instead of re-asked of the authority. The verb therefore
+  RE-MEASURES: after a successful `rm` it re-runs `_project_pool_state` and refuses unless the
+  answer is `untagged`. That is this repo's own done-fingerprint discipline applied to a one-file
+  write — trust no claim, re-measure the fact — and it closes this shape and any future one,
+  because the only thing it trusts is the reader.
+  The lesson the three shapes teach together: a false success is not fixed by choosing a better
+  PREDICATE, nor even by deciding from the right AUTHORITY, until the ACT's result is also
+  measured against that same authority.
   **Obligation on wave 3:** its route re-reads the tag through the agent after calling the verb
   and answers a MEASURED state, so it would have reported `unreadable` while `ccd` exited 0 — the
   two disagreeing. **Which one is wrong: the SERVER is right and the VERB is wrong.** The server's
