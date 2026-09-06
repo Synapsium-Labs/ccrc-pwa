@@ -103,6 +103,21 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   carry them unticked); the offline-snapshot revive gap is already implemented and mutation-pinned in wave 4's
   plan.
 
+- **Wave 1 fix round, numbering ruling (2026-09-06 09:25 UTC):** the worker asked for ONE number, not two, and argued the
+  difference. **D-1743** minted for the prefix row — it asked because the defect is not only in the shipped
+  fixture but in the PLAN, which lists that row verbatim with the `why` that overclaims, making it D-1741's
+  class (plan-mandated text whose guard measures less than its own sentence claims) rather than a fold-in.
+  Agreed. For must-fix 2 it proposed taking NO new number and amending D-1742 with a round 2 instead, since
+  that entry's subject is the finding "the mirrored grammar is held equal by a comment claiming a mechanism
+  nobody built" — an entry closed twice on measurements nobody took is still one finding. **Ruling: endorsed.**
+  A second number there would assert to a later reader that a distinct class was discovered, and none was; one
+  number, one finding, the whole history in one place. Cost if wrong: a reader tracing D-1742 must read its
+  two rounds to see the class was closed by text extraction and not by the rows its first two attempts
+  claimed. The worker also ACCEPTED the out-of-scope ruling on the unescaped emitter arm on the argument
+  rather than on authority, adding the better reason: making `pool` the one escaped value where `id` and `hue`
+  are not would itself be the inconsistency. Numbers spent outside the plan-time block so far: D-1741, D-1742,
+  D-1743.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
