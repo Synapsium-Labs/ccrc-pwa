@@ -225,6 +225,33 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   **The trip-wire now covers both arms:** if any later wave makes `named` reachable from a failed read, or
   gives `unreadable` and `malformed` different DECISIONS, this entry is void and reopens.
 
+- **D-1798 (wave 2a, 2026-09-06 16:05 UTC) — `pools-v1` is advertised one wave before `--cross-pool` exists. RULED: keep the
+  token in 2a, and the window is closed by MECHANISM, not by wave ordering.** The worker escalated rather than
+  decided, correctly: this is a cross-wave contract. Its analysis of the hazard was right — the token gates
+  exactly one server decision (may the server build a `--cross-pool` argv, wave 3), `capSupported` refuses on
+  no evidence precisely because a wrong guess is a SILENT SUCCESS, and 2a advertises the token while unable to
+  honour the flag. Its conclusion that only wave ORDERING stands in the way was wrong.
+  **What actually closes it is the flag's POSITION.** Spec §5.6 puts `--cross-pool` LEADING, before the
+  positionals, and wave 3's plan already pins that token-for-token with the reason attached: a trailing flag on
+  an old ccd's `start w p wd` is a silently ignored fourth positional, while a leading one lands in a slot
+  `_is_valid_wrapper` refuses. **I measured all three verbs on the worker's branch rather than trusting the
+  plan:** `swap --cross-pool <id> <w>` puts the flag in `id` and the session id in `target`; `start` and
+  `enable` put it in `wrapper`. All three die nonzero, so `runCcdOr502` renders a loud 502 — never the silent
+  200. That holds on every ccd that has ever shipped, which is stronger than anything this program could add.
+  **Required of 2a: the PIN.** The mechanism exists but the wave that CREATES the exposure measures nothing —
+  wave 3 pins that its builders emit a leading flag, and nobody pins that today's ccd refuses one. Different
+  claims; only the second makes the early token safe. Three assertions, no code change. The wave that creates
+  an exposure owes the proof it is safe rather than borrowing one from a wave not yet written.
+  **Nuance found while measuring:** `cmd_enable` runs `_lc_done enable "$id" ""` BEFORE delegating to
+  `cmd_start`, so a skewed enable writes a limits-ledger entry for a bogus id and only then dies. Harmless, no
+  fix, but "dies before doing anything" would be false of that verb — recorded because this program has twice
+  been bitten by a disclosure claiming slightly more than it measured.
+  **Option (a) — move the token to 2b — declined on the merits, not on cost:** with the position mechanism
+  measured it buys nothing the flag order does not already buy, and would rewrite two other plans and this
+  wave's pinned rows. The worker also fixed a comment above `echo pools-v1` that asserted `_pool_ok` runs at
+  "every account decision" and that `--cross-pool` exists: measured, `_pool_ok` has ZERO call sites at
+  `ccd/ccd:1279` and all three `--cross-pool` hits are comment text; it gains exactly one caller this wave.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
