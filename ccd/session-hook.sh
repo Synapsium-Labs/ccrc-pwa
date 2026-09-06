@@ -39,19 +39,23 @@ _hook_epoch_ms() {
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
-# ── THE TWO PRINTFS: R1's card, R5's deny ───────────────────────────────
+# ── THE THREE ENVELOPES: R1's card, R5's deny, R6's nudge ─────────────────
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
-# is context to inject, on PreToolUse it is a permission decision — and those
-# two events are the only ones this file prints on. Until D-1613 there was one
-# printf and the rule was "the card, and nothing else, ever"; now there are two,
-# so each has its OWN emitter and each emitter names its own `hookEventName`,
-# which is what stops a card being delivered as a decision or the other way
-# round. A card that leaked onto another event would not be noise; it would be
-# an answer to a question nobody asked. So this emitter is called from inside
-# the SessionStart arm and nowhere else, the deny emitter from the gate and
-# nowhere else, and every failure path in either prints NOTHING — this file's
-# standing contract (exit 0 on every path, no network, no locks, no waiting) is
-# unchanged. Every read below is a local file or a git ref.
+# is context to inject, on PreToolUse it is a permission decision OR context
+# (`additionalContext`) for the call that proceeds — and those two events are
+# the only ones this file prints on. Until D-1613 there was one printf and the
+# rule was "the card, and nothing else, ever"; now there are three builders,
+# each naming its own `hookEventName`, which is what stops a card being
+# delivered as a decision or the other way round. A card that leaked onto
+# another event would not be noise; it would be an answer to a question nobody
+# asked. So this emitter is called from inside the SessionStart arm and nowhere
+# else; `_hook_deny_json` (the gate, D-1613) and `_hook_nudge_json` (the Read
+# nudge, D-1745) are BUILDERS called only inside a `$( )` from the PreToolUse
+# arm, and whichever one the arm chose is printed from ONE site at the end of
+# the file, after the hookstate rename lands (D-1689) — at most one line per
+# event, never both. Every failure path in any of them prints NOTHING; this
+# file's standing contract (exit 0 on every path, no network, no locks, no
+# waiting) is unchanged. Every read below is a local file or a git ref.
 _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
   local j=""
   j=$(jq -cn --arg c "$1" \
@@ -72,6 +76,21 @@ _hook_deny_json() {   # <reason> -> the deny envelope, one line; 1 when it could
   j=$(jq -cn --arg r "$1" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny",
       permissionDecisionReason:$r}}' 2>/dev/null) \
+    || return 1
+  printf '%s\n' "$j"
+}
+
+# R6's emitter (D-1745). The SAME print site as the deny above — built inside
+# a $( ) capture, printed at the end of this file after the hookstate rename —
+# and the same fail-open: a jq that cannot build the envelope returns 1 and the
+# caller says nothing. What it does NOT carry is a `permissionDecision`: this
+# is `additionalContext` and the call proceeds. A `Read` is never denied, which
+# is the ruling itself — `Edit` requires a prior `Read`, so a deny here would
+# charge every session told to fix a named file one denial before its edit.
+_hook_nudge_json() {   # <nudge> -> the nudge envelope, one line; 1 when it could not be built
+  local j=""
+  j=$(jq -cn --arg c "$1" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse", additionalContext:$c}}' 2>/dev/null) \
     || return 1
   printf '%s\n' "$j"
 }
@@ -302,7 +321,7 @@ _hook_graph_card() {
     if [ -e "$GRAPH_GATE_OFF" ]; then
       line="$line Search tools are not gated here: the search gate is off (operator file)."
     else
-      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated until this session's first graph query."
+      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated, and source-file reads are nudged, until this session's first graph query."
     fi
   fi
   _hook_emit_context "$line"
@@ -340,6 +359,31 @@ GRAPH_GATE_MAX_DENIALS=3
 # / `cd <dir>;` prefix and any run of `FOO=bar ` assignments, the first word.
 # `graphify` is not in the list and so is never gated — the gate must never
 # stand between a session and the very command that opens it.
+# ── R6: what a source READ is (D-1745) ──────────────────────────────────
+# The gate leaves `Read` alone — a named file is not a question — so a session
+# can navigate file by file and never meet it. The ruling closes that hole with
+# a NUDGE on a source read, never a deny: `Edit` requires a prior `Read`, and a
+# deny here would charge every session told to fix a named file one denial
+# before its first edit.
+#
+# THE LIST IS GRAPHIFY'S OWN, not this file's opinion: `_HOOK_SOURCE_EXTS` in
+# graphify 0.9.9's `graphify/__main__.py`, the tuple its own project-scoped
+# `Read|Glob` hook nudges on, in its own order. It is spelled HERE and only
+# here — `session-hook.test.ts` harvests this assignment rather than retyping
+# the list, so a drift in either direction is red.
+#
+# ANCHORED AT THE END, dot-prefixed: `.json` can never match `.js`, `a.js.map`
+# is a `.map`, and a final segment with no dot has no extension at all. The
+# path is matched whole, so a `dist.ts/README` matches nothing either — the
+# anchor makes the last segment the only one that can end the string.
+GRAPH_NUDGE_READ_RE='\.(py|js|ts|tsx|jsx|astro|vue|svelte|go|rs|java|rb|c|h|cpp|hpp|cc|cs|kt|swift|php|scala|lua|sh|md|rst|txt|mdx)$'
+# DERIVED, never re-spelled (single-definition): the same alternation with the
+# JSON string terminator in place of end-of-line, so the raw payload can be
+# refused before any jq fork. A payload whose `file_path` ends in a source
+# extension cannot fail to carry `<ext>"`, so the prefilter has no false
+# negative that matters; a false positive costs one jq the anchored match then
+# refuses.
+GRAPH_NUDGE_PRE_RE="${GRAPH_NUDGE_READ_RE%\$}\""
 GRAPH_SEARCH_RE='^[[:space:]]*(cd[[:space:]]+[^;&|]+(&&|;)[[:space:]]*)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(rg|grep|egrep|fgrep|ugrep|ag|ack|find|fd|git[[:space:]]+grep)([[:space:]]|$)'
 
 payload=$(cat 2>/dev/null) || exit 0
@@ -547,13 +591,43 @@ if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
 # GATED call in an ARMED session pays for the jq that reads the command or the
 # git that dates the graph. A session that has queried once, or that has spent
 # its three denials, never pays anything again.
-deny_json=""
-if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
-      && "$gq" -eq 0 && "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] \
+# R6 (D-1745) shares this arm rather than copying it: the nudge's conditions
+# ARE the gate's 1-4 (kill-switch, a datable graph, freshness inside the bound,
+# `graphQueries` 0), and only the fifth — the denial bound — is the gate's
+# alone, because a nudge spends nothing and is never bounded. Two copies of one
+# predicate is the drift the card's own `_hook_gate_tree` exists to prevent.
+# ONE LINE PER EVENT: `Read` is never gated and `Grep`/`Glob`/`Bash` is never
+# nudged, so the two branches below are mutually exclusive by the tool name,
+# and `pre_json` (the deny's `deny_json`, generalised) holds whichever one was
+# built.
+pre_json=""
+if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
    && [ ! -e "$GRAPH_GATE_OFF" ]; then
-  gated=0
+  gated=0 nudged=0 bounded=0 fpath=""
+  [[ "$gd" -lt "$GRAPH_GATE_MAX_DENIALS" ]] && bounded=1
   case "${tool:-}" in
     Grep|Glob) gated=1 ;;
+    Read)
+      # ORDER IS BUDGET, as everywhere else in this arm: the tool name was read
+      # by the arm above and is free, the prefilter is a bash regex over a
+      # string already in memory, and only a source read pays for the jq that
+      # reads the path or the git that dates the graph.
+      # LOWERCASED before every match (D-1797): graphify's own `hook-guard read`
+      # lowercases the path before testing the extension, and the list here is
+      # graphify's own, so `A.TS` must answer the same way on both halves.
+      if [[ "${payload,,}" =~ $GRAPH_NUDGE_PRE_RE ]]; then
+        fpath=$(jq -r 'if .tool_name == "Read" then (.tool_input.file_path // "") else "" end' \
+          <<<"$payload" 2>/dev/null) || fpath=""
+        if [[ -n "$fpath" && "${fpath,,}" =~ $GRAPH_NUDGE_READ_RE ]]; then
+          # NEVER UNDER `graphify-out/`, at any depth: the card sends the
+          # session to `GRAPH_REPORT.md` by name, and nudging that read would
+          # have the two halves of the same mechanism contradict each other.
+          case "${fpath,,}" in
+            graphify-out/*|*/graphify-out/*) ;;
+            *) nudged=1 ;;
+          esac
+        fi
+      fi ;;
     Bash)
       # The prefilter is the PostToolUse arm's budget argument, in the other
       # direction: a command that HEADS with one of the search words cannot
@@ -572,7 +646,15 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
         [[ -n "$scmd" && "$scmd" =~ $GRAPH_SEARCH_RE ]] && gated=1
       fi ;;
   esac
-  if [[ "$gated" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
+  # THE BOUND IS DECIDED HERE AND NOWHERE ELSE (D-1797). The R6 refactor had
+  # `bounded` consulted in the `Grep|Glob` arm and in the `Bash` prefilter as
+  # well, which made THIS conjunct redundant and left the shell copy pinned by
+  # nothing (measured: dropping it stayed green). One site now, so the bound
+  # test — three denials on `Grep`, then a `Grep` AND a shell search silent —
+  # reds the moment the conjunct goes. The price is one jq per shell search
+  # for a session that has spent its three denials and still never queried,
+  # which is the rare shape by design.
+  if [[ "$gated" -eq 1 && "$bounded" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
     # The card's own vocabulary — node count and freshness word, measured by the
     # card's own function — plus the act, plus the bound. A session that cannot
     # run Bash at all still gets through on its fourth search, and the board
@@ -589,7 +671,18 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0
     # measured on the branch before the fix, with the registry unwritable every
     # search read "Denial 1 of 3" forever, and the one graphify query that
     # would have opened the gate was lost by the same failed write.
-    if deny_json=$(_hook_deny_json "$greason"); then gd=$((gd + 1)); else deny_json=""; fi
+    if pre_json=$(_hook_deny_json "$greason"); then gd=$((gd + 1)); else pre_json=""; fi
+  elif [[ "$nudged" -eq 1 ]] && _hook_graph_measure && _hook_gate_tree; then
+    # The card's own vocabulary again, measured by the card's own function, and
+    # the act — but no bound and no count: the nudge is advice, it spends
+    # nothing, and it stops the moment the session queries. The node clause is
+    # omitted when the count could not be measured, exactly as the deny's is.
+    nreason="graphify: this tree has a knowledge graph ("
+    [ -z "$GM_NODES" ] || nreason+="$GM_NODES nodes, "
+    nreason+="$GM_FRESH) and this session has not queried it yet."
+    nreason+=' Before reading files to orient, run: `graphify query "<your question in plain words>"` (`graphify explain "<concept>"` for one concept).'
+    nreason+=' Reading a named file to edit it needs no query.'
+    pre_json=$(_hook_nudge_json "$nreason") || pre_json=""
   fi
 fi
 
@@ -638,7 +731,9 @@ fi
 tmp="$REG/.$id.$$.hookstate.tmp"
 { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
 mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
-# The one deny this file ever prints, and only now: the count it names is on
-# disk, so the next event will see it (D-1689).
-[ -z "$deny_json" ] || printf '%s\n' "$deny_json"
+# The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
+# (R6) — and only now: the count a deny names is on disk, so the next event
+# will see it (D-1689). The nudge counts nothing, but it shares this site so
+# that neither branch can ever print from inside the arm.
+[ -z "$pre_json" ] || printf '%s\n' "$pre_json"
 exit 0
