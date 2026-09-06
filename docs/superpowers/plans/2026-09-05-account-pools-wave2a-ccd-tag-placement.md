@@ -2456,7 +2456,7 @@ Allocated in their own act at the moment they were found, never taken from a gap
 D-1663–D-1688 block. A `D-TBD-<slug>` here is a number REQUESTED and not yet issued; it is
 substituted before wave-done.
 
-- **D-TBD-reader-e-folds-unreadable-into-untagged** (Task 1) — `_project_pool_state`'s
+- **D-1744** (Task 1) — `_project_pool_state`'s
   `[[ -e "$f" ]] || { echo untagged; return 0; }` — this plan's own Step 8 body, transcribed
   verbatim from spec §5.4.3 — treats "not `-e`" as ABSENCE, and `-e` is false for three
   conditions that are not absence: a symlink LOOP at the tag path, a BROKEN symlink at the tag
@@ -2469,6 +2469,17 @@ substituted before wave-done.
   pinned on both sides", and §5.4.3's comment on the `cat` line claims ELOOP is caught there
   when `-e` has already returned false and `cat` is never reached. Fixed in wave 2a, in the
   reader itself, with a test per condition: absence is now PROVEN, not assumed.
+  **THE RULE THIS BREAKS IS `CLAUDE.md`'s "no overloaded null at a seam", not merely spec
+  hygiene** — the coordinator reproduced all three conditions independently before minting and
+  ruled it so. `untagged` means the project is UNCONSTRAINED and placement may go anywhere;
+  `unreadable` means NOBODY KNOWS and placement must refuse. Folding the second into the first
+  does not lose information, it INVERTS the safe default — and the mode-000 arm inverts it for
+  every project on the box at once, so the failure is silent, total, and looks exactly like a
+  fleet nobody ever tagged.
+  **WHICH HALF OF THE SPEC IS WRONG, recorded here so the next reader of §5.4.3 finds the
+  correction attached to it:** §5.4.3's BODY is the wrong half; §10's failure table STANDS.
+  Correcting the spec's own text is WAVE 5's, not this wave's — the coordinator carries it into
+  that brief.
   WHY NOT DEFERRED TO A LATER WAVE: wave 3's `readProjectPools` (spec §5.4.4) mirrors this
   reader's four states in TypeScript, so a fold left standing here is a fold copied into the
   server. **Obligation on wave 3:** its `readFileMeasured` arm has the same shape and must be
