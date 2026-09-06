@@ -344,6 +344,20 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   moves. **Carried to wave 2b and wave 3**, which land machinery half a dozen of this wave's comments describe
   in advance.
 
+- **The set arm was not exempt, and it closed a round BEFORE I asked (2026-09-06 18:08 UTC).** I probed whether
+  `project-pool --pool`'s exit code meant "the state you asked for now obtains" or only "three syscalls
+  returned 0". Verified on the tree: `finalstate=$(_project_pool_state "$project")` is unconditional, BOTH
+  arms gate their success echo on it, and both write a `pool-tag-void` retraction to `swap.log` when the
+  optimistic line above did not take effect — retracting the log as well as the exit code, which is more than
+  was asked and right, since the log is the other thing an operator reads.
+  **The provenance is the point and belongs in the method, not the courtesy notes:** the implementer added the
+  set-arm re-measurement UNINSTRUCTED (the round-4 message asked only for `--clear`), and the re-reviewer
+  refused to call it gold-plating on the argument — it measured the pre-round-4 tree and found a LIVE false
+  success neither the worker nor I had named (`--pool pool-a` under an aliasing swap.log: rc 0, `tagged demo
+  pool-a`, state reading `malformed`). The asymmetry I was probing for was already closed, and not by anyone
+  reasoning it through: by somebody re-running a claim nobody asked them to check. That is the same thing that
+  caught my own wrong lock in D-1798, and it is the method this wave should be remembered for.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
