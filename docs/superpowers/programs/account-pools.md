@@ -196,6 +196,35 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   noticed; one that blocks does not). All closed and reproduced, and round 3 removed a fork and a subshell
   from the hot path rather than adding any.
 
+- **D-1796 AMENDED (2026-09-06 15:17 UTC) — the worker retracted a premise, and the replacement covers only one arm.**
+  It mailed a correction before my ruling reached it (the mails crossed): its own "a condition neither of us
+  could construct" was FALSE for two of three arms — an EIO via a symlink to `/proc/self/mem` under the pools
+  directory is trivially constructible, and its round-4 test constructs it and runs green in 39 ms. The shape
+  is worth more than the slip: the phrase propagated from the round-4 dispatch into a CODE COMMENT, where the
+  scoped re-reviewer caught it and reded the round — so the overstatement was about to ship inside the
+  disclosure written to prevent exactly that class. Corrected in three places by the worker, self-reported
+  before I acted. **Not counted against the wave; this is the behaviour the process exists to produce.**
+  **My amendment: it struck reachability wholesale, and reachability is load-bearing for the second arm.**
+  Its re-derivation — `_pool_ok` maps `unreadable` and `malformed` alike to rc 2, so no decider distinguishes
+  them — is structural and strictly stronger than a rarity argument, but ONLY for the zero-byte arm, where the
+  read delivers nothing, the token is empty and the reader answers `malformed`. **The partial-read arm never
+  reaches that argument at all:** a read erroring after delivering `pool-a` from a file holding `pool-abc`
+  leaves a grammatically VALID token, so the reader answers `named pool-a` — rc 0, a positive answer, and
+  `_pool_ok`'s rc-2 arm is never entered. Placement proceeds onto a pool the file does not name. The caller
+  argument cannot carry an arm that never becomes a caller question, so striking reachability there left it
+  parked on nothing.
+  **Required: two arms, two justifications, labelled.** Zero-byte parks on the CALLER argument (reachable,
+  constructed, costs a message and never a placement — the strongest form the park has). Partial-read parks on
+  REACHABILITY in those words: decision-level, unconstructed rather than impossible, the weaker park, carrying
+  the argument for why it is judged unreachable (after the `-f` guard the path is a regular file, and regular
+  files short-read at EOF rather than erroring mid-stream; `$REG` is not a trust boundary). The worker's
+  instinct that "a park needing the condition to be rare was not the park I meant to make" is right for the
+  first arm and wrong for the second — the second IS a rarity park and the honest move is to label it one.
+  **No round spent:** a fork cannot close arm two either, since `read` never reports a short read; it would
+  need a size comparison, which is a bigger change than this deserves on the supervise path.
+  **The trip-wire now covers both arms:** if any later wave makes `named` reachable from a failed read, or
+  gives `unreadable` and `malformed` different DECISIONS, this entry is void and reopens.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
