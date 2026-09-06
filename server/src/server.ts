@@ -1185,6 +1185,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       projected: projectHome(deps.cfg.roster, limits),
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
+        pool: a.pool,
       })),
     };
   });
