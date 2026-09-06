@@ -24,7 +24,7 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first (touches nothing under `ccd/`). | run 32; docs PR #56 (merged `ece7597a`) carried the plans first | dispatched 2026-09-05 23:46 UTC — `sessionId:ccrc-pwa-clear-meadow`, `briefQueued:true`, `adopted:false`, `spawnState:null` (not recorded), `skillState:present`; 6 items declared |
+| 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first (touches nothing under `ccd/`). | run 32; docs PR #56 (merged `ece7597a`) carried the plans first | dispatched 2026-09-05 23:46 UTC — `sessionId:ccrc-pwa-clear-meadow`, `briefQueued:true`, `adopted:false`, `spawnState:null` (not recorded), `skillState:present`; 6 items declared; run `working` 2026-09-06 06:12 UTC on the worker's `underway` mail |
 | 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | — | not opened |
 | 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | — | not opened |
 | 3 | Server L1/L3 (`pools.ts`, `poolrule.ts` wrapper), registry `stranded`, routes, watcher frame, health. | — | not opened |
@@ -59,6 +59,22 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 - **Deploy after wave 1:** not agent-first. Server lane only, from the merge sha; `accounts.sh` regenerates
   with `_ccrc_pool` on the fleet box only when the agent lane ships (wave 2a), so `rosterAgreement` may read
   `divergent` between the two — spec §5.3 names this as expected and the banner's remedy stands.
+
+- **Wave 1 pre-flight (worker, 2026-09-06 06:12 UTC):** before Task 1 was dispatched the worker audited the plan against the
+  tree and found one blocker plus one important defect, both in SHIPPED source rather than plan prose, plus nine
+  prose defects it corrected without ledgering. I minted **D-1741** and **D-1742** for the two (allocator call,
+  project `ccrc-pwa`, count 2, floor now 1743) and mailed them back — the program's own D-1663–D-1688 block is
+  fully defined and is never a reserve. **D-1741** — the purity scan the plan listed for `shared/poolrule.ts`
+  blanked block comments with a lazy regex whose first `/*` sat inside a LINE comment, so it swallowed the
+  `import type` line, found zero imports and reded on its own vacuity tripwire; the guard would have shipped
+  measuring nothing, and the task's proving mutation produced no new red. Closed by rewording the module header;
+  the tripwire stays, because it is what caught it. **D-1742** — the plan mandated a comment into
+  `shared/roster-json.mjs` claiming its grammar copy is pinned equal "by text extraction rather than by hope";
+  nothing pins that copy (wave 2a's parity test reads `ccd/ccd` and `ccrc-doctor-checks`, never a `.mjs`, and
+  `single-definition`'s source filter is `/\.tsx?$/`). Closed by naming what actually holds it — behaviour, via
+  the `gen-accounts` REJECT table — and adding a row one character past the 32-char cap, the one drift that
+  separates the two spellings. Ruling: both are real and worth numbers; the nine prose corrections are not.
+  Cost if wrong: two ledger numbers spent on findings a reviewer would have called plan-only.
 
 ## Carried constraints
 
