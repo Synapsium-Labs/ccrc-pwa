@@ -5382,20 +5382,35 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # rows are both gone; a remedy that refused on the very state it cures
     # would leave the finding unfixable.
     #
-    # PAIRED WITH `-L`, THE FIX FOR FINDING 1 (fix round 1): a bare `-e`
-    # follows the link to a target that is not there and reads FALSE for a
-    # dangling symlink — same as genuine absence — which would skip this
-    # whole block and leave the link in place while `untagged` is echoed. The
-    # verb already HELD the honest answer a moment earlier (`oldstate`,
-    # above) and this bare `-e` discarded it — the exact shape `_project_pool_state`
-    # itself refuses two lines apart, pairing `[[ ! -e "$f" ]]` with `[[ -L "$f" ]]`.
-    # `rm -f` removes a symlink by `unlink(2)` on its OWN directory entry,
-    # which never follows the link and never cares whether the target exists
-    # or loops — so once the guard stops skipping the attempt, removal just
-    # works, and `untagged` becomes true rather than merely echoed.
-    if [[ -e "$POOLS_DIR/$project" || -L "$POOLS_DIR/$project" ]]; then
+    # DECIDE FROM `$oldstate`, NOT ANY FRESH FILESYSTEM TEST — fix round 2
+    # (Finding 4, D-1847). Fix round 1 paired `-e` with `-L`, which closes the
+    # dangling-symlink/loop shape but not the whole class: a tag under an
+    # UNSEARCHABLE $POOLS_DIR (mode 000) answers FALSE to `-e` AND to `-L` —
+    # neither predicate can stat OR lstat through a directory it cannot
+    # search — so that guard would skip the removal again, a different shape
+    # of the identical false success. The defect was never that `-e` was the
+    # wrong predicate; it is that the verb asked the filesystem a SECOND
+    # time, with different semantics, having already asked through the one
+    # reader whose entire job is answering that question (spec §5.1: `ccd` is
+    # the authority on the tag's state, and in practice that authority is
+    # `_project_pool_state`) — two readers of one fact, free to disagree.
+    # `untagged` is the ONLY state with nothing to remove; `named`,
+    # `unreadable` and `malformed` all mean something IS there, and the
+    # removal must be attempted and SUCCEED. One reader, both shapes closed,
+    # and every future fix to the reader inherited for free.
+    #
+    # THE MESSAGE ON FAILURE says "may still be constrained" rather than "is
+    # STILL tagged": for `named` the two mean the same thing, but for
+    # `unreadable`/`malformed` nothing is a genuine, readable tag — an
+    # unsearchable $POOLS_DIR or a corrupt file — so claiming a NAMED tag
+    # survives would itself be a claim this verb cannot back. "May still be
+    # constrained" is true across all three: `_pool_ok` answers non-serve
+    # (mismatch or undecidable) for every one of them, which is what actually
+    # binds placement, and the wording never overclaims certainty for the two
+    # states where the verb genuinely cannot see what is there.
+    if [[ "$oldstate" != untagged ]]; then
       rm -f -- "$POOLS_DIR/$project" \
-        || die "could not remove the pool tag for $project — it is STILL tagged ($POOLS_DIR/$project)"
+        || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
     fi
   else
     _pool_name_valid "$pool" \

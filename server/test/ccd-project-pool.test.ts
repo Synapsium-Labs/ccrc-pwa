@@ -473,6 +473,27 @@ describe('ccd project-pool — the writer verb', () => {
     expect(state('demo')).toBe('untagged');
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses --clear when $POOLS_DIR is unsearchable — pairing `-e` with `-L` does not close this shape (Fix round 2, Finding 4)', () => {
+      // Fix round 1 paired `-e` with `-L` on the removal guard, which closes
+      // the dangling-symlink/loop shape but NOT the whole class: under an
+      // UNSEARCHABLE $POOLS_DIR (mode 000), neither `-e` NOR `-L` can stat OR
+      // lstat through a directory they cannot search — BOTH read false,
+      // exactly like genuine absence, so that guard skips the removal AGAIN.
+      // `_project_pool_state` already proves this exact case `unreadable`
+      // (its own `-x "$POOLS_DIR"` check) — root searches anything, so this
+      // is skipped for root.
+      plantTag('demo', 'pool-a');
+      fs.chmodSync(POOLS(), 0o000);
+      try {
+        const r = shFail('cmd_project_pool --project demo --clear');
+        expect(r.code).not.toBe(0);
+        expect(r.stdout).not.toContain('untagged');
+      } finally {
+        fs.chmodSync(POOLS(), 0o700);
+      }
+    });
+
   it('retags cleanly over a dangling symlink and over a symlink loop — the --pool arm has no analogous `-e` gate', () => {
     // Checked per the coordinator's ask: the write arm never tests `-e` on
     // the tag path at all. It goes straight from `mkdir -p` to an atomic
@@ -616,14 +637,20 @@ describe('ccd project-pool — the write is CHECKED in both directions', () => {
       }
     });
 
-  it('refuses LOUDLY when the tag cannot be removed — it is STILL tagged (any uid)', () => {
+  it('refuses LOUDLY when the tag cannot be removed — placement may still be constrained (any uid)', () => {
     // `rm -f` suppresses ENOENT only; EISDIR still exits non-zero, for root as
     // well. The polarity that matters: a caller told the project was untagged
     // while the constraint still binds every placement.
+    //
+    // Message updated in Fix round 2 (Finding 4): the removal decision now
+    // comes from `$oldstate`, not a fresh `-e`/`-L` test, so the failure
+    // message had to stop claiming a NAMED tag ("STILL tagged") since a
+    // DIRECTORY here reads `oldstate=unreadable`, not `named <pool>` — "may
+    // still be constrained" is honest for every non-`untagged` state.
     fs.mkdirSync(path.join(POOLS(), 'demo'), { recursive: true });
     const r = shFail('cmd_project_pool --project demo --clear');
     expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain('STILL tagged');
+    expect(r.stderr).toContain('may still be constrained');
     expect(r.stdout).not.toContain('untagged demo');
   });
 });
@@ -663,5 +690,46 @@ describe('the marker namespace cannot collide with a session id', () => {
     expect(h.sh('_ws_slug_free pools quiet-basin && echo free || echo taken')).toBe('taken');
     expect(h.sh('_ws_slug_free pools quiet-mesa && echo free || echo taken')).toBe('free');
     expect(state('pools')).toBe('named pool-a');
+  });
+});
+
+describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (Fix round 2, Finding 5)', () => {
+  // MEASUREMENT, not a fix — no code changes ride with this describe. The
+  // `echo pools-v1` comment argues that a wave-3 server meeting a 2a-only
+  // fleet box gets a LOUD failure rather than a silent `200 {ok:true}`,
+  // because `--cross-pool` is specified LEADING, before the positionals: on
+  // a `ccd` that does not know the flag it lands in a slot `_is_valid_wrapper`
+  // refuses, and the verb DIES. Wave 3 will pin that its own builders EMIT a
+  // leading flag — a different claim from THIS one, that today's `ccd`
+  // REFUSES a leading one, and only this second claim makes advertising the
+  // token early actually safe. Nothing here asserts what the flag DOES
+  // (there is no `--cross-pool` behaviour yet); each case only asserts a
+  // nonzero exit, which is the entire safety property this early token
+  // depends on.
+  it('a leading --cross-pool on `swap` dies loudly — the `*)` arm collects it as a positional, `_is_valid_wrapper` refuses it', () => {
+    const r = shFail('cmd_swap --cross-pool demo pool-a');
+    expect(r.code).not.toBe(0);
+  });
+
+  it('a leading --cross-pool on `start` dies loudly — `$# -ge 2` makes `wrapper` the flag itself, `_is_valid_wrapper` refuses it', () => {
+    const r = shFail('cmd_start --cross-pool demo pool-a');
+    expect(r.code).not.toBe(0);
+  });
+
+  it('a leading --cross-pool on `enable` dies loudly too, but only AFTER one lifecycle line is written for the bogus id it computes first', () => {
+    // Nuance that must not be lost: `cmd_enable` runs `_lc_done enable "$id" ""`
+    // BEFORE delegating to `cmd_start`, so a skewed `enable --cross-pool …`
+    // writes a lifecycle entry for a bogus id (`_id "--cross-pool" demo` =
+    // `--cross-pool-demo`) and only THEN fails — it does not die before doing
+    // anything. Harmless (the id is bogus and nothing downstream trusts it),
+    // but this test's own name must say what actually happens, not "dies
+    // before doing anything".
+    const r = shFail('cmd_enable --cross-pool demo pool-a');
+    expect(r.code).not.toBe(0);
+    const lcDir = path.join(REG(), '.lifecycle');
+    expect(fs.existsSync(lcDir)).toBe(true);
+    const journal = fs.readdirSync(lcDir)
+      .map((f) => fs.readFileSync(path.join(lcDir, f), 'utf8')).join('\n');
+    expect(journal).toContain('"id":"--cross-pool-demo"');
   });
 });

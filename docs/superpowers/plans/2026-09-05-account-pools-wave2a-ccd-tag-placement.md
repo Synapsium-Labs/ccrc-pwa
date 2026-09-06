@@ -2537,7 +2537,7 @@ substituted before wave-done.
   mirror answers `unreadable` on a failed read and can NEVER answer a name from one. With D-1744
   that file now owes wave 3 two polarity obligations.
 
-- **D-TBD-poolsv1-advertised-before-crosspool-exists** (Task 3) — `cmd_caps` echoes the
+- **D-1798** (Task 3) — `cmd_caps` echoes the
   capability token `pools-v1` in wave 2a, one wave BEFORE the capability it gates exists. The
   token gates exactly ONE server decision — whether the server may build a `--cross-pool` argv
   (wave 3) — and `capSupported` refuses on no evidence precisely because the wrong guess there is
@@ -2548,21 +2548,37 @@ substituted before wave-done.
   `ccd` that does not know the flag; where that does not die, `runCcdOr502` renders exit 0 as
   `200 {ok:true}` for a crossing that never happened — the exact hazard the token's own comment
   says it exists to prevent.
-  WHAT CLOSES THE WINDOW TODAY IS ORDERING, NOT MECHANISM: waves merge in sequence and agent-first
-  ships `ccd` before the server (Task 9). That is process, and a partial deploy or a `ccd`
-  rollback reopens it.
-  The alternative considered and NOT taken in this wave — moving `echo pools-v1` to wave 2b, where
-  `--cross-pool` lands — is strictly safer because it uses the mechanism already present (absent
-  token, `capSupported` refuses, no argv is built). It was left in place because the plan sites it
-  here deliberately and moving it rewrites two other waves' plans plus this wave's pinned rows 18
-  and 47; the question was referred to the coordinator rather than decided unilaterally, since a
-  capability token is a cross-wave contract.
+  **WHAT CLOSES THE WINDOW IS A MECHANISM, AND IT IS THE FLAG'S POSITION — corrected.** An earlier
+  draft of this entry said the window was closed by ORDERING (waves merge in sequence, agent-first
+  ships `ccd` first) and called that process rather than mechanism. That was wrong, and the true
+  answer is both stronger and measurable. Spec §5.6 puts `--cross-pool` **LEADING**, before the
+  positionals, precisely so an old `ccd` cannot silently ignore it: a TRAILING flag is a fourth
+  positional nobody reads, while a LEADING one lands in a slot `_is_valid_wrapper` refuses.
+  MEASURED on this wave's own `ccd`, all three verbs: `swap --cross-pool <id> <w>` collects it in
+  the `*)` arm so `id` becomes `--cross-pool` and is refused; `start --cross-pool <w> <p>` has
+  `$# >= 2` so `wrapper` becomes `--cross-pool` and is refused; `enable` delegates to `cmd_start`
+  and dies there. All three exit NONZERO, so `runCcdOr502` renders a 502 carrying `ccd`'s own
+  stderr — a wave-3 server meeting a 2a-only fleet box gets a LOUD failure, never a silent
+  `200 {ok:true}`. That guarantee holds on every `ccd` that has ever shipped, which is stronger
+  than anything this program could add.
+  **THIS WAVE OWES THE PIN, AND SHIPS IT.** The mechanism existed but nothing in the wave that
+  CREATES the exposure measured it: wave 3 pins that its builders EMIT a leading flag, and that is
+  a different claim from today's `ccd` REFUSING one — only the second makes the early token safe.
+  Three assertions ship here, one per verb. The wave that creates an exposure owes the proof it is
+  safe rather than borrowing one from a wave that has not been written.
+  Nuance, because this program has twice been bitten by disclosures claiming slightly more than
+  they measured: `cmd_enable` runs `_lc_done enable "$id" ""` BEFORE delegating to `cmd_start`, so
+  a skewed `enable --cross-pool …` writes a lifecycle entry for a bogus id and only THEN fails
+  loudly. Harmless and not fixed — but "dies before doing anything" would be false of that verb.
+  The alternative of moving `echo pools-v1` to wave 2b was considered and REJECTED on the merits,
+  not on cost: with the position mechanism measured it buys nothing the flag order does not
+  already buy, while costing two other waves' plans and this wave's pinned rows 18 and 47.
   The comment above `echo pools-v1` is corrected in this wave to state what is true as of 2a and
   to name the owing wave for the rest, rather than asserting later-wave machinery as present fact.
   **Obligation on wave 2b:** when `--cross-pool` lands, this token's promise becomes true — check
   this entry and close it.
 
-- **D-TBD-clear-over-dangling-symlink-reports-success** (Task 3) — `cmd_project_pool --clear`
+- **D-1847** (Task 3) — `cmd_project_pool --clear`
   guards its unlink with `[[ -e "$POOLS_DIR/$project" ]]`, and `-e` is FALSE for a dangling
   symlink, so the `rm` is SKIPPED — there is no failure for the `|| die` to catch. Measured in a
   fixture HOME: `ln -s /nonexistent/t $REG/pools/demo` then `--clear` prints `untagged demo` and
@@ -2574,11 +2590,26 @@ substituted before wave-done.
   It is also **an adapter narrowing a distinction it received**: the verb computes
   `oldstate=$(_project_pool_state "$project")` and therefore HOLDS `unreadable` at the moment it
   decides, then discards it and asks `-e` instead.
-  The reader already solved this two lines apart (`[[ ! -e "$f" ]]` paired with `[[ -L "$f" ]]`,
-  D-1744); the writer must pair them too. Fixed in wave 2a with a red-first test — the existing
-  `--clear` failure test plants a DIRECTORY, which `-e` does see, so it could never have caught
-  this.
+  **THE OBVIOUS FIX DOES NOT CLOSE THE CLASS, and that is the lesson worth keeping.** Pairing
+  `-e` with `-L`, as the reader does under D-1744, closes the dangling-symlink shape and leaves an
+  identical second one standing: a tag under an UNSEARCHABLE `$POOLS_DIR` answers FALSE to `-e`
+  AND FALSE to `-L`, because neither can stat through a directory it cannot search — so the `rm`
+  is skipped again, exit 0 again, tag still there again. That form was written, measured, and
+  replaced before it shipped.
+  **The fix is to decide from `$oldstate`, not from a fresh filesystem test of any kind.** The
+  defect was never that `-e` is the wrong predicate; it is that the verb asks the filesystem a
+  SECOND time, with different semantics, having already asked through the one reader whose whole
+  job is that question — two readers of one fact, free to disagree, where spec §5.1 makes `ccd`
+  the authority and in practice that authority is `_project_pool_state`. `untagged` is the only
+  state with nothing to remove; `named`, `unreadable` and `malformed` all mean something IS there
+  and the removal must be attempted and seen to succeed. One reader, both shapes closed, and every
+  future fix to the reader inherited for free.
+  Fixed in wave 2a, red-first, with the mode-000 case pinned specifically so the next person to
+  touch this does not reach for `-L` for the same good reason. The pre-existing `--clear` failure
+  test plants a DIRECTORY, which `-e` DOES see, so it could never have caught either shape.
   **Obligation on wave 3:** its route re-reads the tag through the agent after calling the verb
-  and answers a MEASURED state, so it would have reported `unreadable` while `ccd` exited 0 —
-  the two would have disagreed. That re-read is what makes the server's answer right; it does
-  not make the verb's exit code right, and the verb is what a shell operator sees.
+  and answers a MEASURED state, so it would have reported `unreadable` while `ccd` exited 0 — the
+  two disagreeing. **Which one is wrong: the SERVER is right and the VERB is wrong.** The server's
+  correctness is NOT a mitigation, because a shell operator never sees the server. A reader who
+  finds only "the server would have caught it" could reasonably conclude the verb needs no fix;
+  it did.
