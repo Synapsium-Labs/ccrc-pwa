@@ -1518,13 +1518,15 @@ Create `shared/poolrule.ts`:
 // L0, like every other module in `shared/`: it imports nothing but TYPES,
 // not even `node:*`, because the PWA bundles this file. That is not a formality here —
 // it is the whole reason the rule lives in `shared/` rather than under
-// `server/src/`. The server's 409 pre-check and the phone's "show other pools"
-// disclosure are two renderings of ONE decision, and two copies of it drift;
-// the copy the phone shows would then offer a swap the copy the API enforces
-// refuses, which is the failure the shared fixture table
-// (`server/test/fixtures/poolRule.ts`) exists to make impossible. `ccd`'s bash
-// `_pool_ok` is the other spelling — it cannot share code across the language
-// boundary, so it shares that same table instead.
+// `server/src/`. The server's 409 pre-check (wave 3) and the phone's "show
+// other pools" disclosure (wave 4) will be two renderings of ONE decision, and
+// two copies of it would drift; the copy the phone showed would then offer a
+// swap the copy the API enforces refuses, which is the failure the shared
+// fixture table (`server/test/fixtures/poolRule.ts`) exists to make impossible.
+// `ccd`'s bash `_pool_ok` will be the other spelling (wave 2a) — it cannot
+// share code across the language boundary, so it shares that same table
+// instead. Nothing outside this wave imports this function yet; every consumer
+// named in this file is an obligation on the wave that names it, not a report.
 //
 // PRECEDENCE IS THE POINT, and the order below is not arbitrary:
 //
@@ -1565,9 +1567,10 @@ export type PoolVerdict =
  * The rule, once.
  *
  * `accountPool` is `null` for an untagged account — and, deliberately, also for
- * an account THIS SIDE CANNOT SEE. The PWA reads it through `accountPool`
- * (`pwa/src/lib/accounts.ts`), which answers `null` for a wrapper the roster on
- * the wire does not carry, and that fold is the permissive direction on purpose:
+ * an account THIS SIDE CANNOT SEE. The PWA will read it through `accountPool`
+ * (`pwa/src/lib/accounts.ts`, wave 4), which must answer `null` for a wrapper the
+ * roster on the wire does not carry, and that fold is the permissive direction on
+ * purpose:
  * `ccd`'s `_is_valid_wrapper` is the authority on which wrappers exist, the
  * server's roster copy can lag the fleet's, and a display that HID a live
  * non-roster account would be worse than one that offers it and lets `ccd`
