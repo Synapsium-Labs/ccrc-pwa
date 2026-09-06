@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=69bcd850e4338131db537f043fcae739137b4310faf67f809726f6b973b25ddc
+# ccrc:generated 1 sha256=31667c887ae63bb7983b8cd8cfe76bbeb4fde67afcabbc52e6b878c605cb1e26
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5071,14 +5071,15 @@ EOF
   echo actor-flags-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
-  # it reads `$POOLS_DIR/<project>` (Task 1). `_pool_ok` (Task 2) has NO
-  # CALLER anywhere in this file yet — wiring it into fresh placement
-  # (`_ws_least_loaded [project]`) is this same wave's Task 5; wiring it into
-  # the auto-swap candidate loop and the 5-second tick (`_swap_target`,
-  # `_auto_swap_check`) is wave 2b's, a separate later wave, and so is
-  # `--cross-pool`, which appears in `ccd/ccd` only as comment text until
-  # then — no verb parses it. Fix round 1 (Finding 2a): a prior version of
-  # this comment claimed the last two in the present tense.
+  # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
+  # CALLED — wired into fresh placement (Task 5), from `_ws_least_loaded`
+  # and from `cmd_ws_add`'s refusal loop, so a mismatched or undecidable tag
+  # can refuse a `ws-add`. Wiring it into the auto-swap candidate loop and
+  # the 5-second tick (`_swap_target`, `_auto_swap_check`) is wave 2b's, a
+  # separate later wave, and so is `--cross-pool`, which appears in
+  # `ccd/ccd` only as comment text until then — no verb parses it. Fix
+  # round 1 (Finding 2a): a prior version of this comment claimed the last
+  # two in the present tense.
   #
   # It gates exactly ONE server decision — "may I build a `--cross-pool`
   # argv" (wave 3) — and `capSupported` refuses on no evidence, because the

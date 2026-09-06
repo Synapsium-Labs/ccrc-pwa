@@ -111,8 +111,9 @@ export interface AccountDef {
   /** The operator's optional grouping of accounts — a billing or tenancy pool.
    *  An account may serve a project when either side is untagged or the two
    *  names agree; `shared/poolrule.ts` is the one place that rule is spelled in
-   *  TypeScript, and `ccd`'s `_pool_ok` will be the one place it is spelled in
-   *  bash (wave 2a) — nothing under `ccd/` spells it yet.
+   *  TypeScript, and `ccd`'s `_pool_ok` is the other spelling, in bash (wave
+   *  2a) — the two share no code across the language boundary, so both are
+   *  driven over the same `POOL_RULE_CASES` fixture table instead.
    *
    *  REQUIRED on the type, with `null` as the untagged answer, so every
    *  constructor of an `AccountDef` has to say which it means. The field is

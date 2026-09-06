@@ -1427,7 +1427,8 @@ export interface ProjectRow {
  * FOUR states, and no reader may fold one into another. `unreadable` (the file
  * is there and could not be read — EACCES, a directory planted at the path, a
  * symlink loop) and `malformed` (it was read and is not one pool name) are the
- * two ways NOBODY DECIDES: creation must refuse naming the file (wave 2a), the
+ * two ways NOBODY DECIDES: creation refuses, naming the file (wave 2a landed
+ * it — `ccd/ccd`'s `cmd_ws_add` refusal names `$POOLS_DIR/$project`), the
  * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
  * Folding either into `untagged` would silently LIFT the constraint — the
  * overloaded-null defect this tree refuses at a seam, in its most expensive

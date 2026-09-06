@@ -113,13 +113,15 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 
 /** Mirrors `shared/roster.ts`'s exported `POOL_NAME_RE`. Kept here as a literal
  *  rather than imported for this file's standing reason: a bare `node` cannot
- *  import the TypeScript. `ccd` will carry a third copy in bash (wave 2a).
+ *  import the TypeScript. `ccd` carries a third copy in bash (wave 2a landed
+ *  it).
  *
  *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
  *  so matters more than the tidy sentence this comment used to carry
- *  (D-1742). `ccd`'s bash literal WILL be pinned against
- *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file —
- *  once wave 2a's parity scan lands; nothing reads `ccd/ccd` for this yet.
+ *  (D-1742). `ccd`'s bash literal IS pinned against `POOL_NAME_RE.source` by
+ *  TEXT EXTRACTION — a scan that reads the bash file
+ *  (`server/test/pool-name-parity.test.ts`, wave 2a), which pins
+ *  `ccd/ccrc-doctor-checks`'s own copy the same way.
  *
  *  THIS copy is pinned by text extraction too, as of D-1742's SECOND ROUND:
  *  `server/test/gen-accounts.test.ts`'s last block reads this file and

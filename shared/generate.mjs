@@ -168,12 +168,12 @@ function idArray(ids) {
  *
  * The account half of project pools. Emitted ALWAYS, even when no account is
  * tagged — an empty `case` — for two reasons that are not the same reason:
- * `declare -F _ccrc_pool` will be how `ccd`'s `_acct_pool` (wave 2a) asks
- * whether this box's `accounts.sh` knows about pools at all, and a new `ccd`
- * will call this function on the supervisor's 5-second loop, where
- * `command not found` would be the answer on every box whose roster has no
- * tags yet. An empty `case … esac` is valid bash and answers empty at rc 0,
- * which is exactly the contract below.
+ * `declare -F _ccrc_pool` is how `ccd`'s `_acct_pool` (wave 2a landed it)
+ * asks whether this box's `accounts.sh` knows about pools at all, and a new
+ * `ccd` will call this function on the supervisor's 5-second loop (wave 2b),
+ * where `command not found` would be the answer on every box whose roster
+ * has no tags yet. An empty `case … esac` is valid bash and answers empty at
+ * rc 0, which is exactly the contract below.
  *
  * That contract is `_ccrc_cfg_dir`'s, restated: empty stdout at exit 0 for an
  * untagged id AND for an unknown one, with the caller deciding what silence

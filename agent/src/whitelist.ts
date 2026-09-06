@@ -235,14 +235,15 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  *
  * `project-pool` (account pools) is the fourth, and it is `coord-pause`'s
  * argument again with a sharper edge: `--project` is not a confirmation token,
- * it is the verb's whole argument surface. TODAY the verb only WRITES the tag
- * — ccd's `_pool_ok` has no caller anywhere in `ccd/ccd` yet, so running
- * `project-pool` refuses no placement. Wiring `_pool_ok` into fresh placement
- * is this same wave's Task 5; wiring it into the swap tick and the manual
- * verbs is wave 2b's. The grant is narrow NOW because the policy WILL bind
- * placement once those land: a one-token `['project-pool']` grant would
- * permit every positional form the verb might ever grow, reached (wave 3)
- * from a route the PWA will hit with no box token of any kind.
+ * it is the verb's whole argument surface. The verb WRITES the tag, and as of
+ * this wave's Task 5, ccd's `_pool_ok` is now CALLED — from `_ws_least_loaded`
+ * and from `cmd_ws_add`'s refusal loop — so running `project-pool` can refuse
+ * a fresh placement. Wiring it into the swap tick and the manual verbs is
+ * wave 2b's. The grant is narrow because the policy already binds fresh
+ * placement and widens further once wave 2b lands: a one-token
+ * `['project-pool']` grant would permit every positional form the verb might
+ * ever grow, reached (wave 3) from a route the PWA will hit with no box token
+ * of any kind.
  *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
@@ -384,9 +385,10 @@ export const EXEC_WHITELIST = {
     // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
     // then some: prefix matching leaves everything after the granted tokens
     // unconstrained, so an unenrolled `['project-pool']` would admit every
-    // positional form the verb might grow — and once Task 5 and wave 2b wire
-    // it in, this verb will decide WHERE work may be PLACED, not merely
-    // whether it is paused.
+    // positional form the verb might grow — and now that Task 5 has wired
+    // `_pool_ok` into fresh placement, this verb already decides WHERE new
+    // work may be PLACED, not merely whether it is paused; wave 2b still owes
+    // that same decision on the swap tick and the manual verbs.
     ['project-pool', '--project'],
     // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what

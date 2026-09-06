@@ -398,8 +398,9 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
 // These three literals BY NAME, because no generic scan reaches them:
 // `single-definition.test.ts`'s `sources()` filters `/\.tsx?$/`, so a `.mjs` is
 // invisible to it, and `server/test/source-bytes.test.ts` does walk that file
-// but only for control bytes, never for grammar. `ccd`'s coming bash copy of
-// `POOL_NAME_RE` is wave 2a's parity scan to pin, not this one's.
+// but only for control bytes, never for grammar. `ccd`'s bash copy of
+// `POOL_NAME_RE` is wave 2a's parity scan to pin
+// (`server/test/pool-name-parity.test.ts`), not this one's.
 describe('shared/roster-json.mjs hand-copies three regex literals, and they equal the parser\'s', () => {
   const ROSTER_TS = path.join(ccrcRoot, 'shared', 'roster.ts');
   const ROSTER_MJS = path.join(ccrcRoot, 'shared', 'roster-json.mjs');

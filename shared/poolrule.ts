@@ -11,10 +11,11 @@
 // two copies of it would drift; the copy the phone showed would then offer a
 // swap the copy the API enforces refuses, which is the failure the shared
 // fixture table (`server/test/fixtures/poolRule.ts`) exists to make impossible.
-// `ccd`'s bash `_pool_ok` will be the other spelling (wave 2a) — it cannot
-// share code across the language boundary, so it shares that same table
-// instead. Nothing outside this wave imports this function yet; every consumer
-// named in this file is an obligation on the wave that names it, not a report.
+// `ccd`'s bash `_pool_ok` is the other spelling (wave 2a landed it) — it
+// cannot share code across the language boundary, so it is driven over that
+// same table instead (`server/test/ccd-pool-ok.test.ts`). Nothing outside
+// this wave imports this function yet; every consumer named in this file is
+// an obligation on the wave that names it, not a report.
 // (D-1664 — plan-time refinement of spec §5.2/§8.)
 //
 // PRECEDENCE IS THE POINT, and the order below is not arbitrary:
