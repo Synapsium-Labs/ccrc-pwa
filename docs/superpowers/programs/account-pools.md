@@ -252,6 +252,34 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   "every account decision" and that `--cross-pool` exists: measured, `_pool_ok` has ZERO call sites at
   `ccd/ccd:1279` and all three `--cross-pool` hits are comment text; it gains exactly one caller this wave.
 
+- **D-1847 (wave 2a, 2026-09-06 16:12 UTC) — `project-pool --clear` reports success over a tag it did not remove.** The
+  `rm` is guarded by `[[ -e "$POOLS_DIR/$project" ]]`, and `-e` is FALSE for a dangling symlink, so the removal
+  is skipped, nothing fails for `|| die` to catch, the verb prints `untagged` and exits 0 — while the symlink
+  survives, the reader still answers `unreadable`, `_pool_ok` still refuses, and placement stays BLOCKED with
+  the operator told the constraint is gone. Reproduced. **The worker's framing is the right one and is why it
+  earned a number: an adapter narrowing a distinction it received** — the repo's own highest-yield rule. The
+  verb computes `oldstate=$(_project_pool_state "$project")` on line 14 and is HOLDING the word `unreadable`
+  when it reaches the `-e` test on line 18. The reader learned this under D-1744 two lines away; the writer
+  never did.
+  **My addition, measured before ruling: the obvious fix does not close the class.** `[[ -e … || -L … ]]`
+  leaves an identical false success one shape over — a tag under an unsearchable `$POOLS_DIR` answers FALSE to
+  BOTH, since neither can stat through a mode-000 directory, so the `rm` is skipped again and the verb exits 0
+  again. It would have shipped as a fixed bug. **Ruling: decide from `$oldstate`, not from any fresh filesystem
+  test.** The defect is not that `-e` is the wrong predicate but that the verb asks the filesystem a SECOND
+  time with different semantics, having already asked through the one reader whose job is that question — two
+  readers of one fact, disagreeing, where spec §5.1 makes ccd (and so `_project_pool_state`) the authority.
+  Branching on the word gives the verb one reader, closes both shapes and every shape the reader already
+  handles, and inherits future reader fixes for free. Required red: the mode-000 case specifically, so the
+  next person to touch it does not reach for `-L` for the same good reason.
+  **Wave 3 obligation, sharpened:** its route re-reads through the agent and would answer a measured
+  `unreadable` while ccd exited 0. The entry must say which side is wrong — the SERVER is right, the VERB is
+  wrong, and the server's correctness is not a mitigation because a shell operator never sees the server.
+- **A habit, not five slips (wave 2a, 2026-09-06 16:12 UTC).** Five present-tense comments asserting later-wave machinery in one
+  wave, three of them in text the worker's own dispatches dictated. Diagnosis: dictated comment text is written
+  BEFORE the code exists, so the present tense is natural and wrong at the moment of writing. The remedy is
+  structural — write dictated comments in the obligation tense by default and let the wave that lands the
+  machinery flip them — not more care. **Carried to wave 2b, whose plan dictates comments the same way.**
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
