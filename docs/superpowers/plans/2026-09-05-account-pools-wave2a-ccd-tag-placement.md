@@ -2486,29 +2486,53 @@ substituted before wave-done.
   checked for the same collapse — `absent` from a `readdir` listing plus a per-file measured
   read is a different mechanism from `-e`, but the polarity question is identical.
 
-- **D-TBD-read-failure-folds-into-eof** (Task 1, PARKED WITH DISCLOSURE — not fixed) —
-  `_project_pool_state`'s NUL-detecting read, `{ IFS= read -r -d '' v; } 2>/dev/null < "$f"`,
-  uses `read`'s exit status to tell "a NUL delimiter was found" (rc 0, `malformed`) from
-  "EOF reached first" (rc 1, the ordinary path). `read` also returns 1 for a read FAILURE, so a
-  failure past the `-f && -r` guard falls into the ordinary path: a symlink to `/proc/self/mem`
-  passes both tests, fails EIO, and answers `malformed`; fd exhaustion (EMFILE) does the same.
-  The variant nobody DID construct — a read delivering PARTIAL bytes before erroring — would
-  answer `named <partial-prefix>`; it was reported as unconstructed rather than excluded, which
-  is not the same as unreachable.
-  **NOT CLOSED, DELIBERATELY.** `_pool_ok` maps BOTH `unreadable` and `malformed` to rc 2, so
-  every decider this wave ships treats the two identically: the fold is at the operator-DIAGNOSTIC
-  seam, not a decision seam, and its whole cost is the doctor proposing `rewrite the file as one
-  lowercase token` where the cure is `fix the I/O error`. Placement refuses either way. Closing it
-  needs a distinction bash's `read` does not expose, i.e. a fork on the 5-second `cmd_supervise`
-  path — reinstating the exact cost this round removed, to improve a MESSAGE while changing no
-  DECISION.
-  **REACHABILITY, corrected — an earlier draft of this entry said "an unconstructible condition"
-  and that was wrong.** The EIO arm is trivially constructible and this wave's own test
-  constructs it (a symlink to `/proc/self/mem` under `pools/`); EMFILE is reachable too. Only the
-  PARTIAL-READ variant is unconstructed, and "unconstructed" is not "unreachable" — nobody built
-  one, that is all. The park therefore rests ENTIRELY on the rc-2 argument above and takes no
-  support at all from how hard the condition is to reach. Disclosed in the function's comment and PINNED by a test that says it pins a known
-  residual, in `_reg_set`'s "disclosed price" idiom.
-  **Obligation on wave 3, which CAN discharge this one:** `readFileMeasured` already tells absent
-  from unreadable from over-cap, so the TypeScript mirror has the mechanism bash lacks. It must not
-  reproduce this fold — a failed read there is `unreadable`, never `malformed` and never a name.
+- **D-1796** (Task 1, PARKED WITH DISCLOSURE — not fixed) — `_project_pool_state`'s NUL-detecting
+  read, `{ IFS= read -r -d '' v; } 2>/dev/null < "$f"`, uses `read`'s exit status to tell "a NUL
+  delimiter was found" (rc 0, `malformed`) from "EOF reached first" (rc 1, the ordinary path).
+  `read` also returns 1 for a read FAILURE, so a failure past the `-f && -r` guard falls into the
+  ordinary path.
+  **TWO ARMS, TWO DIFFERENT JUSTIFICATIONS, AND THEY ARE NOT THE SAME FINDING.** An earlier draft
+  of this entry put both under one "diagnostic, not decision" heading; that heading is true of the
+  first arm only, and a reader who took it at its word would have concluded the second was
+  harmless too. Corrected on the coordinator's ruling.
+  **ARM 1 — the ZERO-BYTE failures (EIO, EMFILE): parked on the CALLER argument. Structural,
+  and reachability is irrelevant.** A symlink to `/proc/self/mem` passes `-f` and `-r`, fails EIO,
+  and delivers nothing; fd exhaustion makes the open itself fail. `$v` stays empty,
+  `_pool_name_valid` fails, the reader answers `malformed`. MEASURED, not assumed (the premise this
+  rests on was unmeasured when first written, because Task 2 had not landed): `_pool_ok`
+  (`ccd/ccd:1272`) maps `unreadable` and `malformed` alike to rc 2 through one `*)` arm, so no
+  decider distinguishes them and PLACEMENT REFUSES EITHER WAY. The cost is the doctor proposing
+  "rewrite the file as one lowercase token" where the cure is "fix the I/O error" — a wrong
+  MESSAGE, never a wrong DECISION. This arm is easily reachable and this wave's own test
+  constructs it; that costs nothing, which is what makes this the stronger of the two parks.
+  **ARM 2 — a PARTIAL read that errors after delivering a grammatically valid prefix: parked on
+  REACHABILITY, and this entry says so in those words.** A read erroring after delivering `pool-a`
+  from a file holding `pool-abc` leaves a legal token, so `_pool_name_valid` SUCCEEDS and the
+  reader answers `named pool-a` — a POSITIVE answer, rc 0, which never enters `_pool_ok`'s rc-2
+  arm at all. **This is a DECISION-level fold**: placement proceeds, onto a pool the file does not
+  name. The caller argument cannot carry it, because the arm never becomes a caller question. It
+  is parked because it is judged unreachable, it is UNCONSTRUCTED rather than proven impossible,
+  and it is the weaker park of the two.
+  THE REACHABILITY ARGUMENT, CHECKED RATHER THAN ADOPTED — one half holds and one half does not:
+  * SOUND, and load-bearing: **`$REG` is not a trust boundary.** Anyone who can plant a
+    partially-erroring path in `$POOLS_DIR` can write a wrong pool name into the tag directly, so
+    the fold grants nothing that write access to that directory does not already grant. This is
+    the argument the park actually rests on.
+  * NOT AIRTIGHT, so the park does NOT rest on it: "for a regular file the kernel returns a short
+    read at EOF rather than erroring mid-stream" is true for a healthy LOCAL filesystem, and the
+    `-f` guard does exclude FIFOs and devices before any open. It is NOT guaranteed for a network
+    or FUSE mount, nor for a failing device, where a mid-stream `EIO` after partial delivery is
+    permitted. `$PROJECTS_ROOT` is a symlink to another mount on this fleet, so a non-local
+    `$REG` is not absurd on its face.
+  **TRIP-WIRE — the condition this park depends on, stated so waves 2b, 3 and 4 trip over it
+  while reading rather than having to infer it.** This entry is VOID and must be reopened if
+  either becomes true: (a) any decider gives `unreadable` and `malformed` different DECISIONS
+  (different MESSAGES are fine and expected — the doctor already does that, Task 8); or (b) any
+  change makes `named <n>` reachable from a failed read. Arm 1's park dies on (a); arm 2's park
+  dies on (b).
+  Disclosed in the function's comment and PINNED by a test that says it pins a known residual, in
+  `_reg_set`'s "disclosed price" idiom.
+  **Obligation on wave 3, which discharges BOTH arms and is the real remedy rather than a
+  nicety:** `readFileMeasured` distinguishes a failed read from a complete one, so the TypeScript
+  mirror answers `unreadable` on a failed read and can NEVER answer a name from one. With D-1744
+  that file now owes wave 3 two polarity obligations.

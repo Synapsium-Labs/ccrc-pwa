@@ -1153,23 +1153,30 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
     echo malformed; return 0
   fi
   # DISCLOSED, NOT CLOSED (parked, not fixed — 2026-09-06): `read -d ''`
-  # returns 1 for a genuine read FAILURE exactly as it does for reaching EOF
-  # with no NUL found, so a failure past the `-f && -r` guard above falls
-  # into this same ordinary path. TWO ARMS ARE EASY TO HIT: a symlink to
-  # `/proc/self/mem` (EIO on the read; `2>/dev/null` correctly hides bash's
-  # own `read error:` message, so nothing survives to tell the two apart) and
-  # fd exhaustion (EMFILE on the `< "$f"` open itself) — both land as
-  # `malformed`, the doctor's misleading "rewrite the file" in place of the
-  # real "fix the I/O error". A read that delivered PARTIAL bytes before
-  # erroring would answer `named <prefix>` instead; nobody has constructed
-  # one, and nothing here excludes one either. Parked because `_pool_ok`
-  # maps `unreadable` AND `malformed` to "nobody decides" alike, so PLACEMENT
-  # refuses either way regardless of which of the two this lands on — the
-  # fold costs only the operator MESSAGE, never a decision. Closing it needs
-  # a distinction `read` does not expose: a fork on the supervisor's hot path
-  # to improve a message while changing no decision. Same trade as
-  # `_reg_set`'s leaked tmp file: an inert cost, paid on purpose, to stay out
-  # of a hot loop.
+  # returns 1 for a read FAILURE exactly as for reaching EOF with no NUL, so
+  # a failure past `-f && -r` falls into the ordinary path. TWO ARMS, TWO
+  # PARKS — do not conflate them.
+  # ZERO-BYTE (EIO via a `/proc/self/mem` symlink — this file's own test
+  # constructs it — or EMFILE on the `<` open): `$v` stays empty, the answer
+  # is `malformed`, and `_pool_ok` maps `unreadable`/`malformed` alike to
+  # "nobody decides" — PLACEMENT is identical either way. Parked on THAT
+  # CALLER ARGUMENT alone; reachability is irrelevant to it.
+  # PARTIAL READ leaving a valid prefix (`pool-a` from `pool-abc`) is
+  # DECISION-level, not the case above: `_pool_name_valid` SUCCEEDS, the
+  # answer is the POSITIVE `named <prefix>`, `_pool_ok` never calls it
+  # undecidable, and PLACEMENT PROCEEDS onto a pool the file does not name.
+  # Parked on REACHABILITY ALONE — the WEAKER park, stated plainly:
+  # UNCONSTRUCTED, not proven impossible. Sound half: `$REG` is not a trust
+  # boundary, so whoever could trigger this could write the wrong name
+  # directly — the fold grants nothing extra. Not airtight: a short read at
+  # EOF rather than mid-stream holds on a healthy LOCAL filesystem (`-f`
+  # already excludes FIFOs/devices before any open), but not on a
+  # network/FUSE mount or a failing device — `$PROJECTS_ROOT` is already a
+  # symlink to another mount on this fleet, so a non-local `$REG` is not
+  # absurd on its face.
+  # VOID if any decider ever gives `unreadable`/`malformed` different
+  # DECISIONS (different MESSAGES are fine), or `named <n>` becomes
+  # reachable from a failed read some other way.
   # A shell `echo pool-a > pools/demo` is a legal writer (ruling 2), so a
   # trailing newline is not malformed. Leading whitespace IS: the grammar is
   # anchored, and a leading space is a hand-edit nobody meant.
