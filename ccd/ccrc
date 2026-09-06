@@ -1027,7 +1027,7 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # on read, so they are declared here rather than at first assignment. `BOX_*`
 # and `_box_*` are a THIRD namespace, deliberately kept clear of the two already
 # in play in any shell that sources this tree: `_ccrc_*` (this file's own
-# refusal helpers AND the five functions `shared/generate.mjs` emits into
+# refusal helpers AND the six functions `shared/generate.mjs` emits into
 # ~/.ccrc/accounts.sh) and `_wrap_*`/`WRAPPER_*` (ccrc-wrapper-shape).
 BOX_BUILD=()
 BOX_HEALTH=()
