@@ -2681,9 +2681,25 @@ substituted before wave-done.
   IDENTICALLY.** Wherever they differ — and in this design they always differ, because absent
   means UNCONSTRAINED and unresolvable means REFUSE — `-e` must be paired with `-L`, or the
   question must be asked of `_project_pool_state`, which is the box's authority on it.
-  It also produced a PROSE DISAGREEMENT between two shipped files before it was caught:
-  `ccd/ccd` named "the doctor (Task 8's `pools-unlistable`)" as already agreeing with the reader,
-  while the doctor did not. Two files describing one contract, only one of them true.
+  It also produced a PROSE DISAGREEMENT between two shipped files: `ccd/ccd` named "the doctor
+  (Task 8's `pools-unlistable`)" as already agreeing with the reader, while the doctor did not.
+  Two files describing one contract, only one of them true.
+  **AND THIS ENTRY ITSELF CARRIED THE DEFECT IT DESCRIBES — corrected at the whole-branch
+  review.** An earlier draft stated that disagreement in the past tense, as resolved. It was
+  resolved for TWO of the three anomalies and not the third: the doctor's absence guard was
+  `[ ! -e "$dir" ] && [ ! -L "$dir" ]`, which is precisely the form D-1847's own round-2 comment
+  proves insufficient, since neither predicate can stat OR lstat through a directory it cannot
+  search. So an unsearchable `$REG` still printed `PASS pools: no project pools tagged — every
+  project is unconstrained` on a box where the reader answered `unreadable` for every project,
+  and this ledger entry — the one about unmeasured cross-file claims — was itself an unmeasured
+  cross-file claim, written by the same reflex it exists to name. The whole-branch review
+  measured it; the final fix wave closed it with a searchable-`$REG` refusal answering
+  `pools-unlistable`, and with a NUL-bearing tag now reading `malformed` with an empty stderr.
+  **The guard is deliberately NOT the reader's literal form, and that is measured, not assumed:**
+  mirroring `[ ! -d "$reg" ] || [ ! -x "$reg" ]` exactly reds the pre-existing "PASSES with no
+  pools directory at all" case, because a healthy box has no `.cc-sessions` at all and `ccrc
+  doctor` runs on the SERVER box — the literal mirror would have made the doctor FAIL there
+  forever. Same question, two callers, two right answers.
   **THE DOCTOR INSTANCE IS THE WORST OF THE THREE, and the reason generalises.** The other two
   fail toward a wrong ACTION. This one actively REASSURES, in the diagnostic surface, at the exact
   moment an operator is consulting it because nothing else works. An incorrect PASS in a doctor is
