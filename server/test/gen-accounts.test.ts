@@ -258,6 +258,29 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a secretsFile with a trailing slash', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['a secretsFile with a space', roster(acct({ exec: { kind: 'generated', secretsFile: '.cc-secrets/a b.env' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],
+    // D-1663 (spec §12 P-1), closed in this task. This file's whole argument is the REJECT
+    // direction — "a roster the CLI accepted and the server rejected would
+    // deploy a box whose `ccd` works and whose `ccrc.service` crash-loops every
+    // three seconds behind a green deploy" — and `hidden` was that roster. The
+    // validator never learned the field, so `"false"` (a truthy string that
+    // erases an account from every surface listing one) sailed through here and
+    // died at `loadConfig`. This row was RED on the tree before the mirror
+    // learned the field; that measurement is what makes it a mechanism.
+    ['a non-boolean hidden — a truthy string that would erase an account', roster(acct({ hidden: 'false' }))],
+    // `pool` is embedded UNQUOTED in a generated bash `case` arm and printed
+    // with `echo`, so its grammar is `ID_RE`'s and every way out of it is
+    // refused on both sides.
+    ['a pool name with an uppercase letter', roster(acct({ pool: 'Corp' }))],
+    ['an empty pool name', roster(acct({ pool: '' }))],
+    ['a non-string pool', roster(acct({ pool: 7 }))],
+    ['a pool name carrying a shell metacharacter', roster(acct({ pool: 'a$(id)' }))],
+    ['an explicit null pool — absence means untagged, a written null is a half-edit', roster(acct({ pool: null }))],
+    // The CAP, measured rather than assumed (D-TBD-mjs-regex-unpinned). No text scan
+    // reads a `.mjs`, so this table is the only thing holding the two copies of the
+    // grammar equal, and a cap that drifted — `{0,31}` against `{0,63}` — is the one
+    // drift every other row in this block survives: 33 lowercase letters are legal
+    // under both spellings of the charset and illegal under only one of the lengths.
+    ['a pool name one character past the 32-character cap', roster(acct({ pool: 'a'.repeat(33) }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],
     ['two accounts with the same id', roster(acct(), acct({ exec: { kind: 'generated' } }))],

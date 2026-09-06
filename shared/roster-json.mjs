@@ -53,6 +53,19 @@
 // does not check at all — `parseRoster` only warns about those and never
 // throws, so ignoring them cannot make this file laxer than the parser.
 //
+// THAT WAS AN ASPIRATION, NOT A MEASURED FACT, for as long as `hidden`
+// existed. This file never learned the field, so it accepted `hidden:
+// "false"` — a truthy string that removes an account from every surface that
+// lists one — while `loadConfig` refused to boot on the same bytes. A
+// crash-looping `ccrc.service` behind a green deploy is precisely the outcome
+// the paragraph above says cannot happen, and it stood for as long as the
+// claim did. The gap closed in the same act that added `pool`, and it closed
+// as a MECHANISM: `server/test/gen-accounts.test.ts`'s REJECT table now
+// carries a `hidden: "false"` row, measured red on the tree before this check
+// landed. Read that table, not this paragraph — it is the census of what the
+// two sides agree to refuse, and it is the thing that goes red when they stop
+// agreeing.
+//
 // Nothing is returned until every check has succeeded, so a caller can never
 // observe a half-validated roster.
 //
@@ -97,6 +110,24 @@ const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
  *  A label reaches a one-line terminal status bar and the tmux-capture
  *  parser that reads it back; a control byte breaks both. */
 const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
+
+/** Mirrors `shared/roster.ts`'s exported `POOL_NAME_RE`. Kept here as a literal
+ *  rather than imported for this file's standing reason: a bare `node` cannot
+ *  import the TypeScript. `ccd` carries a third copy in bash.
+ *
+ *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
+ *  so matters more than the tidy sentence this comment used to carry
+ *  (D-TBD-mjs-regex-unpinned). `ccd`'s bash literal is pinned against
+ *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file.
+ *  THIS copy is pinned by BEHAVIOUR instead: no text scan reads a `.mjs`
+ *  (`single-definition.test.ts` filters `/\.tsx?$/`, and wave 2a's parity test
+ *  reads `ccd/ccd` and `ccrc-doctor-checks`), so what measures the agreement is
+ *  `server/test/gen-accounts.test.ts`'s REJECT table, which drives the same
+ *  malformed pool names — empty, uppercase, non-string, shell metacharacter,
+ *  written `null`, and one character past the cap — through the CLI and the
+ *  parser and requires both to refuse. A grammar drift big enough to matter
+ *  reds a row there. Read that table; it is the census. */
+const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
 const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
@@ -195,6 +226,28 @@ function checkAccount(raw, index) {
       `Set "homeAble" to true or false for account "${id}".`);
   }
 
+  // Mirrors `parseRoster`'s `hidden` gate — the one this file never had (spec
+  // §12 P-1, D-1663). The field is OPTIONAL, so absence is legal; a PRESENT non-boolean
+  // is not. `"false"` is a truthy string, and truthiness on this field removes
+  // an account from every surface that lists one, which the server refuses at
+  // boot while this validator waved it through.
+  const hidden = raw['hidden'];
+  if (hidden !== undefined && typeof hidden !== 'boolean') {
+    bad(`account "${id}" has a non-boolean hidden.`,
+      `Set "hidden" to true or false for account "${id}", or remove the key.`);
+  }
+
+  // Mirrors `parseRoster`'s `pool` gate, including its refusal of an explicit
+  // `null`: absence is the file saying "untagged", a written `null` is a
+  // half-finished edit, and this file may not be laxer than the parser about
+  // which one it is looking at.
+  const pool = raw['pool'];
+  if (pool !== undefined && (typeof pool !== 'string' || !POOL_NAME_RE.test(pool))) {
+    bad(`account "${id}" has an invalid pool ${JSON.stringify(pool)}.`,
+      `Set "pool" for account "${id}" to a name matching ^[a-z][a-z0-9-]{0,31}$ — lowercase `
+      + 'letters, digits and hyphens only — or remove the key to leave the account untagged.');
+  }
+
   const telemetry = raw['telemetry'];
   if (telemetry !== 'anthropic' && telemetry !== 'none') {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
@@ -219,9 +272,18 @@ function checkAccount(raw, index) {
   // omits it (D-75, closed here): the field was validated above and then
   // dropped, and Task 5's wrapper writer needs the value that survived
   // validation, not merely proof that it was legal.
+  //
+  // `hidden` is checked above and deliberately NOT returned: the emitter has no
+  // use for it (it stays outside `accounts.sh`, so outside `bodyDigest` and
+  // outside `rosterAgreement`'s reach — the doctor's D-72 note is where that
+  // asymmetry is explained). `pool` IS returned, because `_ccrc_pool` is
+  // generated from it — which is the whole reason the field is emitted at all:
+  // a roster field that never reaches `accounts.sh` is a field whose cross-box
+  // drift nobody can see.
   return {
     id, label, configDirSuffix: suffix, homeAble, telemetry, hue,
     execKind: exec['kind'], secretsFile: exec['secretsFile'],
+    pool: pool === undefined ? null : pool,
   };
 }
 
