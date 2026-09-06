@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=31667c887ae63bb7983b8cd8cfe76bbeb4fde67afcabbc52e6b878c605cb1e26
+# ccrc:generated 1 sha256=0fdee0a0c31ffd8b67055ce3c91203d67224f3a4d20c669ded00ba04ba248e15
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1058,7 +1058,19 @@ _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is 
 # embedded NUL byte included) have DIFFERENT REMEDIES, and neither is ever
 # folded into `untagged`: folding would silently LIFT the constraint, so a
 # chmod would quietly make a project unconstrained. `_pool_ok` answers rc 2
-# for both — nobody decides — and the callers branch three ways.
+# for both — nobody decides.
+#
+# NO CALLER OF `_pool_ok` BRANCHES THREE WAYS TODAY, and the sentence here
+# used to say one did. Measured: `grep -n '_pool_ok' ccd/ccd` finds exactly
+# two call sites (`_ws_least_loaded`'s loop and `cmd_ws_add`'s reason
+# builder) and BOTH fold rc 1 into rc 2 — the second says so in its own
+# comment. The four-word distinction survives today for a different reason:
+# `cmd_ws_add` re-reads the STATE WORD itself, separately from `_pool_ok`,
+# to tell "every in-pool lane is unusable" from "the tag is undecidable" and
+# to print `tag:unreadable` or `tag:malformed`. A THREE-WAY BRANCH ON THE
+# EXIT CODE IS AN OBLIGATION ON WAVE 2b (§5.5.5's cross-pool verbs, which
+# must refuse an undecidable tag differently from a mismatch), not a
+# property of this file as it stands.
 #
 # WORD ON STDOUT, NOT AN EXIT CODE. An rc-based reader splits the fourth state
 # across two functions, and a `$(…)` capture that forgot `$?` reads unreadable
@@ -1269,9 +1281,22 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # THREE EXIT CODES, NOT A BOOLEAN. A boolean would fold "the tag cannot be
 # read" into one side of the answer — either silently lifting the constraint or
 # silently refusing every account — and both are wrong: when the tag is
-# undecidable, NOBODY DECIDES. Callers branch three ways. The same three
-# verdicts are `shared/poolrule.ts`'s `PoolVerdict` and are driven from one
-# fixture table (`server/test/fixtures/poolRule.ts`) in both languages.
+# undecidable, NOBODY DECIDES. The same three verdicts are
+# `shared/poolrule.ts`'s `PoolVerdict` and are driven from one fixture table
+# (`server/test/fixtures/poolRule.ts`) in both languages.
+#
+# THE THIRD CODE IS KEPT FOR WAVE 2b, NOT CONSUMED TODAY. Measured, both of
+# this function's callers fold rc 1 into rc 2: `_ws_least_loaded` writes
+# `_pool_ok "$w" "$pps" || continue`, and `cmd_ws_add`'s reason builder uses
+# `elif ! _pool_ok …` and documents the fold itself. What preserves the
+# distinction in today's behaviour is `cmd_ws_add` separately re-reading the
+# STATE WORD (`pps=$(_project_pool_state "$project")`), not this exit code.
+# So the third code is an INTERFACE this function refuses to narrow ahead of
+# the wave that needs it — §5.5.5's cross-pool verbs must tell a mismatch
+# (overridable) from an undecidable tag (not overridable) — rather than a
+# distinction some caller is acting on now. Do not "simplify" it to a
+# boolean because no caller reads it: an adapter may not narrow a
+# distinction it received.
 #
 # THE STATE IS PASSED IN, not read here: callers obtain it ONCE per decision
 # (`pps=$(_project_pool_state "$project")`) and pass the word, so a loop over
@@ -5536,7 +5561,29 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # and every reader skips dot-leading entries, which is exact because no
     # project may lead with a dot.
     local tmp="$POOLS_DIR/.$project.$BASHPID.tmp"
-    printf '%s' "$pool" > "$tmp" 2>/dev/null \
+    # `2>/dev/null` BEFORE `> "$tmp"`, and the order is the whole of it — the
+    # same rule `_project_pool_state` spells out for its own read: bash applies
+    # a command's redirections LEFT TO RIGHT and reports a FAILING one on
+    # whatever stderr is current AT THAT POINT. Written the other way round
+    # (`> "$tmp" 2>/dev/null`, which is what stood here) the silencer is not
+    # yet installed when the OPEN is attempted, so only `printf`'s runtime
+    # WRITE errors were caught and the open's own failure escaped — measured
+    # with `$POOLS_DIR` at mode 0500: `ccd: line <this one>: …/.demo.<pid>.tmp:
+    # Permission denied`, straight from the shell, ahead of the `die` that
+    # explains it; with this order, that line is gone and only the `die`
+    # remains. It was never a dead redirection, only half of one, and
+    # `ccd-project-pool.test.ts` pins the half that was missing.
+    #
+    # THE `rm -f` ON THE FAILURE PATH STILL REPORTS, deliberately unsilenced —
+    # but only where the UNLINK itself is denied, which is a stricter fixture
+    # than the one above. Measured at mode 0500 it says nothing (`-f`
+    # suppresses the ENOENT of a tmp that was never created); measured at mode
+    # 000 it says `rm: cannot remove '…': Permission denied`. That is not the
+    # shell talking over its own `die`: it is a SECOND, independent failure —
+    # the tmp could not be cleaned up either — and an operator reading the
+    # `die` below deserves to know a stray tmp may have been left behind.
+    # Silencing it would fold two facts into one.
+    printf '%s' "$pool" 2>/dev/null > "$tmp" \
       || { rm -f -- "$tmp"; die "could not write the pool tag for $project — it is NOT tagged"; }
     _plat_mv_notdir "$tmp" "$POOLS_DIR/$project" \
       || { rm -f -- "$tmp"; die "could not write the pool tag for $project — it is NOT tagged"; }
@@ -5544,9 +5591,17 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   fi
 
   # THE ONE swap.log LINE WHOSE SUBJECT IS A PROJECT. Every other line in that
-  # file names a session id. Deliberate: the retag is the CAUSE of the
-  # `rehome`/`auto-pool` lines that follow it within a tick, and a reader who
-  # cannot see the cause beside its effects has to correlate two files.
+  # file names a session id.
+  #
+  # WHY THAT IS WORTH THE ODDITY IS AN OBLIGATION ON WAVE 2b, NOT A DESCRIPTION
+  # OF TODAY. The argument is that the retag is the CAUSE of the `rehome` and
+  # `auto-pool` lines that will follow it within a tick, and that a reader who
+  # cannot see the cause beside its effects has to correlate two files. Neither
+  # effect exists yet: measured, `rehome` appears in this file ONLY as a member
+  # of `_LC_ACTS` (:1868) with no `_lc_emit` naming it, and `auto-pool` appears
+  # nowhere in this file at all — it is spec-only (§5.5.4). Until wave 2b emits
+  # them, this line's justification is a promise; the line itself is still the
+  # only record a project-scoped retag leaves anywhere.
   #
   # THIS LINE MUST LAND BEFORE THE FINAL RE-MEASUREMENT BELOW — fix round 4
   # (Finding 10). Reproduced: `ln -s "$REG/pools/$project" "$REG/swap.log"`
@@ -5564,7 +5619,19 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # line, is the fix: the invariant that actually holds is not "this write is
   # harmless" (an argument that keeps expiring as this function grows one
   # more write after the one it was made about) but THE VERB'S LAST ACT IS A
-  # MEASUREMENT, so nothing this function does can outrun what it reports.
+  # MEASUREMENT, so nothing this function does can outrun what it reports —
+  # WITH ONE STATED EXCEPTION, and it is stated HERE rather than only where it
+  # is introduced, because this is where the invariant is claimed. Fix round 5
+  # appends a `pool-tag-void` line on each of the two `die` paths below, AFTER
+  # the measurement, so on those two paths the measurement is not the last act.
+  # That write can itself alter the very tag that was measured — measured, with
+  # `$REG/swap.log` symlinked at `$POOLS_DIR/demo`, a refused `--pool` left
+  # that path holding the pool name with a whole audit line concatenated onto
+  # it (159 bytes on a fixture box; the length is the path's), reading
+  # `malformed`. What the invariant still buys is the only thing it was ever
+  # for: those writes run only AFTER a refusal has been decided, so no write in
+  # this function can outrun a REPORTED SUCCESS. A `die` is not a report of
+  # success. See the round-5 note below.
   echo "$(date '+%F %T') pool-tag $project: $old -> $new" >> "$REG/swap.log"
 
   # THE FINAL RE-MEASUREMENT, UNCONDITIONAL, ON BOTH BRANCHES — the verb's
@@ -5573,9 +5640,18 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # branch and only ahead of the line above). Nothing after this call can
   # falsify what it reports, because nothing runs after it: this reads the
   # same authority every other decision in this file defers to
-  # (`_project_pool_state`, spec §5.1) one last time, over the state as it
-  # exists after every write this call has made, log line included, and
-  # refuses to echo success unless that reader agrees.
+  # (`_project_pool_state`, spec §5.1) one last time, over `$project`'s OWN
+  # tag as it exists after every write this call has made, log line included,
+  # and refuses to echo success unless that reader agrees.
+  #
+  # `$project`'s OWN TAG, AND NOTHING ELSE — the reader takes one project, so
+  # this certifies one project. It is NOT a claim that the call left the pools
+  # directory as it found it. Measured: with `$REG/swap.log` symlinked at
+  # `$POOLS_DIR/quiet-basin`, `--project demo --pool pool-a` exits 0 printing
+  # `tagged demo pool-a` (true, and `demo` really does read `named pool-a`)
+  # while the append destroys a DIFFERENT project's tag — `quiet-basin` goes
+  # from `named pool-b` to `malformed` in the same call. A verb that was not
+  # asked about `quiet-basin` cannot certify it, and this one does not try.
   #
   # A CORRECTIVE LINE ON EITHER DIE PATH BELOW — fix round 5 (Finding 13),
   # and NOT a reversion of fix round 4. Moving the append upstream of the
@@ -5590,9 +5666,18 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # failure decision cannot manufacture a false success, because nothing
   # downstream reads it as one: the function is about to `die`, so this
   # second line's only job is to keep a HUMAN scanning the file from reading
-  # the first one at face value. `pool-tag-void` is a deliberately different
-  # verb, not a suffix reusing `pool-tag`'s own prefix, so it can never be
-  # mistaken for a second genuine transition.
+  # the first one at face value.
+  #
+  # `pool-tag-void` IS A DIFFERENT VERB IN THE VERB COLUMN, and that is the
+  # whole of the claim. A reader parsing the third field of a swap.log line
+  # gets `pool-tag-void`, never `pool-tag`, so it can never be counted as a
+  # second genuine transition. A SUBSTRING GREP CAN be fooled, and `-w` does
+  # not save it: `-` is not a word constituent, so `pool-tag` is a whole word
+  # inside `pool-tag-void` too. Measured on a swap.log holding one of each
+  # line, `grep -c pool-tag` = 2 and `grep -cw pool-tag` = 2, while
+  # `grep -c pool-tag-void` = 1. Anything counting real transitions must
+  # anchor on the column (or exclude `pool-tag-void` explicitly), not match
+  # the token loose.
   local finalstate; finalstate=$(_project_pool_state "$project")
   if (( clear )); then
     if [[ "$finalstate" != untagged ]]; then
@@ -5604,21 +5689,36 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # FIX ROUND 5 (FINDING 12): this die used to reuse the printf/mv
     # failure's own "it is NOT tagged" — accurate THERE, where nothing was
     # ever written, but reachable HERE with the tag path holding GARBAGE
-    # instead: `$finalstate` can read `malformed` (measured: the rename
-    # succeeds, then an aliased swap.log append — `ln -s
-    # "$POOLS_DIR/$project" "$REG/swap.log"` — concatenates the audit line
-    # onto the freshly-written pool name with no separating newline, which
-    # `_pool_name_valid` rejects) or, by the same construction that reaches
-    # `unreadable` on the `--clear` arm (fix round 3), `unreadable`. For
-    # BOTH — unlike `named <other>`, where `_pool_ok` still serves an
-    # unpooled or matching account (Finding 7) — `_pool_ok`'s `*)` arm
+    # instead. `$finalstate` reads `malformed` under a construction anyone
+    # can run (measured: the rename succeeds, then an aliased swap.log
+    # append — `ln -s "$POOLS_DIR/$project" "$REG/swap.log"` — concatenates
+    # the audit line onto the freshly-written pool name with no separating
+    # newline, which `_pool_name_valid` rejects).
+    #
+    # ONE CONSTRUCTED STATE, THREE RACE-ONLY ONES — corrected in fix round 6.
+    # The sentence this replaces also claimed `unreadable` here "by the same
+    # construction that reaches `unreadable` on the `--clear` arm", and that
+    # is measurably wrong: on THIS arm neither shape survives to the
+    # measurement. `$POOLS_DIR` a plain file dies earlier, at `mkdir -p`
+    # ("could not create … — demo is NOT tagged"); `$POOLS_DIR` at mode 000
+    # dies earlier still, at the `printf` into the tmp ("could not write the
+    # pool tag … — it is NOT tagged"). So `unreadable` belongs with
+    # `untagged` and `named <other>` — reachable only if a concurrent writer
+    # lands between the rename above and this read, which is exactly the
+    # class the enumeration already excluded for those two.
+    #
+    # WHAT THE MESSAGE HAS TO BE HONEST FOR IS STILL ALL FOUR, race included,
+    # and it is. For `malformed` and `unreadable`, `_pool_ok`'s `*)` arm
     # answers non-serve (rc 2, undecidable) UNCONDITIONALLY: nobody decides,
-    # for every candidate. So "it is NOT tagged" would tell the operator the
-    # opposite of the truth — the project is not free, it is UNDECIDABLE —
-    # and the cure differs: remove the garbage, not retry the write. The
+    # for every candidate — so "it is NOT tagged" would tell the operator the
+    # opposite of the truth (the project is not free, it is UNDECIDABLE) and
+    # the cure differs: remove the garbage, not retry the write. For
+    # `untagged` and `named <other>` the tag is readable and `_pool_ok`
+    # decides normally — Finding 7's point — and there "NOT tagged" would be
+    # wrong in the other direction, or simply naming the wrong pool. The
     # message below claims neither NOT-tagged nor STILL-tagged; it says only
-    # what is true of every reachable state here — the path no longer holds
-    # what this call wrote.
+    # what is true of every one of the four — the path no longer holds what
+    # this call wrote.
     if [[ "$finalstate" != "named $pool" ]]; then
       echo "$(date '+%F %T') pool-tag-void $project: the pool-tag line above did NOT take effect — this call refused" >> "$REG/swap.log"
       die "could not confirm the pool tag for $project as $pool — the tag path no longer holds what this call wrote ($POOLS_DIR/$project)"

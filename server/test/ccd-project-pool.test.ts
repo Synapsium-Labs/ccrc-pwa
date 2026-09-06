@@ -763,6 +763,37 @@ describe('ccd project-pool — the write is CHECKED in both directions', () => {
       }
     });
 
+  it.skipIf(process.getuid?.() === 0)(
+    'the denied tmp write is silenced by REDIRECTION ORDER — bash never talks over the die', () => {
+      // `2>/dev/null` has to be applied BEFORE `> "$tmp"`, not after: bash
+      // installs a command's redirections LEFT TO RIGHT and reports a failing
+      // one on whatever stderr is current at that point. Written the other way
+      // round — which is how it shipped — the silencer was not yet in place
+      // when the OPEN was attempted, so it caught only `printf`'s runtime
+      // WRITE errors and the open's own failure escaped: the operator saw
+      // `<ccd>: line NNNN: <pools>/.demo.<pid>.tmp: Permission denied` ahead
+      // of the `die` that explains the same fact in words. `_project_pool_state`
+      // spells out this exact ordering rule for its own read; this is the
+      // writer honouring it.
+      //
+      // Mode 0500 (not 000) is the fixture ON PURPOSE: the directory stays
+      // searchable, so the failure is the create alone and the follow-up
+      // `rm -f` is silent (`-f` swallows the ENOENT of a tmp that never
+      // existed). That isolates the one half this test is about. At mode 000
+      // the `rm` speaks too, deliberately — a second, independent fact.
+      h.makeRepo('demo');
+      fs.mkdirSync(POOLS(), { recursive: true });
+      fs.chmodSync(POOLS(), 0o500);
+      try {
+        const r = shFail('cmd_project_pool --project demo --pool pool-a');
+        expect(r.stderr).toContain('could not write the pool tag for demo');
+        const leaked = r.stderr.split('\n').filter((l) => /\.tmp: Permission denied/.test(l));
+        expect(leaked, `bash reported the tmp open itself:\n${r.stderr}`).toEqual([]);
+      } finally {
+        fs.chmodSync(POOLS(), 0o700);
+      }
+    });
+
   it('refuses LOUDLY when the tag cannot be removed — placement may still be constrained (any uid)', () => {
     // `rm -f` suppresses ENOENT only; EISDIR still exits non-zero, for root as
     // well. The polarity that matters: a caller told the project was untagged
@@ -833,6 +864,17 @@ describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (
   // early actually safe. Nothing here asserts what the flag DOES (there is
   // no `--cross-pool` behaviour yet); each case only asserts a nonzero exit,
   // which is the entire safety property this early token depends on.
+  //
+  // THREE OF SPEC §5.5.5's FOUR VERBS, and the fourth is unpinned on purpose.
+  // That section names `cmd_swap`, `cmd_start`, `cmd_enable` and `cmd_prefer`;
+  // only the first three are exercised here because only they are reachable
+  // from the server at all. `prefer` has no `CCD_ARGV` builder
+  // (`server/src/ccdargv.ts`), and `CCD_ARGV` is the only way to obtain the
+  // `CcdArgv` brand `Deps.runCcd` demands — so no server-built argv can carry
+  // a leading `--cross-pool` to `cmd_prefer`, and the agent grants it no
+  // whitelist entry either (`agent/src/whitelist.ts`'s `ccd:` list). It is a
+  // shell-only verb, and the safety property this describe measures is about
+  // what crosses the wire.
   it('a leading --cross-pool on `swap` dies loudly — but not because `_is_valid_wrapper` sees the flag itself', () => {
     // Corrected in fix round 3 (Finding 8): the flag lands in the `id` slot
     // (the `*)` arm collects it as the first positional) and `id` is never

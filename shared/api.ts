@@ -4752,11 +4752,18 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
-  | 'rehome'        // a session's HOME account moved — the pool re-seed
-                    // (account pools §5.5.4) and `ccd prefer`, which wrote
-                    // `.home` and journalled nothing until this act existed.
+  | 'rehome'        // RESERVED, and nothing emits it yet — measured, `rehome`
+                    // appears in `ccd/ccd` only as a member of `_LC_ACTS`
+                    // (:1868), with no `_lc_emit` naming it. The act it is
+                    // reserved FOR is a session's HOME account moving: the
+                    // pool re-seed (account pools §5.5.4, wave 2b) and `ccd
+                    // prefer`, which writes `.home` and journals nothing.
                     // DISTINCT FROM `swap`: `swap` moves the session it is
-                    // running on, `rehome` moves the account it returns to.
+                    // running on, `rehome` will move the account it returns
+                    // to. Declared ahead of its writer for the reason `gc`
+                    // below gives — this vocabulary is wire-facing and
+                    // additive-only, so a newer ccd emitting `rehome` at an
+                    // older server is what absence-permits exists to survive.
   | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
                     // per-row removals go out as `destroy` with `verb ws-gc`
                     // (ccd:8699, ccd:8812). A run-level line would need an
