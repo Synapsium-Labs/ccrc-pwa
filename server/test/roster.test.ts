@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseRoster, RosterError } from '../../shared/roster.js';
+import { parseRoster, RosterError, POOL_NAME_RE } from '../../shared/roster.js';
 
 const one = (over: Record<string, unknown> = {}) => ({
   version: 1,
@@ -143,6 +143,87 @@ describe('parseRoster', () => {
       { id: 'claude', label: 'c', configDirSuffix: '.claude', exec: { kind: 'upstream' },
         homeAble: true, hue: 'cyan', telemetry: 'anthropic', hidden: 'false' },
     ] })).toThrow(/non-boolean hidden/);
+  });
+
+  // `pool` — the operator's optional grouping of accounts, and the account half
+  // of the rule an account may serve a project by (design §5.2). OPTIONAL in
+  // the FILE like `hidden`, and `null` on the type: absence is how the roster
+  // says "untagged", which is what every roster written before this field
+  // existed says, so nothing on a live box changes on the day it ships.
+  it('parses a pool tag, and answers null for an account carrying none', () => {
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: 'pool-a' },
+      { id: 'work', label: 'work', configDirSuffix: '.work', exec: { kind: 'generated' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] });
+    expect(r.byId.get('claude')!.pool).toBe('pool-a');
+    expect(r.byId.get('work')!.pool).toBeNull();
+  });
+
+  // Five refusals, one per way a hand-edited roster gets this wrong. A written
+  // `null` is in the list ON PURPOSE and is NOT the same as an absent key:
+  // absence is the file saying "untagged", a written `null` is a half-finished
+  // edit, and folding the two would be this parser narrowing a distinction it
+  // received. Every remedy names the file and the grammar, because nobody
+  // reading a boot refusal at 2am has this regex memorised.
+  //
+  // The grammar is INTERPOLATED from the imported object rather than typed out
+  // again: this file already value-imports `POOL_NAME_RE`, and a hand-typed
+  // fourth copy of `^[a-z][a-z0-9-]{0,31}$` would be one more spelling to keep
+  // in step — including with a remedy that widened while this string did not,
+  // which is the drift that would make the assertion pass while the remedy
+  // named a grammar the parser no longer enforces.
+  it.each([
+    ['an empty pool name', ''],
+    ['an explicit null pool — absence is untagged, a written null is a half-edit', null],
+    ['a non-string pool', 7],
+    ['a pool name with an uppercase letter', 'Corp'],
+    ['a pool name containing a space', 'a b'],
+  ])('refuses %s, naming the file and the fix', (_name, pool) => {
+    const bad = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool },
+    ] };
+    expect(() => parseRoster(bad)).toThrow(RosterError);
+    try {
+      parseRoster(bad);
+    } catch (e) {
+      expect((e as RosterError).message).toMatch(/invalid pool/i);
+      expect((e as RosterError).remedy).toContain('~/.ccrc/accounts.json');
+      expect((e as RosterError).remedy).toContain(POOL_NAME_RE.source);
+    }
+  });
+
+  // `pool` in ACCOUNT_KEYS is what stops `warnUnknownKeys` printing "unknown
+  // field" for a roster this parser now fully understands. A warning on a legal
+  // field trains the operator to ignore the one diagnostic that catches a real
+  // typo — `secretFile` for `secretsFile`, the case that docstring names.
+  it('does not warn about the pool key it now understands', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      parseRoster({ version: 1, accounts: [
+        { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: 'pool-b' },
+      ] });
+      expect(warn.mock.calls.some(([m]) => typeof m === 'string' && m.includes('"pool"'))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // The grammar is ID_RE's, deliberately, and the boundary is worth pinning
+  // rather than trusting to a shared regex source: `ccd` will carry a
+  // hand-typed bash copy of this literal (wave 2a), and a drift in the CAP is
+  // the drift a "same shape" comment would never catch.
+  it('accepts the full 32-character grammar and refuses what falls outside it', () => {
+    const longest = `a${'b'.repeat(31)}`;
+    expect(longest.length).toBe(32);
+    expect(POOL_NAME_RE.test(longest)).toBe(true);
+    expect(POOL_NAME_RE.test(`${longest}b`)).toBe(false);
+    expect(POOL_NAME_RE.test('1pool')).toBe(false);
+    expect(POOL_NAME_RE.test('-pool')).toBe(false);
+    expect(POOL_NAME_RE.test('pool_a')).toBe(false);
   });
 
   it('warns but does not fail on an unknown field, naming the offending key', () => {

@@ -1420,6 +1420,64 @@ export interface ProjectRow {
   readiness?: ProjectReadiness | null;
 }
 
+/**
+ * What a project's pool tag (`~/.cc-sessions/pools/<project>` on the fleet box)
+ * was MEASURED to be.
+ *
+ * FOUR states, and no reader may fold one into another. `unreadable` (the file
+ * is there and could not be read — EACCES, a directory planted at the path, a
+ * symlink loop) and `malformed` (it was read and is not one pool name) are the
+ * two ways NOBODY DECIDES: creation must refuse naming the file (wave 2a), the
+ * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
+ * Folding either into `untagged` would silently LIFT the constraint — the
+ * overloaded-null defect this tree refuses at a seam, in its most expensive
+ * form, because the direction of the mistake is always "run the work somewhere
+ * it was not allowed to run".
+ *
+ * No detail string beside the state, deliberately: the detail belongs in
+ * exactly two places once they land — `ccrc doctor` will carry the bytes
+ * (wave 2a) and the PWA's warning chip will carry the full path (wave 4) — so
+ * a third rendering of the same fact would be a third thing to keep true.
+ *
+ * Declared ahead of its consumers so both ends of the wire import ONE spelling
+ * rather than each inventing its own.
+ */
+export type ProjectPoolWire =
+  | { state: 'tagged'; name: string }
+  | { state: 'untagged' }
+  | { state: 'malformed' }
+  | { state: 'unreadable' };
+
+/**
+ * Whether the fleet's `ccd` actually HONOURS project pools — the version-skew
+ * channel for this feature, and three-valued for `lifecycleState`'s reason:
+ * `unknown` means "this server has not measured", and a two-state answer would
+ * make that look like one of the other two.
+ *
+ * `unavailable` is what will arm the PWA's host banner (wave 4) ("the fleet
+ * host's ccd does not honour project pools yet"); `unknown` arms nothing,
+ * because a banner on no evidence is a banner nobody can act on.
+ */
+export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
+
+/**
+ * The fleet-level pool census, as one frame carries it.
+ *
+ * `listed: false` is not "no projects are tagged" — it is "this server could not
+ * enumerate the tags", which is the registry root being unlistable or a regular
+ * file planted where `pools/` belongs. The distinction survives to the phone
+ * because a fleet of silently untagged projects and a fleet whose tags cannot be
+ * read look identical otherwise, and only one of them is a reason to stop
+ * trusting the chips.
+ *
+ * FLEET-LEVEL, never per session: a `FleetSession` field would make
+ * `reviveFleetSession` a second producer of this fact, which is the argument the
+ * `divergence` frame already makes for itself.
+ */
+export type ProjectPoolsWire =
+  | { listed: true; byProject: Record<string, ProjectPoolWire>; enforcement: PoolsEnforcement }
+  | { listed: false; enforcement: PoolsEnforcement };
+
 /** Fold one skill's answer across every rostered HOME. A proven absence
  *  anywhere dominates; a home we could not read downgrades a clean sweep to an
  *  unknown; measuring NOTHING is an unknown, never a vacuous `present`. */
@@ -2652,6 +2710,26 @@ export interface RosterWire {
    *  keep rendering every entry exactly as it did. `rosterWrapperIds`
    *  (`pwa/src/lib/accounts.ts`) is the single reader that applies it. */
   hidden: boolean;
+  /** The operator's pool for this account, or `null` for untagged — see
+   *  `AccountDef.pool` (`shared/roster.ts`) for what a pool is and why an
+   *  absent key, not a written `null`, is how the roster file says "untagged".
+   *
+   *  ADDITIVE, and `FLEET_PROTO` is deliberately not bumped for it, on
+   *  `hidden`'s exact terms. A server built before this field omits it, and the
+   *  PWA's SINGLE reader (`accountPool`, `pwa/src/lib/accounts.ts`, wave 4)
+   *  MUST test `typeof v === 'string'` and answer `null` for anything else —
+   *  so an older payload will read as untagged, which is the permissive
+   *  direction. A reader that trusted the static type here would be trusting a
+   *  cast: the offline snapshot's `isRosterWireLike` does not check this field,
+   *  any more than it checks `hidden`.
+   *
+   *  REQUIRED on this interface even though it is optional in the roster FILE,
+   *  for the reason `hidden` gives above: a handler that forgot to copy it
+   *  would ship a wire on which every account looks untagged — on a fleet where
+   *  pools are enforced, a phone offering swaps `ccd` will refuse — and the
+   *  compiler is the only thing that can catch a field-by-field rebuild
+   *  dropping one. */
+  pool: string | null;
 }
 
 /**

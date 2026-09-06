@@ -15,6 +15,13 @@ export interface RosterJsonAccount {
   homeAble: boolean;
   telemetry: 'anthropic' | 'none';
   hue: Hue;
+  /** The account's pool, or `null` for untagged — `AccountDef.pool`
+   *  (`shared/roster.ts`) one-for-one, including that a JSON `null` is
+   *  REFUSED and only an absent key produces this `null`. Returned rather
+   *  than merely validated because `generateAccountsSh` emits it into
+   *  `_ccrc_pool`. `hidden` is validated by `checkAccount` and NOT returned:
+   *  nothing downstream of this type reads it. */
+  pool: string | null;
   execKind: ExecSpec['kind'];
   /** Present only when the roster declared one; `undefined` otherwise —
    *  including whenever `execKind` is not `'generated'`. */
