@@ -646,6 +646,27 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
       // off documents a switch nobody can find.
       'graphGateDenials',
       'graph-gate-off',
+      // R6's two (D-1745). NOT `GRAPH_NUDGE_READ_RE`: that identifier is the
+      // hook's own spelling of graphify's extension list, harvested from the
+      // hook by `session-hook.test.ts` and pinned there — requiring it here
+      // would make the README quote a shell variable name to stay green, and
+      // the token would then be satisfied by a README that never says what
+      // the nudge DOES. What the overview owes a reader is the mechanism's
+      // name and its verb: `Read nudge` is what the paragraph is called, and
+      // `nudged` is the word the card's own armed sentence uses for what
+      // happens to a source read. A nudge the canonical overview does not
+      // mention is a mechanism nobody can find — every session on the fleet
+      // meets it, and the only place it is written down is the hook.
+      //
+      // WHAT THIS PAIR ACTUALLY BINDS, measured rather than assumed (the
+      // D-1355 lesson two comments up): deleting the R6 paragraph whole
+      // leaves BOTH tokens standing, because the hook bullet's stdout
+      // sentence names the nudge too — so the pair binds the two mentions
+      // together, not the paragraph. The paragraph itself is bound by the
+      // anchored assertion below, which is the row that went red for that
+      // deletion (1 failed / 56 passed).
+      'Read nudge',
+      'nudged',
     ]) {
       expect(readme, `the README never mentions ${token}`).toContain(token);
     }
@@ -674,6 +695,20 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
       'the README no longer says the gate was declined first — without that history the three ' +
       'grounds get re-derived as if nothing had ever answered them')
       .toMatch(/PreToolUse[\s\S]{0,240}?declined/i);
+    // R6 IS THE OTHER HALF OF THE SAME RULING, and the half a reader gets
+    // wrong by default. The gate denies; the nudge sitting beside it in the
+    // same `PreToolUse` arm does NOT, and a README that documents "a Read
+    // nudge" without saying so leaves every reader — and every operator
+    // reading a complaint about a blocked session — to assume the gate's own
+    // shape. The distinction is the ruling itself (`Edit` requires a prior
+    // `Read`), so it has to survive an edit of the paragraph that carries it.
+    // ANCHORED on the paragraph's own opener, in the same window idiom as the
+    // two above, so the phrase cannot be satisfied from somewhere else in a
+    // 2000-line file.
+    expect(flatReadme,
+      'the README describes the Read nudge without saying it is not a deny — the one thing ' +
+      "that distinguishes it from the gate it sits beside, and the ruling's own reason")
+      .toMatch(/Read nudge[\s\S]{0,600}?nudge, not a deny/i);
   });
 
   it('never again describes the read side as something ccrc writes into a CLAUDE.md (D-1245)', () => {
