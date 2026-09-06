@@ -358,6 +358,36 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   reasoning it through: by somebody re-running a claim nobody asked them to check. That is the same thing that
   caught my own wrong lock in D-1798, and it is the method this wave should be remembered for.
 
+- **THE THREE-AXIS RULE (2026-09-06 20:42 UTC) — this program's most portable finding, and it belongs to the PROGRAM rather
+  than to any entry:** *a claim is scoped to what was measured, and the axes it can be wrong on are FILE, TIME
+  and PLATFORM.* Every comment and guard defect this wave produced sits on one of them. **FILE** — D-1848: true
+  of one file, false of a sibling (`ccd/ccd` said the doctor agreed with the reader; it did not). **TIME** —
+  the ripened-comment class: true when written, false once Tasks 2, 5 and 8 landed. **PLATFORM** — D-1849,
+  below: true on the platform it was measured on, false on the other. Carried into every remaining brief
+  (2b, 3, 4, 5).
+- **D-1849 (wave 2a, 2026-09-06 20:42 UTC) — `rm -f` swallows ENOTDIR on GNU and NOT on BSD, found by macOS CI on an otherwise
+  green PR #59.** With a plain file at `$POOLS_DIR`, GNU returns 0 and the verb proceeds to write its swap.log
+  line and then void it; BSD returns non-zero, so `|| die` fires BEFORE the append and the log is empty. **Both
+  behaviours are correct** — macOS refuses earlier and writes nothing misleading — and what was wrong was the
+  TEST, which encoded one platform's PATH as though it were the property. Fixed by asserting the invariant the
+  finding actually established: swap.log never carries a `pool-tag` line for a refused call without a following
+  `pool-tag-void`. **Ruled: its own number, NOT a fourth shape of D-1848.** D-1848 is a specific greppable
+  predicate rule with a SCAN behind it; this is a different predicate, a different mechanism, caught by neither
+  that scan nor that pairing. What they share is an epistemic, not a rule, and folding an epistemic into a
+  numbered predicate rule would dilute the one thing that makes D-1848 worth more than three instance numbers.
+  Each is exactly as strong as its own mechanism: D-1848's is a scan, D-1849's is macOS CI.
+  **The correction shape is the same as the ladder's**, which is worth a reader's attention: a
+  platform-specific PATH stood in for the guarantee exactly as an exit code stood in for the state. And the
+  axis was not unknown here — `_plat_mv_notdir` exists in the same file because `mv` diverges the same way. The
+  wave used the precedent for `mv` and wrote a fresh GNU-only assumption for `rm` beside it. Known, not
+  generalised.
+- **The one-fix-wave allowance was deliberately exceeded, and correctly (2026-09-06 20:42 UTC).** The worker fixed red macOS CI
+  after its final fix wave and recorded it as a deviation from the execution skill rather than surfacing it.
+  **Endorsed, and it needed no permission:** the cap bounds REVIEW findings, which are judgements that can
+  ping-pong and need a line drawn somewhere. Red CI is a GATE — binary, and part of DONE by this program's own
+  brief. "Done with residuals" plus a red check is not a coherent state, and surfacing a blocker as an opinion
+  would have been the error.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
