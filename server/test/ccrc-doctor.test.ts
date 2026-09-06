@@ -44,9 +44,10 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv, ghPoisonAt } from './ccdWsHelpers.js';
+import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
+import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -3615,6 +3616,149 @@ describe('ccrc doctor: wrappers', () => {
     // the check never ran at all.
     expect(line).toMatch(/^FAIL wrappers: acct-a /);
     expect(line).toBe(lineFor(runDoctor(without).stdout, 'wrappers'));
+  });
+});
+
+describe('ccrc doctor: pools', () => {
+  /** `$HOME/.cc-sessions/pools/<project>`, with EXACT bytes. */
+  function tag(home: string, project: string, bytes: string): string {
+    const d = join(home, '.cc-sessions', 'pools');
+    mkdirSync(d, { recursive: true });
+    const p = join(d, project);
+    writeFileSync(p, bytes);
+    return p;
+  }
+
+  /** A project directory under `$HOME/projects`, which is where the check
+   *  looks for one — the same spelling `_check_graphify` uses (`:2764`). */
+  const project = (home: string, name: string): void =>
+    mkdirSync(join(home, 'projects', name), { recursive: true });
+
+  /** The roster projection ccd obeys, so the orphan arm has a pool vocabulary
+   *  to measure against. Generated, never hand-written — a fixture accounts.sh
+   *  typed out here would be a copy of the roster deciding what the check
+   *  believes. */
+  const pooledRoster = (home: string): void => seedAccountsSh(home, POOLED_TEST_ROSTER);
+
+  it('PASSES with no pools directory at all — nothing is tagged, nothing is constrained', () => {
+    const home = healthy('ccrc-doctor-pools-none-');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('no project pools tagged');
+  });
+
+  it('PASSES on a tagged, coherent box — one line, no remedy', () => {
+    const home = healthy('ccrc-doctor-pools-ok-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'pools')).toMatch(/^PASS pools: /);
+    expect(out.split('\n').filter((l) => / pools: /.test(l))).toHaveLength(1);
+  });
+
+  it('FAILS pools-malformed with its own remedy, and names the file', () => {
+    const home = healthy('ccrc-doctor-pools-malformed-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'Pool a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-malformed'));
+    expect(i, `no pools-malformed line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('WARNS pools-stale for a tag whose project and registry rows are both gone', () => {
+    const home = healthy('ccrc-doctor-pools-stale-');
+    pooledRoster(home);
+    tag(home, 'quiet-basin', 'pool-a');   // no projects/quiet-basin, no *.project row
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-stale'));
+    expect(i, `no pools-stale line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    // The remedy is the verb, and the verb's `--clear` arm is existence-free
+    // precisely so this remedy always works.
+    expect(lines[i + 1]).toContain('ccd project-pool --project quiet-basin --clear');
+  });
+
+  it('does NOT call a registry-only project stale', () => {
+    // The `--pool` arm accepts a project that exists only as a registry row;
+    // the doctor must use the same two-way test, or it reports every
+    // custom-workdir project as stale.
+    const home = healthy('ccrc-doctor-pools-regonly-');
+    pooledRoster(home);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'claude-quiet-basin.project'), 'quiet-basin');
+    tag(home, 'quiet-basin', 'pool-a');
+    expect(lineFor(runDoctor(home).stdout, 'pools')).toMatch(/^PASS pools: /);
+  });
+
+  it('WARNS pools-orphan-pool when no rostered account carries the name', () => {
+    const home = healthy('ccrc-doctor-pools-orphan-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-c');          // no account in POOLED_TEST_ROSTER carries it
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-orphan-pool'));
+    expect(i, `no pools-orphan-pool line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('WARNS pools-tmp-leak for a dot-leading entry, with `rm` as the remedy', () => {
+    const home = healthy('ccrc-doctor-pools-leak-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    tag(home, '.demo.4242.tmp', 'pool-a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-tmp-leak'));
+    expect(i, `no pools-tmp-leak line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toContain('rm');
+  });
+
+  it('FAILS pools-unlistable when a regular file sits where the directory belongs', () => {
+    const home = healthy('ccrc-doctor-pools-unlistable-');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'pools'), 'not a directory\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unlistable'));
+    expect(i, `no pools-unlistable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'FAILS pools-unreadable for a mode-000 tag, and never calls it untagged', () => {
+      const home = healthy('ccrc-doctor-pools-unreadable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      const p = tag(home, 'demo', 'pool-a');
+      chmodSync(p, 0o000);
+      try {
+        const lines = runDoctor(home).stdout.split('\n');
+        const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unreadable'));
+        expect(i, `no pools-unreadable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+        expect(lines[i]).toContain('demo');
+      } finally {
+        chmodSync(p, 0o600);
+      }
+    });
+
+  it('gives each class its OWN line and its OWN remedy, never one joined verdict', () => {
+    // Two classes with two different remedies on one box: `pools-malformed` is
+    // "rewrite the file", `pools-stale` is "clear the tag". Joining them hands
+    // one finding the other's instruction, the collapse `_check_wrappers` was
+    // split for.
+    const home = healthy('ccrc-doctor-pools-two-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'Pool a');
+    tag(home, 'quiet-basin', 'pool-a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const verdicts = lines.filter((l) => / pools: /.test(l));
+    expect(verdicts.length, `expected two pools verdict lines:\n${lines.join('\n')}`).toBe(2);
+    for (const v of verdicts) {
+      expect(lines[lines.indexOf(v) + 1]).toMatch(/^ {2}remedy: \S/);
+    }
   });
 });
 

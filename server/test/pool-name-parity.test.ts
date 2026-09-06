@@ -76,6 +76,17 @@ describe('the pool-name grammar is one grammar in two languages', () => {
     const bash = exactlyOne(ccdSrc, /^POOL_NAME_RE='([^']*)'$/gm, 'ccd/ccd POOL_NAME_RE');
     expect(bash).toBe(POOL_NAME_RE.source);
   });
+
+  it('ccd/ccrc-doctor-checks holds exactly one POOL_NAME_RE, byte-equal to the other two', () => {
+    // A THIRD bash spelling, and the reason it exists rather than being
+    // imported: this file is sourced under `set -u` by things that are not
+    // `ccrc` (this suite's own `tableNames()` is one), so it cannot reference
+    // another tool's variable at the top level — D-92's trade, the one
+    // `CCRC_RC_FILE` already makes here. What it CAN have is a pin.
+    const checks = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+    const bash = exactlyOne(checks, /^POOL_NAME_RE='([^']*)'$/gm, 'ccrc-doctor-checks POOL_NAME_RE');
+    expect(bash).toBe(POOL_NAME_RE.source);
+  });
 });
 
 describe('the pools directory is one name in two languages', () => {

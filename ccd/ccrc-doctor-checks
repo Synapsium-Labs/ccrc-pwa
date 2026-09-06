@@ -188,6 +188,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  pools
   graphify
   graphify-path
   build
@@ -2637,6 +2638,157 @@ _check_wrappers() {
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
 }
 
+# ── the project pool tags (account pools, spec §5.4.6) ────────────────────
+# `$HOME/.cc-sessions/pools/<project>` is one file per tagged project, holding
+# one token. This check REPORTS and RESOLVES NOTHING — `_check_wrappers`'s own
+# contract — because every finding here is either an operator's intent to
+# revise or a permission bit no doctor should silently change.
+#
+# THE GRAMMAR IS SPELLED HERE, and that is D-92's trade rather than an
+# oversight: this file is sourced under `set -u` by things that are not `ccrc`
+# (`ccrc-doctor.test.ts`'s `tableNames()`), so a top-level reference to `ccd`'s
+# `POOL_NAME_RE` would make sourcing it FAIL, and a `${…:-…}` fallback is the
+# second spelling with a branch in front of it. `CCRC_RC_FILE` below makes the
+# identical trade. What is different from `ccrc-wrapper-shape`'s hand-copy of
+# `ID_RE` is that this one is PINNED: `server/test/pool-name-parity.test.ts`
+# extracts all three spellings — TypeScript, `ccd/ccd`, and this line — and
+# holds them byte-equal.
+POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
+# Builtin substitute for `grep -qxF`: exact-line membership, nothing more.
+# NO GREP, for the identical reason `POOL_NAME_RE` above gives no `${…:-…}`
+# import — this file's PATH is not guaranteed to carry coreutils (measured
+# under `ccrc-doctor.test.ts`'s own harness, which hands every check exactly
+# the binaries it stubbed and nothing else), and no other check here forks
+# one.
+_pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of haystack
+  local needle="$1" hay="$2" line
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ "$line" = "$needle" ] && return 0
+  done <<< "$hay"
+  return 1
+}
+_check_pools() {
+  local dir="$HOME/.cc-sessions/pools" reg="$HOME/.cc-sessions" proot="$HOME/projects"
+  if [ ! -e "$dir" ]; then
+    _dr_pass pools "no project pools tagged ($dir does not exist) — every project is unconstrained, which is the pre-pools behaviour"
+    return 0
+  fi
+  # A regular file, a dangling symlink, or a directory nobody may list. ccd
+  # reads the same directory and cannot decide a tag it cannot reach, so this
+  # is a FAIL rather than the absence above.
+  if [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+    _dr_fail pools "pools-unlistable: $dir is not a listable directory, so no project's tag can be read — ccd reads this same path" \
+      "fix what is at that path — check with: ls -ld $dir"
+    return 1
+  fi
+
+  # ONE BUCKET PER REMEDY, this file's standing rule: two conditions cured by
+  # the same command share a verdict line; a condition with a DIFFERENT cure
+  # gets its own line and its own remedy. Five buckets, five different cures.
+  local p_leak=() p_unread=() p_malformed=() p_stale=() p_orphan=()
+  # The pool vocabulary the FLEET obeys — `~/.ccrc/accounts.sh`, the generated
+  # projection, not `accounts.json`. Sourced in a SUBSHELL so nothing it
+  # defines lands in doctor's namespace. When it cannot be read the orphan arm
+  # makes NO CLAIM (an empty `known`): `_check_wrappers` already FAILs loudly
+  # for a missing or unreadable roster with its own remedy, and inventing a
+  # second verdict for the same condition would hand one fact two vocabularies.
+  local known=""
+  if [ -r "$HOME/.ccrc/accounts.sh" ]; then
+    known="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
+      && declare -F _ccrc_pool >/dev/null 2>&1 \
+      && for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_pool "$a"; done )" || known=""
+  fi
+
+  # This box's `*.project` registry rows, read ONCE rather than once per tag —
+  # matching `known` above, and for the same reason. Builtin-read (`$(< "$rf")`,
+  # not `cat`; see `_pool_has_line`'s own header for why neither this file nor
+  # any check in it may fork a coreutil).
+  local reg_rows="" rf
+  for rf in "$reg"/*.project; do
+    [ -e "$rf" ] && [ -f "$rf" ] && [ -r "$rf" ] || continue
+    reg_rows+="$(< "$rf")"$'\n'
+  done
+
+  local n f v
+  # `*` ALONE never matches a dot-leading name (bash's default, no `dotglob`),
+  # so the tmp-leak bucket below would be permanently empty without the two
+  # extra patterns — `.[!.]*` and `..?*` are the standard dotglob-free way to
+  # add "every dot-leading name except `.` and `..`" (measured: the bare `*`
+  # form silently never saw a `.demo.4242.tmp` fixture at all).
+  for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$f" ] || continue          # unmatched glob: no nullglob here
+    n="${f##*/}"
+    case "$n" in
+      .*) p_leak+=("$n"); continue ;;
+    esac
+    # The four arms are `_project_pool_state`'s, in its order and with its
+    # meanings — a doctor that measured the tag differently from the file that
+    # obeys it would report on a rule nobody enforces. `-f`/`-r` are checked
+    # FIRST and SEPARATELY from the read itself: `$(< "$f")` is bash's own
+    # no-fork slurp (this file's PATH is not guaranteed to carry `cat` —
+    # measured under `ccrc-doctor.test.ts`'s harness), but unlike `cat` it
+    # answers a permission failure by printing directly to the CALLER's
+    # stderr rather than the substitution's exit status once any OTHER
+    # redirection sits beside it, so unreadable has to be decided before the
+    # read is ever attempted, not folded into it.
+    if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+      p_unread+=("$n"); continue
+    fi
+    v="$(< "$f")"
+    v="${v%"${v##*[![:space:]]}"}"
+    if ! [[ "$v" =~ $POOL_NAME_RE ]]; then
+      p_malformed+=("$n"); continue
+    fi
+    # STALE is about the PROJECT, not the pool: a directory under the projects
+    # root, or a registry row naming it — the same two-way test the verb's
+    # `--pool` arm applies, so a custom-workdir project is never called stale.
+    if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then
+      p_stale+=("$n")
+    fi
+    # ORPHAN is about the POOL: no rostered account carries the name, so this
+    # pool is EMPTY and every session of this project will strand rather than
+    # cross (ruling 6). WARN, not FAIL — the pool may be about to gain an
+    # account (O5).
+    if [ -n "$known" ] && ! _pool_has_line "$v" "$known"; then
+      p_orphan+=("$n ($v)")
+    fi
+  done
+
+  local rc=0
+  if [ "${#p_unread[@]}" -gt 0 ]; then
+    _dr_fail pools "pools-unreadable: $(_dr_join ${p_unread[@]+"${p_unread[@]}"}) — the tag exists and cannot be read, so ccd refuses to place work for these projects rather than treating them as unconstrained" \
+      "fix the mode/ownership under $dir — check with: ls -l $dir"
+    rc=1
+  fi
+  if [ "${#p_malformed[@]}" -gt 0 ]; then
+    _dr_fail pools "pools-malformed: $(_dr_join ${p_malformed[@]+"${p_malformed[@]}"}) — the file holds something that is not one pool name, so nothing can decide these projects' placement" \
+      "rewrite each as a single lowercase token: ccd project-pool --project <p> --pool <name>"
+    rc=1
+  fi
+  if [ "${#p_stale[@]}" -gt 0 ]; then
+    # One `ccd project-pool --project <n> --clear` per stale name, not a single
+    # templated sentence — the remedy is the exact command an operator runs,
+    # and a `<p>` placeholder left unsubstituted is not a command at all.
+    local -a p_stale_cmds=()
+    for n in "${p_stale[@]}"; do p_stale_cmds+=("ccd project-pool --project $n --clear"); done
+    _dr_warn pools "pools-stale: $(_dr_join ${p_stale[@]+"${p_stale[@]}"}) — tagged, but no project directory and no registry row of that name exists, so nothing reads these tags" \
+      "clear each: $(_dr_join "${p_stale_cmds[@]}")"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#p_orphan[@]}" -gt 0 ]; then
+    _dr_warn pools "pools-orphan-pool: $(_dr_join ${p_orphan[@]+"${p_orphan[@]}"}) — no account in this box's roster is in that pool, so a hard-blocked session of these projects will strand rather than cross" \
+      "either tag an account into the pool in \$HOME/.ccrc/accounts.json and redeploy the agent lane, or retag the project: ccd project-pool --project <p> --pool <name>"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "${#p_leak[@]}" -gt 0 ]; then
+    _dr_warn pools "pools-tmp-leak: $(_dr_join ${p_leak[@]+"${p_leak[@]}"}) — a dot-leading entry, i.e. a tmp file a SIGKILL left between the write and the rename; inert, and no reader sees it" \
+      "rm the named entries under $dir"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -ne 0 ]; then return "$rc"; fi
+  _dr_pass pools "every project tag under $dir is one legal pool name, names a project that exists, and names a pool this box's roster carries"
+}
+
 # ── graphify: the AST-graph sweep's engine, skills, excludes, census, and
 # worktrees headroom (D-995, D-997) ────────────────────────────────────────
 # `~/.ccrc/graph-sweep.json` is a census FOR an operator, not a doctor of its
@@ -3300,6 +3452,18 @@ _check_build() {
 # file produce the same digest and report `'agreed'` (measured on this plan's
 # own Task 6 fix). The PASS therefore claims exactly what was measured, and the
 # thing that catches the rest is the `wrappers` check above, run on each box.
+#
+# WHAT THE DIGEST NOW COVERS, and what it still does not. `pool` IS covered:
+# `shared/generate.mjs` emits `_ccrc_pool()` into `accounts.sh` always — an
+# empty `case` when nothing is tagged — precisely so a pool disagreement
+# between the two boxes changes the bytes and reads as `divergent` here, with
+# this check's existing remedy. `hidden` is NOT covered, and joins `exec.kind`
+# and `secretsFile` in the same disclosure: the generator emits none of the
+# three, so two rosters differing only in a `hidden` flag produce the same
+# digest and report `'agreed'`. Expect a TRANSIENT `divergent` during any
+# agent-first deploy that adds or changes pools — the roster lane lands on one
+# box before the other, the deploy output says so, and it clears when the
+# second lane runs.
 _check_fleet() {
   # THE READERS LIVE IN `ccrc`, NOT HERE, and that is not an accident of where
   # the code was typed: `ccrc status` makes the same call, and a copy of an
