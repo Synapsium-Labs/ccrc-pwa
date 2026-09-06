@@ -324,8 +324,13 @@ Run: `cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts`
 Expected: FAIL on the first assertion (`server/test/ is clean under a tests-inclusive project`) with
 
 ```
-test/roster-generate.test.ts(111,38): error TS2345: Argument of type '{ version: 1; accounts: { … }[]; … }' is not assignable to parameter of type 'Roster'.
+test/roster-generate.test.ts(111,…): error TS2345: Argument of type '{ version: 1; accounts: { … }[]; … }' is not assignable to parameter of type 'Roster'.
+  … Types of property 'accounts' are incompatible …
   Property 'pool' is missing in type '{ id: string; label: string; configDirSuffix: string; exec: { kind: "upstream"; }; homeAble: boolean; hue: "cyan"; telemetry: "anthropic"; hidden: false; }' but required in type 'AccountDef'.
+
+(Shape, not a transcript: the real diagnostic interposes two more `Type '…' is not assignable` lines
+and its column is not 38. Match on the file, the code `TS2345` and the `Property 'pool' is missing`
+line — not on the column or the exact line count.)
 ```
 
 This is the point of making the field required rather than optional: `generateAccountsSh` consumes a `Roster` STRUCTURALLY with no runtime check that its argument ever passed through `parseRoster`, and `shared/generate.d.mts` is what makes the compiler the check instead. The hostile-payload fixture is the only object in the tree that builds one by hand.
@@ -380,7 +385,7 @@ git commit -m "feat(roster): an account carries an optional pool name, refused r
 - Test: `server/test/gen-accounts.test.ts` — the `CASES` REJECT table (`:222`–`:277`)
 
 **Interfaces:**
-- Consumes: `POOL_NAME_RE`'s grammar from Task 1 (copied as a literal, not imported — a bare `node` cannot import TypeScript; that copy is what wave 2a's text-extraction parity test will later pin).
+- Consumes: `POOL_NAME_RE`'s grammar from Task 1 (copied as a literal, not imported — a bare `node` cannot import TypeScript). **What pins THIS copy is behaviour, not text** (D-TBD-mjs-regex-unpinned): wave 2a's text-extraction parity test reads `ccd/ccd` and `ccrc-doctor-checks`, never a `.mjs`, and `single-definition.test.ts` filters `/\.tsx?$/`, so it cannot see this file either. The mechanism is the REJECT table in this task's own suite, which drives the same malformed pool names through both sides — which is why the table gains an over-the-cap row here as well as the five grammar rows.
 - Produces: `checkAccount` returns `pool: string | null` on every account, which `generateAccountsSh` reads in Task 3. `checkAccount` also VALIDATES `hidden` without returning it — the emitter has no use for the value, and the file's own contract is "reject anything the SERVER would reject", not "reject anything the generator would trip over".
 
 **Spec:** §5.3 (the `shared/roster-json.mjs` paragraph), §3.4, §12 P-1 (D-1663).
@@ -416,7 +421,7 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;   // <- the literal in the file
 
 - [ ] **Step 1: Write the failing tests**
 
-In `server/test/gen-accounts.test.ts`, add six rows to the `CASES` array (declared at `:222`, ending with `'two upstream accounts'` at `:276`). Put them immediately after the `['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],` row:
+In `server/test/gen-accounts.test.ts`, add SEVEN rows to the `CASES` array (declared at `:222`, ending with `'two upstream accounts'` at `:276`) — the six this task first drafted, plus the over-the-cap row D-TBD-mjs-regex-unpinned adds. Put them immediately after the `['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],` row:
 
 ```ts
     // D-1663 (spec §12 P-1), closed in this task. This file's whole argument is the REJECT
@@ -436,15 +441,21 @@ In `server/test/gen-accounts.test.ts`, add six rows to the `CASES` array (declar
     ['a non-string pool', roster(acct({ pool: 7 }))],
     ['a pool name carrying a shell metacharacter', roster(acct({ pool: 'a$(id)' }))],
     ['an explicit null pool — absence means untagged, a written null is a half-edit', roster(acct({ pool: null }))],
+    // The CAP, measured rather than assumed (D-TBD-mjs-regex-unpinned). No text scan
+    // reads a `.mjs`, so this table is the only thing holding the two copies of the
+    // grammar equal, and a cap that drifted — `{0,31}` against `{0,63}` — is the one
+    // drift every other row in this block survives: 33 lowercase letters are legal
+    // under both spellings of the charset and illegal under only one of the lengths.
+    ['a pool name one character past the 32-character cap', roster(acct({ pool: 'a'.repeat(33) }))],
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail — and record which half fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts`
 
-Expected: PASS for all six rows in the first `it.each` (`… — parseRoster throws on it`) — Task 1 already made the five `pool` rows throw, and `hidden: 'false'` has thrown since `hidden` existed.
+Expected: PASS for all seven rows in the first `it.each` (`… — parseRoster throws on it`) — Task 1 already made the six `pool` rows throw (the over-cap name is refused by `POOL_NAME_RE`'s `{0,31}` bound), and `hidden: 'false'` has thrown since `hidden` existed.
 
-Expected: FAIL for all six rows in the second `it.each` (`… — the CLI exits nonzero and writes NO bash`):
+Expected: FAIL for all seven rows in the second `it.each` (`… — the CLI exits nonzero and writes NO bash`):
 
 ```
 AssertionError: a roster the server refuses to boot on must fail the deploy, not generate a file
@@ -460,8 +471,20 @@ In `shared/roster-json.mjs`, after `LABEL_UNSAFE_RE` (`:99`):
 ```js
 /** Mirrors `shared/roster.ts`'s exported `POOL_NAME_RE`. Kept here as a literal
  *  rather than imported for this file's standing reason: a bare `node` cannot
- *  import the TypeScript. `ccd` carries a third copy in bash, and the three are
- *  pinned equal by text extraction rather than by hope. */
+ *  import the TypeScript. `ccd` carries a third copy in bash.
+ *
+ *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
+ *  so matters more than the tidy sentence this comment used to carry
+ *  (D-TBD-mjs-regex-unpinned). `ccd`'s bash literal is pinned against
+ *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file.
+ *  THIS copy is pinned by BEHAVIOUR instead: no text scan reads a `.mjs`
+ *  (`single-definition.test.ts` filters `/\.tsx?$/`, and wave 2a's parity test
+ *  reads `ccd/ccd` and `ccrc-doctor-checks`), so what measures the agreement is
+ *  `server/test/gen-accounts.test.ts`'s REJECT table, which drives the same
+ *  malformed pool names — empty, uppercase, non-string, shell metacharacter,
+ *  written `null`, and one character past the cap — through the CLI and the
+ *  parser and requires both to refuse. A grammar drift big enough to matter
+ *  reds a row there. Read that table; it is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 ```
 
@@ -563,7 +586,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/gen-accounts.test.ts`
 Expected: FAIL — `a non-boolean hidden … — the CLI exits nonzero and writes NO bash`, `expected 0 not to be 0`.
 
 Restore it, delete the `pool` `bad()` block, re-run:
-Expected: FAIL — all five `pool` rows of the second `it.each`.
+Expected: FAIL — all six `pool` rows of the second `it.each`, the over-cap row included; if the over-cap row alone stays green while the other five red, the mirrored literal's CAP has drifted from `shared/roster.ts`'s and that is the exact drift this row exists to catch.
 
 Restore it.
 
@@ -762,7 +785,13 @@ beside the existing `import { DEFAULT_TEST_ROSTER } from './helpers.js';` (`:41`
 Run: `cd server && ./node_modules/.bin/vitest run test/roster-generate.test.ts test/gen-accounts.test.ts`
 
 Expected: FAIL.
-- `roster-generate.test.ts` — `is defined even when NO account is tagged`: `expected '' to be 'yes'`; `emits an EMPTY case…`: `expected '…' to contain '_ccrc_pool() {'`; the two `sh(pooledHome, …)` cases throw from bash (`_ccrc_pool: command not found`).
+- `roster-generate.test.ts` — all six new cases go red, and only one of them reds on an assertion.
+  `emits an EMPTY case…`, `emits one arm per TAGGED account only…` and `sits after _ccrc_hue` fail on
+  their assertions (`expected '…' to contain '_ccrc_pool() {'`; `arms` is `[]` against a two-row
+  expectation; `indexOf` returns `-1`). The other three THROW out of `sh()` before any assertion runs,
+  because the bash child exits nonzero: `declare -F _ccrc_pool` returns 1 on an undefined function so
+  the `&&` short-circuits and bash exits 1, and `_ccrc_pool 'a'` is `command not found` (exit 127).
+  Expect `Command failed: bash -c …`, not a value comparison.
 - `gen-accounts.test.ts` — the new ACCEPT row PASSES (both sides currently ignore `pool`, so both emit identical pool-free bash). That is expected: it becomes load-bearing at Step 4, and is measured as such in Step 6.
 
 - [ ] **Step 4: Emit it**
@@ -772,12 +801,16 @@ In `shared/generate.mjs`, after the `hueArms` block (`:202`–`:204`):
 ```js
   // One arm per TAGGED account, in `byIdLengthDesc` order like `_ccrc_cfg_dir`
   // above. `typeof a.pool === 'string'` rather than a truthiness test and rather
-  // than `!= null`: `generateAccountsSh` consumes a `Roster` STRUCTURALLY (see
-  // the header), so a hand-built one — the shape
-  // `server/test/roster-generate.test.ts`'s hostile-payload case deliberately
-  // constructs — can carry `undefined` here where a parsed roster carries
-  // `null`. Both mean untagged and both must produce no arm, and one predicate
-  // that answers the same for either is how that stays true.
+  // than `!= null`: `generateAccountsSh` consumes a `Roster` STRUCTURALLY, with no
+  // runtime check that its argument ever passed through `parseRoster` or
+  // `rosterFromJson` (see the header). `!= null` would already exclude both
+  // `null` and `undefined`, so that is NOT the distinction being drawn here — what
+  // `typeof === 'string'` adds is refusing a non-string that reached this function
+  // without being validated by either producer, which `.mjs` callers are not
+  // typechecked against. `a.pool = 7` under `!= null` emits `id) echo 7 ;;`; under
+  // this predicate it emits no arm. Untagged, unvalidated and junk all produce no
+  // arm, which is the only answer this emitter can honestly give for a value it
+  // was never allowed to see.
   const poolArms = roster.byIdLengthDesc
     .filter((a) => typeof a.pool === 'string')
     .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
@@ -840,10 +873,10 @@ Expected: FAIL — `the test default roster with pool tags on some accounts: std
 
 Row 3 — change the `poolArms` filter to `.filter(() => true)` and run:
 Run: `cd server && ./node_modules/.bin/vitest run test/roster-generate.test.ts`
-Expected: FAIL — `emits one arm per TAGGED account only…`, an arm for `a-b` whose pool prints as `undefined`; and `emits an EMPTY case for an all-untagged roster…`. Restore the filter.
+Expected: FAIL — `emits one arm per TAGGED account only…`, an arm for `a-b` whose pool prints as `null` (not `undefined`: `pooledRoster` came through `parseRoster`, which parses an absent `pool` key to `null`, and `null` still satisfies the assertion's `[a-z0-9-]+` capture, so the row appears and `toEqual` fails); and `emits an EMPTY case for an all-untagged roster…`. Restore the filter.
 
 Row 3 — wrap the emission so it is skipped when `poolArms === ''` and run:
-Expected: FAIL — `is defined even when NO account is tagged` (`expected '' to be 'yes'`) and `emits an EMPTY case…`. Restore.
+Expected: FAIL — `is defined even when NO account is tagged`, which THROWS `Command failed: bash -c …` rather than comparing a value (the function is undefined again in `untaggedHome`, so `declare -F` exits 1 and the `&&` short-circuits), and `emits an EMPTY case…` on its assertion. Restore.
 
 - [ ] **Step 7: Commit**
 
@@ -1433,8 +1466,8 @@ Create `shared/poolrule.ts`:
 //   An account `a` may serve a project `p` iff pool(a) is null, or pool(p) is
 //   null, or pool(a) === pool(p). If pool(p) cannot be read, NOBODY DECIDES.
 //
-// L0, like every other `shared/*.ts`: it imports nothing but TYPES, not even
-// `node:*`, because the PWA bundles this file. That is not a formality here —
+// L0, like every other module in `shared/`: it imports nothing but TYPES,
+// not even `node:*`, because the PWA bundles this file. That is not a formality here —
 // it is the whole reason the rule lives in `shared/` rather than under
 // `server/src/`. The server's 409 pre-check and the phone's "show other pools"
 // disclosure are two renderings of ONE decision, and two copies of it drift;
@@ -1507,7 +1540,16 @@ export function poolRule(accountPool: string | null, projectPool: ProjectPoolWir
 
 Run: `cd server && ./node_modules/.bin/vitest run test/pool-rule-core.test.ts`
 
-Expected: PASS — 13 table rows plus 7 assertions.
+Expected: PASS — 13 table rows plus 9 standalone assertions, **22 tests**.
+
+**Do not write the phrase `` `shared/*.ts` `` (or any other `/*` sequence) into a LINE comment in
+this module (D-TBD-poolrule-header-blanks-import).** The purity scan's `code()` helper blanks BLOCK
+comments first, and its lazy `/\*[\s\S]*?\*/` would match from that `/*` all the way to the first
+real `*/` — swallowing the `import type` line on the way — so `imports.length` reads 0 and
+`no imports found — the scan is over nothing` reds on a perfectly correct module. Measured, on the
+module text exactly as listed above: as first drafted, `imports: 0`; with the header's `` `shared/*.ts` ``
+reworded to `` `shared/` ``, `imports: 1`, all type-only, 768 non-whitespace characters. Say
+`` `shared/` `` or `` `shared/<name>.ts` ``.
 
 - [ ] **Step 5: Measure the mutations**
 
@@ -1516,15 +1558,29 @@ Each of these is restored before the next.
 1. Move both untagged shortcuts ABOVE the undecidable check (`untagged-project`, then `accountPool === null`, then the undecidable arm):
    Expected: FAIL — exactly two rows, `unreadable-untagged-account` and `malformed-untagged-account`, each `expected 'serve' to be 'undecidable'`. The two TAGGED-account undecidable rows still pass, which is the point: this precedence error is invisible in every row except those two, and they are in the table for it.
 2. Delete the `|| projectPool.state === 'malformed'` disjunct:
-   Expected: FAIL — `malformed-untagged-account` (`expected 'serve' to be 'undecidable'`) and `malformed-tagged-account` (`expected 'mismatch' to be 'undecidable'` — the malformed row falls through to the name comparison against a `tagged`-only field, which does not exist, so the comparison sees `undefined` and takes the mismatch arm). `tsc` also refuses this mutation, since `projectPool.name` no longer narrows; vitest's esbuild strips types, so the suite still runs it and the assertion above is what you will see.
+   Expected: FAIL — also `an undecidable carries WHICH state`, plus `malformed-untagged-account` (`expected 'serve' to be 'undecidable'`) and `malformed-tagged-account` (`expected 'mismatch' to be 'undecidable'` — the malformed row falls through to the name comparison against a `tagged`-only field, which does not exist, so the comparison sees `undefined` and takes the mismatch arm). `tsc` also refuses this mutation, since `projectPool.name` no longer narrows; vitest's esbuild strips types, so the suite still runs it and the assertion above is what you will see.
 3. Invert the comparison to `accountPool !== projectPool.name`:
-   Expected: FAIL — `same-pool-a`, `same-pool-b`, `mismatch-a-into-b`, `mismatch-b-into-a`, `mismatch-on-a-prefix`.
+   Expected: FAIL — `same-pool-a`, `same-pool-b`, `mismatch-a-into-b`, `mismatch-b-into-a`,
+   `mismatch-on-a-prefix`, and the two shape assertions that name the arms directly:
+   `a mismatch carries BOTH names` and `names every serve REASON`.
 4. Replace the comparison with `projectPool.name.startsWith(accountPool)`:
    Expected: FAIL — `mismatch-on-a-prefix` alone. This is the row that exists for exactly this mutation.
-5. Delete four rows from `POOL_RULE_CASES` (any four):
-   Expected: FAIL — `has a floor of rows, unique names, and covers every project state` (`expected 9 to be greater than or equal to 12`).
-6. Add `import { readFileSync } from 'node:fs';` to `shared/poolrule.ts`:
-   Expected: FAIL — `takes TYPE imports only` (twice: the value-import loop and the `node:` scan).
+5. Delete four rows from `POOL_RULE_CASES` — delete the LAST four, so the two undecidable-state
+   classes are the ones that go:
+   Expected: FAIL — `has a floor of rows, unique names, and covers every project state`
+   (`expected 9 to be greater than or equal to 12`), and, because those four rows are also the only
+   carriers of two other guarantees, `exercises all five verdicts the rule can produce` and
+   `carries a REJECT per rule`. The floor test is the row-count guard; the other two are why "any
+   four" is the wrong instruction — no four-row deletion from a 13-row table leaves the floor test
+   as the ONLY red, since the surviving assertions jointly require ten specific rows.
+6. Add `import { readFileSync } from 'node:fs';` to `shared/poolrule.ts`, beside the existing import:
+   Expected: FAIL — `takes TYPE imports only`, ONCE. Both of that test's guards see the mutation
+   (`imports` becomes the two lines, and the `node:` scan matches), but the value-import loop's
+   `expect` throws first, so vitest reports one failing test, not two. Measured on the fixed header:
+   `imports: 2`, `allTypeOnly: false`, `node: hit: true`. **On the UNFIXED header this mutation
+   produces no new red at all** — the added import is blanked with the rest, and the pre-existing
+   `no imports found` red is what you see — which is the second reason D-TBD-poolrule-header-blanks-import
+   is a defect rather than a cosmetic one.
 
 - [ ] **Step 6: Typecheck and re-run**
 
@@ -1538,7 +1594,7 @@ Expected: exit 0. (`../shared` is in the PWA's `include`, so this is where an L0
 
 ```bash
 git add shared/poolrule.ts server/test/fixtures/poolRule.ts server/test/pool-rule-core.test.ts
-git commit -m "feat(poolrule): the pool rule spelled once in TypeScript, over the table its three spellings share"
+git commit -m "feat(poolrule): the pool rule spelled once in TypeScript, over the table its two spellings share"
 ```
 
 ---
@@ -1584,7 +1640,7 @@ git fetch origin main
 cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts
 ```
 
-Expected: PASS. This wave defines D-1663 and D-1664 in `## Deviations found`, both issued by the allocator in the plan-commit call, so the suite has something real to measure: it reds if either number is also defined by a plan on `origin/main`. Green here means the block is still this branch's alone — and it is run rather than assumed, because green-trivially and green-because-nobody-looked are the same output and only one of them is a measurement.
+Expected: PASS. This wave defines D-1663 and D-1664 in `## Deviations found`, both issued by the allocator in the plan-commit call, so the suite has something real to measure: it reds if an allocator-era number is defined by a DIFFERENT plan file across HEAD and the fetched base. Note what green does NOT mean here: **this plan file is itself already on `origin/main`** (`ece7597a`, PR #56), so the block is not "this branch's alone" and never was — the same file defining the same numbers on both sides is one definition, not a collision. Green means no OTHER plan has taken one of them. It is run rather than assumed because green-trivially and green-because-nobody-looked are the same output and only one of them is a measurement.
 
 - [ ] **Step 4: The tree-wide scans**
 
@@ -1595,9 +1651,9 @@ cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/
 Expected: PASS.
 
 What each is actually checking here:
-- `single-definition` scans `shared/`, `server/src`, `pwa/src`, `agent/src` (NOT `server/test`) for a second copy of a single-sourced value and for any source file restating the roster as an array literal. `POOL_NAME_RE` exists once under those roots; the `roster-json.mjs` copy is a deliberate cross-language mirror, which wave 2a pins by text extraction rather than by this scan.
+- `single-definition` scans `shared/`, `server/src`, `pwa/src`, `agent/src` (NOT `server/test`) for a second copy of a single-sourced value and for any source file restating the roster as an array literal. `POOL_NAME_RE` exists once under those roots — `sources()` filters `/\.tsx?$/`, so `shared/roster-json.mjs`'s deliberate cross-language mirror is invisible to this scan and is held equal behaviourally instead, by `gen-accounts.test.ts`'s REJECT table (D-TBD-mjs-regex-unpinned; wave 2a's text extraction covers `ccd`'s bash copy, not this one).
 - `topology-clean` walks `git ls-files` — every tracked file, code and document alike — for an operator's real host, account or label. The fixture names this wave introduced (`pool-a`, `pool-b`, `pool-ab`) are the only new name-shaped literals.
-- `dtbd` git-greps the tracked tree for a concrete `D-TBD` placeholder. This plan writes none.
+- `dtbd` git-greps the tracked tree for a concrete `D-TBD` placeholder. This plan defines none at rest; any `D-TBD-<slug>` written into `## Deviations found` during execution must be substituted with an allocated number before this gate can pass, which is the mechanism that makes the placeholder a promise rather than a note.
 
 - [ ] **Step 5: Re-run the five suites this wave touched, in isolation**
 
@@ -1656,3 +1712,37 @@ is never a ledger number.
   `splitByPool` both call ONE spelling; the fixture table `POOL_RULE_CASES` therefore has two consumers
   (bash `_pool_ok`, TypeScript `poolRule`), not the spec's three. The spec's constraints on the module —
   pure, type-only imports, purity-scanned — all still hold and are pinned by this task's scan.
+
+**Found during execution of this wave, 2026-09-06.** Both were surfaced by the controller's pre-flight
+audit of this plan against the tree, before Task 1 was dispatched, and both change SHIPPED source rather
+than only this document. Numbers are requested from the coordinator in one `deviation-request` and
+substituted here before `wave-done`; `dtbd.test.ts` refuses a surviving placeholder, so the PR cannot
+go green while these read `D-TBD`.
+
+- **D-TBD-poolrule-header-blanks-import** (Task 5) — the module text this plan listed for
+  `shared/poolrule.ts` opened its header with ``// L0, like every other `shared/*.ts`: …``, and the
+  `/*` inside `` `shared/*.ts` `` is the FIRST `/*` in the file. The purity scan's `code()` helper
+  (copied from `coord-caps-policy.test.ts`) blanks BLOCK comments first with a lazy
+  `/\*[\s\S]*?\*/`, so that match ran from inside a LINE comment all the way to the close of the
+  `PoolVerdict` docstring — swallowing the `import type { ProjectPoolWire } …` line on the way. The
+  scan then found zero imports and reded on its own vacuity tripwire,
+  `no imports found — the scan is over nothing`, against a module that was completely correct.
+  Measured on the listed text: `imports: 0` as drafted; `imports: 1`, all type-only, 768
+  non-whitespace characters with the header reworded to `` `shared/` ``. The mutation the task uses to
+  prove the guard (`add a node:fs import`) produced NO new red at all under the original header, which
+  is what makes this a defect rather than a typo: the guard would have shipped measuring nothing but
+  its own tripwire. Closed by rewording the header; the tripwire itself is kept, because it is the
+  thing that caught this.
+- **D-TBD-mjs-regex-unpinned** (Task 2) — this plan mandated a comment into `shared/roster-json.mjs`
+  saying `ccd` carries a third copy of the grammar "and the three are pinned equal by text extraction
+  rather than by hope", and repeated the claim in Task 2's Interfaces bullet and Task 6's gate note.
+  Nothing pins THIS copy. Wave 2a's parity test extracts three literals from two files — `ccd/ccd`
+  (`POOL_NAME_RE`, `POOLS_DIR`) and `ccrc-doctor-checks` (`POOL_NAME_RE`) — and never reads a `.mjs`;
+  `single-definition.test.ts`'s `sources()` filters `/\.tsx?$/`, so it cannot see the file either. A
+  comment asserting a mechanism that does not exist is the failure mode this tree names outright
+  ("a comment is a request; a red suite is a mechanism"), and it was about to ship in the same file
+  whose LAST false header claim is D-1663. Closed both ways: the comment now says what actually holds
+  the copies equal — behaviour, via `gen-accounts.test.ts`'s REJECT table, for this copy, and text
+  extraction for `ccd`'s — and that table gains a row one character past the 32-character cap, which
+  is the single drift every other row in the block survives (33 lowercase letters are legal under both
+  spellings of the charset and illegal under only one of the lengths).
