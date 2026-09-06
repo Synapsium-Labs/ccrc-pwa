@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4e2e8d686b29cf1a652dd55418e7d11ce49d89c382a7cfb87d7643a6e9f9d109
+# ccrc:generated 1 sha256=1ed644d1711785eb12f6e782f2ff459ffae9d9f0d1c7fb7192eb2941d2be9de4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1171,8 +1171,16 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # BLOCKS. The type gate above refuses a FIFO and a character device, so no
   # OPEN can hang — but a REGULAR FILE of any size was still read whole into a
   # shell variable, which is not a hang and is just as fatal to a function
-  # that runs under `cmd_ws_add`'s flock and, from wave 2b, on the 5-second
-  # supervisor tick. Measured by the coordinator's review: 10 MB took 0.20 s
+  # on the `ws-add` path and, from wave 2b, on the 5-second supervisor tick.
+  # NOT "UNDER `cmd_ws_add`'s FLOCK", which is what the review said and what
+  # this comment said back to it for one round: measured, every reachable
+  # call — `_ws_least_loaded`'s at :3851 (entered from :3979) and the reason
+  # builder's at :3999 — runs BEFORE `exec {lfd}>>"$addlock"` / `flock -n`
+  # at :4044, and `grep -n '_project_pool_state' ccd/ccd` finds no call after
+  # it. So the cost delays a workspace creation; it does not extend a lock
+  # hold, and no other `ws-add` waits on it. The supervisor tick is the arm
+  # that makes this urgent, and it is enough on its own.
+  # Measured by the coordinator's review: 10 MB took 0.20 s
   # and 32 MB RSS, 100 MB took 39 s and 979 MB RSS — linear and unbounded.
   # It needs no exotic filesystem to reach: `ln -s ~/.cc-sessions/swap.log
   # pools/<p>` (or this branch's own documented alias in the other direction)

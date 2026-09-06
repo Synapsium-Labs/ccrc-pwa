@@ -274,6 +274,86 @@ describe('_project_pool_state — four words, always rc 0', () => {
     expect(state('demo')).toBe('malformed');
   });
 
+  it('reads `pool-a` + 50 trailing spaces as `named pool-a` and `pool-a` + 100 as `malformed` — the PAIR is the `-n 64` cap\'s only evidence at any plausible bound', () => {
+    // WHAT THE CAP IS. `read -r -d '' -n 64 v` bounds the read at 64 bytes.
+    // The type gate above (`-f`) already refuses a FIFO and a character
+    // device, so no OPEN can hang — but a REGULAR file of any size was still
+    // pulled whole into a shell variable, on the `ws-add` path and (from wave
+    // 2b) on the 5-second supervisor tick. NOT "inside `cmd_ws_add`'s flock",
+    // which is what the review said and what this comment repeated for one
+    // round: measured, every reachable call runs BEFORE `ws-add` takes its
+    // lock (`ccd:3851` via `:3979`, and `:3999`; the `flock` is `:4044`), so
+    // the cost delays one workspace creation and extends no lock hold. The
+    // supervisor tick is the arm that makes it urgent. An over-cap read stops SHORT of
+    // EOF and so returns 0 from the very branch an embedded NUL returns 0 from,
+    // one test above — hence `malformed`, and `malformed` is the right word:
+    // the bytes were readable, and they are not one legal token.
+    //
+    // WHY IT TAKES TWO ROWS. Measured in fix round 7 by running ccd's OWN
+    // reader — not a re-implementation of it — out of scratchpad copies of
+    // `ccd` with the cap deleted and with it set two ways too tight. Every
+    // cell below was run; none is inferred:
+    //
+    //   tag bytes              tree        `-n 64` gone   `-n 32`     `-n 8`
+    //   `pool-a`               named       named          named       named
+    //   `pool-a\n`             named       named          named       named
+    //   `pool-a\n\n  \t\n`     named       named          named       MALFORMED
+    //   `pool-a` + 50 spaces   named       named          MALFORMED   MALFORMED
+    //   `pool-a` + 100 spaces  malformed   NAMED POOL-A   malformed   malformed
+    //   1 MB of `x`            malformed   malformed      malformed   malformed
+    //
+    // ("named" is `named pool-a` throughout; the three rows above the pair are
+    // the well-formed ones already pinned earlier in this describe.)
+    //
+    // Read the columns. DELETING the cap moves exactly one cell — the
+    // 100-space row — so that row is the whole of the too-loose evidence.
+    // TIGHTENING it to 32, the plausible "cap it at the grammar's own length"
+    // mistake, moves exactly one cell too, and it is the 50-space row: every
+    // row that existed before this test is green at `-n 32`, so without the
+    // 50-space row a cap that refuses a padded legal name ships unnoticed. Only
+    // at `-n 8`, far tighter than anything anyone would write, does an existing
+    // row (the 12-byte whitespace one) start to catch it as well. THE BIG FILE
+    // MOVES IN NO COLUMN AT ALL (see the 1 MB case below): size alone is not
+    // the cap's evidence, this pair is.
+    //
+    // 50 spaces is the "a legal name still reads" half: 64 is twice the
+    // 32-character grammar `POOL_NAME_RE` allows, so no legal tag can reach the
+    // bound on its own name. The measured edge is the byte count, not the space
+    // count — `pool-a` + 57 spaces (63 bytes) reads `named pool-a` and + 58
+    // (64 bytes) reads `malformed`, which is the one behaviour change the cap
+    // makes for a WELL-FORMED name. `_pool_ok` maps `malformed` to "nobody
+    // decides", the safe side — and "nobody decides" here means `_ws_least_loaded`
+    // `continue`s past every candidate and `cmd_ws_add` REFUSES placement
+    // ("no account available for placement", `ccd:4030`), NOT that the project
+    // becomes unconstrained. Saying it the other way round would name the very
+    // fold this whole file exists to refuse.
+    plantTag('demo', `pool-a${' '.repeat(50)}`);
+    expect(state('demo')).toBe('named pool-a');
+    plantTag('demo', `pool-a${' '.repeat(100)}`);
+    expect(state('demo')).toBe('malformed');
+  });
+
+  it('answers `malformed` for a ~1 MB tag file, PROMPTLY — but the bound here is the never-blocks contract, NOT the cap\'s proof', () => {
+    // `boundedState` is cheap insurance, not a measurement. The HANG property
+    // belongs to the FIFO and /dev/zero rows above, where it was measured;
+    // past the `-f` type gate no REGULAR file can hang, whatever its size —
+    // measured in fix round 7, 1 MB with the cap DELETED answers `malformed`
+    // in 0.41 s (0.002 s capped), nowhere near the 5 s bound, which therefore
+    // cannot fire for this input. The wrapper is here because a synchronous
+    // `execFileSync` would defeat vitest's own timeout if some future
+    // regression did reintroduce a block, and that is the whole of its claim.
+    //
+    // SAY PLAINLY WHAT IT DOES NOT MEASURE: it is not a cap test. Measured in
+    // fix round 7, 1 MB of `x` answers `malformed` on the tree AND on all three
+    // scratchpad mutants the pair above is measured against (`-n 64` deleted,
+    // `-n 32`, `-n 8`) — green in every column of that table, because a
+    // megabyte of `x` is not one legal token either way. A reviewer
+    // reaching for "the big file proves the cap" would be reading a row that
+    // cannot go red for that reason; the whitespace pair above is the evidence.
+    plantTag('demo', 'x'.repeat(1024 * 1024));
+    expect(boundedState('demo')).toBe('malformed');
+  }, 10000);
+
   it.skipIf(!fs.existsSync('/proc/self/mem'))(
     'PINS A KNOWN RESIDUAL: a symlink to /proc/self/mem (EIO on read) answers `malformed`, not a desired property', () => {
       // This test PINS the CURRENT behaviour so a future change to it is
@@ -969,8 +1049,28 @@ describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (
   });
 
   it('a leading --cross-pool on `start` dies loudly — `$# -ge 2` makes `wrapper` the flag itself, `_is_valid_wrapper` refuses it', () => {
+    // THE TITLE IS NOW PINNED, NOT MERELY ASSERTED (fix round 7, must-fix 6).
+    // `expect(r.code).not.toBe(0)` alone stayed green for ANY nonzero exit,
+    // including one that refuses for a completely different reason — the
+    // fixture-shaped guarantee this wave has been closing everywhere. The
+    // sentence below is `cmd_start`'s own
+    // `_is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' …"`,
+    // and it names THE FLAG ITSELF, which is exactly what separates this case
+    // from the two `swap` cases above: there the flag lands in the `id` slot
+    // and something else does the refusing.
+    //
+    // MEASURED BOTH WAYS against a scratchpad copy of `ccd` with that one line
+    // replaced by `:` — the mutant STILL EXITS 1, falling through to
+    // `[[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: …"` — so the
+    // code-only assertion is green in both worlds and this stderr line is the
+    // only thing that goes red.
+    //
+    // Only the roster-independent half of the sentence is pinned: the real
+    // message ends `(valid: <CCRC_ACCOUNTS>)`, and pinning that would make this
+    // test track `DEFAULT_TEST_ROSTER`'s contents instead of the guard.
     const r = shFail('cmd_start --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("unknown wrapper '--cross-pool'");
   });
 
   it('a leading --cross-pool on `enable` dies loudly too, but only AFTER one lifecycle line is written for the bogus id it computes first', () => {
@@ -981,8 +1081,24 @@ describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (
     // anything. Harmless (the id is bogus and nothing downstream trusts it),
     // but this test's own name must say what actually happens, not "dies
     // before doing anything".
+    //
+    // WHICH VERB ACTUALLY REFUSES (fix round 7, must-fix 6): `cmd_enable` has
+    // no wrapper check of its own — its only arity gate is `$# -ge 1`, which
+    // three arguments pass — so the sentence on stderr is `cmd_start`'s,
+    // reached through the `cmd_start "$@"` this verb delegates to AFTER the
+    // lifecycle write. Pinning it is what makes the ordering claim in this
+    // test's name load-bearing: the lifecycle line and the refusal are then
+    // both attributed, rather than "something wrote a line and something
+    // exited nonzero".
+    //
+    // MEASURED BOTH WAYS against the same scratchpad copy of `ccd` used by the
+    // `start` case above (`_is_valid_wrapper`'s die replaced by `:`): the
+    // mutant still exits 1 AND still writes exactly one lifecycle line for
+    // `--cross-pool-demo`, so BOTH pre-existing assertions here stay green and
+    // only the stderr line goes red.
     const r = shFail('cmd_enable --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("unknown wrapper '--cross-pool'");
     const lcDir = path.join(REG(), '.lifecycle');
     expect(fs.existsSync(lcDir)).toBe(true);
     const journal = fs.readdirSync(lcDir)

@@ -2943,7 +2943,7 @@ _check_pools() {
     fi
     if [ "$p_stale_omit" -gt 0 ]; then
       [ -z "$p_stale_remedy" ] || p_stale_remedy+=" — and "
-      p_stale_remedy+="$p_stale_omit name(s) are NOT printed as a command: they hold characters no project name may hold, so the command would not mean what it looks like. Remove those by hand under $dir"
+      p_stale_remedy+="$p_stale_omit name(s) are NOT printed as a command: they are not shaped like a project name (a character outside A-Za-z0-9._- , or a leading dot or dash), so the command would not mean what it looks like. Remove those by hand under $dir"
     fi
     _dr_warn pools "pools-stale: $(_dr_join ${p_stale[@]+"${p_stale[@]}"}) — tagged, but no project directory and no registry row of that name exists, so nothing reads these tags" \
       "$p_stale_remedy"
@@ -2965,10 +2965,21 @@ _check_pools() {
   # old single sentence asserted the third clause ("names a pool this box's
   # roster carries") anyway — a PASS reporting a check that was skipped, which
   # is the same false-PASS shape D-1848's own doctor instance was numbered for.
+  # AND THE FIRST FIX POINTED SOMEWHERE FALSE, caught by the same round's
+  # verification: it said `_check_wrappers` reports the unreadable projection
+  # on its own line. Measured — `_check_wrappers` (:2189-2680) contains ZERO
+  # occurrences of `accounts.sh`; it reads `accounts.json`, and on a box with
+  # the JSON and no projection it answers PASS. `_check_graphify` sources the
+  # projection when it can and silently SKIPS when it cannot, emitting no
+  # verdict. So nothing in this file reports that file, and this sentence now
+  # says so rather than sending an operator to read a line that is not there.
+  # (On a FLEET box the real finding is louder anyway: `ccd` dies at
+  # `ccd:986` without it. This also runs on the server box, where absence is
+  # ordinary, so the verdict stays a PASS and states its own limit.)
   if [ -n "$known" ]; then
     _dr_pass pools "every project tag under $dir is one legal pool name, names a project that exists, and names a pool this box's roster carries"
   else
-    _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — the pool-vocabulary half is UNMEASURED: \$HOME/.ccrc/accounts.sh could not be read, which _check_wrappers reports on its own line"
+    _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — the pool-vocabulary half is UNMEASURED: \$HOME/.ccrc/accounts.sh could not be read, and no other check here reports that file (_check_wrappers reads accounts.json, not the projection)"
   fi
 }
 
