@@ -24,8 +24,8 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first (touches nothing under `ccd/`). | run 32; docs PR #56 (merged `ece7597a`) carried the plans first | dispatched 2026-09-05 23:46 UTC — `sessionId:ccrc-pwa-clear-meadow`, `briefQueued:true`, `adopted:false`, `spawnState:null` (not recorded), `skillState:present`; 6 items declared; run `working` 2026-09-06 06:12 UTC on the worker's `underway` mail; wave-done claimed `4c92b0b4` (PR #57, 5/5 CI green), server re-measurement ok, items 6/6; REVIEWED and returned for one fix round 2026-09-06 09:21 UTC |
-| 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | — | not opened |
+| 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first. | run 32, PR #57 (merged `07ce360e`) | **done 2026-09-06 11:11 UTC** — 19 commits, 15 files, +1572/-70; one fix round after a three-lens coordinator review; CI 5/5 on `bf2c66f4`; deployed SERVER LANE from the merge sha, `/health` reports `07ce360e`, unit stable. D-1663, D-1664 defined; D-1741, D-1742 (two rounds), D-1743 issued mid-wave |
+| 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | run 33 | opened 2026-09-06 11:11 UTC — same workspace `clear-meadow`, reclaimed; dispatch follows |
 | 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | — | not opened |
 | 3 | Server L1/L3 (`pools.ts`, `poolrule.ts` wrapper), registry `stranded`, routes, watcher frame, health. | — | not opened |
 | 4 | PWA: `accountPool`, `splitByPool`, `PoolSheet`, chips, sheets, store slot. Defines no deviation. | — | not opened |
@@ -118,6 +118,28 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   are not would itself be the inconsistency. Numbers spent outside the plan-time block so far: D-1741, D-1742,
   D-1743.
 
+- **Wave 1 fix round VERIFIED and CLOSED (2026-09-06 11:11 UTC).** The worker's fixes were re-measured by me in an isolated
+  worktree pinned at `bf2c66f4`, not accepted on report. **D-1743:** the rule table now has 14 rows, and all
+  three wrong comparisons red on a named row — `a.startsWith(p)` and `a.includes(p)` on the new
+  `mismatch-on-a-project-prefix`, `p.startsWith(a)` on the original — while the correct equality survives, as
+  it must. The worker also found a SECOND overclaim in that same sentence which neither I nor the review
+  named: the row claimed to catch a bash `==` with an unquoted right side, and no fixture pool name carries a
+  glob metacharacter, so nothing there could ever exercise it. Both rows now name that hazard as UNCOVERED and
+  hand it to wave 2a as a quoting assertion against `ccd`. **D-1742 round 2:** the extraction block lifts
+  `POOL_NAME_RE`, `ID_RE` and `LABEL_UNSAFE_RE` out of the TEXT of both files and requires each pair equal,
+  `POOL_NAME_RE` against the imported object's `.source`/`.flags` so one row measures the regex the parser
+  actually runs. I measured both directions: drifting the mirror to `^[a-z][a-z0-9.-]{0,31}$` — genuinely
+  laxer than the parser, D-1663's own shape — leaves **107 of 108 green, every REJECT row included**, and
+  reds only the extraction, with a message naming the deploy hazard; renaming the literal so the extractor
+  finds nothing reds BY NAME on its vacuity tripwire rather than passing over nothing. That is the class
+  closed, not three instances of it. The REJECT table is deliberately kept: text equality proves the two files
+  hold the same pattern and says nothing about whether either side APPLIES it.
+- **Merged with a hand-written squash body (2026-09-06 11:11 UTC).** Eight commit-message lines in the branch quote the
+  `D-TBD-` slugs the two deviations carried before their numbers were issued, one of them a subject.
+  `dtbd.test.ts` scans file CONTENTS, so CI was correctly green — but GitHub's default squash body would have
+  landed superseded placeholders on `main`. Verified after merge: the body on `07ce360e` carries none.
+  **This is a standing rule for every later wave of this program.**
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
@@ -129,6 +151,9 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 - Every guard ships with a test measured RED on its deletion — before and after, not asserted.
 
 ## Next-wave brief
+
+**Wave 2a is dispatched as run 33** — its brief is reproduced below the wave-1 one, which is kept as the
+record of what that worker read.
 
 **Wave 1 brief, as dispatched 2026-09-05 23:46 UTC (run 32, worker `ccrc-pwa-clear-meadow`)** — the text below is what the worker read, after dispatch's own `ccrc-worker` prefix:
 
