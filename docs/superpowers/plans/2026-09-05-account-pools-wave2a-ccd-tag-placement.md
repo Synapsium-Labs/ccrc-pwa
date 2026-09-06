@@ -2532,6 +2532,17 @@ substituted before wave-done.
   dies on (b).
   Disclosed in the function's comment and PINNED by a test that says it pins a known residual, in
   `_reg_set`'s "disclosed price" idiom.
+  **SCOPE REFINEMENT — a NEW CONSUMER of the reader's POSITIVE form arrived after this entry was
+  written (Task 3, round 4).** `cmd_project_pool` now re-measures with `_project_pool_state` after
+  it writes or removes, and refuses unless the answer is what it just claimed — so the verb uses
+  the reader's answer as a SUCCESS CERTIFICATE, not merely as a decision input. Both parked arms
+  bend toward `malformed`/`unreadable`, i.e. toward a false FAILURE, EXCEPT arm 2 (partial read
+  leaving a valid prefix), which yields the POSITIVE `named <prefix>`. This does not void the park
+  — every decider still maps `unreadable` and `malformed` to the same refusal, and the trip-wire
+  below is unchanged — but it lowers the honest ceiling of what the verb can claim: its report
+  equals WHAT THE ONE AUTHORITY SAYS, not what the file's bytes are. Any future consumer of the
+  positive form should read this clause before relying on it.
+
   **Obligation on wave 3, which discharges BOTH arms and is the real remedy rather than a
   nicety:** `readFileMeasured` distinguishes a failed read from a complete one, so the TypeScript
   mirror answers `unreadable` on a failed read and can NEVER answer a name from one. With D-1744
@@ -2555,7 +2566,9 @@ substituted before wave-done.
   positionals, precisely so an old `ccd` cannot silently ignore it: a TRAILING flag is a fourth
   positional nobody reads, while a LEADING one lands in a slot `_is_valid_wrapper` refuses.
   MEASURED on this wave's own `ccd`, all three verbs, and **the swap arm's lock is not the one an
-  earlier draft of this entry named** — corrected after reproduction: `swap --cross-pool <id> <w>`
+  earlier draft of this entry named — the wrong lock was supplied by the COORDINATOR's own
+  measurement and inherited here in good faith; recording its provenance because a ledger that
+  hides where a claim came from teaches nothing** — corrected after reproduction: `swap --cross-pool <id> <w>`
   collects the flag in the `*)` arm so it lands in the `id` slot, where it is NEVER
   wrapper-validated; what `_is_valid_wrapper` rejects is the shifted TARGET. On a skew whose
   session id happens to collide with a roster id (`swap --cross-pool claude-a claude-b`)
@@ -2624,12 +2637,72 @@ substituted before wave-done.
   answer is `untagged`. That is this repo's own done-fingerprint discipline applied to a one-file
   write — trust no claim, re-measure the fact — and it closes this shape and any future one,
   because the only thing it trusts is the reader.
-  The lesson the three shapes teach together: a false success is not fixed by choosing a better
-  PREDICATE, nor even by deciding from the right AUTHORITY, until the ACT's result is also
-  measured against that same authority.
+  **THE LADDER — the lesson the three shapes teach together, and the coordinator has taken it into
+  the program ledger in these words:** a false success is not fixed by choosing a better
+  PREDICATE, nor even by deciding from the right AUTHORITY, until the ACT's RESULT is also
+  measured against that same authority. Three shapes, three rungs, one ladder. `rm -f` is the
+  reason the third rung exists: it returns 0 for a real removal, for ENOTDIR through a regular
+  file at `$POOLS_DIR`, and for ENOENT through a dangling symlink there — three cases, one exit
+  code, incapable of carrying the answer.
+  **THE LADDER BINDS THE SET ARM TOO, and it does — MEASURED, not reasoned.** The coordinator
+  asked whether the `--pool` arm is exempt, having read `mkdir -p` / `printf > tmp` /
+  `_plat_mv_notdir` each with its own `|| die` and noted that an exit code meaning "three syscalls
+  returned 0" is not the same promise as "the state you asked for now obtains". It is not exempt
+  and it is not unguarded: round 4 gave it the same re-measurement (measured on the shipped tree —
+  `finalstate=$(_project_pool_state "$project")` is UNCONDITIONAL, before the branch, and the
+  `tagged` echo is gated on `[[ "$finalstate" != "named $pool" ]]`). Both arms of the verb now end
+  with one measurement against the one authority. The asymmetry the question was probing for
+  closed a round before it was asked.
   **Obligation on wave 3:** its route re-reads the tag through the agent after calling the verb
   and answers a MEASURED state, so it would have reported `unreadable` while `ccd` exited 0 — the
   two disagreeing. **Which one is wrong: the SERVER is right and the VERB is wrong.** The server's
   correctness is NOT a mitigation, because a shell operator never sees the server. A reader who
   finds only "the server would have caught it" could reasonably conclude the verb needs no fix;
   it did.
+
+- **D-1848** (Tasks 1, 3, 8 — the CLASS, numbered as a RULE; D-1744 and D-1847 stay as its
+  worked examples) — `[ -e "$path" ]` is FALSE for a dangling symlink and for a symlink loop, so
+  "not `-e`" reads as ABSENCE when it is not. In one wave this defect was written independently
+  into THREE files by three different dictated code blocks, and each time the fix was the same
+  pairing with `-L`:
+  * `ccd/ccd`'s reader `_project_pool_state` (D-1744) — folded `unreadable` into `untagged`,
+    lifting a placement constraint silently;
+  * `ccd/ccd`'s writer `cmd_project_pool --clear` (D-1847) — skipped the unlink and reported
+    `untagged` while the tag survived;
+  * `ccd/ccrc-doctor-checks`'s `_check_pools` (this entry) — dropped the entry before every
+    bucket, so a dangling `pools/<project>` prints `PASS`, and a dangling `pools/` itself prints
+    `PASS pools: no project pools tagged … every project is unconstrained` on a box where `ccd`
+    answers `unreadable` for EVERY project. The exact inverse of the truth, in the tool an
+    operator consults precisely when nothing works.
+  **WHY THIS IS RECORDED AS A CLASS RATHER THAN A THIRD BUG.** Three independent authors made the
+  same mistake in one wave, which means the next dictated `[ -e ]` will make it a fourth. The
+  rule, for waves 2b/3/4 and for anything that reads this tree afterwards: **a bare `-e` may only
+  be used where the answer "absent" and the answer "present but unresolvable" are handled
+  IDENTICALLY.** Wherever they differ — and in this design they always differ, because absent
+  means UNCONSTRAINED and unresolvable means REFUSE — `-e` must be paired with `-L`, or the
+  question must be asked of `_project_pool_state`, which is the box's authority on it.
+  It also produced a PROSE DISAGREEMENT between two shipped files before it was caught:
+  `ccd/ccd` named "the doctor (Task 8's `pools-unlistable`)" as already agreeing with the reader,
+  while the doctor did not. Two files describing one contract, only one of them true.
+  **THE DOCTOR INSTANCE IS THE WORST OF THE THREE, and the reason generalises.** The other two
+  fail toward a wrong ACTION. This one actively REASSURES, in the diagnostic surface, at the exact
+  moment an operator is consulting it because nothing else works. An incorrect PASS in a doctor is
+  worse than the same defect anywhere else, because it is the thing people reach for once they
+  have stopped trusting everything else.
+  **THE RULE IS SHIPPED AS A SCAN, not only as this entry.** A rule written in a ledger is a lesson
+  the next author might read; a scan is a gate they cannot walk past — this repo's own doctrine
+  that a comment is a request and a red suite is a mechanism. The scan reads `ccd/ccd` and
+  `ccd/ccrc-doctor-checks` as text and refuses any existence test on a pools path that is not
+  paired with `-L` or delegated to `_project_pool_state`, with a floor asserting it found the
+  sites it scans. Without it the class number would be worth less than three instance numbers.
+  **A DISTINCT SUB-SHAPE, and it is NOT the comment-tense habit.** `ccd/ccd` named "the doctor
+  (Task 8's `pools-unlistable`)" as already agreeing with the reader, and the doctor did not. That
+  claim makes no assertion about a later wave — it was wrong the MOMENT IT WAS WRITTEN, about a
+  SIBLING FILE IN THE SAME WAVE. So the habit is broader than tense: **a claim about any file
+  other than the one you are editing is UNMEASURED until you go and read that file. Cross-file is
+  as unverified as cross-wave.** And as with every other instance, the false one was the
+  reassuring one — the direction these consistently fail in.
+  **Obligation on wave 3:** the server's `readProjectPools` reads this same directory through the
+  agent. `io.readdir` and `readFileMeasured` do not share bash's `-e` semantics, so the mechanism
+  differs — but the QUESTION is identical, and the answer is settled here: a path that exists and
+  cannot be resolved is `unreadable`, never absent.
