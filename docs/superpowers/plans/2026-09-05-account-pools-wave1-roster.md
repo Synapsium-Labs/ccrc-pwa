@@ -813,13 +813,24 @@ beside the existing `import { DEFAULT_TEST_ROSTER } from './helpers.js';` (`:41`
 Run: `cd server && ./node_modules/.bin/vitest run test/roster-generate.test.ts test/gen-accounts.test.ts`
 
 Expected: FAIL.
-- `roster-generate.test.ts` — all six new cases go red, and only one of them reds on an assertion.
-  `emits an EMPTY case…`, `emits one arm per TAGGED account only…` and `sits after _ccrc_hue` fail on
-  their assertions (`expected '…' to contain '_ccrc_pool() {'`; `arms` is `[]` against a two-row
-  expectation; `indexOf` returns `-1`). The other three THROW out of `sh()` before any assertion runs,
-  because the bash child exits nonzero: `declare -F _ccrc_pool` returns 1 on an undefined function so
-  the `&&` short-circuits and bash exits 1, and `_ccrc_pool 'a'` is `command not found` (exit 127).
-  Expect `Command failed: bash -c …`, not a value comparison.
+- `roster-generate.test.ts` — all six new cases go red, split **two throwing, four asserting**
+  (measured; an earlier draft of this paragraph said three and three).
+
+  **THROWING**, because the bash child exits nonzero and `sh()` propagates that as
+  `Command failed: bash -c …` before any assertion runs — `is defined even when NO account is tagged`
+  (`declare -F _ccrc_pool` returns 1 on an undefined function, so the `&&` short-circuits and bash
+  exits 1) and `answers the pool name for a tagged account` (a bare `_ccrc_pool 'a'` is
+  `command not found`, exit 127).
+
+  **ASSERTING** — `emits an EMPTY case…` (`expected '…' to contain '_ccrc_pool() {'`),
+  `emits one arm per TAGGED account only…` (`arms` is `[]` against a two-row expectation),
+  `sits after _ccrc_hue` (`indexOf` returns `-1`), and — the one worth understanding —
+  `answers empty at rc 0 for an untagged account AND for an unknown id`, which compares
+  `'rc=127'` against `'rc=0'` rather than throwing. Its snippet sequences with `;`, not `&&`, so the
+  missing function's 127 is captured by `$?` and printed, and the LAST command in the child is the
+  `echo` — which succeeds. `bash -c` therefore exits 0 and `sh()` never throws. That is the same
+  property the test relies on in the GREEN state, where it is what lets an rc be asserted at all;
+  worth knowing before reading any `; echo "rc=$?"` snippet in this file as a throw.
 - `gen-accounts.test.ts` — the new ACCEPT row PASSES (both sides currently ignore `pool`, so both emit identical pool-free bash). That is expected: it becomes load-bearing at Step 4, and is measured as such in Step 6.
 
 - [ ] **Step 4: Emit it**
