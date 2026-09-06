@@ -345,6 +345,20 @@ export function verbSupported(
  *  parity; the `toContain` assertion above is. */
 export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
 
+/** The `ccd caps` token that says this box honours project pool tags (wave
+ *  2a). Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason: a
+ *  capability token copied into two files is the drift shape
+ *  `single-definition.test.ts` exists for. ccd's own `echo pools-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, and that test's `toContain` assertion is what keeps THIS one
+ *  equal to them.
+ *
+ *  It gates ONE decision, and only one: whether the server may build a
+ *  `--cross-pool` argv (wave 3). The tag route is gated on the VERB's presence
+ *  instead, and the 409 pre-check and the placement forecast are the server's
+ *  own decisions over data it reads and are not gated at all. */
+export const POOLS_CAP = 'pools-v1';
+
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
  * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an

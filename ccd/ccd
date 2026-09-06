@@ -4941,6 +4941,7 @@ pick
 pr-open
 pr-state
 prefer
+project-pool
 start
 stop
 supervise
@@ -4999,6 +5000,17 @@ EOF
   # renders exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
   # argument, same polarity, as `stop-surface` above.
   echo actor-flags-v1
+  # `pools-v1` says THIS copy of ccd honours project pool tags: it reads
+  # `$POOLS_DIR/<project>`, applies `_pool_ok` at every account decision, and
+  # understands `--cross-pool` on the manual verbs. It gates exactly ONE server
+  # decision — "may I build a `--cross-pool` argv" — and `capSupported` refuses
+  # on no evidence, because the wrong guess there is a SILENT SUCCESS: an old
+  # ccd meets a trailing `--cross-pool` as a positional and, where it does not
+  # die, `runCcdOr502` renders exit 0 as `200 {ok:true}` for a crossing that
+  # never happened. The TAG ROUTE needs no token: the verb and every reader
+  # ship in one ccd inode, so `project-pool`'s presence in `ccdVerbs` IS the
+  # evidence. Same argument, same polarity, as `actor-flags-v1` above.
+  echo pools-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -5310,6 +5322,92 @@ cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
     fi
     echo "running"
   fi
+}
+
+cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
+  # THE PROJECT SIDE of the pool rule gets a writer a phone can reach. The tag
+  # is `$POOLS_DIR/<project>` — one file, one token — and until this verb
+  # existed the only writer was an ssh session and an `echo`, which ruling 2
+  # rules out as the only way in.
+  #
+  # MODELLED LINE FOR LINE ON `cmd_coord_pause` ABOVE: flag-led, EXACT arity
+  # (usage die otherwise), validation before anything on disk is touched, and
+  # BOTH write arms CHECKED. That last is not decoration: ccd runs
+  # `set -uo pipefail` with NO `-e` (ccd:9), so an unchecked write that failed
+  # would fall straight through to the echo and report a tag that is not there.
+  # This is the verb where a false success is worst — a route keyed on the exit
+  # code then believes a project is constrained while placement is free.
+  #
+  # NO `_lc_done` LINE. The lifecycle vocabulary is per-SESSION and this verb
+  # acts on a project; `cmd_coord_pause` journals nothing for the same reason.
+  # The record it does leave is one `swap.log` line, below.
+  local project pool="" clear=0
+  local usage="usage: ccd project-pool --project <p> --pool <name>|--clear"
+  case "$#" in
+    4) [[ $1 == --project && $3 == --pool ]] || die "$usage"; project=$2; pool=$4 ;;
+    3) [[ $1 == --project && $3 == --clear ]] || die "$usage"; project=$2; clear=1 ;;
+    *) die "$usage" ;;
+  esac
+  # BEFORE THE FILESYSTEM. `_ws_project_valid` refuses `..`, `.`, dot-leading,
+  # whitespace and slashes, so the joined path can never leave `$POOLS_DIR` and
+  # a dot-leading name can never alias this directory's own tmp namespace.
+  _ws_project_valid "$project" \
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (the tag is a file in $POOLS_DIR, whose dot-leading names are its tmp namespace)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+
+  local oldstate old="-" new="-"
+  oldstate=$(_project_pool_state "$project")
+  case "$oldstate" in "named "*) old=${oldstate#named } ;; esac
+
+  if (( clear )); then
+    # NO EXISTENCE CHECK ON `--clear`, deliberately. The doctor's `pools-stale`
+    # remedy IS this command run against a project whose directory and registry
+    # rows are both gone; a remedy that refused on the very state it cures
+    # would leave the finding unfixable.
+    if [[ -e "$POOLS_DIR/$project" ]]; then
+      rm -f -- "$POOLS_DIR/$project" \
+        || die "could not remove the pool tag for $project — it is STILL tagged ($POOLS_DIR/$project)"
+    fi
+  else
+    _pool_name_valid "$pool" \
+      || die "invalid pool name '$pool' — one token matching $POOL_NAME_RE (lowercase, starts with a letter, max 32 chars)"
+    # EXISTENCE, ON THE `--pool` ARM ONLY. Two ways to be a project: a
+    # directory under $PROJECTS_ROOT, or a registry row that names one — which
+    # is what makes the four non-git projects and every custom-workdir session
+    # taggable. The glob is guarded because an empty registry leaves it its own
+    # literal text and grep would complain about a file that is not there.
+    [[ -d "$PROJECTS_ROOT/$project" ]] \
+      || grep -qxF -- "$project" "$REG"/*.project 2>/dev/null \
+      || die "no such project '$project' — neither $PROJECTS_ROOT/$project nor any registry row names it"
+    # A WARNING, NOT A REFUSAL. This pool may be about to gain an account, and
+    # the FLEET's roster copy is the authority — the server's can lag it
+    # (§3.3). When it bites, it bites loudly: an empty pool STRANDS.
+    local w hit=0
+    for w in "${CCRC_ACCOUNTS[@]}"; do
+      [[ "$(_acct_pool "$w")" == "$pool" ]] && { hit=1; break; }
+    done
+    (( hit )) || echo "warn: no rostered account is in pool $pool" >&2
+
+    mkdir -p -- "$POOLS_DIR" \
+      || die "could not create $POOLS_DIR — $project is NOT tagged"
+    # `_reg_set`'s atomicity, verbatim: tmp then rename. A SIGKILL between the
+    # two leaks one dot-leading tmp — the same disclosed price `_reg_set` pays,
+    # and every reader skips dot-leading entries, which is exact because no
+    # project may lead with a dot.
+    local tmp="$POOLS_DIR/.$project.$BASHPID.tmp"
+    printf '%s' "$pool" > "$tmp" 2>/dev/null \
+      || { rm -f -- "$tmp"; die "could not write the pool tag for $project — it is NOT tagged"; }
+    _plat_mv_notdir "$tmp" "$POOLS_DIR/$project" \
+      || { rm -f -- "$tmp"; die "could not write the pool tag for $project — it is NOT tagged"; }
+    new="$pool"
+  fi
+
+  # THE ONE swap.log LINE WHOSE SUBJECT IS A PROJECT. Every other line in that
+  # file names a session id. Deliberate: the retag is the CAUSE of the
+  # `rehome`/`auto-pool` lines that follow it within a tick, and a reader who
+  # cannot see the cause beside its effects has to correlate two files.
+  echo "$(date '+%F %T') pool-tag $project: $old -> $new" >> "$REG/swap.log"
+  if (( clear )); then echo "untagged $project"; else echo "tagged $project $new"; fi
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -11178,6 +11276,15 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   fi
   echo "$pool"
 }
+# TWO MEANINGS OF ONE WORD, IN ONE FILE, and this is the sentence that keeps
+# the next reader from conflating them. The registry `pool` field read here is
+# a SPACE-SEPARATED CANDIDATE LIST of wrappers a session may auto-swap between,
+# and it has NO WRITER anywhere in this tree — an operator sets it by hand.
+# The `pool` of the account-pools design is a NAME, one token, and it lives in
+# two other places entirely: `_ccrc_pool <account>` (the roster's projection)
+# and `$POOLS_DIR/<project>` (the project's tag). Renaming this field is out of
+# scope; `ccd-project-pool.test.ts`'s `acct-a-demo` case is what proves the two
+# cannot become one file by accident.
 _pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$1"; }
 
 _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd unit.
@@ -13644,9 +13751,10 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  project-pool) shift; cmd_project_pool "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|project-pool|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

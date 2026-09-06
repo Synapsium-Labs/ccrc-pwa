@@ -16,11 +16,12 @@
 // match would not see it.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -87,5 +88,24 @@ describe('the pools directory is one name in two languages', () => {
     // A dot-leading directory would land inside ccd's own private namespace
     // (spec §4), and a name with a slash would not be one directory at all.
     expect(POOLS_DIR_NAME).toMatch(/^[a-z][a-z0-9-]*$/);
+  });
+});
+
+describe('the two directory-name spellings are the same directory on a real box', () => {
+  it('the verb writes where POOLS_DIR_NAME says the server will look', () => {
+    // Text extraction proves the two LITERALS agree. This proves the running
+    // bash actually joins them the way the TypeScript will: a `POOLS_DIR` that
+    // was correct in its assignment and wrong at its use site is invisible to
+    // the extraction above.
+    const h = makeCcdHarness('ccrc-pool-parity-');
+    try {
+      h.makeRepo('demo');
+      expect(h.sh('cmd_project_pool --project demo --pool pool-a')).toBe('tagged demo pool-a');
+      const p = path.join(h.home, '.cc-sessions', POOLS_DIR_NAME, 'demo');
+      expect(fs.existsSync(p), `nothing at ${p}`).toBe(true);
+      expect(fs.readFileSync(p, 'utf8')).toBe('pool-a');
+    } finally {
+      h.cleanup();
+    }
   });
 });

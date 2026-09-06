@@ -317,3 +317,282 @@ describe('_project_pool_state — four words, always rc 0', () => {
       ['named pool-a', 'malformed', 'unreadable', 'untagged', 'untagged']);
   });
 });
+
+/** stdout captured BESIDE stderr and the code, `ccd-coord-pause.test.ts`'s
+ *  helper: on this verb the defect that matters is a refusal that still
+ *  printed `tagged`, and a code-and-stderr-only helper cannot see it. */
+const shFail = (snippet: string): { code: number; stderr: string; stdout: string } => {
+  try { return { code: 0, stderr: '', stdout: h.sh(snippet) }; }
+  catch (e) {
+    const err = e as { status?: number; stderr?: Buffer; stdout?: Buffer };
+    return { code: err.status ?? 1, stderr: String(err.stderr ?? ''), stdout: String(err.stdout ?? '') };
+  }
+};
+
+/** The DISPATCHER, not the function. The agent invokes this verb as
+ *  `ccd project-pool --project demo --pool pool-a`, so the `case` arm is
+ *  load-bearing production surface: a shipped `cmd_project_pool` with no arm
+ *  answers the usage line at exit 1 for every tap the phone makes. */
+const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
+  const opts = {
+    encoding: 'utf8' as const, cwd: h.home,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+  };
+  try { return { code: 0, stdout: execFileSync('bash', [CCD, ...args], opts).trim(), stderr: '' }; }
+  catch (e) {
+    const err = e as { status?: number; stdout?: string; stderr?: string };
+    return { code: err.status ?? 1, stdout: String(err.stdout ?? '').trim(), stderr: String(err.stderr ?? '') };
+  }
+};
+
+const swapLog = (): string => {
+  const p = path.join(REG(), 'swap.log');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+};
+
+/** Everything under $HOME, so "nothing was touched" is a measurement rather
+ *  than a spot check on one path. */
+const treeUnderHome = (): string[] => {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      out.push(path.relative(h.home, p));
+      if (e.isDirectory() && !e.isSymbolicLink()) walk(p);
+    }
+  };
+  walk(h.home);
+  return out.sort();
+};
+
+describe('ccd project-pool — the writer verb', () => {
+  it('tags a project through the DISPATCHER, and says so', () => {
+    h.makeRepo('demo');
+    const r = runCcd('project-pool', '--project', 'demo', '--pool', 'pool-a');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('tagged demo pool-a');
+    expect(state('demo')).toBe('named pool-a');
+  });
+
+  it('names itself in the usage line every mistyped verb prints', () => {
+    const r = runCcd();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('project-pool');
+  });
+
+  it('writes the value with NO trailing newline', () => {
+    // `_reg_set`'s convention (`printf '%s'`). The mutant is `echo "$pool"`,
+    // which is invisible to every word-level assertion above.
+    h.makeRepo('demo');
+    h.sh('cmd_project_pool --project demo --pool pool-a');
+    expect(fs.readFileSync(path.join(POOLS(), 'demo'), 'utf8')).toBe('pool-a');
+  });
+
+  it('leaves no tmp file behind, and the tag is a regular file', () => {
+    h.makeRepo('demo');
+    h.sh('cmd_project_pool --project demo --pool pool-a');
+    expect(fs.readdirSync(POOLS())).toEqual(['demo']);
+    expect(fs.statSync(path.join(POOLS(), 'demo')).isFile()).toBe(true);
+  });
+
+  it('creates $REG/pools lazily on the first --pool', () => {
+    h.makeRepo('demo');
+    expect(fs.existsSync(POOLS())).toBe(false);
+    h.sh('cmd_project_pool --project demo --pool pool-a');
+    expect(fs.statSync(POOLS()).isDirectory()).toBe(true);
+  });
+
+  it('retags in place, and logs one pool-tag line per call with the old and new names', () => {
+    h.makeRepo('demo');
+    h.sh('cmd_project_pool --project demo --pool pool-a');
+    h.sh('cmd_project_pool --project demo --pool pool-b');
+    expect(h.sh('cmd_project_pool --project demo --clear')).toBe('untagged demo');
+    const lines = swapLog().trim().split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/ pool-tag demo: - -> pool-a$/);
+    expect(lines[1]).toMatch(/ pool-tag demo: pool-a -> pool-b$/);
+    expect(lines[2]).toMatch(/ pool-tag demo: pool-b -> -$/);
+  });
+
+  it('clears idempotently and without any existence check on the project', () => {
+    // The doctor's `pools-stale` remedy IS `--clear` on a project whose
+    // directory and registry rows are both gone. If that refused, the remedy
+    // for the finding could never be applied.
+    plantTag('acct-a-demo', 'pool-a');
+    expect(h.sh('cmd_project_pool --project acct-a-demo --clear')).toBe('untagged acct-a-demo');
+    expect(fs.existsSync(path.join(POOLS(), 'acct-a-demo'))).toBe(false);
+    expect(h.sh('cmd_project_pool --project acct-a-demo --clear')).toBe('untagged acct-a-demo');
+    expect(h.sh('cmd_project_pool --project never-existed --clear')).toBe('untagged never-existed');
+  });
+
+  it('accepts a registry-only project on --pool — a custom workdir has no directory', () => {
+    // Four production projects are not git repositories and dispatched
+    // workspaces can carry a workdir outside $PROJECTS_ROOT, so "a project" is
+    // EITHER a directory under $PROJECTS_ROOT OR a registry row naming it.
+    fs.writeFileSync(path.join(REG(), 'claude-quiet-basin.project'), 'quiet-basin');
+    expect(fs.existsSync(path.join(h.home, 'projects', 'quiet-basin'))).toBe(false);
+    expect(h.sh('cmd_project_pool --project quiet-basin --pool pool-a')).toBe('tagged quiet-basin pool-a');
+  });
+
+  it('refuses --pool for a project that is neither a directory nor a registry row', () => {
+    const r = shFail('cmd_project_pool --project never-existed --pool pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('no such project');
+    expect(r.stdout).not.toContain('tagged');
+    expect(fs.existsSync(POOLS())).toBe(false);
+  });
+
+  it('refuses a missing, an extra and a misspelt flag — each by the usage sentence', () => {
+    for (const argv of ['', '--project', '--project demo', '--project demo --pool',
+      '--project demo --pool pool-a extra', '--proj demo --pool pool-a',
+      '--project demo --poool pool-a']) {
+      const r = shFail(`cmd_project_pool ${argv}`);
+      expect(r.code, `argv: ${argv}`).not.toBe(0);
+      expect(r.stderr, `argv: ${argv}`)
+        .toContain('usage: ccd project-pool --project <p> --pool <name>|--clear');
+    }
+  });
+
+  it('validates the project BEFORE touching the filesystem, and touches nothing', () => {
+    const before = treeUnderHome();
+    for (const p of ['../x', '.hidden', 'a b', '', 'a/b']) {
+      const r = shFail(`cmd_project_pool --project ${JSON.stringify(p)} --pool pool-a`);
+      expect(r.code, JSON.stringify(p)).not.toBe(0);
+      expect(r.stderr, JSON.stringify(p)).toContain('invalid project');
+    }
+    expect(treeUnderHome()).toEqual(before);
+  });
+
+  it('refuses an off-grammar pool name by its OWN sentence, not the usage one', () => {
+    // A caller who got the shape right and the vocabulary wrong is a different
+    // condition from a malformed argv, and folding them answers "usage" to
+    // someone whose usage was fine (`cmd_coord_pause`'s own split).
+    h.makeRepo('demo');
+    for (const bad of ['Pool-a', 'pool a', '', '-pool', 'pool_a', 'a'.repeat(33)]) {
+      const r = shFail(`cmd_project_pool --project demo --pool ${JSON.stringify(bad)}`);
+      expect(r.code, JSON.stringify(bad)).not.toBe(0);
+      expect(r.stderr, JSON.stringify(bad)).toContain('invalid pool name');
+      expect(r.stderr, JSON.stringify(bad)).not.toContain('usage: ccd project-pool');
+    }
+    expect(fs.existsSync(POOLS())).toBe(false);
+  });
+
+  it('warns on stderr — and still tags — when no rostered account carries the name', () => {
+    // A WARNING, not a refusal: this pool may be about to gain an account, and
+    // the FLEET's roster copy is the authority (the server's can lag it).
+    h.makeRepo('demo');
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home,
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+    };
+    const out = execFileSync('bash',
+      ['-c', `source ${JSON.stringify(CCD)}; cmd_project_pool --project demo --pool pool-b 2>&1`], opts);
+    expect(out).toContain('warn: no rostered account is in pool pool-b');
+    expect(out).toContain('tagged demo pool-b');
+    expect(state('demo')).toBe('named pool-b');
+  });
+
+  it('refuses when $REG is not a directory — the tag has nowhere to live', () => {
+    // Deleting $REG does NOT produce this state: ccd runs `mkdir -p "$REG"` at
+    // source time. A FILE at the path is the state the guard answers, and it
+    // discriminates for any uid, root included.
+    fs.rmSync(REG(), { recursive: true, force: true });
+    fs.writeFileSync(REG(), 'not a directory\n');
+    const r = shFail('cmd_project_pool --project demo --pool pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('no registry');
+    expect(r.stdout).not.toContain('tagged');
+  });
+});
+
+describe('ccd project-pool — the write is CHECKED in both directions', () => {
+  it('refuses LOUDLY when the tag cannot be written — it is NOT tagged (any uid)', () => {
+    // A regular FILE where $REG/pools belongs makes `mkdir -p` fail for root
+    // too. ccd runs `set -uo pipefail` with NO `-e`: unguarded, the failure
+    // falls straight through to the echo and a route keyed on the exit code is
+    // told the project is constrained while ccd places work anywhere it likes.
+    h.makeRepo('demo');
+    fs.writeFileSync(POOLS(), 'not a directory\n');
+    const r = shFail('cmd_project_pool --project demo --pool pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('NOT tagged');
+    expect(r.stdout).not.toContain('tagged demo');
+  });
+
+  it('refuses LOUDLY when the rename cannot land — it is NOT tagged (any uid)', () => {
+    // A DIRECTORY at the tag path: `_plat_mv_notdir` refuses to overwrite a
+    // directory with a non-directory on both userlands, for any uid.
+    h.makeRepo('demo');
+    fs.mkdirSync(path.join(POOLS(), 'demo'), { recursive: true });
+    const r = shFail('cmd_project_pool --project demo --pool pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('NOT tagged');
+    expect(r.stdout).not.toContain('tagged demo');
+    // …and the tmp file it could not rename is gone.
+    expect(fs.readdirSync(POOLS())).toEqual(['demo']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'refuses LOUDLY when the tmp write is denied — it is NOT tagged', () => {
+      h.makeRepo('demo');
+      fs.mkdirSync(POOLS(), { recursive: true });
+      fs.chmodSync(POOLS(), 0o500);
+      try {
+        const r = shFail('cmd_project_pool --project demo --pool pool-a');
+        expect(r.code).not.toBe(0);
+        expect(r.stderr).toContain('NOT tagged');
+        expect(r.stdout).not.toContain('tagged demo');
+      } finally {
+        fs.chmodSync(POOLS(), 0o700);
+      }
+    });
+
+  it('refuses LOUDLY when the tag cannot be removed — it is STILL tagged (any uid)', () => {
+    // `rm -f` suppresses ENOENT only; EISDIR still exits non-zero, for root as
+    // well. The polarity that matters: a caller told the project was untagged
+    // while the constraint still binds every placement.
+    fs.mkdirSync(path.join(POOLS(), 'demo'), { recursive: true });
+    const r = shFail('cmd_project_pool --project demo --clear');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('STILL tagged');
+    expect(r.stdout).not.toContain('untagged demo');
+  });
+});
+
+describe('the marker namespace cannot collide with a session id', () => {
+  it('a tag for project acct-a-demo is not the registry `pool` field of session acct-a-demo', () => {
+    // The registry `pool` field is a SPACE-SEPARATED CANDIDATE LIST with no
+    // writer in the tree, not a pool name — two meanings of one word in one
+    // file (D-1666). `$REG/<project>.pool` would have made them one
+    // file: ids are `<wrapper>-<project>`, so a project named `acct-a-demo`
+    // collides with the session `acct-a-demo`.
+    fs.writeFileSync(path.join(REG(), 'acct-a-demo.project'), 'acct-a-demo');
+    h.sh('cmd_project_pool --project acct-a-demo --pool pool-a');
+    expect(h.reg('acct-a-demo', 'pool')).toBeNull();
+    expect(h.sh('_pool_for acct-a-demo')).toBe(h.sh('_default_pool acct-a-demo'));
+  });
+
+  it('_reg_purge takes the row and leaves the tag byte-identical', () => {
+    // `_reg_purge` is what `forget`, `ws-reap` and the dead-reg arm all use.
+    // A project's tag outlives every one of its workspaces BY DESIGN.
+    fs.writeFileSync(path.join(REG(), 'acct-a-demo.project'), 'acct-a-demo');
+    fs.writeFileSync(path.join(REG(), 'acct-a-demo.uuid'), '1'.repeat(36));
+    h.sh('cmd_project_pool --project acct-a-demo --pool pool-a');
+    const before = fs.readFileSync(path.join(POOLS(), 'acct-a-demo'));
+    h.sh('_reg_purge acct-a-demo');
+    expect(fs.existsSync(path.join(REG(), 'acct-a-demo.uuid'))).toBe(false);
+    expect(fs.readFileSync(path.join(POOLS(), 'acct-a-demo'))).toEqual(before);
+  });
+
+  it('a project literally named `pools` does not wedge the slug namespace', () => {
+    fs.writeFileSync(path.join(REG(), 'pools-quiet-basin.uuid'), '2'.repeat(36));
+    h.makeRepo('pools');
+    h.sh('cmd_project_pool --project pools --pool pool-a');
+    // The DIRECTORY $REG/pools is invisible to the suffix-shaped glob
+    // `$REG/<id>.*` that `_ws_slug_free` walks; only the real registry row
+    // holds a slug.
+    expect(h.sh('_ws_slug_free pools quiet-basin && echo free || echo taken')).toBe('taken');
+    expect(h.sh('_ws_slug_free pools quiet-mesa && echo free || echo taken')).toBe('free');
+    expect(state('pools')).toBe('named pool-a');
+  });
+});
