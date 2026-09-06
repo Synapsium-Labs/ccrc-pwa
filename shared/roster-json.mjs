@@ -117,7 +117,7 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *
  *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
  *  so matters more than the tidy sentence this comment used to carry
- *  (D-TBD-mjs-regex-unpinned). `ccd`'s bash literal will be pinned against
+ *  (D-1742). `ccd`'s bash literal will be pinned against
  *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file —
  *  once wave 2a's parity scan lands. THIS copy is pinned by BEHAVIOUR instead:
  *  no text scan pins a regex literal in a `.mjs` (`single-definition.test.ts`

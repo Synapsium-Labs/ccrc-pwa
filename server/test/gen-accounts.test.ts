@@ -286,7 +286,7 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a pool name starting with a hyphen — what the leading-letter rule exists for', roster(acct({ pool: '-pool' }))],
     ['a pool name starting with a digit', roster(acct({ pool: '1pool' }))],
     ['a pool name containing an underscore', roster(acct({ pool: 'pool_a' }))],
-    // The CAP, measured rather than assumed (D-TBD-mjs-regex-unpinned). No text scan
+    // The CAP, measured rather than assumed (D-1742). No text scan
     // pins a regex literal in a `.mjs`, so this table is the only thing holding the
     // two copies of the grammar equal, and a cap that drifted — `{0,31}` against
     // `{0,63}` — is the one drift every other row in this block survives: 33

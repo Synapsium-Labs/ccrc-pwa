@@ -390,7 +390,7 @@ git commit -m "feat(roster): an account carries an optional pool name, refused r
 - Test: `server/test/gen-accounts.test.ts` — the `CASES` REJECT table (`:222`–`:277`)
 
 **Interfaces:**
-- Consumes: `POOL_NAME_RE`'s grammar from Task 1 (copied as a literal, not imported — a bare `node` cannot import TypeScript). **What pins THIS copy is behaviour, not text** (D-TBD-mjs-regex-unpinned): wave 2a's text-extraction parity test reads `ccd/ccd` and `ccrc-doctor-checks`, never a `.mjs`, and `single-definition.test.ts` filters `/\.tsx?$/`, so it cannot see this file either. The mechanism is the REJECT table in this task's own suite, which drives the same malformed pool names through both sides — which is why the table gains an over-the-cap row here as well as the five grammar rows.
+- Consumes: `POOL_NAME_RE`'s grammar from Task 1 (copied as a literal, not imported — a bare `node` cannot import TypeScript). **What pins THIS copy is behaviour, not text** (D-1742): wave 2a's text-extraction parity test reads `ccd/ccd` and `ccrc-doctor-checks`, never a `.mjs`, and `single-definition.test.ts` filters `/\.tsx?$/`, so it cannot see this file either. The mechanism is the REJECT table in this task's own suite, which drives the same malformed pool names through both sides — which is why the table gains an over-the-cap row here as well as the five grammar rows.
 - Produces: `checkAccount` returns `pool: string | null` on every account, which `generateAccountsSh` reads in Task 3. `checkAccount` also VALIDATES `hidden` without returning it — the emitter has no use for the value, and the file's own contract is "reject anything the SERVER would reject", not "reject anything the generator would trip over".
 
 **Spec:** §5.3 (the `shared/roster-json.mjs` paragraph), §3.4, §12 P-1 (D-1663).
@@ -426,7 +426,7 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;   // <- the literal in the file
 
 - [ ] **Step 1: Write the failing tests**
 
-In `server/test/gen-accounts.test.ts`, add SEVEN rows to the `CASES` array (declared at `:222`, ending with `'two upstream accounts'` at `:276`) — the six this task first drafted, plus the over-the-cap row D-TBD-mjs-regex-unpinned adds. Put them immediately after the `['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],` row:
+In `server/test/gen-accounts.test.ts`, add SEVEN rows to the `CASES` array (declared at `:222`, ending with `'two upstream accounts'` at `:276`) — the six this task first drafted, plus the over-the-cap row D-1742 adds. Put them immediately after the `['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],` row:
 
 ```ts
     // D-1663 (spec §12 P-1), closed in this task. This file's whole argument is the REJECT
@@ -446,7 +446,7 @@ In `server/test/gen-accounts.test.ts`, add SEVEN rows to the `CASES` array (decl
     ['a non-string pool', roster(acct({ pool: 7 }))],
     ['a pool name carrying a shell metacharacter', roster(acct({ pool: 'a$(id)' }))],
     ['an explicit null pool — absence means untagged, a written null is a half-edit', roster(acct({ pool: null }))],
-    // The CAP, measured rather than assumed (D-TBD-mjs-regex-unpinned). No text scan
+    // The CAP, measured rather than assumed (D-1742). No text scan
     // reads a `.mjs`, so this table is the only thing holding the two copies of the
     // grammar equal, and a cap that drifted — `{0,31}` against `{0,63}` — is the one
     // drift every other row in this block survives: 33 lowercase letters are legal
@@ -480,7 +480,7 @@ In `shared/roster-json.mjs`, after `LABEL_UNSAFE_RE` (`:99`):
  *
  *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
  *  so matters more than the tidy sentence this comment used to carry
- *  (D-TBD-mjs-regex-unpinned). `ccd`'s bash literal is pinned against
+ *  (D-1742). `ccd`'s bash literal is pinned against
  *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file.
  *  THIS copy is pinned by BEHAVIOUR instead: no text scan reads a `.mjs`
  *  (`single-definition.test.ts` filters `/\.tsx?$/`, and wave 2a's parity test
@@ -593,7 +593,7 @@ Expected: FAIL — `a non-boolean hidden … — the CLI exits nonzero and write
 Restore it, delete the `pool` `bad()` block, re-run:
 Expected: FAIL — all NINE `pool` rows of the second `it.each`.
 
-**And note what this mutation does NOT measure** (D-TBD-mjs-regex-unpinned, fix round 1). Deleting the
+**And note what this mutation does NOT measure** (D-1742, fix round 1). Deleting the
 gate means the mirrored `POOL_NAME_RE` is never consulted at all, so every pool row reds whatever the
 literal reads — this mutation proves the GATE rejects those shapes, and nothing about the literal. The
 plan first wrote a conditional here ("if the over-cap row alone stays green…") naming an outcome its
@@ -1453,7 +1453,7 @@ describe('shared/poolrule.ts is the pure L0 module its ring requires', () => {
    *  between, the `import type` line included. The scan then measures nothing and
    *  says so. That is not a false alarm: it is this assertion doing the one job
    *  it exists for, and the fix is in `shared/poolrule.ts`'s prose, not here.
-   *  (D-TBD-poolrule-header-blanks-import, found before this file first landed.) */
+   *  (D-1741, found before this file first landed.) */
   const code = (): string => SRC
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
@@ -1581,7 +1581,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/pool-rule-core.test.ts`
 Expected: PASS — 13 table rows plus 9 standalone assertions, **22 tests**.
 
 **Do not write the phrase `` `shared/*.ts` `` (or any other `/*` sequence) into a LINE comment in
-this module (D-TBD-poolrule-header-blanks-import).** The purity scan's `code()` helper blanks BLOCK
+this module (D-1741).** The purity scan's `code()` helper blanks BLOCK
 comments first, and its lazy `/\*[\s\S]*?\*/` would match from that `/*` all the way to the first
 real `*/` — swallowing the `import type` line on the way — so `imports.length` reads 0 and
 `no imports found — the scan is over nothing` reds on a perfectly correct module. Measured, on the
@@ -1617,7 +1617,7 @@ Each of these is restored before the next.
    `expect` throws first, so vitest reports one failing test, not two. Measured on the fixed header:
    `imports: 2`, `allTypeOnly: false`, `node: hit: true`. **On the UNFIXED header this mutation
    produces no new red at all** — the added import is blanked with the rest, and the pre-existing
-   `no imports found` red is what you see — which is the second reason D-TBD-poolrule-header-blanks-import
+   `no imports found` red is what you see — which is the second reason D-1741
    is a defect rather than a cosmetic one.
 
 - [ ] **Step 6: Typecheck and re-run**
@@ -1689,7 +1689,7 @@ cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/
 Expected: PASS.
 
 What each is actually checking here:
-- `single-definition` scans `shared/`, `server/src`, `pwa/src`, `agent/src` (NOT `server/test`) for a second copy of a single-sourced value and for any source file restating the roster as an array literal. `POOL_NAME_RE` exists once under those roots — `sources()` filters `/\.tsx?$/`, so `shared/roster-json.mjs`'s deliberate cross-language mirror is invisible to this scan and is held equal behaviourally instead, by `gen-accounts.test.ts`'s REJECT table (D-TBD-mjs-regex-unpinned; wave 2a's text extraction covers `ccd`'s bash copy, not this one).
+- `single-definition` scans `shared/`, `server/src`, `pwa/src`, `agent/src` (NOT `server/test`) for a second copy of a single-sourced value and for any source file restating the roster as an array literal. `POOL_NAME_RE` exists once under those roots — `sources()` filters `/\.tsx?$/`, so `shared/roster-json.mjs`'s deliberate cross-language mirror is invisible to this scan and is held equal behaviourally instead, by `gen-accounts.test.ts`'s REJECT table (D-1742; wave 2a's text extraction covers `ccd`'s bash copy, not this one).
 - `topology-clean` walks `git ls-files` — every tracked file, code and document alike — for an operator's real host, account or label. The fixture names this wave introduced (`pool-a`, `pool-b`, `pool-ab`) are the only new name-shaped literals.
 - `dtbd` git-greps the tracked tree for a concrete `D-TBD` placeholder. This plan defines none at rest; any `D-TBD-<slug>` written into `## Deviations found` during execution must be substituted with an allocated number before this gate can pass, which is the mechanism that makes the placeholder a promise rather than a note.
 
@@ -1753,11 +1753,12 @@ is never a ledger number.
 
 **Found during execution of this wave, 2026-09-06.** Both were surfaced by the controller's pre-flight
 audit of this plan against the tree, before Task 1 was dispatched, and both change SHIPPED source rather
-than only this document. Numbers are requested from the coordinator in one `deviation-request` and
-substituted here before `wave-done`; `dtbd.test.ts` refuses a surviving placeholder, so the PR cannot
-go green while these read `D-TBD`.
+than only this document. Both were requested from the coordinator in one `deviation-request` and
+**minted from the live allocator on 2026-09-06** — project `ccrc-pwa`, count 2, floor now 1743 — then
+substituted here and in the two source files that cite them. Neither number was ever written before it
+was issued.
 
-- **D-TBD-poolrule-header-blanks-import** (Task 5) — the module text this plan listed for
+- **D-1741** (Task 5) — the module text this plan listed for
   `shared/poolrule.ts` opened its header with ``// L0, like every other `shared/*.ts`: …``, and the
   `/*` inside `` `shared/*.ts` `` is the FIRST `/*` in the file. The purity scan's `code()` helper
   (copied from `coord-caps-policy.test.ts`) blanks BLOCK comments first with a lazy
@@ -1771,7 +1772,7 @@ go green while these read `D-TBD`.
   is what makes this a defect rather than a typo: the guard would have shipped measuring nothing but
   its own tripwire. Closed by rewording the header; the tripwire itself is kept, because it is the
   thing that caught this.
-- **D-TBD-mjs-regex-unpinned** (Task 2) — this plan mandated a comment into `shared/roster-json.mjs`
+- **D-1742** (Task 2) — this plan mandated a comment into `shared/roster-json.mjs`
   saying `ccd` carries a third copy of the grammar "and the three are pinned equal by text extraction
   rather than by hope", and repeated the claim in Task 2's Interfaces bullet and Task 6's gate note.
   Nothing pins THIS copy. Wave 2a's parity test extracts three literals from two files — `ccd/ccd`
