@@ -3743,6 +3743,38 @@ describe('ccrc doctor: pools', () => {
       }
     });
 
+  it('FAILS pools-unreadable for a DANGLING SYMLINK at a tag path, never PASS', () => {
+    // `-e` is FALSE for a dangling symlink — the same defect `ccd/ccd` fixed
+    // twice already (its reader and its writer verb), now a third file. A
+    // half-finished `ln -s` after moving a tag must not read as "no tag here".
+    const home = healthy('ccrc-doctor-pools-dangling-tag-');
+    pooledRoster(home);
+    project(home, 'demo');
+    const d = join(home, '.cc-sessions', 'pools');
+    mkdirSync(d, { recursive: true });
+    symlinkSync('/nonexistent-target', join(d, 'demo'));
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unreadable'));
+    expect(i, `no pools-unreadable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('demo');
+    expect(lineFor(runDoctor(home).stdout, 'pools')).not.toMatch(/^PASS pools: /);
+  });
+
+  it('FAILS pools-unlistable for a DANGLING SYMLINK at pools/ itself, never PASS "no project pools tagged"', () => {
+    // The inverse-of-the-truth case: `pools/ -> /nonexistent` must not read as
+    // "nothing is tagged, every project is unconstrained" — `ccd` answers
+    // `unreadable` for EVERY project on a box shaped like this, so the doctor
+    // printing its most reassuring PASS here is the exact opposite of what a
+    // half-finished `ln -s` after moving the registry has done.
+    const home = healthy('ccrc-doctor-pools-dangling-dir-');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync('/nonexistent-target', join(home, '.cc-sessions', 'pools'));
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pools: ') && l.includes('pools-unlistable'));
+    expect(i, `no pools-unlistable line:\n${lines.join('\n')}`).toBeGreaterThan(-1);
+    expect(lineFor(runDoctor(home).stdout, 'pools')).not.toMatch(/^PASS pools: /);
+  });
+
   it('gives each class its OWN line and its OWN remedy, never one joined verdict', () => {
     // Two classes with two different remedies on one box: `pools-malformed` is
     // "rewrite the file", `pools-stale` is "clear the tag". Joining them hands

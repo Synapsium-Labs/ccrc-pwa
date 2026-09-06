@@ -2648,18 +2648,29 @@ _check_wrappers() {
 # oversight: this file is sourced under `set -u` by things that are not `ccrc`
 # (`ccrc-doctor.test.ts`'s `tableNames()`), so a top-level reference to `ccd`'s
 # `POOL_NAME_RE` would make sourcing it FAIL, and a `${…:-…}` fallback is the
-# second spelling with a branch in front of it. `CCRC_RC_FILE` below makes the
+# second spelling with a branch in front of it. `CCRC_RC_FILE` above makes the
 # identical trade. What is different from `ccrc-wrapper-shape`'s hand-copy of
 # `ID_RE` is that this one is PINNED: `server/test/pool-name-parity.test.ts`
 # extracts all three spellings — TypeScript, `ccd/ccd`, and this line — and
 # holds them byte-equal.
 POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # Builtin substitute for `grep -qxF`: exact-line membership, nothing more.
-# NO GREP, for the identical reason `POOL_NAME_RE` above gives no `${…:-…}`
-# import — this file's PATH is not guaranteed to carry coreutils (measured
-# under `ccrc-doctor.test.ts`'s own harness, which hands every check exactly
-# the binaries it stubbed and nothing else), and no other check here forks
-# one.
+# NOT "no fork ever" — `stat`, `date`, `df` and `readlink` are all forked
+# elsewhere in this file, so that claim would be false in one grep. What is
+# true of every one of THOSE forks is that each sits behind its own
+# `command -v` guard and DISCLOSES its own blindness when the binary is
+# absent ("df is not on PATH, so this check cannot measure free space",
+# "$sys is a SYMLINK (target unreadable)"). The dictated `cat`/`grep` version
+# here had no such guard: under `ccrc-doctor.test.ts`'s own harness (which
+# hands a check exactly the binaries it stubbed, nothing else — measured,
+# exit 127) it silently collapsed "no `cat` on PATH" into a REAL verdict
+# class, `pools-unreadable` — an adapter narrowing a distinction it received.
+# Keeping the fork would have needed the guard PLUS a seventh "could not
+# measure" class; a builtin read needs neither and leaves the doctor honest
+# on a broken box. It also buys back a correctness property for free:
+# `cat -- "$f"` may never block, and a FIFO under `pools/` would hang
+# `open(2)` forever — the `-f` gate below is what `_project_pool_state`
+# itself uses this same read for, and for the identical reason.
 _pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of haystack
   local needle="$1" hay="$2" line
   while IFS= read -r line || [ -n "$line" ]; do
@@ -2669,7 +2680,14 @@ _pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of hays
 }
 _check_pools() {
   local dir="$HOME/.cc-sessions/pools" reg="$HOME/.cc-sessions" proot="$HOME/projects"
-  if [ ! -e "$dir" ]; then
+  # `-e` alone is FALSE for a DANGLING symlink — the same defect this wave has
+  # already fixed twice in `ccd/ccd` (its reader, `_project_pool_state`, and
+  # its writer verb): "not `-e`" reads as absence when it is not. A
+  # half-finished `ln -s` after moving the registry must not print this box's
+  # most reassuring PASS while `ccd` answers `unreadable` for EVERY project —
+  # so a dangling (or looping) `$dir` falls through to the unlistable check
+  # below instead of returning here.
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
     _dr_pass pools "no project pools tagged ($dir does not exist) — every project is unconstrained, which is the pre-pools behaviour"
     return 0
   fi
@@ -2716,21 +2734,36 @@ _check_pools() {
   # add "every dot-leading name except `.` and `..`" (measured: the bare `*`
   # form silently never saw a `.demo.4242.tmp` fixture at all).
   for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
-    [ -e "$f" ] || continue          # unmatched glob: no nullglob here
+    # `-e` alone would drop a DANGLING symlink here — an unmatched glob and a
+    # real-but-broken tag are not the same thing, and only the glob case may
+    # be skipped silently. `-L` catches it; the `-f`/`-r` bucket below then
+    # answers it `pools-unreadable` on its own, exactly like any other tag
+    # that exists and cannot be read.
+    [ -e "$f" ] || [ -L "$f" ] || continue   # unmatched glob: no nullglob here
     n="${f##*/}"
     case "$n" in
       .*) p_leak+=("$n"); continue ;;
     esac
-    # The four arms are `_project_pool_state`'s, in its order and with its
-    # meanings — a doctor that measured the tag differently from the file that
-    # obeys it would report on a rule nobody enforces. `-f`/`-r` are checked
-    # FIRST and SEPARATELY from the read itself: `$(< "$f")` is bash's own
-    # no-fork slurp (this file's PATH is not guaranteed to carry `cat` —
-    # measured under `ccrc-doctor.test.ts`'s harness), but unlike `cat` it
-    # answers a permission failure by printing directly to the CALLER's
-    # stderr rather than the substitution's exit status once any OTHER
-    # redirection sits beside it, so unreadable has to be decided before the
-    # read is ever attempted, not folded into it.
+    # UNREADABLE and MALFORMED below mirror `_project_pool_state`'s own
+    # `unreadable`/`malformed` arms exactly — a doctor that measured a
+    # WELL-FORMED tag differently from the file that obeys it would report on
+    # a rule nobody enforces. That mapping stops there, though: `untagged` has
+    # no bucket here (an untagged project has no file for this loop to see at
+    # all), and STALE/ORPHAN/TMP-LEAK below have no counterpart in
+    # `_project_pool_state` — they answer "should this tag exist", not "what
+    # does this tag mean", and only the doctor asks that question.
+    #
+    # `-f`/`-r` are checked FIRST and SEPARATELY from the read itself, not
+    # folded into it: `$(< "$f")` is bash's own no-fork slurp (this file's
+    # PATH is not guaranteed to carry `cat` — measured under
+    # `ccrc-doctor.test.ts`'s harness, exit 127), and its OWN exit status does
+    # correctly report a permission failure same as `cat`'s would — but adding
+    # ANY other redirection to that special form (e.g. `2>/dev/null`, to
+    # silence the "Permission denied" it prints straight to stderr) breaks
+    # bash's fast-path recognition of it and returns EMPTY EVEN ON A
+    # SUCCESSFUL READ (measured). So the permission question has to be settled
+    # by a plain `-r` test beforehand, which costs no fork either, rather than
+    # answered by wrapping the read itself.
     if [ ! -f "$f" ] || [ ! -r "$f" ]; then
       p_unread+=("$n"); continue
     fi
