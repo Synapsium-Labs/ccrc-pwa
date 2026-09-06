@@ -2492,15 +2492,22 @@ substituted before wave-done.
   "EOF reached first" (rc 1, the ordinary path). `read` also returns 1 for a read FAILURE, so a
   failure past the `-f && -r` guard falls into the ordinary path: a symlink to `/proc/self/mem`
   passes both tests, fails EIO, and answers `malformed`; fd exhaustion (EMFILE) does the same.
-  The variant nobody could construct — a read delivering PARTIAL bytes before erroring — would
-  answer `named <partial-prefix>`, reported as unconstructed rather than excluded.
+  The variant nobody DID construct — a read delivering PARTIAL bytes before erroring — would
+  answer `named <partial-prefix>`; it was reported as unconstructed rather than excluded, which
+  is not the same as unreachable.
   **NOT CLOSED, DELIBERATELY.** `_pool_ok` maps BOTH `unreadable` and `malformed` to rc 2, so
   every decider this wave ships treats the two identically: the fold is at the operator-DIAGNOSTIC
   seam, not a decision seam, and its whole cost is the doctor proposing `rewrite the file as one
   lowercase token` where the cure is `fix the I/O error`. Placement refuses either way. Closing it
   needs a distinction bash's `read` does not expose, i.e. a fork on the 5-second `cmd_supervise`
-  path — reinstating the exact cost this round removed, to improve a message on an unconstructible
-  condition. Disclosed in the function's comment and PINNED by a test that says it pins a known
+  path — reinstating the exact cost this round removed, to improve a MESSAGE while changing no
+  DECISION.
+  **REACHABILITY, corrected — an earlier draft of this entry said "an unconstructible condition"
+  and that was wrong.** The EIO arm is trivially constructible and this wave's own test
+  constructs it (a symlink to `/proc/self/mem` under `pools/`); EMFILE is reachable too. Only the
+  PARTIAL-READ variant is unconstructed, and "unconstructed" is not "unreachable" — nobody built
+  one, that is all. The park therefore rests ENTIRELY on the rc-2 argument above and takes no
+  support at all from how hard the condition is to reach. Disclosed in the function's comment and PINNED by a test that says it pins a known
   residual, in `_reg_set`'s "disclosed price" idiom.
   **Obligation on wave 3, which CAN discharge this one:** `readFileMeasured` already tells absent
   from unreadable from over-cap, so the TypeScript mirror has the mechanism bash lacks. It must not

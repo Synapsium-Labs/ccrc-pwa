@@ -1155,20 +1155,21 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # DISCLOSED, NOT CLOSED (parked, not fixed — 2026-09-06): `read -d ''`
   # returns 1 for a genuine read FAILURE exactly as it does for reaching EOF
   # with no NUL found, so a failure past the `-f && -r` guard above falls
-  # into this same ordinary path. Reachable arms: a symlink to
+  # into this same ordinary path. TWO ARMS ARE EASY TO HIT: a symlink to
   # `/proc/self/mem` (EIO on the read; `2>/dev/null` correctly hides bash's
   # own `read error:` message, so nothing survives to tell the two apart) and
   # fd exhaustion (EMFILE on the `< "$f"` open itself) — both land as
-  # `malformed`. A read that delivered PARTIAL bytes before erroring would
-  # answer `named <prefix>` instead; not constructed without root, and not
-  # excluded either. Parked because `_pool_ok` maps `unreadable` AND
-  # `malformed` to "nobody decides" alike, so the fold costs a wrong
-  # DIAGNOSTIC (the doctor proposing "rewrite the file" when the cure is "fix
-  # the I/O error"), never a wrong PLACEMENT — and telling the two apart needs
-  # a distinction `read` does not expose, which means a fork back onto this
-  # 5-second path to improve a message on a condition nobody could construct.
-  # Same trade as `_reg_set`'s leaked tmp file: an inert cost, paid on
-  # purpose, to stay out of a hot loop.
+  # `malformed`, the doctor's misleading "rewrite the file" in place of the
+  # real "fix the I/O error". A read that delivered PARTIAL bytes before
+  # erroring would answer `named <prefix>` instead; nobody has constructed
+  # one, and nothing here excludes one either. Parked because `_pool_ok`
+  # maps `unreadable` AND `malformed` to "nobody decides" alike, so PLACEMENT
+  # refuses either way regardless of which of the two this lands on — the
+  # fold costs only the operator MESSAGE, never a decision. Closing it needs
+  # a distinction `read` does not expose: a fork on the supervisor's hot path
+  # to improve a message while changing no decision. Same trade as
+  # `_reg_set`'s leaked tmp file: an inert cost, paid on purpose, to stay out
+  # of a hot loop.
   # A shell `echo pool-a > pools/demo` is a legal writer (ruling 2), so a
   # trailing newline is not malformed. Leading whitespace IS: the grammar is
   # anchored, and a leading space is a hand-edit nobody meant.
