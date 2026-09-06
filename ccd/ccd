@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=66209b39e824a60580f336bd30d1ac60b4c8f48a8bae9c3efca46173fcdb6e04
+# ccrc:generated 1 sha256=4e2e8d686b29cf1a652dd55418e7d11ce49d89c382a7cfb87d7643a6e9f9d109
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1101,17 +1101,23 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # happen — this reader does not get to be the one place that trusts an
   # impossible state instead of refusing it.
   [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
-  if [[ ! -e "$POOLS_DIR" ]]; then
-    [[ -L "$POOLS_DIR" ]] && { echo unreadable; return 0; }
-    echo untagged; return 0
-  fi
+  # PAIRED INSIDE ONE TEST EXPRESSION, not across two lines (fix round 7).
+  # `-e` is blind to a dangling symlink and to a symlink loop; `-L` is that
+  # blind spot exactly, so the two predicates must decide TOGETHER, in the
+  # statement that acts on them. The earlier shape put `-L` on the line below
+  # and `pools-existence-pairing.test.ts` accepted mere adjacency — which an
+  # inert `[[ -L "$x" ]] && :` parked above the test also satisfies, pairing
+  # the TEXT while measuring nothing. That scan now requires the pair in one
+  # statement; this is what one statement looks like, and the two arms answer
+  # the two conditions `-e` alone folds together.
+  [[ ! -e "$POOLS_DIR" && ! -L "$POOLS_DIR" ]] && { echo untagged; return 0; }
+  [[ ! -e "$POOLS_DIR" && -L "$POOLS_DIR" ]] && { echo unreadable; return 0; }
   [[ -d "$POOLS_DIR" ]] || { echo unreadable; return 0; }
   [[ -x "$POOLS_DIR" ]] || { echo unreadable; return 0; }
   f="$POOLS_DIR/$1"
-  if [[ ! -e "$f" ]]; then
-    [[ -L "$f" ]] && { echo unreadable; return 0; }
-    echo untagged; return 0
-  fi
+  # Same one-expression pairing as `$POOLS_DIR` above, for the same reason.
+  [[ ! -e "$f" && ! -L "$f" ]] && { echo untagged; return 0; }
+  [[ ! -e "$f" && -L "$f" ]] && { echo unreadable; return 0; }
   # THE READER MAY NEVER BLOCK, NOT JUST NEVER `die`. `cat -- "$f"` opens
   # whatever is at `$f` with no regard for its TYPE: a FIFO with no writer
   # blocks in `open(2)` forever, and a symlink to an infinite character
@@ -1141,8 +1147,9 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # `read -d ''` (NUL-delimited, not newline-delimited) reads the WHOLE file
   # into `$v` in the ordinary case (no NUL present, so EOF is reached before
   # any delimiter is found, exactly mirroring what `cat` used to hand the
-  # trailing-whitespace strip below), and its OWN exit status — 0 iff a NUL
-  # delimiter was actually found before EOF — is a free, zero-cost detector
+  # trailing-whitespace strip below), and its OWN exit status — 0 iff the read
+  # STOPPED SHORT of EOF, which for `-d ''` means a NUL delimiter was found
+  # and for `-n 64` means the cap was reached — is a free, zero-cost detector
   # for an embedded NUL byte: a legal tag file can never contain one, so
   # finding one here is answered `malformed` directly, before the spliced
   # string (bash drops the NUL, so `pool-a\0junk` would otherwise read as the
@@ -1160,8 +1167,26 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # `2>/dev/null` ON CAT never caught, because it comes from the PARENT
   # SHELL'S command substitution, not from `cat` — cannot occur here at all:
   # there is no command substitution.
+  # `-n 64` IS THE SIZE GATE (D-1850), AND THE CONTRACT'S HEADLINE IS THAT THIS NEVER
+  # BLOCKS. The type gate above refuses a FIFO and a character device, so no
+  # OPEN can hang — but a REGULAR FILE of any size was still read whole into a
+  # shell variable, which is not a hang and is just as fatal to a function
+  # that runs under `cmd_ws_add`'s flock and, from wave 2b, on the 5-second
+  # supervisor tick. Measured by the coordinator's review: 10 MB took 0.20 s
+  # and 32 MB RSS, 100 MB took 39 s and 979 MB RSS — linear and unbounded.
+  # It needs no exotic filesystem to reach: `ln -s ~/.cc-sessions/swap.log
+  # pools/<p>` (or this branch's own documented alias in the other direction)
+  # makes every swap-log append grow the tag.
+  #
+  # 64 is twice the 32-character grammar `POOL_NAME_RE` allows, so no legal
+  # tag can reach it. An OVER-CAP file returns 0 from the same branch a NUL
+  # returns 0 from, and is answered `malformed` — the right word: the bytes
+  # were readable and are not one legal token. The one behaviour this changes
+  # for a WELL-FORMED name is a tag padded with 58+ characters of trailing
+  # whitespace, which used to strip back to `named <n>` and is now
+  # `malformed`; `_pool_ok` maps that to "nobody decides", the safe side.
   v=
-  if { IFS= read -r -d '' v; } 2>/dev/null < "$f"; then
+  if { IFS= read -r -d '' -n 64 v; } 2>/dev/null < "$f"; then
     echo malformed; return 0
   fi
   # DISCLOSED, NOT CLOSED (parked, not fixed — 2026-09-06): `read -d ''`

@@ -35,6 +35,19 @@
 // a pools path in that function. Both fixes are valid; a fresh, unpaired
 // `-e` is not.
 //
+// WHAT THIS SCAN ENFORCES IS `-e`, AND ONLY `-e`. `_project_pool_state`'s own
+// comment names `-d` as sharing the same blind spot, and it does — `[[ -d X ]]`
+// is false for a dangling symlink exactly as `[[ -e X ]]` is. This scan does
+// not look at `-d` at all, and the header must not imply it does. The one live
+// `-d` on a pools path today (`ccd/ccd`'s `[[ -d "$POOLS_DIR" ]]`) is SAFE for
+// a reason no scan can see: the `-e`/`-L` pair on the two lines above it has
+// already returned for the dangling and looping cases, so by the time `-d`
+// runs the path is known to exist and false there correctly means "exists,
+// and is not a directory". A reviewer forwarded it as a live instance of this
+// class; reading the sequence refutes it. The residue is real and is stated
+// here rather than mechanised: an author who writes a FRESH `-d` on a pools
+// path with no `-e`/`-L` above it gets no warning from this file.
+//
 // PAIRING IS NECESSARY, NOT SUFFICIENT — and that is a statement about this
 // scan's own limits, added after site 3 was found to be STILL WRONG with its
 // pairing in place. `-e`/`-L` on `$dir` answer for `$dir`; NEITHER can stat
@@ -77,22 +90,40 @@
 // THE RULE (D-1848): a bare `-e` may only be used where "absent" and
 // "present but unresolvable" are handled IDENTICALLY. On a pools path they
 // never are here, so every `-e` test whose subject is a pools path must
-// either be paired with `-L` on the same subject (same line or the line
-// immediately before/after, in either order), or sit inside a function that
-// locally decides via a real call to `_project_pool_state` instead of
-// trusting its own fresh test.
+// either be paired with `-L` on the same subject IN THE SAME STATEMENT, or
+// sit inside a function that locally decides via a real call to
+// `_project_pool_state` instead of trusting its own fresh test.
+//
+// "IN THE SAME STATEMENT" REPLACED "WITHIN ONE LINE EITHER SIDE" in fix round
+// 7, and the reason is that the looser window measured TEXT rather than a
+// decision: an inert `[[ -L "$f" ]] && :` parked on the line above satisfied
+// it while changing nothing, so the guard could be silenced without being
+// obeyed. A statement here is a LINE — both files put a condition and its
+// consequence on one line throughout, `[ ! -e "$dir" ] && [ ! -L "$dir" ]`
+// and `[[ ! -e "$f" && -L "$f" ]] && { … }` alike, so the line IS the
+// statement and no bash parser is needed to say so. `ccd/ccd`'s reader was
+// rewritten into that shape by the same round; the doctor already had it.
+// The limit, stated rather than hidden: this still measures adjacency, not
+// semantics. `[[ -e "$f" || -L "$f" ]] && :` on one line would pass. What it
+// buys is that the pair now has to sit in the statement that DECIDES, where
+// writing it wrong is visible to a reader of that line alone.
 //
 // WHAT "PAIRED WITH -L" MEANS HERE, MECHANICALLY. This scan does not parse
-// bash; it looks for test EXPRESSIONS (`[[ … ]]` / `[ … ]`) and, inside
-// them, `-e SUBJECT`. A SUBJECT qualifies as a "pools path" if it is
-// `$POOLS_DIR` itself, a variable this scan can show (by a real assignment
-// or a `for … in "$SUBJECT"/*` loop, discovered per enclosing function) was
-// derived from `$POOLS_DIR` or from a literal `pools` path segment, or a
-// literal argument that itself contains a `/pools/`-shaped segment. Once a
-// subject qualifies, the scan requires either a `-L` test on the identical
-// subject within one line, or a real (non-comment) call to
-// `_project_pool_state` within a few lines of the same function — mirroring
-// `cmd_project_pool --clear`'s "ask the one authority instead" escape hatch.
+// bash; it looks for test EXPRESSIONS — `[[ … ]]`, `[ … ]`, and the `test`
+// COMMAND, which is the same builtin without brackets and was invisible to
+// this scan until fix round 7 — and, inside them, `-e SUBJECT`. A SUBJECT
+// qualifies as a "pools path" if it is `$POOLS_DIR` itself, a variable this
+// scan can show (by a real assignment or a `for … in "$SUBJECT"/*` loop,
+// discovered per enclosing function) was derived from `$POOLS_DIR` or from a
+// literal `pools` path segment, or a literal argument that itself contains a
+// `/pools/`-shaped segment. Once a subject qualifies, the scan requires
+// either a `-L` test on the identical subject in the SAME STATEMENT, or a
+// real (non-comment, non-quoted) call to `_project_pool_state` within a few
+// lines of the same function — mirroring `cmd_project_pool --clear`'s "ask
+// the one authority instead" escape hatch. "Non-quoted" is load-bearing:
+// `die "… _project_pool_state said untagged …"` is a sentence about the
+// reader, not a call to it, and until fix round 7 it licensed an unpaired
+// `-e` five lines either side.
 //
 // IF THIS SCAN FIRES ON YOUR CHANGE: first check whether your new `-e` is
 // actually testing a pools path at all — if it is some unrelated file (a
@@ -114,8 +145,12 @@
 // starting at column 0 as `name() {` and closing at a bare `}` line — the
 // house style both files use throughout), not whole-file, so a variable
 // named `f` or `dir` in one function can never be confused with a
-// similarly-named, unrelated variable in another. The `-L`-pairing window is
-// one line either side, matching every fixed site; the
+// similarly-named, unrelated variable in another. A function NAME may hold a
+// hyphen: `ccrc-doctor-checks` spells four of its own checks that way
+// (`_check_graphify-path`), and until fix round 7 this scan's name pattern
+// excluded `-`, so that function's entire body — and any future
+// `_check_pools-parent()` — sat outside every block it built and was scanned
+// by nothing. The `-L`-pairing window is the statement itself; the
 // `_project_pool_state`-defers-here window is a few lines, not the whole
 // function — `cmd_project_pool` legitimately calls `_project_pool_state`
 // near its top and again near its bottom for reasons that have nothing to
@@ -129,15 +164,27 @@
 // GUARD THE GUARD. A regex that matches nothing passes everything, and this
 // wave has already shipped several guards that measured no actual effect —
 // see `docs/superpowers/plans/…tests-pin-shape-not-effect…`-style lessons
-// elsewhere in this project's history. So this file asserts a FLOOR on how
-// many qualifying pools-path existence tests it finds in each real file
-// (today: exactly two per file, the two guards each of the three fixed
-// sites left behind — `cmd_project_pool` itself now contributes none, having
-// moved to the defer-to-reader shape), and carries its own synthetic-fixture
-// tests proving the extraction logic actually flags an unpaired case, actually
-// accepts a paired one, and actually returns zero hits on source that touches
-// no pools path at all — so a floor of "at least 2" is a real measurement, not
-// a number nothing could ever fail to clear.
+// elsewhere in this project's history. So this file pins the EXACT SET of
+// qualifying sites it found, function by function, rather than a count.
+//
+// A COUNT WAS NOT ENOUGH, and that is worth saying plainly: the floor this
+// replaces was "at least 2 per file", and both of `ccd/ccd`'s hits come from
+// ONE function (`_project_pool_state`). The floor was therefore satisfied
+// while `cmd_ws_add` and `cmd_project_pool` — the other two pools-relevant
+// functions in that file — were covered by nothing, and the assertion could
+// not tell the difference. The set below says where the scan LOOKED, so a
+// site that stops being scanned (a function renamed out of the block
+// pattern, a variable that stops being traceable to `$POOLS_DIR`) reds this
+// file instead of quietly shrinking its own coverage. It is not a claim that
+// those are the only places a defect could live — the violation assertions
+// are file-wide, and a new bare `-e` anywhere in either file still fires.
+//
+// Alongside it, this file carries synthetic-fixture tests proving the
+// extraction logic actually flags an unpaired case, actually accepts a
+// paired one, actually refuses an inert neighbour and a quoted reader
+// mention, and actually returns zero hits on source that touches no pools
+// path at all — so the pinned set is a real measurement, not a number
+// nothing could ever fail to clear.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -218,7 +265,12 @@ function closesInline(line: string, afterIdx: number): boolean {
  *  function's body, and every real violation reported three times over. */
 function findFunctionBlocks(lines: string[]): FuncBlock[] {
   const blocks: FuncBlock[] = [];
-  const startRe = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/;
+  // `-` IS PART OF THE NAME. `ccrc-doctor-checks` names four of its own
+  // checks with one (`_check_graphify-path()` at :3306, and its table lists
+  // `graphify-path`), which bash accepts as a function name and which this
+  // pattern excluded until fix round 7 — putting that whole function, and any
+  // future `_check_pools-parent()`, outside every block this scan builds.
+  const startRe = /^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{/;
   for (let i = 0; i < lines.length; i++) {
     const m = startRe.exec(lines[i]!);
     if (!m) continue;
@@ -282,6 +334,9 @@ function discoverPoolsVars(block: FuncBlock): Set<string> {
 }
 
 interface RawHit {
+  /** The enclosing top-level function — pinned by the hit-set assertion, so a
+   *  site that silently stops being scanned reds this file. */
+  func: string;
   blockLineIdx: number;
   fileLine: number; // 1-based
   text: string;
@@ -309,16 +364,31 @@ function classifySubject(
 // files actually use — measured: every pools-path test in both files is a
 // single-line, non-nested bracket) and only looks for `-e ARG` within them.
 const BRACKET_RE = /\[\[.*?\]\]|\[[^[\]]*\]/g;
+// `test -e "$f"` is the SAME BUILTIN without the brackets, and neither file
+// is forbidden to use it — `ccrc-doctor-checks` is written in POSIX `[ … ]`
+// style throughout, one keystroke from this spelling. Scanned since fix round
+// 7. A `test` region runs to the next `;`, `&&`, `||` or end of line, which is
+// where the command itself ends; `\btest\s` (not a bare `test`) keeps it off
+// `latest`, `$test_dir` and prose.
+const TEST_CMD_RE = /\btest\s[^;&|]*/g;
 const E_ARG_RE = /-e\s+("[^"]*"|'[^']*'|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?:\/\S*)?)/g;
+
+/** Every region of one line in which a `-e` means a file-existence test. */
+function testRegions(raw: string): string[] {
+  const regions: string[] = [];
+  for (const re of [BRACKET_RE, TEST_CMD_RE]) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw))) regions.push(m[0]);
+  }
+  return regions;
+}
 
 function findExistenceHits(block: FuncBlock, poolsVars: Set<string>): RawHit[] {
   const hits: RawHit[] = [];
   block.lines.forEach((raw, idx) => {
     if (isCommentLine(raw)) return;
-    BRACKET_RE.lastIndex = 0;
-    let bm: RegExpExecArray | null;
-    while ((bm = BRACKET_RE.exec(raw))) {
-      const bracketText = bm[0];
+    for (const bracketText of testRegions(raw)) {
       E_ARG_RE.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = E_ARG_RE.exec(bracketText))) {
@@ -326,6 +396,7 @@ function findExistenceHits(block: FuncBlock, poolsVars: Set<string>): RawHit[] {
         const cls = classifySubject(arg, poolsVars);
         if (!cls) continue;
         hits.push({
+          func: block.name,
           blockLineIdx: idx,
           fileLine: block.startLine + idx + 1,
           text: raw.trim(),
@@ -340,19 +411,20 @@ function findExistenceHits(block: FuncBlock, poolsVars: Set<string>): RawHit[] {
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** `-L` on the IDENTICAL subject, same line or one line either side — the
- *  shape every one of the three fixed sites actually uses. */
-function hasNearbyL(block: FuncBlock, hit: RawHit): boolean {
+/** `-L` on the IDENTICAL subject, IN THE SAME STATEMENT as the `-e` — which
+ *  here means the same line, since both files put a condition and its
+ *  consequence on one line throughout. The window used to be one line either
+ *  side; an inert `[[ -L "$f" ]] && :` parked above the test satisfied that
+ *  while deciding nothing, so the pair now has to sit in the statement that
+ *  acts on it. See this file's header for the residue this still does not
+ *  measure. */
+function hasPairedL(block: FuncBlock, hit: RawHit): boolean {
   const lRe = hit.isLiteral
     ? new RegExp(`-L\\s+["']?${escapeRe(hit.subject)}["']?`)
     : new RegExp(`-L\\s+"?\\$\\{?${escapeRe(hit.subject)}\\}?`);
-  for (const idx of [hit.blockLineIdx - 1, hit.blockLineIdx, hit.blockLineIdx + 1]) {
-    if (idx < 0 || idx >= block.lines.length) continue;
-    const line = block.lines[idx]!;
-    if (isCommentLine(line)) continue;
-    if (lRe.test(line)) return true;
-  }
-  return false;
+  const line = block.lines[hit.blockLineIdx]!;
+  if (isCommentLine(line)) return false;
+  return lRe.test(line);
 }
 
 const READER_CALL_RE = /_project_pool_state\b/;
@@ -368,7 +440,11 @@ function isExemptViaReader(block: FuncBlock, hit: RawHit): boolean {
     if (idx === 0) continue; // the function's own `name() {` declaration line
     const line = block.lines[idx]!;
     if (isCommentLine(line)) continue;
-    if (READER_CALL_RE.test(line)) return true;
+    // Quoted contents are neutralised first: `die "… _project_pool_state …"`
+    // is a SENTENCE about the reader, and until fix round 7 it licensed an
+    // unpaired `-e` five lines either side of itself. The same helper the
+    // block-finder uses, so one rule about what a quote hides.
+    if (READER_CALL_RE.test(stripStringsAndExpansions(line))) return true;
   }
   return false;
 }
@@ -390,7 +466,7 @@ function scanSource(src: string, fileLabel: string): { hits: RawHit[]; violation
     const poolsVars = discoverPoolsVars(block);
     for (const hit of findExistenceHits(block, poolsVars)) {
       hits.push(hit);
-      if (hasNearbyL(block, hit)) continue;
+      if (hasPairedL(block, hit)) continue;
       if (isExemptViaReader(block, hit)) continue;
       violations.push({
         file: fileLabel,
@@ -411,22 +487,68 @@ function scanFile(filePath: string, fileLabel: string): { hits: RawHit[]; violat
 // The guard itself, against the real files.
 // ---------------------------------------------------------------------------
 
+/** Every top-level function this scan considers pools-relevant, in file
+ *  order — the "where it looked" half of guarding the guard. */
+function poolsBlocks(filePath: string): string[] {
+  const lines = readFileSync(filePath, 'utf8').split('\n');
+  return findFunctionBlocks(lines).filter(isPoolsRelevantBlock).map((b) => b.name);
+}
+
+// THE PINNED SITES. Measured, not asserted: each entry is `<function>: -e
+// <subject>`, and the list is what the scan reports today. Changing either
+// file's pools code is expected to change these — update them WITH the change
+// and say why in the commit, which is the point: the set moves visibly or not
+// at all.
+const CCD_SITES: string[] = [
+  // The reader's two subjects, each decided by TWO statements since the
+  // same-statement pairing landed: "neither there nor a link" (untagged) and
+  // "not there but a link" (unreadable).
+  '_project_pool_state: -e POOLS_DIR',
+  '_project_pool_state: -e POOLS_DIR',
+  '_project_pool_state: -e f',
+  '_project_pool_state: -e f',
+];
+const DOCTOR_SITES: string[] = [
+  '_check_pools: -e dir',
+  '_check_pools: -e f',
+];
+// `cmd_ws_add` and `cmd_project_pool` are pools-relevant and contribute NO
+// hits — the first never tests a pools path, the second decides from
+// `_project_pool_state` instead. Naming them here is the difference between
+// "the scan found two things" and "the scan read these three functions and
+// two of them hold no existence test at all".
+const CCD_BLOCKS: string[] = ['_project_pool_state', 'cmd_ws_add', 'cmd_project_pool'];
+// One function in the doctor touches a pools path at all. `_check_graphify-path`
+// is now blocked out too (the hyphen fix) but is not pools-relevant, so it
+// never reaches this list — the fixture test for a hyphenated name is what
+// measures that the fix works, not this pin.
+const DOCTOR_BLOCKS: string[] = ['_check_pools'];
+
 describe('D-1848: a pools-path existence test must pair -e with -L, or defer to _project_pool_state', () => {
   const ccdResult = scanFile(CCD_PATH, 'ccd/ccd');
   const doctorResult = scanFile(DOCTOR_PATH, 'ccd/ccrc-doctor-checks');
 
-  it('guards the guard: found at least 2 qualifying pools existence tests in ccd/ccd', () => {
-    expect(
-      ccdResult.hits.length,
-      'the extraction matched zero pools-path existence tests in ccd/ccd — it is not measuring anything',
-    ).toBeGreaterThanOrEqual(2);
+  // Line numbers move with every edit above them and are deliberately NOT
+  // pinned; the function and the subject are what identify a site.
+  const siteSet = (r: { hits: RawHit[] }): string[] =>
+    r.hits.map((h) => `${h.func}: -e ${h.subject}`).sort();
+
+  it('guards the guard: ccd/ccd is scanned at exactly the sites this file claims', () => {
+    expect(siteSet(ccdResult)).toEqual(CCD_SITES);
   });
 
-  it('guards the guard: found at least 2 qualifying pools existence tests in ccrc-doctor-checks', () => {
-    expect(
-      doctorResult.hits.length,
-      'the extraction matched zero pools-path existence tests in ccrc-doctor-checks — it is not measuring anything',
-    ).toBeGreaterThanOrEqual(2);
+  it('guards the guard: ccrc-doctor-checks is scanned at exactly the sites this file claims', () => {
+    expect(siteSet(doctorResult)).toEqual(DOCTOR_SITES);
+  });
+
+  it('guards the guard: every pools-relevant function in both files was actually blocked out', () => {
+    // The set above says where HITS were found; this says where the scan
+    // LOOKED. A function that stops being recognised as a block (a rename the
+    // start pattern cannot match, a `}` that stops being bare) would empty
+    // its own hits AND drop out of here, and the two assertions fail
+    // together rather than one of them passing quietly.
+    expect(poolsBlocks(CCD_PATH)).toEqual(CCD_BLOCKS);
+    expect(poolsBlocks(DOCTOR_PATH)).toEqual(DOCTOR_BLOCKS);
   });
 
   it('ccd/ccd: every pools-path -e is paired with -L or deferred to _project_pool_state', () => {
@@ -479,7 +601,10 @@ describe('D-1848 guard-the-guard: detector behaviour on synthetic fixtures', () 
     expect(violations).toEqual([]);
   });
 
-  it('accepts -e paired with -L on the line immediately after', () => {
+  it('REFUSES -L on the line after — the window that an inert neighbour satisfied', () => {
+    // This exact source was ACCEPTED until fix round 7, and `ccd/ccd`'s reader
+    // was written in this shape. The `-L` decides a different statement from
+    // the `-e`, so nothing ties them together but adjacency.
     const src = [
       '_fixture_reader() {',
       '  if [[ ! -e "$POOLS_DIR" ]]; then',
@@ -488,7 +613,96 @@ describe('D-1848 guard-the-guard: detector behaviour on synthetic fixtures', () 
       '  fi',
       '}',
     ].join('\n');
-    expect(scanSource(src, 'fixture').violations).toEqual([]);
+    expect(scanSource(src, 'fixture').violations.length).toBe(1);
+  });
+
+  it('REFUSES an inert -L parked above the test — the demonstrated way to silence the old window', () => {
+    const src = [
+      '_fixture_reader() {',
+      '  local f="$POOLS_DIR/$1"',
+      '  [[ -L "$f" ]] && :',
+      '  if [[ ! -e "$f" ]]; then',
+      '    echo untagged; return 0',
+      '  fi',
+      '}',
+    ].join('\n');
+    const { violations } = scanSource(src, 'fixture');
+    expect(violations.length).toBe(1);
+    expect(violations[0]!.text).toContain('-e "$f"');
+  });
+
+  it('accepts -e and -L in ONE statement, both spellings the two files use', () => {
+    const src = [
+      '_fixture_reader() {',
+      '  local f="$POOLS_DIR/$1"',
+      '  [[ ! -e "$f" && ! -L "$f" ]] && { echo untagged; return 0; }',
+      '  [ ! -e "$POOLS_DIR" ] && [ ! -L "$POOLS_DIR" ] && return 1',
+      '}',
+    ].join('\n');
+    const { hits, violations } = scanSource(src, 'fixture');
+    expect(hits.length).toBe(2);
+    expect(violations).toEqual([]);
+  });
+
+  it('scans a HYPHENATED function name — the shape ccrc-doctor-checks already ships', () => {
+    const src = [
+      '_check_pools-parent() {',
+      '  local f="$POOLS_DIR/$1"',
+      '  [ -e "$f" ] || continue',
+      '}',
+    ].join('\n');
+    const { hits, violations } = scanSource(src, 'fixture');
+    expect(hits.length).toBe(1);
+    expect(hits[0]!.func).toBe('_check_pools-parent');
+    expect(violations.length).toBe(1);
+  });
+
+  it('scans the `test` COMMAND, not only bracketed expressions', () => {
+    const src = [
+      '_fixture_reader() {',
+      '  local f="$POOLS_DIR/$1"',
+      '  if test -e "$f"; then echo tagged; fi',
+      '}',
+    ].join('\n');
+    const { hits, violations } = scanSource(src, 'fixture');
+    expect(hits.length).toBe(1);
+    expect(violations.length).toBe(1);
+  });
+
+  it('accepts a `test -e` paired with `test -L` in the same statement', () => {
+    const src = [
+      '_fixture_reader() {',
+      '  local f="$POOLS_DIR/$1"',
+      '  test -e "$f" || test -L "$f" || continue',
+      '}',
+    ].join('\n');
+    const { hits, violations } = scanSource(src, 'fixture');
+    expect(hits.length).toBe(1);
+    expect(violations).toEqual([]);
+  });
+
+  it('never mistakes a word ENDING in test, or a variable named test_dir, for the builtin', () => {
+    const src = [
+      '_fixture_latest() {',
+      '  local f="$POOLS_DIR/$1" latest="-e $f" test_dir="-e $f"',
+      '  echo "$latest $test_dir"',
+      '}',
+    ].join('\n');
+    expect(scanSource(src, 'fixture').hits.length).toBe(0);
+  });
+
+  it('REFUSES a QUOTED mention of _project_pool_state as the defer exemption', () => {
+    // A sentence about the reader is not a call to it. This source was
+    // accepted until fix round 7.
+    const src = [
+      'cmd_fixture_clear() {',
+      '  die "_project_pool_state answered untagged, so nothing to clear"',
+      '  if [[ -e "$POOLS_DIR/$1" ]]; then',
+      '    rm -f -- "$POOLS_DIR/$1"',
+      '  fi',
+      '}',
+    ].join('\n');
+    expect(scanSource(src, 'fixture').violations.length).toBe(1);
   });
 
   it('accepts a bare -e that sits close to a real _project_pool_state call (deferred decision)', () => {

