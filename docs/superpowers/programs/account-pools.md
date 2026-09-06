@@ -310,6 +310,40 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   are now pinned rather than whichever one the fixture happened to trip. D-1798's entry names the coordinator
   as the source of the wrong claim; a ledger that hides where a claim came from teaches nothing.
 
+- **D-1848 (wave 2a, 2026-09-06 17:54 UTC) — a CLASS number, not a third instance, and the framing was ruled deliberately.**
+  `[ -e "$path" ]` is FALSE for a dangling symlink and for a symlink loop, so `! -e` reads as ABSENCE when it
+  is not. In ONE wave that was written independently into THREE files by three different dictated blocks: the
+  reader (D-1744), the writer's `--clear` (D-1847), and the doctor's `_check_pools` (found by Task 8's review).
+  **Ruled: number the RULE.** The two earlier calls this program made — D-1742's round 2, D-1847's third shape
+  — were "one finding, several shapes, one site". This is one rule, three independent sites, three authors. A
+  third instance number would sit in the ledger looking like a third bug, and the next reader would fix a
+  fourth `-e` without seeing it was the same mistake. D-1744 and D-1847 remain as its worked examples.
+  **The rule, in the worker's words:** a bare `-e` may only be used where "absent" and "present but
+  unresolvable" are handled IDENTICALLY — and in this design they never are, because absent means
+  UNCONSTRAINED and unresolvable means REFUSE. So `-e` must be paired with `-L`, or the question asked of
+  `_project_pool_state`, the box's authority.
+  **Required: SHIP THE SCAN.** The rule is greppable, and this repo's doctrine is that a comment is a request
+  while a red suite is a mechanism. A test reading `ccd/ccd` and `ccd/ccrc-doctor-checks` that requires every
+  `-e` on a pools path to be paired with `-L` or replaced by a reader call turns D-1848 from a lesson into a
+  gate. Without it the class number is only a better-written comment. Red-first, by mutating a pairing away.
+  **The doctor instance is the worst of the three and the entry says so.** Reproduced: a dangling `pools/`
+  makes the doctor print `PASS pools: no project pools tagged … every project is unconstrained` on a box where
+  the reader answers `unreadable` for EVERY project — the inverse of the truth, in the diagnostic surface, at
+  the moment an operator consults it because nothing works. The other two fail toward a wrong ACTION; this one
+  actively reassures.
+- **A distinct sub-shape of the comment habit (2026-09-06 17:54 UTC): CROSS-FILE claims are as unmeasured as cross-wave ones.**
+  `ccd/ccd` named "the doctor (Task 8's `pools-unlistable`)" as already agreeing with the reader; the doctor
+  did not. That is not the tense habit — it makes no claim about a later wave — it was simply wrong when
+  written, about a SIBLING file in the SAME wave. **A claim about any file other than the one you are editing
+  is unmeasured until you open that file.** And as with every instance so far, the false one was the
+  reassuring one.
+- **The twelve comment overclaims split in two, and the halves have different causes (2026-09-06 17:54 UTC).** Ones that were
+  wrong when written are the tense habit (dictated text precedes the code). The nine-site sweep Task 9 carries
+  is the other half: claims TRUE when written that ripened into falsehood as Tasks 2, 5 and 8 landed. That is
+  not an author error at all — it is the absence of anything that re-checks prose when the code beneath it
+  moves. **Carried to wave 2b and wave 3**, which land machinery half a dozen of this wave's comments describe
+  in advance.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
