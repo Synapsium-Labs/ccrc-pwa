@@ -280,6 +280,36 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   structural — write dictated comments in the obligation tense by default and let the wave that lands the
   machinery flip them — not more care. **Carried to wave 2b, whose plan dictates comments the same way.**
 
+- **THE PROGRAM'S SHARPEST LESSON SO FAR (2026-09-06 16:46 UTC), from wave 2a's worker, adopted in its words:** *a false
+  success is not fixed by choosing a better PREDICATE, nor even by deciding from the right AUTHORITY, until
+  the ACT's result is measured against that same authority.* Three rungs, discovered one shape at a time in
+  D-1847: `-e` was the wrong predicate (shape 1); `$oldstate` was the right authority and still only chose the
+  right ACTION (shape 2); and `rm -f` returns 0 for a real removal, for ENOTDIR through a regular file at
+  `$POOLS_DIR`, and for ENOENT through a dangling symlink there — **measured, three cases one exit code** — so
+  the RESULT was still inferred from a status that cannot carry it (shape 3). Remedy: re-measure with
+  `_project_pool_state` after the act and refuse unless it answers what was asked. **Carried to wave 2b and
+  wave 3**, both of which ship write paths.
+  I also required the ladder be applied to the verb's SET arm or its exemption argued in the entry: its
+  `mkdir -p` / `printf` / `_plat_mv_notdir` chain each report failure honestly and I could construct no defect,
+  but the third rung is about the exit code meaning "the state you asked for now obtains", which today means
+  "three syscalls returned 0". An unexamined asymmetry between two arms of one verb is where the next shape
+  hides.
+- **D-1847 extended, not split (2026-09-06 16:46 UTC).** The worker asked whether shape 3 warranted its own number, since the
+  mechanism differs (`-f` swallowing an error versus `-e` being false). **Ruled: extend.** Same defect, same
+  verb, same act, found by the review OF its own fix — and this is the identical call as D-1742's round 2,
+  already the ledger's standing shape. Splitting would tell a future reader three bugs were found where one
+  defect had three shapes and taught one lesson.
+- **D-1798's lock claim was MINE and it was wrong (2026-09-06 16:46 UTC).** I measured `swap --cross-pool <id> <w>` with a
+  session id that is not a roster id, watched `_is_valid_wrapper` refuse the shifted target, and wrote
+  "refused by `_is_valid_wrapper`" into mail 236 as a general mechanism claim — one measurement generalised
+  into a ledger sentence, in the same mail that told the worker not to do that. The worker inherited it in good
+  faith and its round-2 re-reviewer caught it. **Corrected:** on the swap arm the flag lands in the `id` slot,
+  which is never wrapper-validated; the refusal comes from `_is_valid_wrapper` only when the shifted TARGET is
+  not a roster id, and otherwise from `no registry for '--cross-pool'`. The conclusion stands — every path
+  exits nonzero, the 502 is loud, the early token is safe — but by a CONJUNCTION, not one lock, so both paths
+  are now pinned rather than whichever one the fixture happened to trip. D-1798's entry names the coordinator
+  as the source of the wrong claim; a ledger that hides where a claim came from teaches nothing.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
