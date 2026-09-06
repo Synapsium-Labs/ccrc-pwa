@@ -1,9 +1,10 @@
 // `shared/poolrule.ts` — the TypeScript spelling of design §5.2's one rule,
-// driven through `POOL_RULE_CASES`, the same table `ccd`'s `_pool_ok` is driven
-// through. Two implementations, one table: either drifting reds its own suite
-// against the same rows, which is what "spelled once per language" has to mean
-// when the languages cannot share code. The PWA is not a third: `splitByPool`
-// calls this function.
+// driven through `POOL_RULE_CASES` by this suite alone today. `ccd`'s bash
+// `_pool_ok` will be driven through the same table once wave 2a lands it —
+// two implementations, one table, so either drifting will red its own suite
+// against the same rows, which is what "spelled once per language" has to
+// mean when the languages cannot share code. The PWA will not be a third:
+// wave 4's `splitByPool` is to call this function rather than re-deriving it.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,10 +20,10 @@ describe('poolRule over the shared truth table', () => {
   });
 
   it('a mismatch carries BOTH names, so no caller re-derives them', () => {
-    // The 409 body, `ccd`'s die text and the PWA's confirm sentence all name the
-    // two pools. Carrying them on the verdict is what stops three callers each
-    // looking them up again — and disagreeing when one of them looks in the
-    // wrong roster copy.
+    // Wave 3's 409 body, wave 2a's `ccd` die text and wave 4's PWA confirm
+    // sentence will each need to name the two pools. Carrying them on the
+    // verdict is what will stop three callers each looking them up again —
+    // and disagreeing when one of them looks in the wrong roster copy.
     expect(poolRule('pool-a', { state: 'tagged', name: 'pool-b' })).toEqual({
       ok: false, reason: 'pool-mismatch', accountPool: 'pool-a', projectPool: 'pool-b',
     });
@@ -53,7 +54,7 @@ describe('the table this drives is a real table', () => {
   // narrowed fixture list passes everything, so THIS goes red rather than every
   // assertion above going quietly vacuous.
   it('has a floor of rows, unique names, and covers every project state', () => {
-    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(12);
+    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(13);
     expect(new Set(POOL_RULE_CASES.map((c) => c.name)).size).toBe(POOL_RULE_CASES.length);
     expect([...new Set(POOL_RULE_CASES.map((c) => c.expect))].sort())
       .toEqual(['mismatch', 'serve', 'undecidable']);
@@ -80,6 +81,12 @@ describe('the table this drives is a real table', () => {
     // Both directions plus the prefix row: an inverted comparison and a
     // `startsWith` are the two mutations one mismatch row alone survives.
     expect(POOL_RULE_CASES.filter((c) => c.expect === 'mismatch').length).toBeGreaterThanOrEqual(3);
+    // Two DIFFERENT names must agree-and-serve, not one. A rule that hard-coded
+    // a single pool passes `same-pool-a` alone, and the floor above cannot see
+    // one row leaving — so the pair is counted rather than assumed.
+    expect(POOL_RULE_CASES.filter((c) =>
+      c.expect === 'serve' && c.project.state === 'tagged' && c.accountPool !== null).length,
+      'the same-pool pair has lost a row').toBeGreaterThanOrEqual(2);
     // Both untagged disjuncts, separately — one of them alone leaves the other
     // deletable.
     expect(POOL_RULE_CASES.some((c) => c.accountPool === null && c.project.state === 'tagged')).toBe(true);
@@ -126,7 +133,7 @@ describe('shared/poolrule.ts is the pure L0 module its ring requires', () => {
       expect(line, `poolrule.ts takes a VALUE import: ${line.trim()}`).toMatch(/^\s*import\s+type\b/);
     }
     expect(code(), 'poolrule.ts imports a node builtin — the PWA bundles this file')
-      .not.toMatch(/from\s+'node:/);
+      .not.toMatch(/from\s+['"]node:/);
   });
 
   it('has no clock, no filesystem, no reply', () => {

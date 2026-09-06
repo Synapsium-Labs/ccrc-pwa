@@ -15,6 +15,7 @@
 // share code across the language boundary, so it shares that same table
 // instead. Nothing outside this wave imports this function yet; every consumer
 // named in this file is an obligation on the wave that names it, not a report.
+// (D-1664 — plan-time refinement of spec §5.2/§8.)
 //
 // PRECEDENCE IS THE POINT, and the order below is not arbitrary:
 //
