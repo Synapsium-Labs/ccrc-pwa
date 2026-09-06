@@ -3933,6 +3933,18 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
     # the two have completely different remedies — enable a lane versus fix one
     # file's bytes. Re-reading the state costs one `cat` on a path that is
     # already refusing.
+    #
+    # THIS IS A SECOND READER OF ONE FACT, FREE TO DISAGREE with the first
+    # (`_ws_least_loaded`'s own `_project_pool_state` call, above) — the exact
+    # shape `cmd_project_pool --clear` deliberately avoids by reading once and
+    # deciding from `$oldstate`. Here the race is ACCEPTED rather than closed:
+    # if the tag changes between the two reads, this message can name a state
+    # that did not cause the empty (a chmod landing between them turns "every
+    # in-pool lane is at ceiling" into `tag:unreadable`), and in the reverse
+    # race the account loop can fall through with every arm passing and print
+    # an EMPTY reason list. Both are harmless because this path is already
+    # refusing either way — the second read only picks the WORDING of a
+    # refusal that has already happened, never whether one happens.
     local w why="" pps ppn=""
     pps=$(_project_pool_state "$project")
     case "$pps" in "named "*) ppn=${pps#named } ;; esac
@@ -3948,6 +3960,19 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         # `pps` is `untagged` or `named …` in this branch, so `_pool_ok` can
         # only answer 0 or 1 here, and an account reported with `pool=` is
         # always a TAGGED one — the empty answer never reaches this string.
+        #
+        # THE QUOTING HERE IS UNREACHABLE-EQUIVALENT, NOT UNTESTED — do not
+        # read a missing mutation kill as missing coverage, and do not
+        # "simplify" these quotes away because of it. Measured: unquoting
+        # `_pool_ok $w $pps` at this call site alone leaves the suite
+        # 121/121 green. The reason is `_account_ok` (`[[ -x wrapper ]] &&
+        # _lane_enabled`) is exactly what the two `elif` arms above already
+        # mirror, so only a genuinely wrong-pool account ever reaches this
+        # third arm — and there, rc 1 (mismatch) and the word-split rc 2
+        # (undecidable, from an unquoted multi-word `$pps`) both fall into
+        # this SAME `elif ! …` branch and print the SAME string. Site 1
+        # (`_ws_least_loaded`'s loop) is the one an unquoted `$2` actually
+        # changes, and stays quoted for the reason stated there.
         elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
         fi
       done

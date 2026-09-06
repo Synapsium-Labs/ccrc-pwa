@@ -16,12 +16,11 @@
 //     REAL generated `accounts.sh`, which is the only thing that can prove the
 //     generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { WS_ADD } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => {
@@ -274,16 +273,18 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
   it('names the pool, each accounts own first failing predicate, and the remedies', () => {
     h.makeRepo('demo');
     tag('demo', 'pool-b');
+    disable('claude');       // BOTH disabled AND wrong-pool — see assertion below
     disable('claude-b');
     disable('claude-d');
     const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('in pool pool-b');
     // FIRST FAILING PREDICATE IN LOOP ORDER, mirroring `_ws_least_loaded`'s own
-    // order: missing, then disabled, then pool. An account that is BOTH
-    // disabled and in the wrong pool is reported as disabled, because that is
-    // the check that ran first and the one the operator fixes first.
-    expect(r.stderr).toContain('claude:pool=pool-a');
+    // order: missing, then disabled, then pool. `claude` is BOTH disabled and
+    // in the wrong pool, and is reported as disabled — the check that ran
+    // first and the one the operator fixes first, never the pool arm.
+    expect(r.stderr).toContain('claude:disabled');
+    expect(r.stderr).not.toContain('claude:pool=pool-a');
     expect(r.stderr).toContain('claude-a:pool=pool-a');
     expect(r.stderr).toContain('claude-b:disabled');
     expect(r.stderr).toContain('claude-d:disabled');
