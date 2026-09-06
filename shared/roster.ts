@@ -233,7 +233,13 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /**
  * The pool-name charset — deliberately `ID_RE`'s exact shape, and for `ID_RE`'s
- * exact reason. A pool name is embedded UNQUOTED in a generated bash `case` arm
+ * exact reason. That sentence is an ASSERTION, not a claim on trust:
+ * `server/test/gen-accounts.test.ts` requires `ID_RE`'s literal, extracted from
+ * this file's text, to equal this object's `.source` and `.flags`. A later wave
+ * with a reason to diverge the two changes that sentence and that assertion in
+ * one act — the pin exists to make a divergence deliberate, not to forbid one.
+ *
+ * A pool name is embedded UNQUOTED in a generated bash `case` arm
  * (`_ccrc_pool`, `shared/generate.mjs`) and printed with `echo`: a leading
  * lowercase LETTER is what makes that `echo` safe, since bash's builtin
  * swallows a first argument made entirely of `-` followed by `n`/`e`/`E` and
@@ -241,24 +247,29 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * `[a-z0-9-]` then leaves no room for whitespace, which `ccd` would word-split
  * when it reads the value back through an unquoted `$( … )`.
  *
- * EXPORTED, unlike `ID_RE`, because something outside this file IMPORTS the
- * object today: `server/test/roster.test.ts` value-imports it to pin the
- * grammar's BOUNDARY — the 32-character cap and the shapes just outside it —
- * which is an assertion only a reader of the one definition can make. Two more
- * importers are coming: the project-pool route (wave 3) will validate a request
- * body against this object, and wave 2a's parity scan will read
- * `POOL_NAME_RE.source` to pin `ccd`'s own hand-typed `POOL_NAME_RE=` bash
- * literal equal to it by text extraction.
+ * EXPORTED, unlike `ID_RE`, because things outside this file IMPORT the object
+ * today: `server/test/roster.test.ts` value-imports it to pin the grammar's
+ * BOUNDARY — the 32-character cap and the shapes just outside it — and
+ * `server/test/gen-accounts.test.ts` value-imports it to hold the bare-`node`
+ * mirror's hand-copied literal equal to this one, both being assertions only a
+ * reader of the one definition can make. One more importer is coming: the
+ * project-pool route (wave 3) will validate a request body against this object.
+ * Wave 2a's parity scan will read `POOL_NAME_RE.source` the same way, to pin
+ * `ccd`'s own hand-typed `POOL_NAME_RE=` bash literal equal to it.
  *
- * The bare-`node` mirror (`shared/roster-json.mjs`) is NOT one of those readers
- * and is NOT why this is exported: it hand-COPIES the literal, because a bare
- * `node` cannot import TypeScript (that file's own header says so) — exactly
- * the relationship it also has with the module-PRIVATE `ID_RE`, so it cannot
- * be what distinguishes the two. A copy that cannot import cannot be held equal
- * by the compiler either, which is why the two are held equal by BEHAVIOUR
- * instead: `server/test/gen-accounts.test.ts`'s REJECT table drives the same
- * malformed pool names through the CLI and the parser and requires both to
- * refuse.
+ * The bare-`node` mirror (`shared/roster-json.mjs`) is NOT why this is exported:
+ * it hand-COPIES the literal, because a bare `node` cannot import TypeScript
+ * (that file's own header says so) — exactly the relationship it also has with
+ * the module-PRIVATE `ID_RE`, so it cannot be what distinguishes the two. A copy
+ * that cannot import cannot be held equal by the compiler either, so it is held
+ * equal by TEXT EXTRACTION: `gen-accounts.test.ts` lifts the literal out of that
+ * file's `const POOL_NAME_RE = /…/;` declaration and requires it to equal THIS
+ * object's `.source` and `.flags`, and reds by name if it finds no literal to
+ * lift at all. That is D-1742's second round. Its first concluded that the
+ * REJECT table's BEHAVIOUR held the two equal; the refutation was three
+ * tail-charset widenings of the mirror that every row of that table survived.
+ * The table remains the behavioural half and is not superseded — text equality
+ * proves the two files hold the same pattern, never that either side applies it.
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 

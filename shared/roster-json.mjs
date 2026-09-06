@@ -117,19 +117,40 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *
  *  WHAT HOLDS THE THREE EQUAL IS NOT THE SAME MECHANISM IN EACH CASE, and saying
  *  so matters more than the tidy sentence this comment used to carry
- *  (D-1742). `ccd`'s bash literal will be pinned against
+ *  (D-1742). `ccd`'s bash literal WILL be pinned against
  *  `POOL_NAME_RE.source` by TEXT EXTRACTION — a scan that reads the bash file —
- *  once wave 2a's parity scan lands. THIS copy is pinned by BEHAVIOUR instead:
- *  no text scan pins a regex literal in a `.mjs` (`single-definition.test.ts`
- *  filters `/\.tsx?$/`, wave 2a's parity test reads `ccd/ccd` and
- *  `ccrc-doctor-checks`, and `server/test/source-bytes.test.ts` does walk this
- *  file — but only for control bytes, not for grammar), so what measures the
- *  agreement is `server/test/gen-accounts.test.ts`'s REJECT table, which drives
- *  the same malformed pool names — empty, uppercase, non-string, shell
- *  metacharacter, written `null`, a leading hyphen or digit, an embedded
- *  underscore, and one character past the cap — through the CLI and the parser
- *  and requires both to refuse. A grammar drift big enough to matter reds a row
- *  there. Read that table; it is the census. */
+ *  once wave 2a's parity scan lands; nothing reads `ccd/ccd` for this yet.
+ *
+ *  THIS copy is pinned by text extraction too, as of D-1742's SECOND ROUND:
+ *  `server/test/gen-accounts.test.ts`'s last block reads this file and
+ *  `shared/roster.ts` as text, lifts the three literals this file mirrors —
+ *  `POOL_NAME_RE`, `ID_RE` and `LABEL_UNSAFE_RE` — out of their
+ *  `const NAME = /…/;` declarations, and requires each to equal the parser's
+ *  (against the IMPORTED object for this one, since it is exported, so at least
+ *  one row measures the regex the parser actually runs rather than two strings
+ *  agreeing about nothing). It had to be written for these three BY NAME: no
+ *  generic scan reaches a regex literal in a `.mjs` — `single-definition.test.ts`
+ *  filters `/\.tsx?$/`, and `server/test/source-bytes.test.ts` does walk this
+ *  file, but only for control bytes, never for grammar.
+ *
+ *  D-1742's first round concluded that BEHAVIOUR held the copies equal, and that
+ *  conclusion was refuted: three tail-charset widenings of this literal —
+ *  `[a-zA-Z0-9-]`, `[a-z0-9.-]`, `[a-z0-9+-]` — each survived every row of the
+ *  REJECT table, because no row there paired a legal first character with an
+ *  illegal tail one. Each of those makes this file LAXER than `parseRoster`,
+ *  which is the one direction this file's header forbids. Rows are the wrong
+ *  mechanism for a charset: the class of widenings is open, and a row only ever
+ *  pins the character it names.
+ *
+ *  The REJECT table is NOT superseded and NOT redundant. Text equality proves
+ *  the two files hold the same PATTERN and says nothing about whether either
+ *  side APPLIES it — a `checkAccount` that dropped the `.test` call below would
+ *  leave every extraction assertion green. The table is the behavioural half: it
+ *  drives malformed pool names through the CLI and the parser and requires both
+ *  to REFUSE, it is the only thing covering the parts of this gate that are no
+ *  regex at all (the type check, the refusal of a written `null`), and its
+ *  over-the-cap and shell-metacharacter rows run the literal end to end through
+ *  a real subprocess. Read both; neither alone is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);

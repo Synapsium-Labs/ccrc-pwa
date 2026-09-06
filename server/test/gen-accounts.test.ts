@@ -12,7 +12,7 @@
 //
 // A hand-copied validator is exactly the drift this stage exists to kill, and
 // a comment asking the next author to keep the two in step is not a
-// mechanism. This is the mechanism. Two directions, both of them cheap:
+// mechanism. This is the mechanism. Three directions, all of them cheap:
 //
 //  - ACCEPT: for every roster both sides consider valid, the CLI's stdout
 //    must equal `markGenerated(generateAccountsSh(parseRoster(json)))`
@@ -24,6 +24,11 @@
 //    actually protects the fleet: a roster the CLI accepted and the server
 //    rejected would deploy a box whose `ccd` works and whose `ccrc.service`
 //    crash-loops every three seconds behind a green deploy.
+//  - TEXT: the three regex literals `shared/roster-json.mjs` hand-copies out
+//    of `shared/roster.ts` are lifted out of BOTH files and required to be
+//    equal, character for character. The last block in this file, added in
+//    D-1742's second round; its header says why the two directions above
+//    cannot do that job.
 //
 // The asymmetry the CLI's own header claims — it may be stricter, never laxer
 // — is what makes the REJECT list the load-bearing one. Every case below is a
@@ -35,7 +40,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseRoster } from '../../shared/roster.js';
+import { parseRoster, POOL_NAME_RE } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -288,14 +293,24 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a pool name starting with a hyphen — what the leading-letter rule exists for', roster(acct({ pool: '-pool' }))],
     ['a pool name starting with a digit', roster(acct({ pool: '1pool' }))],
     ['a pool name containing an underscore', roster(acct({ pool: 'pool_a' }))],
-    // The CAP, measured rather than assumed (D-1742). No text scan
-    // pins a regex literal in a `.mjs`, so this table is the only thing holding the
-    // two copies of the grammar equal: 33 lowercase letters are legal under both
-    // spellings of the charset and illegal under only one of the lengths, so an
-    // over-cap name is the row that catches a widened `{0,31}` (against `{0,63}`)
-    // — beside the rows above that catch a lost leading-letter anchor, an
-    // admitted underscore and an uppercase letter.
+    // The CAP, driven end to end rather than assumed (D-1742). What holds the
+    // two copies of the LITERAL equal is the text-extraction block at the end of
+    // this file (D-1742's second round) — that is the primary mechanism, and the
+    // only one that can speak about a whole charset at once. This row is the
+    // other direction, and is not superseded by it: 33 lowercase letters are
+    // legal under every spelling of the charset and illegal only under the
+    // length, so it drives the cap through a real subprocess and proves the
+    // mirror CONSULTS its literal rather than merely holding one. Text equality
+    // could never tell you that.
     ['a pool name one character past the 32-character cap', roster(acct({ pool: 'a'.repeat(33) }))],
+    // A legal first character followed by an illegal TAIL character — the shape
+    // no row in this table had until now, and the gap that let three tail-charset
+    // widenings of the mirrored literal survive the whole block (D-1742, second
+    // round). Kept as a reader's worked example of what the grammar refuses, NOT
+    // as the guard: it catches `[a-zA-Z0-9-]` and neither `[a-z0-9.-]` nor
+    // `[a-z0-9+-]`, because a row only ever pins the character it names and the
+    // class of widenings is open. The extraction block below is the guard.
+    ['a pool name with an uppercase letter in the TAIL', roster(acct({ pool: 'aCorp' }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],
     ['two accounts with the same id', roster(acct(), acct({ exec: { kind: 'generated' } }))],
@@ -349,5 +364,116 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     expect(r.code).toBe(2);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('usage:');
+  });
+});
+
+// ── The third direction: the LITERALS themselves, held equal as TEXT ────────
+//
+// The two blocks above are BEHAVIOURAL, and behaviour turned out not to hold
+// the grammar equal — D-1742's first round concluded that it did, and that
+// conclusion was refuted. Three tail-charset widenings of
+// `shared/roster-json.mjs`'s mirrored `POOL_NAME_RE` — `[a-zA-Z0-9-]`,
+// `[a-z0-9.-]` and `[a-z0-9+-]` — each SURVIVE every row of the REJECT table,
+// measured. The reason is structural rather than an oversight in one row: every
+// pool row there fails on its FIRST character (`Corp`, `-pool`, `1pool`), on
+// length (33), on type (`7`, a written `null`), or on a character none of the
+// three widenings admit (`a$(id)`, `pool_a`). Not one paired a legal first
+// character with an illegal tail one, so the entire tail charset was unpinned —
+// and each widening makes the mirror LAXER than `parseRoster`, the one
+// direction `shared/roster-json.mjs`'s own header forbids and the exact shape
+// that shipped D-1663's gap behind a green deploy.
+//
+// Rows are the wrong mechanism for this, which was measured too: the `aCorp`
+// row above catches the A–Z widening and neither of the other two. A row pins
+// the character it names; the class of tail widenings is open. Text equality is
+// a claim about the whole charset at once, so that is what this block makes.
+//
+// WHAT THIS BLOCK DOES NOT PIN: behaviour. Two files can hold the same pattern
+// while one of them never calls `.test` on it, and every assertion here would
+// still be green. The REJECT table is what refuses that, and it also covers
+// every part of the `pool` gate that is not a regex at all — the type check and
+// the refusal of a written `null`. Neither block supersedes the other; a reader
+// deciding whether a drift is caught has to read both.
+//
+// These three literals BY NAME, because no generic scan reaches them:
+// `single-definition.test.ts`'s `sources()` filters `/\.tsx?$/`, so a `.mjs` is
+// invisible to it, and `server/test/source-bytes.test.ts` does walk that file
+// but only for control bytes, never for grammar. `ccd`'s coming bash copy of
+// `POOL_NAME_RE` is wave 2a's parity scan to pin, not this one's.
+describe('shared/roster-json.mjs hand-copies three regex literals, and they equal the parser\'s', () => {
+  const ROSTER_TS = path.join(ccrcRoot, 'shared', 'roster.ts');
+  const ROSTER_MJS = path.join(ccrcRoot, 'shared', 'roster-json.mjs');
+
+  /**
+   * Lifts `const NAME = /…/;` — or `export const NAME = /…/;` — out of a file's
+   * TEXT and returns the literal's source and flags.
+   *
+   * The `throw` is this scan's VACUITY TRIPWIRE, and it is the most important
+   * line in the block. An extractor that matches nothing compares nothing, and
+   * a scan that measures nothing while reporting green is the defect this wave
+   * keeps rediscovering — D-1741 lost an entire purity guard to exactly that
+   * shape, green against a module the guard never actually read. So a renamed
+   * const, or a declaration reformatted off one line, REDS here and says which
+   * name in which file it could not find; it never falls through to comparing
+   * two empty strings.
+   */
+  function literalIn(file: string, name: string): { source: string; flags: string } {
+    const m = new RegExp(`^(?:export )?const ${name} = /(.+)/([a-z]*);$`, 'm')
+      .exec(readFileSync(file, 'utf8'));
+    if (m === null) {
+      throw new Error(
+        `the scan found no literal for ${name} in ${path.relative(ccrcRoot, file)}: nothing `
+        + 'there matches `const NAME = /…/;` on a single line, so this scan measured NOTHING. '
+        + 'Teach the extractor the new spelling, or restore the declaration — never delete the '
+        + 'row, which would leave the two copies of the grammar pinned by nothing again.',
+      );
+    }
+    return { source: m[1]!, flags: m[2]! };
+  }
+
+  /** One row per literal `shared/roster-json.mjs` hand-copies out of
+   *  `shared/roster.ts`. Three, not one: the class is the point — a mirror is a
+   *  mirror in every literal it carries — and the mechanism costs the same for
+   *  three as for one.
+   *
+   *  `POOL_NAME_RE` is exported, so its row compares the mirror against the
+   *  IMPORTED OBJECT. At least one row has to reach a runtime value, or the
+   *  whole block is two strings agreeing with each other about nothing while the
+   *  regex the parser actually runs says something else. `ID_RE` and
+   *  `LABEL_UNSAFE_RE` are module-PRIVATE and stay that way — widening a
+   *  constant's visibility to make a test easier is how a private decision
+   *  becomes an API — so their rows read `shared/roster.ts` as text. */
+  const MIRRORED = [
+    ['POOL_NAME_RE', (): { source: string; flags: string } =>
+      ({ source: POOL_NAME_RE.source, flags: POOL_NAME_RE.flags })],
+    ['ID_RE', (): { source: string; flags: string } => literalIn(ROSTER_TS, 'ID_RE')],
+    ['LABEL_UNSAFE_RE', (): { source: string; flags: string } => literalIn(ROSTER_TS, 'LABEL_UNSAFE_RE')],
+  ] as const;
+
+  it.each(MIRRORED)('%s: the mirrored literal is character-for-character the parser\'s', (name, parserSide) => {
+    expect(
+      literalIn(ROSTER_MJS, name),
+      `shared/roster-json.mjs's ${name} has drifted from shared/roster.ts's. A mirror that is `
+      + 'LAXER than the parser deploys a box whose ccd works and whose ccrc.service refuses to '
+      + 'boot on the same bytes — see that file\'s header.',
+    ).toEqual(parserSide());
+  });
+
+  // `POOL_NAME_RE`'s docstring in `shared/roster.ts` says it is "deliberately
+  // `ID_RE`'s exact shape, and for `ID_RE`'s exact reason". Nothing measured
+  // that sentence until the extractor above existed; with it, the sentence is
+  // one assertion.
+  //
+  // It exists to make a DIVERGENCE DELIBERATE, not to forbid one. The two
+  // grammars are identical today because a pool name and an account id reach the
+  // same two hazards — an unquoted bash `case` arm and an `echo` whose builtin
+  // swallows a leading `-n`/`-e`/`-E`. A later wave with a real reason to
+  // separate them changes that sentence and this assertion in the same act; the
+  // red is what stops the two drifting apart while the docstring still claims
+  // they are one shape.
+  it('the pool grammar is still ID_RE\'s exact shape, as roster.ts\'s docstring claims', () => {
+    expect(literalIn(ROSTER_TS, 'ID_RE')).toEqual({
+      source: POOL_NAME_RE.source, flags: POOL_NAME_RE.flags,
+    });
   });
 });

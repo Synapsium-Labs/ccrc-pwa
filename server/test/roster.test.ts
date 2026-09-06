@@ -167,6 +167,13 @@ describe('parseRoster', () => {
   // edit, and folding the two would be this parser narrowing a distinction it
   // received. Every remedy names the file and the grammar, because nobody
   // reading a boot refusal at 2am has this regex memorised.
+  //
+  // The grammar is INTERPOLATED from the imported object rather than typed out
+  // again: this file already value-imports `POOL_NAME_RE`, and a hand-typed
+  // fourth copy of `^[a-z][a-z0-9-]{0,31}$` would be one more spelling to keep
+  // in step — including with a remedy that widened while this string did not,
+  // which is the drift that would make the assertion pass while the remedy
+  // named a grammar the parser no longer enforces.
   it.each([
     ['an empty pool name', ''],
     ['an explicit null pool — absence is untagged, a written null is a half-edit', null],
@@ -184,7 +191,7 @@ describe('parseRoster', () => {
     } catch (e) {
       expect((e as RosterError).message).toMatch(/invalid pool/i);
       expect((e as RosterError).remedy).toContain('~/.ccrc/accounts.json');
-      expect((e as RosterError).remedy).toContain('^[a-z][a-z0-9-]{0,31}$');
+      expect((e as RosterError).remedy).toContain(POOL_NAME_RE.source);
     }
   });
 

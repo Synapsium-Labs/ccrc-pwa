@@ -204,6 +204,12 @@ describe('GET /api/accounts', () => {
   // drawn — this asserts the line is real on the wire, not just in the type.
   it('ships no launch or secrets detail to the browser', async () => {
     const { roster } = await getPayload(seedLimits({ claude: { five: 2, seven: 3 } }));
+    // The loop below is the assertion, and a loop over an empty array runs no
+    // assertion at all: a handler that shipped `roster: []` — the exact silent
+    // wire loss this file exists to catch — would pass it green. `testDeps`
+    // seeds `DEFAULT_TEST_ROSTER`, which has five accounts, so the count is a
+    // fact about the fixture and not a guess about the handler.
+    expect(roster).toHaveLength(5);
     for (const entry of roster) {
       expect(Object.keys(entry).sort()).toEqual(['hidden', 'homeAble', 'hue', 'id', 'label', 'pool']);
     }
