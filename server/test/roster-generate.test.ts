@@ -99,6 +99,10 @@ describe('generateAccountsSh', () => {
       id: 'hostile', label: 'Hostile', configDirSuffix: hostileSuffix,
       exec: { kind: 'upstream' as const }, homeAble: true,
       hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false,
+      // Required on `AccountDef` — this object is deliberately built by hand
+      // rather than parsed, so the compiler is the only thing that can ask it
+      // for every field. Untagged: this case is about `dqEscape`, not pools.
+      pool: null,
     };
     const hostileRoster = {
       version: 1 as const,
