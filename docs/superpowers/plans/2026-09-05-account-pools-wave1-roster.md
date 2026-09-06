@@ -261,7 +261,8 @@ In `AccountDef`, after `hidden: boolean;` (`:110`):
   /** The operator's optional grouping of accounts — a billing or tenancy pool.
    *  An account may serve a project when either side is untagged or the two
    *  names agree; `shared/poolrule.ts` is the one place that rule is spelled in
-   *  TypeScript, and `ccd`'s `_pool_ok` is the one place it is spelled in bash.
+   *  TypeScript, and `ccd`'s `_pool_ok` will be the one place it is spelled in
+   *  bash (wave 2a) — nothing under `ccd/` spells it yet.
    *
    *  REQUIRED on the type, with `null` as the untagged answer, so every
    *  constructor of an `AccountDef` has to say which it means. The field is
@@ -1274,7 +1275,10 @@ then append to the end of the file:
  * the TypeScript the server and the PWA both call) and `ccd`'s bash `_pool_ok`.
  * The two cannot share code across the language boundary, so they share
  * FIXTURES, exactly as `fixtures/leastLoaded.ts` already does for the placement
- * rule. If either drifts, its own suite reds against these rows.
+ * rule. Today only `poolRule` is driven through these rows; when the bash side
+ * lands (wave 2a), either drifting reds its own suite against the same rows.
+ * (Reconciled with what shipped — read `server/test/fixtures/poolRule.ts` for
+ * the authoritative text; `ef8123a4` re-tensed this paragraph in full.)
  *
  * `expect` is deliberately a THIRD vocabulary rather than either
  * implementation's own: bash answers rc 0/1/2 and TypeScript answers a
@@ -1361,8 +1365,10 @@ Create `server/test/pool-rule-core.test.ts`:
 // driven through `POOL_RULE_CASES`, the same table `ccd`'s `_pool_ok` is driven
 // through. Two implementations, one table: either drifting reds its own suite
 // against the same rows, which is what "spelled once per language" has to mean
-// when the languages cannot share code. The PWA is not a third: `splitByPool`
-// calls this function.
+// when the languages cannot share code. The PWA will not be a third: wave 4's
+// `splitByPool` is to call this function rather than re-deriving it.
+// (Reconciled with what shipped — `ef8123a4` re-tensed this header in full;
+// read `server/test/pool-rule-core.test.ts` for the authoritative text.)
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -1412,7 +1418,7 @@ describe('the table this drives is a real table', () => {
   // narrowed fixture list passes everything, so THIS goes red rather than every
   // assertion above going quietly vacuous.
   it('has a floor of rows, unique names, and covers every project state', () => {
-    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(12);
+    expect(POOL_RULE_CASES.length).toBeGreaterThanOrEqual(13);
     expect(new Set(POOL_RULE_CASES.map((c) => c.name)).size).toBe(POOL_RULE_CASES.length);
     expect([...new Set(POOL_RULE_CASES.map((c) => c.expect))].sort())
       .toEqual(['mismatch', 'serve', 'undecidable']);
@@ -1620,7 +1626,7 @@ Each of these is restored before the next.
 5. Delete four rows from `POOL_RULE_CASES` — delete the LAST four, so the two undecidable-state
    classes are the ones that go:
    Expected: FAIL — `has a floor of rows, unique names, and covers every project state`
-   (`expected 9 to be greater than or equal to 12`), and, because those four rows are also the only
+   (`expected 9 to be greater than or equal to 13`), and, because those four rows are also the only
    carriers of two other guarantees, `exercises all five verdicts the rule can produce` and
    `carries a REJECT per rule`. The floor test is the row-count guard; the other two are why "any
    four" is the wrong instruction — no four-row deletion from a 13-row table leaves the floor test
@@ -1641,6 +1647,20 @@ Expected: PASS.
 
 Run: `cd pwa && ./node_modules/.bin/tsc --noEmit -p tsconfig.json`
 Expected: exit 0. (`../shared` is in the PWA's `include`, so this is where an L0 violation in the new module surfaces for the client bundle.)
+
+> **Reconciled after this task landed (`ef8123a4`, and the final review's `c753ac80`).** Two things
+> the listings above do NOT show, because they were added after the plan was written — read the shipped
+> files, which are authoritative over this paste:
+>
+> 1. `shared/poolrule.ts`'s header ends with `(D-1664 — plan-time refinement of spec §5.2/§8.)`. Do not
+>    reintroduce a `/*` sequence anywhere in those LINE comments — that is D-1741's exact shape and it
+>    blanks the `import type` line the purity scan measures.
+> 2. `server/test/pool-rule-core.test.ts` carries a same-pool-pair count guard beside the mismatch-count
+>    assertion, and its `node:` scan is `/from\s+['\"]node:/` — widened from single quotes only, because
+>    `import type { Stats } from "node:fs";` satisfied the type-only loop AND escaped the old scan.
+>
+> The row floor is 13, not 12: a floor one below the row count let five single-row deletions red nothing,
+> `same-pool-b` among them — and that row exists to kill an implementation hard-coding one pool name.
 
 - [ ] **Step 7: Commit**
 
