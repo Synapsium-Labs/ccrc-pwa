@@ -1243,6 +1243,41 @@ _is_valid_wrapper() { local w="$1" v; for v in "${CCRC_ACCOUNTS[@]}"; do [[ "$w"
 # below that used to say `gpt`: an account that is not home-able is one a
 # session may only reach by having it as HOME.
 _is_home_able() { local w="$1" v; for v in "${CCRC_HOME_ABLE[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+# THE ACCOUNT SIDE of the pool rule. `_ccrc_pool` is generated into
+# `~/.ccrc/accounts.sh` (shared/generate.mjs) with one `case` arm per TAGGED
+# account, so its contract is "empty stdout, rc 0, for an untagged or unknown
+# id" — `_ccrc_cfg_dir`'s rule, and the caller decides what silence means.
+#
+# THE `declare -F` GUARD IS WHY A NEW ccd RUNS OVER AN OLD accounts.sh. During
+# the minutes between the roster lane and the ccd lane of an agent deploy, and
+# on any box whose roster was never regenerated, the function does not exist.
+# Under `set -uo pipefail` with no `-e`, `declare -F` on an undefined function
+# short-circuits cleanly, no array is touched, and every account reads as
+# untagged — today's behaviour, with no `command not found` on stderr and no
+# rc 127 leaking into a `$(…)` capture.
+_acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# THE RULE, spelled once in this language: an account may serve a project iff
+# the account is untagged, or the project is untagged, or the names are equal.
+#
+# THREE EXIT CODES, NOT A BOOLEAN. A boolean would fold "the tag cannot be
+# read" into one side of the answer — either silently lifting the constraint or
+# silently refusing every account — and both are wrong: when the tag is
+# undecidable, NOBODY DECIDES. Callers branch three ways. The same three
+# verdicts are `shared/poolrule.ts`'s `PoolVerdict` and are driven from one
+# fixture table (`server/test/fixtures/poolRule.ts`) in both languages.
+#
+# THE STATE IS PASSED IN, not read here: callers obtain it ONCE per decision
+# (`pps=$(_project_pool_state "$project")`) and pass the word, so a loop over
+# five candidates costs one `cat`, not five.
+_pool_ok() {   # wrapper pool-state -> 0 serve | 1 mismatch | 2 undecidable
+  local ap pp; ap=$(_acct_pool "$1")
+  case "$2" in
+    untagged)  return 0 ;;
+    "named "*) pp=${2#named } ;;
+    *)         return 2 ;;                     # unreadable | malformed: nobody decides
+  esac
+  [[ -z "$ap" || "$ap" == "$pp" ]]
+}
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # `tmux has-session` answers THREE questions with one exit status, and every
