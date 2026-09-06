@@ -494,16 +494,25 @@ describe('ccd project-pool — the writer verb', () => {
       }
     });
 
-  it('refuses --clear when $POOLS_DIR ITSELF is a regular FILE — `rm -f` swallows ENOTDIR silently (Fix round 3, Finding 6)', () => {
+  it('refuses --clear when $POOLS_DIR ITSELF is a regular FILE — GNU `rm -f` swallows ENOTDIR silently (Fix round 3, Finding 6)', () => {
     // A THIRD shape of the same false success, one level further out.
-    // `oldstate` is `unreadable` here (correctly), so round 2's guard
-    // decides to remove — but `$POOLS_DIR/$project` is not a resolvable path
-    // when $POOLS_DIR is a plain file (ENOTDIR), and `rm -f` SWALLOWS that
-    // exactly like it swallows genuine "already gone": `rm -f` returns 0
-    // either way, so trusting rm's exit code alone reports `untagged` while
-    // `_project_pool_state` still answers `unreadable`. The fix re-measures
-    // with the same reader after a successful `rm` and refuses to report
-    // success unless it agrees.
+    // `oldstate` is `unreadable` here (correctly), so round 2's guard decides
+    // to remove — but `$POOLS_DIR/$project` is not a resolvable path when
+    // $POOLS_DIR is a plain file (ENOTDIR).
+    //
+    // ON GNU, `rm -f` SWALLOWS ENOTDIR exactly as it swallows genuine "already
+    // gone" — measured, coreutils 9.4, rc 0 either way — so trusting rm's exit
+    // code alone reports `untagged` while `_project_pool_state` still answers
+    // `unreadable`. The fix re-measures with the same reader after a
+    // successful `rm` and refuses to report success unless it agrees.
+    //
+    // ON BSD IT APPARENTLY DOES NOT (macOS CI, this branch): the `rm` guard
+    // fails and the verb refuses one step earlier. This test survives that
+    // because it asserts only the OUTCOME both userlands reach — refused, and
+    // never the word `untagged`. The sibling below that asserted the LINUX
+    // ROUTE is the one that failed CI; see its own comment. The verdict about
+    // `rm` in this comment's first paragraph is therefore about GNU, and is
+    // labelled so — it is not a claim about the fixture on every box.
     fs.mkdirSync(REG(), { recursive: true });
     fs.writeFileSync(POOLS(), 'not a directory\n');
     const r = shFail('cmd_project_pool --project demo --clear');
@@ -513,8 +522,12 @@ describe('ccd project-pool — the writer verb', () => {
 
   it('refuses --clear when $POOLS_DIR ITSELF is a dangling symlink — `rm -f` swallows ENOENT silently (Fix round 3, Finding 6)', () => {
     // Same shape, different cause: $POOLS_DIR resolving nowhere makes
-    // `$POOLS_DIR/$project` unreachable (ENOENT through the missing
-    // directory component), which `rm -f` also swallows.
+    // `$POOLS_DIR/$project` unreachable (ENOENT through the missing directory
+    // component). Unlike the ENOTDIR case above, ENOENT is the one errno POSIX
+    // NAMES for `-f` ("Do not write diagnostic messages or modify the exit
+    // status in the case of nonexistent operands"), so both userlands swallow
+    // it and this test's mechanism — not just its outcome — is the same on
+    // both. Measured on GNU; standards-documented for BSD, not measured here.
     fs.mkdirSync(REG(), { recursive: true });
     fs.symlinkSync(path.join(REG(), 'nowhere'), POOLS());
     const r = shFail('cmd_project_pool --project demo --clear');
@@ -581,28 +594,70 @@ describe('ccd project-pool — the writer verb', () => {
     expect(state('demo')).toBe('malformed');
   });
 
-  it('a failing --clear leaves swap.log an honest record — a corrective line follows the pool-tag line it voids (Fix round 5, Finding 13)', () => {
+  it('a failing --clear never leaves swap.log claiming a transition that did not happen (Fix round 5, Finding 13)', () => {
     // Before fix round 4, every `die` preceded the swap.log append, so the
     // mere PRESENCE of a `pool-tag` line meant the transition happened.
-    // Round 4 moved the append upstream of the final re-measurement to
-    // close the false-SUCCESS shape, which had the side effect of moving
-    // both `die` paths below the line reader now sees. Measured: a plain
-    // FILE at $POOLS_DIR makes `--clear` write `pool-tag demo: - -> -` and
-    // then refuse — a transition recorded for a call that did not
-    // complete. The fix is NOT to move the append back after the
-    // measurement (that undoes round 4); it is a second, unmistakably
-    // different-verbed line that voids the first.
+    // Round 4 moved the append upstream of the final re-measurement to close
+    // the false-SUCCESS shape, which had the side effect of moving both `die`
+    // paths below the line a reader now sees. The fix is NOT to move the
+    // append back after the measurement (that undoes round 4); it is a second,
+    // unmistakably different-verbed line that voids the first.
+    //
+    // THIS TEST USED TO ASSERT ONE USERLAND'S PATH AND FAILED macOS CI on
+    // exactly that (`expected '' to contain 'pool-tag demo: - -> -'`). The
+    // fixture reaches `rm -f -- "$POOLS_DIR/$project"` through a path whose
+    // parent is a regular FILE — ENOTDIR — and the two userlands disagree
+    // about whether `rm -f` swallows that. GNU does (measured here: rc 0), so
+    // Linux writes the transition line and then voids it; the CI evidence says
+    // BSD does not, so macOS refuses at the `rm` guard, one step EARLIER, and
+    // writes nothing at all. See `cmd_project_pool`'s own comment on that
+    // guard for what is measured versus inferred.
+    //
+    // NEITHER OUTCOME IS WRONG — they differ in WHERE the verb refuses, and
+    // both are honest. What Finding 13 actually established is an invariant
+    // that holds on both: swap.log never ends up holding a `pool-tag` line
+    // for a call that refused, unless a `pool-tag-void` line follows it. So
+    // that is what this asserts, rather than either platform's route to it.
     fs.mkdirSync(REG(), { recursive: true });
     fs.writeFileSync(POOLS(), 'not a directory\n');
     const r = shFail('cmd_project_pool --project demo --clear');
+
+    // NON-VACUOUS ON BOTH USERLANDS, and asserted before anything about the
+    // log: the call refused, it said so in the same words either way (both
+    // `die`s carry this message), and the constraint it could not clear is
+    // still in force. A platform where the verb quietly succeeded, or lifted
+    // the constraint, reds here and never reaches the invariant below.
     expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('could not clear the pool tag for demo');
+    expect(state('demo')).toBe('unreadable');
+
+    // THE VERB COLUMN, NOT A SUBSTRING. `pool-tag-void` CONTAINS `pool-tag`,
+    // and `-w` does not save a grep either — `-` is not a word constituent,
+    // so `grep -c pool-tag` and `grep -cw pool-tag` both count 2 on a log
+    // holding one of each (measured). Field 3 of `<date> <time> <verb>
+    // <project>: …` is the only way to count transitions.
     const log = swapLog();
-    expect(log).toContain('pool-tag demo: - -> -');
-    expect(log).toContain('pool-tag-void demo:');
-    // the corrective line must follow the line it voids, not precede it —
-    // a reader scanning top to bottom must see the transition BEFORE the
-    // notice that it did not take effect.
-    expect(log.indexOf('pool-tag-void')).toBeGreaterThan(log.indexOf('pool-tag demo'));
+    const lines = log.split('\n').filter(Boolean);
+    const verbs = lines.map((l) => l.split(/\s+/)[2] ?? '');
+
+    // THE INVARIANT, ONE ASSERTION, TRUE ON BOTH — and exhaustive rather than
+    // permissive: it names the only two honest shapes instead of filtering for
+    // violations, which is what keeps it from passing VACUOUSLY on the
+    // platform that writes no line. `''` is macOS's shape and must be exactly
+    // empty; `pool-tag,pool-tag-void` is Linux's and must be exactly that
+    // pair, in that order. A lone `pool-tag` — the original defect, on either
+    // platform — is in neither set, which is what the mutation below proves.
+    expect(['', 'pool-tag,pool-tag-void'],
+      `swap.log's verb column is neither honest shape:\n${log || '(empty)'}`)
+      .toContain(verbs.join(','));
+
+    // …and whichever lines exist name THIS project and THIS transition. This
+    // one IS vacuous on an empty log, deliberately and visibly: the shape
+    // assertion above is what carries the weight there, which is why it pins
+    // the empty case as a named outcome rather than tolerating it.
+    expect(lines.map((l) => l.replace(/^\S+ \S+ /, ''))
+      .filter((b) => !/^pool-tag demo: - -> -$/.test(b) && !/^pool-tag-void demo: /.test(b)),
+    log).toEqual([]);
   });
 
   it('a failing --pool leaves swap.log an honest record too — the corrective line survives even when swap.log IS the tag path (Fix round 5, Finding 13)', () => {
@@ -610,6 +665,15 @@ describe('ccd project-pool — the writer verb', () => {
     // the alias), so the corrective line is not a separate, clean entry in
     // an untouched log — it lands in the same garbage-holding file the
     // Finding 12 test above reads `state()` on. It must still appear.
+    //
+    // CHECKED FOR THE ENOTDIR SPLIT THAT BROKE ITS `--clear` SIBLING, and it
+    // does not have it: this is the `--pool` arm, where `$POOLS_DIR` is
+    // created by `mkdir -p` and is a real directory by the time anything is
+    // written. The only `rm -f` on this arm is the tmp cleanup on a write
+    // failure, which does not fire here. So both userlands take the identical
+    // route — write, rename, append, re-measure, refuse — and this test may
+    // assert that route directly. It passed macOS CI on the run its sibling
+    // failed.
     h.makeRepo('demo');
     fs.symlinkSync(path.join(POOLS(), 'demo'), path.join(REG(), 'swap.log'));
     const r = shFail('cmd_project_pool --project demo --pool pool-a');

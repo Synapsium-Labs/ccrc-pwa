@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1695c2665aa905b74963ecdf8cdbe2e9a587966f9501972b1ea12a8d2b20bcd5
+# ccrc:generated 1 sha256=66209b39e824a60580f336bd30d1ac60b4c8f48a8bae9c3efca46173fcdb6e04
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5522,14 +5522,42 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # for `named`. Claiming a NAMED tag survives outright ("is STILL tagged")
     # would also be wrong for `unreadable`/`malformed`, where there is no
     # genuine, readable tag to name at all.
-    # `rm -f` SWALLOWS ENOTDIR and ENOENT exactly as it swallows genuine
-    # "already gone" (fix round 3, Finding 6): when $POOLS_DIR ITSELF is a
-    # regular file or a dangling symlink, `$POOLS_DIR/$project` is
-    # unreachable and `rm -f` returns 0 regardless. Round 2 made the reader
-    # authoritative for the DECISION to remove; trusting THIS call's rc for
-    # the OUTCOME was the same mistake one level out. Fixed below, once, as
-    # the verb's unconditional LAST ACT (fix round 4, Finding 10) rather than
-    # here — see that comment for why inline was not enough either.
+    # `rm -f`'s TREATMENT OF ENOTDIR IS A USERLAND SPLIT, not a property of
+    # `rm` — corrected in fix round 7, after macOS CI failed on the sentence
+    # that stood here. When $POOLS_DIR ITSELF is a regular file,
+    # `$POOLS_DIR/$project` cannot be resolved (ENOTDIR):
+    #   - GNU coreutils classes ENOTDIR with ENOENT as "already gone" and
+    #     `rm -f` returns 0. MEASURED, coreutils 9.4, on this branch.
+    #   - BSD/macOS does NOT: the guard below fails and the verb refuses HERE
+    #     instead of at the final re-measurement. INFERRED, not measured — I
+    #     cannot run macOS. The evidence is CI plus this function's own
+    #     control flow: `swap.log` came back EMPTY there, and between entry
+    #     and the append the only reachable `die` in that fixture is this
+    #     one, so the `rm` must have returned non-zero. The usual BSD `rm`
+    #     tests `errno != ENOENT` alone, which would produce exactly this,
+    #     but I have not read Apple's shipped source.
+    # ENOENT itself is swallowed by both, and that half is not a guess: it is
+    # the one case POSIX names for `-f` ("Do not write diagnostic messages or
+    # modify the exit status in the case of nonexistent operands"). ENOTDIR is
+    # not named, which is precisely where the two userlands part.
+    #
+    # NEITHER BEHAVIOUR IS A BUG HERE, so nothing below is platform-forked:
+    # both userlands REFUSE and neither reports a false `untagged`; they
+    # differ only in WHERE. Round 2 made the reader authoritative for the
+    # DECISION to remove; trusting THIS call's rc for the OUTCOME was the same
+    # mistake one level out, and it is a mistake on GNU whatever BSD does.
+    # Fixed below, once, as the verb's unconditional LAST ACT (fix round 4,
+    # Finding 10) rather than here — see that comment for why inline was not
+    # enough either.
+    #
+    # BEFORE ASSERTING ANY `rm`/`mv`/`stat`/`du` SEMANTIC IN THIS FILE, CHECK
+    # BOTH USERLANDS. This wave shipped three distinct kinds of comment that
+    # were "true where I measured it" — true of one FILE and false of a
+    # sibling, true of one ARM and false of the other, and now true of one
+    # PLATFORM and false of the other. `ccd` runs on both and CI tests both,
+    # so a coreutils-only fact stated flatly is a red suite one merge later.
+    # `_plat_mv_notdir` (:75) is the precedent for when the split is real
+    # enough to fork the CODE; this one is not, and is documented instead.
     if [[ "$oldstate" != untagged ]]; then
       rm -f -- "$POOLS_DIR/$project" \
         || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
