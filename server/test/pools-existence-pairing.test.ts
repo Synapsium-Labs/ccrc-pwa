@@ -104,10 +104,16 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CCD } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
-const CCD_PATH = path.join(ccrcRoot, 'ccd', 'ccd');
+// `CCD` (from `ccdWsHelpers.ts`) is the one spelling of the path to
+// `ccd/ccd` this repo permits — `single-definition.test.ts` pins it to that
+// one file. Bound to a local `let`, not used directly, so this scan's own
+// break-one-pairing measurements can temporarily repoint it at a scratchpad
+// copy without re-deriving a second spelling of the real path.
+let CCD_PATH: string = CCD;
 const DOCTOR_PATH = path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks');
 
 // ---------------------------------------------------------------------------
