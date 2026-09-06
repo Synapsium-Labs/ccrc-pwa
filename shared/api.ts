@@ -4751,6 +4751,11 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
+  | 'rehome'        // a session's HOME account moved — the pool re-seed
+                    // (account pools §5.5.4) and `ccd prefer`, which wrote
+                    // `.home` and journalled nothing until this act existed.
+                    // DISTINCT FROM `swap`: `swap` moves the session it is
+                    // running on, `rehome` moves the account it returns to.
   | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
                     // per-row removals go out as `destroy` with `verb ws-gc`
                     // (ccd:8699, ccd:8812). A run-level line would need an
@@ -4771,7 +4776,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, gc: true, spawn: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true,
   unknown: true,
 };

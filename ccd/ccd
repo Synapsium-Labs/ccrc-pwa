@@ -1865,8 +1865,8 @@ _LC_OBS=""
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
-          hold purge reap release rename restore spawn start stop supervise
-          swap unsupervise)
+          hold purge reap rehome release rename restore spawn start stop
+          supervise swap unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
 # the acts array above follows. `unknown` stays OUT of this array for the same
