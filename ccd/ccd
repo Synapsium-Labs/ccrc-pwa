@@ -770,6 +770,29 @@ WRAPPER_DIR="$HOME/.local/bin"
 # Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
 PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
 WORKTREES_ROOT="$HOME/worktrees"
+# THE PROJECT POOL TAG lives in a DOTLESS registry subdirectory, one file per
+# project (spec §4, approach B). Outside every git tree and every session cwd,
+# beside the switches an operator already hand-touches (`<w>-disabled`,
+# `coordinator-paused`, `mail-disabled`) — `ls ~/.cc-sessions/pools/` shows
+# every tag and `echo pool-a > pools/demo` is the 2 am idiom.
+#
+# DOTLESS, and that is measured rather than assumed: every registry glob is
+# SUFFIX-shaped (`_reg_purge` and `_ws_slug_free` glob `"$REG/$id".*`), so a
+# directory is invisible to all of them. `$REG/<project>.pool` was ruled out by
+# a real collision — ids are `<wrapper>-<project>`, so a project named
+# `acct-a-demo` would produce the per-session `pool` field of the session
+# `acct-a-demo`, which is a SPACE-SEPARATED CANDIDATE LIST and not a pool name
+# at all (see `_pool_for`). Dot-LEADING was ruled out because dot-leading is
+# this file's private namespace and the operator must be able to touch this one.
+POOLS_DIR="$REG/pools"
+# The pool-name grammar, ONCE in this file. Same shape as `shared/roster.ts`'s
+# ID_RE, for the reason that file's docstring gives: the value is embedded
+# unquoted in a generated bash `case` arm (`_ccrc_pool`) and printed with
+# `echo`, and a leading lowercase letter is what makes `echo` safe.
+# `server/test/pool-name-parity.test.ts` extracts this line and the one above
+# and holds both equal to their TypeScript spellings — the two files cannot
+# share a value, so the agreement is measured instead.
+POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # THE ACCOUNT ROSTER IS DATA, not a literal in this file: `~/.ccrc/accounts.sh`
 # (sourced below, beneath `die`) defines CCRC_ACCOUNTS — every account, in
 # roster declaration order — CCRC_HOME_ABLE (the subset a session may be PLACED
@@ -1022,6 +1045,38 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+_pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
+# THE ONLY READER OF THE PROJECT TAG in this file. Four words, ALWAYS rc 0,
+# and it may never `die`: every decider calls it once per decision and one of
+# those deciders is `_auto_swap_check`, inside the long-lived `cmd_supervise`
+# loop — a reader that exited there would stop the supervisor.
+#
+# FOUR WORDS, NOT THREE. `unreadable` (permissions, a directory where the file
+# belongs, a symlink loop) and `malformed` (bytes that are not one legal token)
+# have DIFFERENT REMEDIES, and neither is ever folded into `untagged`: folding
+# would silently LIFT the constraint, so a chmod would quietly make a project
+# unconstrained. `_pool_ok` answers rc 2 for both — nobody decides — and the
+# callers branch three ways.
+#
+# WORD ON STDOUT, NOT AN EXIT CODE. An rc-based reader splits the fourth state
+# across two functions, and a `$(…)` capture that forgot `$?` reads unreadable
+# as empty, i.e. as untagged. There is nothing to forget here.
+_project_pool_state() {   # project -> "named <n>" | untagged | unreadable | malformed ; always rc 0
+  local f v
+  # A registry row with no `.project` field (pre-2026-07-28 rows have none)
+  # must never resolve to the DIRECTORY: `$POOLS_DIR/` would `cat` a directory
+  # and read `unreadable` for every such session.
+  [[ -n "${1-}" ]] || { echo untagged; return 0; }
+  f="$POOLS_DIR/$1"
+  [[ -e "$f" ]] || { echo untagged; return 0; }
+  v=$(cat -- "$f" 2>/dev/null) || { echo unreadable; return 0; }
+  # A shell `echo pool-a > pools/demo` is a legal writer (ruling 2), so a
+  # trailing newline is not malformed. Leading whitespace IS: the grammar is
+  # anchored, and a leading space is a hand-edit nobody meant.
+  v=${v%"${v##*[![:space:]]}"}
+  _pool_name_valid "$v" && { echo "named $v"; return 0; }
+  echo malformed
+}
 # An account is a legal AUTOMATIC destination iff its wrapper exists and its
 # lane is enabled. Manual verbs (start/swap/prefer) deliberately bypass this:
 # a named wrapper is an operator override.
