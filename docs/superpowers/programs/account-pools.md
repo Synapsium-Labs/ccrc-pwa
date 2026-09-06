@@ -140,6 +140,26 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   landed superseded placeholders on `main`. Verified after merge: the body on `07ce360e` carries none.
   **This is a standing rule for every later wave of this program.**
 
+- **D-1744 (wave 2a, 2026-09-06 11:35 UTC) — the project-pool reader folded three unreadable conditions into `untagged`.**
+  `_project_pool_state`'s `[[ -e "$f" ]] || { echo untagged; }`, transcribed verbatim from spec §5.4.3, reads
+  `-e` FALSE as absence. I reproduced all three counter-cases myself before minting: a broken symlink, a
+  symlink LOOP, and a tag under a mode-000 directory each answer FALSE, indistinguishable from a path that
+  does not exist. **Ruling: this is the `no overloaded null at a seam` invariant, not a transcription slip.**
+  `untagged` means unconstrained and placement may go anywhere; `unreadable` means nobody knows and placement
+  must refuse — so the fold does not lose information, it INVERTS the safe default, and the mode-000 case
+  answers `untagged` for every project on the box at once, silently and totally. **The spec is the half that
+  is wrong:** §10's failure table already commits to "unreadable != untagged pinned on both sides", and
+  §5.4.3's own comment claims ELOOP is caught at the `cat` that `-e` has made unreachable. §5.4.3's BODY is
+  the defect; §10 stands. Cost if wrong: a reader of §5.4.3 finds a body its own §10 contradicts, which is
+  why the correction is attached to the number rather than left in a wave's transcript.
+  **Carried to wave 5** (spec/README text: correct §5.4.3's body and its comment) and **to wave 3** (its
+  `readProjectPools` mirrors these four states in TypeScript; `readFileMeasured` already tells absent from
+  unreadable, so it has the mechanism — what it needs is to know the polarity question is live here and
+  already settled. Restate in wave 3's brief; the worker has also written it into D-1744's own entry, so it
+  arrives twice rather than depending on one file being read).
+  Found by the worker's own sweep for "comments asserting a mechanism that is not there" — the class its
+  brief told it to watch, caught in the code it was transcribing rather than reproduced into it.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
