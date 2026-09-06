@@ -76,39 +76,69 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
   // NOT in POOL_RULE_CASES, and cannot be added to it: `POOL_NAME_RE` forbids
   // every glob metacharacter in a pool name (`/^[a-z][a-z0-9-]{0,31}$/`,
   // `shared/roster.ts`), and the no-real-names rule means no fixture row can
-  // ever carry one either. So the table is STRUCTURALLY blind to the one bug
-  // that matters most in this language: `_pool_ok`'s comparison is
-  // `[[ -z "$ap" || "$ap" == "$pp" ]]`, and inside `[[ ]]` an UNQUOTED right
-  // operand is a GLOB PATTERN, not a literal — `[[ pool-a == * ]]` is true.
-  // Drop the quotes on `$pp` (`"$ap" == $pp`) and a project tagged `*` would
-  // serve from every pooled account, silently, and no row above would ever
-  // see it: every row's `pp` is a legal `POOL_NAME_RE` token, so quoted and
-  // unquoted comparison agree on every one of them. This test drives the
-  // metacharacter directly, bypassing the fixture table's own grammar limit,
-  // and MUST NOT be deleted as "redundant with the table" — it is the only
-  // thing in either suite that can see this class of bug.
-  it('the comparison is a LITERAL match, not a glob: a metacharacter in the tag must not become a wildcard', () => {
+  // ever carry one either. So the table is STRUCTURALLY blind to a real bug
+  // class: `_pool_ok`'s comparison is `[[ -z "$ap" || "$ap" == "$pp" ]]`, and
+  // inside `[[ ]]` an UNQUOTED right operand is a GLOB PATTERN, not a literal
+  // — `[[ pool-a == * ]]` is true. Drop the quotes on `$pp` (`"$ap" == $pp`)
+  // and every row above would still pass, because every row's `pp` is a
+  // legal `POOL_NAME_RE` token and quoted/unquoted comparison agree on all of
+  // them — this test drives the metacharacter directly, bypassing the
+  // fixture table's own grammar limit.
+  //
+  // WHO CAN ACTUALLY REACH THIS, and who cannot: `_pool_ok`'s SECOND ARGUMENT
+  // is caller-supplied, and nothing inside `_pool_ok` checks its provenance.
+  // The one producer shipped today, `_project_pool_state`, CANNOT reach it —
+  // it gates the on-disk tag through `_pool_name_valid` before ever emitting
+  // `named <n>`, and `_pool_name_valid` refuses every one of `*`, `?` and
+  // `[ab]` outright, so a tag file containing any of them reads as
+  // `malformed`, not `named *`. Through the tag file this escape is
+  // UNREACHABLE today. But a caller that CONSTRUCTS or FORWARDS a state word
+  // itself — bypassing `_project_pool_state` — is not hypothetical: waves 2b
+  // and 3 add callers, and Task 5 of this wave adds two more, and none of
+  // them are required to route through the one validated producer. This test
+  // is DEFENCE IN DEPTH on that caller-supplied argument, not evidence of a
+  // live hole in the tag path — do not delete it as redundant with the table
+  // (it is the only thing in either suite that can see this bug class at
+  // all) and do not read its passing as proof there is nothing to defend
+  // against — the argument's provenance is exactly what is unchecked.
+  it.each([
+    // `*` alone: the textbook case. Any unquoted glob match makes this pass.
+    ['*', 'named *'],
+    // `?` matches exactly one character; crafted so the STRING LENGTHS line
+    // up (`pool-?` is 6 chars, same as `pool-a`) — an unquoted glob matches
+    // this pattern against `pool-a` even though the two strings differ.
+    ['pool-?', 'named pool-?'],
+    // A bracket character class: `[ab]` at the last position glob-matches
+    // either `a` or `b`, so `pool-[ab]` unquoted matches `pool-a` too.
+    ['pool-[ab]', 'named pool-[ab]'],
+  ] as const)('the comparison is a LITERAL match, not a glob: %s must not become a wildcard', (_pp, word) => {
     // Account pool stubbed non-empty on purpose: an untagged account
     // short-circuits on `-z "$ap"` before the comparison is ever reached,
     // which would prove nothing about quoting.
-    const ap = 'pool-a';
-    const cases: ReadonlyArray<[string, string]> = [
-      // `*` alone: the textbook case. Any unquoted glob match makes this pass.
-      ['named *', '*'],
-      // `?` matches exactly one character; crafted so the STRING LENGTHS line
-      // up (`pool-?` is 6 chars, same as `pool-a`) — an unquoted glob matches
-      // this pattern against `pool-a` even though the two strings differ.
-      ['named pool-?', 'pool-?'],
-      // A bracket character class: `[ab]` at the last position glob-matches
-      // either `a` or `b`, so `pool-[ab]` unquoted matches `pool-a` too.
-      ['named pool-[ab]', 'pool-[ab]'],
-    ];
-    for (const [word, pp] of cases) {
-      const out = h.sh(`_ccrc_pool() { echo ${JSON.stringify(ap)}; }; _pool_ok anyaccount ${JSON.stringify(word)}; echo "rc=$?"`);
-      // A literal comparison of "pool-a" against any of these three tokens
-      // disagrees — the correct verdict is MISMATCH (rc 1), never serve (rc 0).
-      expect(out, pp).toBe('rc=1');
-    }
+    const out = h.sh(`_ccrc_pool() { echo pool-a; }; _pool_ok anyaccount ${JSON.stringify(word)}; echo "rc=$?"`);
+    // A literal comparison of "pool-a" against any of these three tokens
+    // disagrees — the correct verdict is MISMATCH (rc 1), never serve (rc 0).
+    expect(out).toBe('rc=1');
+  });
+
+  // Companion to `_acct_pool`'s "predates pools" case below, but pinned at
+  // the OTHER call site: `_pool_ok`'s own `ap=$(_acct_pool "$1")` is a SECOND
+  // place that captures `_acct_pool`'s output, and nothing here proved THAT
+  // capture is safe — every case above either stubs `_ccrc_pool` directly or
+  // calls `_acct_pool` on its own, so none of them exercise `_pool_ok`'s own
+  // line over an `accounts.sh` that predates pools. The mutant this kills:
+  // `ap=$(_acct_pool "$1")` -> `ap=$(_ccrc_pool "$1")`, which deletes the
+  // `declare -F` guard at exactly the call site `_acct_pool`'s own comment
+  // block argues for (the minutes of an agent deploy between the roster lane
+  // landing and the ccd lane landing) — every assertion in this file stayed
+  // green under that mutation because none of them route through it.
+  it('answers with no leaked stderr and no rc 127 at _pool_ok\'s OWN capture line, over an accounts.sh that predates pools', () => {
+    const out = h.sh(
+      'unset -f _ccrc_pool; out=$( { _pool_ok claude "named pool-a"; } 2>&1 ); printf \'%s|%s\' "$out" "$?"');
+    // An account with no visible pool tag is untagged for this decision, and
+    // an untagged account serves any project — rc 0, and nothing on stdout
+    // or stderr says otherwise.
+    expect(out).toBe('|0');
   });
 });
 
