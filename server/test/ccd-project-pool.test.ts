@@ -563,6 +563,63 @@ describe('ccd project-pool — the writer verb', () => {
     }
   });
 
+  it('the --pool arm refuses honestly when the tag path ends up holding garbage, not "NOT tagged" (Fix round 5, Finding 12)', () => {
+    // Round 4's re-measurement on the --pool arm reused the printf/mv
+    // failure's own "it is NOT tagged" message — accurate THERE, where
+    // nothing was ever written, but this NEW check can also fire with the
+    // tag path holding GARBAGE: the rename succeeds, then the swap.log
+    // append — aliased onto the very file the rename just wrote — appends
+    // the audit line with no separating newline, which fails
+    // `_pool_name_valid` and reads back `malformed`. `_pool_ok` answers
+    // non-serve (rc 2, undecidable) for `malformed`, unconditionally — the
+    // project IS constrained, the opposite of what "NOT tagged" claims.
+    h.makeRepo('demo');
+    fs.symlinkSync(path.join(POOLS(), 'demo'), path.join(REG(), 'swap.log'));
+    const r = shFail('cmd_project_pool --project demo --pool pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).not.toContain('is NOT tagged');
+    expect(state('demo')).toBe('malformed');
+  });
+
+  it('a failing --clear leaves swap.log an honest record — a corrective line follows the pool-tag line it voids (Fix round 5, Finding 13)', () => {
+    // Before fix round 4, every `die` preceded the swap.log append, so the
+    // mere PRESENCE of a `pool-tag` line meant the transition happened.
+    // Round 4 moved the append upstream of the final re-measurement to
+    // close the false-SUCCESS shape, which had the side effect of moving
+    // both `die` paths below the line reader now sees. Measured: a plain
+    // FILE at $POOLS_DIR makes `--clear` write `pool-tag demo: - -> -` and
+    // then refuse — a transition recorded for a call that did not
+    // complete. The fix is NOT to move the append back after the
+    // measurement (that undoes round 4); it is a second, unmistakably
+    // different-verbed line that voids the first.
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(POOLS(), 'not a directory\n');
+    const r = shFail('cmd_project_pool --project demo --clear');
+    expect(r.code).not.toBe(0);
+    const log = swapLog();
+    expect(log).toContain('pool-tag demo: - -> -');
+    expect(log).toContain('pool-tag-void demo:');
+    // the corrective line must follow the line it voids, not precede it —
+    // a reader scanning top to bottom must see the transition BEFORE the
+    // notice that it did not take effect.
+    expect(log.indexOf('pool-tag-void')).toBeGreaterThan(log.indexOf('pool-tag demo'));
+  });
+
+  it('a failing --pool leaves swap.log an honest record too — the corrective line survives even when swap.log IS the tag path (Fix round 5, Finding 13)', () => {
+    // The harder case: here swap.log and the tag path are the SAME file (via
+    // the alias), so the corrective line is not a separate, clean entry in
+    // an untouched log — it lands in the same garbage-holding file the
+    // Finding 12 test above reads `state()` on. It must still appear.
+    h.makeRepo('demo');
+    fs.symlinkSync(path.join(POOLS(), 'demo'), path.join(REG(), 'swap.log'));
+    const r = shFail('cmd_project_pool --project demo --pool pool-a');
+    expect(r.code).not.toBe(0);
+    const log = swapLog();
+    expect(log).toContain('pool-tag demo: - -> pool-a');
+    expect(log).toContain('pool-tag-void demo:');
+    expect(log.indexOf('pool-tag-void')).toBeGreaterThan(log.indexOf('pool-tag demo'));
+  });
+
   it('retags cleanly over a dangling symlink and over a symlink loop — the --pool arm has no analogous `-e` gate', () => {
     // Checked per the coordinator's ask: the write arm never tests `-e` on
     // the tag path at all. It goes straight from `mkdir -p` to an atomic

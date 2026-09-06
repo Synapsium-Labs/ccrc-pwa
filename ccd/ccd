@@ -5550,14 +5550,53 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # (`_project_pool_state`, spec §5.1) one last time, over the state as it
   # exists after every write this call has made, log line included, and
   # refuses to echo success unless that reader agrees.
+  #
+  # A CORRECTIVE LINE ON EITHER DIE PATH BELOW — fix round 5 (Finding 13),
+  # and NOT a reversion of fix round 4. Moving the append upstream of the
+  # measurement (round 4) closed the false-SUCCESS shape, but it left a
+  # different artifact behind: every `die` below now runs AFTER the
+  # `pool-tag` line above, so a reader scanning swap.log sees a transition
+  # recorded for a call that in fact refused (measured: `$POOLS_DIR` a plain
+  # file made a failing `--clear` write `pool-tag demo: - -> -` where the
+  # pre-round-4 code wrote nothing at all). The fix is NOT to move the
+  # append back after the measurement — that is shape 4 again, the exact
+  # false success round 4 closed. Instead, a write that happens AFTER a
+  # failure decision cannot manufacture a false success, because nothing
+  # downstream reads it as one: the function is about to `die`, so this
+  # second line's only job is to keep a HUMAN scanning the file from reading
+  # the first one at face value. `pool-tag-void` is a deliberately different
+  # verb, not a suffix reusing `pool-tag`'s own prefix, so it can never be
+  # mistaken for a second genuine transition.
   local finalstate; finalstate=$(_project_pool_state "$project")
   if (( clear )); then
-    [[ "$finalstate" == untagged ]] \
-      || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
+    if [[ "$finalstate" != untagged ]]; then
+      echo "$(date '+%F %T') pool-tag-void $project: the pool-tag line above did NOT take effect — this call refused" >> "$REG/swap.log"
+      die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
+    fi
     echo "untagged $project"
   else
-    [[ "$finalstate" == "named $pool" ]] \
-      || die "could not write the pool tag for $project — it is NOT tagged"
+    # FIX ROUND 5 (FINDING 12): this die used to reuse the printf/mv
+    # failure's own "it is NOT tagged" — accurate THERE, where nothing was
+    # ever written, but reachable HERE with the tag path holding GARBAGE
+    # instead: `$finalstate` can read `malformed` (measured: the rename
+    # succeeds, then an aliased swap.log append — `ln -s
+    # "$POOLS_DIR/$project" "$REG/swap.log"` — concatenates the audit line
+    # onto the freshly-written pool name with no separating newline, which
+    # `_pool_name_valid` rejects) or, by the same construction that reaches
+    # `unreadable` on the `--clear` arm (fix round 3), `unreadable`. For
+    # BOTH — unlike `named <other>`, where `_pool_ok` still serves an
+    # unpooled or matching account (Finding 7) — `_pool_ok`'s `*)` arm
+    # answers non-serve (rc 2, undecidable) UNCONDITIONALLY: nobody decides,
+    # for every candidate. So "it is NOT tagged" would tell the operator the
+    # opposite of the truth — the project is not free, it is UNDECIDABLE —
+    # and the cure differs: remove the garbage, not retry the write. The
+    # message below claims neither NOT-tagged nor STILL-tagged; it says only
+    # what is true of every reachable state here — the path no longer holds
+    # what this call wrote.
+    if [[ "$finalstate" != "named $pool" ]]; then
+      echo "$(date '+%F %T') pool-tag-void $project: the pool-tag line above did NOT take effect — this call refused" >> "$REG/swap.log"
+      die "could not confirm the pool tag for $project as $pool — the tag path no longer holds what this call wrote ($POOLS_DIR/$project)"
+    fi
     echo "tagged $project $new"
   fi
 }
