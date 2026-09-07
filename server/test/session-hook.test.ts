@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { CCD } from './ccdWsHelpers.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -1421,6 +1422,29 @@ describe('the emitter: one line, clipped once', () => {
     expect(text.length).toBeLessThanOrEqual(1800);
     expect(text).toContain('graphify:');
   });
+
+  // THE FIELD THAT ACTUALLY OVERFLOWS. The hold subject cannot: _ct_read caps
+  // every registry read at CCRC_ID_MAX (128) before CCRC_HOLD_MAX is even
+  // consulted, so a pathological .hold can never grow CARD_HOLD past a few
+  // hundred bytes (see 'a pathological hold cannot delete the card' above).
+  // GM_NODES carries no such bound — `grep -oE '[0-9]+ nodes' | head -c 4096`
+  // is UNBOUNDED repetition inside a 4096-byte window, and the digits are
+  // interpolated straight into the graphify sentence. A GRAPH_REPORT.md whose
+  // node count is a few thousand digits — still comfortably inside the
+  // 4096-byte head, so it is captured WHOLE, not truncated — drives the
+  // assembled card well past CARD_MAX_CHARS on its own. This is the fixture
+  // that finally discharges Task 3's deferred clip mutation.
+  it('a pathological node count cannot delete the card', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee', report: false });
+    fs.writeFileSync(path.join(tree, 'graphify-out', 'GRAPH_REPORT.md'),
+      `# Graph Report - demo  (2026-09-02)\n\n## Summary\n`
+      + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
+    const out = run({ hook_event_name: 'SessionStart', cwd: tree });
+    const text = card(out);            // card() asserts exactly one JSON line
+    expect(text.length).toBe(1800);    // clipped EXACTLY, not merely bounded
+  });
 });
 
 // `spawnSync` joins the file's existing `execFileSync` import — the stderr
@@ -1570,7 +1594,7 @@ describe('the co-tenant subject', () => {
   // and can source nothing.
   it('the hook, ccd and shared agree on the supervised-freshness window', () => {
     const hook = fs.readFileSync(path.resolve(__dirname, '../../ccd/session-hook.sh'), 'utf8');
-    const ccd = fs.readFileSync(path.resolve(__dirname, '../../ccd/ccd'), 'utf8');
+    const ccd = fs.readFileSync(CCD, 'utf8');
     const api = fs.readFileSync(path.resolve(__dirname, '../../shared/api.ts'), 'utf8');
     const h = /CCRC_FRESH_S=(\d+)/.exec(hook);
     const c = /now - sup >= 0 && now - sup < (\d+)/.exec(ccd);
