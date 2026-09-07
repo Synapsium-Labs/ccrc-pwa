@@ -1,0 +1,14 @@
+[Unit]
+Description=Probe each Anthropic account's credential for liveness (spec 2026-09-07 §A)
+[Service]
+Type=oneshot
+# NO EnvironmentFile=, deliberately, and this is where the ccrc-ddns pattern
+# stops applying: that unit expands ONE credential from ONE 0600 file, and this
+# probe reads N — one ~/.cc-secrets/<id>-oauth.env per account. The half that
+# still binds is what the executable enforces instead: this 0644 file names no
+# credential and no path into ~/.cc-secrets, and the token never reaches argv,
+# this unit's environment, or any log line.
+ExecStart=%h/.local/bin/ccd-account-health
+# One curl per eligible account at --max-time 20, plus a lock probe; a pass past
+# this is wedged, not slow.
+TimeoutStartSec=300

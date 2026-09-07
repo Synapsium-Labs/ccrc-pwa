@@ -1,0 +1,13 @@
+[Unit]
+Description=Probe account credential liveness every 15 minutes
+# No Unit= line: systemd's default — the same-named .service — is the single
+# source of that pairing, exactly as ccrc-ddns.timer records.
+[Timer]
+# 7min rather than the sweep's 5: two oneshots that both fire at boot and both
+# want the network are a herd of two, and this one has nothing urgent to say in
+# the first minutes of an uptime.
+OnBootSec=7min
+OnUnitActiveSec=15min
+AccuracySec=1min
+[Install]
+WantedBy=timers.target

@@ -638,6 +638,9 @@ if [ "$TARGET" = "agent" ]; then
   # fleet host, so there is no server-role branch to gate it against the way
   # `ccd/ccrc`'s own `_inst_bins` has to.
   install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755
+  # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on
+  # the same terms — a sibling executable, so `ccd` itself stays network-free.
+  install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755
   # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
   # every corpus. Shipped on this lane and not only by `ccrc install`, because a
   # fleet host is DEPLOYED day to day and installed rarely; without it the box
@@ -676,7 +679,8 @@ if [ "$TARGET" = "agent" ]; then
     && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
     && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
     && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ \
-    && cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/'
+    && cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ \
+    && cp ~/ccrc/deploy/systemd/ccd-account-health.service ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
@@ -761,6 +765,7 @@ if [ "$TARGET" = "agent" ]; then
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
+    && systemctl --user enable --now ccd-account-health.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

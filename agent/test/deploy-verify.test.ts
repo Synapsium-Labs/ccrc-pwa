@@ -529,6 +529,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // graphify Task 10 (O3/O6b): the sweep pair, shipped the same way.
       'systemd/ccd-graph-sweep.service',
       'systemd/ccd-graph-sweep.timer',
+      // The account-health probe's pair (spec 2026-09-07 §A.7), mirroring the
+      // sweep's exactly: a `Type=oneshot` unit and a 15-minute timer.
+      'systemd/ccd-account-health.service',
+      'systemd/ccd-account-health.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -536,6 +540,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the cap-scopes enforcer script is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-graph-sweep')),
       'the graph-sweep executable is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-account-health')),
+      'the account-health probe is not in the repo').toBe(true);
 
     // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
     // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
@@ -555,6 +561,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/',
       // graphify Task 10 (O3/O6b): the sweep pair, installed the same way.
       'cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/',
+      'cp ~/ccrc/deploy/systemd/ccd-account-health.service ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -575,6 +582,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // to have already picked up the unit AGENT_BUILD_CMD installed.
     const sweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-graph-sweep.timer'));
     expect(sweepTimerAt, 'the graph-sweep timer is never enabled').toBeGreaterThan(reloadAt);
+    // A third timer, needing the same daemon-reload to have already picked up
+    // the unit AGENT_BUILD_CMD installed.
+    const healthTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-account-health.timer'));
+    expect(healthTimerAt, 'the account-health timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -591,6 +602,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
     expect(deploySh).toContain('install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
