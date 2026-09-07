@@ -8,8 +8,16 @@ export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
   fiveResetAt: number | null; sevenResetAt: number | null;
   /** The window ended and nothing has measured the new one yet, so the 0 above
-   *  is inferred from the reset timestamp rather than observed. Distinct from a
-   *  measured 0 (something ran on the account and it really is empty). */
+   *  is INFERRED rather than observed. Distinct from a measured 0 (something ran
+   *  on the account and it really is empty).
+   *
+   *  TWO writers reach this state and both set the flag: a `resetAt` that has
+   *  lapsed (fact, straight from the API) and a sample older than its own window
+   *  (inference). The flag names the PROVENANCE of the number, not which rule
+   *  derived it — the age path used to write the 0 and leave this false, which
+   *  told both UIs an unmeasured account had been measured empty.
+   *
+   *  `measured()` reads this: an inferred 0 is not a score. */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
   /** ccd's per-lane kill-switch (`~/.cc-sessions/<wrapper>-disabled`) is
    *  present, so this account cannot take work. A FLAG rather than omitting
@@ -139,17 +147,28 @@ export async function readLimits(
       // when a session renders its statusline, so an idle account's sample can
       // outlive its window by days: claude sat at seven=98 for 14h after its 7d
       // window reset, excluding it from the whole fleet.
-      const fiveRolledOver = five !== null && fiveResetAt !== null && now >= fiveResetAt;
-      const sevenRolledOver = seven !== null && sevenResetAt !== null && now >= sevenResetAt;
+      //
+      // `let`, not `const`: the age fallback below is the SECOND writer of the
+      // same conclusion, and it used to write the inferred 0 while leaving these
+      // false. The flag's contract is "the 0 above is inferred rather than
+      // observed" — not "a resetAt lapsed" — so a path that inferred a 0 and
+      // left the flag false was asserting a measurement it had not made.
+      let fiveRolledOver = five !== null && fiveResetAt !== null && now >= fiveResetAt;
+      let sevenRolledOver = seven !== null && sevenResetAt !== null && now >= sevenResetAt;
       if (fiveRolledOver) five = 0;
       if (sevenRolledOver) seven = 0;
 
       // Fallback for a file with no reset fields (the gpt 429 exclusion, and
       // anything written before those fields existed): a sample older than its
       // own window has certainly rolled over.
+      //
+      // The `!fiveRolledOver` guards STAY. They say the FACT wins over the
+      // INFERENCE — the resetAt rule has already reached this conclusion and the
+      // age rule may not re-derive it. They produce the same value either way
+      // today, which is exactly why deleting them would be invisible.
       if (ts !== null) {
-        if (!fiveRolledOver && five !== null && now - ts > FIVE_WINDOW) five = 0;
-        if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) seven = 0;
+        if (!fiveRolledOver && five !== null && now - ts > FIVE_WINDOW) { five = 0; fiveRolledOver = true; }
+        if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) { seven = 0; sevenRolledOver = true; }
       }
 
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,

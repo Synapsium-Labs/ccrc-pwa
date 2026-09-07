@@ -2657,8 +2657,8 @@ export interface AccountUsage {
   ts: number | null;
   fiveResetAt: number | null;   // epoch seconds the 5h window resets
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
-  fiveRolledOver: boolean;      // the 5h window reset; the 0 above is inferred, not measured
-  sevenRolledOver: boolean;     // the 7d window reset; the 0 above is inferred, not measured
+  fiveRolledOver: boolean;      // the 5h window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
+  sevenRolledOver: boolean;     // the 7d window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
   disabled: boolean;            // ccd's kill-switch for this lane is on
 }
 

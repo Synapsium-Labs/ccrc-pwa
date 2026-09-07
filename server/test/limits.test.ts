@@ -61,6 +61,40 @@ describe('readLimits — a window that has rolled over', () => {
     expect(l['measured']).toMatchObject({ five: 0, fiveRolledOver: false });
     expect(l['inferred']).toMatchObject({ five: 0, fiveRolledOver: true });
   });
+
+  it('an age-inferred zero carries the same flag a resetAt-inferred one does', async () => {
+    // The flags' whole contract is "the 0 above is inferred rather than
+    // observed" (the AccountLimits docstring). TWO rules can reach that state:
+    // a lapsed resetAt, which is fact straight from the API, and a sample older
+    // than its own window, which is inference. Both write the same inferred 0,
+    // so both have to set the same flag — the flag names the PROVENANCE of the
+    // number, not which rule derived it.
+    //
+    // Left false, the age path told AccountsScreen's `Bar` (rolledOver ? 'reset'
+    // : `${pct}%`) that an account nobody had measured in six hours was measured
+    // empty — the exact collapse that component's own comment says it never
+    // makes.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    const dir = path.join(home, '.cc-limits');
+    mkdirSync(dir, { recursive: true });
+    const now = 1785231736;
+    // No resetAt fields at all — the gpt 429-exclusion shape, and anything
+    // written before those fields existed. 20000s is past the 5h window and
+    // nowhere near the 7d one, so exactly one half is inferred and the other
+    // stays a real measurement. A fixture that rolled BOTH could not tell a
+    // per-field flag from a per-row one.
+    writeFileSync(path.join(dir, 'aged.json'),
+      JSON.stringify({ five: 99, seven: 80, ts: now - 20000 }));
+
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
+    expect(l['aged'], 'the 5h half is inferred and must say so').toMatchObject({
+      five: 0, fiveRolledOver: true,
+    });
+    expect(l['aged'], 'the 7d half is a real measurement and must NOT say otherwise').toMatchObject({
+      seven: 80, sevenRolledOver: false,
+    });
+  });
 });
 
 describe('disabled lanes', () => {
