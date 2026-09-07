@@ -534,6 +534,64 @@ _hook_ccrc_card() {
   return 0
 }
 
+# ── THE PROGRAM SUBJECT (R7) ────────────────────────────────────────────
+# QUOTE THE BYTES, NEVER NARRATE THE PROGRAM. `rundefs.ts` declares the reason
+# string is never parsed back anywhere in this tree; `wave-lifecycle.md` forbids
+# inferring a wave from it ("never parse a hold reason to learn what wave you
+# are on. Ask `GET /api/runs`") and the coordinator skill forbids inferring a
+# role — pinned VERBATIM by `coordinator-skill.test.ts`. So this function
+# QUOTES and POINTS: the only thing it derives is WHICH SENTENCE to say.
+#
+# It is also empirically necessary. One program on this box read 1/5 -> 2/6 ->
+# 3/6 -> 4/6 -> 5/7 -> 6/7 -> 7/8 -> 8/9: the denominator was revised upward
+# five times, so "wave 3 of 6" would have been wrong five times over.
+#
+# THE SHAPE GATE IS THE SANITISER TOO. A hold that fails it is unspeakable and
+# the subject is silent, which is what closes the ANSI, newline and oversize
+# hazards structurally rather than by a clip that a later subject can forget.
+# `=~` is affordable here — once per SessionStart, not once per row.
+_hook_hold_card() {
+  CARD_HOLD=""
+  [ -e "$CCRC_CARD_OFF" ] && return 0
+  local rc h wd="" subj="this workspace"
+  _ct_read "$REG/$id.hold"; rc=$?
+  [ "$rc" -eq 1 ] && return 0                      # absent — nothing to say
+  if [ "$rc" -eq 2 ]; then                         # unreadable — doubt reads as HELD
+    CARD_HOLD="ccrc-program: this workspace is held and the hold's reason could not be read — \`~/.cc-sessions/$id.hold\` exists but is not a readable file. Every other reader on this box treats that as HELD. If a program wave is running here, \`~/.local/bin/ccrc-api runs list\` is the only thing that can say so."
+    return 0
+  fi
+  h="$CT_V"
+  (( ${#h} <= CCRC_HOLD_MAX )) || return 0
+  [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
+  # AN ARCHIVE DOES NOT CLEAR A HOLD. `cmd_ws_archive` does no registry rm, and
+  # `close.ts`'s failed+archive arm releases nothing, so the bytes outlive the
+  # workspace. Live on this box today.
+  if [ -e "$REG/$id.archived" ]; then
+    CARD_HOLD="ccrc-program: this workspace is stamped ARCHIVED and still carries a claim — \`~/.cc-sessions/$id.hold\` reads \`$h\`. An archive does not clear a hold, so those bytes are the residue of a claim, not an assignment. Take that to the operator rather than starting a wave on it."
+    return 0
+  fi
+  # ONE EMITTED STRING, TWO REFERENTS. The graphify subject measures the
+  # payload's cwd; this one measures the tmux session id. A session that cd'd,
+  # or a second window opened in `cc-<held-id>`, makes "this workspace" and
+  # "this tree" different subjects with no way for the reader to tell — so on
+  # disagreement, or when the cwd could not be measured at all, the card names
+  # the workspace by path and drops the demonstrative.
+  _ct_read "$REG/$id.workdir" && wd="$CT_V"
+  if [ -z "${GM_CWD:-}" ] || { [ -n "$wd" ] && [ "$GM_CWD" != "$wd" ]; }; then
+    subj="the workspace \`$id\`${wd:+ (\`$wd\`)}"
+  fi
+  # NO ` run:` SUFFIX means no dispatch placed it: `closeRun`'s non-final arm
+  # writes `holdReason(program, wave+1, waveOf, null)` for a run that does not
+  # exist yet, and `ledger-template.md` still instructs a hand hold.
+  case "$h" in
+    *" run:"*) ;;
+    *) CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which is the \`ccrc-worker\` skill's declared trigger. It names NO run: a close claimed this workspace for a next wave, or a human wrote it by hand — no dispatch placed it. Run \`~/.local/bin/ccrc-api runs list\` before acting on it; whether any run is open, and whether a brief was sent, are answered there and never by this file."
+       return 0 ;;
+  esac
+  CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which is the \`ccrc-worker\` skill's declared trigger. Run that skill; its first read is \`~/.local/bin/ccrc-api mail list --to $id\`, and a brief you already acked is not listed again — the plan it named is the durable record. The hold can outlive the run that wrote it: whether that run is still open, and whether any brief was sent, are answered only by \`~/.local/bin/ccrc-api runs list\`, never by this file."
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -601,6 +659,21 @@ CCRC_ID_MAX=128
 # `SUPERVISED_FRESH_MS` (`shared/api.ts`) in seconds — the same 120 s window
 # `_session_state`'s bash twin uses, tolerating 4 missed 30 s beats.
 CCRC_FRESH_S=120
+# The hold's own bound. `POST /api/sessions/:id/hold` validates only that the
+# reason is a non-blank string and `ccd` only blankness, while `--actor` on the
+# same verb IS capped at 512 — so this is the first bound the value meets.
+# A hold that fails it is UNSPEAKABLE and the subject is silent.
+#
+# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT. `_ct_read` reads at most
+# `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
+# been truncated and there is no way to tell from here. Refusing at 127 means
+# every value this function ever quotes was captured WHOLE. A 256 bound would
+# be unreachable — dead, and worse than absent, because a 400-character hold
+# would arrive truncated to 128, could lose its ` run:<id>` suffix in the cut,
+# and would then render as CASE B ("It names NO run") for a hold that names one.
+# Quoting a truncated hold as if it were the whole hold is exactly the lying
+# card this design exists to prevent, so the bound refuses instead.
+CCRC_HOLD_MAX=127
 # A search at the HEAD of the line is a codebase question; a search at the tail
 # of a pipeline (`vitest run | grep Tests`) is filtering output this session
 # already produced, and gating that would be the gate answering a question
@@ -746,10 +819,12 @@ case "$event" in
     # appends it only when a prior subject already put text in `$CARD`, so a
     # lone subject carries no leading or trailing space and a third subject
     # (Task 5) joins the same way, on the same separator, without re-deriving it.
-    CARD_GRAPH=""; CARD_CCRC=""; CARD=""
+    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD=""
     _hook_graph_card || true
+    _hook_hold_card  || true
     _hook_ccrc_card  || true
     CARD="$CARD_GRAPH"
+    [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
     [ -z "$CARD" ] || _hook_emit_context "$CARD"
     [[ "$src" == compact ]] && exit 0

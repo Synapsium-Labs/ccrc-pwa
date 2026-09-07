@@ -1714,3 +1714,91 @@ describe('the co-tenant subject', () => {
     });
   });
 });
+
+describe('the program subject', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  const hold = (bytes: string): void =>
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.hold'), bytes);
+  const plain = (): string => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    return card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+  };
+
+  it('quotes the hold bytes and names the worker skill', () => {
+    hold('program:account-pools wave:3/6 run:34');
+    const text = plain();
+    expect(text).toContain('`program:account-pools wave:3/6 run:34`');
+    expect(text).toContain('`ccrc-worker` skill');
+    expect(text).toContain('ccrc-api mail list --to demo-quiet-basin');
+  });
+
+  it('never narrates the wave or the role', () => {
+    hold('program:account-pools wave:3/6 run:34');
+    const text = plain();
+    expect(text).not.toMatch(/you are on wave|wave 3 of 6|you are the dispatched/i);
+  });
+
+  it('says no run placed a suffix-less hold', () => {
+    hold('program:account-pools wave:4/6');
+    const text = plain();
+    expect(text).toContain('names NO run');
+    expect(text).not.toContain('mail list --to');
+  });
+
+  it('is silent on a free-text operator hold', () => {
+    hold('keep — chasing the ccd-session-state flake');
+    expect(plain()).not.toContain('ccrc-program:');
+  });
+
+  it('is silent on a hold longer than the bound', () => {
+    hold(`program:${'x'.repeat(300)} wave:1/2 run:9`);
+    expect(plain()).not.toContain('ccrc-program:');
+  });
+
+  // The truncation trap: _ct_read caps at CCRC_ID_MAX (128), so a hold longer
+  // than that arrives SHORTENED and can lose its ` run:<id>` suffix in the cut.
+  // Rendered naively it would read as CASE B — "names NO run" — for a hold that
+  // names one. CCRC_HOLD_MAX=127 refuses anything that reached the read's bound,
+  // so a value is either quoted whole or not quoted at all.
+  it('is silent on a hold whose run suffix the read would have cut off', () => {
+    const pad = 'x'.repeat(128 - 'program: wave:1/2'.length);
+    hold(`program:${pad} wave:1/2 run:34`);
+    const text = plain();
+    expect(text).not.toContain('ccrc-program:');
+    expect(text).not.toContain('names NO run');
+  });
+
+  it('tells unreadable apart from absent', () => {
+    hold('program:account-pools wave:3/6 run:34');
+    fs.chmodSync(path.join(REG(), 'demo-quiet-basin.hold'), 0o000);
+    const text = plain();
+    expect(text).toContain('could not be read');
+    expect(text).not.toContain('`ccrc-worker` skill');
+  });
+
+  it('names an archived row\'s hold as residue, not an assignment', () => {
+    hold('program:account-pools wave:3/6 run:34');
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.archived'), 'archived=1 reason=merged:#160');
+    const text = plain();
+    expect(text).toContain('stamped ARCHIVED');
+    expect(text).toContain('residue');
+    expect(text).not.toContain('Run that skill');
+  });
+
+  it('names the workspace by path when the cwd is somewhere else', () => {
+    hold('program:account-pools wave:3/6 run:34');
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.workdir'), '/elsewhere/tree');
+    const text = plain();
+    expect(text).toContain('the workspace `demo-quiet-basin`');
+    expect(text).not.toContain('this workspace is claimed');
+  });
+
+  it('the operator file silences it', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'ccrc-card-off'), '');
+    hold('program:account-pools wave:3/6 run:34');
+    expect(plain()).not.toContain('ccrc-program:');
+  });
+});
