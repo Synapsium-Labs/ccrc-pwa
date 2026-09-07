@@ -58,6 +58,13 @@ _hook_epoch_ms() {
 # waiting) is unchanged. Every read below is a local file or a git ref.
 _hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
   local j=""
+  # THE TOTAL CLIP LIVES HERE, at the ONE site every subject passes through.
+  # A per-subject clip is one each new subject can forget; this one cannot be.
+  # It is also what stands between an operator-controlled field and `jq`'s own
+  # MAX_ARG_STRLEN (measured 131072 on this box: at 130442 bytes of card the
+  # exec fails, `|| return 0` swallows it, and the hook prints NOTHING —
+  # deleting the graphify card for that session too).
+  set -- "${1:0:$CARD_MAX_CHARS}"
   j=$(jq -cn --arg c "$1" \
     '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
     || return 0
@@ -297,7 +304,7 @@ _hook_graph_card() {
     # read (a validated 7-40 hex sha sliced to 8, digits off a 4096-byte head,
     # `head -c 64` on engine and pin).
     row="${row:0:400}"
-    _hook_emit_context "graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
+    CARD_GRAPH="graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
     return 0
   fi
 
@@ -324,7 +331,7 @@ _hook_graph_card() {
       line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated, and source-file reads are nudged, until this session's first graph query."
     fi
   fi
-  _hook_emit_context "$line"
+  CARD_GRAPH="$line"
   return 0
 }
 
@@ -351,6 +358,23 @@ GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:sp
 # a deploy and without a token.
 GRAPH_GATE_OFF="$HOME/.ccrc/graph-gate-off"
 GRAPH_GATE_MAX_BEHIND=10
+
+# ── R7: the card's bounds and its kill-switch ───────────────────────────
+# Same shape as GRAPH_GATE_OFF above and as `$REG/coordinator-paused`: a file
+# the operator touches by hand, releasable without a deploy and without a
+# token. Measured cost of the test: p50 0.016 ms.
+CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
+# THE TOTAL, argued rather than inherited. The `<600` in `session-hook.test.ts`
+# is a TAINT bound on ONE repo-controlled field — its own message says so ("an
+# unbounded repo-controlled string reached the session") — and it binds the
+# census arm alone; it stays exactly as it is. THIS is a different number for a
+# different job: the ceiling on the whole assembled card. Measured worst live
+# combination is graphify 593 + held 592 + co-tenant 176 + 2 joins = 1363, and
+# the neighbour hook on this same compact SessionStart
+# (`~/.cc-handoff/restore.sh`) caps its own additionalContext at 24576 bytes —
+# so 1800 clears everything this file can emit today by 32% and is 7.3% of the
+# scale this event already carries.
+CARD_MAX_CHARS=1800
 GRAPH_GATE_MAX_DENIALS=3
 # A search at the HEAD of the line is a codebase question; a search at the tail
 # of a pipeline (`vitest run | grep Tests`) is filtering output this session
@@ -486,7 +510,18 @@ case "$event" in
     # for compact (D-306 — PreCompact/PostCompact own that transition), and the
     # card is independent of it. Compaction is precisely when a session loses
     # what it knew, so it is the source that most needs the card.
+    # ONE EMIT, INDEPENDENT SUBJECTS. Two SessionStart envelopes make the
+    # harness's stdout parser throw and the caller returns `{answer:{}}` —
+    # which deletes BOTH cards fleet-wide, silently, with a warning that blames
+    # a quoting bug that does not exist. So the builders SET text and this is
+    # the only site that prints. `_hook_graph_card` returns early for a tree
+    # with no cwd and for a tree the sweep left no word about; a registry
+    # subject must not inherit either gate, because neither has anything to do
+    # with the registry.
+    CARD_GRAPH=""; CARD=""
     _hook_graph_card || true
+    CARD="$CARD_GRAPH"
+    [ -z "$CARD" ] || _hook_emit_context "$CARD"
     [[ "$src" == compact ]] && exit 0
     state="done" ;;
   Stop)

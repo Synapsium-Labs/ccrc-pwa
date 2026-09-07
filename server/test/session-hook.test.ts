@@ -1400,3 +1400,25 @@ describe('the PreToolUse Read nudge (R6, D-1745)', () => {
     ]);
   });
 });
+
+describe('the emitter: one line, clipped once', () => {
+  it('clips the assembled card at the emitter, on every arm', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+    expect(text.length).toBeLessThanOrEqual(1800);
+  });
+
+  it('a pathological hold cannot delete the card', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hold'),
+      `program:${'x'.repeat(200_000)} wave:1/2 run:9`);
+    const out = run({ hook_event_name: 'SessionStart', cwd: tree });
+    const text = card(out);            // card() asserts exactly one line
+    expect(text.length).toBeLessThanOrEqual(1800);
+    expect(text).toContain('graphify:');
+  });
+});
