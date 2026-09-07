@@ -213,9 +213,9 @@ describe('parseRoster', () => {
   });
 
   // The grammar is ID_RE's, deliberately, and the boundary is worth pinning
-  // rather than trusting to a shared regex source: `ccd` will carry a
-  // hand-typed bash copy of this literal (wave 2a), and a drift in the CAP is
-  // the drift a "same shape" comment would never catch.
+  // rather than trusting to a shared regex source: `ccd` carries a
+  // hand-typed bash copy of this literal (wave 2a landed it), and a drift in
+  // the CAP is the drift a "same shape" comment would never catch.
   it('accepts the full 32-character grammar and refuses what falls outside it', () => {
     const longest = `a${'b'.repeat(31)}`;
     expect(longest.length).toBe(32);

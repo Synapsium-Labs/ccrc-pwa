@@ -1,9 +1,9 @@
 // `shared/poolrule.ts` — the TypeScript spelling of design §5.2's one rule,
-// driven through `POOL_RULE_CASES` by this suite alone today. `ccd`'s bash
-// `_pool_ok` will be driven through the same table once wave 2a lands it —
-// two implementations, one table, so either drifting will red its own suite
-// against the same rows, which is what "spelled once per language" has to
-// mean when the languages cannot share code. The PWA will not be a third:
+// driven through `POOL_RULE_CASES` by this suite, and `ccd`'s bash `_pool_ok`
+// is now driven through the same table too (`server/test/ccd-pool-ok.test.ts`,
+// wave 2a) — two implementations, one table, so either drifting reds its own
+// suite against the same rows, which is what "spelled once per language" has
+// to mean when the languages cannot share code. The PWA will not be a third:
 // wave 4's `splitByPool` is to call this function rather than re-deriving it.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';

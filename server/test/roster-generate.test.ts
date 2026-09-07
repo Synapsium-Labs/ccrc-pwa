@@ -224,11 +224,11 @@ describe('generateAccountsSh — the pool projection', () => {
 
   it('is defined even when NO account is tagged, so `declare -F` is a version probe', () => {
     // Two independent things depend on the unconditional emission: ccd's
-    // `_acct_pool` (wave 2a) will ask `declare -F _ccrc_pool` to learn whether
-    // this box's accounts.sh knows about pools at all, and a new ccd will call
-    // the function every 5 seconds — a conditional emission would be
-    // `command not found` on the supervisor's hot loop, on every box whose
-    // roster has no tags yet.
+    // `_acct_pool` (wave 2a landed it) asks `declare -F _ccrc_pool` to learn
+    // whether this box's accounts.sh knows about pools at all, and a new ccd
+    // will call the function every 5 seconds once wave 2b wires the swap tick
+    // — a conditional emission would be `command not found` on the
+    // supervisor's hot loop, on every box whose roster has no tags yet.
     expect(sh(untaggedHome, 'declare -F _ccrc_pool >/dev/null && echo yes')).toBe('yes');
     expect(sh(untaggedHome, "_ccrc_pool 'a' ; echo \"rc=$?\"")).toBe('rc=0');
   });

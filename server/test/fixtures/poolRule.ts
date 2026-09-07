@@ -96,18 +96,19 @@ export const POOLED_TEST_ROSTER = {
 
 /**
  * One row of the pool-rule truth table — the ONE definition of the rule's
- * cases. Today only `poolRule` (`shared/poolrule.ts`) is driven through these
- * rows, by this table's own suite (`pool-rule-core.test.ts`). It owes two more
- * callers: wave 3's server module and wave 4's PWA `splitByPool` are to
- * value-import it rather than re-deriving the rule. `ccd`'s bash `_pool_ok`
- * will be the OTHER spelling (wave 2a) — the two cannot share code across the
- * language boundary, so once it lands it will share these FIXTURES instead,
- * exactly as `fixtures/leastLoaded.ts` already does for the placement rule.
- * Until then, "either drifts, its own suite reds against these rows" names an
- * obligation on wave 2a, not machinery that exists yet.
+ * cases. `poolRule` (`shared/poolrule.ts`) is driven through these rows by
+ * this table's own suite (`pool-rule-core.test.ts`), and `ccd`'s bash
+ * `_pool_ok` — the OTHER spelling (wave 2a landed it) — is now driven through
+ * the SAME rows by `server/test/ccd-pool-ok.test.ts`, exactly as
+ * `fixtures/leastLoaded.ts` already does for the placement rule: the two
+ * cannot share code across the language boundary, so they share these
+ * FIXTURES instead, and either drifting reds its own suite against these
+ * rows. It still owes two more callers: wave 3's server module and wave 4's
+ * PWA `splitByPool` are to value-import `poolRule` rather than re-deriving
+ * the rule.
  *
  * `expect` is deliberately a THIRD vocabulary rather than either
- * implementation's own: bash will answer rc 0/1/2 and TypeScript answers a
+ * implementation's own: bash answers rc 0/1/2 and TypeScript answers a
  * discriminated union, and writing the table in either idiom would quietly make
  * it that side's fixture with the other side translating. Mapping:
  *

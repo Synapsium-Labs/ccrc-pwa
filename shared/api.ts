@@ -1427,7 +1427,8 @@ export interface ProjectRow {
  * FOUR states, and no reader may fold one into another. `unreadable` (the file
  * is there and could not be read — EACCES, a directory planted at the path, a
  * symlink loop) and `malformed` (it was read and is not one pool name) are the
- * two ways NOBODY DECIDES: creation must refuse naming the file (wave 2a), the
+ * two ways NOBODY DECIDES: creation refuses, naming the file (wave 2a landed
+ * it — `ccd/ccd`'s `cmd_ws_add` refusal names `$POOLS_DIR/$project`), the
  * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
  * Folding either into `untagged` would silently LIFT the constraint — the
  * overloaded-null defect this tree refuses at a seam, in its most expensive
@@ -4751,6 +4752,19 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
+  | 'rehome'        // RESERVED, and nothing emits it yet — measured, `rehome`
+                    // appears in `ccd/ccd` only as a member of its `_LC_ACTS`
+                    // vocabulary array (`grep -n '_LC_ACTS\|rehome' ccd/ccd`),
+                    // with no `_lc_emit` naming it. The act it is
+                    // reserved FOR is a session's HOME account moving: the
+                    // pool re-seed (account pools §5.5.4, wave 2b) and `ccd
+                    // prefer`, which writes `.home` and journals nothing.
+                    // DISTINCT FROM `swap`: `swap` moves the session it is
+                    // running on, `rehome` will move the account it returns
+                    // to. Declared ahead of its writer for the reason `gc`
+                    // below gives — this vocabulary is wire-facing and
+                    // additive-only, so a newer ccd emitting `rehome` at an
+                    // older server is what absence-permits exists to survive.
   | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
                     // per-row removals go out as `destroy` with `verb ws-gc`
                     // (ccd:8699, ccd:8812). A run-level line would need an
@@ -4771,7 +4785,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, gc: true, spawn: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true,
   unknown: true,
 };
