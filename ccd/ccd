@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f48f160f21a7d5c6fcc7e7dcbfa7f3c66d18392c43af9473322837331423b995
+# ccrc:generated 1 sha256=36719063d76d51d67477275312d53681caa6e325bd9c34667cee49d826416675
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11689,7 +11689,12 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # `_swap_target` can hand a wrong-pool account to a pool-aware `cmd_swap`.
   # The refusal there must be LOUD — a marker and a banner — because nothing is
   # reading this unit's exit code. Set inside the `bash -c` string, dynamically
-  # visible to the re-exec, exactly as CCD_SWAP_DETACHED is at ccd:14075.
+  # visible to the re-exec, exactly as CCD_SWAP_DETACHED is — set inside
+  # `cmd_swap`'s own detach arm, in its `_svc_run_detached bash -c` line
+  # (`grep -n 'CCD_SWAP_DETACHED=1' ccd/ccd`). Stated as a grep, not a line
+  # number, for the reason D-1850's own citation gives it: a number goes
+  # stale the moment code above it moves — this exact citation already did,
+  # inside this same task's own fix round, before it was ever re-measured.
   _svc_run_detached \
     bash -c "sleep $jitter; CCD_SWAP_AUTO=1 exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
@@ -13991,8 +13996,10 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing sta
 }
 
 _crosspool_mark() {   # id project-pool account — record a DELIBERATE crossing
-  # One dot-free registry field, so `_reg_purge` (ccd:1552, one-dot rule
-  # stated at ccd:1555) purges it with the row. `cmd_swap --cross-pool`'s
+  # One dot-free registry field, so `_reg_purge` (`grep -n '^_reg_purge()'
+  # ccd/ccd`; its one-dot rule is stated in that same function's own header
+  # comment, "one dot, no more" — grepped, not line-numbered, because Task 7
+  # edits that comment block) purges it with the row. `cmd_swap --cross-pool`'s
   # success tail is this field's first writer; `cmd_start --cross-pool` and
   # `cmd_prefer` are Task 6's, and will call the same spelling.
   _reg_set "$1" crosspool "$(date +%s) $2 $3"
@@ -14223,8 +14230,9 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # could not attribute.
   # `dec.*`, not `meas.*` (§14 O6): the dec namespace is for a DECLARED
   # operator choice, and a crossing is declared — the flag is the declaration.
-  # The array form is the `cmd_ws_add` idiom (`lc_dec`, ccd:4202): an empty
-  # array under `set -u` needs bash >= 4.4, which this file already requires.
+  # The array form is the `cmd_ws_add` idiom (`grep -n 'local lc_dec=()'
+  # ccd/ccd`): an empty array under `set -u` needs bash >= 4.4, which this
+  # file already requires.
   local lc_cross=()
   [[ -n "$crossing" ]] && lc_cross=(dec.crosspool 1)
   _lc_done swap "$id" "" meas.from "$cur" meas.wrapper "$target" meas.uuid "$uuid" "${lc_cross[@]}"
