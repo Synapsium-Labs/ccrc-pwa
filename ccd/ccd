@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5dd4021136f103c3ddd8fb33bc110ffe1f4f4ef1f4388bcc86547cc28515c5e3
+# ccrc:generated 1 sha256=c382fdc4f0baabf2ba129a817bdcae52135ef9f2e4ed637ce74f7df36ac9dc00
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11987,11 +11987,31 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # still admits it, and admits it for a reason that no longer depends on this
     # function's score: it refuses only a KNOWN half at the ceiling.
     #
-    # 100 is exact, not a large-ish number. `_avail` above has already rejected
-    # every candidate scoring >= SWAP_CEILING (98), so a measured candidate
-    # that reaches this line is at most 97 and always outranks an unmeasured
-    # one — while 100 is still far below `best_score`'s 999 sentinel, so an
-    # unmeasured candidate is picked the moment it is the only one left.
+    # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
+    # — not one. This paragraph used to cite `_avail` alone ("has already
+    # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
+    # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
+    # does not reject on a SCORE any more, it refuses only a KNOWN half at the
+    # ceiling. The derivation that actually holds:
+    #
+    #   1. A candidate reaches the comparison below carrying a NUMBER only if
+    #      `_limit_score` returned one, and it returns one only when BOTH
+    #      halves are measured.
+    #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
+    #
+    # Both halves known and both < 98 makes their max <= 97, so every SCORED
+    # candidate outranks 100 — while 100 is still far below `best_score`'s 999
+    # sentinel, so an unmeasured candidate is picked the moment it is the only
+    # one left.
+    #
+    # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
+    # the split it is eligible and SCORELESS at the same time — one half at 40,
+    # the other's window merely ended: `_avail` admits it (no known half at the
+    # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
+    # tier at 100, NOT in the measured one, and that is correct — one known half
+    # bounds the truth only from below. A reader sent to `_avail` for the <= 97
+    # claim would conclude the opposite.
+    #
     # Unmeasured candidates tie with each other at 100 and the strict `<` takes
     # the first in pool order, i.e. roster declaration order, the same
     # tie-break `_ws_least_loaded` and `projectHome` use.
@@ -12010,13 +12030,38 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
     # preference and must never cost eligibility.
     #
-    # 100 is the same exact number, for the same exact reason, as the `:=100`
-    # above: `_avail` has already rejected every candidate at or over
-    # SWAP_CEILING (98), so any measured candidate reaching this line is at most
-    # 97 and outranks a condemned one — while 100 is far below `best_score`'s
-    # 999 sentinel, so a condemned candidate is still picked the moment it is
-    # the only one left.
-    _authdead "$cand" && sc=100
+    # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+    # This was `sc=100` — the same number as the `:=100` above — until fix round
+    # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
+    # TELEMETRY, because telemetry is written by a session rendering its
+    # statusline and nothing can run there. So its last sample ages out
+    # (`_limit_field` retracts a window that has ended), `_limit_score` answers
+    # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
+    # entire effect was the few hours in which a condemned lane still carried
+    # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
+    # marked lane earlier in roster order BEAT a healthy quiet one at the strict
+    # `-lt` below — a rescue landing on the account we have measured as dead.
+    # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
+    # tick of wrongness.
+    #
+    # THE FULL ORDER, derived rather than asserted — the derivation above
+    # applies unchanged, and this number extends it by exactly one:
+    #
+    #   measured  <= 97   both halves known (`_limit_score`) and neither at the
+    #                     ceiling (`_avail`) — see the two facts above
+    #   unmeasured   100   eligible, no score: never measured, window ended, or
+    #                     half-measured
+    #   auth-dead    101   eligible, and measured as not authenticating
+    #   sentinel     999   `best_score`'s initial value
+    #
+    # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+    # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
+    # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+    # is still far below the 999 sentinel, so a condemned candidate is picked
+    # the moment it is the only one left — eligibility is untouched by this
+    # change, only preference. That is the same rule the `:=100` above obeys and
+    # the reason this line is an assignment and not a `continue`.
+    _authdead "$cand" && sc=101
     [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
   done
   [[ -n "$best" ]] && echo "$best"

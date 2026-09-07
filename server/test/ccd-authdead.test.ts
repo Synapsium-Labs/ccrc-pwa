@@ -171,15 +171,39 @@ describe('_swap_target ranks an auth-dead lane LAST, and never makes it ineligib
     expect(sh('_swap_target claude-demo claude claude || true')).toBe('claude-d');
   });
 
-  it('an auth-dead lane ties with an unmeasured one and loses the tie to roster order', () => {
-    // Both land at 100 — the block unmeasured already occupies — and the strict
-    // `<` takes the first in pool order. Pinned so a later edit that gave
-    // auth-dead its own worse-than-unmeasured rank has to say so out loud.
+  it('RANKS BELOW unmeasured, losing to a silent lane it would beat on roster order', () => {
+    // SAYING IT OUT LOUD, as the version of this case that pinned the two as
+    // EQUAL asked the edit that separated them to. They are no longer equal:
+    // auth-dead is 101, one tier below unmeasured's 100, so `claude-a` loses to
+    // `claude-b` here DESPITE winning roster order — which is exactly what the
+    // old equality could not express, because at a shared 100 the strict `<`
+    // handed the rescue to whichever condemned lane came first.
+    //
+    // Why the tier and not the tie: an auth-dead lane cannot refresh its own
+    // telemetry (nothing runs there to render a statusline), so within hours it
+    // reads unmeasured anyway and `sc` is already 100 from `: "${sc:=100}"`. At
+    // a shared 100 the guard's whole effect was the window in which a dead lane
+    // still carried fresh both-halves telemetry — here, `claude-a`'s 5/5.
     seedSession('claude-demo', 'claude');
     writeLimits('claude', 99, 99);        // cur: pinned
-    writeLimits('claude-a', 5, 5);        // dead -> 100
+    writeLimits('claude-a', 5, 5);        // dead -> 101, not the 5 it measures
     mark('claude-a', '1757203200 auth-401');
     // claude-b and claude-d have no telemetry file at all -> unmeasured -> 100
-    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-b');
+  });
+
+  it('loses to a healthy lane when NEITHER has telemetry — the steady state', () => {
+    // THE CASE THE OLD EQUALITY LOST, and the reason for the tier. This is not
+    // a corner: it is what an auth-dead lane looks like a few hours after the
+    // probe marks it, every time, because it cannot report and `_limit_field`
+    // retracts the sample whose window has ended. Both lanes are scoreless, so
+    // the ONLY thing separating them is the health verdict — at `sc=100` the
+    // strict `<` gave the rescue to `claude-a` on roster order alone, sending a
+    // hard-blocked session to the one account measured as not authenticating.
+    seedSession('claude-demo', 'claude');
+    writeLimits('claude', 99, 99);        // cur: pinned, must leave
+    mark('claude-a', '1757203200 auth-401');   // dead, and no telemetry -> 101
+    // claude-b, claude-d: healthy and silent -> unmeasured -> 100
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-b');
   });
 });
