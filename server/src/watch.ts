@@ -2521,7 +2521,9 @@ export class FleetWatcher {
       store.openUnleasedRun({
         automationId: row.id, now,
         occurrence: {
-          trigger: 'schedule', scheduledFor: decision.scheduledFor, dstShifted: false,
+          // MEASURED BY L1, never a literal here: the missed arm carries its
+          // own `dstShifted` for exactly this write.
+          trigger: 'schedule', scheduledFor: decision.scheduledFor, dstShifted: decision.dstShifted,
           next: toScheduleStamp(decision.advance),
         },
         settlement: { outcome: 'missed' },

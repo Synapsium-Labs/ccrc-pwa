@@ -176,6 +176,70 @@ describe('POST /api/automations — create', () => {
     const res = await create(app, { name: '', project: PROJECT, prompt: 'go', cadence: WALL_CLOCK });
     expect(res.statusCode).toBe(400);
   });
+
+  it('400 for a prompt with no non-blank line — the delivery seam would report it DELIVERED', async () => {
+    // An empty needle disables both halves of the send proof: `sendPrompt`
+    // pre-sets `echoed = needle === ''` and then accepts an empty box as
+    // proof the turn left. So a blank prompt spawns a real session, verifies
+    // zero keystrokes, and settles the run `ok` — the run history, which is
+    // the operator's only review instrument and the whole basis of the §7 arm
+    // gate, reports a clean tick for a session that was never prompted. An
+    // `ok` settle also resets `consecutiveFailures`, so the failure ceiling
+    // never brakes it: an armed row spawns a fresh worktree, branch, tmux
+    // session and unit every tick, none of them reclaimable except by hand.
+    //
+    // `.trim()`, not `!== ''`: `composePrompt` strips leading blank LINES
+    // only, so a whitespace-only prompt reaches the identical empty needle.
+    // The sibling caller of the same `sendPrompt` — `POST /api/sessions/:id/
+    // prompt` — has refused an empty text with 400 all along; this route is
+    // what omitted the guard.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    for (const prompt of ['', '   ', '\n\t \n']) {
+      const res = await create(app, validBody({ prompt }));
+      expect(res.statusCode, `prompt ${JSON.stringify(prompt)} must not be accepted`).toBe(400);
+    }
+    expect(w.coord.automations({}).length, 'and nothing was written').toBe(0);
+    // The same one parse site serves the edit route, so it is covered too.
+    const id = (await create(app, validBody())).json().automation.id as number;
+    const edit = await app.inject({
+      method: 'POST', url: `/api/automations/${id}`, payload: validBody({ prompt: '  ' }),
+    });
+    expect(edit.statusCode, 'an armed, proved automation must not be editable to a blank prompt').toBe(400);
+    expect(w.coord.automation(id)!.prompt).toBe('go');
+  });
+
+  it('400 for a number the store could store but never read back — one such row poisons every read', async () => {
+    // `node:sqlite` throws `RangeError: Value is too large to be represented
+    // as a JavaScript number` when it reads an INTEGER above 2^53-1, and
+    // `.all()` throws for the WHOLE result set, not the one row. So a single
+    // accepted `everyMinutes: 2**53` (or `graceMs: 1e16`, which needs no bad
+    // cadence at all) makes `GET /api/automations` 500 for EVERY row for
+    // ever, freezes the `{type:'automations'}` frame (the sweep's emit
+    // swallows the throw every tick), and leaves the operator no id to
+    // retire, because the route's own read-back throws before it can answer.
+    // The create path is not inside a `tx()`, so the poison commits.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+    const healthy = (await create(app, validBody())).json().automation.id as number;
+
+    const bodies: Record<string, unknown>[] = [
+      { cadence: { kind: 'interval', everyMinutes: 2 ** 53 } },
+      { graceMs: 1e16 },
+      { cadence: { kind: 'wall-clock', days: 2 ** 53 + 127, minuteOfDay: 540, tz: 'UTC' } },
+      { cadence: { kind: 'wall-clock', days: 0b1111111, minuteOfDay: 2 ** 53, tz: 'UTC' } },
+    ];
+    for (const over of bodies) {
+      const res = await create(app, validBody(over));
+      expect(res.statusCode, `${JSON.stringify(over)} must be refused: ${res.body}`).toBeGreaterThanOrEqual(400);
+      expect(res.statusCode).toBeLessThan(500);
+    }
+    // THE PROPERTY, not the status code: the table still reads.
+    expect(w.coord.automations({}).map((a) => a.id)).toEqual([healthy]);
+    expect((await app.inject({ method: 'GET', url: '/api/automations' })).statusCode).toBe(200);
+  });
 });
 
 describe('the arm gate — never-run-by-hand, and what clears it', () => {

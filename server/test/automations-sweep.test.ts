@@ -417,6 +417,32 @@ describe('FleetWatcher.sweepAutomations — the schedule path', () => {
     expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
   });
 
+  it('a recorded MISSED occurrence carries the shift it was measured with, not a literal false', async () => {
+    // `dstShifted` is a measured property of the occurrence being consumed,
+    // and L1 measures it — but the record-missed arm of `FireDecision` did
+    // not carry it, so L4 wrote `dstShifted: false` as a literal into the run
+    // row. That is L4 DECIDING (a fact it never measured), and it is the one
+    // shape the delivery ring may not take. The fire arms carried the
+    // measurement all along; only the missed arm invented one.
+    //
+    // A stored occurrence at a wall clock OTHER than the one the cadence
+    // names is exactly what `occurrenceShifted` answers true for — that is
+    // what a spring-forward gap leaves behind, and here it is set directly.
+    const { w, coord } = await rig();
+    const id = makeArmed(coord, NOW, NOW, 60_000);
+    // 09:00 UTC is the cadence; put the pending occurrence at 10:00 UTC and
+    // make it later than grace, so the decision is record-missed.
+    const shifted = Date.UTC(2026, 6, 1, 10, 0, 0);
+    coord.db.prepare('UPDATE automations SET nextRunAt = ? WHERE id = ?').run(shifted, id);
+    vi.setSystemTime(shifted + 3_600_000);
+    await w.sweepAutomations();
+    const missed = coord.automationRuns(id, 5).find((r) => r.outcome === 'missed');
+    expect(missed, 'the occurrence was recorded missed').toBeDefined();
+    expect(missed!.dstShifted,
+      'the run row must carry the shift L1 measured for that occurrence').toBe(true);
+    w.stop();
+  });
+
   it('a paused automation does not fire, even past its old due time', async () => {
     const { w, coord } = await rig();
     const id = makeArmed(coord, NOW, NOW);

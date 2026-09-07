@@ -47,20 +47,38 @@ const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false,
  *  `AutomationRow.cadence` documents for the fire-path reader. */
 const cadenceOf = (sc: StoredCadence): Cadence | null => (sc.kind === 'unknown' ? null : sc);
 
+/** A NUMBER THIS STORE CAN READ BACK. `typeof === 'number'` is not enough at
+ *  a wire edge that writes to INTEGER columns: `node:sqlite` stores an
+ *  integral double at or above 2^53 happily and then throws `RangeError:
+ *  Value is too large to be represented as a JavaScript number` on every
+ *  subsequent read — and `.all()` throws for the WHOLE result set, not the
+ *  one row. So a single accepted `everyMinutes: 2**53` (or `graceMs: 1e16`,
+ *  or a `days` mask whose int32 truncation happens to be legal) would make
+ *  `GET /api/automations` fail for EVERY automation for ever, freeze the
+ *  live frame, and leave the operator no id to retire the row by — the
+ *  route's own read-back throws before it can answer. Refusing at the door
+ *  is the only place this is cheap. This is the MECHANICAL half; whether a
+ *  well-formed number is a sane SCHEDULE stays `planSchedule`'s decision
+ *  (`409 bad-schedule`), which is a different question with a different
+ *  answer. */
+const storableInt = (v: unknown): number | null =>
+  (typeof v === 'number' && Number.isSafeInteger(v) ? v : null);
+
 /** `req.body`/`req.query`'s unknown shape, parsed by hand — no schema layer
  *  in this tree (`coord/routes.ts`'s own idiom throughout). */
 function parseCadence(v: unknown): Cadence | null {
   if (v === null || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
   if (o.kind === 'wall-clock') {
-    if (typeof o.days !== 'number' || typeof o.minuteOfDay !== 'number' || typeof o.tz !== 'string') {
-      return null;
-    }
-    return { kind: 'wall-clock', days: o.days, minuteOfDay: o.minuteOfDay, tz: o.tz };
+    const days = storableInt(o.days);
+    const minuteOfDay = storableInt(o.minuteOfDay);
+    if (days === null || minuteOfDay === null || typeof o.tz !== 'string') return null;
+    return { kind: 'wall-clock', days, minuteOfDay, tz: o.tz };
   }
   if (o.kind === 'interval') {
-    if (typeof o.everyMinutes !== 'number') return null;
-    return { kind: 'interval', everyMinutes: o.everyMinutes };
+    const everyMinutes = storableInt(o.everyMinutes);
+    if (everyMinutes === null) return null;
+    return { kind: 'interval', everyMinutes };
   }
   return null;
 }
@@ -80,13 +98,25 @@ function parseAutomationBody(body: unknown): ParsedAutomationBody | 'invalid' {
   const o = body as Record<string, unknown>;
   if (typeof o.name !== 'string' || o.name.trim() === '') return 'invalid';
   if (typeof o.project !== 'string' || o.project.trim() === '') return 'invalid';
-  if (typeof o.prompt !== 'string') return 'invalid';
+  // `.trim()`, like its two siblings above, and for a harder reason than
+  // theirs: a prompt with no non-blank line composes to the empty string, and
+  // an empty needle disables BOTH halves of `sendPrompt`'s proof — the echo
+  // check is pre-satisfied and an untouched empty box reads as proof the turn
+  // was submitted. So a blank prompt would spawn a real session, deliver
+  // nothing, and settle the run `ok`: the run history, which is the
+  // operator's only review instrument and the whole basis of the §7 arm gate,
+  // would report a clean tick for a session that was never prompted, and the
+  // `ok` would reset `consecutiveFailures` so the ceiling never braked it.
+  // The sibling caller of the same `sendPrompt` (`POST /api/sessions/:id/
+  // prompt`) has refused an empty text all along.
+  if (typeof o.prompt !== 'string' || o.prompt.trim() === '') return 'invalid';
   const cadence = parseCadence(o.cadence);
   if (cadence === null) return 'invalid';
   let graceMs = AUTOMATION_GRACE_MS_DEFAULT;
   if (o.graceMs !== undefined) {
-    if (typeof o.graceMs !== 'number' || !Number.isFinite(o.graceMs) || o.graceMs <= 0) return 'invalid';
-    graceMs = o.graceMs;
+    const g = storableInt(o.graceMs);
+    if (g === null || g <= 0) return 'invalid';
+    graceMs = g;
   }
   return { name: o.name, project: o.project, prompt: o.prompt, cadence, graceMs };
 }

@@ -5994,6 +5994,18 @@ export const AUTOMATION_PRESSURE_CEILING = 90;
  *  declared here because it is a wire-level constant like the caps above. */
 export const AUTOMATION_MIN_INTERVAL_MINUTES = 60;
 
+/** The interval cadence's CEILING, in MINUTES — a year and a day. The floor
+ *  stops `every 1 minute` being spellable; this stops a number that is not a
+ *  schedule at all. It is not only a taste question: `nextRunAt = now +
+ *  everyMinutes * 60_000` has to stay an exactly-representable integer that
+ *  an INTEGER column can hold and `node:sqlite` can read back — above 2^53
+ *  a read throws `RangeError` for the WHOLE result set, so one such stored
+ *  row makes every automations read fail, including the read that would let
+ *  an operator retire it. Policed in `planSchedule` beside the floor; the
+ *  ROUTE separately refuses any number that is not a safe integer, which is
+ *  the other, mechanical half of the same question. */
+export const AUTOMATION_MAX_INTERVAL_MINUTES = 366 * 24 * 60;
+
 /* --- Automations: the wire shapes (spec §10, §11). -------------------------- */
 
 /**

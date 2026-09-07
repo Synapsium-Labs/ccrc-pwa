@@ -32,7 +32,7 @@ import type { CcdArgv } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
-  AUTOMATION_FAILURE_CEILING, AUTOMATION_MAX_CONCURRENT, AUTOMATION_PRESSURE_CEILING,
+  AUTOMATION_FAILURE_CEILING, AUTOMATION_MAX_INTERVAL_MINUTES, AUTOMATION_MAX_CONCURRENT, AUTOMATION_PRESSURE_CEILING,
   AUTOMATION_REFUSALS, type AutomationRefusal, type AutomationStep,
 } from '../../shared/api.js';
 
@@ -404,6 +404,41 @@ describe('planSchedule', () => {
       { kind: 'wall-clock', days: 0b1111111, minuteOfDay: 540, tz: 'Not/AZone' }, 1_000, null,
     );
     expect(plan).toEqual({ nextRunAt: null, scheduleError: 'unknown-timezone' });
+  });
+
+  it('an unknown timezone answers it on the ADVANCE path too, where the sweep asks', () => {
+    // `SchedulePlan` promises a typed refusal, and the function was PARTIAL
+    // in fact: the local-tuple read for the consumed occurrence sat outside
+    // `nextOccurrence`'s own zone guard, so with a `consumedMs` — which the
+    // sweep's advance ALWAYS has — an unresolvable zone escaped as a
+    // RangeError. `processDueAutomation` runs inside a per-row catch that
+    // only logs, so nothing was written, nothing disarmed, and
+    // `dueAutomations` re-offered the row every 10 s for ever with no
+    // refusal on the phone. And since the advance is the ONLY writer of a
+    // stored `scheduleError`, the throw made `scheduleError='unknown-
+    // timezone'` unwritable by any path — the landing the spec designates
+    // for it, and the sentence `autoWords` already renders.
+    const bad = { kind: 'wall-clock', days: 0b1111111, minuteOfDay: 540, tz: 'Not/AZone' } as const;
+    expect(planSchedule(bad, 10_000, 9_000))
+      .toEqual({ nextRunAt: null, scheduleError: 'unknown-timezone' });
+    // …and the whole decision stays total, including the two shift reads.
+    expect(decideFire({ cadence: bad, graceMs: 600_000, nextRunAt: 9_000, consecutiveFailures: 0 }, 10_000, false))
+      .toMatchObject({ act: 'fire', advance: { scheduleError: 'unknown-timezone' } });
+  });
+
+  it('an interval above the ceiling answers bad-cadence — its arithmetic leaves the readable range', () => {
+    // The floor was policed and the ceiling was not, so `everyMinutes` up to
+    // 2^53 passed policy. Both ends are the same question: an interval whose
+    // next occurrence cannot be represented — let alone read back out of an
+    // INTEGER column — is not a schedule.
+    expect(planSchedule({ kind: 'interval', everyMinutes: AUTOMATION_MAX_INTERVAL_MINUTES + 1 }, 1_000, null))
+      .toEqual({ nextRunAt: null, scheduleError: 'bad-cadence' });
+    expect(planSchedule({ kind: 'interval', everyMinutes: 2 ** 53 }, 1_000, null))
+      .toEqual({ nextRunAt: null, scheduleError: 'bad-cadence' });
+    // The ceiling itself is still a schedule, and its arithmetic is exact.
+    const plan = planSchedule({ kind: 'interval', everyMinutes: AUTOMATION_MAX_INTERVAL_MINUTES }, 1_000, null);
+    expect(plan.scheduleError).toBeNull();
+    expect(Number.isSafeInteger(plan.nextRunAt)).toBe(true);
   });
 });
 

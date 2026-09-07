@@ -10,7 +10,7 @@ import {
   type Cadence, type LocalTuple,
 } from '../../../shared/schedule.js';
 import {
-  AUTOMATION_FAILURE_CEILING, AUTOMATION_MIN_INTERVAL_MINUTES,
+  AUTOMATION_FAILURE_CEILING, AUTOMATION_MAX_INTERVAL_MINUTES, AUTOMATION_MIN_INTERVAL_MINUTES,
   type AutomationOutcome, type AutomationRefusal, type AutomationState,
   type AutomationTrigger, type ScheduleError,
 } from '../../../shared/api.js';
@@ -63,6 +63,7 @@ export type FireDecision =
       readonly advance: SchedulePlan }
   | { readonly act: 'record-missed';
       readonly scheduledFor: number; readonly lateMs: number;
+      readonly dstShifted: boolean;       // of the occurrence being RECORDED
       readonly advance: SchedulePlan }
   | { readonly act: 'unschedulable'; readonly error: ScheduleError };
 
@@ -96,22 +97,58 @@ export const AUTOMATION_PUNCTUAL_MS = 60_000;
  * `consumedMs` is the occurrence being advanced past (`a.nextRunAt`), or
  * `null` for create / edit / arm.
  *
- * The ONE consumer of `AUTOMATION_MIN_INTERVAL_MINUTES`: an `interval` below
- * the floor answers `bad-cadence`. It cannot live in `shared/schedule.ts` —
- * that module is import-free and cannot read a cap (GC 8).
+ * The ONE consumer of the interval BAND: below `AUTOMATION_MIN_INTERVAL_
+ * MINUTES` or above `AUTOMATION_MAX_INTERVAL_MINUTES` answers `bad-cadence`.
+ * Neither cap can live in `shared/schedule.ts` — that module is import-free
+ * and cannot read a cap (GC 8). The ceiling is not symmetry for its own sake:
+ * the floor stops a rate a fleet cannot absorb, and the ceiling stops a
+ * number whose `nextRunAt` leaves the range an INTEGER column can hold and
+ * `node:sqlite` can read back (a read above 2^53 throws for the whole result
+ * set, so one stored row would make every automations read fail).
+ *
+ * TOTAL, as `SchedulePlan` promises. The local-tuple read for the consumed
+ * occurrence used to sit OUTSIDE `nextOccurrence`'s zone guard, so on the
+ * advance path — the only path that ever has a `consumedMs`, and the only
+ * writer of a stored `scheduleError` — a zone this build's ICU rejects
+ * escaped as the `RangeError` `localTupleAt` documents, instead of the typed
+ * refusal declared here. Converting an L0 throw into this file's own
+ * vocabulary is exactly what a policy is for; leaving it to escape wedged the
+ * row (nothing written, nothing disarmed, re-offered every 10 s for ever) and
+ * made `scheduleError='unknown-timezone'` unwritable by any path at all.
  */
 export function planSchedule(
   cadence: Cadence | null, nowMs: number, consumedMs: number | null,
 ): SchedulePlan {
   if (cadence === null) return { nextRunAt: null, scheduleError: 'bad-cadence' };
-  if (cadence.kind === 'interval' && cadence.everyMinutes < AUTOMATION_MIN_INTERVAL_MINUTES) {
+  if (cadence.kind === 'interval' &&
+      (cadence.everyMinutes < AUTOMATION_MIN_INTERVAL_MINUTES ||
+       cadence.everyMinutes > AUTOMATION_MAX_INTERVAL_MINUTES)) {
     return { nextRunAt: null, scheduleError: 'bad-cadence' };
   }
-  const afterLocal = consumedMs === null || cadence.kind === 'interval'
-    ? null : localTupleAt(cadence.tz, consumedMs);
+  let afterLocal: LocalTuple | null = null;
+  if (consumedMs !== null && cadence.kind !== 'interval') {
+    try {
+      afterLocal = localTupleAt(cadence.tz, consumedMs);
+    } catch {
+      return { nextRunAt: null, scheduleError: 'unknown-timezone' };
+    }
+  }
   const next = nextOccurrence(cadence, nowMs, afterLocal);
   if ('unschedulable' in next) return { nextRunAt: null, scheduleError: next.unschedulable };
   return { nextRunAt: next.at, scheduleError: null };
+}
+
+/** The shift of the occurrence being CONSUMED, measured — and measurable,
+ *  because `occurrenceShifted` reaches the same `localTupleAt` that throws on
+ *  a zone ICU rejects. The guard is the advance's own answer rather than a
+ *  second try/catch: `unknown-timezone` there means exactly "this cadence's
+ *  zone does not resolve", which is exactly when the shift cannot be
+ *  measured. So `false` here is never a silent collapse — the condition that
+ *  produced it rides beside it, in `advance`, where the caller already reads
+ *  it and where it disarms the row. */
+function shiftOf(cadence: Cadence, atMs: number, advance: SchedulePlan): boolean {
+  if (advance.scheduleError === 'unknown-timezone') return false;
+  return occurrenceShifted(cadence, atMs);
 }
 
 /**
@@ -148,19 +185,17 @@ export function decideFire(
   const scheduledFor = a.nextRunAt;
   const lateMs = nowMs - scheduledFor;
   const advance = planSchedule(a.cadence, nowMs, scheduledFor);
+  const dstShifted = shiftOf(a.cadence, scheduledFor, advance);
   if (lateMs < AUTOMATION_PUNCTUAL_MS) {
-    return {
-      act: 'fire', trigger: 'schedule', scheduledFor, lateMs,
-      dstShifted: occurrenceShifted(a.cadence, scheduledFor), advance,
-    };
+    return { act: 'fire', trigger: 'schedule', scheduledFor, lateMs, dstShifted, advance };
   }
   if (lateMs <= a.graceMs && !caughtUpThisBoot) {
-    return {
-      act: 'fire', trigger: 'catchup', scheduledFor, lateMs,
-      dstShifted: occurrenceShifted(a.cadence, scheduledFor), advance,
-    };
+    return { act: 'fire', trigger: 'catchup', scheduledFor, lateMs, dstShifted, advance };
   }
-  return { act: 'record-missed', scheduledFor, lateMs, advance };
+  // The missed arm carries the SAME measurement. It used to carry none, and
+  // L4 wrote `dstShifted: false` as a literal into the run row — a fact the
+  // delivery ring never measured, which is the one shape it may not take.
+  return { act: 'record-missed', scheduledFor, lateMs, dstShifted, advance };
 }
 
 // THE §8 LADDER LIVES IN THE STORE, AND ONLY THERE. An `export function
