@@ -99,8 +99,10 @@ export interface AccountDef {
    *  is stating something false.
    *
    *  DECLARED, NEVER DERIVED. The tempting derivation — `homeAble: false` plus
-   *  `telemetry: 'none'` — is exactly `gpt`: a REAL opt-in account a session
-   *  reaches on purpose with `ccd prefer`, which
+   *  `telemetry: 'none'` — is exactly `gpt`: a REAL account — an overflow lane
+   *  the auto-swapper rotates onto as a last resort while it is installed and
+   *  not kill-switched, and one an operator can send a session to with
+   *  `ccd prefer`/`ccd swap` — which
    *  `pwa/test/accounts-screen.test.tsx`'s "every account, never hidden"
    *  invariant requires a row for. No predicate over the other fields can tell
    *  the two apart, so only the operator can say which this is.

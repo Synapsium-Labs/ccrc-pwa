@@ -17,17 +17,42 @@
 // The harness never installs the roster's non-home-able account (`gpt` in
 // `DEFAULT_TEST_ROSTER`), so every pre-existing suite sees exactly the pool it
 // saw before this change; the cases below install it on purpose. Mutation
-// check, measured before this file was committed: with `_default_pool`
-// reverted to the 2026-07-26 body, FIVE of the thirteen cases go red — "adds a
-// non-home-able lane once it is installed", "does not depend on the session's
-// HOME", "the kill-switch removes it again" (its re-enable arm), "a hand-set
-// registry `pool` list still overrides" (the other session's default) and
-// "rotates onto the enabled overflow lane". The other eight are the invariants
-// that must SURVIVE the change, and pin that nothing else moved.
+// check #1 (`_default_pool`), MEASURED against this file's current 14 cases
+// (re-measured after Task 1 of the 2026-09-07 follow-up plan edited this
+// describe block — see check #2 below): with `_default_pool` reverted to the
+// 2026-07-26 body, FIVE go red — "adds a non-home-able lane once it is
+// installed", "does not depend on the session's HOME", "the kill-switch
+// removes it again" (its re-enable arm), "a hand-set registry `pool` list
+// still overrides" (the other session's default), and "...and takes the
+// overflow lane only when every home-able account is at the ceiling" (under
+// the old body claude-demo's registry `home` field is never set to `gpt`, so
+// the lane is never added to its pool at all, and the call errors instead of
+// answering `gpt`). The other nine are the invariants that must SURVIVE the
+// change, and pin that nothing else moved. Note: "rotates onto the
+// least-loaded HOME-ABLE account when home is at the ceiling" no longer
+// catches this mutation by itself (both bodies leave gpt out of the pool for
+// a session that never named it as HOME, so both answer the home-able
+// account) — check #2 below is what pins IT.
+//
+// Mutation check #2 (`_swap_target`, Task 1 of the 2026-09-07 follow-up plan
+// — "overflow is a LAST RESORT, not a peer"), measured before that commit:
+// with `_swap_target`'s two-bracket split reverted to the single
+// `best`/`best_score` ranking it replaced, TWO of the fourteen cases in the
+// second `describe` go red — "rotates onto the least-loaded HOME-ABLE account
+// when home is at the ceiling — not onto a cheaper overflow lane" and "a
+// home-able account wins over the overflow lane regardless of score — not
+// merely a tie". Both fail the same way: gpt's real telemetry (`{five: null,
+// seven: 0}`, score 0) beats every home-able candidate's honest score under a
+// single ranking, so the old loop answers `gpt` where the new one must answer
+// the home-able account. The other twelve cases do not depend on the
+// two-bracket split and stay green either way — most either install no gpt
+// lane at all, or set up a state where no candidate in EITHER bracket
+// qualifies, so ranking order between brackets cannot matter.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -52,7 +77,9 @@ const install = (w: string): void =>
 const disable = (w: string): void =>
   fs.writeFileSync(path.join(home, '.cc-sessions', `${w}-disabled`), '');
 
-const HOME_ABLE = 'claude claude-a claude-b claude-d';
+// Derived, not hand-typed, so a roster edit cannot silently drift this file's
+// expectations out of step with what the harness actually seeds.
+const HOME_ABLE = DEFAULT_TEST_ROSTER.accounts.filter((a) => a.homeAble).map((a) => a.id).join(' ');
 
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-default-pool-'); home = h.home; });
 afterEach(() => { h.cleanup(); });
@@ -113,14 +140,27 @@ describe('_default_pool: the home-able roster, plus every ENABLED overflow lane'
   });
 });
 
-describe('the rotation reaches an enabled overflow lane; placement never does', () => {
-  it('a session at the ceiling on its home rotates onto the overflow lane when it is the least loaded', () => {
+describe('the rotation reaches an enabled overflow lane only as a LAST RESORT; placement never does', () => {
+  it('rotates onto the least-loaded HOME-ABLE account when home is at the ceiling — not onto a cheaper overflow lane', () => {
+    // THE MUTATION CASE: gpt's real shape ({five: null, seven: 0}) scores 0,
+    // which beats every measured home-able candidate here on score alone. The
+    // old single-ranking loop answered `gpt`; the two-bracket rule must not.
     install('gpt');
-    writeLimits('claude', 99, 99);     // cur == home, over SWAP_CEILING: must leave
-    writeLimits('claude-a', 90, 90);
-    writeLimits('claude-b', 90, 90);
-    writeLimits('claude-d', 90, 90);
+    writeLimits('claude', 99, 99);     // cur == home, over SWAP_CEILING (98): must leave
+    writeLimits('claude-a', 90, 90);   // avail: 90 < 98 — the only home-able account under the ceiling
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude-d', 99, 99);
     writeWeeklyOnly('gpt', 0);         // the real Codex shape: no 5h window, weekly at 0
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
+  });
+
+  it('...and takes the overflow lane only when every home-able account is at the ceiling', () => {
+    install('gpt');
+    writeLimits('claude', 99, 99);     // cur == home, over the ceiling: must leave
+    writeLimits('claude-a', 99, 99);   // every home-able candidate is also over the ceiling
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude-d', 99, 99);
+    writeWeeklyOnly('gpt', 0);         // the last resort, and the only avail candidate left
     expect(sh('_swap_target claude-demo claude claude')).toBe('gpt');
   });
 
@@ -131,14 +171,17 @@ describe('the rotation reaches an enabled overflow lane; placement never does', 
     expect(sh('_swap_target claude-demo gpt claude')).toBe('claude');
   });
 
-  it('an overflow lane at its own weekly cap is not a destination', () => {
+  it('an overflow lane at its own weekly cap is not a destination even as the last resort', () => {
     install('gpt');
-    writeLimits('claude', 99, 99);
-    writeLimits('claude-a', 50, 50);
-    writeLimits('claude-b', 60, 60);
-    writeLimits('claude-d', 60, 60);
+    writeLimits('claude', 99, 99);     // cur == home, over the ceiling: must leave
+    writeLimits('claude-a', 99, 99);   // every home-able candidate over the ceiling too
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude-d', 99, 99);
     writeWeeklyOnly('gpt', 100);       // ccgpt-usage reporting the Codex weekly cap reached
-    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
+    // No candidate qualifies in either bracket, so the function's own exit
+    // code is non-zero — `|| true` is the house idiom (ccd-account-ok.test.ts)
+    // for capturing that empty stdout without throwing.
+    expect(sh('_swap_target claude-demo claude claude || true')).toBe('');
   });
 
   it('a kill-switched overflow lane is not a destination even when it is the cheapest', () => {
@@ -152,13 +195,17 @@ describe('the rotation reaches an enabled overflow lane; placement never does', 
     expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
   });
 
-  it('a home-able account wins a tie against the overflow lane — pool order is the tie-break', () => {
+  it('a home-able account wins over the overflow lane regardless of score — not merely a tie', () => {
+    // Under the two-bracket rule a home-able candidate always wins the
+    // home-able bracket first; a non-home-able one is never even compared
+    // against it, so this holds even with the WORST home-able score here
+    // against the BEST overflow score.
     install('gpt');
-    writeLimits('claude', 99, 99);
-    writeLimits('claude-a', 40, 40);
-    writeLimits('claude-b', 60, 60);
-    writeLimits('claude-d', 60, 60);
-    writeWeeklyOnly('gpt', 40);
+    writeLimits('claude', 99, 99);     // cur == home, over the ceiling: must leave
+    writeLimits('claude-a', 97, 97);   // avail, but the worst score of any candidate here
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude-d', 99, 99);
+    writeWeeklyOnly('gpt', 0);         // scores 0 — the best score in the whole pool, and still loses
     expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
   });
 
