@@ -429,6 +429,9 @@ exactly as it is."
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
+// `spawnSync` joins the file's existing `execFileSync` import — the stderr
+// assertion below needs a result object on a ZERO exit, which execFileSync
+// does not give.
 describe('the co-tenant subject', () => {
   const REG = (): string => path.join(home, '.cc-sessions');
   /** Plant a peer row: `.uuid` (the id enumeration), `.project`, `.supervised`. */
@@ -489,6 +492,11 @@ describe('the co-tenant subject', () => {
     expect(plain()).toContain('ccrc: 1 other supervised row names project `alpha`');
   });
 
+  // `spawnSync`, not `run`/`execFileSync`: this test's whole point is the
+  // STDERR channel, and only spawnSync hands it back on a zero exit. A bare
+  // `$(<f)` on a mode-000 file writes "Permission denied" to the hook's real
+  // stderr, which the harness folds into a user-visible warning on EVERY
+  // SessionStart of EVERY co-tenant session.
   it('an unreadable peer .project costs no stderr and is reported, never folded into absence', () => {
     peer('demo-quiet-basin', 'alpha', 5);
     peer('p1', 'alpha', 5);
@@ -497,15 +505,17 @@ describe('the co-tenant subject', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);
     plantGraph(tree, { built: 'deadbee' });
-    const out = execFileSync('bash', [HOOK], {
+    const r = spawnSync('bash', [HOOK], {
       input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: tree }),
       encoding: 'utf8',
       env: { ...process.env, HOME: home,
         PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
         TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
-      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    expect(card(out)).toContain('ccrc: at least 1 other supervised row names project `alpha`');
+    expect(r.status, 'the hook must exit 0 on every path').toBe(0);
+    expect(r.stderr, 'the hook leaked stderr the harness will surface').toBe('');
+    expect(card(r.stdout))
+      .toContain('ccrc: at least 1 other supervised row names project `alpha`');
   });
 
   it('a directory at a registry path is not read', () => {
