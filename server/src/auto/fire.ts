@@ -110,7 +110,6 @@ export interface AutomationCoordPort {
    *  takes NO duration: the store owns the lease arithmetic, not the caller
    *  (a further correction over task-6-decisions.md C2.9's stale
    *  three-argument call shape, written before this method landed). */
-  renewAutomationLease(automationId: number, now: number): boolean;
 }
 
 /** Rungs 1-2. Their row is opened UN-LEASED (`openUnleasedRun`), outside
@@ -589,8 +588,15 @@ export async function fireAutomation(
     return { settle: 'ok', facts };
   }
   if ('retry' in attempt) {
-    // The ladder is live: write nothing terminal, renew the SOFT lease.
-    deps.coord.renewAutomationLease(a.id, nowMs);
+    // The ladder is live: write nothing terminal, and renew NOTHING. `nowMs`
+    // is the clock this act STARTED with — L1 samples none of its own — and
+    // the spawn it has just come through is budgeted 240 s, so a renewal from
+    // here writes a soft bound that is already in the past, releasing the
+    // lease it meant to hold (the store's MAX now refuses to regress it, and
+    // this call was the only producer of that regression). What holds the
+    // lease is the sweep's own renewal loop, with a fresh clock and keyed on
+    // the run: `fireOne` keeps a `pending` run in `automationsInFlight`
+    // precisely so that loop keeps covering it.
     return {
       pending: 'prompt', facts, attempts: attempt.attempts,
       nextAttemptAt: attempt.nextAttemptAt, detail: attempt.detail,

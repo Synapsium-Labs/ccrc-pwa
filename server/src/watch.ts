@@ -2417,9 +2417,18 @@ export class FleetWatcher {
     // so it names the acts in progress and nothing else. The renewal is keyed
     // on the RUN, so a stale entry whose lease was released and re-claimed
     // renews nothing rather than extending someone else's.
+    // AND STOP ASKING once the answer is no. `false` means this run's lease
+    // is gone — settled, hard-lapsed, or re-claimed by another run — so no
+    // renewal can ever match it again. Membership is otherwise removed only
+    // on a TERMINAL settle (deliberately: see the field's docstring), and a
+    // `pending` prompt ladder or a thrown act never reaches one, so without
+    // this every such run would leave a permanent entry costing one prepare
+    // and one zero-row UPDATE against the box's hottest sqlite file on every
+    // sweep for the life of the process. Pruning cannot resurrect a spawn:
+    // pass 3 is keyed on `leaseRunId`, which the settle has already cleared.
     for (const runId of this.automationsInFlight) {
       try {
-        store.renewAutomationLeaseForRun(runId, now);
+        if (!store.renewAutomationLeaseForRun(runId, now)) this.automationsInFlight.delete(runId);
       } catch (err) {
         console.warn(`ccrc-server: lease renewal failed for automation run ${runId} (${err instanceof Error ? err.message : String(err)}) — one bad renewal must not kill the sweep`);
       }

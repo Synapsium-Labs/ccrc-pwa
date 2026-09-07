@@ -266,6 +266,141 @@ describe('a restart is not a second spawn', () => {
     }
     w.stop();
   });
+
+  it('never re-performs the act for a run that BEGAN it, before any session is bound', async () => {
+    // THE OTHER HALF OF THE SAME WINDOW, and the wider one. `sessionId` is
+    // not written until `markAutomationSpawn`, which runs AFTER `ccd ws-add`
+    // returns — and ccd allows a spawn 240 s. So for the whole length of a
+    // real spawn the run reads exactly like a claim nobody ever started, and
+    // a process that restarts inside it issues a SECOND `ws-add` for one
+    // firing. The agent's socket-close handler kills PTYs and tails, never an
+    // in-flight `execFile`, so the first session is created and registered
+    // regardless: two live sessions, one run row, and `markAutomationSpawn`
+    // can name at most one of them.
+    //
+    // The distinction pass 3 needs is therefore not "did this bind a session"
+    // but "did anyone BEGIN this act", and the durable evidence for that is
+    // the run's own event trail — `fireAutomation` writes its `precheck` row
+    // (and the home score) BEFORE its first mutating call, so a resume that
+    // reads the trail can never race the spawn.
+    const { w, coord, calls, deps } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'nightly', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 },
+      NOW,
+    );
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup: the proving claim was refused');
+    // Exactly what a performer has written by the time it enters `ws-add`,
+    // in `fireAutomation`'s own order: the measured home score, then the
+    // `precheck` row. Nothing else — no spawn, no session.
+    coord.markRunHomeScore(claim.runId, 3);
+    coord.appendRunEvent(claim.runId, 'precheck', true, 'placed on claude, homeScore 3', NOW);
+    expect(coord.automationRuns(id, 5)[0]!.sessionId,
+      'the state under test is a run mid-spawn: begun, nothing bound').toBeNull();
+
+    const restarted = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await restarted.tick();
+      await restarted.sweepAutomations();
+      // A REAL wait, for the reason the fixture above states in full.
+      await new Promise((resolve) => { setTimeout(resolve, 400); });
+      expect(calls.filter((c) => c.includes('ws-add')),
+        'a run whose act was already begun must never be spawned a second time').toEqual([]);
+    } finally {
+      restarted.stop();
+    }
+    w.stop();
+  });
+
+  it('still resumes a claim NOBODY began — the manual door depends on it', async () => {
+    // The complement, so the predicate above cannot be narrowed into a
+    // blanket refusal: `POST /:id/run` claims and answers 202 WITHOUT
+    // performing the act, so a claim with an empty event trail is the
+    // ordinary state of every *Run now*, and pass 3 is the only actor that
+    // will ever perform it.
+    const { w, coord, calls } = await rig();
+    const { id } = coord.insertAutomation(
+      { name: 'nightly', project: PROJECT, prompt: 'go', cadence: wallClock(), graceMs: 1_800_000 },
+      NOW,
+    );
+    const claim = coord.claimAndOpenRun({ automationId: id, now: NOW, occurrence: { trigger: 'manual' } });
+    if (!('runId' in claim)) throw new Error('setup: the claim was refused');
+    try {
+      await w.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(coord.automationRun(claim.runId)!.endedAt,
+          'the untouched claim is performed and settles').not.toBeNull();
+      });
+      expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+    } finally {
+      w.stop();
+    }
+  });
+
+  it('stops asking to renew a run that can never be renewed again', async () => {
+    // `automationsInFlight` is added to before any await and removed only on
+    // a TERMINAL settle — deliberately, so a throw cannot manufacture a
+    // second spawn. But a `pending` prompt ladder and a thrown act both leave
+    // the entry behind for ever, and pass 1 settles those very runs `lost` a
+    // few minutes later without touching the set. Every leaked id then costs
+    // one prepare + one zero-row UPDATE against the box's hottest sqlite file
+    // on every 10 s sweep, for the life of the process. The store already
+    // returns the boolean that answers this: `false` means the lease is gone.
+    const home = mkTmp('ccrc-auto-prune-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let seeded = false;
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      // A pane with a half-typed draft in it: `sendPrompt` answers
+      // `draft-present`, which the ladder treats as a RETRY (C2.7), so the
+      // act returns `pending` and settles nothing.
+      if (args[0] === 'capture-pane') return { code: 0, stdout: 'scrollback\n❯ half-typed thought\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+    const renew = vi.spyOn(coord, 'renewAutomationLeaseForRun');
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      const runId = await vi.waitFor(() => {
+        const r = coord.automationRuns(id, 5).find((x) => x.trigger === 'schedule');
+        expect(r, 'the scheduled run opened').toBeDefined();
+        expect(r!.sessionId, 'and its session was bound, so the act reached the prompt').not.toBeNull();
+        return r!.id;
+      });
+      expect(coord.automationRun(runId)!.endedAt,
+        'the ladder is live, so nothing terminal was written').toBeNull();
+
+      // Past the HARD bound: pass 1 settles this run `lost`, and no renewal
+      // can ever match it again.
+      advance(600_001);
+      renew.mockClear();
+      await w.sweepAutomations();
+      expect(renew.mock.calls.map((c) => c[0]),
+        'the sweep asks once more, and the store answers false').toContain(runId);
+      expect(coord.automationRun(runId)!.outcome, 'and pass 1 settles it').toBe('lost');
+
+      advance(10_001);
+      renew.mockClear();
+      await w.sweepAutomations();
+      expect(renew.mock.calls.map((c) => c[0]),
+        'a run whose lease is gone must not be asked again on every tick for the life of the process')
+        .not.toContain(runId);
+    } finally {
+      w.stop();
+    }
+  });
 });
 
 describe('FleetWatcher.sweepAutomations — the schedule path', () => {

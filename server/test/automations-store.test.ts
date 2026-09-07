@@ -166,7 +166,7 @@ describe('CoordStore: automations — the lease CAS', () => {
     expect(s.automation(id)!.leaseUntil, "and the second run's lease is untouched").toBe(heldBySecond);
   });
 
-  it('renewAutomationLease moves leaseUntil only, leaves leaseHardUntil byte-identical, and returns false once the lease is gone', () => {
+  it('renewAutomationLeaseForRun moves leaseUntil only, leaves leaseHardUntil byte-identical, and returns false once the lease is gone', () => {
     const s = store();
     const t0 = 1_700_000_000_000;
     const id = makeArmed(s, t0, t0);
@@ -174,14 +174,46 @@ describe('CoordStore: automations — the lease CAS', () => {
     if (!('runId' in claim)) throw new Error('unreachable');
 
     const before = s.automation(id)!;
-    expect(s.renewAutomationLease(id, t0 + 2)).toBe(true);
+    expect(s.renewAutomationLeaseForRun(claim.runId, t0 + 2)).toBe(true);
     const after = s.automation(id)!;
     expect(after.leaseHardUntil).toBe(before.leaseHardUntil);
     expect(after.leaseUntil).toBe(t0 + 2 + 120_000);
     expect(after.leaseUntil).not.toBe(before.leaseUntil);
 
     s.settleAutomationRun({ runId: claim.runId, settlement: { outcome: 'ok' }, now: t0 + 3 });
-    expect(s.renewAutomationLease(id, t0 + 4)).toBe(false);
+    expect(s.renewAutomationLeaseForRun(claim.runId, t0 + 4)).toBe(false);
+  });
+
+  it('a renewal never moves the soft bound BACKWARDS, whatever clock its caller holds', () => {
+    // `SET leaseUntil = MIN(?, leaseHardUntil)` assigns unconditionally, and
+    // a renewal is the one call whose entire purpose is to HOLD the bound up.
+    // A caller whose clock is older than the bound on the row therefore
+    // LOWERS it — and once the act has been in flight for longer than
+    // `AUTOMATION_LEASE_MS` that lowers it into the PAST, which is not a
+    // renewal but a release: both overlap guards read the soft bound, so a
+    // second claim lands on an automation whose act is still running and pass
+    // 3 spawns it a second time. A stale caller is not hypothetical — L1
+    // samples no clock of its own, so an act holds the clock it started with,
+    // and the sweep renews with a fresh one; the two disagree by however long
+    // the spawn took (ccd allows 240 s).
+    const s = store();
+    const t0 = 1_700_000_000_000;
+    const id = makeArmed(s, t0, t0);
+    const claim = s.claimAndOpenRun({ automationId: id, now: t0 + 1, occurrence: manualOccurrence() });
+    if (!('runId' in claim)) throw new Error('unreachable');
+
+    expect(s.renewAutomationLeaseForRun(claim.runId, t0 + 200_000), 'a fresh clock renews forward').toBe(true);
+    const held = s.automation(id)!;
+    expect(held.leaseUntil).toBe(t0 + 200_000 + 120_000);
+
+    // 199 s behind, and still well inside the hard bound — so the WHERE
+    // clause matches and only the assignment decides the outcome.
+    expect(s.renewAutomationLeaseForRun(claim.runId, t0 + 1_000),
+      'the lease is live and named by this run, so the call still reports true').toBe(true);
+    expect(s.automation(id)!.leaseUntil,
+      'a stale renewal must hold the bound, never lower it').toBe(held.leaseUntil);
+    expect(s.automation(id)!.leaseHardUntil,
+      'and the hard bound is never renewal\'s business').toBe(held.leaseHardUntil);
   });
 
   it('inFlightAutomationRunCount ignores a running row whose lease has lapsed past the hard bound (mutation: drop the join and two crashed runs disable the whole feature)', () => {

@@ -101,7 +101,6 @@ function makeCoord(spec: { inFlight?: number; paused?: boolean }): AutomationCoo
     markAutomationSpawn: () => boom('markAutomationSpawn'),
     settleAutomationRun: () => boom('settleAutomationRun'),
     appendRunEvent: () => boom('appendRunEvent'),
-    renewAutomationLease: () => boom('renewAutomationLease'),
   };
 }
 
@@ -536,7 +535,6 @@ function makeAutoCoord(opts: { paused?: boolean; inFlight?: number } = {}) {
     markAutomationSpawn: [] as Parameters<AutomationCoordPort['markAutomationSpawn']>[],
     appendRunEvent: [] as Parameters<AutomationCoordPort['appendRunEvent']>[],
     settleAutomationRun: [] as Parameters<AutomationCoordPort['settleAutomationRun']>[],
-    renewAutomationLease: [] as Parameters<AutomationCoordPort['renewAutomationLease']>[],
   };
   const coord: AutomationCoordPort = {
     inFlightAutomationRunCount: () => opts.inFlight ?? 0,
@@ -552,7 +550,6 @@ function makeAutoCoord(opts: { paused?: boolean; inFlight?: number } = {}) {
         consecutiveFailures: 0, autoPaused: false, proved: false,
       };
     },
-    renewAutomationLease: (...args) => { calls.renewAutomationLease.push(args); return true; },
   };
   return { coord, calls };
 }
@@ -702,9 +699,15 @@ describe('fireAutomation — spawn, identify by registry diff, adopt honestly, p
       expect(outcome.facts.sessionId).toBe('pending-one');
       expect(outcome.nextAttemptAt).toBe(1_000 + promptBackoffMs(1));
     }
-    // Nothing terminal: no settle, but the SOFT lease is renewed for the next sweep.
+    // Nothing terminal, and NOTHING LEASED. The port carries no lease writer
+    // at all: `nowMs` here is the clock the act started with (L1 samples
+    // none), and after a spawn ccd allows 240 s a renewal written from it
+    // lands in the past — a release, not a renewal. The sweep renews instead,
+    // with a fresh clock and keyed on the run, for as long as this run stays
+    // in `automationsInFlight` — which `pending` is exactly what keeps it in.
     expect(calls.settleAutomationRun.length).toBe(0);
-    expect(calls.renewAutomationLease).toEqual([[1, 1_000]]);
+    expect(Object.keys(calls), 'no lease writer reachable from L1')
+      .not.toContain('renewAutomationLease');
     expect(calls.appendRunEvent.map((c) => c[1])).toEqual(['precheck', 'spawn', 'identify', 'prompt']);
     expect(calls.appendRunEvent.find((c) => c[1] === 'prompt')?.[2]).toBe(false);
   });

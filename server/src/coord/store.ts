@@ -4207,9 +4207,8 @@ export class CoordStore {
    *  while the route performed the act inside the request, retire could not
    *  land in the gap. */
   leasedAutomations(): AutomationRow[] {
-    // AND WHOSE RUN HAS NOT YET BOUND A SESSION. The lease alone is not the
-    // question pass 3 means to ask; "does this lease still have an act to
-    // perform" is. The sweep's single-flight guard is a private field of the
+    // AND WHOSE RUN NOBODY HAS BEGUN. The lease alone is not the question
+    // pass 3 means to ask; "does this lease still have an act to perform" is. The sweep's single-flight guard is a private field of the
     // watcher — in memory BY DESIGN, so a run a crashed process left leased is
     // picked up again — and that resume is wanted. But without this predicate
     // the resume cannot tell "claimed and never started" from "claimed,
@@ -4220,6 +4219,23 @@ export class CoordStore {
     // orphan-manufacture rule, measured as a real second `ws-add` before this
     // clause existed.
     //
+    // THE EVENT TRAIL, NOT THE SESSION, IS THE MARKER. `sessionId` is not
+    // written until `markAutomationSpawn`, which runs AFTER `ccd ws-add`
+    // returns, and ccd allows a spawn 240 s — so a session-only predicate
+    // leaves the whole length of a real spawn reading exactly like a claim
+    // nobody ever started, which is where a second `ws-add` was measured (the
+    // agent's socket-close handler kills PTYs and tails, never an in-flight
+    // `execFile`, so the first session is created regardless).
+    // `fireAutomation` writes its `precheck` row before its first mutating
+    // call, so "has any step been recorded for this run" is true from before
+    // the spawn until the settle, and cannot race it. A claim NOBODY began
+    // has an empty trail — the ordinary state of every *Run now*, since that
+    // route claims and answers 202 without performing the act, so this
+    // predicate must never widen into a blanket refusal. Both conjuncts are
+    // spelled even though the first subsumes the second (the `spawn` row is
+    // appended before `markAutomationSpawn`): `dueAutomations`'s rule, that
+    // the read must be true of the DATA and not only of the invariant.
+    //
     // What happens to such a run instead: nothing, until `lapseAutomationRuns`
     // settles it `lost` at its hard lease, WITH its sessionId preserved. That
     // is an honest record of a session that WAS created, which is what §6 asks
@@ -4229,6 +4245,8 @@ export class CoordStore {
     const rows = this.db.prepare(
       `SELECT ${CoordStore.AUTOMATION_COLS} FROM automations ` +
       'WHERE leaseRunId IS NOT NULL AND NOT EXISTS (' +
+      '  SELECT 1 FROM automation_run_events e WHERE e.runId = automations.leaseRunId' +
+      ') AND NOT EXISTS (' +
       '  SELECT 1 FROM automation_runs r WHERE r.id = automations.leaseRunId AND r.sessionId IS NOT NULL' +
       ') ORDER BY id',
     ).all() as unknown as AutomationRowDb[];
@@ -4369,11 +4387,15 @@ export class CoordStore {
   /** `renewClaimRow`'s verbatim shape: moves ONLY `leaseUntil`, never
    *  `leaseHardUntil` — the hard bound is what makes a crashed runner's lock
    *  lapse on its own. Returns `false` once the lease is gone (already
-   *  settled, or never held by this automation) — a `void` return would be
+   *  settled, or never named by this run) — a `void` return would be
    *  `markDelivered`'s defect: the caller must stop renewing, not believe it
-   *  still holds one. */
-  /** THE SAME RENEWAL, KEYED ON THE RUN — which is what the sweep has, and
-   *  what the renewal actually means.
+   *  still holds one, and the sweep uses exactly that answer to stop asking.
+   *
+   *  KEYED ON THE RUN — which is what the sweep has, and what the renewal
+   *  actually means. There is no automation-keyed sibling, deliberately: the
+   *  one that existed was called from L1 with the clock the act STARTED with,
+   *  and an unconditional assignment plus a stale clock is a release, not a
+   *  renewal (see the MAX below).
    *
    *  Both overlap guards read the SOFT bound: `checkPreClaim` rung 1
    *  (`nowMs < a.leaseUntil`) and `claimAndOpenRun`'s in-transaction CAS
@@ -4394,18 +4416,19 @@ export class CoordStore {
    *  is the one thing renewal must not be able to extend, or a wedged act
    *  holds an automation for ever. */
   renewAutomationLeaseForRun(runId: number, now: number): boolean {
+    // MONOTONE BY CONSTRUCTION. `MIN(?, leaseHardUntil)` alone assigns
+    // unconditionally, so a caller holding a clock older than the bound
+    // already on the row LOWERS it — and a renewal is the one call whose
+    // whole purpose is to hold that bound up. Once an act has been in flight
+    // for longer than `AUTOMATION_LEASE_MS` that lowers it into the PAST,
+    // which is a release: both overlap guards read the soft bound, so a
+    // second claim lands on an automation whose act is still running and pass
+    // 3 performs it as a second spawn. The MAX makes that unreachable from
+    // any caller, present or future, instead of trusting each one's clock.
     const res = this.db.prepare(
-      'UPDATE automations SET leaseUntil = MIN(?, leaseHardUntil) ' +
+      'UPDATE automations SET leaseUntil = MAX(COALESCE(leaseUntil, 0), MIN(?, leaseHardUntil)) ' +
       'WHERE leaseRunId = ? AND leaseHardUntil > ?',
     ).run(now + AUTOMATION_LEASE_MS, runId, now);
-    return Number(res.changes) > 0;
-  }
-
-  renewAutomationLease(automationId: number, now: number): boolean {
-    const res = this.db.prepare(
-      'UPDATE automations SET leaseUntil = MIN(?, leaseHardUntil) ' +
-      'WHERE id = ? AND leaseRunId IS NOT NULL AND leaseHardUntil > ?',
-    ).run(now + AUTOMATION_LEASE_MS, automationId, now);
     return Number(res.changes) > 0;
   }
 
