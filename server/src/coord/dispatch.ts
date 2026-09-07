@@ -130,14 +130,17 @@ export type DispatchOutcome =
 
 /**
  * Dispatch a run: pause and caps checked FIRST, then either a fresh
- * workspace (wave 1) or a resumed one with an injected `/clear` (wave N>=2,
- * deviation D-1), then the hold, then the transition, then the brief — as
- * MAIL, never injected directly (a fresh pane is `working` for its first
- * seconds, and the delivery lane's own gate is exactly the thing that knows
- * when it is not). `brief` is UNKNOWN off the wire — the route's own JSON
- * parse gives it no shape guarantee, so this function validates it itself,
- * in the same order the route used to (D-46: the transition guard runs
- * BEFORE the body is even looked at).
+ * workspace (wave 1), held as soon as its session id exists, or a resumed
+ * one (wave N>=2, deviation D-1) whose hold is placed BEFORE the injected
+ * `/clear` that follows it (R7: the `/clear` fires a SessionStart, and the
+ * card that event emits quotes the hold file, so the hold must already be
+ * there) — then the transition, then the brief — as MAIL, never injected
+ * directly (a fresh pane is `working` for its first seconds, and the
+ * delivery lane's own gate is exactly the thing that knows when it is not).
+ * `brief` is UNKNOWN off the wire — the route's own JSON parse gives it no
+ * shape guarantee, so this function validates it itself, in the same order
+ * the route used to (D-46: the transition guard runs BEFORE the body is even
+ * looked at).
  */
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
@@ -274,10 +277,12 @@ export async function dispatchRun(
   // MUTATED IN PLACE beneath us: `remote/client.ts`'s `onReady` rewrites it on
   // every agent re-handshake (and writes `null` for a ready frame carrying no
   // usable list), and `refreshcaps.ts`'s 60s lane overwrites it with whatever
-  // the fleet host now advertises. The hold at step 5 spends this value some
-  // seven awaits later — the `ws-add`, two registry reads, a hook read, the
-  // `/clear` — so if caps REGRESS across that window (a reconnect to a
-  // downgraded ccd, a ready frame with no `ccdVerbs`) the hold ships
+  // the fleet host now advertises. The hold spends this value a few awaits
+  // later, on either branch — the `ws-add` and two registry reads on the
+  // fresh-spawn arm, or `ensure`, a registry read and a hook read on the
+  // resume arm (R7 moved the hold ahead of that arm's `/clear`, so the clear
+  // no longer widens this window) — so if caps REGRESS across that window (a
+  // reconnect to a downgraded ccd, a ready frame with no `ccdVerbs`) the hold ships
   // `--surface`/`--actor` where the fresh `sweepDec` this hoist replaced would
   // have omitted them, at the cost `capSupported`'s no-evidence-FALSE default
   // is argued for in `ccdargv.ts`. Nothing below catches it, and the asymmetry
@@ -530,6 +535,44 @@ export async function dispatchRun(
     if (hs !== null && hs.ok && hs.state.state !== 'done') {
       return { ok: false, kind: 'refused', code: 'worker-busy' };
     }
+  }
+
+  // 5: hold, behind `verbSupported` — the standing convention reason string,
+  // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
+  // `sweepDec` call: see its declaration above, where the one measurement this
+  // function takes is explained.
+  //
+  // R7: THE HOLD IS PLACED BEFORE THE PANE IS CLEARED. The `/clear` fires a
+  // SessionStart, and the card that SessionStart emits quotes
+  // `$REG/<id>.hold` — so a hold written after it would have the card quote
+  // the PREVIOUS wave's bytes, and wave 1 would see none at all. The refusal
+  // shapes are unchanged and the ordering costs nothing: a failed `ws-hold`
+  // already returned before the transaction with the `/clear` sent, so this
+  // strictly reduces the window in which that happens.
+  //
+  // STILL ONE SHARED CALL SITE, positioned exactly where it always was — a
+  // fresh spawn never sends a `/clear` at all, and a resume's `/clear` moved
+  // to AFTER this point (below) rather than the hold moving to BEFORE the
+  // resume arm's own preconditions; `unattended-actor.test.ts`'s own
+  // call-site count pins `CCD_ARGV.wsHold` to exactly one occurrence in this
+  // file, so the fix is the `/clear` relocating to meet the hold, not a
+  // second hold call meeting the `/clear`.
+  const holdArgv = CCD_ARGV.wsHold(sessionId,
+    holdReason(run.program, run.wave, run.waveOf, run.id),
+    dispatchDec);
+  if (!verbSupported(deps.fleetState, holdArgv)) {
+    return { ok: false, kind: 'unsupported' };
+  }
+  const holdRes = await deps.runCcd(holdArgv);
+  if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
+
+  // R7 continued: the injected `/clear` itself, now placed AFTER the hold
+  // above rather than before it — the only piece that moved. `resumed` is
+  // exactly the condition the old `else` arm's own presence used to encode
+  // (a fresh spawn never reaches this point with `resumed === true`), so
+  // gating on it here reproduces that arm's scope precisely, just on the far
+  // side of the hold.
+  if (resumed) {
     const clearRes = await sendPrompt({ tmux: deps.tmux, queue: deps.queue }, sessionId, '/clear');
     // A refused `/clear` (dialog open, draft present, an ignored Enter…) is
     // not fatal to dispatch itself — the run still lands in `dispatched`
@@ -542,19 +585,6 @@ export async function dispatchRun(
     clearedAt = clearRes.ok ? Date.now() : null;
     clearError = clearRes.ok ? null : clearRes.error;
   }
-
-  // 5: hold, behind `verbSupported` — the standing convention reason string,
-  // DISPLAY-ONLY and never parsed back. `dispatchDec` rather than a second
-  // `sweepDec` call: see its declaration above, where the one measurement this
-  // function takes is explained.
-  const holdArgv = CCD_ARGV.wsHold(sessionId,
-    holdReason(run.program, run.wave, run.waveOf, run.id),
-    dispatchDec);
-  if (!verbSupported(deps.fleetState, holdArgv)) {
-    return { ok: false, kind: 'unsupported' };
-  }
-  const holdRes = await deps.runCcd(holdArgv);
-  if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
   // 6: ONE call, and one transaction (D-277 (was D-B4-4)). The dispatch write, the
   // `clearedAt` stamp, the transition and the declared ledger's INSERTs used
