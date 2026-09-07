@@ -1059,7 +1059,7 @@ Expected: PASS, all of them.
 | delete the `.archived` branch | `names an archived row's hold as residue` |
 | delete the `GM_CWD`/`wd` comparison | `names the workspace by path when the cwd is somewhere else` |
 | make case B fall through to case A | `says no run placed a suffix-less hold` |
-| delete `set -- "${1:0:$CARD_MAX_CHARS}"` from Task 3 | `the clip bounds an unbounded GM_NODES` — **this is where Task 3 Step 8's deferred mutation finally reds.** NOT the pathological-hold test: `_ct_read`'s 128-char cap bounds a hold's contribution long before the clip matters, so the hold route cannot measure it. `GM_NODES` can — it takes UNBOUNDED digits off a 4096-byte head and is interpolated straight into the graphify sentence. |
+| delete `set -- "${1:0:$CARD_MAX_CHARS}"` from Task 3 | `a pathological node count cannot delete the card` — **this is where Task 3 Step 8's deferred mutation finally reds.** NOT the pathological-hold test: `_ct_read`'s 128-char cap bounds a hold's contribution long before the clip matters, so the hold route cannot measure it. `GM_NODES` can — it takes UNBOUNDED digits off a 4096-byte head and is interpolated straight into the graphify sentence. |
 
 - [ ] **Step 8: Measure the three-subject worst case**
 
