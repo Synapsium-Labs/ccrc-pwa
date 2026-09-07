@@ -1562,7 +1562,12 @@ PR body: the measured baseline from `## Baseline recorded`, the deploy order, an
 - Pre-deploy roll-up (the reading at **13:53:50Z** — NOT the 13:53:58Z line, which is the Step 8 mutation artifact written with the log emptied):
   `{"ts":"2026-09-07T13:53:50Z","gateOff":false,"queriesToday":66,"denied":5,"zeroQuery":3,"peerRead":0,"claimed":0,"nullPeerRead":23,"heldN":2,"coTenantN":15,"liveN":17}`
   `nullPeerRead:23` = every row, no field: the proof the hook has not shipped. Its fall is the proof it has.
-- Claims history: rows _(n)_ · programless _(n)_ · holders _(n)_ · projects _(list)_
+- Claims history: rows **34** · programless **0** · holders **10** · projects **ccrc-pwa, expoAI-assistant, MekWarLive**
+  Measured 2026-09-07 pre-deploy by raw HTTP against the live server (`GET /api/claims?all=1`, box token),
+  because the installed client predates Task 2's `all` key and still refuses `--all`. Re-take it through
+  `ccrc-api claims list --all 1` after the agent-lane deploy; the figures must match or the deploy changed
+  something it should not have. **programless 0 is the falsification** — no session has ever coordinated
+  outside a program run.
 - Fleet census at deploy: rows _(n)_ · archived _(n)_ · live _(n)_ · held _(n)_ · with a co-tenant _(n)_
 - Installed-hook fingerprint before deploy: _(IDENTICAL / differs)_
 
