@@ -58,11 +58,13 @@ function trackedFiles(): string[] {
 }
 
 describe('L0 stays import-free: the PWA bundles these files', () => {
-  // `shared/base-url.ts` gets its row in this describe in the NEXT task, which
-  // is the task that writes the file. Asserting it here would mean committing a
-  // suite with a known-red row — `ENOENT … shared/base-url.ts` — and this repo's
-  // rule is that every task ships green: a red row in a landed commit is
-  // indistinguishable, on the next run, from a regression.
+  // `shared/base-url.ts` got its row here in Task 2, the task that wrote the
+  // file — it is the SECOND `it` below (`:72`), after `providers.ts`'s own row.
+  // It could not have landed in THIS task (Task 1): asserting it here would
+  // have meant committing a suite with a known-red row — `ENOENT …
+  // shared/base-url.ts` — and this repo's rule is that every task ships green:
+  // a red row in a landed commit is indistinguishable, on the next run, from a
+  // regression.
   it('shared/providers.ts imports nothing at all', () => {
     expect(read('shared/providers.ts')).not.toMatch(/^\s*import /m);
   });
@@ -77,9 +79,15 @@ describe('L0 stays import-free: the PWA bundles these files', () => {
     expect(read('shared/base-url.ts')).not.toMatch(/^\s*import /m);
   });
 
-  it('shared/roster.ts imports nothing — the whole list, so an addition must be stated here', () => {
+  it('shared/roster.ts imports L0 only — the whole list, so an addition must be stated here', () => {
     const imports = read('shared/roster.ts').split('\n').filter((l) => /^import\s/.test(l));
-    expect(imports).toEqual([]);
+    // Two lines, both `shared/*.ts`, both import-free themselves (pinned above),
+    // so the browser bundle gains no runtime dependency. `shared/api.ts` carries
+    // the same shape and the same pin (peers-claims-l0.test.ts:156-161).
+    expect(imports).toEqual([
+      "import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';",
+      "import { BASE_URL_OK } from './base-url.js';",
+    ]);
   });
 });
 

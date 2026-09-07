@@ -312,7 +312,24 @@ describe('loadConfig', () => {
       loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH });
       loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '' });
       loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_PORT: '9001' });
-      expect(warn).not.toHaveBeenCalled();
+      // NARROWED, deliberately, and this is what it now claims: loadConfig says
+      // nothing ABOUT CCRC_PORT for an absent, empty or valid value. It used to
+      // assert global silence, which was a stronger claim than the test was
+      // written to make and became false the moment `parseRoster` gained a
+      // migration warning for a roster that names no exec.provider — which
+      // ROSTER_PATH, i.e. DEFAULT_TEST_ROSTER, is. What is NOT lost: the
+      // positive half above still pins that a REJECTED port warns and names
+      // itself, the value and the fallback, so deleting the warn entirely still
+      // reds three assertions.
+      //
+      // `saidLater`, NOT a second `const said`: `:304` already declares `said`
+      // in this same `try { … }` block (opened at `:302`), so re-declaring it
+      // is `SyntaxError: Identifier 'said' has already been declared` — which
+      // fails the whole FILE to load, not one assertion, and reds
+      // `typecheck-tests.test.ts` with TS2451 besides.
+      const saidLater = warn.mock.calls.flat().join(' ');
+      expect(saidLater).not.toContain('CCRC_PORT');
+      expect(saidLater).not.toContain('7788');
     } finally { warn.mockRestore(); }
   });
 

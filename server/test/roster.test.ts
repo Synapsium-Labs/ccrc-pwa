@@ -203,11 +203,247 @@ describe('exec.secretsFile is a path, not merely a string', () => {
   it('accepts the shape every real account uses', () => {
     const r = parseRoster(rosterWithSecrets('.cc-secrets/claude2-oauth.env'));
     const acct = r.accounts.find((a) => a.id === 'claude2');
-    expect(acct?.exec).toEqual({ kind: 'generated', secretsFile: '.cc-secrets/claude2-oauth.env' });
+    // `provider` is now on every generated exec — defaulted to `anthropic` for a
+    // roster that predates the field, which is what this fixture is.
+    expect(acct?.exec).toEqual(
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
   });
 
   it('still accepts a generated account with no secretsFile at all', () => {
     const r = parseRoster(rosterWithSecrets(undefined));
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec).toEqual({ kind: 'generated' });
+    expect(r.accounts.find((a) => a.id === 'claude2')?.exec)
+      .toEqual({ kind: 'generated', provider: 'anthropic' });
+  });
+});
+
+// ── §4.1: provider, endpoint and models ────────────────────────────────────
+// Three gates and one default. The default is the migration: a `generated`
+// entry with no `provider` is `anthropic`, because every generated wrapper ccrc
+// has ever written is one — and `parseRoster` says so ONCE per parse rather
+// than once per account, naming the accounts it assumed for.
+
+/** A two-account roster whose second account carries an arbitrary exec. */
+const rosterWithExec = (exec: unknown) => ({
+  version: 1,
+  accounts: [
+    { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'lane', label: 'team·shared', configDirSuffix: '.claude-lane',
+      exec, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+  ],
+});
+const execOf = (roster: unknown, id: string) =>
+  parseRoster(roster).accounts.find((a) => a.id === id)?.exec;
+
+describe('exec.provider', () => {
+  it('defaults a generated entry to anthropic and WARNS once, naming the accounts it assumed for', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = parseRoster({ version: 1, accounts: [
+        { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+        { id: 'one', label: 'team·max', configDirSuffix: '.claude-one', exec: { kind: 'generated' },
+          homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+        { id: 'two', label: 'alt·max', configDirSuffix: '.claude-two', exec: { kind: 'generated' },
+          homeAble: true, hue: 'blue', telemetry: 'anthropic' },
+      ] });
+      expect(r.byId.get('one')!.exec).toEqual({ kind: 'generated', provider: 'anthropic' });
+      // ONE warning for TWO accounts. Once per parse, not once per account:
+      // `loadConfig` runs this on every boot and every test, and a roster
+      // written by `ccrc-adopt` (which emits `{"kind":"generated"}` with no
+      // provider, `ccd/ccrc-adopt:496-503`, the bare literal at `:500`) would
+      // otherwise print a line per
+      // generated account forever.
+      const said = warn.mock.calls.flat().join(' ');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(said).toContain('exec.provider');
+      expect(said).toContain('anthropic');
+      expect(said).toContain('one');
+      expect(said).toContain('two');
+    } finally { warn.mockRestore(); }
+  });
+
+  it('says nothing when every generated entry declares one', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(execOf(rosterWithExec({ kind: 'generated', provider: 'openrouter' }), 'lane'))
+        .toEqual({ kind: 'generated', provider: 'openrouter' });
+      expect(warn).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+
+  it('leaves an external entry UNDECLARED when it names no provider', () => {
+    // Absent is a third answer, not a default: the UI shows the lane, offers
+    // enable/disable and remove, and offers no provider operation (§4.1).
+    expect(execOf(rosterWithExec({ kind: 'external' }), 'lane')).toEqual({ kind: 'external' });
+  });
+
+  it('refuses an unknown provider, listing the ones that exist', () => {
+    expect(() => parseRoster(rosterWithExec({ kind: 'generated', provider: 'anthorpic' })))
+      .toThrow(/exec\.provider/);
+    try { parseRoster(rosterWithExec({ kind: 'generated', provider: 'anthorpic' })); }
+    catch (e) { expect((e as RosterError).remedy).toContain('openrouter'); }
+  });
+
+  it('refuses a provider on an UPSTREAM entry — upstream is anthropic and does not say so', () => {
+    // `provider` is not in EXEC_KEYS_UPSTREAM, so this is the unknown-key WARN
+    // path, and the value is dropped rather than honoured: an upstream entry
+    // claiming `openrouter` would be a roster asserting that the Claude Code
+    // binary talks to somebody else.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = parseRoster({ version: 1, accounts: [
+        { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+          exec: { kind: 'upstream', provider: 'openrouter' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      ] });
+      expect(r.byId.get('claude')!.exec).toEqual({ kind: 'upstream' });
+      expect(warn.mock.calls.some(([m]) => typeof m === 'string' && m.includes('provider'))).toBe(true);
+    } finally { warn.mockRestore(); }
+  });
+});
+
+describe('exec.baseUrl', () => {
+  it('keeps a legal endpoint, normalised', () => {
+    expect(execOf(rosterWithExec(
+      { kind: 'generated', provider: 'compatible', baseUrl: 'HTTPS://Orchard-API/V1' }), 'lane'))
+      .toEqual({ kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/V1' });
+  });
+
+  it('requires one on compatible, and only on compatible', () => {
+    expect(() => parseRoster(rosterWithExec({ kind: 'generated', provider: 'compatible' })))
+      .toThrow(/base-url-required/);
+    // openrouter falls back to PROVIDERS.openrouter.baseUrl, so absence is legal
+    // and the roster does NOT store the default — the table stays the one home.
+    expect(execOf(rosterWithExec({ kind: 'generated', provider: 'openrouter' }), 'lane'))
+      .toEqual({ kind: 'generated', provider: 'openrouter' });
+  });
+
+  it.each([
+    ['base-url-insecure', 'http://orchard-api/v1'],
+    ['base-url-credentials', 'https://user:pass@orchard-api/v1'],
+    ['base-url-query', 'https://orchard-api/v1?beta=true'],
+    ['base-url-fragment', 'https://orchard-api/v1#frag'],
+    ['base-url-unparseable', 'orchard-api'],
+  ] as const)('refuses %s, and the message says which', (reason, baseUrl) => {
+    expect(() => parseRoster(rosterWithExec({ kind: 'generated', provider: 'compatible', baseUrl })))
+      .toThrow(new RegExp(reason));
+  });
+
+  it('admits a loopback endpoint — the proxy lane this fleet already runs (§4.3)', () => {
+    expect(execOf(rosterWithExec(
+      { kind: 'generated', provider: 'compatible', baseUrl: 'http://127.0.0.1:8642' }), 'lane'))
+      .toEqual({ kind: 'generated', provider: 'compatible', baseUrl: 'http://127.0.0.1:8642/' });
+  });
+
+  it('is DECLARATIVE on external: recorded, never written', () => {
+    expect(execOf(rosterWithExec(
+      { kind: 'external', provider: 'openrouter', baseUrl: 'https://orchard-api/v1' }), 'lane'))
+      .toEqual({ kind: 'external', provider: 'openrouter', baseUrl: 'https://orchard-api/v1' });
+  });
+});
+
+describe('exec.models', () => {
+  const MAP = { opus: 'vendor/opus-1', sonnet: 'vendor/sonnet-1', haiku: 'vendor/haiku-1', subagent: 'vendor/haiku-1' };
+
+  it('accepts the four aliases on an api-key lane', () => {
+    expect(execOf(rosterWithExec({ kind: 'generated', provider: 'openrouter', models: MAP }), 'lane'))
+      .toEqual({ kind: 'generated', provider: 'openrouter', models: MAP });
+  });
+
+  it('accepts them on the OTHER api-key lane too — compatible, not just openrouter', () => {
+    // THE ROW THAT DISTINGUISHES THE TWO SPELLINGS OF THIS GATE, and the only
+    // one that can. §4.1 says "the two api-key providers" and §14 line 1455 says
+    // "refused on a non-openrouter provider"; every other row in this describe
+    // uses `openrouter`, on which both readings agree, so without this row the
+    // gate could be written either way and the suite could not tell. Step 5(c)
+    // mutates the gate to §14's spelling and names THIS row as the red.
+    //
+    // `baseUrl` is not decoration here: `compatible` is the one provider with
+    // `baseUrlRequired`, so a compatible lane with no endpoint throws
+    // `base-url-required` before `models` is ever reached, and the row would
+    // then be green under both spellings for the wrong reason.
+    const exec = {
+      kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/v1', models: MAP,
+    };
+    expect(execOf(rosterWithExec(exec), 'lane')).toEqual(exec);
+  });
+
+  it('refuses models on a lane whose provider carries no api-key model map', () => {
+    // Read off PROVIDERS[p].apiKeyModels, not off a second list of provider
+    // names — §4.1 line 229 and §14 line 1455 disagree about which providers
+    // those are, and the table is where that is settled.
+    expect(() => parseRoster(rosterWithExec({ kind: 'generated', provider: 'anthropic', models: MAP })))
+      .toThrow(/exec\.models/);
+  });
+
+  it('refuses a missing alias — all four are the lane\'s routing map, not a suggestion', () => {
+    const { subagent: _drop, ...three } = MAP;
+    expect(() => parseRoster(rosterWithExec({ kind: 'generated', provider: 'openrouter', models: three })))
+      .toThrow(/subagent/);
+  });
+
+  it.each([
+    ['a leading slash', '/vendor/opus'],
+    ['a space', 'vendor/opus 1'],
+    ['a quote', 'vendor/"opus"'],
+    ['the empty string', ''],
+  ] as const)('refuses %s as a model id', (_why, bad) => {
+    expect(() => parseRoster(rosterWithExec(
+      { kind: 'generated', provider: 'openrouter', models: { ...MAP, opus: bad } })))
+      .toThrow(/exec\.models\.opus/);
+  });
+
+  it('accepts the punctuation OpenRouter ids are made of', () => {
+    const ids = { ...MAP, opus: 'anthropic/claude-opus-4.5:beta', sonnet: 'a_b-c.d:e/f' };
+    expect(execOf(rosterWithExec({ kind: 'generated', provider: 'openrouter', models: ids }), 'lane'))
+      .toEqual({ kind: 'generated', provider: 'openrouter', models: ids });
+  });
+
+  it('accepts a selectable allowlist and requires every alias to be in it', () => {
+    const ok = { ...MAP, selectable: [
+      { id: 'vendor/opus-1', label: 'Opus' }, { id: 'vendor/sonnet-1' }, { id: 'vendor/haiku-1' },
+    ] };
+    expect(execOf(rosterWithExec({ kind: 'generated', provider: 'openrouter', models: ok }), 'lane'))
+      .toEqual({ kind: 'generated', provider: 'openrouter', models: ok });
+    // A routing target the operator cannot select is a lane that answers
+    // `/model opus` with something the picker never showed (§4.1).
+    const bad = { ...MAP, selectable: [{ id: 'vendor/sonnet-1' }, { id: 'vendor/haiku-1' }] };
+    expect(() => parseRoster(rosterWithExec({ kind: 'generated', provider: 'openrouter', models: bad })))
+      .toThrow(/vendor\/opus-1/);
+  });
+});
+
+describe('exec.secretsFile is legal on all three kinds — and gated on all three', () => {
+  // THE ONE NON-ADDITIVE CHANGE IN THIS WAVE (D-1857). Before this task these
+  // two rosters PARSED: `secretsFile` was not in EXEC_KEYS_BASE (roster.ts:247),
+  // `warnUnknownKeys` only warns (:264-270), and the bare literal at :321
+  // dropped the value. Now the gate runs before the kind is dispatched on, so
+  // the same bytes throw.
+  it.each(['upstream', 'external'] as const)('refuses a parent-directory hop on %s', (kind) => {
+    const roster = kind === 'upstream'
+      ? { version: 1, accounts: [{ id: 'claude', label: 'claude', configDirSuffix: '.claude',
+          exec: { kind, secretsFile: '../.ssh/id_ed25519' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }] }
+      : rosterWithExec({ kind, secretsFile: '../.ssh/id_ed25519' });
+    expect(() => parseRoster(roster)).toThrow(/exec\.secretsFile/);
+  });
+
+  it('KEEPS a declared upstream secretsFile — the point of hoisting it (§1.7)', () => {
+    // The upstream launcher has a credential and nothing could see it. ccrc
+    // still never writes that launcher; it now knows where the file is, which
+    // is the only way that hole closes.
+    const r = parseRoster({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/claude-oauth.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] });
+    expect(r.byId.get('claude')!.exec).toEqual(
+      { kind: 'upstream', secretsFile: '.cc-secrets/claude-oauth.env' });
+  });
+
+  it('KEEPS a declared external secretsFile, beside its declared provider', () => {
+    expect(execOf(rosterWithExec(
+      { kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' }), 'lane'))
+      .toEqual({ kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' });
   });
 });
