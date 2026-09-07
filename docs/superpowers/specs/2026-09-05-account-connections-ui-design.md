@@ -796,6 +796,21 @@ the route table only:
 - `/accounts/connect/openrouter` — the PKCE return path (§10), an SPA route the existing
   path router already handles.
 
+**The connect affordance lives on this screen and nowhere else** (operator ruling 2026-09-07).
+It is the last line of the accounts list — one door, inside the screen that owns accounts — and
+it appears in no global surface: no bottom bar, no app-level action, nothing on the fleet screen
+or in the sidebar. An earlier draft also pinned a second copy of the door in an
+absolutely-positioned bottom `.dock`, argued from reach; a persistent bottom bar is app chrome by
+construction, and it made a screen-scoped, rarely-taken action read as general PWA furniture.
+That copy is gone. Measured, it cost ~96px of every visit to this screen plus the clearance rule
+that stopped the last real row hiding under it — the list frame's content fell from 1504px to
+1330px on its removal alone — and what it carried was a SHORTER statement of state the in-list
+door already made in full (`13a`'s docked copy read "openai only here" beside an in-list door
+reading "openai only — the server reports secrets off on this origin"). One fact said twice,
+once lossily, is the defect this design refuses everywhere else. The desktop frame had already
+reached the same conclusion from the other side: at 1200px the door moves into the header and
+nothing is pinned, "because a second door would be furniture, not reach".
+
 Ring placement is unchanged from §3: the screen is L4 delivery, it decides nothing, and
 every refusal it renders is a code the server measured on the fleet box.
 
@@ -1295,19 +1310,29 @@ else in this design depends on them.
 
 `DIRECTION` charters the `❯` in three places — the prompt input, the preselected dialog row,
 and the streaming caret — and calls it *"the one piece of terminal furniture that crosses into
-the chrome"*. This design claims **one** more: the connect door, the list's last line and the
-bottom-pinned row, reading `❯ connect an account`.
+the chrome"*. This design claims **one** more: the connect door — the last line of the accounts
+list, reading `❯ connect an account`.
+
+**This claim got SMALLER on 2026-09-07, and the amendment is re-argued rather than re-labelled.**
+The door used to be drawn twice on a phone: once ending the list, once pinned in a bottom `.dock`.
+The operator ruled the connect affordance belongs inside the account-management screen and not in
+the general PWA, and a persistent bottom bar is the definition of the second thing. With the dock
+gone the door is no longer chrome at all — it is a row in a list, on one screen — so what this
+section asks for is a fourth placement **in a list**, which is a weaker request than the one
+originally written here.
 
 **The count, measured rather than claimed — and re-measured after the first count was wrong.**
 A DOM walk of the rendered canvas (text nodes plus generated content, excluding the canvas's
-own annotation prose) finds **21** `❯` in the product, in three placements: the connect door
-(`.door .g`, 12), the preselected dialog row (`.opt-cur`, 3 — DIRECTION's own), and the shell
+own annotation prose) finds **14** `❯` in the product, in three placements: the connect door
+(`.door .g`, 5), the preselected dialog row (`.opt-cur`, 3 — DIRECTION's own), and the shell
 prompt at the head of the probe's command line inside a `--bg-well` (`.probe-cmd::before`, 6).
-An earlier draft of this paragraph said 27 in a 12 / 5 / 10 split, taken from a reviewer's
-figure rather than from a render; it counted the glyphs in the canvas's own commentary as
-though they were product. The correction is worth stating rather than quietly applying,
-because the paragraph's whole claim is that the census is honest, and a census carried from a
-second-hand number is exactly what it claims not to be.
+The door's count fell from 12 to 5 when the dock came out: seven of those twelve were the pinned
+duplicate. This paragraph has now been wrong twice and re-measured twice, which is the point of
+keeping it. An earlier draft said 27 in a 12 / 5 / 10 split, taken from a reviewer's figure
+rather than from a render — it counted the glyphs in the canvas's own commentary as though they
+were product. Neither correction is worth applying quietly, because the paragraph's whole claim
+is that the census is honest, and a census carried from a number nobody re-took is exactly what
+it claims not to be.
 The third is not a fourth claim. `DIRECTION` says the well *is* the terminal peeking through —
 the structured layer and the escape hatch sharing one material — so reproducing a shell prompt
 inside one is inheritance, which is the whole thesis, not promotion into the chrome. The
@@ -1316,7 +1341,8 @@ census is honest rather than convenient.
 
 The argument: the door is a prompt. It is the single line on this screen where the operator
 addresses the machine to bring something into existence, which is what the glyph means in
-ccd's own TUI and what it means in the composer. It is not decoration and it is not a fourth
+ccd's own TUI and what it means in the composer — and "single" is now literal rather than
+rhetorical: there is exactly one of it per screen. It is not decoration and it is not a fourth
 habit — every other placement the concept round proposed (on a selected segment, on a
 preselected hue chip, on a desktop side-nav item) is **refused here**, and so is the promotion
 of the drawer's keycaps into operation verbs (§12.4), which would have been a second, larger
@@ -1475,6 +1501,52 @@ plan's mutation table will name these at minimum:
         behind the whitelist proxy, so the base-URL field neither invokes nor weakens the
         ownership ban.
 
+13. **The loud health state is achromatic, not red.** Default: `✕ auth dead` wears the
+    shipped `.sess-line--active` reversed slab (`--bg-page` on `--ink-primary`, 16.94 / 15.26)
+    and every other outcome stays quiet, so the design ships **zero new colour tokens**.
+    Alternative (the concept round's proposal): a red `--status-dead-text` on
+    `--status-dead-tint` badge on the list row, which costs two colour aliases and puts a
+    lamp-grade signal on a standing state — `DIRECTION` reserves glanceable-from-across-the-room
+    for light, and light for living things.
+14. **A fourth `❯` placement — the connect door** (§13.4). Default: granted, and it is the
+    design's ONLY exception to a refusal. The claim SHRANK on 2026-09-07 (decision 23): with the
+    bottom dock removed the door is a row in a list rather than chrome, so this asks for a fourth
+    placement in a list, and the rendered census fell from 21 `❯` to 14. Alternative: the door
+    reads `+ connect an account` and nothing else in the design moves. Every other placement the concept round proposed
+    (selected segment, preselected hue chip, desktop side-nav) is refused either way, as is
+    promoting the drawer's keycaps into operation verbs.
+15. **Two non-colour tokens, `--switch-w: 48px` / `--switch-h: 28px`.** Default: added, for
+    enumerate-once discipline on the one new primitive. Alternative: inline both numbers in
+    the single rule that uses them; nothing else depends on them.
+16. **`/accounts/:id` is a route, but never on the path of an operation** (§12.4). Default:
+    the full record is a route so a push notification naming a lane can deep-link to it.
+    Alternative: make it a full-height sheet and add no route — cheaper, and it costs exactly
+    that deep link.
+17. **The two shipped defects in §12.13 ride this plan.** Default: yes — the
+    `--limit-crit` / `--limit-critical` fallback (every critical band on this very screen is
+    painting an unmeasured GitHub red today) and the `wrapper === 'gpt'` literal in
+    `models.ts` are each one line plus a red-first test, and both sit inside the surface this
+    work is rebuilding. Alternative: split them into a separate PR ahead of the feature.
+18. **`remove` refuses on home-able AND enabled** (§9). Default: yes — removal adopts `disable`'s
+    predicate, keeps its own code `last-home-able`, and its refusal names both the roster and the
+    kill-switch markers. Alternative: leave removal reading the roster alone, which is defensible
+    if you would rather removal never consulted a marker — at the cost that removing the last
+    *enabled* home-able lane leaves the placer with nowhere to land, which is the hole the
+    refusal exists to close.
+19. **The per-account cache keeps three health readings, not one** (§4.5). Default:
+    `lastChecks?: HealthRow[]`, newest first, capped at 3, so the fold can answer "did this just
+    break, or has it been broken?" Alternative: keep one slot and cut `previous` from the fold —
+    cheaper, and it costs the 2 a.m. screen its reason to exist.
+20. **`add` and `declare` leave the new lane switched off** (§5). Default: both write
+    `$REG/<id>-disabled`, so a lane nobody has probed cannot take placement, and the done step
+    says so with Enable beside it. Alternative: leave new lanes enabled, which makes connecting
+    one step shorter and lets an unmeasured credential take real work.
+21. **The dark box is a server statement on the wire** (§7). Default:
+    `connect.secretsAllowed` / `secretsReason` ride `GET /api/accounts`, and the UI never reasons
+    from its own `location` — the two disagree behind any reverse proxy. Alternative: let the
+    browser infer from `location.protocol`, which is one fewer field and one more place the UI
+    can be confidently wrong.
+
 22. **The generated api-key lane takes any Anthropic-compatible base URL** — operator ruling
     2026-09-07, granting what decision 12 left open. `ProviderId` gains `compatible`, `ExecSpec`
     gains `baseUrl`, and that is the whole of it: the `settings.json` env block, the 0600 secrets
@@ -1510,49 +1582,24 @@ plan's mutation table will name these at minimum:
     `_ws_least_loaded` fix stops that zero from making it the least-loaded lane forever — and it
     is one more reason a new lane lands DISABLED (decision 20).
 
-13. **The loud health state is achromatic, not red.** Default: `✕ auth dead` wears the
-    shipped `.sess-line--active` reversed slab (`--bg-page` on `--ink-primary`, 16.94 / 15.26)
-    and every other outcome stays quiet, so the design ships **zero new colour tokens**.
-    Alternative (the concept round's proposal): a red `--status-dead-text` on
-    `--status-dead-tint` badge on the list row, which costs two colour aliases and puts a
-    lamp-grade signal on a standing state — `DIRECTION` reserves glanceable-from-across-the-room
-    for light, and light for living things.
-14. **A fourth `❯` placement — the connect door** (§13.4). Default: granted, and it is the
-    design's ONLY exception to a refusal. Alternative: the door reads `+ connect an account`
-    and nothing else in the design moves. Every other placement the concept round proposed
-    (selected segment, preselected hue chip, desktop side-nav) is refused either way, as is
-    promoting the drawer's keycaps into operation verbs.
-15. **Two non-colour tokens, `--switch-w: 48px` / `--switch-h: 28px`.** Default: added, for
-    enumerate-once discipline on the one new primitive. Alternative: inline both numbers in
-    the single rule that uses them; nothing else depends on them.
-16. **`/accounts/:id` is a route, but never on the path of an operation** (§12.4). Default:
-    the full record is a route so a push notification naming a lane can deep-link to it.
-    Alternative: make it a full-height sheet and add no route — cheaper, and it costs exactly
-    that deep link.
-17. **The two shipped defects in §12.13 ride this plan.** Default: yes — the
-    `--limit-crit` / `--limit-critical` fallback (every critical band on this very screen is
-    painting an unmeasured GitHub red today) and the `wrapper === 'gpt'` literal in
-    `models.ts` are each one line plus a red-first test, and both sit inside the surface this
-    work is rebuilding. Alternative: split them into a separate PR ahead of the feature.
-18. **`remove` refuses on home-able AND enabled** (§9). Default: yes — removal adopts `disable`'s
-    predicate, keeps its own code `last-home-able`, and its refusal names both the roster and the
-    kill-switch markers. Alternative: leave removal reading the roster alone, which is defensible
-    if you would rather removal never consulted a marker — at the cost that removing the last
-    *enabled* home-able lane leaves the placer with nowhere to land, which is the hole the
-    refusal exists to close.
-19. **The per-account cache keeps three health readings, not one** (§4.5). Default:
-    `lastChecks?: HealthRow[]`, newest first, capped at 3, so the fold can answer "did this just
-    break, or has it been broken?" Alternative: keep one slot and cut `previous` from the fold —
-    cheaper, and it costs the 2 a.m. screen its reason to exist.
-20. **`add` and `declare` leave the new lane switched off** (§5). Default: both write
-    `$REG/<id>-disabled`, so a lane nobody has probed cannot take placement, and the done step
-    says so with Enable beside it. Alternative: leave new lanes enabled, which makes connecting
-    one step shorter and lets an unmeasured credential take real work.
-21. **The dark box is a server statement on the wire** (§7). Default:
-    `connect.secretsAllowed` / `secretsReason` ride `GET /api/accounts`, and the UI never reasons
-    from its own `location` — the two disagree behind any reverse proxy. Alternative: let the
-    browser infer from `location.protocol`, which is one fewer field and one more place the UI
-    can be confidently wrong.
+23. **The connect affordance is scoped to the accounts screen, and drawn once** — operator
+    ruling 2026-09-07. The door is the last line of the accounts list. There is no bottom bar, no
+    app-level connect action, and nothing on any other screen or in the sidebar: connecting an
+    account is a rare, deliberate act belonging to the screen that owns accounts, not furniture
+    the whole PWA carries. What this reverses is a second, PINNED copy of the same door in an
+    absolutely-positioned `.dock`, which had been argued from reach — the phone list runs past the
+    fold, so the docked copy was always visible. Three measurements decided it against that
+    argument: the bar cost **~96px of every visit** plus a `.phone:has(.dock) .app` clearance rule,
+    and removing both dropped the list frame's content from 1504px to 1330px; the fold's four
+    operations went from "174px or more above the visible bottom" to **271px**; and the docked
+    door was a *lossy duplicate* of state the in-list door already carried in full (`13a`: "openai
+    only here" against "openai only — the server reports secrets off on this origin"). The desktop
+    frame had reached the same answer independently — at 1200px the door sits in the header and
+    nothing is pinned, "because a second door would be furniture, not reach".
+    Alternative: keep a pinned door and accept the bar, which buys back the scroll on a list that
+    runs 486px past the fold for an action taken about as often as an account is created. If you
+    want it back it is one `.dock` block per list frame and one rule in the kit; the in-list door
+    stays either way, since it is the one that states the full refusal.
 
 ### Evidence to collect before the plan is written (each is one command or one pane)
 
