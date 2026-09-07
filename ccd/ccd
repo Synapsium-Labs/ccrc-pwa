@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c821e36c02fb228e81e6368990ef58e01f7e83a2021479b6cd22afeae552f3af
+# ccrc:generated 1 sha256=f48f160f21a7d5c6fcc7e7dcbfa7f3c66d18392c43af9473322837331423b995
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11689,7 +11689,7 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   # `_swap_target` can hand a wrong-pool account to a pool-aware `cmd_swap`.
   # The refusal there must be LOUD — a marker and a banner — because nothing is
   # reading this unit's exit code. Set inside the `bash -c` string, dynamically
-  # visible to the re-exec, exactly as CCD_SWAP_DETACHED is at ccd:13013.
+  # visible to the re-exec, exactly as CCD_SWAP_DETACHED is at ccd:14075.
   _svc_run_detached \
     bash -c "sleep $jitter; CCD_SWAP_AUTO=1 exec '$HOME/.local/bin/ccd' swap '$1' '$2' >>'$REG/swap.log' 2>&1" \
     || echo "$(date '+%F %T') dispatch FAILED for $1 -> $2" >> "$REG/swap.log"
@@ -13825,7 +13825,7 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   echo "${out# }"
 }
 
-_strand_mark() {   # id wrapper project — a hard-blocked session with nowhere to go.
+_strand_mark() {   # id wrapper project [cause] — a hard-blocked session with nowhere to go.
   # RULING 6: an empty pool STAYS IN POOL and says so. Never cross.
   #
   # TWO FLOORS, and they are floors on different things. The MARKER is the
@@ -13837,12 +13837,33 @@ _strand_mark() {   # id wrapper project — a hard-blocked session with nowhere 
   # the truth, but 720 banners an hour is the storm SWAPBLOCK_COOLDOWN was
   # introduced for on the refusal channel (see _auto_swap_check's gate).
   # Suppressing the MARKER instead would hide the truth; only the banner waits.
-  local id="$1" w="$2" p="$3" now pps pool pdesc why nts banner=1
+  #
+  # `$4` (CAUSE) IS ADDITIVE, and this is Task 5's fix for Important 4:
+  # `_strand_why` describes THIS ccd's pool-aware world ("$cand:pool=…"), which
+  # is the right question for "no candidate is free" but the WRONG one for
+  # "cmd_swap's own guard refused this exact target as an undeclared crossing"
+  # (§5.8.4) — `cmd_swap`'s guard already knows precisely what happened and
+  # `_strand_why` would have to reverse-engineer it, badly: a wrong-pool
+  # candidate not in `_pool_for`'s list degrades to " no candidate", making
+  # the stock sentence ("no account in pool $pdesc can take it") flatly false
+  # whenever another in-pool account genuinely could. When `$4` is given it
+  # REPLACES the computed reason everywhere a reason is shown — the marker,
+  # swap.log's line, and the banner — so the deploy-window caller can say what
+  # actually happened instead of a misleading pool census. Omitted, this
+  # function is byte-identical to before: `why` still computes from
+  # `_strand_why`, and the banner still reads its original sentence.
+  local id="$1" w="$2" p="$3" cause="${4:-}" now pps pool pdesc why nts banner=1 msg
   now=$(date +%s)
   pps=$(_project_pool_state "$p")
   pool='-'; pdesc='(untagged)'
   [[ "$pps" == "named "* ]] && { pool="${pps#named }"; pdesc="$pool"; }
-  why=$(_strand_why "$id" "$p")
+  if [[ -n "$cause" ]]; then
+    why="$cause"
+    msg="cc swap STRANDED: $id is blocked on $w — $cause"
+  else
+    why=$(_strand_why "$id" "$p")
+    msg="cc swap STRANDED: $id is blocked on $w and no account in pool $pdesc can take it — $why"
+  fi
   if [[ ! -e "$REG/$id.stranded" ]]; then
     _reg_set "$id" stranded "$now $why"
     echo "$(date '+%F %T') stranded $id: $w (blocked) -> nowhere [pool=$pool] ($why)" >> "$REG/swap.log"
@@ -13857,8 +13878,7 @@ _strand_mark() {   # id wrapper project — a hard-blocked session with nowhere 
     # DELIBERATELY NOT `cc swap: <id> moved …`: server/src/server.ts:1305 parses
     # that exact prefix into a per-session chat line about an account CHANGE,
     # and nothing changed here.
-    [[ -x "$REG/notify.sh" ]] \
-      && "$REG/notify.sh" "cc swap STRANDED: $id is blocked on $w and no account in pool $pdesc can take it — $why" >/dev/null 2>&1
+    [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "$msg" >/dev/null 2>&1
   fi
   return 0
 }
@@ -13971,10 +13991,10 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing sta
 }
 
 _crosspool_mark() {   # id project-pool account — record a DELIBERATE crossing
-  # One dot-free registry field, so `_reg_purge`'s one-dot rule (ccd:1294)
-  # purges it with the row. `cmd_swap --cross-pool`'s success tail is this
-  # field's first writer; `cmd_start --cross-pool` and `cmd_prefer` are Task
-  # 6's, and will call the same spelling.
+  # One dot-free registry field, so `_reg_purge` (ccd:1552, one-dot rule
+  # stated at ccd:1555) purges it with the row. `cmd_swap --cross-pool`'s
+  # success tail is this field's first writer; `cmd_start --cross-pool` and
+  # `cmd_prefer` are Task 6's, and will call the same spelling.
   _reg_set "$1" crosspool "$(date +%s) $2 $3"
 }
 
@@ -14017,7 +14037,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   done
   set -- "${args[@]}"    # bash >= 4.4 (the fleet host runs 5.2): an empty array here is
                          # not an unbound-variable error under `set -u`.
-  local id="${1:?usage: ccd swap [--force] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] <id> <target-wrapper>}"
+  local id="${1:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   local cur; cur=$(_reg_get "$id" wrapper)
@@ -14045,8 +14065,12 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
       # §5.8.4: inside `_dispatch_swap`'s transient unit nobody reads this exit
       # code, and an old supervisor will repeat the same choice every
       # SWAP_COOLDOWN. Mark and banner (both floor-debounced) so the deploy
-      # window is audible instead of being a silent strand for days.
-      [[ "${CCD_SWAP_AUTO:-}" == 1 ]] && _strand_mark "$id" "$cur" "$project"
+      # window is audible instead of being a silent strand for days. The
+      # CAUSE is passed explicitly (Important 4): `_strand_why`'s pool census
+      # would be misleading here — an in-pool account can often genuinely
+      # take the session; what actually happened is this exact refusal.
+      [[ "${CCD_SWAP_AUTO:-}" == 1 ]] && _strand_mark "$id" "$cur" "$project" \
+        "$target refused as a cross-pool crossing nobody asked for — likely a supervisor still running a pre-deploy ccd; the remedy is the claude-session@* unit sweep"
       die "pool-mismatch: $target is in pool '$(_acct_pool "$target")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd swap --cross-pool $id $target"
     fi
   fi

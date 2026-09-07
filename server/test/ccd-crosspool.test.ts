@@ -7,20 +7,23 @@
  * crossed account as a must-leave, and the affinity arm moves the session back
  * at the next idle boundary. `prefer --cross-pool` would be a no-op.
  *
- * FIXTURE HOME ONLY (`makeCcdHarness`). Task 4's own cases below drive only
+ * FIXTURE HOME ONLY (`makeCcdHarness`). Task 4's own cases below drove only
  * `_auto_swap_check` (the tick) — none of them calls a manual verb, so none
- * touches `cmd_swap`, `systemctl`/`launchctl`/`tmux`, or `TMUX` today. The
- * unused-looking imports and helpers below (`WS_ADD`, `eventsOf`, `measOf`,
- * `decOf`, `logLines`, `noticeLines`, `plantNotify`, `SWAP_STUBS`, `plant`,
- * `shFail`) are brief-dictated scaffolding for Tasks 5-6, which append
- * manual-verb cases to this same file and consume them — not an oversight
- * of this task.
+ * touched `cmd_swap`, `systemctl`/`launchctl`/`tmux`, or `TMUX` on its own.
+ * Task 5 is what exercises `cmd_swap`, `--cross-pool`'s flag loop, the
+ * detached self-swap retry and the deploy-window strand below, and consumes
+ * every helper this file imports except `WS_ADD`, which stays unused here
+ * for Task 6's `cmd_start`/`cmd_prefer` cases (`eventsOf`, `measOf`, `decOf`,
+ * `logLines`, `noticeLines`, `plantNotify`, `SWAP_STUBS`, `plant` and
+ * `shFail` are all live now).
  *
- * TASKS 5-6 OWE: systemd and tmux logging instead of acting; `sleep`
- * stubbed because `cmd_swap`'s flush wait is a second of real time per
- * case; `TMUX` emptied at the call site so the detached self-swap branch is
- * never taken from a suite that may itself be running inside tmux, except
- * in the two cases that are ABOUT that branch.
+ * WHAT TASK 5 DELIVERED, for the manual-verb cases below: systemd and tmux
+ * logging instead of acting (`SWAP_STUBS`, `SELF`); `sleep` stubbed because
+ * `cmd_swap`'s flush wait is a second of real time per case; `TMUX` emptied
+ * at the call site so the detached self-swap branch is never taken from a
+ * suite that may itself be running inside tmux, except in the two cases that
+ * are ABOUT that branch. Task 6 still owes `cmd_start --cross-pool`,
+ * `cmd_prefer --cross-pool` and `cmd_ensure`'s strand clear.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -180,8 +183,11 @@ describe('an undecidable or unreadable record decides nothing, or lies', () => {
   // "nobody can say", and folding it into either arm would invent a fourth,
   // destructive way for a deliberate crossing to end. A transient permission
   // hiccup on `$POOLS_DIR` must never be able to end every live crossing on
-  // the fleet box inside one tick, irreversibly, with no writer able to put
-  // the marker back until Task 5-6 land.
+  // the fleet box inside one tick, irreversibly. `cmd_swap --cross-pool`
+  // (Task 5) is now a writer that COULD re-establish a wrongly-cleared
+  // crossing, but only once an operator notices and re-issues it by hand —
+  // there is still no automatic recovery, which is what this test guards.
+  // Task 6 adds `start`/`prefer`'s writers.
   it.skipIf(process.getuid?.() === 0)(
     'an UNDECIDABLE project tag leaves a VALID marker untouched', () => {
       seedRow(); tagPool('demo', 'pool-a');
@@ -249,6 +255,13 @@ describe('cmd_swap refuses a crossing that was not asked for', () => {
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('pool-mismatch: claude-b is in pool');
     expect(h.reg(ID, 'wrapper')).toBe('claude');
+    // Review round 1, Important 2. `CCD_SWAP_AUTO` is unset on this call (a
+    // shell invocation, not a dispatched unit), so the strand-mark inside the
+    // guard's else arm must not fire — an operator's plain mistyped swap (or
+    // the same tap from the PWA) is not the deploy-window scenario §5.8.4
+    // exists for, and must not write `.stranded`, log a `stranded` line, or
+    // burn the strand-notify floor against the next GENUINE strand.
+    expect(h.reg(ID, 'stranded')).toBeNull();
   });
 
   it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
@@ -295,6 +308,16 @@ describe('cmd_swap crosses on purpose', () => {
     // Logged ONCE, at the success tail: this arm re-execs and runs the guard a
     // second time, so a line written at the guard would be written twice.
     expect(logLines('cross-pool')).toHaveLength(0);
+    // Review round 1, Important 1. The detach arm RETURNS before the carry
+    // ever runs — nothing has moved yet, the re-exec'd unit is what will
+    // actually do it — so the marker must not exist on THIS process's
+    // registry. `_crosspool_mark` belongs solely at the success tail; written
+    // at the guard instead, it would name a crossing this call never
+    // performed, and a later death (a failed transcript pre-flight, a
+    // missing config-dir mapping, `systemd-run` itself failing) would leave
+    // it standing — the pool machinery switched off for good on an account
+    // the session never reached.
+    expect(h.reg(ID, 'crosspool')).toBeNull();
   });
 
   it('a landed swap CLEARS a standing strand', () => {
@@ -303,6 +326,23 @@ describe('cmd_swap crosses on purpose', () => {
     h.sh(`${SWAP_STUBS} cmd_swap ${ID} claude-a`, { TMUX: '' });
     expect(h.reg(ID, 'stranded')).toBeNull();
     expect(logLines('unstranded')).toHaveLength(1);
+  });
+
+  it('a STANDING crossing lets the same target land with NO flag — the automatic path`s own escape', () => {
+    // Review round 1, Important 3. This is the arm `_swap_target`'s "home
+    // recovered, go back" branch and `_auto_swap_check`'s own dispatch
+    // (CCD_SWAP_AUTO=1, no --cross-pool) depend on: the pool machinery
+    // itself chose this exact move once, under a marker that still stands,
+    // so the guard must not re-refuse it as an undeclared crossing. Without
+    // this arm every such automatic move would strand the row and banner
+    // the operator every SWAP_COOLDOWN — silently, because nothing in this
+    // suite exercises `cmd_swap` with a standing marker AND no flag.
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    crossed('pool-a', 'claude-b');
+    expect(h.sh(`${SWAP_STUBS} cmd_swap ${ID} claude-b`, { TMUX: '' }))
+      .toContain(`swapped ${ID}: claude -> claude-b`);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    expect(h.reg(ID, 'stranded')).toBeNull();
   });
 });
 
@@ -325,7 +365,15 @@ describe('the deploy window (§5.8.4)', () => {
     expect(h.reg(ID, 'wrapper'), 'nothing moved').toBe('claude');
     expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
     expect(noticeLines()).toHaveLength(1);
-    expect(noticeLines()[0]).toContain(`cc swap STRANDED: ${ID} is blocked on claude`);
+    // Review round 1, Important 4. PINNED WHOLE, not by prefix: the stock
+    // "no account in pool $pdesc can take it" sentence is FALSE here — an
+    // in-pool account (claude-a) genuinely could take the session — so the
+    // banner must say what actually happened (an undeclared crossing this
+    // guard refused) rather than a misleading pool census. MEASURED.
+    expect(noticeLines()[0]).toBe(
+      `cc swap STRANDED: ${ID} is blocked on claude — claude-b refused as a `
+      + 'cross-pool crossing nobody asked for — likely a supervisor still '
+      + 'running a pre-deploy ccd; the remedy is the claude-session@* unit sweep');
     expect(h.reg(ID, 'lastswap'),
       'the stamp stays: retracting it would re-dispatch the same choice every 5 s')
       .toMatch(/^\d{10}$/);
@@ -336,6 +384,12 @@ describe('the deploy window (§5.8.4)', () => {
     h.sh('_svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };'
       + ` _dispatch_swap ${ID} claude-a`);
     const argv = h.calls().filter((c) => c.startsWith('detached ')).join('\n');
-    expect(argv).toContain('CCD_SWAP_AUTO=1');
+    // Review round 1, Minor 1: placement-aware, not merely present-anywhere.
+    // `CCD_SWAP_AUTO=1 exec …` exports it into the re-exec'd `ccd`'s
+    // environment; `CCD_SWAP_AUTO=1;` (a bare assignment, semicolon-terminated
+    // with no `exec` after it) would satisfy `.toContain('CCD_SWAP_AUTO=1')`
+    // while never actually reaching the child process — a mutation that made
+    // the whole deploy-window mechanism inert while this suite stayed green.
+    expect(argv).toContain('CCD_SWAP_AUTO=1 exec ');
   });
 });
