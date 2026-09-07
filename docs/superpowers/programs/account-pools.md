@@ -25,8 +25,8 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | Roster substrate: `AccountDef.pool` + `POOL_NAME_RE`, the bare-`node` mirror (closes D-1663), `_ccrc_pool()` in `accounts.sh`, `RosterWire.pool` + project-pool wire vocabulary, `shared/poolrule.ts` (D-1664), fixture table. NOT agent-first. | run 32, PR #57 (merged `07ce360e`) | **done 2026-09-06 11:11 UTC** — 19 commits, 15 files, +1572/-70; one fix round after a three-lens coordinator review; CI 5/5 on `bf2c66f4`; deployed SERVER LANE from the merge sha, `/health` reports `07ce360e`, unit stable. D-1663, D-1664 defined; D-1741, D-1742 (two rounds), D-1743 issued mid-wave |
-| 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | run 33 | opened 2026-09-06 11:11 UTC — same workspace `clear-meadow`, reclaimed; **dispatched 2026-09-06 11:12 UTC** — `resumed:true`, `/clear` injected, `briefQueued:true`, `skillState:present`, 9 items; wave-done claimed `2a4f5287` (PR #59, 38 commits, 5/5 CI), server re-measurement ok, items 9/9; REVIEWED and returned for one fix round 2026-09-06 21:44 UTC |
-| 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | — | not opened |
+| 2a | `ccd` reader + `project-pool` verb + `_pool_ok` + placement + agent grant + `POOLS_CAP` + doctor + `rehome`. AGENT-FIRST. | run 33, PR #59 (merged `58ef97b6`) | **done 2026-09-07 03:11 UTC** (merge commit time; both lanes deployed after) — 38 commits + 8 fix commits, wave-done `2a4f5287`, one coordinator fix round returned 2026-09-06 21:44 UTC and closed over EIGHT rounds (the worker's five, then three more I required: the unbounded read, the two refusal routes, and the doctor's own new false PASS); CI 5/5; **deployed AGENT LANE FIRST** — `ccd` reports `58ef97b6c23ff6602c021ed55dfd9d95068257dd`, `ccrc-agent.service` active, all 16 `claude-session@*` units verified active after, then the server lane, `/health` reports the same sha. Live read-only checks: `ccd caps` lists `pools-v1`, `project-pool` is in the usage line, `ccrc doctor` PASSes with the honest untagged verdict. D-1665–D-1670 defined; D-1744, D-1796, D-1798, D-1847, D-1848, D-1849 coordinator-minted; D-1850–D-1853 worker-minted and ruled to stand |
+| 2b | `ccd` deciders: auto-swap tick, strand, crossing marker, four manual verbs. AGENT-FIRST. | run 34 | opened 2026-09-07 03:15 UTC — same workspace `clear-meadow`, reclaimed (`released:false` on run 33's close is correct: 34 already held it); **dispatched 2026-09-07 09:16 UTC** — `resumed:true`, `/clear` injected, `briefQueued:true`, `skillState:present`, 8 items. The six-hour open-to-dispatch gap is this coordinator pane being compacted between the two acts, not a machinery stall: an open run holds its workspace indefinitely and nothing expires |
 | 3 | Server L1/L3 (`pools.ts`, `poolrule.ts` wrapper), registry `stranded`, routes, watcher frame, health. | — | not opened |
 | 4 | PWA: `accountPool`, `splitByPool`, `PoolSheet`, chips, sheets, store slot. Defines no deviation. | — | not opened |
 | 5 | README, `CLAUDE.md`, `config.ts` / `ccd` comment corrections. | — | not opened |
@@ -476,6 +476,32 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   its own round, and why its instinct to replace anchors with greppable NAMES was right. Applied here rather
   than correcting the numbers.
 
+- **Wave 2a CLOSES (coordinator, 2026-09-07 03:20 UTC).** Eight fix rounds after the worker's own five, PR #59
+  merged as `58ef97b6` under a hand-written 62-line squash body (the wave's commit subjects again carried
+  superseded `D-TBD-` slugs, and `dtbd.test.ts` scans file CONTENTS, not messages, so CI was green either
+  way — the second wave in a row where the default body would have landed placeholders on `main`).
+  **Deployed AGENT LANE FIRST**, which is the rule this wave existed to respect: the fleet host took the new
+  `ccd` before the server took the code that reads what it writes, and all 16 `claude-session@*` units were
+  verified active after `install_atomic`. Then the server; `/health` and `ccd --version` report the same sha.
+  Three live read-only confirmations, none of them a mutation: `ccd caps` now lists `pools-v1`, `project-pool`
+  appears in the usage line, and `ccrc doctor` prints `PASS pools: no project pools tagged (…/pools does not
+  exist) — every project is unconstrained, which is the pre-pools behaviour`. That last line is the one the
+  round-8 fix bought: before it, this exact box — readable roster, zero tags — printed a false "could not be
+  read". Four filesystem states now resolve correctly (readable-and-empty, readable-with-pools, unreadable,
+  absent), and the fix carries the OUTCOME beside the content rather than re-inferring it, because an empty
+  result and a failed read are the same empty string by construction and no sharper test on that one variable
+  could ever separate them.
+- **One worker claim I could not reproduce, carried to wave 2b rather than reopened (2026-09-07 03:25 UTC).**
+  The round-8 fix's own comment calls the `|| :` after `_ccrc_pool "$a"` load-bearing, saying that without it
+  a readable-but-pool-less roster would report `unmeasured`. On bash 5.2, with the shape `shared/generate.mjs`
+  actually emits, `_ccrc_pool` returns 0 for an untagged account — an empty `case` and a non-matching `case`
+  both do — so the guard is a harmless net, not the thing holding the third state up. The third state is held
+  by the `measured` sentinel line, which is unconditional. **Ruling: do not reopen a green branch for a comment
+  about a defensive net**, having just overruled the one-fix-wave cap for a genuine falsehood one round earlier
+  — the cost of a ninth round is not worth a word. It goes to wave 2b as a text item with my measurement
+  attached: the worker either exhibits the shape where `|| :` fires, or softens the comment to say what it is.
+  Cost if wrong: one sentence in a shipped comment overstates a guard's importance for one wave.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
@@ -488,8 +514,8 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 
 ## Next-wave brief
 
-**Wave 2a is dispatched as run 33** — its brief is reproduced below the wave-1 one, which is kept as the
-record of what that worker read.
+**Wave 2b is dispatched as run 34** — its brief is reproduced last, below the wave-1 and wave-2a ones,
+which are kept as the record of what that worker read at the time.
 
 **Wave 1 brief, as dispatched 2026-09-05 23:46 UTC (run 32, worker `ccrc-pwa-clear-meadow`)** — the text below is what the worker read, after dispatch's own `ccrc-worker` prefix:
 
@@ -553,5 +579,53 @@ record of what that worker read.
 > SAFETY: fixture HOMEs only (`makeCcdHarness`, `mkTmp`, `seedRoster`, `seedAccountsSh`) — never the live `$HOME`, never a `ccd` verb against the live host, never tmux, `~/.cc-sessions`, `~/.cc-limits` or a `claude-session@*` unit. Never print a secret file's contents. `EXEC_COMMANDS` stays `['tmux','ccd']`; no `gh` grant, ever. No real account, pool, host or IP in any tracked file — fixture pools are `pool-a`, `pool-b`, `pool-ab`. Write repo-relative paths in anything you commit; the pre-push hook refuses a blob carrying an absolute worktree path.
 >
 > ONE RULE FOR YOUR PR, learned at wave 1's merge: eight of that wave's commit messages quoted `D-TBD-` slugs from before the numbers were issued, one as a subject. `dtbd.test.ts` scans file CONTENTS, not messages, so CI is green either way — but a default squash body lands superseded placeholders on `main` forever. Keep placeholder slugs out of commit SUBJECTS, and expect me to write the squash body by hand.
+>
+> Do not update the program ledger — it is mine. Do not deploy. Do not merge.
+
+---
+
+**Wave 2b brief, as dispatched 2026-09-07 09:16 UTC (run 34, same worker `ccrc-pwa-clear-meadow`, resumed and cleared) — 8083 bytes, composed 8185 against the 8192-byte envelope cap, and four trim passes to get there; the nine numbered carries are the whole point of it:**
+
+> Program `account-pools`, WAVE 2b of 6, run 34. Same workspace, fresh wave — dispatch cleared your context, so everything you knew is in the files below, not in your head.
+>
+> WHAT THIS WAVE IS. The deciders. Wave 2a gave the fleet a tag and a predicate; you make the machinery ACT on them — the strand, `_swap_target`'s pool insertions, the 5-second tick, the crossing marker and its expiry, `cmd_swap`'s guard and flag, and `--cross-pool` on the four manual verbs. Eight tasks; Task 8 is the whole-branch gate and the deploy ORDER.
+>
+> THIS WAVE IS AGENT-FIRST — every change is under `ccd/`, so the fleet host ships before the server. You do NOT deploy: report the fingerprint and I run both lanes in order. Task 8 states the order; read it, do not run it.
+>
+> YOUR REQUIREMENTS: the plan `docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md`, then its spec `docs/superpowers/specs/2026-09-04-account-pools-design.md`. Read the plan's Global Constraints, Wave map and CONSUMED list once — its safety and no-real-names constraints bind; I do not restate them.
+>
+> WAVE 2a IS MERGED (`58ef97b6`) AND LIVE ON BOTH LANES — fetch `origin/main` and build on it. Your CONSUMED list is real now; do not re-spell or re-implement any of it.
+>
+> NINE THINGS FROM 2a YOUR PLAN CANNOT SEE — all obligations.
+>
+> 1. `_project_pool_state` DOES NOT VALIDATE ITS OWN `$1` — it answers on whatever `$POOLS_DIR/$1` composes to. 2a's callers pass a project already through `_ws_project_valid`; the TICK does not, nor do the four manual verbs. Decide where validation lives for your call sites and pin it. Do not assume the reader guards you.
+>
+> 2. `_pool_ok` GAINS ITS FIRST TICK AND MANUAL-VERB CALLERS here. 2a swept every comment near it for later-wave claims written as present fact; your diff makes that sweep stale. Run it again over the region you touch.
+>
+> 3. WRITE DICTATED COMMENTS IN THE OBLIGATION TENSE BY DEFAULT. 2a's most repeated defect, across four rounds, was a comment asserting machinery a later wave owes as present fact. Default spelling: "wave N is to do X", never "wave N does X". If the thing is yours and shipped, name it plainly so a grep finds it — your own code in the future tense is as wrong as the reverse.
+>
+> 4. `pool-tag-void` IS A NEW `swap.log` LINE CLASS 2a shipped — the writer verb's retraction when the tag it just wrote does not read back. `docs/superpowers/plans/2026-09-05-account-pools-wave5-docs.md:46` enumerates the swap.log classes and does NOT list it, and you add six more. Say so in wave-done, so wave 5 corrects that enumeration once with all seven.
+>
+> 5. WHEN `--cross-pool` LANDS, D-1798's PROMISE COMES TRUE — go close that entry. It records that the flag is refused TODAY by two different routes, depending on whether the shifted argument happens to name a roster id, both pinned in `server/test/ccd-project-pool.test.ts`. **I am the source of that entry's original false claim** — I wrote "refused by `_is_valid_wrapper`" from one measurement; the flag lands in the `id` slot, which is never wrapper-validated. Task 5 makes the flag real, so those two pins change DELIBERATELY: name them in your diff, say which behaviour the flag replaces, and mail me if either route should survive for another reason.
+>
+> 6. THE D-1796 TRIP-WIRE. That entry parks a two-arm case on the argument that `unreadable` and `malformed` reach the same DECISION and that `named` is unreachable from a failed read. If anything you write makes `named` reachable from a failed read, or gives the two words different decisions anywhere, **the entry is void and you tell me** — never quietly keep a park your own diff has falsified.
+>
+> 7. THE FILE/TIME/PLATFORM RULE, 2a's most expensive lesson. A claim about a FILE, about TIME (a cooldown, a jitter window, a tick period) and about a PLATFORM (bash version, kernel, filesystem semantics) are three measurements; evidence for one is not evidence for another. Your plan is dense with time claims — `SWAP_COOLDOWN` 900 s, `SWAPBLOCK_COOLDOWN` 1800 s, D-1675's 120 s jitter, the 5 s tick, D-1676's days-long stale-supervisor window. Measure each on its own axis. Companion rule: **a claim inherited from a review is not measured merely because a reviewer measured something nearby** — 2a shipped two of my false statements into production comments and tests because each rode beside a true one.
+>
+> 8. RESOLVE THE `D-TBD`/GREEN-CI TENSION EXPLICITLY BEFORE YOUR FINAL ROUNDS. `dtbd.test.ts` refuses a surviving placeholder in tracked file CONTENTS, so the branch cannot be green while one lives — yet late rounds are exactly what produce execution-time deviations. The resolution is ordering: batch the `deviation-request` so it reaches me BEFORE the final gate, substitute, then run Task 8's gates on the substituted tree. A gate green on a tree that still carried a placeholder proves nothing about the tree you push, so a deviation found DURING the gate re-runs it after substitution.
+>
+> 9. A PREDECESSOR CLAIM I COULD NOT REPRODUCE, handed over with my measurement. `ccd/ccrc-doctor-checks`'s `_check_pools` carries a comment calling the `|| :` after `_ccrc_pool "$a"` load-bearing — that without it a readable-but-pool-less roster reports `unmeasured`. On bash 5.2, with the shape `shared/generate.mjs` actually emits, `_ccrc_pool` returns 0 for an untagged account (an empty `case` and a non-matching `case` both do), so the third state is held by the unconditional `measured` sentinel and the `|| :` is a harmless net. Either exhibit the shape where it fires — if it exists, the comment is right and I want to see it — or soften the comment to say what it is.
+>
+> EXECUTION SKILL: invoke `superpowers:subagent-driven-development` and run it as written — fresh implementer per task, review after each, fix loop capped at five rounds, whole-branch review at the end. 2a's guards ended up measuring something because every finding went to an independent refuter first: keep that step, and prove each guard by MUTATING its subject, never by deleting the gate.
+>
+> BRANCH: this workspace's own branch, never a separate feature branch, based on `origin/main` after `git fetch origin`. End with "push and open a pull request" — merging is mine.
+>
+> DONE MEANS: eight tasks complete, SDD final review clean or residuals parked with rulings, Task 8's gates green, branch pushed, PR opened against `main`, all CI green. Then mail `wave-done`: `kind:"status"`, `subject:"wave-done"`, `toId:"coordinator"`, `runId` 34, body = prose plus the fingerprint JSON exactly `{"branchTip":"<40-hex>","prNumber":<n>,"prPhase":"open","handoffCommit":"<the same 40-hex>"}` — both shas identical, measured ONCE after your last push, then STOP PUSHING. Say what waves 3/4/5 need that their plans cannot see, and answer items 4, 5, 6 and 9 by name.
+>
+> MAIL: every mail to `coordinator` carries `"runId": 34` — another program is active and the runId-less form will not resolve. Send one `subject:"underway"` line when Task 1's implementer is dispatched. Deviations: write `D-TBD-<slug>` in full in the plan's `## Deviations found`, mail `subject:"deviation-request"` with slugs and count, I mint and mail back, you substitute before the final gate (item 8). Never invent a number, never take one from a gap, never call the allocator. Your plan-time block D-1671–D-1678 is already DEFINED — cite, do not redefine.
+>
+> SAFETY, the part your plan does not already say: yours is the wave that MOVES SESSIONS, so fixture HOMEs matter more here than anywhere — `makeCcdHarness` only, never the live `$HOME`, never a `ccd` verb against the live host, never tmux, `~/.cc-sessions`, `~/.cc-limits` or a `claude-session@*` unit. `_dispatch_swap`, tmux and `notify.sh` stubbed; `_avail` stays real, steered through the fixture's own limit files.
+>
+> YOUR PR: keep `D-TBD-` slugs out of commit SUBJECTS — twice now a wave's default squash body would have landed superseded placeholders on `main`, invisibly to CI. I write the squash body by hand.
 >
 > Do not update the program ledger — it is mine. Do not deploy. Do not merge.
