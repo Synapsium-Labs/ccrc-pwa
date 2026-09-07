@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=92c8df4811601bdfe33746c9c421837e7034a9c32e2c7e042955b1c09bfa133b
+# ccrc:generated 1 sha256=43f538541652b21316e46e2a18862641a2944ba17828ed13f29e18af8cdc7fd4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3558,15 +3558,22 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   #
   # UNKNOWN IS NOT UNPLACEABLE either. On a fresh box nothing has reported yet,
   # and refusing to place work there would break first run. The fallback is TWO
-  # deep, not one, and it is the server's spelled in bash: `${firstm:-$first}` IS
-  # projectHome's `scorable[0] ?? live[0]!` (server/src/limits.ts:106). Prefer
-  # the first lane that COULD report; fall back to the first placeable lane at
-  # all, so a roster whose every home-able account opts out of telemetry can
-  # still take work. (The comment that used to sit here said this fell back to
-  # "the first _account_ok account in iteration order — same rule, same answer,
-  # as the server's projectHome". Both halves of that sentence were wrong at
-  # once: it was one fallback, not two, and it therefore was NOT the same answer
-  # — see gap 1 below.)
+  # deep, not one, and — outside the unset-CCRC_MEASURED window named below —
+  # it is the server's spelled in bash: `${firstm:-$first}` is projectHome's
+  # `scorable[0] ?? live[0]!` (server/src/limits.ts:106). Prefer the first lane
+  # that COULD report; fall back to the first placeable lane at all, so a
+  # roster whose every home-able account opts out of telemetry can still take
+  # work. The equivalence has a hole: `_account_measured`'s own header
+  # (`:1035-1042`) reads an UNSET `CCRC_MEASURED` as measured-everything, so on
+  # a box holding an accounts.sh that predates it, `firstm` collapses onto
+  # `first` and tier two stops filtering — a state `projectHome` cannot reach
+  # at all, because `parseRoster` makes `telemetry` mandatory
+  # (`shared/roster.ts:716-721`) and the server has no "the roster did not say"
+  # case to collapse into. (The comment that used to sit here said this fell
+  # back to "the first _account_ok account in iteration order — same rule, same
+  # answer, as the server's projectHome". Both halves of that sentence were
+  # wrong at once: it was one fallback, not two, and it therefore was NOT the
+  # same answer — see gap 1 below.)
   #
   # The server's copy (projectHome, server/src/limits.ts) used to be stricter
   # about "unknown" in TWO ways this was not. ONE OF THEM IS NOW CLOSED HERE and
@@ -3603,16 +3610,25 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   # fixtures and is where it would be pinned the day something starts writing a
   # half-null row.
   #
-  # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES: PREFER MEASURED ACCOUNTS;
-  # IF NONE IS MEASURED, FALL BACK TO THE FIRST LANE THAT COULD REPORT, AND ONLY
-  # THEN TO THE FIRST PLACEABLE LANE AT ALL. (The old spelling of this rule ended
-  # at "FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER", which
-  # `${firstm:-$first}` makes false.) Skipping here and ranking-last in
-  # `_swap_target` are the two affordable spellings of the same preference —
-  # this function can skip because it HAS that fallback, and the rescue loop
-  # cannot because its "no candidate" answer strands a stuck session. `_avail`
-  # stays permissive because it answers eligibility, not rank. Full reasoning on
-  # `_avail`.
+  # THE RULE AT THIS SITE: PREFER MEASURED ACCOUNTS; IF NONE IS MEASURED, FALL
+  # BACK TO THE FIRST LANE THAT COULD REPORT, AND ONLY THEN TO THE FIRST
+  # PLACEABLE LANE AT ALL. (The old spelling of this rule ended at "FALL BACK TO
+  # THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER", which `${firstm:-$first}`
+  # makes false.) "Measured" here is `_account_measured` — the ROSTER'S answer.
+  # `_swap_target`'s rescue loop asks a different question: whether a FILE
+  # exists at all (`_limit_score "$cand"` returning non-empty), never what the
+  # roster says about telemetry — this task leaves that alone, so a home-able
+  # `telemetry:'none'` lane carrying a stale or hand-written limits file still
+  # competes normally there, and a row that happens to read a real zero still
+  # wins the rescue. That is a residual gap this task did not close (carried to
+  # the whole-branch review), not a claim this comment gets to make on
+  # `_swap_target`'s behalf. Skipping here and ranking-last in `_swap_target`
+  # remain the two affordable spellings of the same ELIGIBILITY preference
+  # (unmeasured never outranks measured), even though the two functions now
+  # measure "unmeasured" by different means — this function can skip because it
+  # HAS that fallback, and the rescue loop cannot because its "no candidate"
+  # answer strands a stuck session. `_avail` stays permissive because it
+  # answers eligibility, not rank. Full reasoning on `_avail`.
   #
   # CCRC_HOME_ABLE is in roster declaration order (shared/generate.mjs emits
   # roster.homeAble as-is), and that order is load-bearing three times over: the
@@ -3630,10 +3646,12 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
-  # `${firstm:-$first}` IS projectHome's `scorable[0] ?? live[0]!`
-  # (server/src/limits.ts:106), spelled in bash. Prefer the first lane that
-  # COULD report; fall back to the first placeable lane at all, so a roster
-  # whose every home-able account opts out of telemetry can still take work.
+  # `${firstm:-$first}` is projectHome's `scorable[0] ?? live[0]!`
+  # (server/src/limits.ts:106) outside the unset-CCRC_MEASURED window this
+  # function's header qualifies above — spelled in bash. Prefer the first lane
+  # that COULD report; fall back to the first placeable lane at all, so a
+  # roster whose every home-able account opts out of telemetry can still take
+  # work.
   [[ -z "$best" ]] && best="${firstm:-$first}"
   echo "$best"
 }

@@ -197,15 +197,16 @@ describe('projectHome ranks unmeasured below measured', () => {
 
 // ── §4.6: the two placement implementations agree about TELEMETRY, not only
 //    about the presence of a file ────────────────────────────────────────────
-// `ccd:3557-3566` states the standing position: parity holds "because both gaps
-// are reachable only through the SAME account — gpt is the only telemetry:'none'
-// account and gpt is not home-able", and calls that "an agreement of
-// circumstance, not of rule", naming THIS file as the suite that says so the day
-// the circumstance changes. Decision 22 creates a provider class that is
-// telemetry:'none' by construction and may be declared homeAble, so the
-// circumstance is over. Every roster below is one DEFAULT_TEST_ROSTER cannot
-// express, which is why these cases live in their own home rather than in the
-// shared fixture table above.
+// Before this task (at `4c834bb3`), `_ws_least_loaded`'s docstring's "Parity
+// holds today" paragraph stated the standing position: parity held "because
+// both gaps are reachable only through the SAME account — gpt is the only
+// telemetry:'none' account and gpt is not home-able", and called that "an
+// agreement of circumstance, not of rule", naming THIS file as the suite that
+// would say so the day the circumstance changed. Decision 22 creates a
+// provider class that is telemetry:'none' by construction and may be declared
+// homeAble, so the circumstance is over. Every roster below is one
+// DEFAULT_TEST_ROSTER cannot express, which is why these cases live in their
+// own home rather than in the shared fixture table above.
 describe('ccd and projectHome agree about telemetry, not only about limits files', () => {
   let h: string;
 
