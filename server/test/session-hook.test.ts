@@ -344,6 +344,34 @@ describe('the fleet gate and failure polarity', () => {
     times.sort((a, b) => a - b);
     expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
   }, 30000);
+  it('p95 of 20 SessionStart runs stays under the budget with a 200-row registry', () => {
+    const reg = path.join(home, '.cc-sessions');
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 200; i++) {
+      const id = `row-${i}`;
+      fs.writeFileSync(path.join(reg, `${id}.uuid`), `uuid-${id}`);
+      fs.writeFileSync(path.join(reg, `${id}.project`), i < 40 ? 'alpha' : `proj-${i}`);
+      fs.writeFileSync(path.join(reg, `${id}.supervised`), String(now - 5));
+    }
+    // 120 leaked _reg_set-shaped dotfiles: the glob must not see them.
+    for (let i = 0; i < 120; i++) fs.writeFileSync(path.join(reg, `.tmp-${i}`), 'x');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.uuid'), 'uuid-1');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.project'), 'alpha');
+    fs.writeFileSync(path.join(reg, 'demo-quiet-basin.supervised'), String(now - 5));
+
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const t0 = process.hrtime.bigint();
+      run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });
+      times.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  });
 });
 
 // ── R4: the read side, MEASURED ───────────────────────────────────────────
