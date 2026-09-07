@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6e916ba5a541f02af7fa63161b078dd30b4664d53a506736ce1d18742b8898fa
+# ccrc:generated 1 sha256=70a11acec30f519f05df0a1e11395816521f9903539df271dd8c39b58c9b6d9d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13882,13 +13882,17 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   # above. The home re-seed in `_auto_swap_check` (Task 3) is this
   # predicate's second reader: it asks about `wrapper` and `home` before ever
   # touching `.home`, one tick before `_swap_target`'s own read of the same
-  # marker runs. `_crosspool_tick` (Task 4) is this field's only EXPIRER: it
-  # runs immediately after that same read, before the re-seed acts on it, and
-  # removes an invalid marker and logs `crosspool-ended` — see its own header
-  # for the two ways a marker goes invalid. The fourth reaction, and every
-  # WRITER of this field, are still owed to later tasks: Task 5 is
-  # `cmd_swap`'s in-unit refusal, plus the `swap`/`start --cross-pool` verbs
-  # that write the marker; Task 6 is `prefer --cross-pool`. Today the field
+  # marker runs. `_crosspool_tick` (Task 4) is this field's EXPIRER — the
+  # only remover that judges the marker's OWN validity; `_reg_purge` removes
+  # it too, but unconditionally, as one of every field wiped when the whole
+  # row is purged, which says nothing about whether the crossing was still
+  # good. `_crosspool_tick` runs immediately after that same read, before
+  # the re-seed acts on it, and removes an invalid marker and logs
+  # `crosspool-ended` — see its own header for the three ways a marker goes
+  # invalid. The fourth reaction, and every WRITER of this field, are still
+  # owed to later tasks: Task 5 is `cmd_swap`'s in-unit refusal, plus the
+  # `swap`/`start --cross-pool` verbs that write the marker; Task 6 is
+  # `prefer --cross-pool`. Today the field
   # exists only where a test hand-writes it with `_reg_set`.
   #
   # The `-e` test is FIRST so the steady state of an uncrossed row costs two
@@ -13908,16 +13912,46 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
 _crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing stands; else END it
   # THE MARKER MUST EXPIRE, or a stale crossing is indistinguishable from a
   # live one and the pool machinery stays switched off on that row for ever.
-  # Evaluated once per tick, BEFORE the re-seed consults it. The reason names
-  # which of the two clauses failed, because the remedies differ: a retag is
-  # the operator's own newer instruction, a move off the account is the
-  # affinity arm doing what §2's ruling-8 interpretation says it should.
+  # Evaluated once per tick, BEFORE the re-seed consults it.
+  #
+  # `cur` and `home` are folded into ONE `_crosspool_valid` call, exactly as
+  # `_auto_swap_check`'s own call site folds them into `crossed` — this
+  # helper answers the same per-row question ("is this row under a
+  # deliberate crossing AT ALL?"), not `_swap_target`'s per-account one, so
+  # it inherits the identical cost: an unrelated wrong-pool `home` sitting
+  # alongside a wrapper-arm marker is not distinguished from one the marker
+  # actually names (see the DELIBERATE FOLD comment at the
+  # `_auto_swap_check` call site for what that costs).
+  #
+  # THREE REASONS, not a boolean, because the remedies differ: a retag is
+  # the operator's own newer instruction; a move off the account is the
+  # affinity arm doing what §2's ruling-8 interpretation says it should; a
+  # marker whose own record cannot be read is neither, and must say so
+  # rather than guess at one.
+  #
+  # UNDECIDABLE IS NOT A DECISION — the same rule `_swap_target` states in
+  # its own words (ccd:11850). An unreadable or malformed PROJECT tag means
+  # nobody can say whether the crossing still holds, so the marker survives
+  # untouched. Removing it here on an undecidable tag would invent a FOURTH
+  # way for a crossing to end, beyond the three §5.7.2 names (a retag, an
+  # untag, a move off the account) — and a transient permission hiccup on
+  # `$POOLS_DIR` would then end every live crossing on the fleet box inside
+  # one tick, irreversibly, with no writer able to put the marker back.
   local id="$1" cur="$2" home="$3" pps="$4" raw ts pool acct reason
   [[ -e "$REG/$id.crosspool" ]] || return 1
   _crosspool_valid "$id" "$pps" "$cur" "$home" && return 0
+  [[ "$pps" == named* || "$pps" == untagged ]] || return 1
   raw=$(_reg_get "$id" crosspool)
   read -r ts pool acct <<<"$raw" || :
-  if [[ "$pps" != "named ${pool:-}" ]]; then
+  if [[ -z "${pool:-}" ]]; then
+    # The MARKER's own record is what is broken here — empty or unreadable
+    # — not the project tag: `$pps` is already known to be a DECIDED state
+    # by this line (the gate above). Falling into "project pool is now
+    # $pps" would be a LIE whenever `$pps` happens to be exactly the pool
+    # this crossing was made under — the operator would go hunting for a
+    # retag that never happened.
+    reason="marker record is unreadable"
+  elif [[ "$pps" != "named $pool" ]]; then
     reason="project pool is now $pps"
   else
     reason="moved off ${acct:-<unrecorded>}"
