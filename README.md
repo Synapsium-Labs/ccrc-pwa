@@ -1756,7 +1756,16 @@ One emitted string, two referents: the graphify subject measures the payload's `
 measures the tmux session id. A session that `cd`'d, or a second window opened on the same held id, makes
 "this workspace" and "this tree" different subjects with no way for the reader to tell — so on
 disagreement, or when the cwd could not be measured at all, the card drops the demonstrative and names the
-workspace by path instead: *"the workspace `<id>` (`<workdir>`)"*.
+workspace by path instead: *"the workspace `<id>` (`<workdir>`)"*. That path is gated exactly as the hold
+bytes are, and for the same reason: `$REG/<id>.workdir` is registry text landing verbatim in a model's
+context, in a file any session on this box can write, so it carries both a path-shaped `case` class
+(`CCRC_WD_CLASS`, derived from `CCRC_PROJ_CLASS` with `/` prepended) and a length bound one under the
+128-byte read cap (`CCRC_WD_MAX`, derived from `CCRC_ID_MAX` so the off-by-one is a mechanism and not a
+number kept in step by hand). A path failing either is **unspeakable**: `wd` becomes empty, which restores
+the plain demonstrative rather than asserting a disagreement the hook cannot measure. Without the length
+bound a workdir longer than 128 characters that the cwd **equals exactly** came back truncated, compared
+unequal, and made the card claim a directory disagreement that did not exist beside a path that did not
+exist.
 
 **One emit.** The three builders — `_hook_graph_card`, `_hook_hold_card`, `_hook_ccrc_card` — only set
 text; nothing prints until the `SessionStart` arm joins whatever they set with one space

@@ -217,6 +217,35 @@ disagree the card names the workspace by path and drops the demonstrative,
 because otherwise "this workspace" and "this tree" are two subjects in one
 string.
 
+> **Amended by the fix wave (C1) — this section specified an ungated field, and
+> that was the spec's own defect.** Case C rules that a string failing its gate
+> is never rendered, and §4.2's hold bytes carry a shape gate *and*
+> `CCRC_HOLD_MAX` for exactly that reason. The workdir this case interpolates
+> was given **neither**, though it is the same kind of value: registry text
+> reaching a model's context verbatim, in a file any session on this box can
+> write (one UNIX user, `ccd` has no caller auth). Two consequences, both
+> reproduced against the shipped file. **(a)** `_ct_read` caps at
+> `CCRC_ID_MAX` (128), so a cwd EXACTLY EQUAL to a longer workdir compared
+> unequal to its own truncated reading and the card asserted a directory
+> disagreement that does not exist beside a path that does not exist — the
+> precise truncation hazard `CCRC_HOLD_MAX=127` was invented for, applied to one
+> field and not its sibling. **(b)** Backticks, newlines, ANSI escapes and
+> instruction-shaped prose landed verbatim in `additionalContext`, re-injected
+> on every compaction for as long as the hold stood. This card is the first
+> mechanism in the tree piping another row's registry bytes into a peer
+> session's model context; before it, registry bytes flowed session → server →
+> PWA → a human.
+>
+> **Ruled: the workdir takes the hold's treatment.** `CCRC_WD_CLASS`
+> (`CCRC_PROJ_CLASS` with `/` **prepended** — appended, the class's trailing `-`
+> would fall mid-class and spell the reversed range `_-/`) as a `case` glob, and
+> `CCRC_WD_MAX` = `CCRC_ID_MAX - 1`, derived so the off-by-one is a mechanism
+> rather than a second literal. On failure `wd=""`, which restores the plain
+> demonstrative — **silence over a false claim**, the same ruling Case C makes.
+> The cost is accepted and named: a genuine disagreement whose workdir is
+> unspeakable now reads as "this workspace", because a card that cannot measure
+> the disagreement must not assert one.
+
 #### 4.2.1 The wave-lateness defect, and its fix
 
 `dispatch.ts` sends the `/clear` at `:533` and writes the hold at step 5,

@@ -577,6 +577,40 @@ _hook_hold_card() {
   # disagreement, or when the cwd could not be measured at all, the card names
   # the workspace by path and drops the demonstrative.
   _ct_read "$REG/$id.workdir" && wd="$CT_V"
+  # THE WORKDIR IS A BYTE CHANNEL INTO A MODEL'S CONTEXT, AND THESE TWO GATES
+  # ARE WHAT CLOSE IT (C1, D-1901). Do not relax either as noise. Every other value
+  # this card quotes is gated twice — `$h` by the anchored shape match AND
+  # `CCRC_HOLD_MAX`, `$CT_PROJ` by `CCRC_PROJ_CLASS` AND `CCRC_PROJ_MAX`, `$id`
+  # by its own class at the top of this file. This one had neither gate, and it
+  # is the same kind of string: registry text that lands VERBATIM in a session's
+  # `additionalContext`, re-injected on every compaction, for as long as the
+  # hold stands. `$REG/<id>.workdir` is a file ANY session on this box can
+  # write — one UNIX user, `ccd` has no caller auth, and CLAUDE.md's own threat
+  # model says outright not to assume server-side checks stop a session acting
+  # directly — so ungated it carried backticks, newlines, ANSI escapes and
+  # instruction-shaped prose from one session straight into a peer's context.
+  # This card is the first mechanism in the tree that pipes another row's
+  # registry bytes into a peer's model context; the hold bytes were gated for
+  # exactly this reason and the workdir was missed.
+  #
+  # THE LENGTH BOUND IS `CCRC_HOLD_MAX`'S OFF-BY-ONE ARGUMENT APPLIED TO ITS
+  # SIBLING, and it fixes a lie as well as a hazard. `_ct_read` reads at most
+  # `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY
+  # have been truncated. Ungated, a 132-character workdir that the cwd EQUALS
+  # EXACTLY comes back cut to 128, compares unequal to `$GM_CWD`, and the card
+  # takes the disagreement branch: it asserts a directory disagreement that does
+  # not exist, beside a path that does not exist. Refusing at one under the read
+  # cap means every path this subject quotes was captured WHOLE.
+  #
+  # ON FAILURE `wd=""` — SILENCE, NEVER A GUESS. An empty `$wd` makes the
+  # condition below false, so the card falls back to the plain demonstrative
+  # rather than asserting a disagreement it cannot measure. Same ruling as
+  # Case C's: a value that fails a gate is never rendered.
+  #
+  # `case` plus `${#x}`, not an ERE — this file's own measured idiom (see
+  # `CCRC_PROJ_CLASS` below); zero forks either way.
+  (( ${#wd} <= CCRC_WD_MAX )) || wd=""
+  case "$wd" in *[!$CCRC_WD_CLASS]*) wd="" ;; esac
   if [ -z "${GM_CWD:-}" ] || { [ -n "$wd" ] && [ "$GM_CWD" != "$wd" ]; }; then
     subj="the workspace \`$id\`${wd:+ (\`$wd\`)}"
   fi
@@ -685,6 +719,16 @@ CCRC_FRESH_S=120
 # Quoting a truncated hold as if it were the whole hold is exactly the lying
 # card this design exists to prevent, so the bound refuses instead.
 CCRC_HOLD_MAX=127
+# The workdir's own two bounds (C1), argued at the gate that uses them in
+# `_hook_hold_card`. The class is DERIVED from `CCRC_PROJ_CLASS` with the `/`
+# PREPENDED, never appended: appended, the `-` this file's class ends with would
+# land mid-class and spell the reversed range `_-/`, which is not a path class
+# at all. The length is DERIVED from the read cap rather than restating 127, so
+# the off-by-one — a value that reached `_ct_read`'s cap may have been truncated
+# and must be refused — is a mechanism here instead of a number that has to be
+# kept in step with `CCRC_ID_MAX` by hand. Both expansions are builtins: no fork.
+CCRC_WD_CLASS="/$CCRC_PROJ_CLASS"
+CCRC_WD_MAX=$(( CCRC_ID_MAX - 1 ))
 # A search at the HEAD of the line is a codebase question; a search at the tail
 # of a pipeline (`vitest run | grep Tests`) is filtering output this session
 # already produced, and gating that would be the gate answering a question
