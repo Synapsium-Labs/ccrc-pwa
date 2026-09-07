@@ -224,14 +224,14 @@ describe('projectHome ranks unmeasured below measured', () => {
     // answer. `b` is not scored at 40 here; `a` at 50 wins by being the only
     // account anyone has actually measured.
     //
-    // NOTE, and it is a real divergence recorded as a deviation
-    // (D-TBD-half-rolled-score-divergence): bash does NOT agree on this shape.
-    // `_limit_score` substitutes 0 for a missing half and answers "" only when
-    // BOTH halves are empty, so it scores this row 40. That is why this case
-    // lives HERE, in the TS-only describe, and NOT in the shared leastLoaded
-    // fixtures — a shared case over this shape would red the parity harness by
-    // design. See `_ws_least_loaded`'s third divergence note for why closing it
-    // is not this change's job.
+    // BASH AGREES, and that was not free. `_limit_score` used to substitute 0
+    // for a missing half and answer "" only when BOTH were empty, so it scored
+    // this row 40 while `measured()` called it unknown — a divergence this
+    // change INTRODUCED (before it, both sides said 40) and then closed in the
+    // same commit, on the coordinator's ruling. `half-rolled-window` in the
+    // shared leastLoaded fixtures now asserts the agreement over one seeded
+    // HOME; this case stays because it pins the RULE in isolation, over a
+    // synthetic roster, the way its neighbours do.
     expect(projectHome(r, {
       a: L(50, 50),
       b: { ...L(0, 40), fiveRolledOver: true },

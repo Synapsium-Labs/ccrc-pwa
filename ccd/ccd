@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d36ba176a78c655f244f8cdd28291785d2137524411951f78d3193775db04e92
+# ccrc:generated 1 sha256=8aac08ffdd6e12d8d66d53ab62469d9af15ddca7f44f3de958943c8255d8c24c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3798,8 +3798,8 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
   #
   # The server's copy (projectHome, server/src/limits.ts) is stricter about
-  # "unknown" in THREE ways this is not, and all three are stated here rather
-  # than discovered later:
+  # "unknown" in exactly ONE way this is not, and it is stated here rather than
+  # discovered later:
   #
   #   1. It skips an account whose roster entry says telemetry:'none' — an
   #      account that will never report, so its permanent unknown must not read
@@ -3807,37 +3807,33 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   #      gap did not close with it: the generated file carries ids, home-ability
   #      and the upstream id, and no telemetry field at all (shared/
   #      generate.mjs), so bash still has nothing to consult.
-  #   2. It treats a HALF-measured row as unknown, where _limit_score
-  #      substitutes 0 for the missing half (`: "${five:=0}"`) and returns a
-  #      real number. With a home-able `{"five":null,"seven":0}`, bash picks
-  #      that account at 0 and the server picks the cheapest fully-measured one.
-  #   3. It treats a HALF-ROLLED row as unknown, where _limit_score scores it by
-  #      its surviving half. Since the provenance fix, _limit_field answers ""
-  #      for a window that has ended, so `{five: <ended>, seven: 40}` reaches
-  #      _limit_score as `("" , 40)` — its `: "${five:=0}"` substitutes 0 and the
-  #      wholly-unknown branch does not fire, giving 40, while projectHome's
-  #      measured() reads the row's fiveRolledOver flag and answers unknown.
-  #      Unlike gaps 1 and 2 this one is REACHABLE: it needs only one Anthropic
-  #      account with one window turned over. Not closed here, deliberately —
-  #      relaxing _limit_score's `&&` to `||` would make `_limit_score gpt`
-  #      unknown for gpt's real half-null file, hence `_avail gpt` always true,
-  #      hence _gpt_status unable to report the Codex weekly cap at all. The
-  #      clean close is a second channel on _limit_field (an exit status telling
-  #      "absent" from "inferred") so _limit_score can tell them apart; recorded,
-  #      not chosen. projected-home.test.ts keeps no fixture on this shape,
-  #      because a shared fixture over it would red on parity by design.
   #
-  # Parity holds today on gaps 1 and 2 ONLY, and they are reachable only
-  # through the SAME account: gpt is the only telemetry:'none' account and the
-  # only one whose
-  # file carries a null half (it has no 5h window at all), and gpt is not
-  # home-able — absent from CCRC_HOME_ABLE here and from roster.homeAble there —
-  # so neither implementation ever scores it. Nothing else writes a half-null
-  # file: statusline-command.sh emits both fields for every Anthropic account.
-  # But `_limit_score`'s own `:=0` defaults and `_limit_five`'s back-compat shim
-  # exist precisely because a file CAN be missing a key, so this is an agreement
-  # of circumstance, not of rule. `projected-home.test.ts` runs both sides over
-  # the same fixtures and says so the day the circumstance changes.
+  # THERE USED TO BE A SECOND, AND BRIEFLY A THIRD; BOTH ARE NOW CLOSED, and
+  # what closed them is one line — `_limit_score`'s `[[ -z "$five" || -z
+  # "$seven" ]]`, which was `&&` with `: "${five:=0}"` filling the gap.
+  #   • The old gap 2 was the HALF-MEASURED row: `{"five":null,"seven":0}`
+  #     scored 0 in bash and unknown on the server.
+  #   • The old gap 3 was the HALF-ROLLED row, created by the provenance fix
+  #     itself: `{five: <window ended>, seven: 5}` scored 5 in bash and unknown
+  #     on the server. Unlike gap 2 that one was REACHABLE by any Anthropic
+  #     account at any 5h reset, and it was the placement magnet this file's
+  #     first paragraph describes, surviving through the readable half — which
+  #     is why it was closed in the same change that opened it rather than
+  #     recorded and deferred.
+  # Both were one defect wearing two faces: a score is a MAXIMUM, so one known
+  # half bounds the truth only from below, and a bound from below is not a
+  # score. `_limit_score` now says so, and `half-rolled-window` in
+  # projected-home.test.ts's shared fixtures asserts the two sides agree on it.
+  #
+  # Gap 1 is reachable only through gpt: it is the only telemetry:'none'
+  # account, and it is not home-able — absent from CCRC_HOME_ABLE here and from
+  # roster.homeAble there — so neither implementation ever scores it. That is
+  # still an agreement of circumstance rather than of rule, and
+  # `projected-home.test.ts` runs both sides over the same fixtures so it says
+  # so the day the circumstance changes. (`_limit_five`'s back-compat shim
+  # survives as the standing evidence that a limits file CAN be missing a key;
+  # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
+  # — they were the mechanism of the gap, not a defence against it.)
   #
   # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
   # the loose form of it ("unmeasured never wins") is contradicted two lines
@@ -11777,8 +11773,11 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
     #
     # The honest answer is "": this window ended and nobody has measured the new
     # one. _avail keeps the account ELIGIBLE (see its comment — eligibility and
-    # rank are different questions), _ws_least_loaded skips it, _swap_target
-    # ranks it last at 100. Availability does not change; only preference does.
+    # rank are different questions, and it refuses only on a KNOWN half at the
+    # ceiling), _ws_least_loaded skips it, _swap_target ranks it last at 100.
+    # Availability does not change; only preference does — and that holds for a
+    # row with only ONE window ended, because _limit_score answers "" unless
+    # both halves are measured.
     return 0
   fi
   # Fallback when the file carries no resetAt (the gpt 429 exclusion, and files
@@ -11796,14 +11795,31 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
 }
 _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
 
-_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly unknown
+_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
   # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
   # free 5h window but an exhausted week is NOT a good landing spot, and an account nearing
   # its weekly cap should evacuate just like one nearing its 5h cap.
+  #
+  # EITHER HALF UNKNOWN MAKES THE ROW UNKNOWN. This was `&&` — "" only when
+  # BOTH halves were empty — with `: "${five:=0}"` substituting 0 for the
+  # missing one. That substitution is the same unknown-is-zero magnet the
+  # provenance fix removed from _limit_field, surviving through the half that
+  # was still readable: `{five: <window ended>, seven: 5}` scored 5, which made
+  # an account whose 5h state nobody had measured the emptiest-looking on the
+  # fleet, and _ws_least_loaded's strict `<` sent placement there. The score is
+  # a MAXIMUM, so one known half bounds the truth only from BELOW — it could
+  # really be 99 — and a bound from below is not a score.
+  #
+  # This is a RANK, and rank is the only thing it answers. Eligibility asks a
+  # different question and needs only that lower bound, so `_avail` reads
+  # `_limit_field` itself rather than routing through here; see its comment.
+  # Splitting the two is what let this guard tighten without stripping the gpt
+  # lane of its only exclusion — measured: with `_avail` still reading this
+  # function, gpt's real `{"five": null, "seven": 99}` went from EXCLUDED to
+  # "enabled, available" and three _gpt_status assertions went red.
   local five seven
   five=$(_limit_field "$1" five 0); seven=$(_limit_field "$1" seven 0)
-  [[ -z "$five" && -z "$seven" ]] && return 0
-  : "${five:=0}"; : "${seven:=0}"
+  [[ -z "$five" || -z "$seven" ]] && return 0
   (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
 }
 
@@ -11851,6 +11867,20 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   #     fleet, so skipping costs nothing). `_swap_target` cannot skip — a
   #     rescue with no destination strands a stuck session — so it ranks
   #     unmeasured LAST instead, eligible but never preferred.
+  #   • ELIGIBILITY NEEDS ONLY A LOWER BOUND; RANK NEEDS A FULL MEASUREMENT.
+  #     That is why this function reads `_limit_field` directly instead of
+  #     asking `_limit_score`, which now answers "" whenever EITHER half is
+  #     unknown. A single KNOWN half at or above the ceiling is already PROOF
+  #     there is no headroom, whatever the other half turns out to be — so it
+  #     refuses. Nothing known says nothing, so it admits. The extension is
+  #     byte-identical to the `max(five, seven) < SWAP_CEILING` this replaced:
+  #     for a fully-measured row `max < C` is exactly "neither half >= C", for a
+  #     wholly-unknown row both spellings admit, and for a half-known row the
+  #     old `: "${five:=0}"` made the score the known half anyway. What changes
+  #     is only WHICH function it depends on, and that is the whole point: it
+  #     frees `_limit_score` to be strict about rank without taking gpt's only
+  #     exclusion with it (`{"five": null, "seven": 99}` must stay excluded, and
+  #     _gpt_status's entry guard at ccd:1254 is this function).
   #
   # An earlier version of this comment claimed the three sites could not be
   # aligned without breaking something. That was true only of the alignment it
@@ -11864,9 +11894,11 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   # Placement's fallback is the one deliberate exception, and it is a fallback
   # rather than a ranking: prefer measured accounts; if NONE is measured, take
   # the first home-able account in roster order.
-  local w="$1" sc
-  sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
-  [[ "$sc" -lt "$SWAP_CEILING" ]]
+  local w="$1" five seven
+  five=$(_limit_field "$w" five 0); seven=$(_limit_field "$w" seven 0)
+  [[ -n "$five"  && "$five"  -ge "$SWAP_CEILING" ]] && return 1
+  [[ -n "$seven" && "$seven" -ge "$SWAP_CEILING" ]] && return 1
+  return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
 _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing = stay put
@@ -11910,10 +11942,13 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     #
     # And unmeasured now has a SECOND source, routine rather than exceptional:
     # since the provenance fix a candidate whose window has merely ended reads
-    # unmeasured too. It stays eligible and ranks 100 here, which is the correct
-    # treatment — its old inferred 0 made it the preferred rescue destination on
-    # a fleet where nothing had run on it, which is the magnet this comment
-    # already describes, arriving by a third route.
+    # unmeasured too — EITHER window, since `_limit_score` answers "" unless
+    # both halves are measured. It stays eligible and ranks 100 here, which is
+    # the correct treatment — its old inferred 0 made it the preferred rescue
+    # destination on a fleet where nothing had run on it, which is the magnet
+    # this comment already describes, arriving by a third route. `_avail` above
+    # still admits it, and admits it for a reason that no longer depends on this
+    # function's score: it refuses only a KNOWN half at the ceiling.
     #
     # 100 is exact, not a large-ish number. `_avail` above has already rejected
     # every candidate scoring >= SWAP_CEILING (98), so a measured candidate

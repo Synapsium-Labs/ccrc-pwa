@@ -59,9 +59,17 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  Both flags are consulted, and either one alone answers null.
  *
  *  ccd's mirror says this by saying nothing — `_limit_field` prints "" for a
- *  window that has ended, which `_limit_score` (its ranking reader) and that
- *  function's three callers already read as unmeasured. Two languages, one fact. `projected-home.test.ts` runs
- *  both over the same bytes. */
+ *  window that has ended, and `_limit_score` (the ranking reader) answers ""
+ *  unless BOTH halves are measured, which its two callers `_ws_least_loaded`
+ *  and `_swap_target` already read as unmeasured. That `||` is term for term
+ *  this function's own rule and landed with it: a score is a MAXIMUM, so one
+ *  known half bounds the truth only from below. `_avail` deliberately does NOT
+ *  go through `_limit_score` — eligibility needs only that lower bound, so it
+ *  reads `_limit_field` itself and refuses on a known half at the ceiling,
+ *  which is what lets rank be strict without stripping the gpt lane of its
+ *  only exclusion. Two languages, one fact, half-rolled rows included;
+ *  `projected-home.test.ts` runs both over the same bytes and
+ *  `half-rolled-window` is the case that says so. */
 const measured = (l: AccountLimits | undefined): number | null =>
   !l || l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
     ? null

@@ -144,6 +144,24 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         + 'runs on an account nothing was placed on. The cheapest MEASURED account wins',
     },
     {
+      name: 'half-rolled-window',
+      files: {
+        // claude's 5h window ended; its 7d window is fresh and reads 5 — the
+        // shape EVERY Anthropic account passes through at each 5h reset, and
+        // the one the live fleet was sitting in when this case was written.
+        claude: c({ five: 87, seven: 5, ts: now - 15000, fiveResetAt: now - 100, sevenResetAt: now + 200000 }),
+        'claude-a': fresh(10, 10),
+        'claude-b': fresh(40, 40),
+        'claude-d': fresh(20, 20),
+      },
+      expect: { wrapper: 'claude-a', score: 10 },
+      why: 'ONE ended window is enough to make the row unmeasured: a score is a MAXIMUM, so the '
+        + 'surviving half bounds the truth only from below and 5 could really be 99. Scoring the '
+        + 'survivor is the placement magnet reaching through the readable half — the account whose '
+        + '5h state nobody has measured would rank emptiest on the fleet and win every placement. '
+        + 'This case had no coverage, which is why that divergence was invisible',
+    },
+    {
       name: 'all-rolled-over',
       // §B.2's honest cost, pinned in both languages. Two accounts really do
       // share a 5h reset on this fleet, so a shared boundary that leaves NOTHING

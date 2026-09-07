@@ -51,11 +51,13 @@ const json = (o: Record<string, number>): string => JSON.stringify(o);
  *  fiveRolledOver: true`) because the accounts screen renders both halves —
  *  "reset" is a different word from "0%" and from "—". `_limit_field` has no
  *  second channel: stdout carries one token, and the ranking callers that
- *  consume it (`_limit_score`, and through it `_avail`, `_ws_least_loaded`,
+ *  consume it (`_limit_score`, and through it `_ws_least_loaded` and
  *  `_swap_target`) have exactly one spelling for "nobody measured this", which
- *  is "". (`_gpt_status`, ccd:1268, is the other direct reader and folds "" to
- *  0 — see the note in this plan's Task 3 Interfaces for why that fold is
- *  unreachable here.)
+ *  is "". Its two other direct readers take it raw: `_avail` (ccd:11838), which
+ *  refuses only a KNOWN half at the ceiling because eligibility needs a lower
+ *  bound where rank needs a full measurement, and `_gpt_status` (ccd:1268),
+ *  which folds "" to 0 — reachable only for a shape gpt's file does not have,
+ *  since `_avail` gates the branch that fold lives in.
  *
  *  So a row is unknown to bash when its value is null OR its rollover flag is
  *  set. Collapsing that into `v === null` is what let bash print a confident `0`
@@ -291,10 +293,10 @@ describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not 
       'eligibility must not change across the provenance fix — a hard-blocked session that '
       + 'cannot reach a rolled-over lane has nowhere to go').toBe('AVAIL');
     // The REASON, pinned separately so the fix is visible here and not only in
-    // the parity harness. Today `_limit_score` answers a confident `0` for an
-    // account whose windows have both lapsed; after the fix it answers ""
-    // (unknown) and `_avail`'s own `[[ -z "$sc" ]] && return 0` carries the same
-    // verdict for an honest reason. Task 3 flips this ONE literal.
+    // the parity harness. `_limit_score` used to answer a confident `0` for an
+    // account whose windows have both lapsed; it now answers "" (unknown), and
+    // `_avail` reaches the SAME verdict for an honest reason without consulting
+    // it at all — no known half sits at the ceiling, so nothing refuses.
     expect(sh('_limit_score claude'),
       'the reason eligibility holds: an honest unknown, not an inferred zero').toBe('');
   });
