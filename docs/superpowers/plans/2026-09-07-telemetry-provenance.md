@@ -827,14 +827,15 @@ In `server/test/projected-home.test.ts`, add these two `it`s at the end of
     // answer. `b` is not scored at 40 here; `a` at 50 wins by being the only
     // account anyone has actually measured.
     //
-    // NOTE, and it is a real divergence recorded as a deviation
-    // (D-TBD-half-rolled-score-divergence): bash does NOT agree on this shape.
-    // `_limit_score` substitutes 0 for a missing half and answers "" only when
-    // BOTH halves are empty, so it scores this row 40. That is why this case
-    // lives HERE, in the TS-only describe, and NOT in the shared leastLoaded
-    // fixtures — a shared case over this shape would red the parity harness by
-    // design. See `_ws_least_loaded`'s third divergence note for why closing it
-    // is not this change's job.
+    // SUPERSEDED BY FIX ROUND 1 — the comment this plan originally specified
+    // here said bash does NOT agree on this shape and that a shared fixture
+    // over it "would red the parity harness by design". Both clauses were made
+    // false by the same round that closed D-TBD-half-rolled-score-divergence:
+    // `_limit_score` now answers "" unless BOTH halves are measured, so bash
+    // agrees, and `half-rolled-window` IS in the shared leastLoaded fixtures.
+    // What shipped is the corrected text; see the ledger entry. This case
+    // survives because it pins the RULE in isolation, over a synthetic roster,
+    // the way its neighbours do.
     expect(projectHome(r, {
       a: L(50, 50),
       b: { ...L(0, 40), fiveRolledOver: true },
@@ -1012,6 +1013,14 @@ with:
 
 `_limit_score`, `_avail`, `_ws_least_loaded` and `_swap_target` are **NOT edited** in this step. They
 already read `""` as unmeasured; that is the whole reason this fix fits in one branch.
+
+**AMENDED BY FIX ROUND 1 — two of those four WERE edited, in the follow-up commit `2b8743bd`.** The
+sentence above is true of *this step* and false as a claim about the task, so it is corrected rather
+than left to mislead. `_limit_score` gained the `||` (either half unknown makes the row unknown) and
+lost its `: "${five:=0}"` defaults; `_avail` was rewritten to read `_limit_field` directly and refuse
+only a KNOWN half at the ceiling, which is what let `_limit_score` tighten without stripping the gpt
+lane of its only exclusion. `_ws_least_loaded` and `_swap_target` are genuinely untouched in both
+commits. See D-TBD-half-rolled-score-divergence for the argument and the measurements.
 
 - [ ] **Step 7: Name the new source of "unknown" where the three sites explain themselves**
 
@@ -1252,19 +1261,35 @@ until the sweep has run. The server lane's final gate is `/health` reporting the
   `AccountsStrip.tsx`'s `LimitRow` rendered `0%` — a measured zero — for a window nobody had measured.
   The flag's own docstring already defined it as "the 0 above is inferred rather than observed"; this
   path was the one writer that never honoured it. Fixed by Task 1.
-- **D-TBD-half-rolled-score-divergence** — after Task 3 the two implementations disagree on a row with
-  ONE window rolled over. TypeScript's `measured()` answers `null` (the flag is set, and the score is
-  a maximum bounded only from below); bash's `_limit_score` substitutes `0` for the empty half and
-  answers the surviving one. **Found, not fixed.** The spec fixes `_limit_field` and states that
-  `_limit_score` "then returns `""` when both halves are unknown", so its wholly-unknown rule is out
-  of scope; and relaxing that rule's `&&` to `||` would make `_limit_score gpt` unknown for gpt's real
-  on-disk `{"five": null, "seven": 0}`, hence `_avail gpt` always true, hence `_gpt_status` unable to
-  report the Codex weekly cap — three assertions in `ccd-limits.test.ts` red and the gpt lane silently
-  stripped of its only exclusion. The clean close, recorded as the escalation and not chosen: give
-  `_limit_field` a second channel (an exit status distinguishing "absent" from "inferred") so
-  `_limit_score` can tell the two apart, since the current collapse is precisely an overloaded null at
-  a seam whose callers handle the two conditions differently. Documented in `_ws_least_loaded`'s
-  own comment as its third divergence (Task 3 Step 7b) and in `projected-home.test.ts`'s TS-only case.
+- **D-TBD-half-rolled-score-divergence** — Task 3's own fix opened this and Task 3 closed it, in the
+  follow-up commit `2b8743bd`. On a row with ONE window rolled over, TypeScript's `measured()`
+  answered `null` (the flag is set, and the score is a maximum bounded only from below) while bash's
+  `_limit_score` substituted `0` for the empty half and answered the surviving one — so
+  `{five: <ended>, seven: 5}` scored 5, and an account whose 5h state nobody had measured ranked
+  emptiest on the fleet and won every placement. That is the plan's own magnet reaching through the
+  readable half, on a shape every Anthropic account enters at each 5h reset. **Found and FIXED**
+  (operator/coordinator ruling, fix round 1, overriding this plan's original decision to defer).
+
+  Why the deferral was overridden: it is NEW (before Task 3 both sides answered 40), it is routine
+  rather than exceptional, and its dangerous direction restores the defect the plan exists to remove.
+
+  The close is not the `&&`→`||` relaxation this entry originally rejected, because that rejection
+  was CORRECT and was re-measured: with `_avail` still routed through `_limit_score`, gpt's real
+  `{"five": null, "seven": 99}` went from EXCLUDED to "enabled, available" and three `_gpt_status`
+  assertions went red. The shipped close separates the two questions instead — ELIGIBILITY NEEDS ONLY
+  A LOWER BOUND, RANK NEEDS A FULL MEASUREMENT. `_limit_score` answers `""` unless BOTH halves are
+  measured (and `: "${five:=0}"`, which WAS the magnet, is deleted); `_avail` no longer consults it at
+  all, reading `_limit_field` itself and refusing only a KNOWN half at or above the ceiling. `_avail`'s
+  extension is byte-identical to the `max(five, seven) < SWAP_CEILING` it replaced on every shape —
+  only its dependency moved. Pinned by the new SHARED fixture `half-rolled-window`
+  (`server/test/fixtures/leastLoaded.ts`), which is the coverage whose absence made the divergence
+  invisible: reverting `||` to `&&` reds it and nothing else.
+
+  Still open and NOT closed by this: `_limit_field`'s single output channel cannot distinguish an
+  ABSENT value from a RETRACTED one, which is an overloaded null at a seam whose callers handle the
+  two differently. It is harmless today only because the one file with a null half (gpt's) is absent
+  rather than retracted. The recorded close remains a second channel — an exit status separating the
+  two — as its own change.
 - **D-TBD-fleet-limits-no-provenance** — `FleetSession.limits` (`shared/api.ts:41`) carries
   `{five, seven}` and no provenance, so `pwa/src/fleet/SwapSheet.tsx`'s `load` ranks an inferred `0`
   as the emptiest pool and awards it the "suggested" tag — the exact defect that function's own
@@ -1294,8 +1319,8 @@ even though nothing here names them.
 | §B requirement | Where |
 |---|---|
 | TS: `measured()` consults the rollover flags and returns `null` for an inferred zero | Task 3 Step 5 |
-| bash: `_limit_field`'s `resetAt` branch returns `""`; `_limit_score`, `_ws_least_loaded`, `_swap_target` unchanged | Task 3 Step 6, and the explicit no-edit note in that step |
-| `_avail` deliberately unchanged — unknown stays available | Not edited; pinned in both directions by Task 2, mutation-measured as M4 in Task 3 Step 10, and its own comment quoted in Background |
+| bash: `_limit_field`'s `resetAt` branch returns `""`; `_ws_least_loaded`, `_swap_target` unchanged | Task 3 Step 6. **Amended:** `_limit_score` WAS edited in fix round 1 (`2b8743bd`) to close the divergence Step 6 opened; `_ws_least_loaded` and `_swap_target` are untouched |
+| `_avail` deliberately unchanged — unknown stays available | **Behaviour** unchanged and pinned in both directions by Task 2 (mutation-measured as M4/M4′); its **implementation** was rewritten in fix round 1 to read `_limit_field` instead of `_limit_score`, with an extension byte-identical to the `max(five, seven) < SWAP_CEILING` it replaced. Unknown still stays available |
 | The age-fallback path's dishonest `rolledOver` flag | Task 1 |
 | §B.1: `rolled-over-window` rewritten, not deleted (R7) | Task 3 Step 1 |
 | §B.1's measured mutation table (E12) | Task 3 Step 10 M1–M3 re-measure it; Task 1 Step 5 measures the age-flag guard |
@@ -1336,10 +1361,11 @@ four deliberate `D-TBD-<slug>` names the convention prescribes for an unreachabl
 
 1. **The half-rolled divergence (D-TBD-half-rolled-score-divergence) is introduced by this change, not
    inherited.** Today both sides agree on `{five: rolled, seven: 40}` at 40. After Task 3 they do not.
-   It is argued and documented rather than closed, and the plan deliberately keeps it OUT of the
-   shared fixtures — a shared case over that shape would red the parity harness by design. If a
-   reviewer asks for parity there, the answer is the exit-status channel, as its own change; it is not
-   a fixture edit.
+   **RESOLVED IN FIX ROUND 1** (`2b8743bd`), overriding the deferral this paragraph originally
+   recommended: it was closed in the same task that opened it, `half-rolled-window` IS now a shared
+   fixture, and the answer was not the exit-status channel but a separation of eligibility from rank.
+   The paragraph is kept, corrected, because the risk it names was real and the reviewer it warned
+   about did ask.
 2. **The mutation counts in Task 3 Step 4 and Step 10 were derived by reading, not by running** — this
    worktree has no `server/node_modules`, so no suite was executed while writing this plan. E12 in the
    spec is the measured figure (2 bash assertions for the `resetAt` branch, +1 for the age branch, 5

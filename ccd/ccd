@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8aac08ffdd6e12d8d66d53ab62469d9af15ddca7f44f3de958943c8255d8c24c
+# ccrc:generated 1 sha256=d1698452921aad8906a2198b109e677a63d8c5713a4ae60dee5f93141653f975
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11859,8 +11859,9 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   #     nobody ever measured — so every account passes through unknown each time
   #     a window turns over, on a healthy fleet. That makes this function's
   #     permissiveness load-bearing rather than a corner case: a rolled-over
-  #     account is available today because it scored 0 and available now because
-  #     it scores unknown, which is the same answer for an honest reason.
+  #     account was available because it scored 0 and is available now because
+  #     no KNOWN half sits at the ceiling — the same answer for an honest
+  #     reason, and reached without consulting a score at all (next bullet).
   #   • Ranking is where unknown must lose, and both ranking sites now make it
   #     lose, by the means each can afford. `_ws_least_loaded` SKIPS an
   #     unmeasured account outright (it has a fallback for the all-unmeasured
