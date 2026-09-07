@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8fb4982b69115c15e5c877831c0869c95caa8ab68acd7ee6235bb24f43d91a43
+# ccrc:generated 1 sha256=0c96a89c40eb2726c1729d89316fcc726d967eebf361f553f8ed8fa26bc9fd4a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3832,6 +3832,22 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # exist precisely because a file CAN be missing a key, so this is an agreement
   # of circumstance, not of rule. `projected-home.test.ts` runs both sides over
   # the same fixtures and says so the day the circumstance changes.
+  #
+  # THE THREE CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
+  # (PR #61, 2026-09-07). PLACEMENT — this function — iterates CCRC_HOME_ABLE
+  # and never scores an overflow lane, so the parity above still holds for it
+  # exactly as written. ROTATION — `_swap_target` — walks `_pool_for`, which
+  # since #61 includes every installed, non-kill-switched lane that is NOT
+  # home-able, and it DOES score such a lane with `_limit_score`: gpt's
+  # half-null file reads as 0 there. That reading cannot beat an Anthropic
+  # account, because `_swap_target` keeps overflow lanes in a bracket of their
+  # own and reaches it only when no home-able candidate passed `_account_ok`
+  # and `_avail` — the 0 orders overflow lanes among themselves and nothing
+  # else. `_strand_why` (account pools, wave 2b) mirrors `_swap_target`'s walk,
+  # so it names an overflow lane too. A reader who finds this function refusing
+  # a lane the rotation accepts is looking at the design, not at a drift:
+  # a workspace never STARTS on the Codex lane, but a session whose every
+  # home-able account is at the ceiling may end up there until one recovers.
   #
   # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
   # the loose form of it ("unmeasured never wins") is contradicted two lines
