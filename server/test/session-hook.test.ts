@@ -1582,4 +1582,135 @@ describe('the co-tenant subject', () => {
       .toBe(Number(s![1]!.replace(/_/g, '')));
     expect(Number(c![1]), 'ccd and the hook disagree on the window').toBe(Number(h![1]));
   });
+
+  // ── Fix round 1: the seven review findings against d391f305 ────────────
+  // Findings 1 and 2 share one fix (`CT_V=$(<"$1")` → bounded `read -N`);
+  // finding 3 is the gap that let five branches ship with no red-on-mutation
+  // test at all — this describe closes both, plus finding 5's own leading-
+  // zero stderr leak. Findings 4, 6 and 7 were comment-only corrections with
+  // no behaviour to pin, so they carry no new test here.
+  describe('fix round 1 — reviewed edges', () => {
+    /** The stderr-sensitive shape, factored out: two tests below need the
+     *  spawnSync result object, not just stdout, the same reason the
+     *  existing "unreadable peer .project" test above does. */
+    const runRaw = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home,
+        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
+    });
+
+    // Finding 1: `CT_V=$(<"$1")` writes bash's "ignored null byte in input"
+    // warning to real stderr on a NUL-containing `.project` — reproduced by
+    // the reviewer, and exactly the leak the pre-existing "costs no stderr"
+    // test exists to prevent for the readability case.
+    it('a NUL byte in a peer .project costs no stderr (finding 1)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      fs.writeFileSync(path.join(REG(), 'p1.uuid'), 'uuid-p1');
+      fs.writeFileSync(path.join(REG(), 'p1.project'), Buffer.from('al\0pha'));
+      fs.writeFileSync(path.join(REG(), 'p1.supervised'),
+        String(Math.floor(Date.now() / 1000) - 5));
+      const tree = path.join(home, 'tree');
+      gitTree(tree, 1);
+      plantGraph(tree, { built: 'deadbee' });
+      const r = runRaw({ hook_event_name: 'SessionStart', cwd: tree });
+      expect(r.status, 'the hook must exit 0 on every path').toBe(0);
+      expect(r.stderr, 'a NUL byte in a peer .project leaked a bash warning').toBe('');
+    });
+
+    // Finding 2 (shared fix with 1): the read was unbounded, so one 2 MB
+    // `.project` took the probe from 5 ms to 759 ms (reviewer's measurement)
+    // and one 8 MB file to 3.3 s. The fix bounds the read to CCRC_ID_MAX
+    // (128), not CCRC_PROJ_MAX (64) — reading exactly CCRC_PROJ_MAX would
+    // TRUNCATE an over-long value to precisely the bound and let it PASS the
+    // length gate as if it had always been that short. This plants a project
+    // value past BOTH bounds (150 > 128 > 64) so a value that is genuinely
+    // too long is still refused after truncation, not silently accepted.
+    it('a project value longer than the read bound is refused, not truncated into a passing one (finding 2)', () => {
+      const longProj = 'a'.repeat(150);
+      peer('demo-quiet-basin', longProj, 5);
+      peer('p1', longProj, 5);
+      expect(plain(), 'a 150-char self project slipped past the length gate').not.toContain('ccrc:');
+    });
+
+    // Finding 3, branch: the ID_MAX length gate. Nothing in the suite ever
+    // planted an over-long peer id before this.
+    it('a peer id longer than CCRC_ID_MAX is excluded before its project is even read (finding 3)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      peer('p1', 'alpha', 5);
+      const longId = 'q'.repeat(130);
+      peer(longId, 'alpha', 5);
+      const text = plain();
+      expect(text).toContain('ccrc: 1 other supervised row names project `alpha`');
+      expect(text, 'the over-long id was counted anyway').not.toContain('2 other');
+    });
+
+    // Finding 3, branch: supervised ABSENT. This is the exact distinction the
+    // comment above `_ct_read "$REG/$o.supervised"` argues for — folding
+    // absence into doubt would put "at least" on every card forever — and
+    // nothing in the suite ever planted a peer with no `.supervised` at all
+    // alongside a counted peer to observe the difference.
+    it('a peer with no .supervised at all is skipped outright, never folded into "at least" (finding 3)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      peer('p1', 'alpha', 5);
+      peer('p2', 'alpha', null);
+      const text = plain();
+      expect(text).toContain('ccrc: 1 other supervised row names project `alpha`');
+      expect(text, 'an absent heartbeat was folded into uncertainty').not.toContain('at least');
+    });
+
+    // Finding 3, branch: supervised UNMEASURABLE (unreadable, distinct from
+    // absent). Nothing in the suite ever chmod'd a peer's `.supervised`.
+    it('a peer whose .supervised is unreadable counts toward "at least" (finding 3)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      peer('p1', 'alpha', 5);
+      peer('p2', 'alpha', 5);
+      fs.chmodSync(path.join(REG(), 'p2.supervised'), 0o000);
+      const text = plain();
+      expect(text).toContain('ccrc: at least 1 other supervised row names project `alpha`');
+    });
+
+    // Finding 3, branch: supervised NON-NUMERIC (distinct from absent and
+    // unmeasurable). Nothing in the suite ever planted a non-numeric
+    // `.supervised`.
+    it('a peer whose .supervised is non-numeric counts toward "at least" (finding 3)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      peer('p1', 'alpha', 5);
+      peer('p2', 'alpha', null);
+      fs.writeFileSync(path.join(REG(), 'p2.supervised'), 'not-a-number');
+      const text = plain();
+      expect(text).toContain('ccrc: at least 1 other supervised row names project `alpha`');
+    });
+
+    // Finding 3, branch: the peer `project ?? id` fallback. The only row
+    // lacking `.project` in the pre-existing suite exits at rc 2 (unreadable)
+    // one line earlier, so `[[ -n $CT_V ]] || CT_V="$o"` never ran. A row
+    // with NO `.project` file at all (rc 1, absent) reaches it; its id must
+    // equal the self row's project for the fallback to be observable at all.
+    it('a peer with no .project falls back to its own id (finding 3)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      peer('alpha', null, 5);
+      expect(plain()).toContain('ccrc: 1 other supervised row names project `alpha`');
+    });
+
+    // Finding 5: `case "$CT_V" in ''|*[!0-9]*)` admits a leading-zero string
+    // like "0899", which `(( ))` then tries to parse as OCTAL and errors
+    // ("value too great for base") to real stderr — the same failure mode as
+    // finding 1, on the additionalContext path. `10#$CT_V` fixes it.
+    it('a leading-zero .supervised is parsed as decimal, not octal — no stderr leak (finding 5)', () => {
+      peer('demo-quiet-basin', 'alpha', 5);
+      peer('p1', 'alpha', null);
+      fs.writeFileSync(path.join(REG(), 'p1.supervised'), '0899');
+      const tree = path.join(home, 'tree');
+      gitTree(tree, 1);
+      plantGraph(tree, { built: 'deadbee' });
+      const r = runRaw({ hook_event_name: 'SessionStart', cwd: tree });
+      expect(r.status, 'the hook must exit 0 on every path').toBe(0);
+      expect(r.stderr, 'octal parsing of a leading-zero heartbeat leaked stderr').toBe('');
+      // "0899" read as decimal is 899 seconds since the epoch — wildly stale
+      // — so the lone peer contributes nothing and the card stays silent.
+      expect(card(r.stdout)).not.toContain('ccrc:');
+    });
+  });
 });

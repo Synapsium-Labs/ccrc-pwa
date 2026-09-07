@@ -345,12 +345,65 @@ _hook_graph_card() {
 # NEVER `2>/dev/null` on a `$(<f)`: bash parses that as a null command with
 # redirections, NOT the fork-free read — measured, it returns the EMPTY STRING
 # and rc 0 on a perfectly readable file, so the reflex idiom is a silent wrong
-# answer. The `[[ -f && -r ]]` guard is what makes stderr silent instead.
+# answer. The `[[ -f && -r ]]` guard is what makes stderr silent instead — for
+# THAT hazard. `$(<f)` carries a SECOND, independent one: on a NUL byte in the
+# file it silently strips the byte but STILL WRITES bash's own "warning:
+# command substitution: ignored null byte in input" to real stderr (measured,
+# bash 5.2). The `-f && -r` guard cannot see this either — the loss happens
+# INSIDE the read, on a file that already passed every prior check. Fix round
+# 1 (finding 1) replaced the read itself with the bash builtin below.
+#
+# `IFS= read -r -N "$CCRC_ID_MAX" CT_V` is fork-free (a builtin, no subshell —
+# see "IT SETS CT_V AND NEVER PRINTS" below) AND BOUNDED — `$(<f)` read the
+# WHOLE file before the trim ever ran, so one 2 MB peer `.project` took the
+# probe from 5 ms to 759 ms and one 8 MB file to 3.3 s (fix round 1, finding
+# 2); `-N` caps the bytes this function ever holds regardless of how large the
+# file on disk is (re-measured after the fix: the same 2 MB and 8 MB files
+# both read back in ~3 ms).
+#
+# THE BOUND IS `CCRC_ID_MAX` (128), NOT `CCRC_PROJ_MAX` (64), though every
+# caller today reads either a `.project` field (bound by `CCRC_PROJ_MAX`) or a
+# `.supervised` epoch integer (far shorter than either bound). Reading exactly
+# `CCRC_PROJ_MAX` would make an over-long value TRUNCATE to precisely the
+# bound and then PASS the length gate as if it had always been that short —
+# exactly the "silently truncated into a passing value" failure fix round 1
+# (finding 2) named. Reading the LARGER of this file's two length constants
+# means a value genuinely within `CCRC_PROJ_MAX` is always captured whole (a
+# short read), while anything longer is truncated at a length that STILL
+# exceeds `CCRC_PROJ_MAX` (128 > 64) — so the length gate downstream still
+# correctly refuses it instead of silently accepting the truncated prefix.
+#
+# `read -N` returns 1 on a SHORT READ (fewer than the requested count because
+# EOF arrived first) — the NORMAL case for every field this function reads,
+# never an error — so this function does not branch on that return value; only
+# the `-e`/`-f`/`-r` checks above decide absent vs unmeasurable. `-N` ignores
+# delimiters, so a trailing newline lands inside `CT_V` exactly as it did
+# before; the trim below is unchanged and still strips it.
+#
+# `2>/dev/null` COMES FIRST, before the `< "$1"` redirection, not after:
+# reversed, it does nothing — a failed INPUT redirection is reported and
+# aborts the command before a LATER stderr redirection ever takes effect
+# (measured: `read … < gone 2>/dev/null` still printed "No such file or
+# directory" to real stderr; `read … 2>/dev/null < gone` printed nothing). The
+# only way this fires on a path that just passed `-e`/`-f`/`-r` is a TOCTOU
+# race — another process deleting or replacing the row between the check and
+# the read — and on that race `CT_V` stays empty, which every caller already
+# treats the same as a genuinely empty field.
+#
+# A NUL byte in the file is still silently dropped — bash variables cannot
+# hold one, full stop, and no fork-free mechanism here can detect one was
+# ever there. What changes is that `read` does this WITHOUT bash's `$(<f)`
+# warning (measured: zero stderr on `al\0pha`). The narrow "unsafe" divergence
+# finding 1 named — the byte-preserving server groups `al\0pha` on its own,
+# this hook groups the NUL-stripped `alpha` — is UNCHANGED and accepted:
+# closing it would need a `stat`/`wc` fork this file's zero-fork budget
+# does not have.
 #
 # IT SETS `CT_V` AND NEVER PRINTS. `v=$(_ct_read f)` would be a command
 # SUBSTITUTION, which forks a subshell even around a shell function: measured
 # 61.9 ms for one 22-row pass that way against 2.97 ms this way. The whole
-# probe forks ZERO times (strace: 0 clone/clone3/vfork over one pass).
+# probe forks ZERO times (strace: 0 clone/clone3/vfork over one pass — still
+# true after fix round 1's read change, re-measured).
 #
 # The trim reproduces the server's own `field()` (`server/src/registry.ts:333`
 # does `content.trim()`), so the hook and the server group rows the same way.
@@ -358,7 +411,7 @@ _ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
   CT_V=""
   [[ -e "$1" ]] || return 1
   [[ -f "$1" && -r "$1" ]] || return 2
-  CT_V=$(<"$1") || return 2
+  IFS= read -r -N "$CCRC_ID_MAX" CT_V 2>/dev/null < "$1"
   CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
   return 0
 }
@@ -399,17 +452,40 @@ _ct_probe() {   # -> CT_N CT_U CT_PROJ ; rc 1 = nothing may be said
   # `names.filter(n => n.endsWith('.uuid'))`). Globbing `*.project` instead
   # would make a row that carries no `.project` INVISIBLE — but the server
   # gives that row `project ?? id`, so the two sides would enumerate different
-  # fleets. `$o` is shape-gated with `$id`'s own class before it is compared or
-  # interpolated: with no match at all the glob stays LITERAL, and an ungated
-  # `*` reaching a `[[ ]]` comparison is a pattern, not a name.
+  # fleets. `$o` is COMPARED against `$id` first and shape-gated SECOND (fix
+  # round 1, finding 7 corrected this comment — it previously claimed the
+  # opposite order). The order is harmless either way: `[[ ]]` treats only its
+  # RIGHT operand (`$id`, already validated at the top of this file) as a
+  # pattern, so `$o` on the LEFT of `==` is matched LITERALLY no matter its own
+  # shape — an ungated `*` there is just a string, never a wildcard. The shape
+  # gate below exists for what runs AFTER it, not for this comparison: `$o` is
+  # INTERPOLATED into a registry path two lines down, and that read is what
+  # the gate protects.
   for f in "$REG"/*.uuid; do
     o="${f%.uuid}"; o="${o##*/}"
     [[ $o == "$id" ]] && continue
     case "$o" in ''|*[!$CCRC_PROJ_CLASS]*) continue ;; esac
     (( ${#o} <= CCRC_ID_MAX )) || continue
+    # CT_U IS FLEET-SCOPED, DELIBERATELY, NOT PROJECT-SCOPED (fix round 1,
+    # finding 6): an unmeasurable `.project` on this row could belong to ANY
+    # project — its own value cannot be read to rule that out — so it still
+    # earns THIS card's "at least" qualifier even if it turns out to belong
+    # elsewhere. One bad row anywhere in the fleet then hedges every project's
+    # card, which is coarser than a per-project uncertainty count would be,
+    # but it is never a false EXACT count — the direction every other gate in
+    # this function also protects.
     _ct_read "$REG/$o.project"; rc=$?
     [[ $rc -ne 2 ]] || { CT_U=$(( CT_U + 1 )); continue; }
-    [[ -n $CT_V ]] || CT_V="$o"        # the server's own `project ?? id`
+    # NOT AN EXACT `??` (fix round 1, finding 4): the server's `project ?? id`
+    # (`registry.ts`) coalesces NULL only, so a `.project` that reads back
+    # empty or whitespace-only stays `''` on the server — but this `-n` test
+    # coalesces THAT case too, falling back to `$o` here where the server
+    # would not. The divergence is SAFE, unlike the NUL byte's unsafe
+    # direction above: two rows with an empty `.project` group together as
+    # `''` on the server and separately (or not at all) here, so this hook can
+    # only UNDER-count or fall silent, never claim a co-tenant the server does
+    # not also see.
+    [[ -n $CT_V ]] || CT_V="$o"
     [[ $CT_V == "$me" ]] || continue
     # A ROW WITH NO `.supervised` IS A MEASURED ABSENCE, not an unmeasured row:
     # on this box the 5 rows lacking it are all archived AND stopped. Folding
@@ -418,7 +494,13 @@ _ct_probe() {   # -> CT_N CT_U CT_PROJ ; rc 1 = nothing may be said
     [[ $rc -ne 1 ]] || continue
     if [[ $rc -eq 2 ]]; then CT_U=$(( CT_U + 1 )); continue; fi
     case "$CT_V" in ''|*[!0-9]*) CT_U=$(( CT_U + 1 )); continue ;; esac
-    (( now - CT_V >= 0 && now - CT_V < CCRC_FRESH_S )) && CT_N=$(( CT_N + 1 ))
+    # `10#$CT_V`, NOT BARE `$CT_V` (fix round 1, finding 5): `(( ))` treats a
+    # leading-zero numeric string as OCTAL, and a value like "0899" is not
+    # valid octal (8 and 9 are not octal digits) — bash errors "value too
+    # great for base" to real stderr (measured) on a `.supervised` the case
+    # pattern just above proved is all-digits. `10#` forces base 10, which is
+    # always a legal reading of an all-digit string.
+    (( now - 10#$CT_V >= 0 && now - 10#$CT_V < CCRC_FRESH_S )) && CT_N=$(( CT_N + 1 ))
   done
   CT_PROJ="$me"
   return 0
