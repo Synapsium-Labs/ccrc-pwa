@@ -261,6 +261,103 @@ const openRow = async (): Promise<void> => {
   fireEvent.click(toggle);
 };
 
+describe('the filter chips say what they are and whether they are on', () => {
+  it('names each chip by its dimension, so two "all" chips are two controls', async () => {
+    // `stateFilters` and `outcomeFilters` both contain `all`, so before this
+    // there were two buttons with the identical accessible name "all" — a
+    // screen reader, and any test, could only say "the all button" and mean
+    // either.
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(<AutomationsScreen loadAutomations={async () => ({ automations: [auto()] })} />);
+    expect(await screen.findByRole('button', { name: 'state: all' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'last outcome: all' })).toBeInTheDocument();
+  });
+
+  it('carries selection as aria-pressed, not as colour alone', async () => {
+    // Selection used to live ONLY in `data-selected`, which is not in the
+    // accessibility tree — its whole visible effect is a colour and a border
+    // on `.auto-filter[data-selected='true']`. State by colour alone is on
+    // this project's refused list.
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(<AutomationsScreen loadAutomations={async () => ({ automations: [auto()] })} />);
+    const all = await screen.findByRole('button', { name: 'state: all' });
+    const armed = screen.getByRole('button', { name: 'state: armed' });
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    expect(armed).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(armed);
+    expect(screen.getByRole('button', { name: 'state: armed' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'state: all' })).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('a panel landing names the row it was fetched for', () => {
+  it('re-reads when the panel STARTS showing an unsettled run, not only when the frame moves', async () => {
+    // The missed ordering, and it is ordinary rather than exotic: the frame
+    // changes BEFORE the cold read lands (so the guard's `showsUnsettledRun`
+    // is still false at that instant), the run settles server-side in that
+    // gap, and the frame never changes again. With the guard sampled only on
+    // a frame change, the panel then says `running` under a header that says
+    // `ok` — for ever, which is the exact contradiction the effect exists to
+    // prevent.
+    let calls = 0;
+    let release: ((v: { automation: AutomationSummary; runs: AutomationRunSummary[] }) => void) | null = null;
+    const getAutomation = (): Promise<{ automation: AutomationSummary; runs: AutomationRunSummary[] }> => {
+      calls++;
+      if (calls === 1) return new Promise((resolve) => { release = resolve; });
+      return Promise.resolve({ automation: auto({ lastOutcome: 'ok' }), runs: [runRow({ endedAt: 9, outcome: 'ok' })] });
+    };
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()] })}
+        getAutomation={getAutomation}
+      />,
+    );
+    await openRow();
+    await waitFor(() => { expect(calls).toBe(1); });
+
+    // The frame moves while the first read is STILL in flight.
+    seedStore({ automations: [auto({ lastOutcome: 'ok', lastFireAt: 5_000 })], automationsFrameSeen: true });
+    // …and only now does the read land, carrying an unsettled run.
+    await act(async () => { release!({ automation: auto(), runs: [runRow()] }); });
+
+    await waitFor(() => {
+      expect(calls, 'the panel must re-read once it starts showing an unsettled run').toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('does not write a slow answer for one row into the panel of another', async () => {
+    // `detail`/`detailState`/`busy`/`actionError` are single screen-level
+    // states handed to whichever row is expanded, and every write to them was
+    // unconditional. Two rows are one finger-width apart, so a fetch landing
+    // after the operator moved on is ordinary use.
+    const slow = auto({ id: 1, name: 'nightly', prompt: 'PROMPT-ONE' });
+    const fast = auto({ id: 2, name: 'weekly', prompt: 'PROMPT-TWO' });
+    let releaseSlow: ((v: { automation: AutomationSummary; runs: AutomationRunSummary[] }) => void) | null = null;
+    const getAutomation = (id: number): Promise<{ automation: AutomationSummary; runs: AutomationRunSummary[] }> => {
+      if (id === 1) return new Promise((resolve) => { releaseSlow = resolve; });
+      return Promise.resolve({ automation: fast, runs: [] });
+    };
+    seedStore({ automations: [slow, fast], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [slow, fast] })}
+        getAutomation={getAutomation}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /nightly/ }));
+    await waitFor(() => { expect(releaseSlow).not.toBeNull(); });
+    // The operator moves on before the first answer arrives.
+    fireEvent.click(await screen.findByRole('button', { name: /weekly/ }));
+    await screen.findByText('PROMPT-TWO');
+
+    await act(async () => { releaseSlow!({ automation: slow, runs: [] }); });
+    expect(screen.queryByText('PROMPT-ONE'),
+      "the collapsed row's answer must not land in the panel now on screen").toBeNull();
+    expect(screen.getByText('PROMPT-TWO')).toBeInTheDocument();
+  });
+});
+
 describe('the run history says WHEN, not "now"', () => {
   it('renders an age for a run that started an hour ago', async () => {
     // `formatReset` is a COUNTDOWN to a FUTURE epoch-seconds instant — its

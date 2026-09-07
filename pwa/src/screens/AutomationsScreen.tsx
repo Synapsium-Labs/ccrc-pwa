@@ -325,26 +325,53 @@ export function AutomationsScreen({
     ? null
     : `${String(liveRow.lastFireAt)}:${String(liveRow.lastOutcome)}:${String(liveRow.lastRefusal)}`;
   const showsUnsettledRun = detail !== null && detail.runs.some((r) => r.endedAt === null);
+  // `showsUnsettledRun` is in the list because the GUARD reads it, and a
+  // dependency list that omits what the guard reads samples that guard only
+  // when the other dependency moves. The missed ordering is real and is the
+  // exact contradiction this effect exists to prevent: the frame changes
+  // BEFORE the cold read lands (so `showsUnsettledRun` is still false), the
+  // run settles server-side in that gap, and the frame never changes again —
+  // so the panel keeps saying `running` under a header that says `ok`, for
+  // ever. Adding it cannot loop: `refreshDetail` writes `detail`, and if the
+  // re-read is still unsettled the flag stays true, which is not a change.
   useEffect(() => {
     if (expandedId === null || !showsUnsettledRun) return;
     refreshDetail(expandedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStamp]);
+  }, [liveStamp, showsUnsettledRun, expandedId]);
+
+  // WHICH ROW A LANDING BELONGS TO. `detail`, `detailState`, `busy`,
+  // `actionError` and `actionNote` are single screen-level states handed to
+  // whichever row is expanded, and every write to them used to be
+  // unconditional — so a `getAutomation` resolving for the row the operator
+  // just collapsed (or for the row they collapsed and replaced with another)
+  // wrote ITS answer into the panel now on screen. The tap that starts a
+  // second fetch is one finger-width away from the first, so the window is
+  // ordinary use, not a stress case. `aliveRef` a few lines up already makes
+  // this argument for the cold load; this is the same argument for the panel.
+  const shownRef = useRef<number | null>(null);
+  const owns = (id: number): boolean => shownRef.current === id;
 
   const openDetail = (id: number): void => {
-    if (expandedId === id) { setExpandedId(null); return; }
+    if (expandedId === id) { setExpandedId(null); shownRef.current = null; return; }
     setExpandedId(id);
+    shownRef.current = id;
     setDetail(null);
     setDetailState('loading');
     setActionError(null);
     setActionNote(null);
+    // `busy` too: it was the one action state `openDetail` did not clear, so a
+    // row opened while another was mid-action inherited its disabled buttons.
+    setBusy(null);
     getAutomation(id)
-      .then((r) => { setDetail(r); setDetailState('ok'); })
-      .catch(() => setDetailState('error'));
+      .then((r) => { if (owns(id)) { setDetail(r); setDetailState('ok'); } })
+      .catch(() => { if (owns(id)) setDetailState('error'); });
   };
 
   const refreshDetail = (id: number): void => {
-    getAutomation(id).then((r) => { setDetail(r); setDetailState('ok'); }).catch(() => {});
+    getAutomation(id)
+      .then((r) => { if (owns(id)) { setDetail(r); setDetailState('ok'); } })
+      .catch(() => { /* a refresh that fails leaves the last good answer up */ });
   };
 
   const runAction = (
@@ -357,6 +384,7 @@ export function AutomationsScreen({
     setActionNote(null);
     fn()
       .then(() => {
+        if (!owns(id)) return;
         setBusy(null);
         // NEVER a duration. The lag is the automations lane's own sweep gate
         // plus a tick; both are server-side (`AUTOMATION_SWEEP_MS`) and
@@ -368,6 +396,7 @@ export function AutomationsScreen({
         void loadCold();
       })
       .catch((err: unknown) => {
+        if (!owns(id)) return;
         setBusy(null);
         setActionError(err instanceof ApiError ? automationErrorSentence(err.body) : String(err));
       });
@@ -382,12 +411,23 @@ export function AutomationsScreen({
         <h1 className="auto-title">Automations</h1>
       </header>
 
+      {/* `aria-pressed` is what carries SELECTION, not `data-selected`: a data
+          attribute is not in the accessibility tree at all, so the entire
+          signal was `.auto-filter[data-selected='true']`'s colour and border —
+          state by colour alone, which this project's own design rules refuse.
+          The visible text stays the bare token because these are chips on a
+          phone; the DIMENSION goes in the label, which also ends two buttons
+          answering to the same accessible name: `stateFilters` and
+          `outcomeFilters` both contain `all`, so "the all button" named two
+          different controls. */}
       <div className="auto-filters" role="group" aria-label="filters">
         {stateFilters.map((f) => (
           <button
             key={f}
             type="button"
             className="auto-filter"
+            aria-label={`state: ${f}`}
+            aria-pressed={stateFilter === f}
             data-selected={stateFilter === f}
             onClick={() => setStateFilter(f)}
           >
@@ -399,6 +439,8 @@ export function AutomationsScreen({
             key={f}
             type="button"
             className="auto-filter"
+            aria-label={`last outcome: ${f}`}
+            aria-pressed={outcomeFilter === f}
             data-selected={outcomeFilter === f}
             onClick={() => setOutcomeFilter(f)}
           >
