@@ -542,13 +542,25 @@ export async function dispatchRun(
   // `sweepDec` call: see its declaration above, where the one measurement this
   // function takes is explained.
   //
-  // R7: THE HOLD IS PLACED BEFORE THE PANE IS CLEARED. The `/clear` fires a
+  // R7: THE HOLD IS PLACED BEFORE THE PANE IS CLEARED (D-1897). The `/clear` fires a
   // SessionStart, and the card that SessionStart emits quotes
   // `$REG/<id>.hold` — so a hold written after it would have the card quote
   // the PREVIOUS wave's bytes, and wave 1 would see none at all. The refusal
-  // shapes are unchanged and the ordering costs nothing: a failed `ws-hold`
-  // already returned before the transaction with the `/clear` sent, so this
-  // strictly reduces the window in which that happens.
+  // shapes are unchanged, and this is still net positive: a failed `ws-hold`
+  // already returned before the transaction with the `/clear` sent, so the
+  // reorder strictly reduces the window in which that happens.
+  //
+  // IT IS NOT FREE, THOUGH, AND SAYING SO IS THE POINT (fix wave, I6). This
+  // comment used to claim "the ordering costs nothing". The `worker-busy` /
+  // `hookstate-unmeasurable` gate above exists to refuse a `/clear` into an
+  // observably mid-turn pane, and that measurement is now separated from the
+  // `/clear` it guards by `verbSupported` PLUS a full `runCcd(wsHold)` round
+  // trip over the agent WebSocket. So the evidence the gate acted on is staler
+  // by exactly that much when the `/clear` finally lands, and a pane that
+  // started a turn inside that window is cleared on a reading taken before it.
+  // The window was widened deliberately, in exchange for a card that quotes
+  // this wave's bytes rather than the previous wave's; it is not an argument
+  // for moving the hold back.
   //
   // STILL ONE SHARED CALL SITE, positioned exactly where it always was — a
   // fresh spawn never sends a `/clear` at all, and a resume's `/clear` moved

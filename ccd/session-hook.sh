@@ -300,9 +300,17 @@ _hook_graph_card() {
     # file emits is already capped — `.[0:200]` on the approval summary, 64KB on
     # the state envelope — and this one was not. 400 characters keeps the
     # outcome and the head of the reason, which is the part that says what to do
-    # about it. The other arm needs no cap: each of its fields is bounded at the
-    # read (a validated 7-40 hex sha sliced to 8, digits off a 4096-byte head,
-    # `head -c 64` on engine and pin).
+    # about it. THE OTHER ARM IS NOT BOUNDED AT THE READ (D-1899), and this comment
+    # claimed it was until the fix wave corrected it (I4). Two of its three
+    # fields are — a validated 7-40 hex sha sliced to 8, `head -c 64` on engine
+    # and pin — but `GM_NODES` is UNBOUNDED REPETITION inside a 4096-byte head:
+    # `grep -oE '[0-9]+ nodes'` captures however many digits fit, captures them
+    # WHOLE (so no length gate downstream sees a truncated value to refuse), and
+    # they are interpolated straight into the graphify sentence. Measured: 3000
+    # digits inside the head drive the assembled card to 3437 characters. What
+    # actually holds that is `CARD_MAX_CHARS` at the emitter, and the test that
+    # measures it is `a pathological node count cannot delete the card`
+    # (`server/test/session-hook.test.ts`) — never this arm's own reads.
     row="${row:0:400}"
     CARD_GRAPH="graphify: this tree has no knowledge graph — the ccrc sweep's last pass says $row. Do not build one here; the sweep owns the write side."
     return 0
@@ -747,10 +755,19 @@ CARD_MAX_CHARS=2400
 # per event; inside a per-row loop the `{m,n}` expansion was the WHOLE cost of
 # this probe (17.4 ms p50 before, 4.5 ms after).
 #
-# The class is spelled ONCE and the `case` patterns expand it, because a
-# variable inside a bracket expression works and costs the same (measured):
-# two literal copies would be the second definition `single-definition.test.ts`
-# exists to redden.
+# THE CLASS IS A CONSTANT THE `case` PATTERNS EXPAND, because a variable inside
+# a bracket expression works and costs the same (measured) — and `CCRC_WD_CLASS`
+# below DERIVES from it rather than re-spelling it. But this comment used to
+# claim the class is "spelled ONCE" in this file and that
+# `single-definition.test.ts` would redden a second copy, and BOTH halves were
+# false (fix wave, I7). There are three spellings, because an ERE cannot
+# interpolate a bracket-class variable the way `case` can: this constant, the
+# session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
+# file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
+# `_hook_hold_card`. And `single-definition.test.ts` does not scan `ccd/` at
+# all — its four roots are the TypeScript packages, as this branch's own README
+# addition says. Keeping the three in step is a reading discipline, not a
+# mechanism; if you widen one, widen the other two by hand.
 CCRC_PROJ_CLASS='A-Za-z0-9._-'
 CCRC_PROJ_MAX=64
 CCRC_ID_MAX=128

@@ -10,7 +10,14 @@ const SRC = path.resolve(__dirname, '../src/coord/dispatch.ts');
 describe('dispatch places the hold before it clears the pane', () => {
   it('the ws-hold call site precedes the /clear sendPrompt', () => {
     const src = fs.readFileSync(SRC, 'utf8');
-    const hold = src.indexOf('CCD_ARGV.wsHold');
+    // THE CALL SITE, NOT THE COMMENT ABOVE IT. A bare `CCD_ARGV.wsHold` match
+    // finds the R7 comment that explains the ordering, which sits ~3 lines
+    // ahead of the call it explains — so the guard passed on the comment's
+    // position and only worked because the comment happens to travel with the
+    // block. Matching the assignment makes the measured thing the shipped
+    // thing: `unattended-actor.test.ts` already pins this file to exactly one
+    // `CCD_ARGV.wsHold` occurrence, so this spelling cannot become ambiguous.
+    const hold = src.indexOf('const holdArgv = CCD_ARGV.wsHold(');
     const clear = src.indexOf("'/clear'");
     expect(hold, 'no CCD_ARGV.wsHold call site found').toBeGreaterThan(-1);
     expect(clear, "no '/clear' sendPrompt found").toBeGreaterThan(-1);

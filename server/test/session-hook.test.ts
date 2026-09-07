@@ -344,7 +344,7 @@ describe('the fleet gate and failure polarity', () => {
     times.sort((a, b) => a - b);
     expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
   }, 30000);
-  // R1 FIX: an absolute ms budget was tried first and rejected — see the
+  // R1 FIX (D-1898): an absolute ms budget was tried first and rejected — see the
   // measurement below for why. This asserts a RATIO of SessionStart's p95 to
   // PostToolUse's p95, both measured IN THE SAME RUN (interleaved, same
   // process, same few seconds of box load), because box load inflates every
@@ -371,6 +371,22 @@ describe('the fleet gate and failure polarity', () => {
   // 3.03-3.47 (mean 3.30, n=15); the ERE mutation gave ratios of 4.48-5.61
   // (mean 4.87, n=15) — non-overlapping, 15/15 under and 15/15 over R=4 with
   // ~13% margin on the shipped side and ~12% margin on the mutated side of R.
+  //
+  // WHAT THIS GUARD CANNOT SEE — its masking window, recorded here rather than
+  // in a gitignored measurement file, because this repo's convention is that a
+  // guard's number carries its evidence beside it. A RATIO is blind to anything
+  // that inflates BOTH arms, and blind in one direction to anything that
+  // inflates the DENOMINATOR alone. The cheap PostToolUse arm is the
+  // denominator, and it is not frozen: it forks jq on a prefilter hit and reads
+  // the hookstate back. If that arm slows down on its own, the ratio falls
+  // while the SessionStart arm is exactly as slow as it was. Against the
+  // measured mutated band, a compound regression of >=12% in the cheap arm
+  // (4.48/4 = 1.12) pulls the mutation's BEST case back under R=4, and ~13%
+  // would put a typical mutated run there — so a >=10-13% cheap-arm regression
+  // is enough to mask the very mutation this test exists to catch, silently and
+  // with the suite green. The absolute p95 budget in the test above is what
+  // still binds the cheap arm; if that budget is ever raised, this ratio's
+  // masking window widens with it, and the two must be re-argued together.
   it('SessionStart costs no more than 4x the cheap PostToolUse arm, on a 200-row registry', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
@@ -1466,7 +1482,7 @@ describe('the PreToolUse Read nudge (R6, D-1745)', () => {
 });
 
 describe('the emitter: one line, clipped once', () => {
-  it('clips the assembled card at the emitter, on every arm', () => {
+  it('clips the assembled card at the emitter, on the armed-tree arm', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);
     plantGraph(tree, { built: 'deadbee' });
