@@ -277,13 +277,13 @@ describe('gen-wrappers.mjs', () => {
     // Marked the way the real ones are. `ccd`'s marker is over its own bytes;
     // any marked script is the same five-for-five shape as far as this scan is
     // concerned, and using the real 570 KB `ccd` here would test file size.
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep']) {
+    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health']) {
       writeFileSync(path.join(binDir, name),
         markGenerated(`#!/usr/bin/env bash\n# ccrc's own ${name}, installed by ccrc install\nexit 0\n`));
     }
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep']) {
+    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health']) {
       expect(r.stdout, `${name} was reported as an account wrapper nobody claims`)
         .not.toMatch(new RegExp(`^orphan\\t${name}$`, 'm'));
     }

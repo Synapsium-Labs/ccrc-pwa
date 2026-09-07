@@ -145,6 +145,9 @@ const TREE_FILES = [
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
   // UNIT and its ENABLE are role-gated, per `_inst_units`/`_inst_enable`).
   'ccd/ccd-graph-sweep',
+  // The account-health probe (spec 2026-09-07 §A): `_inst_bins` ships it beside
+  // the sweep, on the same gate — not Darwin, every role.
+  'ccd/ccd-account-health',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -2291,6 +2294,10 @@ const UNIT_FILES: Array<[string, string]> = [
   // their absence explicitly.
   ['ccd-graph-sweep.service', 'deploy/systemd/ccd-graph-sweep.service'],
   ['ccd-graph-sweep.timer', 'deploy/systemd/ccd-graph-sweep.timer'],
+  // ROLE-GATED on the sweep's exact terms: a server box holds no wrapper HOMEs
+  // and no ~/.cc-secrets, so it has no credential to probe.
+  ['ccd-account-health.service', 'deploy/systemd/ccd-account-health.service'],
+  ['ccd-account-health.timer', 'deploy/systemd/ccd-account-health.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2415,6 +2422,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // idiom), which is why it is not folded into the `_ccrc_die`-guarded
       // loop above it.
       '--user enable --now ccd-graph-sweep.timer',
+      '--user enable --now ccd-account-health.timer',
       // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -2827,7 +2835,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
         ? ['ccd', 'ccrc', 'graphify']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
-        : ['ccd', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
+        : ['ccd', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3521,6 +3529,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
       '--user enable --now ccd-graph-sweep.timer',
+      '--user enable --now ccd-account-health.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -3538,12 +3547,15 @@ describe('ccrc install --role: the refusals and the default', () => {
     // it runs no per-tree AST sweep — while every unit this verb shipped
     // before this task still lands unchanged.
     for (const [dest] of UNIT_FILES) {
-      if (dest === 'ccd-graph-sweep.service' || dest === 'ccd-graph-sweep.timer') continue;
+      if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-account-health.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-account-health.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
