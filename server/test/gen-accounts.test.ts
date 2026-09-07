@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { parseRoster, MODEL_ID_RE } from '../../shared/roster.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
-import { markGenerated } from '../../shared/mark.mjs';
+import { markGenerated, bodyDigest } from '../../shared/mark.mjs';
 import { rosterFromJson as rosterFromJsonSync } from '../../shared/roster-json.mjs';
 import { baseUrlCases } from './fixtures/baseUrlCases.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -71,6 +71,43 @@ const HUELESS_ROSTER = {
   accounts: [
     { id: 'one', label: 'One', configDirSuffix: '.one', exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
     { id: 'two', label: 'Two', configDirSuffix: '.two', exec: { kind: 'generated', secretsFile: '.cc-secrets/two.env' }, homeAble: false, telemetry: 'none' },
+  ],
+};
+
+/** The same two accounts as `PLAIN_ROSTER` below, carrying every field §4.1
+ *  adds. Nothing in `generateAccountsSh`'s output may move because of them —
+ *  and `deploy/gen-accounts.mjs` must agree, byte for byte, which is what the
+ *  ACCEPT row below asserts. */
+const ENRICHED_ROSTER = {
+  version: 1,
+  accounts: [
+    { id: 'one', label: 'team·max', configDirSuffix: '.claude-one',
+      exec: { kind: 'upstream', secretsFile: '.cc-secrets/one-oauth.env' },
+      homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'two', label: 'alt·max', configDirSuffix: '.claude-two',
+      exec: {
+        kind: 'generated', provider: 'compatible', secretsFile: '.cc-secrets/two.env',
+        baseUrl: 'http://127.0.0.1:8642/v1',
+        models: {
+          opus: 'vendor/opus-1', sonnet: 'vendor/sonnet-1',
+          haiku: 'vendor/haiku-1', subagent: 'vendor/haiku-1',
+          selectable: [{ id: 'vendor/opus-1', label: 'Opus' }, { id: 'vendor/sonnet-1' }, { id: 'vendor/haiku-1' }],
+        },
+      },
+      homeAble: false, hue: 'violet', telemetry: 'none' },
+  ],
+};
+
+/** The identical roster with every §4.1 field removed — a roster written before
+ *  this spec existed. The pair is the whole measurement. */
+const PLAIN_ROSTER = {
+  version: 1,
+  accounts: [
+    { id: 'one', label: 'team·max', configDirSuffix: '.claude-one',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'two', label: 'alt·max', configDirSuffix: '.claude-two',
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/two.env' },
+      homeAble: false, hue: 'violet', telemetry: 'none' },
   ],
 };
 
@@ -167,6 +204,7 @@ describe('gen-accounts.mjs agrees with the TypeScript pipeline it cannot import'
   it.each([
     ["the five-account test default roster", DEFAULT_TEST_ROSTER],
     ['a roster with no explicit hues', HUELESS_ROSTER],
+    ['a roster carrying provider, baseUrl and models', ENRICHED_ROSTER],
     ['a roster mixing explicit and auto-assigned hues', MIXED_HUE_ROSTER],
     ['seven hueless accounts against six hues', OVERFLOW_HUE_ROSTER],
     ['all six hues claimed, with two accounts still needing one', EXHAUSTED_HUE_ROSTER],
@@ -453,5 +491,70 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     expect(r.code).toBe(2);
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('usage:');
+  });
+});
+
+// `shared/generate.mjs` is the one file in the roster chain this wave does not
+// edit, and the reason to PROVE that rather than inspect it is that three
+// mechanisms turn on the exact bytes it emits: `ownRosterFp`
+// (server/src/server.ts:1028, compared at :1054 against the fleet host's copy
+// and answered as `roster: 'divergent'` on GET /api/fleet/health), `ccd`
+// sourcing the file on every invocation (ccd:971), and
+// `wrapper-roster-fixture.test.ts`'s two-directional comparison of ccd's parsed
+// answer space against the roster. On an AGENT-FIRST wave the fleet box gets
+// new code first, so an emitter change shows up as an amber banner over a green
+// deploy.
+describe('the new roster fields do not reach accounts.sh', () => {
+  it('an enriched roster and a plain one project to the SAME bytes', () => {
+    const enriched = generateAccountsSh(parseRoster(ENRICHED_ROSTER));
+    const plain = generateAccountsSh(parseRoster(PLAIN_ROSTER));
+    expect(enriched).toBe(plain);
+  });
+
+  it('…and to the same digest, which is the value the two boxes compare', () => {
+    // `bodyDigest` over the marked text is what `ownRosterFp` is; comparing the
+    // digests rather than only the strings states the property in the terms the
+    // divergence banner is computed in.
+    expect(bodyDigest(markGenerated(generateAccountsSh(parseRoster(ENRICHED_ROSTER)))))
+      .toBe(bodyDigest(markGenerated(generateAccountsSh(parseRoster(PLAIN_ROSTER)))));
+  });
+
+  it('the emitted bash never spells provider, baseUrl or models', () => {
+    // The direct statement, so a future emitter that started writing one of
+    // them reds here and not only in the equality above — which a change
+    // emitting the SAME new line for both rosters would satisfy.
+    const sh = generateAccountsSh(parseRoster(ENRICHED_ROSTER));
+    for (const token of ['provider', 'baseUrl', 'models', 'compatible', 'openrouter', '8642', 'vendor/']) {
+      expect(sh, `accounts.sh must not carry ${token}`).not.toContain(token);
+    }
+    // …and the secrets path is not in there either. It never was — the emitter
+    // has no `secretsFile` arm — but §4.1 makes the field legal on the upstream
+    // account for the first time, and `accounts.sh` is world-readable at 0644.
+    expect(sh).not.toContain('.cc-secrets');
+  });
+
+  it('the equality is not vacuous: a difference the emitter DOES read moves the bytes', () => {
+    // Without this, an emitter returning a constant satisfies every assertion
+    // above. `label` is the cheapest field to move that is not `id`.
+    const relabelled = JSON.parse(JSON.stringify(PLAIN_ROSTER)) as typeof PLAIN_ROSTER;
+    relabelled.accounts[1]!.label = 'team·shared';
+    expect(generateAccountsSh(parseRoster(relabelled)))
+      .not.toBe(generateAccountsSh(parseRoster(PLAIN_ROSTER)));
+    expect(bodyDigest(markGenerated(generateAccountsSh(parseRoster(relabelled)))))
+      .not.toBe(bodyDigest(markGenerated(generateAccountsSh(parseRoster(PLAIN_ROSTER)))));
+  });
+
+  it('the two shipped rosters still project exactly as they did', () => {
+    // `deploy/accounts.default.json` is the roster a fresh install starts from
+    // and `DEFAULT_TEST_ROSTER` is what every ccd fixture home is built out of.
+    // §4.1's absence-permitting claim is pinned by keeping both byte-identical
+    // and green; this is that pin stated where the bytes are, rather than only
+    // as an untouched file in the diff.
+    const shipped: unknown = JSON.parse(
+      readFileSync(path.join(ccrcRoot, 'deploy', 'accounts.default.json'), 'utf8'));
+    expect(generateAccountsSh(parseRoster(shipped)))
+      .toContain('CCRC_ACCOUNTS=(claude)');
+    expect(generateAccountsSh(parseRoster(DEFAULT_TEST_ROSTER)))
+      .toContain('CCRC_MEASURED=(claude claude-a claude-b claude-d)');
   });
 });
