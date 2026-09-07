@@ -13647,6 +13647,87 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   return 1
 }
 
+_strand_clear() {   # id — the strand is over; say so exactly once per strand.
+  # THE `-e` TEST IS LOAD-BEARING, and it is not a micro-optimisation.
+  # `_auto_swap_check` calls this on EVERY healthy tick of EVERY session, so
+  # without it ~20 sessions write ~240 `unstranded` lines a minute into
+  # swap.log — the forensic trail beside every swap decision — and the file
+  # stops being readable by the human it exists for.
+  [[ -e "$REG/$1.stranded" ]] || return 0
+  rm -f -- "$REG/$1.stranded"
+  echo "$(date '+%F %T') unstranded $1" >> "$REG/swap.log"
+}
+
+_strand_why() {   # id project -> one line naming why no candidate could take this session
+  # WALKS `_pool_for`, NOT `CCRC_ACCOUNTS`. The candidate set is the thing the
+  # decision was actually about: a reason naming a non-home-able lane, or one a
+  # hand-set registry `pool` list excluded, sends the operator to enable an
+  # account that would not have been used anyway.
+  #
+  # PREDICATE ORDER MIRRORS `_swap_target`'s OWN LOOP — pool, then _account_ok,
+  # then _avail — so the annotation is the FIRST thing that failed, which is
+  # the thing to fix. An account in the wrong pool reads `pool=`, never
+  # `limit`, even when both are true.
+  local id="$1" p="$2" pps cand ap cur out=""
+  pps=$(_project_pool_state "$p")
+  # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
+  # accounts would invent five reasons for one condition. One token, with the
+  # path, because the remedy is a permission or a rewrite and not an account.
+  [[ "$pps" == untagged || "$pps" == "named "* ]] \
+    || { echo "tag:$pps $POOLS_DIR/$p"; return 0; }
+  cur=$(_reg_get "$id" wrapper)
+  for cand in $(_pool_for "$id"); do
+    [[ "$cand" == "$cur" ]] && continue
+    if ! _pool_ok "$cand" "$pps"; then
+      ap=$(_acct_pool "$cand"); out+=" $cand:pool=${ap:-none}"
+    elif ! _account_ok "$cand"; then
+      if [[ -x "$WRAPPER_DIR/$cand" ]]; then out+=" $cand:disabled"; else out+=" $cand:missing"; fi
+    elif ! _avail "$cand"; then
+      out+=" $cand:limit"
+    fi
+  done
+  [[ -n "$out" ]] || out=" no candidate"
+  echo "${out# }"
+}
+
+_strand_mark() {   # id wrapper project — a hard-blocked session with nowhere to go.
+  # RULING 6: an empty pool STAYS IN POOL and says so. Never cross.
+  #
+  # TWO FLOORS, and they are floors on different things. The MARKER is the
+  # debounce for the log line — presence means "this strand has already been
+  # announced" — so the 5-second tick cannot spam swap.log. The BANNER carries
+  # its own floor on top, because `_pane_hard_blocked` greps the last eight
+  # pane lines and a scrolling limit banner can flip the verdict every tick:
+  # each flip is a legitimate mark -> clear -> mark, and the marker must follow
+  # the truth, but 720 banners an hour is the storm SWAPBLOCK_COOLDOWN was
+  # introduced for on the refusal channel (see _auto_swap_check's gate).
+  # Suppressing the MARKER instead would hide the truth; only the banner waits.
+  local id="$1" w="$2" p="$3" now pps pool pdesc why nts banner=1
+  now=$(date +%s)
+  pps=$(_project_pool_state "$p")
+  pool='-'; pdesc='(untagged)'
+  [[ "$pps" == "named "* ]] && { pool="${pps#named }"; pdesc="$pool"; }
+  why=$(_strand_why "$id" "$p")
+  if [[ ! -e "$REG/$id.stranded" ]]; then
+    _reg_set "$id" stranded "$now $why"
+    echo "$(date '+%F %T') stranded $id: $w (blocked) -> nowhere [pool=$pool] ($why)" >> "$REG/swap.log"
+  fi
+  # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]`, so `&&`
+  # short-circuits before the arithmetic ever sees a torn or hand-edited field
+  # (D-299's class; the same shape as the `swapblocked` gate above).
+  nts=$(_reg_get "$id" strandnotify)
+  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$SWAPBLOCK_COOLDOWN" ]] && banner=""
+  if [[ -n "$banner" ]]; then
+    _reg_set "$id" strandnotify "$now"
+    # DELIBERATELY NOT `cc swap: <id> moved …`: server/src/server.ts:1305 parses
+    # that exact prefix into a per-session chat line about an account CHANGE,
+    # and nothing changed here.
+    [[ -x "$REG/notify.sh" ]] \
+      && "$REG/notify.sh" "cc swap STRANDED: $id is blocked on $w and no account in pool $pdesc can take it — $why" >/dev/null 2>&1
+  fi
+  return 0
+}
+
 cmd_swap() {   # [--force] id target-wrapper — move a session to another account, conversation intact.
   # Transcripts are plain JSONL with no account binding (validated 2026-07-03): carry the
   # session's transcripts into the target config dir, flip the registry wrapper, restart.

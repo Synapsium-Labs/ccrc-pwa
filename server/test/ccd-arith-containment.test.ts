@@ -101,6 +101,18 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.cleanup();
   });
 
+  it('_strand_mark does not evaluate a payload planted in strandnotify', () => {
+    const h = makeCcdHarness('arith-strand');
+    // The banner floor reads `strandnotify` as an arithmetic operand. A torn or
+    // hand-edited field is the threat model, exactly as `lastswap` is.
+    h.sh(
+      '_reg_set myid wrapper claude;'
+      + " _reg_set myid strandnotify 'REG[$(touch \"$HOME/PWNED-strand\")]';"
+      + ' _strand_mark myid claude demo');
+    expect(existsSync(path.join(h.home, 'PWNED-strand'))).toBe(false);
+    h.cleanup();
+  });
+
   it('ccd assigns SWAP_JITTER unconditionally — the reason the env cannot reach that arithmetic', () => {
     // Pins the fact the test above depends on. If line 54 ever becomes
     // `${SWAP_JITTER:-120}`, this goes red and the reader is sent to the guard
@@ -123,6 +135,7 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_auto_compact_check (lastswap)',         anchors: ['$((now - lastswap))', 'COMPACT_COOLDOWN'], arith: '$((' },
     { fn: '_spawn_start (fromswap)',                anchors: ['- lastswap ))', '-lt 300'],            arith: '$((' },
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
+    { fn: '_strand_mark (strandnotify floor)', anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
   ];
   const codeLines = readFileSync(CCD, 'utf8').split('\n')
     .map((line) => line.trim())
