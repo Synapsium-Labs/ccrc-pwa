@@ -81,7 +81,13 @@ Operator rulings, in the order they were given:
 3. **PRs #40 and #47 stay out of scope.**
 4. **Both arms** — the card speaks to the 2 held sessions *and* to the
    co-tenant majority. Ruled on the 0-programless-claims baseline above.
-5. **`CARD_MAX_CHARS = 1200`**, with the existing 600 left untouched (§4.4).
+5. **`CARD_MAX_CHARS`**, with the existing 600 left untouched (§4.4). Ruled at
+   1200; **corrected to 1800 while writing the plan** — the 1200 was argued from
+   a 906-character worst case that understated the held subject at ~125 chars,
+   which was the co-tenant investigation's own shortened model rather than
+   §4.2's actual 592-character text. The real worst live combination is 1363
+   (§4.4), so 1200 would have truncated the co-tenant sentence on exactly the
+   sessions that carry a hold.
 6. **`ccrc-api claims list` gains the `all` query key** — one word, one test row.
 7. **The hold moves above the `/clear` in `dispatch.ts`** (§4.2.1).
 
@@ -302,7 +308,7 @@ would reproduce in the hook the exact lie the server refuses to tell.
 
 `set -- "${1:0:$CARD_MAX_CHARS}"` as the **first statement** of
 `_hook_emit_context` — the one site every subject passes through, so no future
-subject can forget it. `CARD_MAX_CHARS=1200`.
+subject can forget it. `CARD_MAX_CHARS=1800`.
 
 The existing `toBeLessThan(600)` is **left untouched and green**. Three
 measurements say it is not the ceiling it looks like:
@@ -321,8 +327,17 @@ measurements say it is not the ceiling it looks like:
 The real numbers, which every prior estimate got wrong: **the live graphify card
 measures 570–593 characters, not 537**, because no repo-tree fixture plants
 `~/.ccrc/graphify.pin` and the hook reads it from `$HOME` (`:163`, appending
-` (pin 0.9.9)` = 12 chars). Real headroom under 600 was **six characters**. The
-worst live three-subject combination is **906**; 1200 sits 35% above it.
+` (pin 0.9.9)` = 12 chars). Real headroom under 600 was **six characters**.
+
+The worst live three-subject combination is **1363**, not the 906 first
+computed: graphify 593 + §4.2's held case A at **592** + co-tenant 176 + two
+joins. The 906 came from the co-tenant investigation modelling the held clause
+at ~125 characters — its own shortened sketch, since it was instructed not to
+redesign the held arm — and the two halves' budgets were never reconciled until
+the plan was written. `CARD_MAX_CHARS=1800` clears 1363 by 32% and is 7.3% of
+the 24576 bytes the neighbour hook already emits on this event. At 1200 the clip
+would have truncated the co-tenant sentence on exactly the two sessions that
+carry a hold — the sessions the held subject exists for.
 
 The bound was fiction in the other direction too: the shipped hook was made to
 emit **3,570 characters** with no ccrc card at all and every suite green,
