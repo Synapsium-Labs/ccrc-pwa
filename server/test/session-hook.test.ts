@@ -116,6 +116,37 @@ const card = (stdout: string): string => {
   return String(j.hookSpecificOutput.additionalContext);
 };
 
+// ── The ARMED-TREE fixtures, module scope for the same reason `plantGraph`
+// and `gitTree` are: R5's search gate and R6's Read nudge (D-1745) ask ONE
+// measurement (`_hook_graph_measure`) of ONE tree under ONE arm predicate, and
+// a second copy of the tree builder for the second reader would be exactly the
+// drift the comment above forbids — two describes could then disagree about
+// what "armed" means while both stayed green.
+const NODES = 4242;
+
+/** A tree whose graph is fresh at HEAD — the armed shape, for the tests that
+ *  are about something else. `commits` past the graph makes it stale. */
+const gatedTree = (commits = 1): string => {
+  const tree = path.join(home, 'tree');
+  const first = gitTree(tree, commits);
+  plantGraph(tree, { built: first, nodes: NODES });
+  return tree;
+};
+const pre = (tool: string, input: object, cwd: string): object =>
+  ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd });
+const query = (cwd: string): object =>
+  ({ hook_event_name: 'PostToolUse', tool_name: 'Bash',
+    tool_input: { command: 'graphify query "who calls assembleFleet"' }, cwd });
+
+/** The one PreToolUse envelope on stdout, asserted to be exactly one line of
+ *  JSON — a deny (R5) or a nudge (R6), and the assertion that it is never
+ *  BOTH is that this returns a single object. */
+const oneLine = (stdout: string): any => {
+  const lines = stdout.trim().split('\n').filter((l) => l !== '');
+  expect(lines, 'the hook printed nothing, or more than one line').toHaveLength(1);
+  return JSON.parse(lines[0]!);
+};
+
 describe('event → state mapping', () => {
   it('UserPromptSubmit writes working with identity fields', () => {
     run({ hook_event_name: 'UserPromptSubmit', session_id: 'uuid-1' });
@@ -753,13 +784,19 @@ describe('the SessionStart graph card', () => {
   // now the silence of the calls the gate does not touch: a shell line that is
   // not a search, a named file, an edit. The gated shapes have their own
   // describe below; what this row keeps is that nothing else ever prints.
+  //
+  // R6 (D-1745) took ONE row off this list: `Read` of `a.ts` in a tree with a
+  // fresh graph is the nudged shape now, and it is pinned in R6's own describe.
+  // What replaces it is the same call over a path the extension list does NOT
+  // carry — a `Read` is still silent unless it is a source read — and `Edit` of
+  // a `.ts`, which proves the nudge is scoped to the tool as well as the path.
   it('prints NOTHING on every other event, even with a graph right there', () => {
     const tree = path.join(home, 'tree');
     const first = gitTree(tree, 1);
     plantGraph(tree, { built: first });
     for (const payload of [
       { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
-      { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'a.ts' }, cwd: tree },
+      { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'a.json' }, cwd: tree },
       { hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: 'a.ts' }, cwd: tree },
       { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, cwd: tree },
       { hook_event_name: 'Stop', cwd: tree },
@@ -866,8 +903,8 @@ describe('the SessionStart graph card', () => {
     const first = gitTree(tree, 1);
     plantGraph(tree, { built: first });
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
-    expect(text).toContain('Search tools (Grep, Glob, shell grep/rg/find) are gated '
-      + "until this session's first graph query.");
+    expect(text).toContain('Search tools (Grep, Glob, shell grep/rg/find) are gated, '
+      + "and source-file reads are nudged, until this session's first graph query.");
     // …and the gate itself agrees, in the same tree, on the next call.
     const out = run({ hook_event_name: 'PreToolUse', tool_name: 'Grep',
       tool_input: { pattern: 'x' }, cwd: tree });
@@ -919,30 +956,11 @@ describe('the SessionStart graph card', () => {
 // session. Every other event's silence is pinned in the card describe above,
 // and the non-gated PreToolUse calls are pinned here beside it.
 describe('the PreToolUse search gate (R5, D-1613)', () => {
-  const NODES = 4242;
-
-  /** A tree whose graph is fresh at HEAD — the armed shape, for the tests that
-   *  are about something else. `commits` past the graph makes it stale. */
-  const gatedTree = (commits = 1): string => {
-    const tree = path.join(home, 'tree');
-    const first = gitTree(tree, commits);
-    plantGraph(tree, { built: first, nodes: NODES });
-    return tree;
-  };
-  const pre = (tool: string, input: object, cwd: string): object =>
-    ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd });
   const bashPre = (command: string, cwd: string): object => pre('Bash', { command }, cwd);
   const grepPre = (cwd: string): object => pre('Grep', { pattern: 'assembleFleet' }, cwd);
-  const query = (cwd: string): object =>
-    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash',
-      tool_input: { command: 'graphify query "who calls assembleFleet"' }, cwd });
-
-  /** The deny envelope on stdout, asserted to be exactly one line of JSON. */
-  const deny = (stdout: string): any => {
-    const lines = stdout.trim().split('\n').filter((l) => l !== '');
-    expect(lines, 'the hook printed nothing, or more than one line').toHaveLength(1);
-    return JSON.parse(lines[0]!);
-  };
+  /** The deny envelope on stdout: the module's one-line reader, under the name
+   *  this describe reads it by. */
+  const deny = oneLine;
   /** The spec's reason, spelled here so a drift in either direction is red. */
   const reasonFor = (nodes: number, fresh: string, k: number): string =>
     `graphify gate: this tree has a knowledge graph (${nodes} nodes, ${fresh}) and this session `
@@ -1026,8 +1044,14 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     expect(deny(run(pre('Glob', { pattern: '**/*.ts' }, tree)))
       .hookSpecificOutput.permissionDecision).toBe('deny');
     fs.rmSync(stateFile());
-    expect(run(pre('Read', { file_path: `${tree}/c0.txt` }, tree))).toBe('');
-    expect(run(pre('Edit', { file_path: `${tree}/c0.txt` }, tree))).toBe('');
+    // R6 (D-1745): `.txt` IS on the nudge list, so the file this row used to
+    // read is now a nudged read — the silence this row is about is the GATE's,
+    // and it is measured over a path neither mechanism speaks about. That a
+    // `Read` is never DENIED, in any state including the nudged one, is R6's
+    // own row; `Edit` is silent even over a `.ts`, which is this file's only
+    // assertion that the nudge is scoped to the tool.
+    expect(run(pre('Read', { file_path: `${tree}/c0.bin` }, tree))).toBe('');
+    expect(run(pre('Edit', { file_path: `${tree}/c0.ts` }, tree))).toBe('');
   });
 
   // Ground 2 of the decline, answered by a bound rather than by a promise: a
@@ -1041,6 +1065,16 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     }
     expect(run(grepPre(tree)), 'the gate denied a fourth search — the bound is not bounding').toBe('');
     expect(readState().graphGateDenials, 'the bound was passed and the counter kept climbing').toBe(3);
+    // AND THE SAME BOUND FOR A SHELL SEARCH (D-1797). The R6 refactor moved the
+    // bound out of the arm's outer predicate into a `bounded` flag consulted
+    // in more than one place, and the review measured the `Bash` copy pinned
+    // by nothing: dropping it left the suite green while a session that
+    // searches only through the shell would have read "Denial 4 of 3". The
+    // bound is decided at ONE site again, and this row is what keeps it there.
+    expect(run(bashPre('rg assembleFleet src', tree)),
+      'a shell search past the bound was denied — the Bash arm has its own bound')
+      .toBe('');
+    expect(readState().graphGateDenials).toBe(3);
   });
 
   it('carries the denial count across other events, and a non-gated call leaves it alone', () => {
@@ -1124,5 +1158,245 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     gatedTree();
     expect(run({ hook_event_name: 'PreToolUse', tool_name: 'Grep', tool_input: { pattern: 'x' } }))
       .toBe('');
+  });
+});
+
+// ── R6: the PreToolUse Read nudge (D-1745) ────────────────────────────────
+// The gate (R5) fires on the question-shaped calls and leaves `Read` alone,
+// because a named file is not a question — and a session can therefore
+// navigate file by file and never meet the gate at all. Measured against what
+// graphify itself ships (D-1746), that hole is the whole of the read side's
+// reach: graphify's own project hooks nudge on `Read`, and 330 of the 345
+// queries in the week before the read side shipped came from the seven
+// projects where someone had run its installer.
+//
+// The operator's ruling closes it as a NUDGE, not a deny: `Edit` requires a
+// prior `Read`, so denying a `Read` would charge every session told to fix a
+// named file one denial before its first edit. So this describe's load-bearing
+// row is the one that says a `Read` is NEVER denied, in any state.
+describe('the PreToolUse Read nudge (R6, D-1745)', () => {
+  const readPre = (file: string, cwd: string): object => pre('Read', { file_path: file }, cwd);
+
+  /** The spec's nudge, spelled here so a drift in either direction is red. The
+   *  node clause is omitted when the count could not be measured, exactly as
+   *  the deny's is. */
+  const nudgeFor = (nodes: number | null, fresh: string): string =>
+    'graphify: this tree has a knowledge graph ('
+    + (nodes === null ? '' : `${nodes} nodes, `)
+    + `${fresh}) and this session has not queried it yet. `
+    + 'Before reading files to orient, run: `graphify query "<your question in plain words>"` '
+    + '(`graphify explain "<concept>"` for one concept). '
+    + 'Reading a named file to edit it needs no query.';
+
+  it('nudges the first source Read in a fresh-graph tree, with the whole envelope byte-exact', () => {
+    const tree = gatedTree();
+    const j = oneLine(run(readPre(`${tree}/src/a.ts`, tree)));
+    expect(j).toEqual({ hookSpecificOutput: {
+      hookEventName: 'PreToolUse', additionalContext: nudgeFor(NODES, 'fresh') } });
+    // THE KEY THAT MUST NOT BE THERE. `toEqual` above already says the object
+    // has no other key, but it says it as a shape mismatch; this says WHICH
+    // key, because a `Read` denied instead of nudged is the one failure mode
+    // the ruling exists to prevent.
+    expect('permissionDecision' in j.hookSpecificOutput,
+      'the nudge carries a permission decision — a Read was DENIED').toBe(false);
+    // …and it spends nothing: the nudge is advice, not a denial.
+    expect(readState().graphGateDenials, 'the nudge charged the gate a denial').toBe(0);
+    expect(readState().state, 'the nudge path skipped the state write').toBe('working');
+  });
+
+  it("nudges an upper-case extension too — graphify's own read hook lowercases before it matches (D-1797)", () => {
+    // `hook-guard read` lowercases the path before testing the extension, so
+    // `A.TS` is nudged by graphify's project hook. The list here is graphify's
+    // own; the match has to be too, or the two halves disagree on one file.
+    const tree = gatedTree();
+    const j = oneLine(run(readPre(`${tree}/SRC/A.TS`, tree)));
+    expect(j.hookSpecificOutput.additionalContext).toBe(nudgeFor(NODES, 'fresh'));
+  });
+
+  it('is not bounded and not counted — the fourth source Read is nudged too', () => {
+    const tree = gatedTree();
+    for (let i = 0; i < 4; i++) {
+      expect(oneLine(run(readPre(`${tree}/src/a${i}.ts`, tree))).hookSpecificOutput.additionalContext,
+        `read ${i + 1} was not nudged`).toBe(nudgeFor(NODES, 'fresh'));
+      expect(readState().graphGateDenials, 'the nudge spent a denial').toBe(0);
+    }
+  });
+
+  it('is silent once the session has run one graphify query', () => {
+    const tree = gatedTree();
+    run(query(tree));
+    expect(readState().graphQueries).toBe(1);
+    expect(run(readPre(`${tree}/src/a.ts`, tree)),
+      'a session that queried the graph was nudged anyway').toBe('');
+  });
+
+  it('is silent for a read UNDER graphify-out/, at any depth — the card sends the session there', () => {
+    const tree = gatedTree();
+    for (const f of [`${tree}/graphify-out/GRAPH_REPORT.md`,
+      `${tree}/sub/graphify-out/GRAPH_REPORT.md`, 'graphify-out/GRAPH_REPORT.md']) {
+      expect(run(readPre(f, tree)), `${f} was nudged`).toBe('');
+    }
+  });
+
+  it('matches the final segment only, anchored at its end', () => {
+    const tree = gatedTree();
+    // `.json` must never match `.js`; `a.js.map` ends in `.map`; a directory
+    // component that looks like a source file is not what is being read; and a
+    // final segment with no dot at all has no extension to match.
+    for (const f of [`${tree}/package.json`, `${tree}/a.js.map`, `${tree}/dist.ts/README`,
+      `${tree}/Makefile`, `${tree}/notes.txtual`]) {
+      expect(run(readPre(f, tree)), `${f} was nudged`).toBe('');
+    }
+    // …and the silence above is not the silence of a nudge that never fires.
+    for (const f of [`${tree}/doc.md`, `${tree}/x.py`, `${tree}/app.tsx`, `${tree}/main.rs`]) {
+      expect(oneLine(run(readPre(f, tree))).hookSpecificOutput.additionalContext,
+        `${f} was not nudged`).toBe(nudgeFor(NODES, 'fresh'));
+    }
+  });
+
+  it('is silent while the operator kill-switch file exists', () => {
+    const tree = gatedTree();
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'graph-gate-off'), '');
+    expect(run(readPre(`${tree}/src/a.ts`, tree))).toBe('');
+    fs.rmSync(path.join(home, '.ccrc', 'graph-gate-off'));
+    expect(oneLine(run(readPre(`${tree}/src/a.ts`, tree))).hookSpecificOutput.additionalContext)
+      .toBe(nudgeFor(NODES, 'fresh'));
+  });
+
+  it('nudges at 10 commits behind HEAD and is silent at 11 — the gate\'s own freshness bound', () => {
+    const ten = gatedTree(11);                 // graph built at c0, HEAD at c10
+    expect(oneLine(run(readPre(`${ten}/src/a.ts`, ten))).hookSpecificOutput.additionalContext)
+      .toBe(nudgeFor(NODES, '10 commits behind HEAD'));
+    fs.rmSync(ten, { recursive: true, force: true });
+    const eleven = gatedTree(12);
+    expect(run(readPre(`${eleven}/src/a.ts`, eleven)),
+      'a graph 11 commits stale nudged a read anyway').toBe('');
+  });
+
+  it('is silent in a tree with no graph at all', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    expect(run(readPre(`${tree}/src/a.ts`, tree))).toBe('');
+  });
+
+  // THE RULING ITSELF, as a mechanism. `Edit` requires a prior `Read`, so a
+  // denied `Read` would charge every session told to fix a named file one
+  // denial before its first edit — this loops every state the gate can be in
+  // and asserts no `Read` output ever carries a permission decision.
+  it('never DENIES a Read, in any state the gate can be in', () => {
+    const states: Array<[string, () => string]> = [
+      ['armed', () => gatedTree()],
+      ['stale', () => gatedTree(12)],
+      ['queried', () => { const t = gatedTree(); run(query(t)); return t; }],
+      ['kill-switch', () => {
+        const t = gatedTree();
+        fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+        fs.writeFileSync(path.join(home, '.ccrc', 'graph-gate-off'), '');
+        return t;
+      }],
+      ['gate bound spent', () => {
+        const t = gatedTree();
+        run(pre('Grep', { pattern: 'x' }, t)); run(pre('Grep', { pattern: 'x' }, t));
+        run(pre('Grep', { pattern: 'x' }, t));
+        expect(readState().graphGateDenials).toBe(3);
+        return t;
+      }],
+    ];
+    for (const [name, build] of states) {
+      const tree = build();
+      for (const f of [`${tree}/src/a.ts`, `${tree}/package.json`,
+        `${tree}/graphify-out/GRAPH_REPORT.md`]) {
+        const out = run(readPre(f, tree));
+        expect(out, `${name}: a Read printed more than one line`)
+          .not.toMatch(/\n[^\n]*\n/);
+        if (out.trim() !== '') {
+          expect(JSON.parse(out.trim()).hookSpecificOutput,
+            `${name}: a Read of ${f} was denied`).not.toHaveProperty('permissionDecision');
+        }
+      }
+      fs.rmSync(tree, { recursive: true, force: true });
+      fs.rmSync(stateFile(), { force: true });
+      fs.rmSync(path.join(home, '.ccrc', 'graph-gate-off'), { force: true });
+    }
+  });
+
+  // AT MOST ONE LINE PER EVENT, and which one is decided by the call: a
+  // `Grep` is denied and never nudged, a `Read` is nudged and never denied.
+  it('denies a Grep in the same tree and does not nudge it — exactly one line', () => {
+    const tree = gatedTree();
+    const out = run(pre('Grep', { pattern: 'x' }, tree));
+    const j = oneLine(out);
+    expect(j.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(j.hookSpecificOutput, 'a gated call carried the nudge as well')
+      .not.toHaveProperty('additionalContext');
+    expect(out.trim().split('\n'), 'the hook printed a deny AND a nudge').toHaveLength(1);
+  });
+
+  // FAIL-OPEN, the same contract the gate lives under: a hook that can wedge a
+  // turn is worse than no hook, so every read that will not answer prints
+  // nothing — and the state write, which is this file's whole job, happens anyway.
+  it('is silent when the hookstate exists and will not parse — an UNKNOWN count is not a zero', () => {
+    const tree = gatedTree();
+    fs.writeFileSync(stateFile(), '{nope');
+    expect(run(readPre(`${tree}/src/a.ts`, tree)),
+      'the nudge fired on a count it could not read').toBe('');
+    expect(readState().state, 'the corrupt file cost the state write too').toBe('working');
+  });
+
+  it('is silent when the payload names no tree at all', () => {
+    gatedTree();
+    expect(run({ hook_event_name: 'PreToolUse', tool_name: 'Read',
+      tool_input: { file_path: 'src/a.ts' } })).toBe('');
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'says nothing at all when the registry cannot be written (D-1689\'s ordering)', () => {
+    // The nudge rides the deny's own print site, which is AFTER the hookstate
+    // rename lands. Nothing about a nudge needs counting, but the print site is
+    // shared, so a nudge printed from inside the arm would be a nudge printed
+    // on a run whose state write failed — and, worse, would put the print back
+    // where D-1689 measured the gate's bound breaking. Root writes through
+    // 0500, so root skips this.
+    const tree = gatedTree();
+    const reg = path.join(home, '.cc-sessions');
+    fs.chmodSync(reg, 0o500);
+    try {
+      expect(run(readPre(`${tree}/src/a.ts`, tree)),
+        'the hook nudged on a run it could not record').toBe('');
+      expect(fs.existsSync(stateFile()), 'nothing could be written, so nothing should exist').toBe(false);
+    } finally {
+      fs.chmodSync(reg, 0o700);
+    }
+    expect(oneLine(run(readPre(`${tree}/src/a.ts`, tree))).hookSpecificOutput.additionalContext)
+      .toBe(nudgeFor(NODES, 'fresh'));
+  });
+
+  it('omits the node clause rather than inventing one when GRAPH_REPORT.md is absent', () => {
+    const tree = path.join(home, 'tree');
+    const first = gitTree(tree, 1);
+    plantGraph(tree, { built: first, report: false });
+    expect(oneLine(run(readPre(`${tree}/src/a.ts`, tree))).hookSpecificOutput.additionalContext)
+      .toBe(nudgeFor(null, 'fresh'));
+  });
+
+  // ── The extension list, HARVESTED not retyped (the D-1363 idiom) ─────────
+  // The hook spells the list ONCE, and this reads it back out of the hook's own
+  // assignment: a list retyped in the suite is a list that can agree with itself
+  // while disagreeing with graphify, which is the one thing this pin is for.
+  it('carries exactly graphify 0.9.9\'s own source and doc extensions', () => {
+    const hook = fs.readFileSync(HOOK, 'utf8');
+    const m = hook.match(/^GRAPH_NUDGE_READ_RE='\\\.\(([^)]+)\)\$'/m);
+    if (!m) throw new Error('ccd/session-hook.sh no longer assigns GRAPH_NUDGE_READ_RE as an '
+      + 'end-anchored dotted alternation — the nudge\'s extension list has to be re-derived '
+      + 'against the hook\'s new spelling, not pinned against the old one');
+    // PROVENANCE: graphify 0.9.9, `graphify/__main__.py`, `_HOOK_SOURCE_EXTS`
+    // — the tuple its own `Read|Glob` project hook nudges on, read off the
+    // installed 0.9.9 venv on 2026-09-06 and copied here in its own order.
+    expect(m[1]!.split('|')).toEqual([
+      'py', 'js', 'ts', 'tsx', 'jsx', 'astro', 'vue', 'svelte', 'go',
+      'rs', 'java', 'rb', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'kt',
+      'swift', 'php', 'scala', 'lua', 'sh', 'md', 'rst', 'txt', 'mdx',
+    ]);
   });
 });

@@ -29,7 +29,7 @@ export const ACT_WORD: Record<LifecycleAct, string> = {
   supervise: 'supervised', unsupervise: 'unsupervised', destroy: 'destroyed',
   rename: 'branch renamed', hold: 'held', release: 'released',
   archive: 'archived', restore: 'restored', 'attic-drop': 'attic refs dropped',
-  reap: 'reaped', gc: 'gc pass', spawn: 'respawned', start: 'started',
+  reap: 'reaped', rehome: 'home account moved', gc: 'gc pass', spawn: 'respawned', start: 'started',
   ensure: 'ensured', swap: 'account swapped', enable: 'enabled',
   stop: 'stopped', forget: 'forgotten',
   unknown: 'unmodelled act',

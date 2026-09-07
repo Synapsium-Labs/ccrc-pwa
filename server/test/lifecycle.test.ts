@@ -852,4 +852,25 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
   });
+  it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
+    // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2
+    // makes an unassigned artifact class a defect, and this one has NO
+    // COLLECTOR by design: a project's pool tag outlives every one of its
+    // workspaces — `_reg_purge`, `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`,
+    // `ws-restore` and `forget` all glob `$REG/<id>.*` and none of them can
+    // see a dotless directory. Nothing sweeps operator intent; the operator
+    // clears it, and `ccrc doctor` says when it has gone inert.
+    //
+    // The three per-id fields the pool design also adds (`.stranded`,
+    // `.strandnotify`, `.crosspool`, wave 2b) need no entry of their own: they
+    // are registry fields under the one-dot rule and purge with the row, like
+    // `swapblocked` and `lastswap`.
+    const c = LIFECYCLE.find((x) => x.name === 'project-pool-tag');
+    expect(c, 'shared/lifecycle.ts declares no project-pool-tag class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('ccd project-pool');
+    expect(c!.ruling).toContain('pools-stale');
+    expect(c!.root).toContain('pools/');
+  });
 });

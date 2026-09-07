@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e2099ab3fced440f68f7fd0d2ae47d46dcb09df1bde945ddd523336985288e3e
+# ccrc:generated 1 sha256=6a575ec3da50f92ab3b2543de97e72b7725ce7574eb9f303cb218e7ba7773fa2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -770,6 +770,29 @@ WRAPPER_DIR="$HOME/.local/bin"
 # Environment= or exported PROJECTS_ROOT would point a unit test at real repos.
 PROJECTS_ROOT="$HOME/projects"     # $HOME/projects -> /data/projects (symlink) in production
 WORKTREES_ROOT="$HOME/worktrees"
+# THE PROJECT POOL TAG lives in a DOTLESS registry subdirectory, one file per
+# project (spec §4, approach B). Outside every git tree and every session cwd,
+# beside the switches an operator already hand-touches (`<w>-disabled`,
+# `coordinator-paused`, `mail-disabled`) — `ls ~/.cc-sessions/pools/` shows
+# every tag and `echo pool-a > pools/demo` is the 2 am idiom.
+#
+# DOTLESS, and that is measured rather than assumed: every registry glob is
+# SUFFIX-shaped (`_reg_purge` and `_ws_slug_free` glob `"$REG/$id".*`), so a
+# directory is invisible to all of them. `$REG/<project>.pool` was ruled out by
+# a real collision — ids are `<wrapper>-<project>`, so a project named
+# `acct-a-demo` would produce the per-session `pool` field of the session
+# `acct-a-demo`, which is a SPACE-SEPARATED CANDIDATE LIST and not a pool name
+# at all (see `_pool_for`). Dot-LEADING was ruled out because dot-leading is
+# this file's private namespace and the operator must be able to touch this one.
+POOLS_DIR="$REG/pools"
+# The pool-name grammar, ONCE in this file. Same shape as `shared/roster.ts`'s
+# ID_RE, for the reason that file's docstring gives: the value is embedded
+# unquoted in a generated bash `case` arm (`_ccrc_pool`) and printed with
+# `echo`, and a leading lowercase letter is what makes `echo` safe.
+# `server/test/pool-name-parity.test.ts` extracts this line and the one above
+# and holds both equal to their TypeScript spellings — the two files cannot
+# share a value, so the agreement is measured instead.
+POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # THE ACCOUNT ROSTER IS DATA, not a literal in this file: `~/.ccrc/accounts.sh`
 # (sourced below, beneath `die`) defines CCRC_ACCOUNTS — every account, in
 # roster declaration order — CCRC_HOME_ABLE (the subset a session may be PLACED
@@ -1022,6 +1045,193 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+_pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
+# THE ONLY READER OF THE PROJECT TAG in this file. Four words, ALWAYS rc 0,
+# and it may never `die`: every decider calls it once per decision and one of
+# those deciders is `_auto_swap_check`, inside the long-lived `cmd_supervise`
+# loop — a reader that exited there would stop the supervisor.
+#
+# FOUR WORDS, NOT THREE. `unreadable` (permissions on the file, a directory or
+# a FIFO or a character device — or a symlink to any of those — at the tag
+# path, a broken symlink, a symlink LOOP, or `$POOLS_DIR`/`$REG` themselves
+# unsearchable) and `malformed` (bytes that are not one legal token, an
+# embedded NUL byte included) have DIFFERENT REMEDIES, and neither is ever
+# folded into `untagged`: folding would silently LIFT the constraint, so a
+# chmod would quietly make a project unconstrained. `_pool_ok` answers rc 2
+# for both — nobody decides.
+#
+# NO CALLER OF `_pool_ok` BRANCHES THREE WAYS TODAY, and the sentence here
+# used to say one did. Measured: `grep -n '_pool_ok' ccd/ccd` finds exactly
+# two call sites (`_ws_least_loaded`'s loop and `cmd_ws_add`'s reason
+# builder) and BOTH fold rc 1 into rc 2 — the second says so in its own
+# comment. The four-word distinction survives today for a different reason:
+# `cmd_ws_add` re-reads the STATE WORD itself, separately from `_pool_ok`,
+# to tell "every in-pool lane is unusable" from "the tag is undecidable" and
+# to print `tag:unreadable` or `tag:malformed`. A THREE-WAY BRANCH ON THE
+# EXIT CODE IS AN OBLIGATION ON WAVE 2b (§5.5.5's cross-pool verbs, which
+# must refuse an undecidable tag differently from a mismatch), not a
+# property of this file as it stands.
+#
+# WORD ON STDOUT, NOT AN EXIT CODE. An rc-based reader splits the fourth state
+# across two functions, and a `$(…)` capture that forgot `$?` reads unreadable
+# as empty, i.e. as untagged. There is nothing to forget here.
+_project_pool_state() {   # project -> "named <n>" | untagged | unreadable | malformed ; always rc 0
+  local f v
+  # A registry row with no `.project` field (pre-2026-07-28 rows have none)
+  # must never resolve to the DIRECTORY: `$POOLS_DIR/` would trip the `-f`
+  # check below (a directory is never a regular file) and read `unreadable`
+  # for every such session.
+  [[ -n "${1-}" ]] || { echo untagged; return 0; }
+  # ABSENCE HAS TO BE PROVEN AT EVERY LEVEL IT IS CLAIMED, NOT ASSUMED FROM
+  # ONE TEST BEING FALSE — first for `$REG` (the level `$POOLS_DIR` sits in),
+  # then for `$POOLS_DIR` (the level `$f` sits in). A bare `-d "$POOLS_DIR"`
+  # is false for the genuine "nobody has tagged anything yet" case AND for at
+  # least three others that are not absence at all: a regular FILE sitting at
+  # `$POOLS_DIR`, a broken symlink or a symlink LOOP there, and `$REG` itself
+  # unsearchable (so `-d` cannot even stat the path) — the identical fold
+  # this function already refused one level down (`$f`), one level up. `ccd`
+  # is spec §5.1's AUTHORITY on this question: answering `untagged` on any of
+  # those three would place work freely on a box the server (spec §6) and the
+  # doctor (Task 8's `pools-unlistable`) both already read as `unreadable` —
+  # three spellings of one rule with the authoritative one as the odd one
+  # out. `$REG` missing entirely gets the SAME `unreadable` verdict as every
+  # other anomaly checked here, on purpose: `ccd` runs `mkdir -p "$REG"` at
+  # source time, so this branch should be unreachable, but an unconstrained
+  # default is the wrong side to fail on for a condition that should never
+  # happen — this reader does not get to be the one place that trusts an
+  # impossible state instead of refusing it.
+  [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  # PAIRED INSIDE ONE TEST EXPRESSION, not across two lines (fix round 7).
+  # `-e` is blind to a dangling symlink and to a symlink loop; `-L` is that
+  # blind spot exactly, so the two predicates must decide TOGETHER, in the
+  # statement that acts on them. The earlier shape put `-L` on the line below
+  # and `pools-existence-pairing.test.ts` accepted mere adjacency — which an
+  # inert `[[ -L "$x" ]] && :` parked above the test also satisfies, pairing
+  # the TEXT while measuring nothing. That scan now requires the pair in one
+  # statement; this is what one statement looks like, and the two arms answer
+  # the two conditions `-e` alone folds together.
+  [[ ! -e "$POOLS_DIR" && ! -L "$POOLS_DIR" ]] && { echo untagged; return 0; }
+  [[ ! -e "$POOLS_DIR" && -L "$POOLS_DIR" ]] && { echo unreadable; return 0; }
+  [[ -d "$POOLS_DIR" ]] || { echo unreadable; return 0; }
+  [[ -x "$POOLS_DIR" ]] || { echo unreadable; return 0; }
+  f="$POOLS_DIR/$1"
+  # Same one-expression pairing as `$POOLS_DIR` above, for the same reason.
+  [[ ! -e "$f" && ! -L "$f" ]] && { echo untagged; return 0; }
+  [[ ! -e "$f" && -L "$f" ]] && { echo unreadable; return 0; }
+  # THE READER MAY NEVER BLOCK, NOT JUST NEVER `die`. `cat -- "$f"` opens
+  # whatever is at `$f` with no regard for its TYPE: a FIFO with no writer
+  # blocks in `open(2)` forever, and a symlink to an infinite character
+  # device (`/dev/zero`) blocks in `read(2)` forever — both HANG the
+  # `cmd_supervise` loop this runs inside, permanently, with no exit code and
+  # no word on stdout for anything to notice. `-f "$f"` (which follows
+  # symlinks, exactly like `-e`/`-d`) is required BEFORE any attempt to open
+  # `$f` at all: true only for a regular file or a symlink chain that resolves
+  # to one, so an ordinary indirection (`ln -s realtag pools/demo`) still
+  # reads normally, while a FIFO, a device node, or a symlink to either is
+  # refused on a type check alone — no open, no read, no possibility of
+  # blocking. This also SUBSUMES the old directory case (`-f` is false for a
+  # directory too), so `cat`'s own "Is a directory" error is no longer the
+  # mechanism; it is measured directly instead. A character device that does
+  # NOT block, such as `/dev/null`, is refused by the SAME check, on purpose:
+  # a type check cannot tell a bounded device from an unbounded one without
+  # attempting the read this whole guard exists to avoid attempting, so every
+  # character device gets the one answer that is safe for all of them.
+  # `-r "$f"` is checked in the SAME breath: without it, a permission-denied
+  # file falls through to the NUL-delimited read below, which finds no
+  # delimiter (same as ordinary content), so `$v` stays empty and the
+  # function answers `malformed` instead of `unreadable` — measured, not
+  # assumed; see `ccd-project-pool.test.ts`'s mode-000 case.
+  [[ -f "$f" && -r "$f" ]] || { echo unreadable; return 0; }
+  # NO COMMAND SUBSTITUTION, NO SUBSHELL, AND NO FORK: `v=$(cat -- "$f")`
+  # spawns `cat` AND opens a subshell to capture its output — both gone here.
+  # `read -d ''` (NUL-delimited, not newline-delimited) reads the WHOLE file
+  # into `$v` in the ordinary case (no NUL present, so EOF is reached before
+  # any delimiter is found, exactly mirroring what `cat` used to hand the
+  # trailing-whitespace strip below), and its OWN exit status — 0 iff the read
+  # STOPPED SHORT of EOF, which for `-d ''` means a NUL delimiter was found
+  # and for `-n 64` means the cap was reached — is a free, zero-cost detector
+  # for an embedded NUL byte: a legal tag file can never contain one, so
+  # finding one here is answered `malformed` directly, before the spliced
+  # string (bash drops the NUL, so `pool-a\0junk` would otherwise read as the
+  # single legal-looking token `pool-ajunk`, appearing nowhere in the file)
+  # ever reaches `_pool_name_valid`. The redirection ORDER is load-bearing and
+  # was measured, not guessed: `2>/dev/null` MUST come before `< "$f"`, because
+  # bash applies a command's redirections left-to-right and reports a FAILING
+  # one on whatever stderr is current AT THAT POINT — `< "$f" 2>/dev/null`
+  # (redirect stdin first) lets a permission error escape before the stderr
+  # redirection is ever applied, while `2>/dev/null < "$f"` (this order)
+  # is already in place when the open is attempted. (`-r` above means this
+  # order only matters for a TOCTOU race, but it is the same race `-e`/`-d`
+  # above already accept, and getting the order right costs nothing.) `cat`'s
+  # own `warning: command substitution: ignored null byte in input` — which
+  # `2>/dev/null` ON CAT never caught, because it comes from the PARENT
+  # SHELL'S command substitution, not from `cat` — cannot occur here at all:
+  # there is no command substitution.
+  # `-n 64` IS THE SIZE GATE (D-1850), AND THE CONTRACT'S HEADLINE IS THAT THIS NEVER
+  # BLOCKS. The type gate above refuses a FIFO and a character device, so no
+  # OPEN can hang — but a REGULAR FILE of any size was still read whole into a
+  # shell variable, which is not a hang and is just as fatal to a function
+  # on the `ws-add` path and, from wave 2b, on the 5-second supervisor tick.
+  # NOT "UNDER `cmd_ws_add`'s FLOCK", which is what the review said and what
+  # this comment said back to it for one round. Measured, and stated as a
+  # GREP rather than as line numbers — the numbers this sentence first
+  # carried were wrong the day they were written, and would have gone wrong
+  # anyway: `grep -n '_project_pool_state\|_ws_least_loaded\|addlock' ccd/ccd`
+  # puts every reachable call — `_ws_least_loaded`'s own, and the one in
+  # `cmd_ws_add`'s reason builder — ABOVE `cmd_ws_add`'s `exec {lfd}>>"$addlock"`,
+  # with no call site below it. So the cost delays a workspace creation; it
+  # does not extend a lock hold, and no other `ws-add` waits on it. The
+  # supervisor tick is the arm that makes this urgent, and it is enough on
+  # its own.
+  # Measured by the coordinator's review: 10 MB took 0.20 s
+  # and 32 MB RSS, 100 MB took 39 s and 979 MB RSS — linear and unbounded.
+  # It needs no exotic filesystem to reach: `ln -s ~/.cc-sessions/swap.log
+  # pools/<p>` (or this branch's own documented alias in the other direction)
+  # makes every swap-log append grow the tag.
+  #
+  # 64 is twice the 32-character grammar `POOL_NAME_RE` allows, so no legal
+  # tag can reach it. An OVER-CAP file returns 0 from the same branch a NUL
+  # returns 0 from, and is answered `malformed` — the right word: the bytes
+  # were readable and are not one legal token. The one behaviour this changes
+  # for a WELL-FORMED name is a tag padded with 58+ characters of trailing
+  # whitespace, which used to strip back to `named <n>` and is now
+  # `malformed`; `_pool_ok` maps that to "nobody decides", the safe side.
+  v=
+  if { IFS= read -r -d '' -n 64 v; } 2>/dev/null < "$f"; then
+    echo malformed; return 0
+  fi
+  # DISCLOSED, NOT CLOSED (parked, not fixed — 2026-09-06): `read -d ''`
+  # returns 1 for a read FAILURE exactly as for reaching EOF with no NUL, so
+  # a failure past `-f && -r` falls into the ordinary path. TWO ARMS, TWO
+  # PARKS — do not conflate them.
+  # ZERO-BYTE (EIO via a `/proc/self/mem` symlink — this file's own test
+  # constructs it — or EMFILE on the `<` open): `$v` stays empty, the answer
+  # is `malformed`, and `_pool_ok` maps `unreadable`/`malformed` alike to
+  # "nobody decides" — PLACEMENT is identical either way. Parked on THAT
+  # CALLER ARGUMENT alone; reachability is irrelevant to it.
+  # PARTIAL READ leaving a valid prefix (`pool-a` from `pool-abc`) is
+  # DECISION-level, not the case above: `_pool_name_valid` SUCCEEDS, the
+  # answer is the POSITIVE `named <prefix>`, `_pool_ok` never calls it
+  # undecidable, and PLACEMENT PROCEEDS onto a pool the file does not name.
+  # Parked on REACHABILITY ALONE — the WEAKER park, stated plainly:
+  # UNCONSTRUCTED, not proven impossible. Sound half: `$REG` is not a trust
+  # boundary, so whoever could trigger this could write the wrong name
+  # directly — the fold grants nothing extra. Not airtight: a short read at
+  # EOF rather than mid-stream holds on a healthy LOCAL filesystem (`-f`
+  # already excludes FIFOs/devices before any open), but not on a
+  # network/FUSE mount or a failing device — `$PROJECTS_ROOT` is already a
+  # symlink to another mount on this fleet, so a non-local `$REG` is not
+  # absurd on its face.
+  # VOID if any decider ever gives `unreadable`/`malformed` different
+  # DECISIONS (different MESSAGES are fine), or `named <n>` becomes
+  # reachable from a failed read some other way.
+  # A shell `echo pool-a > pools/demo` is a legal writer (ruling 2), so a
+  # trailing newline is not malformed. Leading whitespace IS: the grammar is
+  # anchored, and a leading space is a hand-edit nobody meant.
+  v=${v%"${v##*[![:space:]]}"}
+  _pool_name_valid "$v" && { echo "named $v"; return 0; }
+  echo malformed
+}
 # An account is a legal AUTOMATIC destination iff its wrapper exists and its
 # lane is enabled. Manual verbs (start/swap/prefer) deliberately bypass this:
 # a named wrapper is an operator override.
@@ -1088,6 +1298,54 @@ _is_valid_wrapper() { local w="$1" v; for v in "${CCRC_ACCOUNTS[@]}"; do [[ "$w"
 # below that used to say `gpt`: an account that is not home-able is one a
 # session may only reach by having it as HOME.
 _is_home_able() { local w="$1" v; for v in "${CCRC_HOME_ABLE[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
+# THE ACCOUNT SIDE of the pool rule. `_ccrc_pool` is generated into
+# `~/.ccrc/accounts.sh` (shared/generate.mjs) with one `case` arm per TAGGED
+# account, so its contract is "empty stdout, rc 0, for an untagged or unknown
+# id" — `_ccrc_cfg_dir`'s rule, and the caller decides what silence means.
+#
+# THE `declare -F` GUARD IS WHY A NEW ccd RUNS OVER AN OLD accounts.sh. During
+# the minutes between the roster lane and the ccd lane of an agent deploy, and
+# on any box whose roster was never regenerated, the function does not exist.
+# Under `set -uo pipefail` with no `-e`, `declare -F` on an undefined function
+# short-circuits cleanly, no array is touched, and every account reads as
+# untagged — today's behaviour, with no `command not found` on stderr and no
+# rc 127 leaking into a `$(…)` capture.
+_acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# THE RULE, spelled once in this language: an account may serve a project iff
+# the account is untagged, or the project is untagged, or the names are equal.
+#
+# THREE EXIT CODES, NOT A BOOLEAN. A boolean would fold "the tag cannot be
+# read" into one side of the answer — either silently lifting the constraint or
+# silently refusing every account — and both are wrong: when the tag is
+# undecidable, NOBODY DECIDES. The same three verdicts are
+# `shared/poolrule.ts`'s `PoolVerdict` and are driven from one fixture table
+# (`server/test/fixtures/poolRule.ts`) in both languages.
+#
+# THE THIRD CODE IS KEPT FOR WAVE 2b, NOT CONSUMED TODAY. Measured, both of
+# this function's callers fold rc 1 into rc 2: `_ws_least_loaded` writes
+# `_pool_ok "$w" "$pps" || continue`, and `cmd_ws_add`'s reason builder uses
+# `elif ! _pool_ok …` and documents the fold itself. What preserves the
+# distinction in today's behaviour is `cmd_ws_add` separately re-reading the
+# STATE WORD (`pps=$(_project_pool_state "$project")`), not this exit code.
+# So the third code is an INTERFACE this function refuses to narrow ahead of
+# the wave that needs it — §5.5.5's cross-pool verbs must tell a mismatch
+# (overridable) from an undecidable tag (not overridable) — rather than a
+# distinction some caller is acting on now. Do not "simplify" it to a
+# boolean because no caller reads it: an adapter may not narrow a
+# distinction it received.
+#
+# THE STATE IS PASSED IN, not read here: callers obtain it ONCE per decision
+# (`pps=$(_project_pool_state "$project")`) and pass the word, so a loop over
+# five candidates costs one `cat`, not five.
+_pool_ok() {   # wrapper pool-state -> 0 serve | 1 mismatch | 2 undecidable
+  local ap pp; ap=$(_acct_pool "$1")
+  case "$2" in
+    untagged)  return 0 ;;
+    "named "*) pp=${2#named } ;;
+    *)         return 2 ;;                     # unreadable | malformed: nobody decides
+  esac
+  [[ -z "$ap" || "$ap" == "$pp" ]]
+}
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # `tmux has-session` answers THREE questions with one exit status, and every
@@ -1668,8 +1926,8 @@ _LC_OBS=""
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
-          hold purge reap release rename restore spawn start stop supervise
-          swap unsupervise)
+          hold purge reap rehome release rename restore spawn start stop
+          supervise swap unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
 # the acts array above follows. `unknown` stays OUT of this array for the same
@@ -3527,7 +3785,7 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
-_ws_least_loaded() {   # -> the home-able account with the most headroom, or "" if none is placeable
+_ws_least_loaded() {   # [project] -> the home-able account with the most headroom, or "" if none is placeable
   # UNKNOWN IS NOT ZERO. This used to read `[[ -z "$sc" ]] && sc=0`, so an
   # account _limit_score knows nothing about — no ~/.cc-limits/<w>.json at all —
   # scored 0 and beat every account that had honestly reported its pressure.
@@ -3580,9 +3838,34 @@ _ws_least_loaded() {   # -> the home-able account with the most headroom, or "" 
   # `first` fallback below takes the first placeable account, and the tie-break
   # is a STRICT `<`, so the first home-able account also wins every tie. The
   # server's `projectHome` ranks ties by the same declaration order.
+  #
+  # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
+  # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
+  # `untagged` by its own first guard, `_pool_ok` returns 0 for `untagged`, and
+  # every pre-existing caller — the parity harness included — is byte-identical.
+  #
+  # THE STATE IS READ ONCE, before the loop, and the WORD is passed to each
+  # candidate: a loop over five accounts costs one `cat`, not five.
+  #
+  # ONE PREDICATE, NO SECOND EXIT. An UNDECIDABLE tag needs no early return of
+  # its own: `_pool_ok` answers 2 for every candidate, every candidate
+  # `continue`s, `first` stays empty and this function answers "" — which is
+  # the right answer (nobody may decide) reached by the same line that skips a
+  # wrong-pool lane. Deleting that line therefore reds BOTH the skip cases and
+  # the undecidable cases, which is why there is no second guard here to keep
+  # in step with it.
+  #
+  # THE EMPTY ANSWER IS OVERLOADED and stays that way: "" is both "every
+  # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
+  # is no second channel on this seam — stdout carries a wrapper name — so the
+  # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  local pps; pps=$(_project_pool_state "${1-}")
   local best="" bs=1000 first="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
+    # AFTER `_account_ok`, BEFORE `first`: the fallback below must land on the
+    # first IN-POOL account, never on a cheaper-looking lane in another pool.
+    _pool_ok "$w" "$pps" || continue
     [[ -z "$first" ]] && first="$w"
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
@@ -3704,14 +3987,58 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # all-excluded refusal leave the box exactly as it found it. Pressure alone
   # never refuses (the all-pinned fixture rule stands); only every lane
   # failing _account_ok gets here.
-  local hw; hw=$(_ws_least_loaded)
+  local hw; hw=$(_ws_least_loaded "$project")
   if [[ -z "$hw" ]]; then
-    local w why=""
-    for w in "${CCRC_HOME_ABLE[@]}"; do
-      if [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
-      elif ! _lane_enabled "$w"; then why+=" $w:disabled"; fi
-    done
-    die "no account available for placement —${why}; enable one (rm $REG/<w>-disabled) and retry — nothing was touched"
+    # TWO EMPTIES, TOLD APART HERE (spec §6). `_ws_least_loaded` answers "" for
+    # "every in-pool lane is unusable" AND for "the tag is undecidable", and
+    # the two have completely different remedies — enable a lane versus fix one
+    # file's bytes. Re-reading the state costs one `cat` on a path that is
+    # already refusing.
+    #
+    # THIS IS A SECOND READER OF ONE FACT, FREE TO DISAGREE with the first
+    # (`_ws_least_loaded`'s own `_project_pool_state` call, above) — the exact
+    # shape `cmd_project_pool --clear` deliberately avoids by reading once and
+    # deciding from `$oldstate`. Here the race is ACCEPTED rather than closed:
+    # if the tag changes between the two reads, this message can name a state
+    # that did not cause the empty (a chmod landing between them turns "every
+    # in-pool lane is at ceiling" into `tag:unreadable`), and in the reverse
+    # race the account loop can fall through with every arm passing and print
+    # an EMPTY reason list. Both are harmless because this path is already
+    # refusing either way — the second read only picks the WORDING of a
+    # refusal that has already happened, never whether one happens.
+    local w why="" pps ppn=""
+    pps=$(_project_pool_state "$project")
+    case "$pps" in "named "*) ppn=${pps#named } ;; esac
+    if [[ "$pps" != untagged && -z "$ppn" ]]; then
+      why=" tag:$pps $POOLS_DIR/$project"
+    else
+      for w in "${CCRC_HOME_ABLE[@]}"; do
+        # FIRST FAILING PREDICATE IN LOOP ORDER — `_ws_least_loaded`'s own
+        # order, so the reason names the check that actually stopped this
+        # account rather than the last one that would have.
+        if   [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
+        elif ! _lane_enabled "$w";       then why+=" $w:disabled"
+        # `pps` is `untagged` or `named …` in this branch, so `_pool_ok` can
+        # only answer 0 or 1 here, and an account reported with `pool=` is
+        # always a TAGGED one — the empty answer never reaches this string.
+        #
+        # THE QUOTING HERE IS UNREACHABLE-EQUIVALENT, NOT UNTESTED — do not
+        # read a missing mutation kill as missing coverage, and do not
+        # "simplify" these quotes away because of it. Measured: unquoting
+        # `_pool_ok $w $pps` at this call site alone leaves the suite
+        # 121/121 green. The reason is `_account_ok` (`[[ -x wrapper ]] &&
+        # _lane_enabled`) is exactly what the two `elif` arms above already
+        # mirror, so only a genuinely wrong-pool account ever reaches this
+        # third arm — and there, rc 1 (mismatch) and the word-split rc 2
+        # (undecidable, from an unquoted multi-word `$pps`) both fall into
+        # this SAME `elif ! …` branch and print the SAME string. Site 1
+        # (`_ws_least_loaded`'s loop) is the one an unquoted `$2` actually
+        # changes, and stays quoted for the reason stated there.
+        elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
+        fi
+      done
+    fi
+    die "no account available for placement${ppn:+ in pool $ppn} —${why}; enable one (rm $REG/<w>-disabled)${ppn:+, tag an account into pool $ppn in ~/.ccrc/accounts.json and redeploy the agent lane, or untag the project (ccd project-pool --project $project --clear)} and retry — nothing was touched"
   fi
 
   # PER PROJECT, and it spans slug selection through the last registry write —
@@ -4744,6 +5071,7 @@ pick
 pr-open
 pr-state
 prefer
+project-pool
 start
 stop
 supervise
@@ -4802,6 +5130,39 @@ EOF
   # renders exit 0 as `200 {ok:true}` for a call that recorded nothing. Same
   # argument, same polarity, as `stop-surface` above.
   echo actor-flags-v1
+  # `pools-v1` says THIS copy of ccd honours project pool tags. What that
+  # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
+  # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
+  # CALLED — wired into fresh placement (Task 5), from `_ws_least_loaded`
+  # and from `cmd_ws_add`'s refusal loop, so a mismatched or undecidable tag
+  # can refuse a `ws-add`. Wiring it into the auto-swap candidate loop and
+  # the 5-second tick (`_swap_target`, `_auto_swap_check`) is wave 2b's, a
+  # separate later wave, and so is `--cross-pool`, which appears in
+  # `ccd/ccd` only as comment text until then — no verb parses it. Fix
+  # round 1 (Finding 2a): a prior version of this comment claimed the last
+  # two in the present tense.
+  #
+  # It gates exactly ONE server decision — "may I build a `--cross-pool`
+  # argv" (wave 3) — and `capSupported` refuses on no evidence, because the
+  # wrong guess there is a SILENT SUCCESS IF THE FLAG WERE TRAILING: a
+  # trailing flag is just a fourth positional nobody reads, so an old ccd
+  # would silently ignore it and `runCcdOr502` would render exit 0 as
+  # `200 {ok:true}` for a crossing that never happened. Spec §5.6 rejects
+  # that shape for exactly this reason: `--cross-pool` is specified LEADING,
+  # before the positionals, so on an old ccd it lands in a slot an existing
+  # check refuses instead (measured per verb by the pins in
+  # `ccd-project-pool.test.ts`'s "pools-v1 is safe to advertise" describe —
+  # e.g. `swap`'s shifted target failing `_is_valid_wrapper`, or `start`'s
+  # `wrapper` becoming the literal flag). Fix round 3 (Finding 9): a prior
+  # version of this sentence said "trailing", the opposite of what the
+  # position mechanism and every one of those pins actually rely on — this
+  # comment and that describe block must agree, since both argue the same
+  # safety property. LOUD failure either way (an old ccd dies nonzero,
+  # `runCcdOr502` renders a real error), never a silent success. The TAG
+  # ROUTE needs no token: the verb and every reader ship in one ccd inode,
+  # so `project-pool`'s presence in `ccdVerbs` IS the evidence. Same
+  # argument, same polarity, as `actor-flags-v1` above.
+  echo pools-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -5112,6 +5473,322 @@ cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
       rm -f -- "$marker" || die "could not clear the pause marker — the fleet is STILL paused"
     fi
     echo "running"
+  fi
+}
+
+cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
+  # THE PROJECT SIDE of the pool rule gains a writer here. The tag is
+  # `$POOLS_DIR/<project>` — one file, one token — and until this verb
+  # existed the only writer was an ssh session and an `echo`, which ruling 2
+  # rules out as the only way in.
+  #
+  # THIS VERB ALONE DOES NOT REACH A PHONE — fix round 1 (Finding 2b): a
+  # prior version of this comment said it did. The exec-whitelist grant that
+  # lets the agent's PWA-facing path invoke it at all is this same wave's
+  # Task 4; the server route that calls the grant is wave 3's; the PWA
+  # control the operator actually taps is wave 4's. Until all three land,
+  # this verb is reachable the same way the `echo` it replaces was — a
+  # session running `ccd` directly, over ssh or a script, not yet the phone.
+  #
+  # MODELLED LINE FOR LINE ON `cmd_coord_pause` ABOVE: flag-led, EXACT arity
+  # (usage die otherwise), validation before anything on disk is touched, and
+  # BOTH write arms CHECKED. That last is not decoration: ccd runs
+  # `set -uo pipefail` with NO `-e` (ccd:9), so an unchecked write that failed
+  # would fall straight through to the echo and report a tag that is not there.
+  # This is the verb where a false success is worst — a route keyed on the exit
+  # code then believes a project is constrained while placement is free.
+  #
+  # NO `_lc_done` LINE. The lifecycle vocabulary is per-SESSION and this verb
+  # acts on a project; `cmd_coord_pause` journals nothing for the same reason.
+  # The record it does leave is one `swap.log` line, below.
+  local project pool="" clear=0
+  local usage="usage: ccd project-pool --project <p> --pool <name>|--clear"
+  case "$#" in
+    4) [[ $1 == --project && $3 == --pool ]] || die "$usage"; project=$2; pool=$4 ;;
+    3) [[ $1 == --project && $3 == --clear ]] || die "$usage"; project=$2; clear=1 ;;
+    *) die "$usage" ;;
+  esac
+  # BEFORE THE FILESYSTEM. `_ws_project_valid` refuses `..`, `.`, dot-leading,
+  # whitespace and slashes, so the joined path can never leave `$POOLS_DIR` and
+  # a dot-leading name can never alias this directory's own tmp namespace.
+  _ws_project_valid "$project" \
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (the tag is a file in $POOLS_DIR, whose dot-leading names are its tmp namespace)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+
+  local oldstate old="-" new="-"
+  oldstate=$(_project_pool_state "$project")
+  case "$oldstate" in "named "*) old=${oldstate#named } ;; esac
+
+  if (( clear )); then
+    # NO EXISTENCE CHECK ON `--clear`, deliberately. The doctor's `pools-stale`
+    # remedy IS this command run against a project whose directory and registry
+    # rows are both gone; a remedy that refused on the very state it cures
+    # would leave the finding unfixable.
+    #
+    # DECIDE FROM `$oldstate`, NOT ANY FRESH FILESYSTEM TEST — fix round 2
+    # (Finding 4, D-1847). Fix round 1 paired `-e` with `-L`, which closes the
+    # dangling-symlink/loop shape but not the whole class: a tag under an
+    # UNSEARCHABLE $POOLS_DIR (mode 000) answers FALSE to `-e` AND to `-L` —
+    # neither predicate can stat OR lstat through a directory it cannot
+    # search — so that guard would skip the removal again, a different shape
+    # of the identical false success. The defect was never that `-e` was the
+    # wrong predicate; it is that the verb asked the filesystem a SECOND
+    # time, with different semantics, having already asked through the one
+    # reader whose entire job is answering that question (spec §5.1: `ccd` is
+    # the authority on the tag's state, and in practice that authority is
+    # `_project_pool_state`) — two readers of one fact, free to disagree.
+    # `untagged` is the ONLY state with nothing to remove; `named`,
+    # `unreadable` and `malformed` all mean something IS there, and the
+    # removal must be attempted and SUCCEED. One reader, both shapes closed,
+    # and every future fix to the reader inherited for free.
+    #
+    # THE MESSAGE ON FAILURE says "may still be constrained" rather than "is
+    # STILL tagged" — corrected in fix round 3 (Finding 7): a prior version
+    # of this comment claimed `_pool_ok` answers non-serve for EVERY
+    # non-`untagged` state, which is false for `named`. Measured against
+    # `_pool_ok`'s own rule ("account untagged, OR project untagged, OR names
+    # equal"): for `unreadable`/`malformed` it answers non-serve (rc 2,
+    # undecidable) for EVERY candidate, unconditionally — nobody decides
+    # while the tag cannot be read. For `named <pool>` it answers SERVE (rc
+    # 0) for any candidate whose own account pool is unset or already equals
+    # `<pool>`, and only mismatches (rc 1) a candidate tagged with a
+    # DIFFERENT pool — a named tag does not block every account, only some.
+    # "May still be constrained" is honest for both shapes: universally true
+    # for `unreadable`/`malformed`, and genuinely possible — not certain —
+    # for `named`. Claiming a NAMED tag survives outright ("is STILL tagged")
+    # would also be wrong for `unreadable`/`malformed`, where there is no
+    # genuine, readable tag to name at all.
+    # `rm -f`'s TREATMENT OF ENOTDIR IS A USERLAND SPLIT, not a property of
+    # `rm` — corrected in fix round 7, after macOS CI failed on the sentence
+    # that stood here. When $POOLS_DIR ITSELF is a regular file,
+    # `$POOLS_DIR/$project` cannot be resolved (ENOTDIR):
+    #   - GNU coreutils classes ENOTDIR with ENOENT as "already gone" and
+    #     `rm -f` returns 0. MEASURED, coreutils 9.4, on this branch.
+    #   - BSD/macOS does NOT: the guard below fails and the verb refuses HERE
+    #     instead of at the final re-measurement. INFERRED, not measured — I
+    #     cannot run macOS. The evidence is CI plus this function's own
+    #     control flow: `swap.log` came back EMPTY there, and between entry
+    #     and the append the only reachable `die` in that fixture is this
+    #     one, so the `rm` must have returned non-zero. The usual BSD `rm`
+    #     tests `errno != ENOENT` alone, which would produce exactly this,
+    #     but I have not read Apple's shipped source.
+    # ENOENT itself is swallowed by both, and that half is not a guess: it is
+    # the one case POSIX names for `-f` ("Do not write diagnostic messages or
+    # modify the exit status in the case of nonexistent operands"). ENOTDIR is
+    # not named, which is precisely where the two userlands part.
+    #
+    # NEITHER BEHAVIOUR IS A BUG HERE, so nothing below is platform-forked:
+    # both userlands REFUSE and neither reports a false `untagged`; they
+    # differ only in WHERE. Round 2 made the reader authoritative for the
+    # DECISION to remove; trusting THIS call's rc for the OUTCOME was the same
+    # mistake one level out, and it is a mistake on GNU whatever BSD does.
+    # Fixed below, once, as the verb's unconditional LAST ACT (fix round 4,
+    # Finding 10) rather than here — see that comment for why inline was not
+    # enough either.
+    #
+    # BEFORE ASSERTING ANY `rm`/`mv`/`stat`/`du` SEMANTIC IN THIS FILE, CHECK
+    # BOTH USERLANDS. This wave shipped three distinct kinds of comment that
+    # were "true where I measured it" — true of one FILE and false of a
+    # sibling, true of one ARM and false of the other, and now true of one
+    # PLATFORM and false of the other. `ccd` runs on both and CI tests both,
+    # so a coreutils-only fact stated flatly is a red suite one merge later.
+    # `_plat_mv_notdir` (:75) is the precedent for when the split is real
+    # enough to fork the CODE; this one is not, and is documented instead.
+    if [[ "$oldstate" != untagged ]]; then
+      rm -f -- "$POOLS_DIR/$project" \
+        || die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
+    fi
+  else
+    _pool_name_valid "$pool" \
+      || die "invalid pool name '$pool' — one token matching $POOL_NAME_RE (lowercase, starts with a letter, max 32 chars)"
+    # EXISTENCE, ON THE `--pool` ARM ONLY. Two ways to be a project: a
+    # directory under $PROJECTS_ROOT, or a registry row that names one — which
+    # is what makes the four non-git projects and every custom-workdir session
+    # taggable. The glob is guarded because an empty registry leaves it its own
+    # literal text and grep would complain about a file that is not there.
+    [[ -d "$PROJECTS_ROOT/$project" ]] \
+      || grep -qxF -- "$project" "$REG"/*.project 2>/dev/null \
+      || die "no such project '$project' — neither $PROJECTS_ROOT/$project nor any registry row names it"
+    # A WARNING, NOT A REFUSAL. This pool may be about to gain an account, and
+    # the FLEET's roster copy is the authority — the server's can lag it
+    # (§3.3). When it bites, it bites loudly: an empty pool STRANDS.
+    local w hit=0
+    for w in "${CCRC_ACCOUNTS[@]}"; do
+      [[ "$(_acct_pool "$w")" == "$pool" ]] && { hit=1; break; }
+    done
+    (( hit )) || echo "warn: no rostered account is in pool $pool" >&2
+
+    mkdir -p -- "$POOLS_DIR" \
+      || die "could not create $POOLS_DIR — $project is NOT tagged"
+    # `_reg_set`'s atomicity, verbatim: tmp then rename. A SIGKILL between the
+    # two leaks one dot-leading tmp — the same disclosed price `_reg_set` pays,
+    # and every reader skips dot-leading entries, which is exact because no
+    # project may lead with a dot.
+    local tmp="$POOLS_DIR/.$project.$BASHPID.tmp"
+    # `2>/dev/null` BEFORE `> "$tmp"`, and the order is the whole of it — the
+    # same rule `_project_pool_state` spells out for its own read: bash applies
+    # a command's redirections LEFT TO RIGHT and reports a FAILING one on
+    # whatever stderr is current AT THAT POINT. Written the other way round
+    # (`> "$tmp" 2>/dev/null`, which is what stood here) the silencer is not
+    # yet installed when the OPEN is attempted, so only `printf`'s runtime
+    # WRITE errors were caught and the open's own failure escaped — measured
+    # with `$POOLS_DIR` at mode 0500: `ccd: line <this one>: …/.demo.<pid>.tmp:
+    # Permission denied`, straight from the shell, ahead of the `die` that
+    # explains it; with this order, that line is gone and only the `die`
+    # remains. It was never a dead redirection, only half of one, and
+    # `ccd-project-pool.test.ts` pins the half that was missing.
+    #
+    # THE `rm -f` ON THE FAILURE PATH STILL REPORTS, deliberately unsilenced —
+    # but only where the UNLINK itself is denied, which is a stricter fixture
+    # than the one above. Measured at mode 0500 it says nothing (`-f`
+    # suppresses the ENOENT of a tmp that was never created); measured at mode
+    # 000 it says `rm: cannot remove '…': Permission denied`. That is not the
+    # shell talking over its own `die`: it is a SECOND, independent failure —
+    # the tmp could not be cleaned up either — and an operator reading the
+    # `die` below deserves to know a stray tmp may have been left behind.
+    # Silencing it would fold two facts into one.
+    printf '%s' "$pool" 2>/dev/null > "$tmp" \
+      || { rm -f -- "$tmp"; die "could not write the pool tag for $project — it is NOT tagged"; }
+    _plat_mv_notdir "$tmp" "$POOLS_DIR/$project" \
+      || { rm -f -- "$tmp"; die "could not write the pool tag for $project — it is NOT tagged"; }
+    new="$pool"
+  fi
+
+  # THE ONE swap.log LINE WHOSE SUBJECT IS A PROJECT. Every other line in that
+  # file names a session id.
+  #
+  # WHY THAT IS WORTH THE ODDITY IS AN OBLIGATION ON WAVE 2b, NOT A DESCRIPTION
+  # OF TODAY. The argument is that the retag is the CAUSE of the `rehome` and
+  # `auto-pool` lines that will follow it within a tick, and that a reader who
+  # cannot see the cause beside its effects has to correlate two files. Neither
+  # effect exists yet: measured, `rehome` appears in this file ONLY as a member
+  # of the `_LC_ACTS` vocabulary array (`grep -n '_LC_ACTS\|rehome' ccd/ccd`)
+  # with no `_lc_emit` naming it, and `auto-pool` appears
+  # nowhere in this file at all — it is spec-only (§5.5.4). Until wave 2b emits
+  # them, this line's justification is a promise; the line itself is still the
+  # only record a project-scoped retag leaves anywhere.
+  #
+  # THIS LINE MUST LAND BEFORE THE FINAL RE-MEASUREMENT BELOW — fix round 4
+  # (Finding 10). Reproduced: `ln -s "$REG/pools/$project" "$REG/swap.log"`
+  # makes this verb's OWN audit line alias the tag it just decided to remove
+  # (or, on the no-op `--clear` path, the tag it never had to touch at all).
+  # Where the append ran AFTER the round-3 re-measurement, the append
+  # RE-CREATED the tag — as unparseable, date-stamped content, so the next
+  # reader sees `malformed` — while the verb had already certified `untagged`
+  # and could only report the answer it already had. Round 1 parked the
+  # unchecked append on the reasoning that losing a line does not make any
+  # exit code lie; round 3 then moved the last WRITE past the last
+  # MEASUREMENT, which silently made that reasoning false — nothing announced
+  # the change, the same question just got asked again. Writing this line
+  # BEFORE the measurement below, rather than adding a guard AROUND this
+  # line, is the fix: the invariant that actually holds is not "this write is
+  # harmless" (an argument that keeps expiring as this function grows one
+  # more write after the one it was made about) but THE VERB'S LAST ACT IS A
+  # MEASUREMENT, so nothing this function does can outrun what it reports —
+  # WITH ONE STATED EXCEPTION, and it is stated HERE rather than only where it
+  # is introduced, because this is where the invariant is claimed. Fix round 5
+  # appends a `pool-tag-void` line on each of the two `die` paths below, AFTER
+  # the measurement, so on those two paths the measurement is not the last act.
+  # That write can itself alter the very tag that was measured — measured, with
+  # `$REG/swap.log` symlinked at `$POOLS_DIR/demo`, a refused `--pool` left
+  # that path holding the pool name with a whole audit line concatenated onto
+  # it (159 bytes on a fixture box; the length is the path's), reading
+  # `malformed`. What the invariant still buys is the only thing it was ever
+  # for: those writes run only AFTER a refusal has been decided, so no write in
+  # this function can outrun a REPORTED SUCCESS. A `die` is not a report of
+  # success. See the round-5 note below.
+  echo "$(date '+%F %T') pool-tag $project: $old -> $new" >> "$REG/swap.log"
+
+  # THE FINAL RE-MEASUREMENT, UNCONDITIONAL, ON BOTH BRANCHES — the verb's
+  # actual last act (fix round 4, Finding 10; generalises fix round 3's
+  # Finding-6 re-measure, which ran only inside the `--clear` arm's `rm`
+  # branch and only ahead of the line above). Nothing after this call can
+  # falsify what it reports, because nothing runs after it: this reads the
+  # same authority every other decision in this file defers to
+  # (`_project_pool_state`, spec §5.1) one last time, over `$project`'s OWN
+  # tag as it exists after every write this call has made, log line included,
+  # and refuses to echo success unless that reader agrees.
+  #
+  # `$project`'s OWN TAG, AND NOTHING ELSE — the reader takes one project, so
+  # this certifies one project. It is NOT a claim that the call left the pools
+  # directory as it found it. Measured: with `$REG/swap.log` symlinked at
+  # `$POOLS_DIR/quiet-basin`, `--project demo --pool pool-a` exits 0 printing
+  # `tagged demo pool-a` (true, and `demo` really does read `named pool-a`)
+  # while the append destroys a DIFFERENT project's tag — `quiet-basin` goes
+  # from `named pool-b` to `malformed` in the same call. A verb that was not
+  # asked about `quiet-basin` cannot certify it, and this one does not try.
+  #
+  # A CORRECTIVE LINE ON EITHER DIE PATH BELOW — fix round 5 (Finding 13),
+  # and NOT a reversion of fix round 4. Moving the append upstream of the
+  # measurement (round 4) closed the false-SUCCESS shape, but it left a
+  # different artifact behind: every `die` below now runs AFTER the
+  # `pool-tag` line above, so a reader scanning swap.log sees a transition
+  # recorded for a call that in fact refused (measured: `$POOLS_DIR` a plain
+  # file made a failing `--clear` write `pool-tag demo: - -> -` where the
+  # pre-round-4 code wrote nothing at all). The fix is NOT to move the
+  # append back after the measurement — that is shape 4 again, the exact
+  # false success round 4 closed. Instead, a write that happens AFTER a
+  # failure decision cannot manufacture a false success, because nothing
+  # downstream reads it as one: the function is about to `die`, so this
+  # second line's only job is to keep a HUMAN scanning the file from reading
+  # the first one at face value.
+  #
+  # `pool-tag-void` IS A DIFFERENT VERB IN THE VERB COLUMN, and that is the
+  # whole of the claim. A reader parsing the third field of a swap.log line
+  # gets `pool-tag-void`, never `pool-tag`, so it can never be counted as a
+  # second genuine transition. A SUBSTRING GREP CAN be fooled, and `-w` does
+  # not save it: `-` is not a word constituent, so `pool-tag` is a whole word
+  # inside `pool-tag-void` too. Measured on a swap.log holding one of each
+  # line, `grep -c pool-tag` = 2 and `grep -cw pool-tag` = 2, while
+  # `grep -c pool-tag-void` = 1. Anything counting real transitions must
+  # anchor on the column (or exclude `pool-tag-void` explicitly), not match
+  # the token loose.
+  local finalstate; finalstate=$(_project_pool_state "$project")
+  if (( clear )); then
+    if [[ "$finalstate" != untagged ]]; then
+      echo "$(date '+%F %T') pool-tag-void $project: the pool-tag line above did NOT take effect — this call refused" >> "$REG/swap.log"
+      die "could not clear the pool tag for $project — placement may still be constrained ($POOLS_DIR/$project)"
+    fi
+    echo "untagged $project"
+  else
+    # FIX ROUND 5 (FINDING 12): this die used to reuse the printf/mv
+    # failure's own "it is NOT tagged" — accurate THERE, where nothing was
+    # ever written, but reachable HERE with the tag path holding GARBAGE
+    # instead. `$finalstate` reads `malformed` under a construction anyone
+    # can run (measured: the rename succeeds, then an aliased swap.log
+    # append — `ln -s "$POOLS_DIR/$project" "$REG/swap.log"` — concatenates
+    # the audit line onto the freshly-written pool name with no separating
+    # newline, which `_pool_name_valid` rejects).
+    #
+    # ONE CONSTRUCTED STATE, THREE RACE-ONLY ONES — corrected in fix round 6.
+    # The sentence this replaces also claimed `unreadable` here "by the same
+    # construction that reaches `unreadable` on the `--clear` arm", and that
+    # is measurably wrong: on THIS arm neither shape survives to the
+    # measurement. `$POOLS_DIR` a plain file dies earlier, at `mkdir -p`
+    # ("could not create … — demo is NOT tagged"); `$POOLS_DIR` at mode 000
+    # dies earlier still, at the `printf` into the tmp ("could not write the
+    # pool tag … — it is NOT tagged"). So `unreadable` belongs with
+    # `untagged` and `named <other>` — reachable only if a concurrent writer
+    # lands between the rename above and this read, which is exactly the
+    # class the enumeration already excluded for those two.
+    #
+    # WHAT THE MESSAGE HAS TO BE HONEST FOR IS STILL ALL FOUR, race included,
+    # and it is. For `malformed` and `unreadable`, `_pool_ok`'s `*)` arm
+    # answers non-serve (rc 2, undecidable) UNCONDITIONALLY: nobody decides,
+    # for every candidate — so "it is NOT tagged" would tell the operator the
+    # opposite of the truth (the project is not free, it is UNDECIDABLE) and
+    # the cure differs: remove the garbage, not retry the write. For
+    # `untagged` and `named <other>` the tag is readable and `_pool_ok`
+    # decides normally — Finding 7's point — and there "NOT tagged" would be
+    # wrong in the other direction, or simply naming the wrong pool. The
+    # message below claims neither NOT-tagged nor STILL-tagged; it says only
+    # what is true of every one of the four — the path no longer holds what
+    # this call wrote.
+    if [[ "$finalstate" != "named $pool" ]]; then
+      echo "$(date '+%F %T') pool-tag-void $project: the pool-tag line above did NOT take effect — this call refused" >> "$REG/swap.log"
+      die "could not confirm the pool tag for $project as $pool — the tag path no longer holds what this call wrote ($POOLS_DIR/$project)"
+    fi
+    echo "tagged $project $new"
   fi
 }
 
@@ -10981,6 +11658,15 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   fi
   echo "$pool"
 }
+# TWO MEANINGS OF ONE WORD, IN ONE FILE, and this is the sentence that keeps
+# the next reader from conflating them. The registry `pool` field read here is
+# a SPACE-SEPARATED CANDIDATE LIST of wrappers a session may auto-swap between,
+# and it has NO WRITER anywhere in this tree — an operator sets it by hand.
+# The `pool` of the account-pools design is a NAME, one token, and it lives in
+# two other places entirely: `_ccrc_pool <account>` (the roster's projection)
+# and `$POOLS_DIR/<project>` (the project's tag). Renaming this field is out of
+# scope; `ccd-project-pool.test.ts`'s `acct-a-demo` case is what proves the two
+# cannot become one file by accident.
 _pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$1"; }
 
 _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd unit.
@@ -13447,9 +14133,10 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  project-pool) shift; cmd_project_pool "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|project-pool|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi
