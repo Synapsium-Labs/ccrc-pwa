@@ -82,7 +82,8 @@ Operator rulings, in the order they were given:
 4. **Both arms** — the card speaks to the 2 held sessions *and* to the
    co-tenant majority. Ruled on the 0-programless-claims baseline above.
 5. **`CARD_MAX_CHARS`**, with the existing 600 left untouched (§4.4). Ruled at
-   1200; **corrected to 1800 while writing the plan** — the 1200 was argued from
+   1200; **corrected to 1800 while writing the plan, and to 2400 by the fix wave
+   (M5, §4.4)** — the 1200 was argued from
    a 906-character worst case that understated the held subject at ~125 chars,
    which was the co-tenant investigation's own shortened model rather than
    §4.2's actual 592-character text. The real worst live combination is 1363
@@ -201,10 +202,25 @@ non-blankness (`server.ts:2004-2032`). This single ruling also closes the
 ANSI-injection, newline and oversize-slug hazards structurally: a string that
 fails the bound is never rendered.
 
-**Case D — present but unreadable** (a directory at that path, mode 000, empty).
-Its own sentence, because collapsing absent with unreadable is the repo's named
-"overloaded null at a seam" defect. `-e` not `-f`, matching all four of ccd's
-hold readers, whose stated rule is *doubt reads as HELD*.
+**Case D — present but not speaking** (a directory at that path, mode 000,
+empty). Its own sentence, because collapsing absent with unreadable is the
+repo's named "overloaded null at a seam" defect. `-e` not `-f`, matching all
+four of ccd's hold readers, whose stated rule is *doubt reads as HELD*.
+
+> **Amended by the fix wave (I3).** The three shapes named above are not one
+> sentence but **two**, and the second shipped unimplemented. A directory and a
+> mode-000 file are *unreadable* — `_ct_read` rc 2 — and share the sentence
+> *"exists but is not a readable file"*. An **empty** (or whitespace-only)
+> `.hold` is rc 0 with an empty value: perfectly readable, carrying no reason,
+> and that sentence would be **false** of it. It fell through the length bound,
+> failed the shape gate, and landed in Case C's silence — the one answer it must
+> not give, since `registry.ts`'s `HOLD_NO_REASON` renders it
+> `<hold file is empty — no program named>` and `ws-rm`/`ws-reap` refuse on `-e`
+> alone. It now has its own clause: *"this workspace is held and the hold names
+> no program … present, readable, and carries no reason … every other reader on
+> this box treats a present `.hold` as HELD"*, closing on `runs list` the way
+> the unreadable arm does. Case D is therefore **two** sentences, and §4.2 as a
+> whole is five rather than four.
 
 **Case E — archived with a standing hold.** Live on this box:
 `data-internal-still-prairie`, stamped `archived=… reason=merged:#160`, with a
@@ -337,7 +353,8 @@ would reproduce in the hook the exact lie the server refuses to tell.
 
 `set -- "${1:0:$CARD_MAX_CHARS}"` as the **first statement** of
 `_hook_emit_context` — the one site every subject passes through, so no future
-subject can forget it. `CARD_MAX_CHARS=1800`.
+subject can forget it. `CARD_MAX_CHARS=2400` (ruled 1800 here; raised by the fix
+wave, argued below).
 
 The existing `toBeLessThan(600)` is **left untouched and green**. Three
 measurements say it is not the ceiling it looks like:
@@ -363,10 +380,29 @@ computed: graphify 593 + §4.2's held case A at **592** + co-tenant 176 + two
 joins. The 906 came from the co-tenant investigation modelling the held clause
 at ~125 characters — its own shortened sketch, since it was instructed not to
 redesign the held arm — and the two halves' budgets were never reconciled until
-the plan was written. `CARD_MAX_CHARS=1800` clears 1363 by 32% and is 7.3% of
-the 24576 bytes the neighbour hook already emits on this event. At 1200 the clip
-would have truncated the co-tenant sentence on exactly the two sessions that
-carry a hold — the sessions the held subject exists for.
+the plan was written. At 1200 the clip would have truncated the co-tenant
+sentence on exactly the two sessions that carry a hold — the sessions the held
+subject exists for.
+
+> **Amended by the fix wave (M5): `CARD_MAX_CHARS=2400`, and the argument is
+> re-made from the STRUCTURAL worst case.** 1363 is a *live sample*, and a live
+> sample is the wrong quantity to size a bound with. The worst combination the
+> code can produce with every **gated** field at its own cap, re-measured from
+> the shipped sentence templates, is graphify **718** (every optional clause
+> present, a 12-digit node count, engine and pin each at their 64-byte `head -c`
+> cap, the armed-gate sentence) + held case A **801** (a 127-character workdir
+> in the subject, a 127-character hold, a 40-character id) + co-tenant **247**
+> (a 64-character project) + two one-space joins = **1768**. Against 1800 that
+> is **32 characters** of headroom, not the 32% this section claimed of the live
+> figure — and since the join order is graphify → hold → ccrc, the overflow ate
+> the **co-tenant** sentence mid-word and silently, on exactly the sessions
+> carrying a hold. 2400 clears 1768 by 36% and stays under 10% of the 24576
+> bytes the neighbour hook already emits on this event. Drop-whole-subject logic
+> on the hot path was considered and **refused**: the bound is the cheaper
+> answer. The ceiling is not a budget the subjects may spend up to — `GM_NODES`
+> is ungated (next paragraph) and can exceed any bound on its own, which is why
+> the clip exists and why the number only has to cover the fields that *are*
+> gated.
 
 The bound was fiction in the other direction too: the shipped hook was made to
 emit **3,570 characters** with no ccrc card at all and every suite green,

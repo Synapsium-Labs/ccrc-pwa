@@ -439,7 +439,18 @@ _ct_probe() {   # -> CT_N CT_U CT_PROJ ; rc 1 = nothing may be said
   me="$CT_V"; [[ -n $me ]] || me="$id"
   case "$me" in ''|*[!$CCRC_PROJ_CLASS]*) return 1 ;; esac
   (( ${#me} <= CCRC_PROJ_MAX )) || return 1
-  now="${EPOCHREALTIME%%[.,]*}"
+  # GUARDED, like every other reader of this builtin in the tree (`:33` here,
+  # `ccrc:269`, `ccd:210`). `EPOCHREALTIME` is bash 5.0+ and this file's
+  # declared floor is 4.4, so a bare `${EPOCHREALTIME%%...}` under `set -u` is
+  # not a wrong number — it ABORTS THE SHELL, here, inside the probe, BEFORE
+  # the card is emitted and BEFORE the hookstate write: on a sub-5.0 box that
+  # is no card, no state write, a non-zero exit and stderr noise on every
+  # SessionStart, which is the worst shape this file can fail in. Empty `now`
+  # degrades to SILENCE instead: `(( now - ... ))` reads an empty variable as
+  # 0, every heartbeat then measures as future-dated, `CT_N` stays 0 and the
+  # subject says nothing. Silence is the true answer for a box that cannot
+  # measure the clock.
+  now="${EPOCHREALTIME:-}"; now="${now%%[.,]*}"
   # SUFFIX-ANCHORED, never `$REG/$id*` and never bare `$REG/*`: `_reg_purge`
   # records MEASURED id-nesting collisions an unanchored glob matches both
   # sides of, and wave 2a put the project pool tag in a DOTLESS `$REG/pools/`
@@ -561,6 +572,29 @@ _hook_hold_card() {
     return 0
   fi
   h="$CT_V"
+  # CASE D'S THIRD SHAPE: PRESENT, READABLE, AND CARRYING NOTHING (I3, D-1902). Spec
+  # §4.2 names it beside the directory and the mode-000 file — "a directory at
+  # that path, mode 000, empty" — and rules all three get a sentence because
+  # DOUBT READS AS HELD. It shipped unimplemented: an empty or whitespace-only
+  # `.hold` returns rc 0 with `CT_V=""`, passes the length bound, fails the
+  # shape gate and falls to SILENCE, telling a workspace every other reader on
+  # this box calls HELD that there is nothing to say.
+  #
+  # It is reachable and it is already named twice in this tree.
+  # `registry.ts`'s `HOLD_NO_REASON` — "`ccd ws-hold` refuses to write one, but
+  # `touch $REG/<id>.hold` still does" — renders it `<hold file is empty — no
+  # program named>`, and `cmd_ws_rm`/`cmd_ws_reap` refuse on `-e "$REG/$id.hold"`
+  # without reading a byte.
+  #
+  # IT NEEDS ITS OWN CLAUSE, NOT CASE D'S. That sentence says the file "exists
+  # but is not a readable file", which would itself be FALSE here — the file is
+  # a perfectly readable file that carries no reason. So this says what is true
+  # and hands over the one authority that can answer the rest, exactly as the
+  # unreadable arm does.
+  if [ -z "$h" ]; then
+    CARD_HOLD="ccrc-program: this workspace is held and the hold names no program — \`~/.cc-sessions/$id.hold\` is present, readable, and carries no reason. \`ccd ws-hold\` refuses to write one that way, so a \`touch\` or a hand-edit did. Every other reader on this box treats a present \`.hold\` as HELD. If a program wave is running here, \`~/.local/bin/ccrc-api runs list\` is the only thing that can say so."
+    return 0
+  fi
   (( ${#h} <= CCRC_HOLD_MAX )) || return 0
   [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
   # AN ARCHIVE DOES NOT CLEAR A HOLD. `cmd_ws_archive` does no registry rm, and
@@ -579,7 +613,7 @@ _hook_hold_card() {
   _ct_read "$REG/$id.workdir" && wd="$CT_V"
   # THE WORKDIR IS A BYTE CHANNEL INTO A MODEL'S CONTEXT, AND THESE TWO GATES
   # ARE WHAT CLOSE IT (C1, D-1901). Do not relax either as noise. Every other value
-  # this card quotes is gated twice — `$h` by the anchored shape match AND
+  # card quotes is gated twice — `$h` by the anchored shape match AND
   # `CCRC_HOLD_MAX`, `$CT_PROJ` by `CCRC_PROJ_CLASS` AND `CCRC_PROJ_MAX`, `$id`
   # by its own class at the top of this file. This one had neither gate, and it
   # is the same kind of string: registry text that lands VERBATIM in a session's
@@ -671,13 +705,32 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # is a TAINT bound on ONE repo-controlled field — its own message says so ("an
 # unbounded repo-controlled string reached the session") — and it binds the
 # census arm alone; it stays exactly as it is. THIS is a different number for a
-# different job: the ceiling on the whole assembled card. Measured worst live
-# combination is graphify 593 + held 592 + co-tenant 176 + 2 joins = 1363, and
-# the neighbour hook on this same compact SessionStart
-# (`~/.cc-handoff/restore.sh`) caps its own additionalContext at 24576 bytes —
-# so 1800 clears everything measured live by 32% and is 7.3% of the
-# scale this event already carries.
-CARD_MAX_CHARS=1800
+# different job: the ceiling on the whole assembled card.
+#
+# ARGUED FROM THE STRUCTURAL WORST CASE, NOT THE LIVE ONE (fix wave, M5, D-1903). The
+# shipped 1800 was argued from the worst combination measured ON THIS FLEET —
+# graphify 593 + held 592 + co-tenant 176 + 2 joins = 1363, cleared by 32% —
+# and a live sample is the wrong quantity to size a bound with. What this bound
+# has to clear is the worst combination the code can PRODUCE with every GATED
+# field at its own cap. Re-measured from the shipped sentence templates:
+# graphify 718 (every optional clause present, a 12-digit node count, engine and
+# pin each at their 64-byte `head -c` cap, plus the armed-gate sentence) + §4.2
+# held case A 801 (a 127-character workdir in the subject, a 127-character hold,
+# a 40-character id) + co-tenant 247 (a 64-character project) + two one-space
+# joins = 1768. Under 1800 that is 32 characters of headroom, not 32%. And the
+# join order (graphify -> hold -> ccrc) means the clip eats the CO-TENANT
+# sentence first, mid-word, silently: the subject naming the route to the peer
+# rules is the one that vanishes, on exactly the sessions carrying a hold.
+#
+# 2400 clears 1768 by 36% and is still under 10% of the 24576 bytes the
+# neighbour hook on this same compact SessionStart (`~/.cc-handoff/restore.sh`)
+# already emits. It is a ceiling, never a budget the subjects may spend up to:
+# `GM_NODES` is ungated (see `_hook_graph_measure`, I4) and can exceed ANY
+# bound on its own, which is why the clip exists at all and why the number
+# above only has to cover the fields that ARE gated. Raising the bound is the
+# cheap answer; drop-whole-subject logic on the hot path is not, and was
+# refused.
+CARD_MAX_CHARS=2400
 # BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
 # in a prompt, so it is gated on a SHAPE rather than clipped to a length: a
 # value this refuses is UNSPEAKABLE and the card says nothing, rather than
@@ -709,7 +762,7 @@ CCRC_FRESH_S=120
 # same verb IS capped at 512 — so this is the first bound the value meets.
 # A hold that fails it is UNSPEAKABLE and the subject is silent.
 #
-# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT. `_ct_read` reads at most
+# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896). `_ct_read` reads at most
 # `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
 # been truncated and there is no way to tell from here. Refusing at 127 means
 # every value this function ever quotes was captured WHOLE. A 256 bound would

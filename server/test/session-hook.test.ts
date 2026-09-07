@@ -1471,7 +1471,7 @@ describe('the emitter: one line, clipped once', () => {
     gitTree(tree, 1);
     plantGraph(tree, { built: 'deadbee' });
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
-    expect(text.length).toBeLessThanOrEqual(1800);
+    expect(text.length).toBeLessThanOrEqual(2400);
   });
 
   it('a pathological hold cannot delete the card', () => {
@@ -1482,7 +1482,7 @@ describe('the emitter: one line, clipped once', () => {
       `program:${'x'.repeat(200_000)} wave:1/2 run:9`);
     const out = run({ hook_event_name: 'SessionStart', cwd: tree });
     const text = card(out);            // card() asserts exactly one line
-    expect(text.length).toBeLessThanOrEqual(1800);
+    expect(text.length).toBeLessThanOrEqual(2400);
     expect(text).toContain('graphify:');
   });
 
@@ -1506,7 +1506,7 @@ describe('the emitter: one line, clipped once', () => {
       + `- ${'9'.repeat(3000)} nodes · 15645 edges · 423 communities\n`);
     const out = run({ hook_event_name: 'SessionStart', cwd: tree });
     const text = card(out);            // card() asserts exactly one JSON line
-    expect(text.length).toBe(1800);    // clipped EXACTLY, not merely bounded
+    expect(text.length).toBe(2400);    // clipped EXACTLY, not merely bounded
   });
 });
 
@@ -1597,6 +1597,47 @@ describe('the co-tenant subject', () => {
     expect(r.stderr, 'the hook leaked stderr the harness will surface').toBe('');
     expect(card(r.stdout))
       .toContain('ccrc: at least 1 other supervised row names project `alpha`');
+  });
+
+  // ── I2: the bash 4.4 floor this file declares for itself ───────────────
+  // `EPOCHREALTIME` is a bash 5.0+ builtin and `_hook_epoch_ms`'s own comment
+  // says so; every other reader in the tree spells it `${EPOCHREALTIME:-}`.
+  // `_ct_probe` had one BARE `${EPOCHREALTIME%%[.,]*}`, and under `set -u` an
+  // unbound expansion does not answer wrong — it ABORTS THE SHELL, inside the
+  // probe, before the card is emitted and before the hookstate rename: no card,
+  // no state write, a non-zero exit and stderr on every SessionStart.
+  //
+  // BASH_ENV IS HOW A BASH 5 BOX IS MADE TO LOOK LIKE A 4.4 ONE. Bash reads it
+  // before running a script non-interactively, and a variable with dynamic
+  // value LOSES that value permanently once unset ("even if it is subsequently
+  // reset" — the manual's own words for RANDOM, SECONDS and this one). So the
+  // hook runs with no `EPOCHREALTIME` at all, which is exactly the 4.4 shape.
+  it('survives a box with no EPOCHREALTIME builtin — the declared 4.4 floor (I2)', () => {
+    const rc = path.join(home, 'no-epochrealtime.sh');
+    fs.writeFileSync(rc, 'unset EPOCHREALTIME\n');
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.hold'),
+      'program:account-pools wave:3/6 run:34');
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, BASH_ENV: rc,
+        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
+    });
+    expect(r.status, 'the hook must exit 0 on every path').toBe(0);
+    expect(r.stderr, 'an unbound EPOCHREALTIME leaked to real stderr').toBe('');
+    const text = card(r.stdout);
+    expect(text, 'the card died with the probe').toContain('ccrc-program:');
+    expect(text, 'a clock this box cannot read must silence the count, not the card')
+      .not.toContain('ccrc: ');
+    // The hookstate write is downstream of the probe: it is the thing an abort
+    // inside `_ct_probe` takes with it, so it is asserted here too.
+    expect(readState().state).toBe('done');
   });
 
   it('a directory at a registry path is not read', () => {
@@ -1938,6 +1979,31 @@ describe('the program subject', () => {
     expect(text).toContain('this workspace is claimed');
   });
 
+  // ── I3: spec §4.2 Case D's third shape, which shipped unimplemented ─────
+  // An empty `.hold` returns rc 0 with an empty value: it passes the length
+  // bound, fails the shape gate, and fell to SILENCE. Every other reader on
+  // this box calls that row HELD — `registry.ts`'s HOLD_NO_REASON, and
+  // `ws-rm`/`ws-reap` refusing on `-e` alone — so silence was the one answer it
+  // must not give. It needs its OWN clause: Case D's "exists but is not a
+  // readable file" would itself be false for a readable, empty file.
+  it('names a present hold that carries no reason, rather than falling silent (I3)', () => {
+    hold('');
+    const text = plain();
+    expect(text, 'a present .hold every other reader calls HELD said nothing')
+      .toContain('ccrc-program:');
+    expect(text).toContain('the hold names no program');
+    expect(text).toContain('carries no reason');
+    expect(text).toContain('ccrc-api runs list');
+    expect(text, 'an empty hold must not be narrated as a worker assignment')
+      .not.toContain('`ccrc-worker` skill');
+    expect(text, 'an empty hold is not the unreadable case')
+      .not.toContain('is not a readable file');
+  });
+
+  it('a whitespace-only hold reads as the same empty case, the way the server trims (I3)', () => {
+    hold('   \n\t \n');
+    expect(plain()).toContain('the hold names no program');
+  });
 
   it('the operator file silences it', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });

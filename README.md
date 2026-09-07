@@ -1732,13 +1732,20 @@ of 6" would have been wrong five times over. The shape gate is the sanitiser too
 own bounded form (`program:<slug> wave:N[/M][ run:R]`, capped at `CCRC_HOLD_MAX` = 127 — one under the
 128-byte read cap, so refusing at 127 means every value this subject ever quotes was captured whole and
 never a silently truncated prefix that could lose its ` run:` suffix in the cut) is unspeakable and the
-subject is silent, same as an absent hold. Four distinct sentences cover what a readable, well-shaped hold
-can mean:
+subject is silent, same as an absent hold. Five distinct sentences cover what a **present** `.hold` can
+mean — the first two are what the file's presence alone can say, the last three what its bytes say:
 
 - **Unreadable** (exists, not a readable file): *"ccrc-program: this workspace is held and the hold's
   reason could not be read — `~/.cc-sessions/<id>.hold` exists but is not a readable file. Every other
   reader on this box treats that as HELD. If a program wave is running here,
   `~/.local/bin/ccrc-api runs list` is the only thing that can say so."*
+- **Present and empty** (readable, and carrying no reason — `ccd ws-hold` refuses to write one that way, so
+  a `touch` or a hand-edit did; this is the same shape `registry.ts` calls `HOLD_NO_REASON` and renders
+  `<hold file is empty — no program named>`, and the same one `ws-rm`/`ws-reap` refuse on without reading a
+  byte): *"ccrc-program: this workspace is held and the hold names no program — `~/.cc-sessions/<id>.hold`
+  is present, readable, and carries no reason. … Every other reader on this box treats a present `.hold` as
+  HELD."* It gets its own sentence rather than the unreadable one, whose "is not a readable file" would
+  itself be false here, and rather than the silence it fell to before.
 - **Archived but still held** (`cmd_ws_archive` does no registry `rm`, and the failed+archive close path
   releases nothing, so the bytes outlive the workspace): *"ccrc-program: this workspace is stamped ARCHIVED
   and still carries a claim — `~/.cc-sessions/<id>.hold` reads `<h>`. An archive does not clear a hold, so
@@ -1774,12 +1781,21 @@ carries no leading or trailing space) and calls `_hook_emit_context` exactly onc
 `additionalContext` envelope on the same event makes the harness's stdout parser throw — the caller returns
 `{answer:{}}`, deleting every card fleet-wide, graphify's included, with a warning that blames a quoting
 bug that does not exist. `_hook_emit_context` is also the one site that clips the assembled total:
-`CARD_MAX_CHARS` (1800) is a different bound for a different job than the `<600` assertion elsewhere in the
+`CARD_MAX_CHARS` (2400) is a different bound for a different job than the `<600` assertion elsewhere in the
 suite, which taints one repo-controlled field alone (the graph sweep's refusal reason) and stays exactly as
 it is; `CARD_MAX_CHARS` is the ceiling on graphify + hold + co-tenant + their two one-space joins together.
-Measured worst live combination is 593 + 592 + 176 + 2 = 1363 — 1800 clears that by 32% and is 7.3% of the
-neighboring `~/.cc-handoff/restore.sh` hook's own 24576-byte `additionalContext` cap on this same compact
-event. It is also what stands between an operator-controlled field and `jq`'s own `MAX_ARG_STRLEN`
+It is argued from the **structural** worst case, not the live one: the worst combination measured on this
+fleet is 593 + 592 + 176 + 2 = 1363, but the worst the code can produce with every gated field at its own
+cap is graphify 718 (a 12-digit node count, engine and pin each at their 64-byte `head -c` cap, the armed-
+gate sentence present) + held case A 801 (a 127-character workdir, a 127-character hold, a 40-character id)
++ co-tenant 247 (a 64-character project) + two joins = **1768**. The shipped 1800 cleared that by 32
+characters, not by the 32% its own comment claimed of the live figure — and because the join order is
+graphify → hold → ccrc, the overflow ate the **co-tenant** sentence mid-word and silently, on exactly the
+sessions that carry a hold. 2400 clears 1768 by 36% and is still under 10% of the neighboring
+`~/.cc-handoff/restore.sh` hook's own 24576-byte `additionalContext` cap on this same compact event. It is
+a ceiling and never a budget to spend up to: the node count is ungated (`grep -oE '[0-9]+ nodes'` is
+unbounded repetition inside a 4096-byte head) and can exceed any bound on its own, which is why the clip
+exists at all and why the number above only has to cover the fields that **are** gated. It is also what stands between an operator-controlled field and `jq`'s own `MAX_ARG_STRLEN`
 (measured 131072 on the fleet host): past it the `jq -cn` exec fails, `|| return 0` swallows it, and the
 hook prints nothing at all — deleting the graphify card too.
 
