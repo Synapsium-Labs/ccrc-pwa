@@ -667,6 +667,32 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   the same red the wave 2a close walked into from the other side (the ledger three commits behind
   main), and it is now a standing pre-commit check, not a lesson.
 
+- **Inbound from another program: PR #61 changes what one wave 2b assertion MEANS (2026-09-07 18:50
+  UTC, peer mail from `claude-OpenClawHetzner`, reply 263).** #61 ("an enabled non-home-able lane
+  rejoins the auto-swap rotation") widens `_default_pool` from `CCRC_HOME_ABLE` alone to that plus
+  every rostered non-home-able account passing `_account_ok`. Re-measured rather than taken: `gpt` is
+  the ONLY `homeAble: false` account in `DEFAULT_TEST_ROSTER`, and `claude-d` — the other untagged
+  one — is `homeAble: true` and therefore already in `CCRC_HOME_ABLE`, so the widening adds nothing
+  for it. **The second arm I went looking for does not exist and the peer's scoping to `gpt` was
+  right.** No fixture collision either: none of wave 2b's three new suites references
+  `leastLoaded.ts`, which #61 also edits.
+  **The peer called it a one-line wording fix; it is not, and that is the finding.**
+  `ccd-auto-swap-pool.test.ts:139` asserts `_strand_why` never names `gpt`, labelled "gpt is not
+  home-able: it was never a candidate". Today that holds BY HOME-ABILITY and would hold with `gpt`
+  installed. After #61 it holds only because the harness never installs it — `_strand_why` walks
+  `_pool_for`, and an installed non-home-able lane is in the widened default pool. So the case would
+  pass on an incidental property of the fixture rather than the property its label names: **the exact
+  class this wave minted seven numbers for.** Re-labelling it to "not installed in this harness"
+  records the incidental reason accurately and leaves the guard measuring nothing.
+  **Ruling owed, and it is #61's to make: may `_strand_why` name an installed overflow lane?** Yes →
+  the wave 2b case installs `gpt` and asserts it IS named, and spec §5.8's strand vocabulary gains a
+  line. No → `_strand_why` needs an explicit home-able filter and the case installs `gpt` and keeps
+  asserting absence, which is the only shape that measures its own claim in BOTH worlds.
+  **Nothing changes on `ws/clear-meadow` yet, deliberately.** #61 is OPEN and `origin/main` is still
+  `58ef97b6`, so that assertion is TRUE today; rewriting it on an unmerged PR's premise would put a
+  false claim into a shipped test, which is the defect this wave has spent the day paying for.
+  **Whoever rebases SECOND owns it** — merge shas to be exchanged either way.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
