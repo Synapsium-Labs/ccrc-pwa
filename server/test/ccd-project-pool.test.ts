@@ -997,20 +997,30 @@ describe('the marker namespace cannot collide with a session id', () => {
   });
 });
 
-describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (Fix round 2, Finding 5)', () => {
-  // MEASUREMENT, not a fix — no code changes ride with this describe. The
-  // `echo pools-v1` comment argues that a wave-3 server meeting a 2a-only
-  // fleet box gets a LOUD failure rather than a silent `200 {ok:true}`,
-  // because `--cross-pool` is specified LEADING, before the positionals: on
-  // a `ccd` that does not know the flag it lands in a POSITIONAL slot some
-  // existing validation refuses (which check fires depends on the verb and
-  // is measured per case below — see Finding 8's correction on `swap`), and
-  // the verb DIES. Wave 3 will pin that its own builders EMIT a leading
-  // flag — a different claim from THIS one, that today's `ccd` REFUSES a
-  // leading one, and only this second claim makes advertising the token
-  // early actually safe. Nothing here asserts what the flag DOES (there is
-  // no `--cross-pool` behaviour yet); each case only asserts a nonzero exit,
-  // which is the entire safety property this early token depends on.
+describe('pools-v1 is safe to advertise before --cross-pool lands on every verb (D-1798)', () => {
+  // MEASUREMENT, not a fix on `swap`'s two cases below — wave 2b (Task 5)
+  // landed `--cross-pool` there, so their PREMISE changed underneath them:
+  // this used to be "an old `ccd` that does not know the flag refuses it by
+  // accident, because it drifts into a positional slot some existing lock
+  // rejects." That is no longer what `swap` does. `swap` now recognises
+  // `--cross-pool` and strips it BEFORE the positional parse (see its own
+  // header comment), so on `swap` the flag never reaches a positional slot
+  // at all — the two cases below still exit nonzero, but now because the
+  // REAL positionals underneath (`id`/`target`, once the flag is gone) are
+  // what the fixture happens to hand it: a bogus wrapper name, or a session
+  // id with no registry row. That is D-1798's window closing FOR `swap`: the
+  // capability token `pools-v1` promised a wave-3 server could build
+  // `--cross-pool` against this fleet box and get a real decision rather
+  // than a silently-ignored flag, and that promise is now literally true
+  // here rather than true by an accident of argument parsing.
+  //
+  // `start` and `enable` have NOT changed — Task 6 owes them — so their two
+  // cases below still measure the OLD accident: the flag lands in a
+  // positional slot some pre-existing lock happens to refuse. Nothing here
+  // asserts what `--cross-pool` DOES on those two verbs (there is no
+  // `--cross-pool` behaviour there yet); each case only asserts a nonzero
+  // exit, which is the entire safety property this early token depends on
+  // until Task 6 lands.
   //
   // THREE OF SPEC §5.5.5's FOUR VERBS, and the fourth is unpinned on purpose.
   // That section names `cmd_swap`, `cmd_start`, `cmd_enable` and `cmd_prefer`;
@@ -1022,33 +1032,30 @@ describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (
   // whitelist entry either (`agent/src/whitelist.ts`'s `ccd:` list). It is a
   // shell-only verb, and the safety property this describe measures is about
   // what crosses the wire.
-  it('a leading --cross-pool on `swap` dies loudly — but not because `_is_valid_wrapper` sees the flag itself', () => {
-    // Corrected in fix round 3 (Finding 8): the flag lands in the `id` slot
-    // (the `*)` arm collects it as the first positional) and `id` is never
-    // passed to `_is_valid_wrapper` at all — only checked against
-    // `$REG/$id.uuid`'s existence, further down. What actually refuses HERE
-    // is the SECOND positional, shifted one slot right by the flag's
-    // presence: `target` becomes the string meant to be the session id
-    // ("demo"), and THAT fails `_is_valid_wrapper` (a session id string is
-    // not a wrapper name).
+  it('a leading --cross-pool on `swap` dies loudly — stripped by the flag loop, not caught by `_is_valid_wrapper` seeing the literal', () => {
+    // MEASURED after Task 5 landed the strip (was: "the flag lands in the
+    // `id` slot… what actually refuses HERE is the SECOND positional,
+    // shifted one slot right"). `--cross-pool` is now stripped before the
+    // positional parse, so `id`="demo" and `target`="pool-a" — the REAL
+    // positionals, no longer shifted by the flag's presence. `target`
+    // ("pool-a") is what `_is_valid_wrapper` refuses, exactly as it would
+    // for `ccd swap demo pool-a` with no flag at all.
     const r = shFail('cmd_swap --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain("unknown wrapper 'demo'");
+    expect(r.stderr).toContain("unknown wrapper 'pool-a'");
   });
 
-  it('a leading --cross-pool on `swap` still dies when the shifted target happens to be a real wrapper — a different lock catches it', () => {
-    // The realistic skew, added per fix round 3 (Finding 8): a session id
-    // that COLLIDES with a roster wrapper id (`claude-a`/`claude-b`, both
-    // real fixture wrappers). Here `_is_valid_wrapper "$target"` PASSES
-    // ("claude-a" is a genuine wrapper) — the refusal instead comes from
-    // the FIRST lock further down: `[[ -f "$REG/$id.uuid" ]] || die "no
-    // registry for '$id'"`, where `$id` is still the literal flag
-    // `--cross-pool`. Still nonzero, but by a DIFFERENT lock than the case
-    // above — the pin covers both paths, not only the one where the target
-    // happens to be invalid.
+  it('a leading --cross-pool on `swap` still dies when both positionals happen to be real wrappers — the registry lock catches it', () => {
+    // MEASURED after Task 5 landed the strip (was: "$id is still the literal
+    // flag `--cross-pool`… the refusal comes from `no registry for
+    // '--cross-pool'`"). Stripped now, so `id`="claude-a" and
+    // `target`="claude-b" — both genuine roster wrappers, so
+    // `_is_valid_wrapper` PASSES; the refusal instead comes from the next
+    // lock down, `[[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"`,
+    // where `$id` is the real positional "claude-a", not the flag.
     const r = shFail('cmd_swap --cross-pool claude-a claude-b');
     expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain("no registry for '--cross-pool'");
+    expect(r.stderr).toContain("no registry for 'claude-a'");
   });
 
   it('a leading --cross-pool on `start` dies loudly — `$# -ge 2` makes `wrapper` the flag itself, `_is_valid_wrapper` refuses it', () => {

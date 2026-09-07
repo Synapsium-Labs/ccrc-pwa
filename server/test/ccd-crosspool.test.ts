@@ -215,3 +215,127 @@ describe('an undecidable or unreadable record decides nothing, or lies', () => {
       .not.toContain('project pool is now named pool-a');
   });
 });
+
+/** The self-swap fixture: `tmux display-message` answers with this session's
+ *  own name and TMUX is set, so `cmd_swap` takes the detach arm. The SEAM is
+ *  shadowed rather than the tool — `_svc_run_detached` is what ccd calls, and
+ *  only its Linux arm is systemd-run. */
+const SELF = `
+  systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
+  launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
+  sleep() { :; };
+  tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
+    echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+  _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };
+`;
+
+describe('cmd_swap refuses a crossing that was not asked for', () => {
+  it('dies BEFORE the detach arm — synchronously, with nothing dispatched', () => {
+    // The guard slot matters: below the detach arm this refusal would happen in
+    // a process nobody is waiting for, and the PWA's 502 would carry nothing.
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    const r = shFail(`${SELF} cmd_swap ${ID} claude-b`, { TMUX: '/tmp/x,1,0' });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(
+      "pool-mismatch: claude-b is in pool 'pool-b' and project 'demo' is in pool 'pool-a'");
+    expect(r.stderr).toContain(`ccd swap --cross-pool ${ID} claude-b`);
+    expect(h.calls().join('\n'), 'the detach arm was never reached').not.toContain('detached');
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+
+  it('`--force` is NOT the override — it means transcript loss and nothing else', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    const r = shFail(`${SWAP_STUBS} cmd_swap --force ${ID} claude-b`, { TMUX: '' });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('pool-mismatch: claude-b is in pool');
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+
+  it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'Pool Orate');
+    const r = shFail(`${SWAP_STUBS} cmd_swap --cross-pool ${ID} claude-b`, { TMUX: '' });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(
+      `pool tag for demo is malformed: ${h.home}/.cc-sessions/pools/demo`);
+    expect(r.stderr).toContain('nothing was touched');
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+});
+
+describe('cmd_swap crosses on purpose', () => {
+  it('writes the marker, ONE `cross-pool` line and `dec.crosspool 1`', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    expect(h.sh(`${SWAP_STUBS} cmd_swap --cross-pool ${ID} claude-b`, { TMUX: '' }))
+      .toContain(`swapped ${ID}: claude -> claude-b`);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    expect(h.reg(ID, 'crosspool')).toMatch(/^\d{10} pool-a claude-b$/);
+    expect(logLines('cross-pool')).toHaveLength(1);
+    expect(swapLog()).toContain(
+      `cross-pool ${ID}: claude -> claude-b [project=demo pool=pool-a target-pool=pool-b]`);
+    const rows = eventsOf(h.home, 'swap');
+    expect(rows).toHaveLength(1);
+    expect(decOf(rows[0]!)['crosspool']).toBe('1');
+    expect(measOf(rows[0]!)).toMatchObject({ from: 'claude', wrapper: 'claude-b' });
+  });
+
+  it('writes NO marker and no crossing flag for an ordinary in-pool swap', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    h.sh(`${SWAP_STUBS} cmd_swap ${ID} claude-a`, { TMUX: '' });
+    expect(h.reg(ID, 'crosspool')).toBeNull();
+    expect(logLines('cross-pool')).toHaveLength(0);
+    expect(decOf(eventsOf(h.home, 'swap')[0]!)['crosspool']).toBeUndefined();
+  });
+
+  it('the detached retry keeps the operator`s decision — the flag rides the unit argv', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
+    h.sh(`${SELF} cmd_swap --cross-pool ${ID} claude-b`, { TMUX: '/tmp/x,1,0' });
+    const argv = h.calls().filter((c) => c.startsWith('detached ')).join('\n');
+    expect(argv, 'the detach really happened').toContain(`swap`);
+    expect(argv).toContain('--cross-pool');
+    // Logged ONCE, at the success tail: this arm re-execs and runs the guard a
+    // second time, so a line written at the guard would be written twice.
+    expect(logLines('cross-pool')).toHaveLength(0);
+  });
+
+  it('a landed swap CLEARS a standing strand', () => {
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
+    h.sh(`_reg_set ${ID} stranded "1700000000 no candidate"`);
+    h.sh(`${SWAP_STUBS} cmd_swap ${ID} claude-a`, { TMUX: '' });
+    expect(h.reg(ID, 'stranded')).toBeNull();
+    expect(logLines('unstranded')).toHaveLength(1);
+  });
+});
+
+describe('the deploy window (§5.8.4)', () => {
+  it('an old supervisor`s pool-blind choice is refused LOUDLY inside the unit', () => {
+    // The pre-deploy inode is modelled by stubbing `_swap_target` to the
+    // pool-blind answer it used to give; `_dispatch_swap` runs the NEW
+    // `cmd_swap` in-process with the environment the real one sets.
+    const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
+    tagPool('demo', 'pool-a'); plantNotify();
+    const OLD_SUPERVISOR = `
+      systemctl() { :; }; launchctl() { :; }; sleep() { :; };
+      tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+      _swap_target() { echo claude-b; };
+      # A SUBSHELL, because that is what the real one is: _dispatch_swap runs
+      # cmd_swap in a transient systemd unit, and cmd_swap's guard reaches
+      # \`die\` (echo + exit 1). In-process that would exit the whole test shell.
+      _dispatch_swap() { ( CCD_SWAP_AUTO=1 cmd_swap "$1" "$2" ) >/dev/null 2>&1 || true; };`;
+    h.sh(`${OLD_SUPERVISOR} _auto_swap_check ${ID}`);
+    expect(h.reg(ID, 'wrapper'), 'nothing moved').toBe('claude');
+    expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
+    expect(noticeLines()).toHaveLength(1);
+    expect(noticeLines()[0]).toContain(`cc swap STRANDED: ${ID} is blocked on claude`);
+    expect(h.reg(ID, 'lastswap'),
+      'the stamp stays: retracting it would re-dispatch the same choice every 5 s')
+      .toMatch(/^\d{10}$/);
+  });
+
+  it('_dispatch_swap really sets CCD_SWAP_AUTO in the unit it launches', () => {
+    seedRow();
+    h.sh('_svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };'
+      + ` _dispatch_swap ${ID} claude-a`);
+    const argv = h.calls().filter((c) => c.startsWith('detached ')).join('\n');
+    expect(argv).toContain('CCD_SWAP_AUTO=1');
+  });
+});
