@@ -281,7 +281,7 @@ Add to `server/test/session-hook.test.ts`, in a new describe:
 
 ```ts
 describe('the emitter: one line, clipped once', () => {
-  it('clips the assembled card at the emitter, on every arm', () => {
+  it('clips the assembled card at the emitter on the armed-tree arm', () => {
     const tree = path.join(home, 'tree');
     gitTree(tree, 1);
     plantGraph(tree, { built: 'deadbee' });
@@ -1070,7 +1070,14 @@ demonstrative rather than let one string carry two referents.
 
 A hold that fails the bounded shape is unspeakable and the subject is silent —
 which is what closes the ANSI, newline and oversize hazards structurally, since
-neither write door caps the value while --actor on the same verb is capped."
+neither write door caps the value while --actor on the same verb is capped.
+
+CARRIES TASK 3'S DEFERRED MUTATION. CARD_MAX_CHARS shipped in 23261700 with no
+test that reddens when it is deleted, because nothing read a hold yet. The
+pathological-hold fixture added here is that test: deleting the clip from
+_hook_emit_context now reds `a pathological hold cannot delete the card`. Until
+this commit the clip was an unmeasured guard, and that fact lived only in a
+session artifact — this is where it enters git."
 ```
 
 ---
