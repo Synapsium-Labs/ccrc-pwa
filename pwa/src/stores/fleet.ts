@@ -126,10 +126,14 @@ export interface FleetState {
   /** Task 11 (spec §10 "The frame"): one additive frame,
    *  `{type:'automations', automations: AutomationSummary[]}`, the SAME
    *  full-snapshot shape `sessions`/`roster` already take — unlike `runs`,
-   *  which is active-only by construction, this one carries every
-   *  automation regardless of state (there is no server-side filter on the
-   *  emitter), so `AutomationsScreen` never needs a second cold source for
-   *  a "finished" half the way `RunsScreen` does. Default `[]`, same
+   *  which is active-only by construction, this one carries every automation
+   *  the store's DEFAULT FILTER carries, which is every state except
+   *  `retired` (`automations({})` appends `state != 'retired'`, spec §9). So
+   *  `AutomationsScreen` needs no second source for a "finished" half the way
+   *  `RunsScreen` does, but it DOES read retired rows over HTTP for its own
+   *  retired chip — this comment asserted "regardless of state ... no
+   *  server-side filter on the emitter" for one wave, and that was false in
+   *  both halves. Default `[]`, same
    *  "unarrived roster" stance every other frame-backed slice in this store
    *  takes. */
   automations: AutomationSummary[];

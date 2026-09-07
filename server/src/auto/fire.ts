@@ -360,6 +360,16 @@ export type FireOutcome =
       readonly detail: string; readonly facts: RunFacts }
   | { readonly settle: 'failed'; readonly refusal: Extract<AutomationRefusal, 'prompt-refused'>;
       readonly detail: string; readonly facts: RunFacts }
+  /** THE STORE REFUSED THE SETTLE, so this act's outcome is not the record
+   *  that stands. The live case is a run pass 1 already closed `lost` when
+   *  its HARD lease lapsed mid-act (the soft renewal never moves that bound);
+   *  `unknown-run` is the ring having evicted the row. Terminal — the act is
+   *  over either way — but distinct from `ok`, because a `✓` push and a
+   *  `close ok` step would both be claims about a run whose durable outcome
+   *  says otherwise. `standing` is the outcome that DOES stand, or `null`
+   *  when the row is gone. */
+  | { readonly settle: 'superseded'; readonly refused: 'unknown-run' | 'already-settled';
+      readonly standing: AutomationOutcome | null; readonly facts: RunFacts }
   /** The prompt ladder is live: leave the run `running`, renew the SOFT
    *  lease, come back. Writes nothing terminal. */
   | { readonly pending: 'prompt'; readonly facts: RunFacts;
@@ -436,6 +446,38 @@ export async function deliverPrompt(
   return { retry: true, attempts, nextAttemptAt: nowMs + promptBackoffMs(attempts), error: res.error, detail };
 }
 
+/**
+ * THE SETTLE, WITH THE STORE'S OWN ANSWER READ. `settleAutomationRun`
+ * returns a three-arm union — the port declares that distinction, and the
+ * store's neighbouring docstring says why a `void` would be a defect: "the
+ * caller must stop renewing, not believe it still holds one". Every call
+ * site here used to discard it, so a refused settle wrote `close ok` onto a
+ * run someone else had already closed, and reported `ok` upward.
+ *
+ * Writes the `close` step ITSELF, because the step's own `ok` flag and detail
+ * are the part that was lying: on a refusal it says so, and names the outcome
+ * that actually stands.
+ */
+function closeRun(
+  deps: FireDeps, runId: number, settlement: RunSettlement, nowMs: number,
+  ok: boolean, detail: string,
+): { readonly applied: true }
+  | { readonly refused: 'unknown-run' | 'already-settled'; readonly standing: AutomationOutcome | null } {
+  const res = deps.coord.settleAutomationRun({ runId, settlement, now: nowMs });
+  if ('refused' in res) {
+    const standing = 'outcome' in res ? res.outcome : null;
+    deps.coord.appendRunEvent(
+      runId, 'close', false,
+      `settle refused:${res.refused}` +
+      (standing === null ? ' — this run is gone' : ` — the record that stands is ${standing}`),
+      nowMs,
+    );
+    return { refused: res.refused, standing };
+  }
+  deps.coord.appendRunEvent(runId, 'close', ok, detail, nowMs);
+  return { applied: true };
+}
+
 /** The un-bound refusal shapes share one shape: an `identify` step naming
  *  what happened, the spawn fact recorded UNBOUND (`identity: {bound:
  *  false}` — never silently dropped, spec §6's orphan-manufacture rule),
@@ -446,8 +488,12 @@ function refuseSpawn(
 ): FireOutcome {
   deps.coord.markAutomationSpawn({ runId, spawnRc, identity: { bound: false } });
   deps.coord.appendRunEvent(runId, 'identify', false, detail, nowMs);
-  deps.coord.settleAutomationRun({ runId, settlement: { outcome: 'refused', refusal }, now: nowMs });
-  deps.coord.appendRunEvent(runId, 'close', false, `settled refused:${refusal}`, nowMs);
+  const closed = closeRun(
+    deps, runId, { outcome: 'refused', refusal }, nowMs, false, `settled refused:${refusal}`,
+  );
+  if ('refused' in closed) {
+    return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts: NO_RUN_FACTS };
+  }
   return { settle: 'refused', refusal, detail, facts: NO_RUN_FACTS };
 }
 
@@ -475,10 +521,13 @@ export async function fireAutomation(
   const verdict = await checkPostClaim(deps, a, nowMs);
   if ('refused' in verdict) {
     deps.coord.appendRunEvent(runId, 'precheck', false, verdict.detail, nowMs);
-    deps.coord.settleAutomationRun({
-      runId, settlement: { outcome: 'refused', refusal: verdict.refused }, now: nowMs,
-    });
-    deps.coord.appendRunEvent(runId, 'close', false, `settled refused:${verdict.refused}`, nowMs);
+    const closed = closeRun(
+      deps, runId, { outcome: 'refused', refusal: verdict.refused }, nowMs,
+      false, `settled refused:${verdict.refused}`,
+    );
+    if ('refused' in closed) {
+      return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts: NO_RUN_FACTS };
+    }
     return { settle: 'refused', refusal: verdict.refused, detail: verdict.detail, facts: NO_RUN_FACTS };
   }
   const { homeScore, projectedWrapper } = verdict;
@@ -582,9 +631,14 @@ export async function fireAutomation(
   );
 
   if ('landed' in attempt) {
-    // Step 10: close.
-    deps.coord.settleAutomationRun({ runId, settlement: { outcome: 'ok' }, now: nowMs });
-    deps.coord.appendRunEvent(runId, 'close', true, 'settled ok', nowMs);
+    // Step 10: close — and READ the store's answer. An act that outlived its
+    // HARD lease was settled `lost` by pass 1 while it ran, and reporting
+    // `ok` over that is a `✓` on the operator's phone for a run whose own row
+    // says otherwise.
+    const closed = closeRun(deps, runId, { outcome: 'ok' }, nowMs, true, 'settled ok');
+    if ('refused' in closed) {
+      return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts };
+    }
     return { settle: 'ok', facts };
   }
   if ('retry' in attempt) {
@@ -609,9 +663,12 @@ export async function fireAutomation(
   // `promptLadder` over the run's own accumulated `prompt` steps. Spec §6's
   // own sentence: "The operator gets a live session with no prompt in it,
   // which is strictly better than a lie" — `sessionId` stays SET.
-  deps.coord.settleAutomationRun({
-    runId, settlement: { outcome: 'failed', refusal: 'prompt-refused' }, now: nowMs,
-  });
-  deps.coord.appendRunEvent(runId, 'close', false, 'settled failed:prompt-refused', nowMs);
+  const closed = closeRun(
+    deps, runId, { outcome: 'failed', refusal: 'prompt-refused' }, nowMs,
+    false, 'settled failed:prompt-refused',
+  );
+  if ('refused' in closed) {
+    return { settle: 'superseded', refused: closed.refused, standing: closed.standing, facts };
+  }
   return { settle: 'failed', refusal: 'prompt-refused', detail: attempt.detail, facts };
 }

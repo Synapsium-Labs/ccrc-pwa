@@ -1184,10 +1184,16 @@ export class FleetWatcher {
    *  socket rather than the one bad read. Skipping a frame is the honest
    *  degrade — the next changed measurement re-broadcasts to everyone.
    *
-   *  The list is a FULL snapshot of every automation regardless of state,
-   *  unlike `runs`' active-only frame, so there is no active/finished split
-   *  for a client to reconcile. Run history is deliberately NOT here (spec
-   *  §10) — it is a cold read, because a frame carrying every run of every
+   *  The list is a FULL snapshot of every automation the DEFAULT FILTER
+   *  carries, unlike `runs`' active-only frame, so there is no
+   *  active/finished split for a client to reconcile. `automations({})` is a
+   *  filter, not the absence of one: its absent-`state` branch appends
+   *  `state != 'retired'` (spec §9, "a retired automation leaves the default
+   *  list"), so a retired row rides no frame and the PWA's retired chip asks
+   *  for those by name over HTTP. This docstring claimed "regardless of
+   *  state" for one wave, which left that chip filtering a list that could
+   *  never contain a match. Run history is deliberately NOT here (spec §10)
+   *  — it is a cold read, because a frame carrying every run of every
    *  automation would grow without bound on the wire. */
   emitAutomations(): void {
     const coord = this.deps.coord;
@@ -2578,6 +2584,19 @@ export class FleetWatcher {
         // lapses (pass 1, above).
         if ('pending' in outcome) return;
         this.automationsInFlight.delete(runId);
+        if (outcome.settle === 'superseded') {
+          // The store REFUSED this act's settle, so the record that stands is
+          // not this act's — pass 1 closed the run `lost` when its hard lease
+          // lapsed mid-act, or the ring evicted the row. The guard clears
+          // (the act is over), and nothing is claimed on the operator's
+          // behalf: a `✓ automation` push here would contradict the run's own
+          // outcome, which is what discarding the store's answer used to do.
+          console.warn(
+            `ccrc-server: automation ${row.id} run ${runId} finished but its settle was refused ` +
+            `(${outcome.refused}${outcome.standing === null ? '' : `, the record that stands is ${outcome.standing}`}) ` +
+            '— no notification raised');
+          return;
+        }
         // Only a run that produced a session notifies (spec §10 "Notifications"
         // — `NotifyEvent.sessionId` is non-nullable and gains no seventh kind;
         // `refused`/`failed` carry no session id to raise one with).

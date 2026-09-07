@@ -675,6 +675,79 @@ describe('FleetWatcher.sweepAutomations — the controller ruling: /run only cla
   });
 });
 
+describe('a settle the store refused is not a settle', () => {
+  it('an act whose run was lapsed `lost` mid-flight closes ok:false and raises nothing', async () => {
+    // `settleAutomationRun` answers a three-arm union — the port declares the
+    // distinction — and every call site discarded it, so a settle the store
+    // REFUSED was indistinguishable from one it applied. The live case is not
+    // exotic: an act that outlives `AUTOMATION_LEASE_HARD_MS` is settled
+    // `lost` by pass 1 (the soft renewal deliberately never moves the hard
+    // bound), and when the act then finishes it appends `close ok "settled
+    // ok"` onto a row whose own outcome says `lost`, reports `settle:'ok'` to
+    // the sweep, and pushes `✓ automation › <name>` to the operator's phone.
+    // The trail IS the log (spec §6) and it contradicted itself.
+    const home = mkTmp('ccrc-auto-superseded-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const sessionId = `${PROJECT}-auto-quiet-basin`;
+    let openGate = (): void => { /* replaced before anything can await it */ };
+    const gate = new Promise<void>((resolve) => { openGate = () => resolve(); });
+    let seeded = false;
+    const run: Runner = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === 'ws-add') {
+        await gate;
+        if (!seeded) { seedRow(home, sessionId); seeded = true; }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'capture-pane') {
+        // empty -> echoed -> empty, so the prompt LANDS and the act reaches
+        // its `ok` settle: the point is that the store refuses it.
+        const p = ['scrollback\n❯ \n', 'scrollback\n❯ go\n', 'scrollback\n❯ \n'][Math.min(calls.filter((c) => c.includes('capture-pane')).length - 1, 2)]!;
+        return { code: 0, stdout: p, stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const log = new NotifyLog(path.join(home, 'notify.json'));
+    await log.load();
+    const deps: Deps = { ...testDeps(home, run), coord, notifyLog: log };
+    const w = new FleetWatcher(deps, new Bus(), 2000);
+    try {
+      await w.tick();
+      const id = makeArmed(coord, NOW, NOW);
+      await w.sweepAutomations();
+      await vi.waitFor(() => {
+        expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
+      });
+      const runId = coord.automation(id)!.leaseRunId!;
+      expect(runId, 'the act is in flight, holding the lease').not.toBeNull();
+
+      // Someone else closes this run while the act is still inside `ws-add`:
+      // the hard lease lapses, which is pass 1's own job.
+      coord.db.prepare('UPDATE automations SET leaseHardUntil = ? WHERE id = ?').run(NOW - 1, id);
+      coord.lapseAutomationRuns(NOW);
+      expect(coord.automationRun(runId)!.outcome, 'the record that now stands').toBe('lost');
+      const seqBefore = log.seq;
+
+      openGate();
+      await vi.waitFor(() => {
+        const close = coord.automationRunEvents(runId).find((e) => e.step === 'close');
+        expect(close, 'the act finished and wrote its close step').toBeDefined();
+      });
+      const close = coord.automationRunEvents(runId).find((e) => e.step === 'close')!;
+      expect(close.ok, 'a settle the store refused must not be written as a clean close').toBe(false);
+      expect(close.detail, 'and it must name what actually stands').toContain('already-settled');
+      expect(coord.automationRun(runId)!.outcome, 'the durable outcome is untouched').toBe('lost');
+      expect(log.seq, 'and no ✓ notification is raised for an act whose record is not its own')
+        .toBe(seqBefore);
+    } finally {
+      openGate();
+      w.stop();
+    }
+  });
+});
+
 describe('FleetWatcher.sweepAutomations — NotifyEvent (kind:\'run\'), only when a session was created', () => {
   it('ok WITH a sessionId raises exactly one NotifyEvent', async () => {
     const { w, coord, log } = await rig();

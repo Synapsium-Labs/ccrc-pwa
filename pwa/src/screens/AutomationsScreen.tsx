@@ -8,10 +8,13 @@
 // sentences — an empty-state sentence is a positive claim, and "No
 // automations yet" is not one a failed read has standing to make. Same
 // idiom `RunsScreen.tsx` already carries for its own two sources; this
-// screen has only one list (the `{type:'automations'}` frame is a FULL
-// snapshot, unlike `runs`'s active-only frame — spec §10 "Run history is
-// NOT on the frame", but every automation regardless of state rides it), so
-// there is no active/finished split to reconcile.
+// screen has one live list (the `{type:'automations'}` frame is a full
+// snapshot of the store's DEFAULT filter, unlike `runs`'s active-only frame
+// — spec §10 "Run history is NOT on the frame"), so there is no
+// active/finished split to reconcile. The one state the frame does NOT carry
+// is `retired`, which the default filter drops by design (spec §9); the
+// retired chip therefore has its own server-side read and its own read
+// state, a few lines down.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -41,7 +44,9 @@ import '../auto/auto.css';
  *  forever, on the one path — the shipping default — no test exercised
  *  before this file's own fixture pinned it (`fetch-loop` in
  *  `automations.test.tsx`). */
-const loadAutomationsDefault = (): Promise<{ automations: AutomationSummary[] }> => api.automations();
+const loadAutomationsDefault = (
+  filter?: { state?: AutomationState },
+): Promise<{ automations: AutomationSummary[] }> => api.automations(filter);
 
 const stateFilters: readonly ('all' | AutomationState)[] = ['all', 'armed', 'paused', 'retired'];
 const outcomeFilters: readonly ('all' | AutomationLastFilter)[] = ['all', 'ok', 'failed', 'never-ran'];
@@ -228,7 +233,7 @@ function AutomationRow({
 
 export interface AutomationsScreenProps {
   store?: FleetStore;
-  loadAutomations?: () => Promise<{ automations: AutomationSummary[] }>;
+  loadAutomations?: (filter?: { state?: AutomationState }) => Promise<{ automations: AutomationSummary[] }>;
   getAutomation?: typeof api.automation;
   armAutomation?: typeof api.armAutomation;
   runAutomation?: typeof api.runAutomation;
@@ -248,6 +253,22 @@ export function AutomationsScreen({
   const conn = store((s) => s.conn);
   const [cold, setCold] = useState<AutomationSummary[] | null>(null);
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
+
+  // RETIRED IS A SERVER-SIDE READ, NOT A CLIENT-SIDE FILTER. The store's
+  // default filter appends `state != 'retired'` — deliberately, spec §9 ("a
+  // retired automation leaves the default list") — and BOTH feeds of the
+  // live list take that default: the `{type:'automations'}` frame and the
+  // param-less cold read. A chip that only filtered `list` could therefore
+  // never match a row, so it rendered "No automations match these filters."
+  // over a database that held them, and because this list's row is the only
+  // door to `api.automation(id)` (there is no `/automations/:id` route), a
+  // retired automation's run history had no way in from a phone at all —
+  // against §9's other half, that "what did that thing do before I removed
+  // it?" stays answerable. Its own list and its own read state, because a
+  // failed chip-scoped read may not borrow the live list's emptiness: an
+  // empty-state sentence is a positive claim (this file's first rule).
+  const [retired, setRetired] = useState<AutomationSummary[] | null>(null);
+  const [retiredState, setRetiredState] = useState<'loading' | 'ok' | 'error'>('loading');
 
   const [stateFilter, setStateFilter] = useState<'all' | AutomationState>('all');
   const [outcomeFilter, setOutcomeFilter] = useState<'all' | AutomationLastFilter>('all');
@@ -290,15 +311,35 @@ export function AutomationsScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store]);
 
+  // Keyed on the CHIP, not on the loader's identity — `loadRef` is what keeps
+  // "once per selection" true regardless of the caller's identity discipline,
+  // the same fix the cold read above carries.
+  useEffect(() => {
+    if (stateFilter !== 'retired') return;
+    setRetiredState('loading');
+    loadRef.current({ state: 'retired' })
+      .then((r) => { if (aliveRef.current) { setRetired(r.automations); setRetiredState('ok'); } })
+      .catch(() => { if (aliveRef.current) setRetiredState('error'); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateFilter]);
+
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
 
-  const source = automationsFrameSeen ? live : cold;
-  const noSignalYet = !automationsFrameSeen && coldState === 'loading';
-  const readFailed = !automationsFrameSeen && coldState === 'error';
+  const showsRetired = stateFilter === 'retired';
+  const source = showsRetired ? retired : automationsFrameSeen ? live : cold;
+  const noSignalYet = showsRetired
+    ? retiredState === 'loading'
+    : !automationsFrameSeen && coldState === 'loading';
+  const readFailed = showsRetired
+    ? retiredState === 'error'
+    : !automationsFrameSeen && coldState === 'error';
   const list = source ?? [];
 
   const projects = Array.from(new Set(list.map((a) => a.project))).sort();
+  // `data-state="empty"` below reads `list.length === 0`, which is the right
+  // question for BOTH sources: an answered-empty retired read is a genuine
+  // "nothing retired yet", not a filtered-out list.
 
   const filtered = list.filter((a) => {
     if (stateFilter !== 'all' && a.state !== stateFilter) return false;

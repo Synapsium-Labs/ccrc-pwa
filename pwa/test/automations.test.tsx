@@ -290,6 +290,55 @@ describe('the filter chips say what they are and whether they are on', () => {
   });
 });
 
+describe('the retired chip is a door, not a dead control', () => {
+  it('asks the server for retired rows — neither feed of the live list carries them', async () => {
+    // The store's DEFAULT filter appends `state != 'retired'`, deliberately
+    // (spec §9: "a retired automation leaves the default list"), and BOTH
+    // feeds of this screen take that default — the `{type:'automations'}`
+    // frame and the param-less cold read. So a chip that filtered
+    // client-side could never match a row: it always rendered "No
+    // automations match these filters." even when retired automations
+    // existed, and since the list row is the only door to `api.automation`
+    // (there is no `/automations/:id` route), a retired automation's run
+    // history had no way in from the phone at all — against §9's other half,
+    // "what did that thing do before I removed it? stays answerable".
+    const asked: (string | undefined)[] = [];
+    const loadAutomations = async (filter?: { state?: AutomationState }) => {
+      asked.push(filter?.state);
+      return filter?.state === 'retired'
+        ? { automations: [auto({ id: 9, name: 'old-nightly', state: 'retired' })] }
+        : { automations: [auto({ id: 1, name: 'nightly' })] };
+    };
+    seedStore({ automations: [auto({ id: 1, name: 'nightly' })], automationsFrameSeen: true });
+    render(<AutomationsScreen loadAutomations={loadAutomations} />);
+    await screen.findByRole('button', { name: /nightly/ });
+
+    fireEvent.click(screen.getByRole('button', { name: 'state: retired' }));
+    expect(await screen.findByRole('button', { name: /old-nightly/ }),
+      'the retired row must be reachable').toBeInTheDocument();
+    expect(asked, 'and it must be ASKED for, not filtered out of a list that never had it')
+      .toContain('retired');
+    // The live list is not replaced by it — going back shows the frame again.
+    fireEvent.click(screen.getByRole('button', { name: 'state: all' }));
+    expect(await screen.findByRole('button', { name: /nightly/ })).toBeInTheDocument();
+  });
+
+  it('a failed retired read does not claim there are none', async () => {
+    // The screen refuses to make a positive empty claim when a read fails
+    // (its own three-empty-states rule); a chip-scoped read is no different.
+    const loadAutomations = async (filter?: { state?: AutomationState }) => {
+      if (filter?.state === 'retired') throw new Error('offline');
+      return { automations: [auto({ id: 1, name: 'nightly' })] };
+    };
+    seedStore({ automations: [auto({ id: 1, name: 'nightly' })], automationsFrameSeen: true });
+    render(<AutomationsScreen loadAutomations={loadAutomations} />);
+    await screen.findByRole('button', { name: /nightly/ });
+    fireEvent.click(screen.getByRole('button', { name: 'state: retired' }));
+    const p = await screen.findByText(/automations may exist that are not shown/);
+    expect(p).toHaveAttribute('data-state', 'error');
+  });
+});
+
 describe('a panel landing names the row it was fetched for', () => {
   it('re-reads when the panel STARTS showing an unsettled run, not only when the frame moves', async () => {
     // The missed ordering, and it is ordinary rather than exotic: the frame
