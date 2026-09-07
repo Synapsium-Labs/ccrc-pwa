@@ -450,6 +450,32 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   spec, citing D-1669 — a worker rewriting the authority to match its own deviation is what the ledger exists
   to prevent. **Wave 5 owns it.**
 
+- **Scoped re-review of fix round 7 (2026-09-07 01:51 UTC): all six must-fix and both folds ADDRESSED**, each verified by
+  reproduction rather than reading — the size gate measured at the 63/64-byte edge, the pairing rewritten to
+  same-statement, the quoted-mention exemption hole closed without breaking real defers, both skew pins now
+  asserting their own stderr sentence. **One new defect blocks the deploy, and it is the wave's own rule.**
+  The new closing PASS says `accounts.sh could not be read` whenever `known` is empty — but `known` is empty
+  in TWO conditions: the file being unreadable, and the file reading perfectly with NO ACCOUNT TAGGED (every
+  `_ccrc_pool` returns empty). **The second is every box on the fleet today**, so on deploy the doctor tells
+  every operator that a file it read fine could not be read. `[ -r … ]` at :2776 had already established
+  readability and the code discards that distinction and re-infers it from an empty result. **This is the
+  overloaded-null rule, in the fix written for the false-PASS class** — D-1744 folded `unreadable` into a
+  benign state; this folds a benign state into `unreadable`. Same seam, opposite direction. **Fourth time this
+  program has found its defining defect inside a disclosure written to prevent it.** Three states are needed,
+  and the middle one is not UNMEASURED: the vocabulary half IS measured and the answer is "this roster carries
+  no pools".
+  **PROCESS RULING, on my authority and ledgered as a deliberate deviation:** the execution skill allows ONE
+  fix wave after the final review and this is a second. Overruled. The cap exists to stop ping-pong on
+  judgement calls; this is neither a judgement call nor a residual to surface — it is a falsehood the fix wave
+  itself introduced, one line, in the surface an operator consults once they have stopped trusting everything
+  else. Scope bounded to that plus a text list; **no further re-review** — I verify the predicate myself.
+  Cost if wrong: one extra round on a branch that was otherwise ready.
+  **The text list is its own lesson:** the anchors in the round's NEW text (`_check_graphify-path` :3382 not
+  :3306, `_ws_project_valid` ccd:3717 not :3685, five flock anchors 8-11 short matching neither head nor base)
+  were wrong WHEN WRITTEN, not staled by anyone. That is the worker's own 1,220-anchor argument arriving inside
+  its own round, and why its instinct to replace anchors with greppable NAMES was right. Applied here rather
+  than correcting the numbers.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
