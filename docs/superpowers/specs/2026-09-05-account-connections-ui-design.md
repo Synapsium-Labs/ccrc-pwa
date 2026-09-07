@@ -779,9 +779,9 @@ merge decisions follow, each of them a judge's measured finding rather than a fr
 the ones that change the shape of the product are called out below and the whole set is
 carried on the canvas.
 
-> The canvas (**52 frames in 9 groups** — 51 at 390×844 and one at 1200px, both themes) is the
+> The canvas (**55 frames in 9 groups** — 54 at 390×844 and one at 1200px, both themes) is the
 > visual authority for everything in this section. Link in the handoff; it is not a tracked
-> artefact. The count is measured off the built file, not carried: `51` elements matching
+> artefact. The count is measured off the built file, not carried: `54` elements matching
 > `class="phone"` plus the one `phone--desk`.
 
 ### 12.2 Where it lives
@@ -823,10 +823,10 @@ is ink — never a status hue on an account, never a glow.
 
 | reading | when | treatment | example |
 |---|---|---|---|
-| `✓ ok` | exit 0, `is_error !== true` | `--ink-primary`, mono | `✓ ok · 14:04:12 · 4 min ago · 1.4 s` |
+| `✓ ok` | exit 0, `is_error !== true` | `--ink-primary`, mono | `✓ ok · 14:04:12 · 4m ago · 1.4 s` |
 | `— not measured` | the wire's absence: no probe has run | `--ink-tertiary` in a **dashed slot** | `— not measured · no probe yet` |
 | `~ inconclusive` | `unreachable`, `timeout`, `unknown` | `--ink-secondary` on `--bg-raised`, evidence beside it | `~ unreachable · ECONNREFUSED · 0.2 s · 14:08:14` |
-| `✕ auth dead` | `api_error_status: 401` | **reversed ink slab** — the shipped `.sess-line--active` idiom (`fleet.css:791`), reversing to the CARD's ground rather than the page's: `--bg-surface` on `--ink-primary`, 15.68 / 16.58, label semibold. Achromatic. | `✕ auth dead · HTTP 401 · 12:07:40 · 2 h ago` |
+| `✕ auth dead` | `api_error_status: 401` | **reversed ink slab** — the shipped `.sess-line--active` idiom (`fleet.css:791`), reversing to the CARD's ground rather than the page's: `--bg-surface` on `--ink-primary`, 15.68 / 16.58, label semibold. Achromatic. | `✕ auth dead · HTTP 401 · 12:07:40 · 2h ago` |
 
 Two rules make this vocabulary honest, and both were failures the panel measured:
 
@@ -890,7 +890,7 @@ full record shows the whole URL; the card shows the host, since the host is the 
 differs.
 
 The two ages are kept apart everywhere. A lane whose credential is dead still shows its last
-reported usage with the age of that reading (`8% / 29% · reported 2 h ago`), because
+reported usage with the age of that reading (`8% / 29% · reported 2h ago`), because
 "credential dead" and "no telemetry" are two different measurements. An empty bar reads as
 0% at a glance; a lane whose launcher reports nothing says so in words — *"this launcher
 reports no usage; bars are not drawn rather than drawn at 0%"* — and draws no track at all.
@@ -1089,7 +1089,7 @@ age below counts from the snapshot rather than from now — and then every age o
 obeys that sentence. (Both of the losing concepts contradicted their own banner here; one
 displayed a measurement timestamped *after* its own snapshot.) A tap on a refused operation
 answers with a toast that names the refused act, the reason, and **restates the last
-reading** — *"the last reading stands: auth dead, 2 h ago"* — so the operator is left with no
+reading** — *"the last reading stands: auth dead, 2h ago"* — so the operator is left with no
 less than they had before they tapped.
 
 The standing-fact card in the fold names exactly which operations are refused while
@@ -1189,17 +1189,57 @@ rather than left to the implementation:
   prevent);
 - `aria-invalid` on a refused field, with the refusal referenced by `aria-describedby`;
 - `role="switch"` + `aria-checked` on the kill switch; `aria-expanded` on the fold control;
-- **`role="status"` + `aria-live="polite"` on every measurement line, every verdict, the
-  step rail's current step and the armed-count readout** — the readings are the content of
-  this screen, and a screen reader that learns a lane went from `✓ ok` to `✕ auth dead` only
-  by re-reading the page is not being told;
+- **live regions belong to PROCESSES, not to inventories** — and this clause replaces the one
+  that used to stand here, which read *"`role="status"` + `aria-live="polite"` on every
+  measurement line"*. That rule is what a careful designer writes and it does not survive
+  contact with a list. MEASURED on the rendered canvas before the change: **82 live regions
+  inside list contexts** (39 `.health-line`, 16 `.meters`, the rest card registers) against 30
+  roll-ups — so a single 20-second poll could queue eighty-odd announcements at a screen-reader
+  user who asked for one screen. The rule now:
+  - the **roll-up is the list's one live region.** It is the summary, it is already the thing
+    that changes when anything changes, and it is where "1 auth dead" becomes "2 auth dead";
+  - a **card's readings arestatic text**, read by navigating to them. They are content, not
+    events;
+  - **a sheet or a pane keeps its live regions** — the current step, the elapsed rule, the
+    outcome, the refusal — because a sheet is one process the operator is watching, which is the
+    case the mechanism is for;
+  - **an event stays live wherever it is**: the offline strip, a refusal, a toast, the kill
+    switch's consequence line, the passkey count. Measured after the change: 3 live regions left
+    in list contexts, all four of those kinds.
+  The symmetry with `DIRECTION` is not a coincidence and is worth saying out loud: **glow lives
+  on a living process, and so does the live region.** Two mechanisms, one rule, and the screen is
+  quieter in both senses.
+- **the focus ring is `base.css:123`'s, and the design owes an answer for each ground it adds**
+  (§13.6). Measured: `--accent` is 10.37 dark / 4.92 light on `--bg-page` (fine), 1.63 / 3.10 on
+  the reversed `✕ auth dead` slab, and 10.67 / **3.37** inside a well, which stays dark in both
+  themes. WCAG 1.4.11 wants 3:1. So the ring keeps `--accent` everywhere except inside a well,
+  where it takes `--accent-on-well` (9.61 light) exactly as `chat.css:1169` already does. The
+  slab needs no rule at all — see §12.13, where the render refused the fix that looked obvious.
+- **forced colours**: `✕ auth dead` is a reversed slab, and forced-colors flattens fill and ink
+  alike, so the design's ONE loud state renders identically to `✓ ok` on the screen whose whole
+  job is telling them apart. The glyph and the word survive — which is why "colour is never the
+  sole carrier" was already the rule — and the slab takes the inset border `fleet.css` gives the
+  same idiom;
+- **one age vocabulary, and it is the app's.** Every relative age is `formatAge`'s output
+  (`formatReset.ts:50-59`): `just now` under two minutes, then `Xm ago`, `Xh ago`, `Xd ago`. The
+  canvas had been writing `2 min ago` and `1 h 54 min ago` — 59 strings the shipped formatter can
+  never produce, which would have shipped either a second formatter or a UI that does not match
+  its own design. Where second-level precision matters the line carries the **absolute clock**
+  beside the age, which is the half that was doing the work anyway;
+- **a group of choices and a list of actions are different things and take different roles.**
+  Both had been bare `<div class="opts">`: a screen reader heard four unrelated buttons and no
+  "1 of 4". Now the provider and launcher pickers are `role="radiogroup"` with `role="radio"` +
+  `aria-checked` children (replacing an `aria-current` that was on three of the eight groups and
+  missing from five), and the action lists — restart a session, move a session, the four routing
+  aliases, the endpoint fills — are `role="group"` with a name. Collapsing the two into one role
+  would be this repo's overloaded-seam defect, in ARIA;
 - 44px on everything tappable, including hue chips, keycaps, copy controls and checkbox rows
   — `DIRECTION` sets the floor at 44 and `chat.css`'s shipped keycap is already 44;
 - colour is never the sole carrier: every state travels with a glyph **and** a word.
 
-### 12.13 Four defects only a render catches
+### 12.13 Five defects only a render catches
 
-The canvas was measured in a headless browser, not just read. Four defects survived every
+The canvas was measured in a headless browser, not just read. Five defects survived every
 review of the CSS and died the moment the DOM was measured. Each is a rule the implementation
 must carry, and each is the kind that ships silently because the stylesheet *looks* correct.
 
@@ -1234,6 +1274,21 @@ must carry, and each is the kind that ships silently because the stylesheet *loo
   "make the well bigger": it is that **a well holding a list the operator is agreeing to must fit
   the cap, and content that will not fit belongs outside the well** — a transcript may scroll, a
   consent list may not.
+- **An inherited fix, applied to a different geometry, is a new defect.** The `✕ auth dead`
+  reading wears `.sess-line--active`'s reversed slab, and `--accent` — the app's focus ring —
+  measures **1.63 dark / 3.10 light** against it, below WCAG 1.4.11's 3:1. `fleet.css:891-896`
+  had already met that exact number on that exact slab and answered it by swapping the ring to
+  `--bg-page`, so copying the override looked like inheritance rather than invention. The audit
+  failed it on the first render. fleet.css's selector is a **descendant** one: the focused thing
+  is a control *inside* the slab, so its ring is painted **on** the slab, where `--bg-page`
+  measures 16.94 / 15.26. The health reading is a static `<span>`, so a ring on the reading
+  itself is painted **outside** it, on the card — where `--bg-page` on `--bg-surface` measures
+  **1.08 / 1.09**. The fix would have shipped an invisible focus ring, for a control this design
+  does not have, out of a correct rule for a case it does not share. The slab therefore takes no
+  ring rule at all; the measurement stays in the kit for whoever adds a control to one later.
+  The rule this generalises to: **a borrowed CSS answer carries its selector's geometry with it,
+  and the ratio has to be re-measured against the ground the ring actually lands on** — not the
+  ground the original was solving for.
 
 ### 12.14 Two shipped defects this work fixes
 
@@ -1306,7 +1361,7 @@ primitive, so the knob geometry has a single home rather than three call sites. 
 the reviewer prefers the numbers inline in the one rule that uses them, drop both — nothing
 else in this design depends on them.
 
-### 13.4 The one refusal exception: a fourth `❯` placement in the chrome
+### 13.4 The one refusal exception: a fourth `❯` placement
 
 `DIRECTION` charters the `❯` in three places — the prompt input, the preselected dialog row,
 and the streaming caret — and calls it *"the one piece of terminal furniture that crosses into
@@ -1323,12 +1378,13 @@ originally written here.
 
 **The count, measured rather than claimed — and re-measured after the first count was wrong.**
 A DOM walk of the rendered canvas (text nodes plus generated content, excluding the canvas's
-own annotation prose) finds **14** `❯` in the product, in three placements: the connect door
-(`.door .g`, 5), the preselected dialog row (`.opt-cur`, 3 — DIRECTION's own), and the shell
+own annotation prose) finds **16** `❯` in the product, in three placements: the connect door
+(`.door .g`, 7), the preselected dialog row (`.opt-cur`, 3 — DIRECTION's own), and the shell
 prompt at the head of the probe's command line inside a `--bg-well` (`.probe-cmd::before`, 6).
-The door's count fell from 12 to 5 when the dock came out: seven of those twelve were the pinned
-duplicate. This paragraph has now been wrong twice and re-measured twice, which is the point of
-keeping it. An earlier draft said 27 in a 12 / 5 / 10 split, taken from a reviewer's figure
+The door's count fell from 12 to 5 when the dock came out — seven of those twelve were the pinned
+duplicate — and rose to 7 when the UX pass added two more list frames (`1d`, `1f`), which is the
+right behaviour: one door per list screen, counted. This paragraph has now been wrong twice and
+re-measured three times, which is the point of keeping it. An earlier draft said 27 in a 12 / 5 / 10 split, taken from a reviewer's figure
 rather than from a render — it counted the glyphs in the canvas's own commentary as though they
 were product. Neither correction is worth applying quietly, because the paragraph's whole claim
 is that the census is honest, and a census carried from a number nobody re-took is exactly what
@@ -1360,6 +1416,35 @@ on content anywhere (`DIRECTION`'s gate refuses it and the tree has no such rule
 sheet that closes itself; no confirmation that can vanish on a timer; no reveal control on a
 secret; and no character count beside one — metadata about a secret is still metadata about a
 secret.
+
+### 13.6 Focus, and the grounds this design adds
+
+`DIRECTION` names the accent as the colour of *"actions, links, focus, `❯`"* and prices non-text
+UI roles — *"dots, bar fills, focus ring"* — at 3:1 per WCAG 1.4.11. It does not say what happens
+when the ring lands on a ground the accent was not priced against, and this design adds two such
+grounds. So this is an amendment that ADDS no token, changes no ring, and writes down three
+measurements plus one withdrawal:
+
+| the ring's ground | `--accent` | verdict |
+|---|---|---|
+| `--bg-page` (the ordinary case) | 10.37 dark / 4.92 light | keep |
+| `--bg-surface` (a card) | 9.61 / 5.35 | keep |
+| `--bg-well` — **a well is dark in BOTH themes** | 10.67 / **3.37** | swap to `--accent-on-well` (10.67 / 9.61), which is what `chat.css:1169` already does |
+| the reversed `✕ auth dead` slab | 1.63 / 3.10 | **no rule** — see below |
+
+The slab entry is the one worth reading. `fleet.css:891-896` met that same 1.63 on that same
+reversed slab and swapped the ring to `--bg-page`; inheriting it here failed the canvas audit on
+the first render, because fleet.css's selector is a **descendant** one — its ring is painted on
+the slab (16.94 / 15.26), while a ring on this design's health *reading* would be painted outside
+it, on the card, where `--bg-page` measures **1.08**. The reading is static text and nothing
+focusable lives inside the slab, so the correct amendment is none at all, and the measurement is
+recorded in the kit for whoever later puts a control there (§12.13).
+
+One more thing `DIRECTION` does not cover and this screen needs: **forced colours**. The design's
+only loud state is a polarity swap, and forced-colors flattens fill and ink to Canvas/CanvasText
+alike — `✕ auth dead` and `✓ ok` render identically. The glyph and the word carry it either way,
+which is the existing "colour is never the sole carrier" rule doing its job, and the slab takes
+the inset border `fleet.css` already gives the same idiom.
 
 ## 14. Testing and mutation discipline
 
@@ -1600,6 +1685,33 @@ plan's mutation table will name these at minimum:
     runs 486px past the fold for an action taken about as often as an account is created. If you
     want it back it is one `.dock` block per list frame and one rule in the kit; the in-list door
     stays either way, since it is the one that states the full refusal.
+
+24. **The UX pass of 2026-09-07 changed four things the design had already written down**, each
+    because the rendered canvas measured its cost. None adds a token or a colour; three of them
+    DELETE something.
+    (a) **Live regions belong to processes, not inventories** (§12.12). The contract used to say
+        `role="status"` on *every* measurement line; the render counted **82 live regions inside
+        list contexts** against 30 roll-ups, i.e. one 20-second poll able to queue eighty
+        announcements. Now the roll-up is the list's single live region, card readings are static
+        text, and sheets, panes, refusals, toasts and the offline strip keep theirs — 3 left in
+        list contexts, all of them events. Alternative: keep per-row regions and rely on screen
+        readers to coalesce, which they do not.
+    (b) **One age vocabulary, and it is `formatAge`'s** (`formatReset.ts:50-59`). 59 strings on
+        the canvas — `2 min ago`, `1 h 54 min ago`, `22 s ago` — were forms the shipped formatter
+        cannot produce, so the design was quietly specifying a second one. Where second-level
+        precision matters the absolute clock is already on the line. Alternative: give `formatAge`
+        a sub-minute arm, which is a third shipped-code fix for a cosmetic gain.
+    (c) **A choice and a list of actions take different ARIA roles** (§12.12). Eight bare
+        `.opts` groups became five `role="group"` and three `role="radiogroup"`, and `aria-current`
+        — present on three, missing from five — became `aria-checked` on every radio.
+    (d) **The focus ring gets an answer per ground** (§13.6), and the slab gets none, because the
+        obvious inherited fix measured 1.08 (§12.13).
+    Three frames were added to draw states the design asserted but had never shown: `1d` keyboard
+    focus, `1e` a lane reading `~ inconclusive` **at card scale with the roll-up counting it** —
+    §12.4 had specified that roll-up form while the canvas had only ever drawn the reading inside
+    a probe sheet — and `1f` the first paint, whose `Skeleton` the accounts screen already ships
+    (`AccountsScreen.tsx:190`) and which this design makes last longer by adding a health field to
+    the same poll.
 
 ### Evidence to collect before the plan is written (each is one command or one pane)
 
