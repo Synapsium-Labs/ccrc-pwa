@@ -344,7 +344,34 @@ describe('the fleet gate and failure polarity', () => {
     times.sort((a, b) => a - b);
     expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
   }, 30000);
-  it('p95 of 20 SessionStart runs stays under the budget with a 200-row registry', () => {
+  // R1 FIX: an absolute ms budget was tried first and rejected — see the
+  // measurement below for why. This asserts a RATIO of SessionStart's p95 to
+  // PostToolUse's p95, both measured IN THE SAME RUN (interleaved, same
+  // process, same few seconds of box load), because box load inflates every
+  // arm together: a slow moment makes the cheap arm slow too, so the ratio
+  // between them stays put while either arm's raw ms does not.
+  //
+  // WHY NOT AN ABSOLUTE MS NUMBER (measured on `openclaw`, the fleet box,
+  // under real concurrent-session load, load average ~2.1-4.3 across the
+  // runs below): 15 isolated runs of the shipped `case` gates measured a
+  // SessionStart p95 range of 136.9-164.5 ms across two 15-run samples
+  // (means 149.1 ms and 153.1 ms) against the 150 ms budget this test
+  // originally inherited from the file's PostToolUse test below — a near
+  // coin flip (8/15 passed in the first sample). The ERE mutation (see
+  // below) measured 203.9-227.2 ms, non-overlapping with the shipped range,
+  // but the ~39 ms gap between the shipped worst case and the mutated best
+  // case is too narrow to host ANY absolute threshold with the ~15% margin
+  // asked for on BOTH sides at once: every candidate T from 170-195 ms gave
+  // one side under 15% (T=180 -> 8.6%/13.3%; T=185 -> 11.1%/10.2%; the
+  // symmetric midpoint T=182 -> 9.6%/12.0%). An absolute ms number is the
+  // wrong shape for an arm timed on a box whose own load varies run to run.
+  //
+  // THE RATIO, measured the same way (15 isolated runs each, same box, same
+  // interleaved-in-one-run method): shipped `case` gates gave ratios of
+  // 3.03-3.47 (mean 3.30, n=15); the ERE mutation gave ratios of 4.48-5.61
+  // (mean 4.87, n=15) — non-overlapping, 15/15 under and 15/15 over R=4 with
+  // ~13% margin on the shipped side and ~12% margin on the mutated side of R.
+  it('SessionStart costs no more than 4x the cheap PostToolUse arm, on a 200-row registry', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -363,14 +390,22 @@ describe('the fleet gate and failure polarity', () => {
     gitTree(tree, 1);
     plantGraph(tree, { built: 'deadbee' });
 
-    const times: number[] = [];
+    const cheapTimes: number[] = [];
+    const mainTimes: number[] = [];
     for (let i = 0; i < 20; i++) {
       const t0 = process.hrtime.bigint();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+      cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      const t1 = process.hrtime.bigint();
       run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });
-      times.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      mainTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
     }
-    times.sort((a, b) => a - b);
-    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+    const p95 = (xs: number[]): number => {
+      const s = [...xs].sort((a, b) => a - b);
+      return s[Math.floor(s.length * 0.95) - 1]!;
+    };
+    const ratio = p95(mainTimes) / p95(cheapTimes);
+    expect(ratio).toBeLessThan(4);
   });
 });
 
