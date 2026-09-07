@@ -230,4 +230,19 @@ describe('_swap_target and the pool', () => {
     // must-leave and the loop moves it back into pool-a.
     expect(target('claude-b', 'claude-b')).toBe('');
   });
+
+  it('admits the CROSSED home through the home-recovered branch', () => {
+    seed(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} home claude-b`);
+    // cur != home IS WHAT MAKES THIS CASE ABLE TO FAIL AT ALL. The case
+    // above sets cur == home == the crossed account, where the cur==home
+    // shortcut answers '' regardless of the marker and the home-recovered
+    // branch is never reached — it cannot tell "the escape works" from "the
+    // escape is missing". Here cur=claude is IN pool-a (no must-leave force),
+    // so the branch actually runs and the marker's `cross_home` escape is
+    // the only thing standing between the two expectations below.
+    expect(target('claude', 'claude-b')).toBe('');          // no marker: the guard refuses the wrong-pool home
+    h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
+    expect(target('claude', 'claude-b')).toBe('claude-b');  // marker: the crossed home is admitted
+  });
 });

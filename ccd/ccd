@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=60795b5f711c77b0903fb874a7f701cb8c2b8a8a98ef9e14de41d3e64a0c3994
+# ccrc:generated 1 sha256=6f9a0052620093e9bee835a38712e0ca1f7c0155c7c0c32293ff9af4daf4919e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11884,12 +11884,16 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     [[ "$cand" == "$cur" ]] && continue
     # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
     # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
-    # entirely (ccd:10984), so a filter placed there would let an other-pool
+    # entirely (ccd:11670), so a filter placed there would let an other-pool
     # wrapper land. AUTOMATIC MOVES NEVER CROSS — marker or no marker: the
     # marker exempts the row from being MOVED, it does not license a new
-    # crossing, so any automatic move lands in pool, and by the account clause
-    # above the marker stops matching for this row from that point on. (Task 4's
-    # `_crosspool_tick` is what then removes it and logs `crosspool-ended`.)
+    # crossing, so any automatic move lands in pool. This ends a `wrapper`-
+    # recorded (`swap`/`start`) crossing on its own — the move changes `cur`,
+    # and `_crosspool_valid`'s account clause no longer matches it next tick.
+    # It does NOT end a `home`-recorded (`prefer`) crossing: this loop never
+    # touches `.home`, so `cross_home` keeps validating until something else
+    # changes `home`. (Task 4's `_crosspool_tick` is what then removes an
+    # invalid marker and logs `crosspool-ended`.)
     _pool_ok "$cand" "$pps" || continue
     _account_ok "$cand" || continue
     _avail "$cand" || continue
@@ -13785,9 +13789,15 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   #     `swap`/`start` crossing, `home` for a `prefer` one. Callers pass both
   #     and either satisfies it.
   # Deliberately NOT switched off: the pre-existing home affinity (§2, O1) —
-  # once a crossed session returns home, that return is itself a move off the
-  # crossed account, so the very next check against the new home fails the
-  # account clause below on its own.
+  # but only for a `wrapper`-recorded (`swap`/`start`) crossing. There, once a
+  # crossed session returns home, it is `cur` that moves off the crossed
+  # account (onto the recovered `home`), so the very next tick's check
+  # against `cur` fails the account clause below on its own — no expiry
+  # mechanism needed for that arm. A `home`-recorded (`prefer`) crossing is
+  # different: the crossed account already IS `home`, so an affinity return
+  # does not apply to it the same way, and nothing here ends that crossing by
+  # itself — it takes a new `.home` write (another `prefer`) to change what
+  # the `home` argument is checked against.
   #
   # THIS COMMIT WIRES ONE READER. `_swap_target` (same commit) asks about
   # `cur` and `home` to gate the must-leave force and the home guard — two of
@@ -13801,8 +13811,10 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   # `prefer --cross-pool`. Today the field exists only where a test
   # hand-writes it with `_reg_set`.
   #
-  # The `-e` test is FIRST so the steady state of an uncrossed row — every row,
-  # on every 5-second tick — costs one stat and not a `cat`.
+  # The `-e` test is FIRST so the steady state of an uncrossed row costs two
+  # stats and never a `cat` — `_swap_target` calls this once for `cur` and
+  # once for `home` per decision, every row, every 5-second tick, and each
+  # call returns at the `-e` line.
   local id="$1" pps="$2" raw ts pool acct a
   shift 2
   [[ -e "$REG/$id.crosspool" ]] || return 1
