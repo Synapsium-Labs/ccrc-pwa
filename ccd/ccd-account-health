@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# ccd-account-health — is each Anthropic account's credential still alive?
+#
+# WHY THIS IS A SIBLING EXECUTABLE AND NOT CODE INSIDE `ccd`. `ccd/ccd` makes
+# ZERO outbound network calls — measured, one `curl` in 13k+ lines and it is
+# inside a comment. An HTTP client there would be a new dependency class for
+# every session-supervising path on the box. Beside it is not: this repo already
+# ships several curl-using scripts, each with its own argued failure contract.
+#
+# THE ORACLE, and why an endpoint that cannot answer is still useful. The usage
+# endpoint AUTHENTICATES BEFORE it checks scope, so a setup token — which is what
+# every account on this fleet uses — gets 403 `oauth_scope_insufficient` while an
+# invalid or malformed bearer gets 401. That pair is the whole measurement:
+# 401 = dead, 403-scope = live. THE TRAP: an EMPTY bearer answers 429, not an
+# auth error, so "not 403" can never mean dead — which is why a missing or empty
+# token file REFUSES here, before anything goes on the wire.
+#
+# FOUR OUTCOMES:
+#   401 ...................................... dead      -> write the marker
+#   403 naming oauth_scope_insufficient ...... live      -> clear the marker
+#   429 / any other status / network / timeout unmeasured -> write NOTHING,
+#                                                            CLEAR NOTHING
+#   token file missing or empty ............... refuse    -> report, no request
+#
+# The third row's second half is the one to protect: a standing verdict survives
+# a pass that could not measure. A probe that cleared on every non-401 would
+# erase a true fault every time the fleet was merely busy.
+#
+# SECRETS. There is no `EnvironmentFile=` on this unit and there cannot be:
+# `ccrc-ddns.service` expands ONE credential from ONE 0600 file, and this reads N
+# — one per account. The half of that pattern that binds is enforced here
+# instead: the 0644 unit names no credential and no path into ~/.cc-secrets; each
+# token is sourced in a SUBSHELL so no export survives into this process (and so
+# never into curl's environ); it reaches curl on STDIN via `-K -`, never in argv,
+# so it is never in the process table; and it is never echoed, never logged, and
+# the body is classified and discarded.
+#
+# HOME-derived roots with no override, exactly as ccd and ccd-graph-sweep derive
+# theirs: HOME is the harness's single isolation boundary. Every other knob IS
+# env-overridable, for the harness (the CCRC_DOCTOR_GH_TIMEOUT precedent).
+#
+# PORTABILITY: no bare `timeout` (the deadline is curl's own `--max-time`), no
+# template-less `mktemp`, no `stat -c`, no `date +%s%3N`. `macos-platform.test.ts`
+# derives its corpus from every shebang'd file in ccd/, so this file is scanned
+# from the moment it exists and is meant to stay in the OWNED half of that list.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+SECRETS_DIR="$HOME/.cc-secrets"
+ROSTER="$HOME/.ccrc/accounts.json"
+PAUSE="$HOME/.ccrc/account-health-paused"
+LOCK="$HOME/.ccrc/account-health.lock"
+: "${CCRC_HEALTH_URL:=https://api.anthropic.com/api/oauth/usage}"
+: "${CCRC_HEALTH_TIMEOUT:=20}"
+# The account-id grammar. A THIRD spelling of `shared/roster.ts`'s ID_RE, after
+# `ccd/ccrc-wrapper-shape`'s WRAPPER_ID_RE — unavoidable, because this file is
+# installed ALONE into $HOME/.local/bin with no library beside it to source, the
+# same situation `session-hook.sh` is in. It is MEASURED rather than trusted:
+# `account-health.test.ts` extracts this literal and WRAPPER_ID_RE's and holds
+# them equal. It is load-bearing twice — an id becomes a FILENAME under $REG and
+# under ~/.cc-secrets, and it is printed at an operator on a terminal that acts
+# on control bytes.
+AH_ID_RE='^[a-z][a-z0-9-]{0,31}$'
+
+_ah_say() { printf 'account-health: %s\n' "$1" >&2; }
+
+# THE CONVENTION, SPELLED ONCE IN THIS FILE. The roster structurally cannot
+# declare where an `upstream` account's credential lives — `exec.secretsFile` is
+# permitted only on `kind: 'generated'` (shared/roster.ts) — so a roster-driven
+# path would cover the generated accounts and SILENTLY SKIP the primary one. The
+# convention covers all of them; `ccrc doctor`'s `credentials` check is what
+# makes an absent file loud rather than invisible.
+_ah_token_file() { printf '%s/%s-oauth.env' "$SECRETS_DIR" "$1"; }
+
+# The token, read in a SUBSHELL (command substitution) so the file's own
+# `export` dies with it and this process never carries the value in its
+# environment. Empty output means "no usable token" for BOTH an unreadable file
+# and a file that sets nothing — one answer, because the probe does the same
+# thing about each and the caller has already told absence from presence.
+_ah_token() {   # <token-file> -> the bearer, or nothing
+  ( set +u
+    # shellcheck source=/dev/null
+    . "$1" >/dev/null 2>&1 || exit 0
+    printf '%s' "${CLAUDE_CODE_OAUTH_TOKEN:-}" )
+}
+
+# The marker, by rename. `_authdead`'s digits gate already refuses a half-written
+# stamp; this is the writer's half of that pair, so the only two states any
+# reader can observe are absent and complete. The template carries XXXXXX (BSD
+# mktemp ignores a template-less call's TMPDIR) and the temp lands in $REG, so
+# the rename never crosses a filesystem. `.tmp.` in the name is DOTTED on
+# purpose: a crashed pass leaves something the registry's own one-dot rule will
+# not confuse with a field, and the next pass's `rm -f` sweeps it.
+_ah_mark() {   # <id> <reason>
+  local tmp
+  tmp="$(mktemp "$REG/$1-authdead.tmp.XXXXXX")" || { _ah_say "$1: cannot stage a marker"; return 1; }
+  printf '%s %s' "$(date +%s)" "$2" > "$tmp" \
+    && mv -f "$tmp" "$REG/$1-authdead" \
+    || { rm -f "$tmp"; _ah_say "$1: cannot write the marker"; return 1; }
+}
+
+_ah_clear() { rm -f "$REG/$1-authdead"; }
+
+# ── the pass ──────────────────────────────────────────────────────────────
+exec 9>"$LOCK"
+# A held lock means the previous pass is still running. A probe is a reading, so
+# a skipped pass costs nothing but 15 minutes — the sweep's `pass-locked` shape.
+flock -n 9 || exit 0
+[ -e "$PAUSE" ] && exit 0
+rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
+
+command -v curl >/dev/null 2>&1 \
+  || { _ah_say "curl is not on PATH — nothing was measured"; exit 1; }
+command -v jq >/dev/null 2>&1 \
+  || { _ah_say "jq is not on PATH — nothing was measured"; exit 1; }
+[ -r "$ROSTER" ] \
+  || { _ah_say 'no roster at $HOME/.ccrc/accounts.json — nothing says which accounts exist'; exit 1; }
+
+IDS="$(jq -r '.accounts[]? | select(.telemetry == "anthropic") | .id // empty' "$ROSTER" 2>/dev/null)" \
+  || { _ah_say 'the roster at $HOME/.ccrc/accounts.json does not parse — nothing was measured'; exit 1; }
+
+# GLOBBING OFF for the split below, and this is the last glob in the file so
+# nothing downstream wants it back. `for id in $IDS` has to be unquoted to split
+# jq's lines, and an unquoted split still PATHNAME-EXPANDS: a roster id spelled
+# `*` would become the contents of the process's cwd — a set of strings the
+# grammar gate below could well accept, at which point the probe names files
+# after directory entries. The gate cannot save it because it runs after the
+# expansion, so the expansion is what has to not happen.
+set -f
+for id in $IDS; do
+  if [[ ! "$id" =~ $AH_ID_RE ]]; then
+    # Refused BY NAME rather than looked for on disk: an id outside the grammar
+    # could name a file this probe has no business writing.
+    _ah_say "an account id in the roster is not a legal account id ($AH_ID_RE) — skipped"
+    continue
+  fi
+  f="$(_ah_token_file "$id")"
+  tok=""
+  # `-s` IS A SHORT-CIRCUIT, NOT A GUARD, and saying so is the honest version:
+  # `_ah_token` already prints nothing for a file it cannot source, so deleting
+  # this test changes no observable behaviour — it only skips a subshell. The
+  # refusal below is what actually decides, which is why the mutation table
+  # bites THAT and not this line.
+  [ -s "$f" ] && tok="$(_ah_token "$f")"
+  if [ -z "$tok" ]; then
+    # THE FOURTH OUTCOME. Not a verdict about the account — a verdict about this
+    # box's own configuration, and the reason `ccrc doctor` carries a
+    # `credentials` check: absence must be loud, never a silent skip.
+    _ah_say "$id: refused — no readable token at \$HOME/.cc-secrets/$id-oauth.env"
+    continue
+  fi
+  # Body and status in ONE capture, so there is no response file on disk at all.
+  # `-K -` reads the Authorization header from stdin: never argv, never environ.
+  out="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" \
+    | curl -sS -K - -o - -w '\n%{http_code}' --max-time "$CCRC_HEALTH_TIMEOUT" \
+      "$CCRC_HEALTH_URL" 2>/dev/null)"; rc=$?
+  tok=""
+  status="${out##*$'\n'}"
+  body="${out%$'\n'*}"
+  if [ "$rc" -ne 0 ]; then
+    _ah_say "$id: unmeasured — curl exited $rc"
+  elif [ "$status" = 401 ]; then
+    _ah_mark "$id" auth-401 && _ah_say "$id: dead (401)"
+  elif [ "$status" = 403 ] && [[ "$body" == *oauth_scope_insufficient* ]]; then
+    _ah_clear "$id"; _ah_say "$id: live (403 scope)"
+  else
+    # 429 is the loud member of this class and the reason the class exists, but
+    # every unrecognised answer belongs here — including a 403 that is NOT the
+    # scope refusal, which is proof of nothing. Write nothing; CLEAR NOTHING.
+    _ah_say "$id: unmeasured — HTTP $status"
+  fi
+done
+exit 0
