@@ -25,12 +25,13 @@
 //
 // NO `.mjs` COPY OF THIS TABLE EXISTS, and that is measured by a scan over
 // `git ls-files` rather than by `single-definition.test.ts`, whose `sources()`
-// (:39-56) filters `/\.tsx?$/` at :53 and has therefore never seen a `.mjs`
+// (:40-57) filters `/\.tsx?$/` at :54 and has therefore never seen a `.mjs`
 // (`server/test/source-bytes.test.ts:30-36` says so by name). The bare-`node`
-// mirror `shared/roster-json.mjs` carries an ID LIST — it must, to stay
-// stricter than the parser rather than laxer — and its agreement with
-// `PROVIDER_IDS` is asserted element for element by `gen-accounts.test.ts`.
-// A list is not a table; the table stays here.
+// mirror `shared/roster-json.mjs` will carry an ID LIST — it must, to stay
+// stricter than the parser rather than laxer — with its agreement against
+// `PROVIDER_IDS` asserted element for element by a test `gen-accounts.test.ts`
+// gains alongside it. Both are Task 4's deliverable, not this one's — neither
+// exists yet. A list is not a table; the table stays here.
 
 /** How an operator gets a credential onto a lane. These five strings are the
  *  VOCABULARY: they are the values `ccrc account add --method` and

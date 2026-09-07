@@ -937,14 +937,14 @@ describe('the account roster — runtime data, no compile-time copies', () => {
 
 // The provider table, §4.2. This describe is the `.tsx?` half; the other half —
 // the one that can see a copy in a `.mjs` — is `server/test/providers.test.ts`,
-// because `sources()` above (:39-56) filters `/\.tsx?$/` at :53 and has never
+// because `sources()` above (:40-57) filters `/\.tsx?$/` at :54 and has never
 // seen a `.mjs`, a `.d.mts` or a bash script (D-76, and `source-bytes.test.ts:30-36`
 // records the incident that fact caused). Both halves ship in the same commit
 // as the promise: a single-definition claim whose scanner cannot reach the file
 // a copy would land in is a comment, not a mechanism (D-1860).
 describe('the provider table — one table, one home', () => {
   // The positive control, the shape this file already uses for its own hunt
-  // lists (`the name list this scans is real, and is the roster`, :845-852): a
+  // lists (`the name list this scans is real, and is the roster`, :846-853): a
   // scan for a name nothing spells passes everything.
   const IDS = PROVIDER_IDS;
   it('the id list this scans is real, and is the table', () => {
@@ -968,7 +968,7 @@ describe('the provider table — one table, one home', () => {
   });
 
   it('no source file under the four roots restates the provider ids as an array literal', () => {
-    // `enumeratesAsArray`'s rule (:858-864), over the provider ids: two or more
+    // `enumeratesAsArray`'s rule (:859-865), over the provider ids: two or more
     // of them quoted inside one `[...]`. `providers.ts` itself is exempt only
     // in the sense that it holds no such literal — the ids appear as KEYS, and
     // that is the point of the table shape.

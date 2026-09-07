@@ -26,8 +26,8 @@
 //     has a runtime list and a type saying the same thing.
 //
 //  3. THE `.mjs` HALF OF §4.2's SINGLE-DEFINITION PROMISE. `single-definition.
-//     test.ts` scans `/\.tsx?$/` only (`sources()`, :39-56, the filter at :53,
-//     `ALL` at :58)
+//     test.ts` scans `/\.tsx?$/` only (`sources()`, :40-57, the filter at :54,
+//     `ALL` at :59)
 //     and `source-bytes.test.ts:30-36` names that blindness by name as the
 //     reason it walks `git ls-files` instead. So the TABLE's uniqueness is
 //     asserted twice: over the four TypeScript roots there (Step 3b), and over
@@ -76,7 +76,7 @@ describe('L0 stays import-free: the PWA bundles these files', () => {
 describe('the provider table is derived, never re-listed', () => {
   it('PROVIDER_IDS is Object.keys(PROVIDERS), in table order', () => {
     expect(PROVIDER_IDS).toEqual(Object.keys(PROVIDERS));
-    // The positive control, the same shape `single-definition.test.ts:845-852`
+    // The positive control, the same shape `single-definition.test.ts:846-853`
     // uses for its own hunt list: a derivation over an empty table would
     // satisfy the line above and assert nothing.
     expect(PROVIDER_IDS.length).toBe(4);
@@ -192,7 +192,7 @@ describe('the provider table has ONE home, in a scan that can see a .mjs', () =>
     // The shape a hand-copied table takes in a `.mjs` mirror: an object literal
     // naming two or more provider ids as KEYS, with at least one ProviderRow
     // field inside it. Modelled on `enumeratesAsArray` (single-definition.
-    // test.ts:858-864), widened from `[...]` to `{...}` because a table copy is
+    // test.ts:859-865), widened from `[...]` to `{...}` because a table copy is
     // an object and a list copy is an array, and this scan must catch both.
     //
     // NESTING IS THE WHOLE DIFFICULTY, and it is why this walks braces by hand
