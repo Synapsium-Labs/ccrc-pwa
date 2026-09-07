@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d3401e3ddea613b81f710c6063f171558f504f0b8f278d8b1a2f91571c690ecc
+# ccrc:generated 1 sha256=60795b5f711c77b0903fb874a7f701cb8c2b8a8a98ef9e14de41d3e64a0c3994
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11839,18 +11839,58 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
   local id="$1" cur="$2" home="$3" force="${4:-}" cand best="" best_score=999 sc
+  # ── POOLS (§5.5.3) ───────────────────────────────────────────────────────
+  # The project's tag is read ONCE per decision and the WORD is passed down, so
+  # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
+  # never dies — it runs inside the long-lived supervise loop.
+  local project pps prc cross_cur="" cross_home=""
+  project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
+  _crosspool_valid "$id" "$pps" "$cur"  && cross_cur=1
+  _crosspool_valid "$id" "$pps" "$home" && cross_home=1
+  # UNDECIDABLE IS NOT A DECISION. An unreadable or malformed tag means nobody
+  # decides: answer nothing. Task 3 is to make the caller (`_auto_swap_check`)
+  # mark a strand when the pane is hard-blocked and this returns empty; until
+  # that lands, an undecidable tag here just produces the same empty answer as
+  # any other "stay, fine" case, indistinguishable at this call site. Folding
+  # it into "stay" would be right by accident; folding it into "untagged"
+  # would silently lift the constraint, which is the overloaded-null defect
+  # this tree names.
+  _pool_ok "$cur" "$pps"; prc=$?
+  [[ "$prc" -eq 2 ]] && return 0
+  # A WRONG-POOL CURRENT ACCOUNT IS A MUST-LEAVE (ruling 5): `force=pool` skips
+  # both "stay" shortcuts exactly as a hard block does, so a retag relocates the
+  # session at its next idle boundary instead of waiting for telemetry to turn
+  # against an account that is perfectly healthy and simply in the wrong pool.
+  [[ "$prc" -eq 1 && -z "$cross_cur" ]] && force=pool
   if [[ "$cur" == "$home" ]]; then
     [[ -z "$force" ]] && { _avail "$home" && return 0; }                     # home is fine: stay
   else
     # disabled excludes home as a DESTINATION only — it never evacuates a
     # session already sitting on it, which is why the two "stay" branches
     # here and below carry no _account_ok check.
-    _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
+    #
+    # NEVER RETURN TO A WRONG-POOL HOME, whatever the reason `home` is
+    # wrong-pool today — hand-set, or simply never retagged. (Once Task 3's
+    # re-seed exists, this guard is also what stops the affinity arm undoing
+    # it on the very next recovery.) The CROSSED home is admitted, and only
+    # the crossed one: `_crosspool_valid` was asked about `$home`
+    # specifically, so a marker written for `wrapper` cannot admit it.
+    _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
+      && _avail "$home" && { echo "$home"; return 0; }                       # home recovered: go back
     [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
   fi
   # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the least-loaded AVAILABLE account
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
+    # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
+    # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
+    # entirely (ccd:10984), so a filter placed there would let an other-pool
+    # wrapper land. AUTOMATIC MOVES NEVER CROSS — marker or no marker: the
+    # marker exempts the row from being MOVED, it does not license a new
+    # crossing, so any automatic move lands in pool, and by the account clause
+    # above the marker stops matching for this row from that point on. (Task 4's
+    # `_crosspool_tick` is what then removes it and logs `crosspool-ended`.)
+    _pool_ok "$cand" "$pps" || continue
     _account_ok "$cand" || continue
     _avail "$cand" || continue
     # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
@@ -13669,11 +13709,11 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # THIS FUNCTION'S OWN ORDER is pool, then _account_ok, then _avail, so the
   # annotation is the FIRST thing that failed, which is the thing to fix — an
   # account in the wrong pool reads `pool=`, never `limit`, even when both are
-  # true. Measured today: `_swap_target`'s own candidate loop checks only
-  # _account_ok then _avail, with no pool predicate at all. Task 2 is to
-  # insert `_pool_ok` into that loop, at which point the two orders agree;
-  # until then this order is this function's own choice, not yet a mirror of
-  # anything.
+  # true. This now MIRRORS `_swap_target`'s own candidate loop (Task 2), which
+  # checks `_pool_ok` before `_account_ok` before `_avail` for the identical
+  # reason — the two orders were independent choices until Task 2 inserted
+  # `_pool_ok` into that loop, and they agree now on purpose, not by mirror
+  # maintenance: a future change to either order should re-check the other.
   local id="$1" p="$2" pps cand ap cur out=""
   pps=$(_project_pool_state "$p")
   # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
@@ -13732,6 +13772,45 @@ _strand_mark() {   # id wrapper project — a hard-blocked session with nowhere 
       && "$REG/notify.sh" "cc swap STRANDED: $id is blocked on $w and no account in pool $pdesc can take it — $why" >/dev/null 2>&1
   fi
   return 0
+}
+
+_crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing marker names one of them
+  # RULING 8 (spec §5.7.2). `$REG/<id>.crosspool` records a DELIBERATE crossing
+  # and is meant to switch off the pool machinery's reaction to it — the
+  # must-leave force, the home re-seed, the home guard, and `cmd_swap`'s
+  # in-unit refusal — for exactly as long as two things hold:
+  #   - the project is still in the pool it was in when the operator crossed
+  #     (a retag or an untag is a new instruction and outranks the old one), and
+  #   - the session is still on the account it crossed TO: `wrapper` for a
+  #     `swap`/`start` crossing, `home` for a `prefer` one. Callers pass both
+  #     and either satisfies it.
+  # Deliberately NOT switched off: the pre-existing home affinity (§2, O1) —
+  # once a crossed session returns home, that return is itself a move off the
+  # crossed account, so the very next check against the new home fails the
+  # account clause below on its own.
+  #
+  # THIS COMMIT WIRES ONE READER. `_swap_target` (same commit) asks about
+  # `cur` and `home` to gate the must-leave force and the home guard — two of
+  # the four reactions listed above. The other two, and every WRITER and
+  # EXPIRER of this field, are owed to later tasks: Task 3 is the home
+  # re-seed's own read of this; Task 4 is `_crosspool_tick`, which removes an
+  # invalid marker and logs `crosspool-ended` (until it lands, an invalid
+  # marker just keeps failing this predicate, silently, for as long as it
+  # sits on disk); Task 5 is `cmd_swap`'s in-unit refusal, plus the
+  # `swap`/`start --cross-pool` verbs that write the marker; Task 6 is
+  # `prefer --cross-pool`. Today the field exists only where a test
+  # hand-writes it with `_reg_set`.
+  #
+  # The `-e` test is FIRST so the steady state of an uncrossed row — every row,
+  # on every 5-second tick — costs one stat and not a `cat`.
+  local id="$1" pps="$2" raw ts pool acct a
+  shift 2
+  [[ -e "$REG/$id.crosspool" ]] || return 1
+  raw=$(_reg_get "$id" crosspool)
+  read -r ts pool acct <<<"$raw" || :
+  [[ -n "${pool:-}" && "$pps" == "named $pool" ]] || return 1
+  for a in "$@"; do [[ -n "$a" && "$a" == "${acct:-}" ]] && return 0; done
+  return 1
 }
 
 cmd_swap() {   # [--force] id target-wrapper — move a session to another account, conversation intact.

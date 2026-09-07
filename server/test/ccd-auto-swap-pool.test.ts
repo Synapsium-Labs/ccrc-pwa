@@ -156,3 +156,78 @@ describe('_strand_mark', () => {
     expect(notices()).toContain('no account in pool (untagged) can take it');
   });
 });
+
+describe('_crosspool_valid', () => {
+  const valid = (pps: string, ...accts: string[]): string =>
+    h.sh(`_crosspool_valid ${ID} "${pps}" ${accts.join(' ')} && echo yes || echo no`);
+  const marker = (): void => { h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`); };
+
+  it('is false with no marker at all — one stat, no `cat`', () => {
+    seed();
+    expect(valid('named pool-a', 'claude-b')).toBe('no');
+  });
+
+  it('is true while the project pool AND the account both still match', () => {
+    seed(); marker();
+    expect(valid('named pool-a', 'claude-b')).toBe('yes');
+    // The `home` clause: a `prefer --cross-pool` puts the marker on the home,
+    // so callers pass both and either may satisfy it.
+    expect(valid('named pool-a', 'claude', 'claude-b')).toBe('yes');
+  });
+
+  it('is false once the project was retagged or untagged', () => {
+    seed(); marker();
+    expect(valid('named pool-b', 'claude-b')).toBe('no');
+    expect(valid('untagged', 'claude-b')).toBe('no');
+    expect(valid('unreadable', 'claude-b')).toBe('no');
+  });
+
+  it('is false once the session moved off the crossed account', () => {
+    seed(); marker();
+    expect(valid('named pool-a', 'claude-a')).toBe('no');
+  });
+});
+
+describe('_swap_target and the pool', () => {
+  const target = (cur: string, home: string, force = ''): string =>
+    h.sh(`_swap_target ${ID} ${cur} ${home} ${force} || true`);
+
+  it('treats a wrong-pool current account as a MUST-LEAVE (force=pool skips both stay shortcuts)', () => {
+    seed(); tagPool('demo', 'pool-b');
+    writeLimits('claude', 1, 1);        // telemetry says home is fine: pre-pool, the answer was ""
+    writeLimits('claude-b', 50, 50);
+    expect(target('claude', 'claude')).toBe('claude-b');
+  });
+
+  it('never returns to a wrong-pool home', () => {
+    seed(); tagPool('demo', 'pool-b');
+    h.sh(`_reg_set ${ID} home claude`);
+    // cur is IN pool and home is not: the home-recovered branch must not fire,
+    // so the answer is "stay put" rather than a move onto the wrong pool.
+    expect(target('claude-b', 'claude')).toBe('');
+    // …and under force, the loop answers with an IN-POOL account, never home.
+    expect(target('claude-b', 'claude', '1')).toBe('claude-d');
+  });
+
+  it('filters the candidate loop AFTER _pool_for — a hand-set registry `pool` list cannot land out of pool', () => {
+    seed(); tagPool('demo', 'pool-b');
+    h.sh(`_reg_set ${ID} pool "claude-a claude-b"`);
+    writeLimits('claude-a', 1, 1);      // by far the cheapest, and in the WRONG pool
+    writeLimits('claude-b', 90, 90);
+    expect(target('claude', 'claude', '1')).toBe('claude-b');
+  });
+
+  it('answers NOTHING when the tag cannot be read — nobody decides', () => {
+    seed(); tagPool('demo', 'Pool Orate');   // two tokens and a capital: malformed
+    writeLimits('claude', 99, 99);
+    expect(target('claude', 'claude', '1')).toBe('');
+  });
+
+  it('a VALID crossing marker suppresses the must-leave force and admits the crossed home', () => {
+    seed(); tagPool('demo', 'pool-a');
+    h.sh(`_reg_set ${ID} home claude-b; _reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
+    // cur == home == the crossed account: without the marker this is a
+    // must-leave and the loop moves it back into pool-a.
+    expect(target('claude-b', 'claude-b')).toBe('');
+  });
+});
