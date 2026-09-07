@@ -254,3 +254,51 @@ describe('_swap_target force arg: gates the two "stay" shortcuts only', () => {
     expect(sh('_swap_target claude-demo claude-a claude 1')).not.toBe(''); // forced: leaves anyway
   });
 });
+
+describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not rank', () => {
+  // Written BEFORE the provenance fix and expected to pass on both sides of it.
+  // That is the point: `_avail`'s own comment rules that "UNKNOWN IS AVAILABLE
+  // HERE… ELIGIBILITY and RANK are different questions and only this function
+  // answers the first", and the fix must not quietly reverse it. A rolled-over
+  // account is available today because it scores 0 and available afterwards
+  // because it scores unknown — same answer, honest reason.
+  //
+  // The 2026-07-27 shape: a 20h-old sample whose 7d window reset 14h ago, and
+  // whose 5h window reset with it.
+  const rolled = (w: string): void => {
+    const t = now();
+    writeLimits(`${w}.json`,
+      json({ five: 10, seven: 98, ts: t - 72000, fiveResetAt: t - 72000, sevenResetAt: t - 50000 }));
+  };
+
+  it('_avail says yes for an account whose windows have both reset', () => {
+    rolled('claude');
+    expect(sh('_avail claude && echo AVAIL || echo NO'),
+      'eligibility must not change across the provenance fix — a hard-blocked session that '
+      + 'cannot reach a rolled-over lane has nowhere to go').toBe('AVAIL');
+    // The REASON, pinned separately so the fix is visible here and not only in
+    // the parity harness. Today `_limit_score` answers a confident `0` for an
+    // account whose windows have both lapsed; after the fix it answers ""
+    // (unknown) and `_avail`'s own `[[ -z "$sc" ]] && return 0` carries the same
+    // verdict for an honest reason. Task 3 flips this ONE literal.
+    expect(sh('_limit_score claude'),
+      'the reason eligibility holds: an inferred zero today, an honest unknown after').toBe('0');
+  });
+
+  it('_swap_target still names a destination when every candidate has rolled over', () => {
+    // The rescue lane's non-negotiable, and the thing `_swap_target`'s
+    // rank-last comment exists to protect: a session that must leave must have
+    // somewhere to go. cur == home == claude-b at the ceiling, so the one
+    // reachable "stay" shortcut (`_avail "$home"`, ccd:11843) declines and the
+    // must-leave loop runs over candidates that are measured today and
+    // unmeasured after — eligible either way, ranked last after, never dropped.
+    rolled('claude'); rolled('claude-a');
+    writeLimits('claude-b.json', json({ five: 99, seven: 99, ts: now() }));
+    expect(sh('_swap_target claude-demo claude-b claude-b || true'),
+      'a rescue with no candidate strands a stuck session').not.toBe('');
+    // …and it is the first candidate in pool order, which is roster declaration
+    // order. Both scores are equal (0 today, 100 after) and the tie-break is a
+    // strict `<`, so the answer is stable across the fix.
+    expect(sh('_swap_target claude-demo claude-b claude-b || true')).toBe('claude');
+  });
+});

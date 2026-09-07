@@ -141,5 +141,30 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       why: 'both sides apply the rollover rule before scoring, so a reset window frees '
         + 'the account rather than excluding it for another six days',
     },
+    {
+      name: 'all-rolled-over',
+      // §B.2's honest cost, pinned in both languages. Two accounts really do
+      // share a 5h reset on this fleet, so a shared boundary that leaves NOTHING
+      // measured is a live shape, not a hypothetical. Both sides must land on
+      // their documented fallback — the first home-able account in roster order
+      // at score 0 — rather than on `null`/`""`, which would mean "nothing is
+      // placeable" and break every ws-add in that window.
+      //
+      // This case gives the SAME answer before and after the provenance fix, and
+      // that is what it is for: today every account scores an inferred 0 and the
+      // strict `<` keeps the first; afterwards every account is unmeasured, both
+      // sides skip them all, and the fallback keeps the first. The answer must
+      // not move while the reason does.
+      files: {
+        claude: c({ five: 10, seven: 98, ts: now - 72000, fiveResetAt: now - 72000, sevenResetAt: now - 50000 }),
+        'claude-a': c({ five: 40, seven: 40, ts: now - 72000, fiveResetAt: now - 60, sevenResetAt: now - 60 }),
+        'claude-b': c({ five: 20, seven: 20, ts: now - 72000, fiveResetAt: now - 60, sevenResetAt: now - 60 }),
+        'claude-d': c({ five: 30, seven: 30, ts: now - 72000, fiveResetAt: now - 60, sevenResetAt: now - 60 }),
+      },
+      expect: { wrapper: 'claude', score: 0 },
+      why: 'every home-able window has turned over, so nothing is measured — both sides fall '
+        + 'back to the first home-able account in roster order rather than answering '
+        + '"nothing is placeable"',
+    },
   ];
 }

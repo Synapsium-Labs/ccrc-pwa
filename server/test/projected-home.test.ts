@@ -70,12 +70,16 @@ const seedDisabled = (wrappers: string[]): void => {
   }
 };
 
-/** `_limit_score` says "wholly unknown" with an empty string, and `|| '0'` is
- *  only reached for a wrapper no fixture expects to WIN — every `c.expect`
- *  names a measured account now, since neither side lets an unmeasured one win
- *  while a measured one exists (Task 6). Kept as a total function anyway: it
- *  reads a score for whichever wrapper the fixture names, and a bare `Number('')`
- *  would be `NaN` rather than a legible failure. */
+/** `_limit_score` says "wholly unknown" with an empty string, and `|| '0'` IS
+ *  reached — by `all-rolled-over`, whose expected winner is unmeasured on both
+ *  sides the moment the provenance fix lands (until then it is an inferred 0 on
+ *  both sides, which is the same 0 by a dishonest route). That case is the
+ *  documented fallback ("if NOTHING is measured, the first home-able account in
+ *  roster order, at score 0"), so bash answers "" for the very wrapper the
+ *  fixture names, and `|| '0'` is what turns that into the 0 the fixture
+ *  asserts. It is therefore LOAD-BEARING, not a courtesy: a bare `Number('')`
+ *  would be `NaN` and red that case for a reason that has nothing to do with
+ *  placement. */
 const shellScore = (wrapper: string): number => Number(sh(`_limit_score ${wrapper}`) || '0');
 
 describe('projectHome agrees with ccd _ws_least_loaded', () => {
