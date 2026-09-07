@@ -1617,7 +1617,7 @@ describe('the co-tenant subject', () => {
     /** The stderr-sensitive shape, factored out: two tests below need the
      *  spawnSync result object, not just stdout, the same reason the
      *  existing "unreadable peer .project" test above does. */
-    const runRaw = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    const runRaw = (payload: object) => spawnSync('bash', [HOOK], {
       input: JSON.stringify(payload),
       encoding: 'utf8',
       env: { ...process.env, HOME: home,
@@ -1842,6 +1842,15 @@ describe('the R7 counters', () => {
     run({ hook_event_name: 'SessionStart', source: 'startup' });
     bash('ls | grep peers');
     bash('echo speers listing');
+    // `speers listing` is blocked by BOTH anchors independently — the leading
+    // class fails on the `s` before `peers`, and the trailing class fails on
+    // the `ing` after `list` — so neither fixture above decides either anchor
+    // on its own (fix round 1, finding 2). These two do: `speers list` ends
+    // right at `list`, so the trailing class is satisfied and only the
+    // LEADING class stops it; `peers listing` starts at a real boundary, so
+    // the leading class is satisfied and only the TRAILING class stops it.
+    bash('echo speers list');
+    bash('echo peers listing');
     expect(readState().ccrcPeerReads).toBe(0);
   });
 
@@ -1879,6 +1888,23 @@ describe('the R7 counters', () => {
     const j = JSON.parse(fs.readFileSync(f, 'utf8'));
     j.ccrcPeerReads = 'seven';
     fs.writeFileSync(f, JSON.stringify(j));
+    bash('ls');
+    expect(readState().ccrcPeerReads).toBe(0);
+  });
+
+  // fix round 1, item 3: `jq`'s own `type == "number"` guard already folds a
+  // wrong-typed but PARSEABLE value (the test above) before the bash regex
+  // guard ever runs — so that fixture cannot tell the bash guard apart from
+  // no guard at all. This one can: a state file the jq FORK ITSELF cannot
+  // read to completion (unparseable JSON, matching the pre-existing "a corrupt
+  // existing state file is overwritten, not crashed on" fixture above) makes
+  // EVERY `read` in the carry read-back hit EOF, so `$cp` never sees a jq
+  // output line at all — it stays the empty string it was initialised to.
+  // `^[0-9]+$` requires at least one digit, so empty fails it exactly the way
+  // `"seven"` does not: this is the guard's real job.
+  it('survives a state file the jq fork cannot parse at all', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    fs.writeFileSync(stateFile(), '{nope');
     bash('ls');
     expect(readState().ccrcPeerReads).toBe(0);
   });
