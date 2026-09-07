@@ -502,6 +502,51 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   attached: the worker either exhibits the shape where `|| :` fires, or softens the comment to say what it is.
   Cost if wrong: one sentence in a shipped comment overstates a guard's importance for one wave.
 
+- **D-1798's wrong claim had a SECOND HOME, and my brief undercounted its pins (2026-09-07 09:30 UTC, on the
+  wave 2b worker's pre-flight).** Two corrections to my own record, both measured before answering.
+  (1) **The wave 2b PLAN carries the same false claim, independently.** Its Task 5 dictates a comment saying
+  the flag is "rejected by `_is_valid_wrapper` as a second lock on the target slot". The plan is dated
+  2026-09-05; the D-1798 measurement is 2026-09-06 — so this is not an inheritance from mail 236, it is the
+  same wrong belief written down a day EARLIER. The belief was in me before the measurement that appeared to
+  produce it, which is a different and worse fault than propagating a bad measurement: it means the
+  measurement was read as confirmation. D-1798's entry named the mail and the test pins; it did not name the
+  plan, so the correction would have shipped into `ccd/ccd` as production prose one wave later. The worker
+  caught it at pre-flight and is writing the invariant instead — after the strip loop runs, NO lock sees the
+  flag, so the strip loop is the only guard and must not move below the positional reads.
+  (2) **My wave 2b brief said "two routes, both pinned"; there are FOUR cases across THREE verbs**
+  (`server/test/ccd-project-pool.test.ts:1000-1104` on `origin/main`: `swap` twice, `start` once, `enable`
+  once), and their mechanisms differ per verb — on `start`, `$# -ge 2` puts the flag in the `wrapper` slot and
+  `_is_valid_wrapper` genuinely does refuse it. The entry above scopes its correction properly ("on the swap
+  arm"); the BRIEF dropped the scope and flattened three verbs into one sentence. The shipped test's own
+  header already says "which check fires depends on the verb and is measured per case below" — the artefact
+  was honest and my restatement of it was not.
+  **This is the third measured instance of one pattern in me: a correction that over-generalises from the one
+  arm I measured.** D-1798's original claim, the flock clause, and now the brief's pin count. The rule the
+  briefs already carry (FILE/TIME/PLATFORM) is not enough on its own; the missing half is that **a correction
+  needs its own scope measured, exactly like the claim it replaces.** Carried into every later brief.
+  Also recorded, because the worker will hit it: the `enable` pin is a trap — its assertions pass BECAUSE
+  `_id "--cross-pool" demo` computes the bogus id `--cross-pool-demo` and writes one lifecycle line BEFORE
+  failing, so Task 6 must replace that pin with the new ordering rather than delete it. And `prefer` is
+  unpinned ON PURPOSE (no `CCD_ARGV` builder, no whitelist entry); giving it the flag as a shell verb does
+  not make it wire-reachable, so no wire pin may be added for it.
+- **Rulings on the wave 2b pre-flight (2026-09-07 09:30 UTC).** The worker found six cross-task conflicts,
+  four of them in my brief or the plan. Accepted: measuring Task 3's mutation row at Task 6 (a table that
+  cannot execute where it is written is a plan defect), **on condition** the deferral is recorded AT Task 3
+  and Task 6's measurement is a wave gate rather than a ledger footnote — a guard whose red is proven three
+  tasks later is fine, one nobody is scheduled to prove is what D-1741 was. **Overruled: folding obligation 3
+  (the obligation tense) into Task 7.** It is a writing default for every implementer in every task, not a
+  deliverable; a late sweep catches the comments it reads, the default stops them being written, and wave 2a
+  measured the sweep alone losing to volume at a cost of four rounds. A Task 7 sweep as well, never instead.
+  **Ruled to be DEVIATIONS and sent back for the batch:** the unrunnable mutation row (D-1741's class, a guard
+  that would have shipped unproven) and the plan's false dictated comment (D-1742's class exactly). Neither is
+  a mere ruling — a finding closed on a ruling and never numbered is the one failure mode this ledger exists
+  to prevent, and the worker's own good rulings were about to swallow both.
+  **Item 9 is answered and CLOSED both ways:** the worker could not exhibit a shape where `|| :` fires either,
+  measured on bash 5.2.21, and quotes `shared/generate.mjs`'s own docstring saying an empty `case … esac`
+  answers rc 0. The comment is being softened, with one boundary I imposed: it must name a hand-written
+  `accounts.sh` as OUT OF CONTRACT rather than assert that shape exists, or it trades one unmeasured claim for
+  another one level down — a bash measurement is not evidence about which files exist.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
@@ -511,6 +556,9 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 - `EXEC_COMMANDS = ['tmux','ccd']` stays closed; no `gh` grant, ever.
 - L0 `shared/*.ts` imports nothing (not even `node:*` types); `shared/poolrule.ts` imports only types from `./api.js`.
 - Every guard ships with a test measured RED on its deletion — before and after, not asserted.
+- **A correction needs its own scope measured, exactly like the claim it replaces** — three
+  measured instances of the coordinator generalising from the one arm it measured (D-1798's
+  original claim, the flock clause, the wave 2b brief's pin count). Carry into every brief.
 
 ## Next-wave brief
 
