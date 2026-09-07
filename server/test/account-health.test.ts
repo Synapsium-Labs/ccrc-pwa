@@ -86,6 +86,24 @@ const rawToken = (id: string, content: string): void => {
   fs.writeFileSync(j('.cc-secrets', `${id}-oauth.env`), content, { mode: 0o600 });
 };
 
+/** The real path of a binary, off the harness's own PATH. */
+const realBin = (name: string): string => {
+  for (const dir of (process.env['PATH'] ?? '').split(':')) {
+    const p = path.join(dir, name);
+    if (p && fs.existsSync(p)) return p;
+  }
+  throw new Error(`${name} is not on the harness PATH — this fixture cannot be built`);
+};
+
+/** A bin directory holding ONLY `needed`, so everything else is genuinely absent.
+ *  The way to test a preflight is to take the tool away, not to mock the check. */
+const thinBin = (needed: string[]): string => {
+  const dir = j('.thin-bin');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of needed) fs.symlinkSync(realBin(n), path.join(dir, n));
+  return dir;
+};
+
 const marker = (id: string): string => j('.cc-sessions', `${id}-authdead`);
 const markerBody = (id: string): string => fs.readFileSync(marker(id), 'utf8');
 
@@ -353,6 +371,42 @@ describe('pass discipline', () => {
     expect(feed, 'the here-string must be attached to that same explicit fd').not.toBeNull();
     expect(read![1]).toBe(feed![1]);
     expect(read![1]).not.toBe('0');   // 0 IS stdin — the bug this pins
+  });
+
+  it('a box with no flock refuses LOUDLY — it never takes the quiet contention exit', () => {
+    // The preflight's whole reason for existing, and it is O1's collapse one door
+    // up: `flock -n 9` on a box without flock fails exactly as a HELD lock does,
+    // so the quiet "someone else is running" exit retires the pass — every timer
+    // tick, forever, reporting nothing. `bash` and `jq` are symlinked in so the
+    // ONLY thing missing is flock; curl is the planted fake in `.local/bin`.
+    token('claude'); token('claude-a');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq'])}` });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/flock is not on PATH — nothing was measured/);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.existsSync(marker('claude'))).toBe(false);
+  });
+
+  it('an http:// URL is refused by curl itself — the bearer never goes out in cleartext', () => {
+    // The ONE case that needs the REAL curl, because the guard being pinned is
+    // curl's own protocol gate. It stays hermetic precisely BECAUSE the guard
+    // works: `--proto '=https'` makes curl refuse with exit 1 ("Protocol \"http\"
+    // not supported or disabled in libcurl") BEFORE it resolves anything, so
+    // nothing leaves the box. The flagless control reaches exit 6 (NXDOMAIN on the
+    // reserved `.invalid` TLD) — which is what makes exit 1 a discriminating
+    // observable rather than a coincidence.
+    //
+    // A refused request is UNMEASURED, so the standing marker must survive it and
+    // no new one may appear: the scheme guard must not become a fifth verdict.
+    token('claude'); token('claude-a');
+    fs.writeFileSync(marker('claude'), '1757203200 auth-401');
+    const r = run({ CCRC_HEALTH_URL: 'http://fixture.invalid/api/oauth/usage',
+                    CCRC_HEALTH_TIMEOUT: '5' });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/claude: unmeasured — curl exited 1/);
+    expect(fs.existsSync(marker('claude'))).toBe(true);
+    expect(fs.existsSync(marker('claude-a'))).toBe(false);
   });
 
   it('writes a marker atomically — never a partial file another reader can see', () => {
