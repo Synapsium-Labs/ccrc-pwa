@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
 } from '../../shared/api.js';
+import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -931,6 +932,55 @@ describe('the account roster — runtime data, no compile-time copies', () => {
     // `order.length`, not a magic 99 — a bound that was safe only while the
     // roster was a five-member union (see the handler's own comment).
     expect(srcOf('server/src/server.ts')).toMatch(/i < 0 \? order\.length/);
+  });
+});
+
+// The provider table, §4.2. This describe is the `.tsx?` half; the other half —
+// the one that can see a copy in a `.mjs` — is `server/test/providers.test.ts`,
+// because `sources()` above (:39-56) filters `/\.tsx?$/` at :53 and has never
+// seen a `.mjs`, a `.d.mts` or a bash script (D-76, and `source-bytes.test.ts:30-36`
+// records the incident that fact caused). Both halves ship in the same commit
+// as the promise: a single-definition claim whose scanner cannot reach the file
+// a copy would land in is a comment, not a mechanism (D-1860).
+describe('the provider table — one table, one home', () => {
+  // The positive control, the shape this file already uses for its own hunt
+  // lists (`the name list this scans is real, and is the roster`, :845-852): a
+  // scan for a name nothing spells passes everything.
+  const IDS = PROVIDER_IDS;
+  it('the id list this scans is real, and is the table', () => {
+    expect(IDS.length).toBeGreaterThanOrEqual(2);
+    expect(IDS).toContain('anthropic');
+  });
+
+  it('PROVIDERS is declared in exactly one file under the four roots', () => {
+    const RE = /^\s*(?:export\s+)?const\s+PROVIDERS\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/providers.ts']);
+  });
+
+  it('the derived lists are derived, not restated', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/providers.ts'), 'utf8');
+    expect(src).toMatch(/PROVIDER_IDS: readonly ProviderId\[\] = Object\.keys\(PROVIDERS\)/);
+    expect(src).toMatch(/GENERATABLE: readonly ProviderId\[\] =\s*\n?\s*PROVIDER_IDS\.filter/);
+    // …and the union is the table's keys, so the type cannot name a fifth
+    // provider the table does not describe.
+    expect(src).toMatch(/export type ProviderId = keyof typeof PROVIDERS;/);
+  });
+
+  it('no source file under the four roots restates the provider ids as an array literal', () => {
+    // `enumeratesAsArray`'s rule (:858-864), over the provider ids: two or more
+    // of them quoted inside one `[...]`. `providers.ts` itself is exempt only
+    // in the sense that it holds no such literal — the ids appear as KEYS, and
+    // that is the point of the table shape.
+    const enumerates = (src: string): boolean => {
+      for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
+        const hits = IDS.filter((p) => new RegExp(`['"]${p}['"]`).test(m[0]));
+        if (hits.length >= 2) return true;
+      }
+      return false;
+    };
+    const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual([]);
   });
 });
 
