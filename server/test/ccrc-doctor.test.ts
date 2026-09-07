@@ -261,11 +261,17 @@ interface RosterEntry {
   id: string;
   configDirSuffix?: string;
   exec: { kind: 'upstream' | 'generated' | 'external'; secretsFile?: string };
+  /** Task: `credentials` reads it, and `healthy()`'s contract is that every
+   *  check PASSES — so the fixture's one account has to be an account the check
+   *  has something to measure about. `_check_wrappers`' own TSV reader ignores
+   *  the field, so no existing case moves. */
+  telemetry?: 'anthropic' | 'none';
 }
 
 /** The upstream account every real roster has exactly one of — `parseRoster`
  *  refuses one without it, and `healthy()` plants its binary. */
-const UPSTREAM: RosterEntry = { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } };
+const UPSTREAM: RosterEntry = { id: 'claude', configDirSuffix: '.claude',
+  exec: { kind: 'upstream' }, telemetry: 'anthropic' };
 
 /** Writes `~/.ccrc/accounts.json`. Two fixture conveniences, both deliberate:
  *  an entry with no `configDirSuffix` gets `.<id>` (the wrapper writer below
@@ -920,6 +926,14 @@ function healthy(prefix: string): string {
   // below starts here and adds (or replaces) exactly what it is about.
   writeBinary(home, 'claude');
   writeRoster(home, [UPSTREAM]);
+  // …and its credential is where the convention says it is. A healthy box is one
+  // where every check PASSES, and `credentials` measures exactly this: the
+  // roster declares one telemetry:'anthropic' account, so there is one file it
+  // must have. Contents are never read by the check (or by this fixture) —
+  // existence and non-emptiness are the whole question.
+  mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+  writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+    'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-real-token\n', { mode: 0o600 });
   // …and it knows where its server is, and that server says the two boxes
   // agree. A healthy box is one where every check PASSES, so the fleet check
   // has to have something to measure here — a fixture whose fleet check SKIPPED
@@ -1814,6 +1828,54 @@ describe('ccrc doctor: services', () => {
     const mgr = process.platform === 'darwin' ? 'launchctl' : 'systemctl';
     expect(r.stdout).toMatch(new RegExp(`^FAIL services: ${mgr} is not on PATH`, 'm'));
     expect(r.code).toBe(1);
+  });
+});
+
+describe('ccrc doctor: services knows about the account-health timer', () => {
+  itLinux('warns — with its OWN consequence — when the probe timer is installed and stopped', () => {
+    // §A.7's parenthesis, measured: `known` (ccd/ccrc-doctor-checks:808) is a
+    // hardcoded three-name list, and a timer outside it is a unit this box runs
+    // and doctor never asks about. WARN is the right class for the same reason
+    // cap-scopes' is — a stopped probe is degradation, not a box that is down —
+    // but the SENTENCE cannot be shared: cap-scopes' says "panes spawned while
+    // it is stopped run without their memory cap", which is false here and
+    // would send an operator to the wrong place with the right remedy.
+    const home = healthy('ccrc-doctor-services-health-timer-');
+    writeUnitFile(home, 'ccd-account-health.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-account-health.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-account-health.timer is installed but inactive');
+    expect(lines[i]).toContain('no account\'s credential is being probed');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-account-health\.timer$/);
+    // A stopped reading is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    // "The PASS names every unit it asked about" is `_check_services`' own
+    // stated contract; a timer added to `known` and then never mentioned would
+    // satisfy the warn case above while measuring nothing on a healthy box.
+    const home = healthy('ccrc-doctor-services-health-timer-ok-');
+    writeUnitFile(home, 'ccd-account-health.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-account-health.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-account-health.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    // `_check_services` asks only about units whose FILE is in the unit dir, so
+    // a fourth name in `known` costs nothing on a fixture that never plants it.
+    // That is the whole reason `HEALTHY_SKIPS` and the counting pins that read
+    // it (`:1280`, `:1789`, `:1894`, `:3128`, `:4501`, `:5177`, `:5178`) stay
+    // exactly where they are.
+    const home = healthy('ccrc-doctor-services-health-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-account-health');
   });
 });
 
@@ -3616,6 +3678,58 @@ describe('ccrc doctor: wrappers', () => {
     // the check never ran at all.
     expect(line).toMatch(/^FAIL wrappers: acct-a /);
     expect(line).toBe(lineFor(runDoctor(without).stdout, 'wrappers'));
+  });
+});
+
+describe('ccrc doctor: credentials', () => {
+  it('passes on a healthy box and names what it measured', () => {
+    const home = healthy('ccrc-doctor-cred-ok-');
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 1 account/m);
+  });
+
+  it('goes red — LOUDLY — when an expected token file is absent', () => {
+    // THE WHOLE REASON THIS CHECK EXISTS. The roster structurally cannot declare
+    // where an `upstream` account's credential lives, so the probe derives the
+    // path by convention. A convention with no measurement is a silent skip
+    // waiting to happen: the probe would refuse that account for ever and the
+    // only place saying so would be a journal nobody reads.
+    const home = healthy('ccrc-doctor-cred-missing-');
+    rmSync(join(home, '.cc-secrets', 'claude-oauth.env'));
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL credentials: claude/m);
+    expect(r.stdout).toMatch(/\.cc-secrets\/claude-oauth\.env/);
+  });
+
+  it('goes red on an EMPTY token file — E4: an empty bearer answers 429, not an auth error', () => {
+    const home = healthy('ccrc-doctor-cred-empty-');
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'), '');
+    expect(runDoctor(home).stdout).toMatch(/^FAIL credentials: claude/m);
+  });
+
+  it('never prints a byte of the file', () => {
+    const home = healthy('ccrc-doctor-cred-quiet-');
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+      'export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-SENTINEL\n');
+    const r = runDoctor(home);
+    expect(r.stdout).not.toContain('SENTINEL');
+    expect(r.stderr).not.toContain('SENTINEL');
+  });
+
+  it('ignores a telemetry:none account — it has no Anthropic credential to have', () => {
+    const home = healthy('ccrc-doctor-cred-none-');
+    writeRoster(home, [UPSTREAM,
+      { id: 'other-lane', exec: { kind: 'external' }, telemetry: 'none' }]);
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 1 account/m);
+  });
+
+  it('SKIPs rather than PASSing when there is no roster — `wrappers` owns that fact', () => {
+    // Two checks measuring one thing is how they come to disagree, and a doctor
+    // that reports agreement it measured nothing is the worst failure this verb
+    // has. No remedy under a skip, by this file's own contract.
+    const home = healthy('ccrc-doctor-cred-noroster-');
+    rmSync(join(home, '.ccrc', 'accounts.json'));
+    expect(runDoctor(home).stdout).toMatch(/^SKIP credentials: /m);
   });
 });
 

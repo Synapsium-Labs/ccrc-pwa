@@ -188,6 +188,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  credentials
   pools
   graphify
   graphify-path
@@ -800,12 +801,12 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
 }
 
 _check_services() {
-  local dir="$CCRC_UNIT_DIR" u st rc=0
+  local dir="$CCRC_UNIT_DIR" u st why rc=0
   local -a ok=() installed=()
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -853,10 +854,25 @@ _check_services() {
     fi
     case "$u" in
       *.timer)
-        # Unreachable on macOS today (`_inst_units` installs no cap-scopes
+        # ONE CLASS, TWO CONSEQUENCES. Both timers DEGRADE rather than down the
+        # box, so both warn — but the sentence an operator reads has to name
+        # what THIS one stopping costs, or they get the right remedy attached to
+        # somebody else's reason. `_dr_warn`'s detail is the only place that
+        # fact exists, so it is a case rather than one shared string.
+        #
+        # The `*` arm is not decoration: `known` above is the list this file
+        # maintains, and the day a fifth unit joins it, a timer with no sentence
+        # of its own says something true and vague rather than something
+        # confidently wrong about memory caps.
+        case "$u" in
+          ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
+          ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
+          *) why="the job it fires is not running" ;;
+        esac
+        # Unreachable on macOS today (`_inst_units` installs neither timer's
         # plist there) — routed through the hint anyway, so the day that
         # changes the remedy is already right.
-        _dr_warn services "$u is installed but ${st:-not active} — panes spawned while it is stopped run without their memory cap" \
+        _dr_warn services "$u is installed but ${st:-not active} — $why" \
           "$(_dr_enable_now_hint "$u")"
         [ "$rc" -eq 1 ] || rc=2 ;;
       *)
@@ -2636,6 +2652,87 @@ _check_wrappers() {
     return "$rc"
   fi
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+}
+
+# ── credentials: does every account this box will PROBE have a token file? ──
+# `ccd-account-health` derives each token's path by CONVENTION —
+# `$HOME/.cc-secrets/<id>-oauth.env` for every `telemetry: "anthropic"` account
+# — because `shared/roster.ts` permits `exec.secretsFile` only on
+# `kind: "generated"`, so the mandatory upstream account structurally cannot
+# declare where its credential lives. A roster-driven probe would have covered
+# the generated accounts and SILENTLY SKIPPED the primary one: precisely the
+# class of defect the health work exists to remove.
+#
+# A convention with no measurement is that silent skip waiting to happen. The
+# probe REFUSES an account whose token file is absent or empty — the fourth
+# outcome, and the correct one — but a refusal that only reaches a journal is
+# indistinguishable from a fleet where nothing went wrong. THIS is where absence
+# becomes loud.
+#
+# READ BY NODE, NOT JQ, for `_check_wrappers`' stated reason: this check must not
+# fail for a reason that belongs to another one, and a box with no jq already
+# gets exactly one FAIL, from the jq check.
+#
+# NOT ONE BYTE OF ANY FILE IS READ. `[ -s ]` answers existence and non-emptiness
+# together, which is the whole question — and this file's standing rule (see
+# `_check_config`) is that a credential is reported as SET or NOT SET and never
+# quoted at a terminal an operator pastes into a ticket.
+#
+# SKIP, NOT PASS, ON AN ABSENT OR UNREADABLE ROSTER: `_check_wrappers` above
+# already owns "this box has no roster", and two checks measuring one thing is
+# how they come to disagree. Skip on ZERO eligible accounts too — a scan over an
+# empty list passes everything, and a doctor reporting agreement nobody measured
+# is the worst failure this verb has.
+_check_credentials() {
+  local roster="$HOME/.ccrc/accounts.json"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_skip credentials "no readable account roster at \$HOME/.ccrc/accounts.json — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_fail credentials "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+  local ids rc
+  ids="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
+    catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    // Only ids that match the shared grammar reach stdout: an id outside it can
+    // name no file, and it must never be printed at a terminal that acts on
+    // control bytes (see `_check_wrappers`, which escapes for the same reason).
+    const ok = /^[a-z][a-z0-9-]{0,31}$/;
+    process.stdout.write(j.accounts
+      .filter((a) => a && typeof a === "object" && a.telemetry === "anthropic" && ok.test(a.id))
+      .map((a) => a.id).join("\n"));
+  ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_skip credentials "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if [ -z "$ids" ]; then
+    _dr_skip credentials "no account on this box declares telemetry \"anthropic\", so there is no Anthropic credential to look for"
+    return 3
+  fi
+  local id n=0 miss=0
+  local -a bad=()
+  for id in $ids; do
+    n=$((n + 1))
+    # THE CONVENTION, SPELLED ONCE IN THIS FILE — the second and last holder;
+    # `single-definition.test.ts` pins the pair and compares their shape.
+    [ -s "$HOME/.cc-secrets/$id-oauth.env" ] && continue
+    miss=$((miss + 1))
+    bad+=("$id has no readable token at \$HOME/.cc-secrets/$id-oauth.env")
+  done
+  if [ "$miss" -gt 0 ]; then
+    _dr_fail credentials "$(_dr_join "${bad[@]}")" \
+      "the account-health probe refuses an account with no token, so its liveness is never measured — put the account's CLAUDE_CODE_OAUTH_TOKEN in that file (0600), or set telemetry to \"none\" for an account this box does not authenticate to Anthropic"
+    return 1
+  fi
+  _dr_pass credentials "$n account(s) declaring telemetry \"anthropic\", each with a token file under \$HOME/.cc-secrets"
 }
 
 # ── the project pool tags (account pools, spec §5.4.6) ────────────────────

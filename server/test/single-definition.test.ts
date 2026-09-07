@@ -1444,6 +1444,58 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
   });
 });
 
+// — the account-health probe's token convention —
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly two bash files', () => {
+  // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
+  // so the mandatory upstream account cannot declare where its credential
+  // lives — and a roster-driven probe would silently skip the primary account.
+  // The convention closes that, and the two files that spell it CANNOT share a
+  // constant: `ccd-account-health` is installed alone into $HOME/.local/bin
+  // with no library beside it, and `ccrc-doctor-checks` is loaded by `ccrc`
+  // through ${BASH_SOURCE[0]} on a box that may not have the probe at all.
+  // So the agreement is MEASURED, the way `.ccrc/remote-control`'s four
+  // spellings are: an exact holder list, and a value comparison.
+  const NEEDLE = '-oauth.env';
+
+  it('is spelled by exactly those two files, each named here BY NAME', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd-account-health',   // _ah_token_file — the probe's own reader
+      'ccd/ccrc-doctor-checks',   // _check_credentials — the operator-facing re-measurement
+    ]);
+  });
+
+  it('and both build the same path from an id', () => {
+    // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
+    // lines whose trimmed start is `#`, and each file names the file TWICE in
+    // shell — once building the path and once in an operator-facing message
+    // that quotes it back (`_ah_say`'s refusal; `bad+=(…)`'s FAIL detail). A
+    // bare `.includes(NEEDLE)` therefore counts 2 on each side and this pin
+    // would be red on arrival for a reason that is not a defect. The message
+    // copies are a feature — an operator is told the exact path — so the
+    // filter names the construction instead of forbidding the mention.
+    const probe = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-health'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('printf'));
+    const doctor = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('[ -s '));
+    expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
+    expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
+    // A REAL comparison, not a tautology. Each line is reduced to the path it
+    // BUILDS, with the two files' different spellings of "the secrets dir" and
+    // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
+    // "$SECRETS_DIR" "$1"` and the doctor's `[ -s "$HOME/.cc-secrets/$id-oauth.env" ]`
+    // both reduce to the SAME literal. A `shape` that returned a constant for
+    // anything matching the filter (the first draft of this pin did) could
+    // never fail, which is the failure mode this whole file exists to catch.
+    const shape = (l: string): string => {
+      const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
+      expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
+      return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>');
+    };
+    expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
+    expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.
