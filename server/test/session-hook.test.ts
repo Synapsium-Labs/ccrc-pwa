@@ -1826,3 +1826,60 @@ describe('the program subject', () => {
     expect(plain()).not.toContain('ccrc-program:');
   });
 });
+
+describe('the R7 counters', () => {
+  const bash = (command: string): void => {
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command } });
+  };
+
+  it('counts the spelling the fleet actually uses, not the one it reads', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    bash('API="$HOME/.local/bin/ccrc-api"; "$API" peers list --of demo');
+    expect(readState().ccrcPeerReads).toBe(1);
+  });
+
+  it('does not count prose or a lookalike', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    bash('ls | grep peers');
+    bash('echo speers listing');
+    expect(readState().ccrcPeerReads).toBe(0);
+  });
+
+  it('counts a programless claim apart from a peer read', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    bash('~/.local/bin/ccrc-api claims take --json -');
+    const s = readState();
+    expect(s.ccrcClaims).toBe(1);
+    expect(s.ccrcPeerReads).toBe(0);
+  });
+
+  it('resets on a new context and is kept across resume', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    bash('ccrc-api peers list --of demo');
+    expect(readState().ccrcPeerReads).toBe(1);
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(readState().ccrcPeerReads).toBe(1);
+    run({ hook_event_name: 'SessionStart', source: 'clear' });
+    expect(readState().ccrcPeerReads).toBe(0);
+  });
+
+  it('carries both counters across an ordinary event', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    bash('ccrc-api peers list --of demo');
+    bash('ccrc-api claims take --json -');
+    bash('ls');
+    const s = readState();
+    expect(s.ccrcPeerReads).toBe(1);
+    expect(s.ccrcClaims).toBe(1);
+  });
+
+  it('survives a non-numeric carried value', () => {
+    run({ hook_event_name: 'SessionStart', source: 'startup' });
+    const f = stateFile();
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    j.ccrcPeerReads = 'seven';
+    fs.writeFileSync(f, JSON.stringify(j));
+    bash('ls');
+    expect(readState().ccrcPeerReads).toBe(0);
+  });
+});

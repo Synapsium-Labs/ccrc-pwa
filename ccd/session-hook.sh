@@ -603,6 +603,17 @@ REG="$HOME/.cc-sessions"
 # the trailing one stops `graphify querying-something-else`.
 GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
 
+# ── R7: what counts as ACTING ON THE CARD ───────────────────────────────
+# ANCHORED ON THE VERB PAIR, NEVER ON THE CLIENT'S NAME. Both skills teach
+# `API="$HOME/.local/bin/ccrc-api"` and then call `"$API" peers list`
+# (coordinator-skill/references/peer-protocol.md), and this hook reads the
+# UNEXPANDED command text — so a regex anchored on `ccrc-api` scores ZERO on
+# every call the fleet actually makes, and looks perfectly healthy doing it.
+# The leading class stops `speers list` and prose; the trailing one stops
+# `peers listing`.
+CCRC_PEERS_RE='(^|[;&|[:space:]])peers[[:space:]]+list([[:space:]]|$)'
+CCRC_CLAIMS_RE='(^|[;&|[:space:]])claims[[:space:]]+take([[:space:]]|$)'
+
 # ── R5: the search gate's bounds, its kill-switch and what it gates ─────
 # D-1613. Every one of these is named ONCE and read everywhere it is needed —
 # the card's gate sentence, the arm condition and the deny reason all take the
@@ -737,7 +748,12 @@ case "$event" in
     # so a payload without them needs no jq at all and the common tool call
     # pays nothing. `$gcmd` stays "" there, which the increment below already
     # treats as "no command".
-    if [[ "$payload" == *graphify* ]]; then
+    # R7 adds TWO-WORD phrases, not two words. Measured: a single-word
+    # `*claims*` prefilter costs an extra jq fork on any payload merely
+    # mentioning the word (p50 42 ms vs 33 ms); the phrases cost nothing
+    # measurable. A line that runs them cannot fail to carry them literally.
+    if [[ "$payload" == *graphify* || "$payload" == *"peers list"* \
+       || "$payload" == *"claims take"* ]]; then
       gcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
         <<<"$payload" 2>/dev/null) || gcmd=""
     fi ;;
@@ -865,11 +881,13 @@ f="$REG/$id.hookstate.json"
 # degrade it already had (D-1613 measures that failure separately for the gate,
 # just below: for the WRITE the degrade is unchanged). This file runs under `set -uo pipefail` and NOT
 # `set -e`, so a `read` hitting EOF is inert.
-subs=""; prev_state=""; gq=""; gd=""
-{ read -r prev_state; read -r gq; read -r gd; read -r subs; } < <(jq -r \
+subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""
+{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r subs; } < <(jq -r \
   '(.state // ""),
    (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
    (if (.graphGateDenials | type) == "number" then (.graphGateDenials | floor) else 0 end),
+   (if (.ccrcPeerReads | type) == "number" then (.ccrcPeerReads | floor) else 0 end),
+   (if (.ccrcClaims | type) == "number" then (.ccrcClaims | floor) else 0 end),
    (.subagents // [] | tostring)' \
   "$f" 2>/dev/null)
 # A HOOKSTATE THAT EXISTS AND WILL NOT PARSE IS NOT A SESSION THAT COUNTED ZERO
@@ -884,6 +902,8 @@ hs_unreadable=0
 [[ "$subs" == \[* ]] || subs="[]"
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0
 [[ "$gd" =~ ^[0-9]+$ ]] || gd=0
+[[ "$cp" =~ ^[0-9]+$ ]] || cp=0
+[[ "$cc" =~ ^[0-9]+$ ]] || cc=0
 # `startup` and `clear` are new sessions; `resume` and `compact` are the SAME
 # session still going, and a counter that reset on compaction would erase the
 # evidence at precisely the moment the session most needed the card (R1).
@@ -908,8 +928,16 @@ hs_unreadable=0
 # once per wave (dispatch `/clear`s it from wave 2 on) and a `/clear` by hand
 # re-arms it. A `resume` is the same session still going, and re-arming there
 # would deny a search the session had already paid for once.
-if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; fi
+# R7's counters reset with R4's and for D-1248's exact reason: the card is
+# emitted once per new context, so a counter carried across a `/clear` would
+# credit context N+1's card with context N's act.
+if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; cp=0; cc=0; fi
 if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
+# THE PROXIMATE ACT and THE DISTAL ONE, counted apart. `peers list` is the act
+# the co-tenant card prescribes; `claims take` is what that answer's own rule 0
+# prescribes next, and it is the one with a durable server-side arbiter.
+if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_PEERS_RE  ]]; then cp=$((cp + 1)); fi
+if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 
 # ── R5: THE SEARCH GATE (D-1613) ────────────────────────────────────────
 # The spec DECLINED this gate and the operator reversed it on R4's own reading:
@@ -1053,9 +1081,11 @@ out=$(jq -cn \
   --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
   --argjson graphGateDenials "$gd" \
+  --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
-    graphGateDenials:$graphGateDenials}
+    graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
+    ccrcClaims:$ccrcClaims}
    + (if $interrupted then {interrupted:true} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
