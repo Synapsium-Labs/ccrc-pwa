@@ -78,10 +78,20 @@
 
 .auto-run-empty { color: var(--ink-tertiary); font-size: var(--text-xs); }
 .auto-run-list { display: grid; gap: var(--sp-1); }
+/* The row is now a DOOR to its own step trail (spec §11's run detail), so the
+   one-line summary moved into a button and the row became its container. The
+   flex line the summary had is unchanged — it is the same line, one element
+   in. */
 .auto-run-row {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  display: grid; gap: var(--sp-1);
   background: var(--bg-well); color: var(--ink-on-well); border-radius: var(--r-sm);
   padding: var(--sp-1) var(--sp-2); font-size: var(--text-2xs); font-family: var(--font-mono);
+}
+.auto-run-row .auto-run-open {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  min-height: var(--tap-min); width: 100%; padding: 0;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  color: var(--ink-on-well); font: inherit;
 }
 /* ON THE WELL, NOT THE SURFACE. `--bg-well` is deliberately dark in BOTH
    themes (tokens.css:43, :320), so the ordinary ink scale does not apply to
@@ -103,6 +113,43 @@
 .auto-run-row .auto-run-adopted { color: var(--ink-on-well); font-weight: 600; }
 .auto-run-row .auto-run-refusal { color: var(--ink-on-well); font-weight: 600; }
 .auto-run-gap { color: var(--ink-tertiary); font-size: var(--text-2xs); font-style: italic; }
+
+/* THE STEP TRAIL. Inside the run row, so it is ON THE WELL and every ink here
+   is `--ink-on-well` for the reason stated above — the ordinary ink scale
+   measures below the 4.5 floor against this ground, and there is no
+   attention-on-well token to reach for. A failed step therefore takes its
+   second cue from the glyph and the weight, never from hue alone. */
+.auto-step-list {
+  display: grid; gap: 2px; margin: 0; padding: 0 0 0 var(--sp-2); list-style: none;
+}
+.auto-step-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
+  color: var(--ink-on-well); font-size: var(--text-2xs); font-family: var(--font-mono);
+}
+.auto-step-row[data-ok='false'] { font-weight: 600; }
+.auto-step-row .auto-step-glyph { color: var(--ink-on-well); }
+.auto-step-row .auto-step-name { color: var(--ink-on-well); }
+.auto-step-row .auto-step-when { color: var(--ink-on-well); opacity: 0.78; font-variant-numeric: tabular-nums; }
+.auto-step-row .auto-step-detail { color: var(--ink-on-well); overflow-wrap: anywhere; }
+/* A cut detail says so — machine output is TRUNCATED, never refused, and an
+   operator reading a cut detail must not read the missing half as silence. */
+.auto-step-row .auto-step-cut { color: var(--ink-on-well); font-weight: 600; }
+.auto-step-loading, .auto-step-empty {
+  color: var(--ink-on-well); opacity: 0.78; font-size: var(--text-2xs); font-family: var(--font-mono);
+}
+
+/* The global kill switch, in the header beside the title: the same chip
+   register as the filters, because it is a state you READ as often as you
+   set. `data-paused` carries the direction for the visual gate; `aria-pressed`
+   carries it for everything else — never colour alone. */
+.auto-global-pause {
+  margin-left: auto; min-height: var(--tap-min); padding: 0 var(--sp-2);
+  background: var(--bg-surface); color: var(--ink-secondary);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-sm);
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono); cursor: pointer;
+}
+.auto-global-pause[data-paused='true'] { color: var(--ink-primary); border-color: var(--edge-strong); font-weight: 600; }
+.auto-global-pause:disabled { cursor: default; color: var(--ink-tertiary); }
 
 .auto-door {
   min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-3);

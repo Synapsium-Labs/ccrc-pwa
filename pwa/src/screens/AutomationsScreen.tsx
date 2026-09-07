@@ -18,7 +18,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  type AutomationLastFilter, type AutomationRunSummary, type AutomationState, type AutomationSummary,
+  type AutomationLastFilter, type AutomationRunSummary, type AutomationState, type AutomationStepWire,
+  type AutomationSummary,
 } from '../../../shared/api';
 import { cadenceFromColumns, describeCadence } from '../../../shared/schedule';
 import {
@@ -46,16 +47,58 @@ import '../auto/auto.css';
  *  `automations.test.tsx`). */
 const loadAutomationsDefault = (
   filter?: { state?: AutomationState },
-): Promise<{ automations: AutomationSummary[] }> => api.automations(filter);
+): Promise<{ automations: AutomationSummary[]; paused?: boolean }> => api.automations(filter);
 
 const stateFilters: readonly ('all' | AutomationState)[] = ['all', 'armed', 'paused', 'retired'];
 const outcomeFilters: readonly ('all' | AutomationLastFilter)[] = ['all', 'ok', 'failed', 'never-ran'];
 
-function AutomationRunRow({ run, nowSec }: { run: AutomationRunSummary; nowSec: number }): ReactNode {
+/** ONE STEP OF THE TRAIL (spec §11's run detail: "the step trail in order,
+ *  each with time, `ok`, detail, and a visible marker when `truncatedBytes >
+ *  0`"). The marker is not decoration: a detail is TRUNCATED, never refused
+ *  (it is machine output — ccd's stderr on a failed spawn is the largest text
+ *  stored), so an operator reading a cut detail has to know it is cut, or
+ *  they will read the missing half as "nothing more was said". */
+function AutomationStepRow({ step, nowSec }: { step: AutomationStepWire; nowSec: number }): ReactNode {
+  return (
+    <li className="auto-step-row" data-ok={step.ok ? 'true' : 'false'} data-step={step.step}>
+      <span className="auto-step-glyph" aria-hidden="true">{step.ok ? '✓' : '✗'}</span>
+      <span className="auto-step-name">{step.step}</span>
+      <span className="auto-step-when">{formatAge(nowSec - Math.floor(step.at / 1000))}</span>
+      {step.detail !== '' && <span className="auto-step-detail">{step.detail}</span>}
+      {step.truncatedBytes > 0 && (
+        <span className="auto-step-cut" data-cut="true" title="the stored detail was truncated">
+          +{step.truncatedBytes} bytes cut
+        </span>
+      )}
+    </li>
+  );
+}
+
+function AutomationRunRow({ run, nowSec, getRun }: {
+  run: AutomationRunSummary; nowSec: number; getRun: typeof api.automationRun;
+}): ReactNode {
   const outcome = automationOutcomeChip(run.outcome);
   const refusal = run.refusal === null ? null : refusalSentence(run.refusal);
+  // THE TRAIL IS PER RUN, so its state lives per run — the panel above holds
+  // ONE `detail`, and giving the trail the same shape would make one run's
+  // steps land under another (the row-ownership defect this screen already
+  // carries a guard for). Its own three states, for this file's first rule:
+  // a failed read must not read as "this run had no steps".
+  const [open, setOpen] = useState(false);
+  const [steps, setSteps] = useState<AutomationStepWire[] | null>(null);
+  const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading');
+  const toggle = (): void => {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    setSteps(null);
+    setState('loading');
+    getRun(run.id)
+      .then((r) => { setSteps(r.steps); setState('ok'); })
+      .catch(() => setState('error'));
+  };
   return (
     <li className="auto-run-row" data-outcome={outcome.token}>
+      <button type="button" className="auto-run-open" onClick={toggle} aria-expanded={open}>
       <span className="auto-run-glyph" aria-hidden="true">{outcome.glyph}</span>
       <span className="auto-run-outcome">{outcome.word}</span>
       <span className="auto-run-trigger">{run.trigger}</span>
@@ -80,6 +123,20 @@ function AutomationRunRow({ run, nowSec }: { run: AutomationRunSummary; nowSec: 
         </span>
       )}
       {refusal !== null && <span className="auto-run-refusal">{refusal}</span>}
+      </button>
+      {open && (
+        state === 'loading' ? (
+          <p className="auto-step-loading">Loading…</p>
+        ) : state === 'error' ? (
+          <p className="auto-step-loading" data-state="error">Could not reach the server.</p>
+        ) : steps !== null && steps.length === 0 ? (
+          <p className="auto-step-empty">No steps recorded for this run.</p>
+        ) : (
+          <ol className="auto-step-list">
+            {(steps ?? []).map((st) => <AutomationStepRow key={st.id} step={st} nowSec={nowSec} />)}
+          </ol>
+        )
+      )}
     </li>
   );
 }
@@ -89,6 +146,7 @@ function AutomationDetail({
   runs,
   runsEvicted,
   nowSec,
+  getRun,
   onArm,
   onRun,
   onPause,
@@ -101,6 +159,7 @@ function AutomationDetail({
   runs: AutomationRunSummary[];
   runsEvicted: number;
   nowSec: number;
+  getRun: typeof api.automationRun;
   onArm: () => void;
   onRun: () => void;
   onPause: () => void;
@@ -146,7 +205,7 @@ function AutomationDetail({
         <p className="auto-run-empty">No runs yet.</p>
       ) : (
         <ul className="auto-run-list">
-          {runs.map((r) => <AutomationRunRow key={r.id} run={r} nowSec={nowSec} />)}
+          {runs.map((r) => <AutomationRunRow key={r.id} run={r} nowSec={nowSec} getRun={getRun} />)}
         </ul>
       )}
       {/* §9: eviction is not a silence — the gap row states the NUMBER the
@@ -169,6 +228,7 @@ function AutomationRow({
   onToggle,
   detail,
   detailState,
+  getRun,
   ...actions
 }: {
   automation: AutomationSummary;
@@ -177,6 +237,7 @@ function AutomationRow({
   onToggle: () => void;
   detail: { automation: AutomationSummary; runs: AutomationRunSummary[] } | null;
   detailState: 'loading' | 'ok' | 'error';
+  getRun: typeof api.automationRun;
   onArm: () => void;
   onRun: () => void;
   onPause: () => void;
@@ -223,6 +284,7 @@ function AutomationRow({
             runs={detail.runs}
             runsEvicted={detail.automation.runsEvicted}
             nowSec={nowSec}
+            getRun={getRun}
             {...actions}
           />
         ) : null
@@ -233,8 +295,12 @@ function AutomationRow({
 
 export interface AutomationsScreenProps {
   store?: FleetStore;
-  loadAutomations?: (filter?: { state?: AutomationState }) => Promise<{ automations: AutomationSummary[] }>;
+  loadAutomations?: (
+    filter?: { state?: AutomationState },
+  ) => Promise<{ automations: AutomationSummary[]; paused?: boolean }>;
   getAutomation?: typeof api.automation;
+  getRun?: typeof api.automationRun;
+  pauseAutomations?: typeof api.automationsPause;
   armAutomation?: typeof api.armAutomation;
   runAutomation?: typeof api.runAutomation;
   setAutomationState?: typeof api.setAutomationState;
@@ -244,6 +310,8 @@ export function AutomationsScreen({
   store = useFleetStore,
   loadAutomations = loadAutomationsDefault,
   getAutomation = api.automation,
+  getRun = api.automationRun,
+  pauseAutomations = api.automationsPause,
   armAutomation = api.armAutomation,
   runAutomation = api.runAutomation,
   setAutomationState = api.setAutomationState,
@@ -253,6 +321,14 @@ export function AutomationsScreen({
   const conn = store((s) => s.conn);
   const [cold, setCold] = useState<AutomationSummary[] | null>(null);
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
+  // THE GLOBAL KILL SWITCH, and which way it points. `POST /api/automations/
+  // pause` shipped with no reader at all — not on the frame, not on any GET —
+  // so the only door a phone could offer was a button that could not say
+  // whether every automation on the box was currently held. It rides the list
+  // read now (one reader, additive); `undefined` from an older server leaves
+  // the control out rather than guessing a direction.
+  const [globalPause, setGlobalPause] = useState<boolean | null>(null);
+  const [pauseBusy, setPauseBusy] = useState(false);
 
   // RETIRED IS A SERVER-SIDE READ, NOT A CLIENT-SIDE FILTER. The store's
   // default filter appends `state != 'retired'` — deliberately, spec §9 ("a
@@ -303,7 +379,12 @@ export function AutomationsScreen({
 
   const loadCold = (): Promise<void> =>
     loadRef.current()
-      .then((r) => { if (aliveRef.current) { setCold(r.automations); setColdState('ok'); } })
+      .then((r) => {
+        if (!aliveRef.current) return;
+        setCold(r.automations);
+        setColdState('ok');
+        if (r.paused !== undefined) setGlobalPause(r.paused);
+      })
       .catch(() => { if (aliveRef.current) setColdState('error'); });
 
   useEffect(() => {
@@ -450,6 +531,26 @@ export function AutomationsScreen({
           ‹
         </button>
         <h1 className="auto-title">Automations</h1>
+        {globalPause !== null && (
+          <button
+            type="button"
+            className="auto-global-pause"
+            aria-label={globalPause ? 'automations paused' : 'pause all automations'}
+            aria-pressed={globalPause}
+            data-paused={globalPause}
+            disabled={pauseBusy}
+            onClick={() => {
+              const next = !globalPause;
+              setPauseBusy(true);
+              pauseAutomations(next)
+                .then((r) => { if (aliveRef.current) setGlobalPause(r.paused); })
+                .catch(() => { /* the switch keeps saying what the server last said */ })
+                .finally(() => { if (aliveRef.current) setPauseBusy(false); });
+            }}
+          >
+            {globalPause ? 'All paused' : 'Pause all'}
+          </button>
+        )}
       </header>
 
       {/* `aria-pressed` is what carries SELECTION, not `data-selected`: a data
@@ -526,6 +627,7 @@ export function AutomationsScreen({
               onToggle={() => openDetail(a.id)}
               detail={expandedId === a.id ? detail : null}
               detailState={detailState}
+              getRun={getRun}
               onArm={() => runAction('arm', a.id, () => armAutomation(a.id))}
               onRun={() => runAction('run', a.id, () => runAutomation(a.id))}
               onPause={() => runAction('pause', a.id, () => setAutomationState(a.id, 'paused'))}

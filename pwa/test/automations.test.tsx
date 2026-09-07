@@ -290,6 +290,106 @@ describe('the filter chips say what they are and whether they are on', () => {
   });
 });
 
+describe('the step trail — the log the runner exists to leave behind', () => {
+  it('opens a run and renders its steps in order, with the truncation marker', async () => {
+    // Spec §11's run detail: "the step trail in order, each with time, `ok`,
+    // detail, and a visible marker when `truncatedBytes > 0`". The route and
+    // its api client both shipped; NOTHING rendered them, so the branch's
+    // whole point — "full history of runs AND LOGS" — stopped at the run's
+    // one-line outcome. A refused spawn's ccd stderr, the reason a prompt did
+    // not land, which rung refused: all of it was on the box and nowhere a
+    // phone could see it.
+    const steps = [
+      { id: 1, runId: 7, at: 1_000, step: 'precheck' as const, ok: true, detail: 'placed on claude, homeScore 12', truncatedBytes: 0 },
+      { id: 2, runId: 7, at: 2_000, step: 'spawn' as const, ok: false, detail: 'ws-add failed: disk floor', truncatedBytes: 48 },
+      { id: 3, runId: 7, at: 3_000, step: 'close' as const, ok: false, detail: 'settled refused:spawn-refused', truncatedBytes: 0 },
+    ];
+    const row = runRow({ id: 7, outcome: 'refused', refusal: 'spawn-refused', endedAt: 3_000 });
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()] })}
+        getAutomation={async () => ({ automation: auto(), runs: [row] })}
+        getRun={async (runId: number) => {
+          expect(runId, 'the trail is fetched for the run that was tapped').toBe(7);
+          return { run: row, steps };
+        }}
+      />,
+    );
+    await openRow();
+    fireEvent.click(await screen.findByRole('button', { name: /refused/ }));
+
+    let trail: HTMLElement[] = [];
+    await waitFor(() => {
+      trail = screen.getAllByRole('listitem').filter((li) => li.className.includes('auto-step-row'));
+      expect(trail.length).toBe(3);
+    });
+    expect(trail.map((li) => li.textContent ?? ''), 'in the order the act wrote them')
+      .toEqual([
+        expect.stringContaining('precheck'),
+        expect.stringContaining('spawn'),
+        expect.stringContaining('close'),
+      ]);
+    expect(trail[1]!.textContent).toContain('ws-add failed: disk floor');
+    expect(trail[1]!.getAttribute('data-ok'), 'a failed step is marked as one').toBe('false');
+    expect(trail[0]!.getAttribute('data-ok')).toBe('true');
+    // `truncatedBytes > 0` is a VISIBLE marker, not a silence: the operator
+    // must know the text they are reading is not all of it.
+    expect(trail[1]!.textContent).toMatch(/48 bytes/);
+  });
+
+  it('says which of the three things happened — loading, failed, or a run with no steps', async () => {
+    const row = runRow({ id: 7 });
+    let reject: ((e: Error) => void) | null = null;
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()] })}
+        getAutomation={async () => ({ automation: auto(), runs: [row] })}
+        getRun={async () => new Promise((_res, rej) => { reject = rej; })}
+      />,
+    );
+    await openRow();
+    // The run row's own door, not a filter chip that happens to share a word.
+    const runOpen = await waitFor(() => {
+      const b = screen.getAllByRole('button').find((x) => x.className.includes('auto-run-open'));
+      expect(b, 'the panel is open and its run row is there').toBeDefined();
+      return b!;
+    });
+    fireEvent.click(runOpen);
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    await act(async () => { reject!(new Error('offline')); });
+    const err = await screen.findByText(/Could not reach the server/);
+    expect(err, 'a failed trail read must not read as "this run had no steps"')
+      .toHaveAttribute('data-state', 'error');
+  });
+});
+
+describe('the global kill switch has a door, and the door shows which way it points', () => {
+  it('reads the switch from the server and flips it', async () => {
+    let paused = true;
+    const calls: boolean[] = [];
+    seedStore({ automations: [auto()], automationsFrameSeen: true });
+    render(
+      <AutomationsScreen
+        loadAutomations={async () => ({ automations: [auto()], paused })}
+        pauseAutomations={async (p: boolean) => { calls.push(p); paused = p; return { paused: p }; }}
+      />,
+    );
+    // It POINTS somewhere: an operator must be able to see that every
+    // automation on this box is currently held, which is exactly what a
+    // set-only route could never tell them.
+    const toggle = await screen.findByRole('button', { name: /automations paused|pause all automations/i });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(toggle);
+    await waitFor(() => { expect(calls).toEqual([false]); });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /automations paused|pause all automations/i }))
+        .toHaveAttribute('aria-pressed', 'false');
+    });
+  });
+});
+
 describe('the filters actually narrow the list', () => {
   it('each chip and the project select narrow it, and an empty result says FILTERED, not empty', async () => {
     // The chip fixtures asserted `aria-pressed` and stopped there, so the

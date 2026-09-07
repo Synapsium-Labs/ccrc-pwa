@@ -174,7 +174,17 @@ export function registerAutoRoutes(app: FastifyInstance, deps: Deps): void {
         ? { last: 'never-ran' as const }
         : typeof q.last === 'string' && isAutomationOutcome(q.last) ? { last: q.last } : {}),
     };
-    return reply.code(200).send({ ok: true, automations: coord.automations(filter).map(toAutomationSummary) });
+    // `paused` RIDES THIS READ. The global kill switch had a setter and no
+    // reader anywhere — not on the frame, not here, no GET of its own — so a
+    // phone could throw it but never see which way it points, which is why it
+    // shipped with no door. Additive, and read in exactly one place: this
+    // list is what the screen's cold read already asks for, and every action
+    // on that screen re-reads it.
+    return reply.code(200).send({
+      ok: true,
+      automations: coord.automations(filter).map(toAutomationSummary),
+      paused: coord.automationsPaused().paused,
+    });
   });
 
   // ── POST /api/automations — create, always `paused` (§7's arm gate) ────

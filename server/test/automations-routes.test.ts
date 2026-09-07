@@ -242,6 +242,37 @@ describe('POST /api/automations — create', () => {
   });
 });
 
+describe('the global kill switch is READABLE, not only settable', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { await app?.close(); app = undefined; });
+
+  it('GET /api/automations carries the switch, so a phone can render its own state', async () => {
+    // `POST /api/automations/pause` had no read anywhere: not on the
+    // `{type:'automations'}` frame, not on this list, no GET of its own. A
+    // switch you can throw but not see is one an operator cannot trust —
+    // the PWA could only ever offer a button with no idea which way it
+    // points, which is why the route shipped with no door at all.
+    //
+    // ADDITIVE and read in ONE place, per this tree's wire discipline: the
+    // list route already answers on every cold read the screen performs.
+    const home = mkTmp('ccrc-auto-routes-');
+    const { run } = makeRunner(home, 'go');
+    const w = await openApp(home, run); app = w.app;
+
+    const before = await app.inject({ method: 'GET', url: '/api/automations' });
+    expect(before.statusCode).toBe(200);
+    expect(before.json()).toMatchObject({ ok: true, paused: false });
+
+    const set = await app.inject({
+      method: 'POST', url: '/api/automations/pause', payload: { paused: true },
+    });
+    expect(set.statusCode).toBe(200);
+    const after = await app.inject({ method: 'GET', url: '/api/automations' });
+    expect(after.json()).toMatchObject({ ok: true, paused: true });
+    expect(w.coord.automationsPaused().paused, 'and the store agrees').toBe(true);
+  });
+});
+
 describe('the arm gate — never-run-by-hand, and what clears it', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { await app?.close(); app = undefined; });
