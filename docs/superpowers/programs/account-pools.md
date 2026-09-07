@@ -547,6 +547,71 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   `accounts.sh` as OUT OF CONTRACT rather than assert that shape exists, or it trades one unmeasured claim for
   another one level down — a bash measurement is not evidence about which files exist.
 
+- **The wave 2b wire-vocabulary breach, and three errors of mine inside the ruling on it (2026-09-07
+  14:24–15:23 UTC).** The worker raised it mid-wave rather than at wave-done, correctly: `ccd` had
+  begun journalling `meas.home`, `meas.pool` and `meas.reason` on the `rehome` row against a
+  `LifecycleMeas` that declared 25 keys, so `ccd-lifecycle-contain.test.ts:172` was red with
+  `an unlisted meas key: expected [ 'home', 'pool', 'reason' ] to deeply equal []`. Attribution
+  measured independently: all three arrived in Task 3 (`ce852626`); `origin/main`'s `ccd` emits none;
+  the guard file itself is byte-identical at both refs, so nothing changed under it.
+  **The warrant is the spec, not the plan** — §5.5.4 step 1 dictates the call verbatim, keys included,
+  so "stop emitting" was never available; and the closed twenty-five is a RULING whose own stated
+  reason ("silently DROPPED from the mirror's typed shape") is the reason it must widen when `ccd`
+  gains an emitter. It has widened twice before, each time in the wave that supplied the emitter.
+  The worker argued from "the plan mandates it", which a self-contradictory plan cannot settle.
+  **The scope in the worker's mail was wrong, and I measured the parts it could not see.**
+  `reviveMeas` (`server/src/coord/journalparse.ts`) returns a literal annotated `LifecycleMeas`, so
+  three new required members are a TS2739 — declaring the keys is impossible without editing SERVER
+  SOURCE, which its mail never conceded. `lifecycle-wire.test.ts` fails twice more (a hand-written
+  25-name `toEqual`, an all-null 25-key literal) and was absent from its list entirely. Its "two
+  'exactly 25' literals" was one executable literal plus fourteen prose sites. And the arm it handed
+  to a reviewer was the worse one: `dec.crosspool` was emitted, undeclared on `LifecycleDec`, dropped
+  by `reviveDec`, and **guarded by nothing at all** — no `LIFECYCLE_DEC_KEY_MAP`, no dec-key scan
+  anywhere in the tree — which is why the branch was red on meas and green on dec while both were
+  broken. Task 8's gate would have passed it.
+  **What landed, measured at the tip rather than taken from a commit message.** `dcdb1e4b` (15:00:42)
+  and `114ea60d` (15:14:45): MEAS 28 declared / 28 emitted / none unlisted / none declared-but-
+  unemitted; DEC 4 / 4 / none. `reviveMeas` +3 and `reviveDec` +1, read with `s()` and the reason
+  stated. A new `LIFECYCLE_DEC_KEY_MAP` with a derived `LIFECYCLE_DEC_KEYS` and the dec-key scan the
+  tree did not have — the mechanism shipped in the same commit as the class it catches, which is what
+  D-1848 asks of a class number. Both falsified `ccd/ccd` comments gone. The worker closed all of it
+  inside an hour and UNDER-described its own scope in the mail; the standing instruction is now to
+  judge the commit, not the mail.
+  **The fix ships the mirror image of the defect it closes.** The new `crosspool` docstring says
+  "Three writers … `cmd_swap --cross-pool`'s success tail, `cmd_start --cross-pool`'s creation-only
+  marker, and `cmd_prefer --cross-pool`'s marker", and its act list reads "swap/start/rehome".
+  Measured: `dec.crosspool` has exactly TWO emit sites (`cmd_swap`, `cmd_prefer`); `_crosspool_mark`
+  has three CALL SITES, and `cmd_start`'s writes the registry marker only, so no `start` row ever
+  carries the key. The docstring enumerates the registry writer's call sites as the journal key's
+  emitters, and **its own cited grep is what produces the wrong answer** — D-1798's shape exactly,
+  in the interface that is the single source, with two further homes (the guard's own new comment and
+  the commit message). Third false-provenance claim measured in this wave's own texts.
+  **Three errors of mine, all inside the ruling.** (1) I told the worker the sentence it quoted was
+  "not in the plan". It is — plan line 7, the Architecture paragraph, verbatim; the worker had
+  misattributed it to Global Constraints and spliced line 23 onto it. I searched one section and
+  spoke about the file, inside a mail whose subject was that exact failure. (2) I endorsed its
+  "extend `journalparse.test.ts`'s round-trip fixture" without checking; the assertion derives from
+  `LIFECYCLE_MEAS_KEYS`, so the fixture needed no edit and was correctly left alone — I relayed a
+  prescription as a requirement. (3) Both mails were measured at `ecef8cfc` and sent after the tree
+  had moved twice, so half of what I demanded was already shipped and one deviation was restated
+  against a tree that no longer had the defect. The first is the fourth measured instance of the
+  scope pattern; the second is the first measured instance of the coordinator breaking the very
+  obligation its own brief carries as item 7; the third is new and is now a carried constraint.
+- **Deploy ruling: wave 2b inverts AGENT-FIRST — the SERVER lane ships first.** Agent-first exists
+  because the server reads what `ccd` writes, and wave 2a needed it. 2b's server change is a READER
+  WIDENING, and L0's own shipped doctrine settles the order: "a reader tolerating a key the writer
+  does not yet produce is fine, the reverse is the defect this widening fixes". Measured:
+  `ingestJournal` binds `JSON.stringify(r.meas)`, so `measJson` stores the REVIVED object, and the
+  read re-revives from `measJson` and never from `raw`. A `rehome` row landing between an agent-first
+  deploy and the server deploy loses home/pool/reason from the typed mirror PERMANENTLY — recoverable
+  only by hand from `raw`, which nothing in this tree does. Nothing in 2b's server change depends on
+  the new `ccd`, and wave 2a already shipped `pools-v1`, so server-first is lossless in both
+  directions while agent-first is lossy in one. No rows are affected today: `origin/main`'s `ccd`
+  emits none of the three, measured. The plan's Task 8 step 7 states the opposite AND rests on a
+  false premise ("changes `ccd/` only") — the worker corrects the premise, I own the order.
+  Wave 5 inherits the rule as written: agent-first is a rule about who READS whom, not about which
+  directory changed, and a wave whose server arm is a reader widening deploys server-first.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
@@ -556,9 +621,23 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
 - `EXEC_COMMANDS = ['tmux','ccd']` stays closed; no `gh` grant, ever.
 - L0 `shared/*.ts` imports nothing (not even `node:*` types); `shared/poolrule.ts` imports only types from `./api.js`.
 - Every guard ships with a test measured RED on its deletion — before and after, not asserted.
-- **A correction needs its own scope measured, exactly like the claim it replaces** — three
+- **A correction needs its own scope measured, exactly like the claim it replaces** — FOUR
   measured instances of the coordinator generalising from the one arm it measured (D-1798's
-  original claim, the flock clause, the wave 2b brief's pin count). Carry into every brief.
+  original claim, the flock clause, the wave 2b brief's pin count, and telling the worker a sentence
+  was "not in the plan" after searching one section of it). Carry into every brief.
+- **A coordinator relaying a worker's quote has not measured it** — brief item 7 binds the chair too.
+  Measured once: the wave 2b worker misattributed and spliced a Global Constraint, and I reasoned
+  from its rendering, then enforced item 7 against it in the same mail. Open the file the quote
+  names before a ruling rests on it.
+- **Re-measure the worker's tree at the moment of the reply, not at the moment the measurement
+  started** — a ruling built on a dossier taken 25 minutes earlier ships a correction whose own scope
+  is stale. Measured once, on this wave: two mails went out against `ecef8cfc` while the worker had
+  already landed `dcdb1e4b` and `114ea60d`, so half the demands were satisfied work and one deviation
+  was restated against a tree that no longer carried the defect. `git rev-parse <worker branch>`
+  immediately before sending, every time.
+- **AGENT-FIRST is a rule about who READS whom, not about which directory changed.** A wave whose
+  server arm is a reader widening deploys SERVER-FIRST: a reader ahead of its writer is safe, a
+  writer ahead of its reader loses rows at ingest for good. Wave 2b is the measured case.
 
 ## Next-wave brief
 
