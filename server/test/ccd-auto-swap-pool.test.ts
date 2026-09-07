@@ -87,8 +87,15 @@ describe('_strand_why names the candidates the decision was actually about', () 
     seed(); tagPool('demo', 'pool-b');
     disable('claude-b');                 // in pool, but the lane is switched off
     writeLimits('claude-d', 99, 99);     // untagged, so in pool, but at the ceiling
-    // claude-a fails the POOL first and must be annotated `pool=`, not `limit`,
-    // even though it is also unmeasured.
+    writeLimits('claude-a', 99, 99);     // ALSO at the ceiling — and in the wrong pool
+    // claude-a fails BOTH the pool rule and _avail. The expected string is
+    // only reachable if the pool check runs FIRST: `_avail` treats an
+    // unmeasured account as available (its own "UNKNOWN IS AVAILABLE HERE"
+    // rule), so without this second writeLimits call claude-a would never
+    // reach `limit` under any ordering — it would just silently pass the
+    // (untested) pool check and read `limit` for the wrong reason, or nothing
+    // at all. With both predicates failing, `pool=pool-a` rather than `limit`
+    // is what proves the pool arm is asked before `_avail`.
     expect(h.sh(`_strand_why ${ID} demo`))
       .toBe('claude-a:pool=pool-a claude-b:disabled claude-d:limit');
   });

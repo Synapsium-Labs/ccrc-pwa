@@ -9,14 +9,17 @@
 // `=~ ^[0-9]+$` placed FIRST inside the same `[[ ]]` guards, because that is
 // what makes `&&` short-circuit before the arithmetic operand is evaluated.
 //
-// THREAT MODEL — say it plainly, as the commit does. None of the five swept
-// sites is wire-reachable: the fields they read (`lastswap`, `lastcompact`)
-// are written only by ccd's own `_reg_set` from `$(date +%s)`, and
-// `SWAP_JITTER` is agent-set env, not wire-set. Exploiting one already needs
-// write access to `~/.cc-sessions` as the fleet UNIX user. This is defence in
-// depth against a TORN or hand-edited registry field, not a live-vulnerability
-// fix. The one live wire-reachable instance was `cmd_ensure`'s positional,
-// closed in 73bc0fe.
+// THREAT MODEL — say it plainly, as the commit does. None of the six swept
+// sites is wire-reachable: the fields they read (`lastswap`, `lastcompact`,
+// `strandnotify`) are written only by ccd's own `_reg_set` from `$(date +%s)`
+// — `strandnotify` has exactly one writer, `_strand_mark` (wave 2b), and no
+// wire route reaches it either, so it is the same defence-in-depth class as
+// the other five, not a new exposure — and `SWAP_JITTER` is agent-set env,
+// not wire-set. Exploiting one already needs write access to
+// `~/.cc-sessions` as the fleet UNIX user. This is defence in depth against a
+// TORN or hand-edited registry field, not a live-vulnerability fix. The one
+// live wire-reachable instance was `cmd_ensure`'s positional, closed in
+// 73bc0fe.
 //
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
@@ -105,6 +108,14 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     const h = makeCcdHarness('arith-strand');
     // The banner floor reads `strandnotify` as an arithmetic operand. A torn or
     // hand-edited field is the threat model, exactly as `lastswap` is.
+    //
+    // MEASURED, under the guard removed: the injection genuinely fires (the
+    // marker IS created), but the resulting arithmetic syntax error inside
+    // `[[ ]]` aborts the enclosing function with rc 1, so `bash -c` exits
+    // non-zero and `h.sh`'s `execFileSync` THROWS before the `expect(...)`
+    // below is ever reached. The assertion is a live backstop for a future
+    // guard shape that fails softer — it is not what produces this test's red
+    // today; the thrown `Error` is.
     h.sh(
       '_reg_set myid wrapper claude;'
       + " _reg_set myid strandnotify 'REG[$(touch \"$HOME/PWNED-strand\")]';"
@@ -135,11 +146,11 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_auto_compact_check (lastswap)',         anchors: ['$((now - lastswap))', 'COMPACT_COOLDOWN'], arith: '$((' },
     { fn: '_spawn_start (fromswap)',                anchors: ['- lastswap ))', '-lt 300'],            arith: '$((' },
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
-    { fn: '_strand_mark (strandnotify floor)', anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
+    { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
   ];
   const codeLines = readFileSync(CCD, 'utf8').split('\n')
     .map((line) => line.trim())
-    .filter((line) => line.startsWith('[['));   // the five sites are all `[[ … ]]` guards, never comments
+    .filter((line) => line.startsWith('[['));   // the six sites are all `[[ … ]]` guards, never comments
 
   for (const site of SITES) {
     it(`${site.fn} carries =~ ^[0-9] before its arithmetic`, () => {

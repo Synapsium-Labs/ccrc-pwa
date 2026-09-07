@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=782b0b1fed9cbb6ab40c5c3f4226ddc22b4b8352e07b853453e522a17a25baaf
+# ccrc:generated 1 sha256=d3401e3ddea613b81f710c6063f171558f504f0b8f278d8b1a2f91571c690ecc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13649,10 +13649,12 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
 
 _strand_clear() {   # id — the strand is over; say so exactly once per strand.
   # THE `-e` TEST IS LOAD-BEARING, and it is not a micro-optimisation.
-  # `_auto_swap_check` calls this on EVERY healthy tick of EVERY session, so
-  # without it ~20 sessions write ~240 `unstranded` lines a minute into
-  # swap.log — the forensic trail beside every swap decision — and the file
-  # stops being readable by the human it exists for.
+  # Task 3 is to wire `_auto_swap_check` to call this on EVERY healthy tick of
+  # EVERY session. Once that lands, the 5-second supervise tick means ONE
+  # `unstranded` line per session per tick without this guard — twelve lines a
+  # minute per session, times however many sessions the box is actually
+  # running (measure it; it drifts) — and swap.log, the forensic trail beside
+  # every swap decision, stops being readable by the human it exists for.
   [[ -e "$REG/$1.stranded" ]] || return 0
   rm -f -- "$REG/$1.stranded"
   echo "$(date '+%F %T') unstranded $1" >> "$REG/swap.log"
@@ -13664,10 +13666,14 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # hand-set registry `pool` list excluded, sends the operator to enable an
   # account that would not have been used anyway.
   #
-  # PREDICATE ORDER MIRRORS `_swap_target`'s OWN LOOP — pool, then _account_ok,
-  # then _avail — so the annotation is the FIRST thing that failed, which is
-  # the thing to fix. An account in the wrong pool reads `pool=`, never
-  # `limit`, even when both are true.
+  # THIS FUNCTION'S OWN ORDER is pool, then _account_ok, then _avail, so the
+  # annotation is the FIRST thing that failed, which is the thing to fix — an
+  # account in the wrong pool reads `pool=`, never `limit`, even when both are
+  # true. Measured today: `_swap_target`'s own candidate loop checks only
+  # _account_ok then _avail, with no pool predicate at all. Task 2 is to
+  # insert `_pool_ok` into that loop, at which point the two orders agree;
+  # until then this order is this function's own choice, not yet a mirror of
+  # anything.
   local id="$1" p="$2" pps cand ap cur out=""
   pps=$(_project_pool_state "$p")
   # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
