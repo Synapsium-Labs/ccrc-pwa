@@ -982,6 +982,31 @@ describe('the provider table — one table, one home', () => {
     const holders = ALL.filter((f) => enumerates(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual([]);
   });
+
+  it('BASE_URL_OK is declared in exactly one file, and it is not the table', () => {
+    const RE = /^\s*(?:export\s+)?const\s+BASE_URL_OK\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/base-url.ts']);
+    // The loopback SET — the three hosts written as one closed list — is the
+    // other value a second copy would be spelled from, and a caller that
+    // re-spells it has re-decided the exception rather than reused it.
+    //
+    // WHY THE SET SPELLING AND NOT THE BARE LITERAL. A scan for
+    // /['"]127\.0\.0\.1['"]/ is RED on this tree, and not because anything is
+    // wrong: four shipped files legitimately quote that host as a BIND ADDRESS
+    // or a loopback test, and none of them is a copy of this decision —
+    // measured 2026-09-07 over the four ROOTS: `server/src/config.ts:310`
+    // (`host: env.CCRC_HOST || '127.0.0.1'`), `server/src/auth/webauthn.ts:342`
+    // (`url.hostname === '127.0.0.1'`), `agent/src/index.ts:25` and
+    // `agent/src/server.ts:712` (`rawOpts.host ?? '127.0.0.1'`). Pinning the
+    // ordered three-element spelling catches the copy this task is about and
+    // leaves those four alone. Measured before writing it: the set spelling has
+    // ZERO holders under the four roots today, so this goes from `[]` to
+    // `['shared/base-url.ts']` and never through a red.
+    const LOOP_SET = /\['127\.0\.0\.1', '\[::1\]', 'localhost'\]/;
+    const loopHolders = ALL.filter((f) => LOOP_SET.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(loopHolders).toEqual(['shared/base-url.ts']);
+  });
 });
 
 describe('the account roster — config dir is data, joined in one place', () => {

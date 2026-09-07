@@ -67,6 +67,16 @@ describe('L0 stays import-free: the PWA bundles these files', () => {
     expect(read('shared/providers.ts')).not.toMatch(/^\s*import /m);
   });
 
+  it('shared/base-url.ts imports nothing at all', () => {
+    // The second of the two L0 files this wave adds, pinned in the SAME
+    // describe as the first so the rule has one home rather than two that can
+    // drift apart. It could not be written in the task that opened this
+    // describe: the file did not exist there, and a row asserted against an
+    // absent file is a committed red — indistinguishable, on the next run, from
+    // a regression.
+    expect(read('shared/base-url.ts')).not.toMatch(/^\s*import /m);
+  });
+
   it('shared/roster.ts imports nothing — the whole list, so an addition must be stated here', () => {
     const imports = read('shared/roster.ts').split('\n').filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([]);
