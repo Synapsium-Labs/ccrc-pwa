@@ -1053,13 +1053,13 @@ Expected: PASS, all of them.
 | mutation | test that must red |
 |---|---|
 | delete the `=~` shape gate | `is silent on a free-text operator hold` |
-| delete the `${#h} <= CCRC_HOLD_MAX` bound | `is silent on a hold longer than the bound` |
+| delete the `${#h} <= CCRC_HOLD_MAX` bound | (measured: reddens nothing — the 300-char fixture is refused by the `=~` shape gate on the next line. The bound's real guard is the row below.) |
 | raise `CCRC_HOLD_MAX` to 256 (making the gate unreachable past `_ct_read`'s 128) | `is silent on a hold whose run suffix the read would have cut off` |
 | change `[ "$rc" -eq 2 ]` to fall through to silence | `tells unreadable apart from absent` |
 | delete the `.archived` branch | `names an archived row's hold as residue` |
 | delete the `GM_CWD`/`wd` comparison | `names the workspace by path when the cwd is somewhere else` |
 | make case B fall through to case A | `says no run placed a suffix-less hold` |
-| delete `set -- "${1:0:$CARD_MAX_CHARS}"` from Task 3 | `a pathological hold cannot delete the card` — **this is where Task 3 Step 8's deferred mutation finally reds** |
+| delete `set -- "${1:0:$CARD_MAX_CHARS}"` from Task 3 | `the clip bounds an unbounded GM_NODES` — **this is where Task 3 Step 8's deferred mutation finally reds.** NOT the pathological-hold test: `_ct_read`'s 128-char cap bounds a hold's contribution long before the clip matters, so the hold route cannot measure it. `GM_NODES` can — it takes UNBOUNDED digits off a 4096-byte head and is interpolated straight into the graphify sentence. |
 
 - [ ] **Step 8: Measure the three-subject worst case**
 
