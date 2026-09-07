@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d1698452921aad8906a2198b109e677a63d8c5713a4ae60dee5f93141653f975
+# ccrc:generated 1 sha256=4673a688410588324b89fdbd87655cc78c42383683a9d8b201df9aec31f1cfa4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -773,7 +773,8 @@ WORKTREES_ROOT="$HOME/worktrees"
 # THE PROJECT POOL TAG lives in a DOTLESS registry subdirectory, one file per
 # project (spec §4, approach B). Outside every git tree and every session cwd,
 # beside the switches an operator already hand-touches (`<w>-disabled`,
-# `coordinator-paused`, `mail-disabled`) — `ls ~/.cc-sessions/pools/` shows
+# `coordinator-paused`, `mail-disabled`) and the one marker a MACHINE writes
+# there (`<account>-authdead`, see `_authdead`) — `ls ~/.cc-sessions/pools/` shows
 # every tag and `echo pool-a > pools/demo` is the 2 am idiom.
 #
 # DOTLESS, and that is measured rather than assumed: every registry glob is
@@ -1045,6 +1046,31 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+# The account-health probe's durable verdict, in the same `"<epoch> <reason>"`
+# format `swapblocked` uses. WRITTEN BY `ccd-account-health` (a sibling
+# executable, never this file — ccd makes no outbound network call, and adding
+# one would be a new dependency class); CLEARED by that probe on a 403, by a
+# successful spawn (`_spawn_settle`), and by an operator `rm`.
+#
+# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob:
+# `_reg_purge`, `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*`
+# and skip any suffix containing a dot, so `$REG/claude-authdead` is invisible
+# to all three even when a session id spells it exactly.
+#
+# NOT `-disabled`. That name is OPERATOR intent, has no writer in this tree, and
+# both its conjuncts in `_account_ok` are things a human did. This one is a
+# MEASUREMENT, which can be wrong — so it never joins `_account_ok`, and its two
+# consumers rank-last (`_swap_target`) and skip-scoring (`_ws_least_loaded`)
+# instead. A rescue must always have a destination.
+#
+# THE DIGITS GATE, exactly as `_auto_swap_check` validates `swapblocked`'s epoch
+# (ccd:11909): the field is bytes off disk. Here it also decides the answer — an
+# empty or half-written marker is NOT a verdict, and reading one as "dead" would
+# let a truncated write bar an account nothing ever measured.
+_authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands for it
+  local t; t=$(cat "$REG/$1-authdead" 2>/dev/null); t="${t%% *}"
+  [[ "$t" =~ ^[0-9]+$ ]]
+}
 _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
 # THE ONLY READER OF THE PROJECT TAG in this file. Four words, ALWAYS rc 0,
 # and it may never `die`: every decider calls it once per decision and one of
