@@ -415,11 +415,11 @@ describe('exec.models', () => {
 });
 
 describe('exec.secretsFile is legal on all three kinds — and gated on all three', () => {
-  // THE ONE NON-ADDITIVE CHANGE IN THIS WAVE (D-1857). Before this task these
-  // two rosters PARSED: `secretsFile` was not in EXEC_KEYS_BASE (roster.ts:247),
-  // `warnUnknownKeys` only warns (:264-270), and the bare literal at :321
-  // dropped the value. Now the gate runs before the kind is dispatched on, so
-  // the same bytes throw.
+  // THE ONE NON-ADDITIVE CHANGE IN THIS WAVE (D-1857). Before this task (at
+  // `b0bbd8a9`), these two rosters PARSED: `secretsFile` was not in
+  // `EXEC_KEYS_BASE`, `warnUnknownKeys` only warned, and `parseExec`'s bare
+  // `{ kind: 'upstream' }` literal dropped the value. Now the gate runs before
+  // the kind is dispatched on, so the same bytes throw.
   it.each(['upstream', 'external'] as const)('refuses a parent-directory hop on %s', (kind) => {
     const roster = kind === 'upstream'
       ? { version: 1, accounts: [{ id: 'claude', label: 'claude', configDirSuffix: '.claude',

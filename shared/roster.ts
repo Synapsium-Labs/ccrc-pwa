@@ -89,10 +89,10 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'] as const sa
  *  it: an account id becomes a filename, a bash `case` pattern and a session-id
  *  prefix, so it cannot hold `/`, `.` or `:` — and an OpenRouter id is
  *  `anthropic/claude-opus-4.5:beta`, which holds all three. Capped at 128
- *  characters. A copy lives in `shared/roster-json.mjs`; the two are asserted
- *  equal source-for-source by `gen-accounts.test.ts`, because the last time a
- *  regex was hand-copied into that file the escape text was emitted as raw
- *  control bytes, twice in one task, with every suite green
+ *  characters. Task 4 adds a copy to `shared/roster-json.mjs` and a test
+ *  asserting the two equal source-for-source in `gen-accounts.test.ts`, because
+ *  the last time a regex was hand-copied into that file the escape text was
+ *  emitted as raw control bytes, twice in one task, with every suite green
  *  (`server/test/source-bytes.test.ts:5-15`). */
 export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
