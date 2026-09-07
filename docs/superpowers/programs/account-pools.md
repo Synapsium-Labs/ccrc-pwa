@@ -612,6 +612,61 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   Wave 5 inherits the rule as written: agent-first is a rule about who READS whom, not about which
   directory changed, and a wave whose server arm is a reader widening deploys server-first.
 
+- **Wave 2b's execution block MINTED: 1868–1895, 28 numbers, one contiguous call (2026-09-07
+  16:40 UTC).** Floor 1868 → 1896. The worker batched TWENTY-SEVEN before Task 8's gate exactly as
+  brief item 8 requires, each written in full in the plan's own `## Deviations found` under "Found
+  during execution", in a commit (`95eb8aa7`) that deliberately REDS `dtbd.test.ts` so the branch
+  cannot go green until the numbers are substituted. Verified before minting rather than taken from
+  the mail: 27 entry headers, 27 unique slugs, count exact. **The mapping was mailed BY SLUG, not by
+  ordinal** — the worker's list called itself plan-order and is alphabetical, so a positional map
+  would have mis-numbered twenty-four of them.
+  **The band is NOT contiguous with wave 2a's.** 1854–1867 belong to `ccrc-pwa-plain-hollow`'s
+  "account connections wave 1 (fleet box): roster model" — fourteen numbers, no open run row (only
+  runs 31 and 34 are open). Wave 2a ended at 1853; account-pools resumes at 1868.
+  **The twenty-eighth is the fix's own false claim, and it is why the count is 28 and not 27.**
+  `1895-crosspool-writers-overclaimed`: the commit that closed the `dec.crosspool` breach shipped
+  a new false declaration in the same interface. `shared/api.ts:5065-5067` says "Three writers …
+  `cmd_swap --cross-pool`'s success tail, `cmd_start --cross-pool`'s creation-only marker, and
+  `cmd_prefer --cross-pool`'s marker"; measured, `dec.crosspool` has exactly TWO emit sites
+  (ccd:14287, ccd:14351) while `_crosspool_mark` has three CALL SITES, and `cmd_start`'s writes the
+  registry marker only — so no `start` row ever carries the key, and :5055's act list
+  "swap/start/rehome" is false the same way. **Its own cited grep is what produces the wrong
+  answer**, which is D-1798's shape exactly, in the file that is the single source. The worker had
+  this finding from me an hour earlier and did not write it up; rather than let it close as a ruling,
+  the number was minted WITH the finding and the worker writes the prose. It had already fixed the
+  twin in `ccd-lifecycle-contain.test.ts` (measured: gone), so only the L0 half was live.
+  **THREE EXTENDS, no new numbers, on D-1847's extend-not-split** — each site shares its entry's
+  cause, and the rule applied is: one number per distinct MECHANISM, extend when the site shares the
+  entry's cause. `meas.from`'s docstring (false for the new act, and its `ccd:11055` ref stale twice
+  over — `cmd_swap` is at ccd:14058) is a second site of **1880**, same cause: the wave gave
+  `rehome` an emitter and falsified L0's prose about it. Plan line 1974's "changes `ccd/` only, so it
+  is agent-first" is a second site of **1890**, same cause: the plan encoded ccd-only in its Global
+  Constraint AND in that premise. And **1874 was retitled off "wave2a"** — `_crosspool_valid`'s
+  header and `ccd-crosspool.test.ts`'s header were falsified by this wave's own later tasks, not by
+  wave 2a, so the entry is "comment claims this wave falsified", eight sites, two origins, one
+  number and a title that stops lying.
+  **1887 (the deploy-window banner) ACCEPTED, veto declined.** Read the fix rather than the
+  summary: the cause arm at ccd:13942 REPLACES the pool census instead of adding to it, both floors
+  and the marker debounce are untouched, and the cause string leads with the measured fact
+  ("refused as a cross-pool crossing nobody asked for") and hedges the inference ("**likely** a
+  supervisor still running a pre-deploy ccd"). That is the correct tense for a claim nothing
+  measured. **1877 is left OPEN on purpose** — its own entry says UNDER REVIEW, and a number parked
+  on an open review is required to resolve before wave-done, not at it.
+  **A method slip of mine, caught before it reached the mail.** Checking whether a concurrent program
+  was editing the roster model, `git diff origin/main..<branch>` reported five branches "touching"
+  `shared/roster.ts`; three-dot `origin/main...<branch>` shows ZERO added lines on every one — the
+  two-dot form was showing main's own commits back at me because those branches are behind. Same
+  class as 1885: a measurement whose form cannot distinguish the thing being asked about.
+  **WHY EVERY NUMBER IN THIS ENTRY IS SPELLED PREFIX-LESS.** `deviation-refs.test.ts`'s floor scan
+  runs over the WHOLE tracked tree while its high-water reads definition-shaped lines in
+  `docs/superpowers/plans/*.md` ONLY, and its assertion is `scan.floor === definedMax() + GAP`. The
+  entries defining 1868-1895 live on `ws/clear-meadow`, unmerged, so a contiguous `D-` token for any
+  of them in THIS branch's ledger reds the suite — the guard's own comment says so: "a source ref to
+  an allocated-but-unentered number reds here until its entry lands". The documented spelling for a
+  non-definition mention is prefix-less, and these become full refs when the wave merges. This is
+  the same red the wave 2a close walked into from the other side (the ledger three commits behind
+  main), and it is now a standing pre-commit check, not a lesson.
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
@@ -635,6 +690,12 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   already landed `dcdb1e4b` and `114ea60d`, so half the demands were satisfied work and one deviation
   was restated against a tree that no longer carried the defect. `git rev-parse <worker branch>`
   immediately before sending, every time.
+- **Before committing anything to this ledger, check the highest contiguous `D-` token in it against
+  the highest DEFINED number in `docs/superpowers/plans/*.md`.** `deviation-refs.test.ts` scans the
+  whole tracked tree for mentions and takes its high-water from plan definition lines only, so a
+  number MINTED but whose entry is still on the worker's unmerged branch reds the suite when the
+  ledger names it contiguously. Spell those prefix-less until the wave merges. Hit from both
+  directions now: the wave 2a close (ledger three commits behind main) and the wave 2b mint.
 - **AGENT-FIRST is a rule about who READS whom, not about which directory changed.** A wave whose
   server arm is a reader widening deploys SERVER-FIRST: a reader ahead of its writer is safe, a
   writer ahead of its reader loses rows at ingest for good. Wave 2b is the measured case.
