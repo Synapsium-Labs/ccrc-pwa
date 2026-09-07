@@ -1700,6 +1700,110 @@ session queries — until then the nudge rides every matching read and the deny 
 where graphify's keeps nudging for the life of the session (D-1797 corrected an earlier "once per
 session" here that the mechanism never had).
 
+**The two ccrc subjects (R7).** Two more subjects share the same `SessionStart` card, both fleet-registry
+reads rather than graph reads: the co-tenant subject and the program subject. Neither narrates — each
+says only what it measured — and both sit behind the same kill-switch and the same total clip, described
+below.
+
+The **co-tenant subject** counts other rows in `~/.cc-sessions` whose `.project` names this session's own
+and whose `.supervised` heartbeat is inside `CCRC_FRESH_S` (120 s — a third copy of `SUPERVISED_FRESH_MS`,
+outside every `single-definition` root because `ccd/` is not one of them). The rung is the heartbeat, never
+`.archived` — the same ruling `server/src/coord/peers.ts` already made for the peers route (D9): one row
+on this box has carried `.archived` for 33 days beside a 4-second-old heartbeat while the server still
+calls it `deliverable:"yes"`, and a main checkout can never be archived at all, so an `.archived` filter
+would both over- and under-count. It says *"ccrc: 2 other supervised rows name project `alpha`;
+`~/.local/bin/ccrc-api peers list --of <id>` names them and returns the five peer rules"* (singular "row
+names" at one), and it deliberately never says "live" — `_swap_beat` re-stamps `.supervised` through a
+whole `cp -a` swap carry on purpose, and 6 of 16 rows have gone silent for 5 h while the server still reads
+them `deliverable:"yes"` — or "share" — the 7 ccrc-pwa rows on this box resolve to 7 distinct workdirs on 6
+distinct branches, sharing a registry string and not a byte on disk. A row whose own `.project` could not
+be read still counts toward the total (fleet-scoped, not project-scoped: an unmeasurable row could belong
+to any project and cannot be ruled out) and turns the count into "at least N" rather than dropping the
+row or reporting an exact one; a lone row (`CT_N` of 0) is silence, never a "0 co-tenants" sentence. It
+prescribes the client verb `peers list`, never the route — the 200 that route returns carries
+`PEER_ETIQUETTE` verbatim, whose rule 0 is "claim before you edit" — so the card points at the authority
+instead of paraphrasing it, and `claims-advisory.test.ts`'s FORBIDDEN scan stays green.
+
+The **program subject** quotes `$REG/<id>.hold` bytes verbatim and never narrates: `rundefs.ts` declares
+the hold reason is parsed back nowhere in this tree, `wave-lifecycle.md` forbids inferring a wave from it,
+and the coordinator skill's own ban on inferring a role is pinned verbatim by its test — one program on
+this box revised its own wave count five times (1/5 → 2/6 → 3/6 → 4/6 → 5/7 → 6/7 → 7/8 → 8/9), so "wave 3
+of 6" would have been wrong five times over. The shape gate is the sanitiser too: a hold that fails its
+own bounded form (`program:<slug> wave:N[/M][ run:R]`, capped at `CCRC_HOLD_MAX` = 127 — one under the
+128-byte read cap, so refusing at 127 means every value this subject ever quotes was captured whole and
+never a silently truncated prefix that could lose its ` run:` suffix in the cut) is unspeakable and the
+subject is silent, same as an absent hold. Four distinct sentences cover what a readable, well-shaped hold
+can mean:
+
+- **Unreadable** (exists, not a readable file): *"ccrc-program: this workspace is held and the hold's
+  reason could not be read — `~/.cc-sessions/<id>.hold` exists but is not a readable file. Every other
+  reader on this box treats that as HELD. If a program wave is running here,
+  `~/.local/bin/ccrc-api runs list` is the only thing that can say so."*
+- **Archived but still held** (`cmd_ws_archive` does no registry `rm`, and the failed+archive close path
+  releases nothing, so the bytes outlive the workspace): *"ccrc-program: this workspace is stamped ARCHIVED
+  and still carries a claim — `~/.cc-sessions/<id>.hold` reads `<h>`. An archive does not clear a hold, so
+  those bytes are the residue of a claim, not an assignment. Take that to the operator rather than starting
+  a wave on it."*
+- **Names no run** (no ` run:` suffix — a close claimed the workspace for its next wave, or a human wrote it
+  by hand, no dispatch placed it): quotes the hold, names the `ccrc-worker` skill as its declared trigger,
+  says *"It names NO run"*, and sends the session to `~/.local/bin/ccrc-api runs list` before acting on it.
+- **Names a run**: quotes the hold, names the same skill, and adds its first read
+  (`~/.local/bin/ccrc-api mail list --to <id>`, noting an already-acked brief is not listed again) and the
+  caveat that the hold can outlive the run that wrote it — whether that run is still open is answered only
+  by `runs list`, never by this file.
+
+One emitted string, two referents: the graphify subject measures the payload's `cwd`; the program subject
+measures the tmux session id. A session that `cd`'d, or a second window opened on the same held id, makes
+"this workspace" and "this tree" different subjects with no way for the reader to tell — so on
+disagreement, or when the cwd could not be measured at all, the card drops the demonstrative and names the
+workspace by path instead: *"the workspace `<id>` (`<workdir>`)"*.
+
+**One emit.** The three builders — `_hook_graph_card`, `_hook_hold_card`, `_hook_ccrc_card` — only set
+text; nothing prints until the `SessionStart` arm joins whatever they set with one space
+(`${CARD:+$CARD }`, appended only when a prior subject already put text in `$CARD`, so a lone subject
+carries no leading or trailing space) and calls `_hook_emit_context` exactly once. A second
+`additionalContext` envelope on the same event makes the harness's stdout parser throw — the caller returns
+`{answer:{}}`, deleting every card fleet-wide, graphify's included, with a warning that blames a quoting
+bug that does not exist. `_hook_emit_context` is also the one site that clips the assembled total:
+`CARD_MAX_CHARS` (1800) is a different bound for a different job than the `<600` assertion elsewhere in the
+suite, which taints one repo-controlled field alone (the graph sweep's refusal reason) and stays exactly as
+it is; `CARD_MAX_CHARS` is the ceiling on graphify + hold + co-tenant + their two one-space joins together.
+Measured worst live combination is 593 + 592 + 176 + 2 = 1363 — 1800 clears that by 32% and is 7.3% of the
+neighboring `~/.cc-handoff/restore.sh` hook's own 24576-byte `additionalContext` cap on this same compact
+event. It is also what stands between an operator-controlled field and `jq`'s own `MAX_ARG_STRLEN`
+(measured 131072 on the fleet host): past it the `jq -cn` exec fails, `|| return 0` swallows it, and the
+hook prints nothing at all — deleting the graphify card too.
+
+**The kill-switch.** `~/.ccrc/ccrc-card-off` is the operator's own file, the same shape as
+`~/.ccrc/graph-gate-off` and `$REG/coordinator-paused`: touched by hand, in a directory ccrc owns and
+nothing in this tree writes, releasable without a deploy and without a token. `_hook_hold_card` and
+`_hook_ccrc_card` each check it first and return early; `_hook_graph_card` never consults it, so it
+silences the two ccrc subjects only — the graphify card (and its own `graph-gate-off`-governed gate
+sentence) is unaffected.
+
+**The two counters.** `ccrcPeerReads` and `ccrcClaims` ride in the same hookstate write the graph counters
+use, carried the same way — reset on any `SessionStart` whose source is not `resume`, kept across `resume`
+and `compact` — and read back by the same guarded jq fork, each behind its own `^[0-9]+$` degrade. Each
+counts an act, not a client: `ccrcPeerReads` increments on a `PostToolUse` `Bash` command matching
+`peers[[:space:]]+list`, `ccrcClaims` on one matching `claims[[:space:]]+take`, both anchored on the
+**verb pair** and never on `ccrc-api` — both skills set `API="$HOME/.local/bin/ccrc-api"` and then call
+`"$API" peers list`, so a counter anchored on the client name would score 0 against the exact spelling
+the fleet uses, and the hook reads the unexpanded command text. `ccrcPeerReads` is the proximate act
+the co-tenant card prescribes; `ccrcClaims` is the distal one that answer's own rule 0 prescribes next, and the one with
+a durable server-side arbiter — counted apart because each answers a different question about adoption.
+Unlike `graphQueries`/`graphGateDenials`, neither reaches `FleetSession` or any wire field:
+`server/src/hookstate.ts` needs no change, because its reader validates named keys and returns an
+object literal built from those names, with no key census — an unknown key is simply never looked at.
+Both counters live only in the raw `~/.cc-sessions/<id>.hookstate.json` file on the fleet box:
+hookstate-only, no server change, no PWA-visible chip.
+
+**The reading's instrument.** `~/.local/bin/graph-gate-snapshot` is the operator's own hourly carrier —
+outside every checkout, no repo lane, no vitest — that reads the registry and every session's hookstate
+file on the fleet host and rolls them into `~/.ccrc/graph-gate-readings.jsonl`: the graph gate's own
+queries/denials, `nullPeerRead` (every row carrying no `ccrcPeerReads` field at all — its fall is what
+proves the hook shipped), `heldN` and `coTenantN` among the roll-ups. It is the instrument the R4 and R7
+adoption readings are taken from; nothing in this repository writes it, ships it, or tests it.
+
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its
 own flock, and writes a rolling census to `~/.ccrc/graph-sweep.json` (last 10 passes). A pass status
