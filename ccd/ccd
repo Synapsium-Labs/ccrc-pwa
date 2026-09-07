@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=dd9ff6932d4b8e30986baf9dd24e678782c0838628c7653fb34340b37b45f81a
+# ccrc:generated 1 sha256=9a36af5d4ca3bda5fdde73fcd5a73076ed91f0f2d65b37813a4e4eb21584cbd4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13971,12 +13971,13 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   # the re-seed acts on it, and removes an invalid marker and logs
   # `crosspool-ended` — see its own header for the three ways a marker goes
   # invalid. The fourth reaction is `cmd_swap`'s in-unit refusal (Task 5,
-  # above the detach arm, gated on this same predicate), and `cmd_swap
-  # --cross-pool`'s success tail is the marker's first WRITER
-  # (`_crosspool_mark`). Still owed to Task 6: `start --cross-pool`'s own
-  # write of this field, and `prefer --cross-pool` entirely. Today the field
-  # is written by `cmd_swap --cross-pool` and by a test that hand-writes it
-  # with `_reg_set`.
+  # above the detach arm, gated on this same predicate). THREE WRITERS now
+  # (Task 6 landed the remaining two): `cmd_swap --cross-pool`'s success
+  # tail (`_crosspool_mark`, Task 5, the marker's first writer),
+  # `cmd_start --cross-pool`'s creation-only marker, and
+  # `cmd_prefer --cross-pool`'s marker — plus a test that hand-writes it
+  # with `_reg_set` for fixture setup that does not depend on any one verb's
+  # shape.
   #
   # The `-e` test is FIRST so the steady state of an uncrossed row costs two
   # stats and never a `cat` — `_swap_target` calls this once for `cur` and

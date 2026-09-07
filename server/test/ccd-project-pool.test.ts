@@ -1077,6 +1077,13 @@ describe('pools-v1 is safe to advertise before --cross-pool lands on every verb 
     // meaningful. What stays true, and is still all this describe claims, is
     // that the flag never lands in `$wrapper` or `$project` — the safety
     // property `pools-v1` depends on.
+    //
+    // M3 (coordinator review, fix round 1): MEASURED, same as before the
+    // rewrite — replacing `_is_valid_wrapper`'s die with `:` still exits 1
+    // here, falling through to `[[ -x "$WRAPPER_DIR/$wrapper" ]] || die
+    // "wrapper missing: …"` for the same nonexistent `demo` wrapper. A bare
+    // `r.code).not.toBe(0)` would stay green in both worlds; pinning this
+    // stderr line is what makes the assertion mean something specific.
     const r = shFail('cmd_start --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain("unknown wrapper 'demo'");

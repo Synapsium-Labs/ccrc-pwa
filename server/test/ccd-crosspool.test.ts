@@ -11,19 +11,17 @@
  * `_auto_swap_check` (the tick) — none of them calls a manual verb, so none
  * touched `cmd_swap`, `systemctl`/`launchctl`/`tmux`, or `TMUX` on its own.
  * Task 5 is what exercises `cmd_swap`, `--cross-pool`'s flag loop, the
- * detached self-swap retry and the deploy-window strand below, and consumes
- * every helper this file imports except `WS_ADD`, which stays unused here
- * for Task 6's `cmd_start`/`cmd_prefer` cases (`eventsOf`, `measOf`, `decOf`,
- * `logLines`, `noticeLines`, `plantNotify`, `SWAP_STUBS`, `plant` and
- * `shFail` are all live now).
+ * detached self-swap retry and the deploy-window strand below. Task 6 is
+ * what exercises `cmd_start`, `cmd_enable`, `cmd_prefer` and `cmd_ensure`'s
+ * strand clear, and consumes every helper this file imports — `WS_ADD`
+ * included, as `START_STUBS` below.
  *
  * WHAT TASK 5 DELIVERED, for the manual-verb cases below: systemd and tmux
  * logging instead of acting (`SWAP_STUBS`, `SELF`); `sleep` stubbed because
  * `cmd_swap`'s flush wait is a second of real time per case; `TMUX` emptied
  * at the call site so the detached self-swap branch is never taken from a
  * suite that may itself be running inside tmux, except in the two cases that
- * are ABOUT that branch. Task 6 still owes `cmd_start --cross-pool`,
- * `cmd_prefer --cross-pool` and `cmd_ensure`'s strand clear.
+ * are ABOUT that branch.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -429,6 +427,27 @@ describe('cmd_start and the pool', () => {
     expect(fs.existsSync(reg('claude-b-demo.uuid')), 'nothing was created').toBe(false);
   });
 
+  it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
+    // Coordinator review, fix round 1, Important 1. This guard shipped
+    // (`[[ "$prc" -eq 2 ]] && die …`) but nothing exercised it: deleting the
+    // line left all 189 baseline cases green, and a malformed or unreadable
+    // tag would CREATE THE SESSION SILENTLY instead of refusing and naming
+    // the file to fix. `cmd_swap`'s own equivalent case, three describes up
+    // in this file, is what this one mirrors.
+    tagPool('demo', 'Pool Orate');
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    const r = shFail(`${START_STUBS} cmd_start --cross-pool claude-b demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(
+      `pool tag for demo is malformed: ${h.home}/.cc-sessions/pools/demo`);
+    expect(r.stderr).toContain('nothing was touched');
+    expect(fs.existsSync(reg('claude-b-demo.uuid')), 'nothing was created').toBe(false);
+    // Important 2, closed by the same fix: narrowing the guard to
+    // `"$prc" -eq 2 && -z "$cross"` (making an undecidable tag overridable
+    // by the flag) is caught by this exact case too — it passes `--cross-
+    // pool` and still expects the refusal.
+  });
+
   it('WARNS rather than refusing on a REVIVAL — the registry already won the account', () => {
     // Ruling 5's auto path owns this move; refusing here would refuse to
     // restart a session the retag put in the wrong pool.
@@ -459,6 +478,40 @@ describe('cmd_start and the pool', () => {
     h.sh(`_reg_set ${ID} stranded "1700000000 no candidate"`);
     h.sh(`${START_STUBS} cmd_start ${ID}`);
     expect(h.reg(ID, 'stranded')).toBeNull();
+  });
+
+  it('a REVIVAL with --cross-pool writes no marker — a revival is not a creation', () => {
+    // Coordinator review, fix round 1, Important 3 (first hole). Dropping
+    // `-z "$regw"` from the MARKER line (a separate condition from the pool-
+    // policy guard's own `-z "$regw"` a few lines up) is green today: an
+    // existing wrong-pool row revived with `--cross-pool` would then write a
+    // standing crossing marker, converting a revival ruling 5's auto path
+    // owns into a deliberate crossing nobody declared — the flag has nothing
+    // to do on a revival at all, since the registry already won the account.
+    tagPool('demo', 'pool-a');
+    const wd = path.join(h.home, 'projects', 'demo');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set claude-b-demo uuid ${UUID}
+      _reg_set claude-b-demo wrapper claude-b
+      _reg_set claude-b-demo project demo
+      _reg_set claude-b-demo workdir ${wd}`);
+    h.sh(`${START_STUBS} cmd_start --cross-pool claude-b demo`);
+    expect(h.reg('claude-b-demo', 'crosspool'), 'nothing to mark — the flag has no effect on a revival')
+      .toBeNull();
+  });
+
+  it('creates IN POOL with the flag anyway — a no-op crossing, and no marker', () => {
+    // Coordinator review, fix round 1, Important 3 (second hole). Dropping
+    // `"$prc" -eq 1` from the marker line is green today: creating WITH the
+    // flag on an account that is already in the project's pool would record
+    // a crossing that never happened, and `_crosspool_valid` then holds that
+    // fabricated marker valid indefinitely — the next genuine retag would
+    // read as pre-authorised by a crossing nothing actually did.
+    tagPool('demo', 'pool-a');
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    h.sh(`${START_STUBS} cmd_start --cross-pool claude demo`);   // claude is IN pool-a already
+    expect(h.reg('claude-demo', 'wrapper')).toBe('claude');
+    expect(h.reg('claude-demo', 'crosspool'), 'nothing was crossed — no marker to write').toBeNull();
   });
 });
 
@@ -494,6 +547,35 @@ describe('cmd_prefer', () => {
     expect(r.stderr).toContain('pool-mismatch: claude-b is in pool');
     expect(r.stderr).toContain(`ccd prefer --cross-pool ${ID} claude-b`);
     expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
+    // Coordinator review, fix round 1, Important 1. Deleting this guard's
+    // `[[ "$prc" -eq 2 ]] && die …` line left 119 of the baseline 189 cases
+    // green — this case, and Important 2's narrowed-guard mutation, are what
+    // catch it: `cmd_prefer`'s own equivalent of `cmd_start`'s and
+    // `cmd_swap`'s undecidable-tag refusal, above.
+    seedRow(); tagPool('demo', 'Pool Orate');
+    const r = shFail(`cmd_prefer --cross-pool ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(
+      `pool tag for demo is malformed: ${h.home}/.cc-sessions/pools/demo`);
+    expect(r.stderr).toContain('nothing was touched');
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('--cross-pool on an IN-POOL wrapper is a no-op crossing — no marker, no dec.crosspool', () => {
+    // Coordinator review, fix round 1, Important 4. Dropping `"$prc" -eq 1`
+    // from the marker/dec line is green today: `ccd prefer --cross-pool`
+    // onto a wrapper that is ALREADY in the project's pool would still
+    // journal `dec.crosspool 1` and write a marker for a move that crosses
+    // nothing — a false operator-intent record on the one row this task
+    // exists to make truthful.
+    seedRow(); tagPool('demo', 'pool-a');
+    h.sh(`cmd_prefer --cross-pool ${ID} claude-a`);   // claude-a is IN pool-a, same as claude
+    expect(h.reg(ID, 'home')).toBe('claude-a');
+    expect(h.reg(ID, 'crosspool'), 'nothing was crossed — no marker to write').toBeNull();
+    expect(decOf(eventsOf(h.home, 'rehome')[0]!)['crosspool'], 'nothing was crossed').toBeUndefined();
   });
 
   it('`--cross-pool` moves the HOME, marks it, and the re-seed leaves it alone', () => {
