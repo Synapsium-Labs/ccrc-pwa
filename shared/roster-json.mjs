@@ -56,7 +56,7 @@
 // Nothing is returned until every check has succeeded, so a caller can never
 // observe a half-validated roster.
 //
-// Two changes from the code's old home inside `deploy/gen-accounts.mjs`:
+// Three changes from the code's old home inside `deploy/gen-accounts.mjs`:
 //  1. `checkAccount` now returns `secretsFile: exec['secretsFile']` — it used
 //     to validate the field and then drop it, so the only bare-`node` reader
 //     of the roster could not tell a caller which secrets file an account
@@ -247,7 +247,7 @@ function checkAccount(raw, index) {
   ) {
     bad(`account "${id}" has an invalid exec.secretsFile ${JSON.stringify(exec['secretsFile'])}.`,
       `Set exec.secretsFile for account "${id}" to a path relative to $HOME (e.g. ".cc-secrets/${id}-oauth.env") `
-      + 'using only letters, digits, ".", "_", "-" and "/" — never absolute, never containing "..", never ending in "/".');
+      + 'using only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", never ending in "/".');
   }
 
   // `provider`, `baseUrl` and `models` — validated here, returned by nothing.
@@ -352,7 +352,7 @@ function checkAccount(raw, index) {
       `Set "telemetry" for account "${id}" to "anthropic" or "none".`);
   }
 
-  // Mirrors `parseRoster`'s `hidden` gate (shared/roster.ts:707-712, whose
+  // Mirrors `parseRoster`'s `hidden` gate (shared/roster.ts:707-713, whose
   // reasoning comment is :702-706). OPTIONAL
   // — absent is false, which is what makes the field additive to rosters that
   // predate it — but a PRESENT value must be a boolean. `"false"` is a truthy

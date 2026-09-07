@@ -356,10 +356,11 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],
     // THE MECHANISM CHECK, added alone and measured red-then-green before the
     // rows below it were trusted to this harness. `parseRoster` has refused a
-    // non-boolean `hidden` since the field landed (roster.ts:707-712, its
-    // reasoning comment at :702-706 and the `=== true` coercion at :713;
-    // pinned by roster.test.ts:141-146) and the mirror had never heard of the
-    // field at all — measured 2026-09-07: `grep -c hidden shared/roster-json.mjs` -> 0.
+    // non-boolean `hidden` since the field landed (roster.ts:707-713, its
+    // reasoning comment at :702-706 and the `=== true` coercion at :714;
+    // pinned by roster.test.ts:141-146) and, before this task, the mirror had
+    // never heard of the field at all — measured 2026-09-07, before this
+    // commit: `grep -c hidden shared/roster-json.mjs` -> 0.
     // So this roster was ACCEPTED by the deploy-side generator, which then
     // rewrote a box's accounts.sh and wrappers for it, and REFUSED by the
     // server on boot. The mirror being laxer than the parser is the one
