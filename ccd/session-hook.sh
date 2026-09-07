@@ -335,6 +335,123 @@ _hook_graph_card() {
   return 0
 }
 
+# ── THE CO-TENANT SUBJECT (R7) ──────────────────────────────────────────
+# ONE READ, THREE ANSWERS. `readFileMeasured`'s rule (D-114) in bash: absent
+# and unreadable are two conditions a caller handles differently, so they get
+# two return codes. `-f` is not decoration — `-r` is TRUE for a DIRECTORY and
+# `$(<dir)` is silently empty with rc 0, and ccd names a directory planted at a
+# registry path as a real attack shape.
+#
+# NEVER `2>/dev/null` on a `$(<f)`: bash parses that as a null command with
+# redirections, NOT the fork-free read — measured, it returns the EMPTY STRING
+# and rc 0 on a perfectly readable file, so the reflex idiom is a silent wrong
+# answer. The `[[ -f && -r ]]` guard is what makes stderr silent instead.
+#
+# IT SETS `CT_V` AND NEVER PRINTS. `v=$(_ct_read f)` would be a command
+# SUBSTITUTION, which forks a subshell even around a shell function: measured
+# 61.9 ms for one 22-row pass that way against 2.97 ms this way. The whole
+# probe forks ZERO times (strace: 0 clone/clone3/vfork over one pass).
+#
+# The trim reproduces the server's own `field()` (`server/src/registry.ts:333`
+# does `content.trim()`), so the hook and the server group rows the same way.
+_ct_read() {   # <path> -> CT_V ; rc 0 read, 1 absent, 2 unmeasurable
+  CT_V=""
+  [[ -e "$1" ]] || return 1
+  [[ -f "$1" && -r "$1" ]] || return 2
+  CT_V=$(<"$1") || return 2
+  CT_V="${CT_V#"${CT_V%%[![:space:]]*}"}"; CT_V="${CT_V%"${CT_V##*[![:space:]]}"}"
+  return 0
+}
+
+# THE RUNG IS THE SUPERVISOR HEARTBEAT, NOT `.archived` — and that is a ruling
+# this repo already made. `server/src/coord/peers.ts` (D9): the peers route
+# "does NOT filter on `.archived` ... `archivedAt` is reported verbatim and
+# decides nothing", and it ships `archiveContradicted`/`archivedStale` to NAME
+# the contradiction. Measured on this box: `data-internal-still-prairie` has
+# carried `.archived` for 33 days beside a 4-second-old heartbeat, and the
+# server calls it `deliverable:"yes"`. In the other direction a main checkout
+# can never be archived at all, so an `.archived` filter over-counts a dead
+# main checkout forever with nothing to correct it. The heartbeat is the one
+# field a dead row stops writing, and 120 s is `SUPERVISED_FRESH_MS`.
+#
+# THE PROJECT IS READ, NEVER PARSED OUT OF THE ID. Measured over all 22 rows:
+# `${id%-*}` is right 0 times and `${id#*-}` 3 times, because ccd mints ids
+# both `<wrapper>-<project>` and `<project>-<slug>` and both halves are
+# hyphenated. There is no fallback there, only a wrong answer.
+_ct_probe() {   # -> CT_N CT_U CT_PROJ ; rc 1 = nothing may be said
+  CT_N=0; CT_U=0; CT_PROJ=""
+  local me="" f o rc now
+  _ct_read "$REG/$id.project"; rc=$?
+  [[ $rc -ne 2 ]] || return 1
+  me="$CT_V"; [[ -n $me ]] || me="$id"
+  case "$me" in ''|*[!$CCRC_PROJ_CLASS]*) return 1 ;; esac
+  (( ${#me} <= CCRC_PROJ_MAX )) || return 1
+  now="${EPOCHREALTIME%%[.,]*}"
+  # SUFFIX-ANCHORED, never `$REG/$id*` and never bare `$REG/*`: `_reg_purge`
+  # records MEASURED id-nesting collisions an unanchored glob matches both
+  # sides of, and wave 2a put the project pool tag in a DOTLESS `$REG/pools/`
+  # precisely because "every registry glob is SUFFIX-shaped ... so a directory
+  # is invisible to all of them". Bare `$REG/*` also costs 3.75 ms against
+  # 0.51 ms here — 485 entries, 126 of them leaked `_reg_set` tmp dotfiles.
+  #
+  # THE ID SET IS `.uuid`, which is the enumeration the SERVER itself uses
+  # (`registry.ts` derives the whole fleet id list from
+  # `names.filter(n => n.endsWith('.uuid'))`). Globbing `*.project` instead
+  # would make a row that carries no `.project` INVISIBLE — but the server
+  # gives that row `project ?? id`, so the two sides would enumerate different
+  # fleets. `$o` is shape-gated with `$id`'s own class before it is compared or
+  # interpolated: with no match at all the glob stays LITERAL, and an ungated
+  # `*` reaching a `[[ ]]` comparison is a pattern, not a name.
+  for f in "$REG"/*.uuid; do
+    o="${f%.uuid}"; o="${o##*/}"
+    [[ $o == "$id" ]] && continue
+    case "$o" in ''|*[!$CCRC_PROJ_CLASS]*) continue ;; esac
+    (( ${#o} <= CCRC_ID_MAX )) || continue
+    _ct_read "$REG/$o.project"; rc=$?
+    [[ $rc -ne 2 ]] || { CT_U=$(( CT_U + 1 )); continue; }
+    [[ -n $CT_V ]] || CT_V="$o"        # the server's own `project ?? id`
+    [[ $CT_V == "$me" ]] || continue
+    # A ROW WITH NO `.supervised` IS A MEASURED ABSENCE, not an unmeasured row:
+    # on this box the 5 rows lacking it are all archived AND stopped. Folding
+    # absence into doubt would put "at least" on every card forever.
+    _ct_read "$REG/$o.supervised"; rc=$?
+    [[ $rc -ne 1 ]] || continue
+    if [[ $rc -eq 2 ]]; then CT_U=$(( CT_U + 1 )); continue; fi
+    case "$CT_V" in ''|*[!0-9]*) CT_U=$(( CT_U + 1 )); continue ;; esac
+    (( now - CT_V >= 0 && now - CT_V < CCRC_FRESH_S )) && CT_N=$(( CT_N + 1 ))
+  done
+  CT_PROJ="$me"
+  return 0
+}
+
+# THE CARD SAYS WHAT THE REGISTRY PROVED AND NOTHING MORE. It does not say
+# "live" — no local field can. `_swap_beat` re-stamps `.supervised` through a
+# whole `cp -a` carry ON PURPOSE, and 6 of 16 rows have been silent over 5 h
+# while reading `deliverable:"yes"` to the server. It does not say "share"
+# either: the 7 ccrc-pwa rows resolve to 7 distinct workdirs on 6 distinct
+# branches — they share a registry string, not a byte on disk. It says
+# `supervised rows name project <p>`, which is the literal measurement, and
+# hands the session the ONE authority that can answer the rest.
+#
+# IT PRESCRIBES `peers list`, NOT `claims take`. The 200 that route returns
+# carries PEER_ETIQUETTE verbatim, whose rule 0 IS "claim before you edit" — so
+# the card points at the authority instead of paraphrasing it. Prescribing the
+# claim directly would push every co-tenant at an 8-hour, alarm-invisible wedge
+# with no precedence rule (`claimAttempt` never consults `runId`) and no client
+# for the release valve. The hook names the CLIENT VERB, never the route, which
+# is also what keeps `claims-advisory.test.ts`'s FORBIDDEN scan green.
+_hook_ccrc_card() {
+  CARD_CCRC=""
+  [ -e "$CCRC_CARD_OFF" ] && return 0
+  _ct_probe || return 0
+  [ "$CT_N" -gt 0 ] || return 0      # SILENCE is the true answer for a lone row
+  local n="other supervised rows name" s=""
+  [ "$CT_N" -eq 1 ] && n="other supervised row names"
+  [ "$CT_U" -eq 0 ] || s="at least "
+  CARD_CCRC="ccrc: $s$CT_N $n project \`$CT_PROJ\`; \`~/.local/bin/ccrc-api peers list --of $id\` names them and returns the five peer rules."
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -358,6 +475,7 @@ GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:sp
 # a deploy and without a token.
 GRAPH_GATE_OFF="$HOME/.ccrc/graph-gate-off"
 GRAPH_GATE_MAX_BEHIND=10
+GRAPH_GATE_MAX_DENIALS=3
 
 # ── R7: the card's bounds and its kill-switch ───────────────────────────
 # Same shape as GRAPH_GATE_OFF above and as `$REG/coordinator-paused`: a file
@@ -372,10 +490,35 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # combination is graphify 593 + held 592 + co-tenant 176 + 2 joins = 1363, and
 # the neighbour hook on this same compact SessionStart
 # (`~/.cc-handoff/restore.sh`) caps its own additionalContext at 24576 bytes —
-# so 1800 clears everything this file can emit today by 32% and is 7.3% of the
+# so 1800 clears everything measured live by 32% and is 7.3% of the
 # scale this event already carries.
 CARD_MAX_CHARS=1800
-GRAPH_GATE_MAX_DENIALS=3
+# BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
+# in a prompt, so it is gated on a SHAPE rather than clipped to a length: a
+# value this refuses is UNSPEAKABLE and the card says nothing, rather than
+# quoting bytes it cannot vouch for. The class is `id`'s own plus a length
+# bound; it admits no whitespace, so the trailing-space divergence that would
+# split the hook's grouping from the server's is refused, not guessed at.
+#
+# THE SHAPE GATE IS A `case` GLOB PLUS `${#x}`, NOT AN ERE, AND THAT IS A
+# BUDGET DECISION MEASURED RATHER THAN ASSUMED. The natural spelling here is
+# `[[ $x =~ ^[A-Za-z0-9._-]{1,128}$ ]]`, and the BOUNDED REPETITION is what
+# costs: over 23 evaluations, `{1,128}` measures 13.1-18.5 ms and `{1,64}`
+# 7.9-13.9 ms, against 1.2-4.1 ms for the same class with `+` and 1.4-2.2 ms
+# for `case` plus `${#x}`. `=~` is free where the shipped hook uses it — once
+# per event; inside a per-row loop the `{m,n}` expansion was the WHOLE cost of
+# this probe (17.4 ms p50 before, 4.5 ms after).
+#
+# The class is spelled ONCE and the `case` patterns expand it, because a
+# variable inside a bracket expression works and costs the same (measured):
+# two literal copies would be the second definition `single-definition.test.ts`
+# exists to redden.
+CCRC_PROJ_CLASS='A-Za-z0-9._-'
+CCRC_PROJ_MAX=64
+CCRC_ID_MAX=128
+# `SUPERVISED_FRESH_MS` (`shared/api.ts`) in seconds — the same 120 s window
+# `_session_state`'s bash twin uses, tolerating 4 missed 30 s beats.
+CCRC_FRESH_S=120
 # A search at the HEAD of the line is a codebase question; a search at the tail
 # of a pipeline (`vitest run | grep Tests`) is filtering output this session
 # already produced, and gating that would be the gate answering a question
@@ -517,10 +660,15 @@ case "$event" in
     # the only site that prints. `_hook_graph_card` returns early for a tree
     # with no cwd and for a tree the sweep left no word about; a registry
     # subject must not inherit either gate, because neither has anything to do
-    # with the registry.
-    CARD_GRAPH=""; CARD=""
+    # with the registry. THE JOIN SEPARATOR IS ONE SPACE — `${CARD:+$CARD }`
+    # appends it only when a prior subject already put text in `$CARD`, so a
+    # lone subject carries no leading or trailing space and a third subject
+    # (Task 5) joins the same way, on the same separator, without re-deriving it.
+    CARD_GRAPH=""; CARD_CCRC=""; CARD=""
     _hook_graph_card || true
+    _hook_ccrc_card  || true
     CARD="$CARD_GRAPH"
+    [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
     [ -z "$CARD" ] || _hook_emit_context "$CARD"
     [[ "$src" == compact ]] && exit 0
     state="done" ;;

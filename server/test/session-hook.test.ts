@@ -2,7 +2,7 @@
 // suites run ccd: a stub tmux on PATH answers the session name, stdin carries
 // the hook payload, and the assertion reads the file the script wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -1420,5 +1420,166 @@ describe('the emitter: one line, clipped once', () => {
     const text = card(out);            // card() asserts exactly one line
     expect(text.length).toBeLessThanOrEqual(1800);
     expect(text).toContain('graphify:');
+  });
+});
+
+// `spawnSync` joins the file's existing `execFileSync` import — the stderr
+// assertion below needs a result object on a ZERO exit, which execFileSync
+// does not give.
+describe('the co-tenant subject', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  /** Plant a peer row: `.uuid` (the id enumeration), `.project`, `.supervised`. */
+  const peer = (id: string, project: string | null, ageS: number | null): void => {
+    fs.writeFileSync(path.join(REG(), `${id}.uuid`), `uuid-${id}`);
+    if (project !== null) fs.writeFileSync(path.join(REG(), `${id}.project`), project);
+    if (ageS !== null) {
+      fs.writeFileSync(path.join(REG(), `${id}.supervised`),
+        String(Math.floor(Date.now() / 1000) - ageS));
+    }
+  };
+  const plain = (): string => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    return card(run({ hook_event_name: 'SessionStart', cwd: tree }));
+  };
+
+  it('counts supervised rows naming the same project, and names the route', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    peer('p2', 'alpha', 5);
+    peer('p3', 'beta', 5);
+    const text = plain();
+    expect(text).toContain('ccrc: 2 other supervised rows name project `alpha`');
+    expect(text).toContain('ccrc-api peers list --of demo-quiet-basin');
+    expect(text).toContain('the five peer rules');
+  });
+
+  it('says nothing at all when this row is alone in its project', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p3', 'beta', 5);
+    expect(plain()).not.toContain('ccrc:');
+  });
+
+  it('uses the singular at one co-tenant', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    expect(plain()).toContain('ccrc: 1 other supervised row names project `alpha`');
+  });
+
+  it('counts an archived row whose supervisor is still beating — the archive stamp decides nothing (D9)', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('ghost', 'alpha', 5);
+    fs.writeFileSync(path.join(REG(), 'ghost.archived'), 'archived=1 reason=merged:#160');
+    expect(plain()).toContain('ccrc: 1 other supervised row names project `alpha`');
+  });
+
+  it('does not count a row whose heartbeat has stopped', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('stale', 'alpha', 5000);
+    expect(plain()).not.toContain('ccrc:');
+  });
+
+  it('a trailing space in .project groups exactly as the server does', () => {
+    peer('demo-quiet-basin', 'alpha ', 5);
+    peer('p1', 'alpha', 5);
+    expect(plain()).toContain('ccrc: 1 other supervised row names project `alpha`');
+  });
+
+  // `spawnSync`, not `run`/`execFileSync`: this test's whole point is the
+  // STDERR channel, and only spawnSync hands it back on a zero exit. A bare
+  // `$(<f)` on a mode-000 file writes "Permission denied" to the hook's real
+  // stderr, which the harness folds into a user-visible warning on EVERY
+  // SessionStart of EVERY co-tenant session.
+  it('an unreadable peer .project costs no stderr and is reported, never folded into absence', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    peer('p2', 'alpha', 5);
+    fs.chmodSync(path.join(REG(), 'p2.project'), 0o000);
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify({ hook_event_name: 'SessionStart', cwd: tree }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home,
+        PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242' },
+    });
+    expect(r.status, 'the hook must exit 0 on every path').toBe(0);
+    expect(r.stderr, 'the hook leaked stderr the harness will surface').toBe('');
+    expect(card(r.stdout))
+      .toContain('ccrc: at least 1 other supervised row names project `alpha`');
+  });
+
+  it('a directory at a registry path is not read', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    fs.mkdirSync(path.join(REG(), 'p2.project'), { recursive: true });
+    fs.writeFileSync(path.join(REG(), 'p2.uuid'), 'uuid-p2');
+    expect(plain()).toContain('at least 1 other supervised row names project `alpha`');
+  });
+
+  it('never claims liveness or shared files, and always names the route that can', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    const text = plain();
+    expect(text).not.toMatch(/\blive\b|\bsessions? share\b|\bsharing\b/i);
+    expect(text).toContain('supervised row names project');
+    expect(text).toContain('peers list --of');
+  });
+
+  it('survives a tree graphify says nothing about', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    const out = run({ hook_event_name: 'SessionStart', cwd: path.join(home, 'nograph') });
+    const text = card(out);
+    expect(text).toContain('ccrc:');
+    expect(text).not.toContain('graphify:');
+  });
+
+  it('the operator file silences the subject and nothing else', () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'ccrc-card-off'), '');
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    const text = plain();
+    expect(text).not.toContain('ccrc:');
+    expect(text).toContain('graphify:');
+  });
+
+  it('emits exactly one parseable line when both subjects fire', () => {
+    peer('demo-quiet-basin', 'alpha', 5);
+    peer('p1', 'alpha', 5);
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.hold'),
+      'program:account-pools wave:3/6 run:34');
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1);
+    plantGraph(tree, { built: 'deadbee' });
+    const out = run({ hook_event_name: 'SessionStart', cwd: tree });
+    expect(out.trim().split('\n')).toHaveLength(1);
+    expect(() => JSON.parse(out.trim())).not.toThrow();
+  });
+
+  // CCRC_FRESH_S is a THIRD copy of SUPERVISED_FRESH_MS and
+  // single-definition.test.ts's roots are shared, server/src, pwa/src and
+  // agent/src — it does not scan ccd/, so nothing else would catch the drift.
+  // The local copy follows this file's own precedent (_hook_epoch_ms is a
+  // deliberate local copy of ccd's _plat_epoch_ms with a test pinning the two
+  // bodies identical), because the hook is installed alone into ~/.cc-sessions
+  // and can source nothing.
+  it('the hook, ccd and shared agree on the supervised-freshness window', () => {
+    const hook = fs.readFileSync(path.resolve(__dirname, '../../ccd/session-hook.sh'), 'utf8');
+    const ccd = fs.readFileSync(path.resolve(__dirname, '../../ccd/ccd'), 'utf8');
+    const api = fs.readFileSync(path.resolve(__dirname, '../../shared/api.ts'), 'utf8');
+    const h = /CCRC_FRESH_S=(\d+)/.exec(hook);
+    const c = /now - sup >= 0 && now - sup < (\d+)/.exec(ccd);
+    const s = /SUPERVISED_FRESH_MS\s*=\s*([\d_]+)/.exec(api);
+    expect(h, 'CCRC_FRESH_S not found in the hook').not.toBeNull();
+    expect(c, "ccd's supervised-freshness comparison not found").not.toBeNull();
+    expect(s, 'SUPERVISED_FRESH_MS not found in shared/api.ts').not.toBeNull();
+    expect(Number(h![1]) * 1000, 'the hook and shared disagree on the window')
+      .toBe(Number(s![1]!.replace(/_/g, '')));
+    expect(Number(c![1]), 'ccd and the hook disagree on the window').toBe(Number(h![1]));
   });
 });
