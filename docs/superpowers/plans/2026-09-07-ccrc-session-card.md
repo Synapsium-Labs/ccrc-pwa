@@ -884,6 +884,19 @@ describe('the program subject', () => {
     expect(plain()).not.toContain('ccrc-program:');
   });
 
+  // The truncation trap: _ct_read caps at CCRC_ID_MAX (128), so a hold longer
+  // than that arrives SHORTENED and can lose its ` run:<id>` suffix in the cut.
+  // Rendered naively it would read as CASE B — "names NO run" — for a hold that
+  // names one. CCRC_HOLD_MAX=127 refuses anything that reached the read's bound,
+  // so a value is either quoted whole or not quoted at all.
+  it('is silent on a hold whose run suffix the read would have cut off', () => {
+    const pad = 'x'.repeat(128 - 'program: wave:1/2'.length);
+    hold(`program:${pad} wave:1/2 run:34`);
+    const text = plain();
+    expect(text).not.toContain('ccrc-program:');
+    expect(text).not.toContain('names NO run');
+  });
+
   it('tells unreadable apart from absent', () => {
     hold('program:account-pools wave:3/6 run:34');
     fs.chmodSync(path.join(REG(), 'demo-quiet-basin.hold'), 0o000);
@@ -935,7 +948,17 @@ Beside `CCRC_FRESH_S`:
 # reason is a non-blank string and `ccd` only blankness, while `--actor` on the
 # same verb IS capped at 512 — so this is the first bound the value meets.
 # A hold that fails it is UNSPEAKABLE and the subject is silent.
-CCRC_HOLD_MAX=256
+#
+# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT. `_ct_read` reads at most
+# `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
+# been truncated and there is no way to tell from here. Refusing at 127 means
+# every value this function ever quotes was captured WHOLE. A 256 bound would
+# be unreachable — dead, and worse than absent, because a 400-character hold
+# would arrive truncated to 128, could lose its ` run:<id>` suffix in the cut,
+# and would then render as CASE B ("It names NO run") for a hold that names one.
+# Quoting a truncated hold as if it were the whole hold is exactly the lying
+# card this design exists to prevent, so the bound refuses instead.
+CCRC_HOLD_MAX=127
 ```
 
 - [ ] **Step 4: Add the builder**
@@ -1031,6 +1054,7 @@ Expected: PASS, all of them.
 |---|---|
 | delete the `=~` shape gate | `is silent on a free-text operator hold` |
 | delete the `${#h} <= CCRC_HOLD_MAX` bound | `is silent on a hold longer than the bound` |
+| raise `CCRC_HOLD_MAX` to 256 (making the gate unreachable past `_ct_read`'s 128) | `is silent on a hold whose run suffix the read would have cut off` |
 | change `[ "$rc" -eq 2 ]` to fall through to silence | `tells unreadable apart from absent` |
 | delete the `.archived` branch | `names an archived row's hold as residue` |
 | delete the `GM_CWD`/`wd` comparison | `names the workspace by path when the cwd is somewhere else` |
