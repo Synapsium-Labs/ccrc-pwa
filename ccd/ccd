@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e7ce819a8024ed38d223d56cd539a5f65bf2e5184f7b551b5bcc44ec54b57ecd
+# ccrc:generated 1 sha256=2d03ce707f573ff32af99a0ac8ebd38a781eff461405406d7c85326b0c48eb62
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11709,12 +11709,32 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
   local jitter=0
   [[ "${SWAP_JITTER:-0}" =~ ^[0-9]+$ && "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
   echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
-  # CCD_SWAP_AUTO=1 SAYS WHO CHOSE THIS TARGET, and it exists for the deploy
-  # window alone (§5.8.4). This function runs the ON-DISK ccd while the
-  # supervisor that chose the target keeps the pre-deploy inode, so a pool-blind
-  # `_swap_target` can hand a wrong-pool account to a pool-aware `cmd_swap`.
-  # The refusal there must be LOUD — a marker and a banner — because nothing is
-  # reading this unit's exit code. Set inside the `bash -c` string, dynamically
+  # CCD_SWAP_AUTO=1 SAYS WHO CHOSE THIS TARGET — the tick's own automatic
+  # pick, never an operator's typed one — and it exists so `cmd_swap`'s
+  # in-unit refusal of such a pick can be LOUD (a marker and a banner)
+  # instead of a `die` nobody reads, because nothing reads this transient
+  # unit's exit code. CORRECTED (final whole-branch review, I-2): this
+  # variable is set ONLY by THIS function, i.e. only once the running
+  # supervisor is itself on the code that defines it — it does NOT, by
+  # itself, make the classic §5.8.4 pre-deploy window audible. A supervisor
+  # still on the pre-deploy inode calls its OWN pre-deploy `_dispatch_swap`,
+  # which predates this variable and never sets it (confirm: `git show
+  # 58ef97b6:ccd/ccd | grep -c CCD_SWAP_AUTO` is 0) — so a pool-blind
+  # `_swap_target`'s wrong-pool choice, dispatched by an OLD supervisor to a
+  # pool-aware ON-DISK `cmd_swap`, reaches the guard with the variable UNSET
+  # and refuses SILENTLY, repeating every SWAP_COOLDOWN for as long as that
+  # unit lives — the exact failure this mechanism reads as closing. That
+  # window is closed by the supervisor SWEEP (`deploy.sh`'s `try-restart
+  # claude-session@*`, behind its mandatory `KillMode=process` preflight),
+  # not by this variable. What this gate DOES genuinely close, once every
+  # supervisor is on the new inode: a mistyped or automatically-dispatched
+  # swap that shouldn't have crossed pools still strands loudly rather than
+  # silently. CARRY for a later wave (not this one — a behaviour change with
+  # its own tests): `systemd-run` sets `INVOCATION_ID` in a transient unit's
+  # environment, so an in-unit swap IS distinguishable from an operator's tty
+  # swap by a signal that exists even on a pre-deploy `ccd` — a genuine
+  # discriminator and a candidate replacement for `CCD_SWAP_AUTO` that a
+  # later wave SHOULD evaluate. Set inside the `bash -c` string, dynamically
   # visible to the re-exec, exactly as CCD_SWAP_DETACHED is — set inside
   # `cmd_swap`'s own detach arm, in its `_svc_run_detached bash -c` line
   # (`grep -n 'CCD_SWAP_DETACHED=1' ccd/ccd`). Stated as a grep, not a line
@@ -13894,6 +13914,16 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
     if ! _pool_ok "$cand" "$pps"; then
+      # ADDED (final whole-branch review, M-3): `:-none` cannot print here
+      # today — `_pool_ok` returns 1 (this branch) only when `ap` is
+      # NON-EMPTY (its own body: `[[ -z "$ap" || "$ap" == "$pp" ]]`), and
+      # `pps` this deep is always `untagged`/`named …`, never the case that
+      # returns 2. Kept anyway as a belt on this call site's OWN guarantee,
+      # not because the fallback is reachable now — a future change to
+      # `_pool_ok`'s or `_acct_pool`'s contract at this exact point should
+      # degrade to an honest `:pool=none` rather than an empty, easy-to-miss
+      # `:pool=` in an operator-facing banner. No behaviour change: this is
+      # a comment only.
       ap=$(_acct_pool "$cand"); out+=" $cand:pool=${ap:-none}"
     elif ! _account_ok "$cand"; then
       if [[ -x "$WRAPPER_DIR/$cand" ]]; then out+=" $cand:disabled"; else out+=" $cand:missing"; fi
@@ -13973,6 +14003,15 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   #   - the session is still on the account it crossed TO: `wrapper` for a
   #     `swap`/`start` crossing, `home` for a `prefer` one. Callers pass both
   #     and either satisfies it.
+  # ADDED (final whole-branch review, M-2): `wrapper`/`home` are alternatives
+  # this predicate CHECKS, but the record itself is ONE `_reg_set` field
+  # (`_crosspool_mark`, one call, `grep -n '^_crosspool_mark()' ccd/ccd`) —
+  # single-valued and last-write-wins, not one slot per act. So `swap
+  # --cross-pool` then `prefer --cross-pool` on the SAME row silently
+  # OVERWRITES the first mark with the second rather than recording both:
+  # the swap crossing's own account stops being what the marker names, and
+  # this predicate's account clause fails for it on the very next tick —
+  # ending a crossing the operator never asked to end.
   # Deliberately NOT switched off: the pre-existing home affinity (§2, O1) —
   # but only for a `wrapper`-recorded (`swap`/`start`) crossing. There, once a
   # crossed session returns home, it is `cur` that moves off the crossed
@@ -14146,12 +14185,21 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
       crossing=1
     else
       # §5.8.4: inside `_dispatch_swap`'s transient unit nobody reads this exit
-      # code, and an old supervisor will repeat the same choice every
-      # SWAP_COOLDOWN. Mark and banner (both floor-debounced) so the deploy
-      # window is audible instead of being a silent strand for days. The
-      # CAUSE is passed explicitly (Important 4): `_strand_why`'s pool census
-      # would be misleading here — an in-pool account can often genuinely
-      # take the session; what actually happened is this exact refusal.
+      # code, so when this gate fires with the variable SET, mark and banner
+      # (both floor-debounced) instead of leaving a silent strand for days.
+      # CORRECTED (final whole-branch review, I-2): this line is a sound
+      # FILTER on a dispatch that arrives with `CCD_SWAP_AUTO=1` — it does
+      # NOT by itself make the classic pre-deploy window audible, because an
+      # old supervisor's OWN pre-deploy `_dispatch_swap` predates the
+      # variable and never sets it, so that dispatch reaches this line with
+      # the variable unset and refuses silently instead (see
+      # `_dispatch_swap`'s own comment for the full account and the
+      # supervisor-sweep closer). The CAUSE is passed explicitly (Important
+      # 4): `_strand_why`'s pool census would be misleading here — an in-pool
+      # account can often genuinely take the session; what actually happened
+      # is this exact refusal, reachable today chiefly via the
+      # retag-races-a-dispatched-unit's-jitter window spec §5.8.4 accepts as
+      # P-8, not a stale supervisor.
       [[ "${CCD_SWAP_AUTO:-}" == 1 ]] && _strand_mark "$id" "$cur" "$project" \
         "$target refused as a cross-pool crossing nobody asked for — likely a supervisor still running a pre-deploy ccd; the remedy is the claude-session@* unit sweep"
       die "pool-mismatch: $target is in pool '$(_acct_pool "$target")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd swap --cross-pool $id $target"

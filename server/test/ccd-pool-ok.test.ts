@@ -347,7 +347,13 @@ describe('the `_pool_ok` header states a call-site count that stays honest', () 
     const claimed = block.match(/finds (\d+) call sites now/);
     expect(claimed, 'the header no longer states a call-site count in the expected shape').not.toBeNull();
     const stated = Number(claimed![1]);
-    const live = (src.match(/_pool_ok /g) || []).length;
+    // CORRECTED (final whole-branch review, M-1): the header's own cited
+    // command is `grep -c`, which counts LINES containing a match, not
+    // occurrences — `.match(/g)` counted occurrences instead, silently
+    // measuring something else. Both are 16 today only because no line in
+    // `ccd/ccd` holds two `_pool_ok ` calls; count lines here so this test
+    // measures the same thing the header's cited command measures.
+    const live = src.split('\n').filter((line) => line.includes('_pool_ok ')).length;
     expect(live, `grep -c '_pool_ok ' ccd/ccd now finds ${live}, but the header still claims ${stated}`).toBe(stated);
   });
 });

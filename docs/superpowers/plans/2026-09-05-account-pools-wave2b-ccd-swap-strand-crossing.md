@@ -1990,6 +1990,7 @@ Two things about this wave in particular:
 
 1. **`deploy.sh`'s supervisor sweep matters here more than usual.** Between `install_atomic` and the `try-restart claude-session@*` sweep (behind its mandatory `KillMode=process` preflight), each running supervisor's `_auto_swap_check` is the **old** inode while `_dispatch_swap`'s transient unit runs the **new** `ccd`. That window is exactly what `CCD_SWAP_AUTO=1` and `_strand_mark` in `cmd_swap`'s guard exist for (Task 5): an old supervisor's pool-blind choice is refused with a marker and a banner instead of silently, every `SWAP_COOLDOWN`, for as long as that unit lives. Do not hand-`install_atomic` this build without the sweep.
 2. **Nothing changes until something is tagged.** With no `~/.cc-sessions/pools/` directory, `_project_pool_state` answers `untagged` for every project, `_pool_ok` answers 0 for every account, and every insertion in this wave is a no-op. The rollout is per-project and reversible with `ccd project-pool --project <p> --clear` (wave 2a's verb).
+3. **`dcdb1e4b`'s wave-3 option is no longer a one-revert move — measured 2026-09-07, in an isolated detached worktree.** An earlier review told the coordinator `dcdb1e4b` "reverts cleanly, disjoint file sets, one revert is enough"; that was true when measured at `114ea60d` and has been false since `c7174ea4` and `1ee6b4a8`. Re-measured (`git worktree add --detach <tmpdir> HEAD`, `git revert --no-commit dcdb1e4b` there, `git worktree remove`/`git worktree prune` after): the revert exits **non-zero**, with content conflicts in exactly two files — `shared/api.ts` (2 hunks) and `server/test/ccd-lifecycle-contain.test.ts` (2 hunks). Resolving both by taking the revert side (deleting the `<<<<<<< HEAD` block in each of the four hunks, keeping the empty side) leaves `cd server && npm run build` at exit 0, but **two** suites red, not one: the disclosed `ccd-lifecycle-contain.test.ts` (`every meas.<key> ccd writes is on the list, and the list is exactly 25` fails with `['home','pool','reason']` unlisted — the expected regression) **and, undisclosed, `single-definition.test.ts`** (`Build 9 nouns — the lifecycle journal vocabulary > DERIVES every runtime list from its total map`, 108 passed/1 failed). The second is caused by `1ee6b4a8`, which added the `['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP']` pin to that test's derivation table (`server/test/single-definition.test.ts`, in the `it('DERIVES every runtime list...')` case) — that pin depends on symbols only `dcdb1e4b` defines, so reverting `dcdb1e4b` without also dropping that one array entry leaves `single-definition` red too. **The accurate price of moving `dcdb1e4b` to wave 3 today:** revert it, resolve the two conflicting files by taking the revert side, ALSO remove the `['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP']` entry `1ee6b4a8` added to `single-definition.test.ts`'s derivation table, and accept that the branch then carries `ccd-lifecycle-contain.test.ts` red on `['home','pool','reason']` until wave 3 lands the declarations — the same caveat the original review gave, just for two suites instead of one.
 
 - [ ] **Step 8: Commit nothing**
 
@@ -2216,7 +2217,17 @@ comment before review caught it.
   states *"This wave changes `ccd/` only, so it is **agent-first**"* — false in the same premise: the branch also
   carries `shared/api.ts`, `server/src/coord/journalparse.ts`, five `server/test` files and two `pwa/test` files.
   The premise is corrected in the plan text; deciding the actual deploy order for a wave that touches both `ccd/`
-  and shared/server source is the coordinator's call to make at merge, not restated here.
+  and shared/server source is the coordinator's call to make at merge, not restated here. **Third site (extend,
+  no new number, corrected 2026-09-07):** the review also told the coordinator `dcdb1e4b` "reverts cleanly,
+  disjoint file sets, one revert is enough" — true when measured at `114ea60d`, falsified since by `c7174ea4`
+  (comment fixes in both files) and by `1ee6b4a8` (which added the `['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP']`
+  pin this same entry's `single-definition.test.ts` comment cites D-1890 for). Re-measured in an isolated detached
+  worktree: the revert now exits non-zero with conflicts in `shared/api.ts` and `ccd-lifecycle-contain.test.ts`
+  (2 hunks each), and resolving both by taking the revert side leaves TWO suites red, not one —
+  `ccd-lifecycle-contain.test.ts` (disclosed) and `single-definition.test.ts` (undisclosed, because that pin
+  depends on symbols only `dcdb1e4b` defines). The full recipe — which files conflict, which side to take, which
+  extra hunk to drop, and the resulting two-red-suite outcome — is written into Task 8 Step 7 above rather than
+  repeated here.
 - **D-1891** (Tasks 5 + 6, CRITICAL) — `cmd_swap` and `cmd_prefer` emit `dec.crosspool 1`, which
   `LifecycleDec` does not declare and `reviveDec`'s closed literal drops at ingest. Worse than the meas gap in one
   specific way: `ccd-lifecycle-contain.test.ts` scans `meas.` keys ONLY, no suite scans `dec.` keys against any list,

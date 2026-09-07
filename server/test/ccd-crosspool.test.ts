@@ -346,14 +346,34 @@ describe('cmd_swap crosses on purpose', () => {
   });
 });
 
-describe('the deploy window (§5.8.4)', () => {
-  it('an old supervisor`s pool-blind choice is refused LOUDLY inside the unit', () => {
-    // The pre-deploy inode is modelled by stubbing `_swap_target` to the
-    // pool-blind answer it used to give; `_dispatch_swap` runs the NEW
-    // `cmd_swap` in-process with the environment the real one sets.
+describe('cmd_swap\'s CCD_SWAP_AUTO strand filter (§5.8.4) — a sound filter, not a deploy-window simulation', () => {
+  it('a pool-aware cmd_swap reached with CCD_SWAP_AUTO=1 strands loudly on an undeclared crossing', () => {
+    // CORRECTED (final whole-branch review, I-2): this fixture does NOT model
+    // the pre-deploy supervisor §5.8.4 was built for, and its previous name
+    // and comment claimed otherwise. `CCD_SWAP_AUTO` is set ONLY by the NEW
+    // `_dispatch_swap` (confirm: `git show 58ef97b6:ccd/ccd | grep -c
+    // CCD_SWAP_AUTO` is 0) — a supervisor still running the OLD inode calls
+    // its OWN pre-deploy `_dispatch_swap`, which never sets the variable at
+    // all. A pool-blind `_swap_target` and a `CCD_SWAP_AUTO=1`-setting
+    // `_dispatch_swap` live in ONE bash process image and cannot disagree the
+    // way this fixture forces them to — the premise below ("the environment
+    // the real one sets") was false.
+    //
+    // What this case DOES genuinely measure: a pool-aware `cmd_swap` reached
+    // with `CCD_SWAP_AUTO=1` set (as only a post-deploy `_dispatch_swap` ever
+    // sets it) strands LOUDLY — marker + banner, both floor-debounced —
+    // instead of silently, whenever `_swap_target`'s own pre-filter hands it
+    // a target the guard refuses. That half of the mechanism is real and
+    // pinned here. The pre-deploy window itself is closed by `deploy.sh`'s
+    // supervisor sweep (`try-restart claude-session@*`, behind its
+    // `KillMode=process` preflight), not by this variable, because an old
+    // supervisor's own `_dispatch_swap` predates it. The one case where the
+    // pre-filter and the guard can still disagree post-sweep is the
+    // retag-races-a-dispatched-unit's-jitter window spec §5.8.4 accepts as
+    // P-8 — no stale supervisor involved there either.
     const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n');
     tagPool('demo', 'pool-a'); plantNotify();
-    const OLD_SUPERVISOR = `
+    const AUTO_GATED_SUPERVISOR = `
       systemctl() { :; }; launchctl() { :; }; sleep() { :; };
       tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
       _swap_target() { echo claude-b; };
@@ -361,7 +381,7 @@ describe('the deploy window (§5.8.4)', () => {
       # cmd_swap in a transient systemd unit, and cmd_swap's guard reaches
       # \`die\` (echo + exit 1). In-process that would exit the whole test shell.
       _dispatch_swap() { ( CCD_SWAP_AUTO=1 cmd_swap "$1" "$2" ) >/dev/null 2>&1 || true; };`;
-    h.sh(`${OLD_SUPERVISOR} _auto_swap_check ${ID}`);
+    h.sh(`${AUTO_GATED_SUPERVISOR} _auto_swap_check ${ID}`);
     expect(h.reg(ID, 'wrapper'), 'nothing moved').toBe('claude');
     expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
     expect(noticeLines()).toHaveLength(1);
