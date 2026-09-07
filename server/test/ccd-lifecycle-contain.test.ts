@@ -161,18 +161,23 @@ describe('the meas key vocabulary is ONE list', () => {
   // distinct names, and the union with L0's now-twelve is the brief's
   // TWENTY-FIVE.
   //
-  // FIX ROUND 1 (account pools wave 2b, Task 6 fix round 1): THIS scan is
-  // exactly what would have caught the next drift immediately, and did not,
-  // because it ran against an `all` that had not been widened yet. Task 6
-  // landed `cmd_prefer` and, earlier in the same wave, the tick's re-seed —
-  // both `rehome` emitters (grep `ccd/ccd` for `_lc_done rehome`) — writing
+  // FIX ROUND 1 (account pools wave 2b, Task 6 fix round 1): Task 6 landed
+  // `cmd_prefer` and, earlier in the same wave, the tick's re-seed — both
+  // `rehome` emitters (grep `ccd/ccd` for `_lc_done rehome`) — writing
   // `meas.home` and `meas.reason` (both writers) plus `meas.pool` (the
   // tick's re-seed only), three keys with no member on `LifecycleMeas` at
-  // the time, shipped and merged with this exact test GREEN throughout,
-  // because `all` (below) was measured against the pre-widening interface.
-  // The coordinator's review is what found the gap; `shared/api.ts`'s own
-  // `LifecycleMeas` docstring has the full account. Re-measuring the scan at
-  // THIS HEAD (`grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u | wc -l`) finds
+  // the time. THIS SCAN is what would have caught it, and nobody ran it:
+  // `ccd-lifecycle-contain.test.ts` is not in the seven-suite blast radius a
+  // pool/swap change runs, so it never executed between either emit landing
+  // and the coordinator's review that found the gap — the scan did not pass
+  // vacuously, it simply was never run against the widened emission
+  // (confirmed: with the interface fix reverted, this exact case reds
+  // immediately with `['home','pool','reason']`). The fix is a suite-list
+  // gap, not a guard weakness — any change to what `ccd` EMITS must also run
+  // this suite (and, since fix round 1, its dec twin below).
+  // `shared/api.ts`'s own `LifecycleMeas` docstring has the full account.
+  // Re-measuring the scan at THIS HEAD
+  // (`grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u | wc -l`) finds
   // TWENTY-EIGHT distinct names — every one of them now a declared member,
   // with no undeclared residue (unlike wave 2's TWENTY-TWO-against-TEN gap
   // above): this fix round closes both new keys AND the interface at once,

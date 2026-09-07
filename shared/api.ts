@@ -5141,12 +5141,13 @@ export const LIFECYCLE_DEC_KEYS: readonly (keyof LifecycleDec)[] =
  * write `meas.from` (already declared), `meas.home` and `meas.reason`; the
  * tick's re-seed additionally writes `meas.pool`, the project's pool name,
  * which `cmd_prefer` never sets (its own crossing intent is `dec.crosspool`
- * instead — a DECLARED choice, not a measured cause). All three shipped
- * GREEN with no compile error and no red test, because nothing scanned for
- * an unlisted `meas.` key until the coordinator's review of that same task
- * found the gap: `ccd-lifecycle-contain.test.ts`'s meas-key scan existed and
- * would have caught it immediately, but ran against a `LIFECYCLE_MEAS_KEYS`
- * this interface had not yet been widened to include. The union returns to
+ * instead — a DECLARED choice, not a measured cause). Nobody ran
+ * `ccd-lifecycle-contain.test.ts`'s meas-key scan between either emit
+ * landing and the coordinator's review that found the gap — it is not in
+ * the seven-suite blast radius a pool/swap change runs, so it never got the
+ * chance to catch this (it reds on it immediately when run: confirmed with
+ * the interface fix reverted). Any change to what `ccd` EMITS must also run
+ * that suite, and — since fix round 1 — its dec twin. The union returns to
  * 28.
  */
 export interface LifecycleMeas {
