@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c382fdc4f0baabf2ba129a817bdcae52135ef9f2e4ed637ce74f7df36ac9dc00
+# ccrc:generated 1 sha256=11aba727ab42b3ef060255d075537194b44144393072d9bf3b57f95305bac9f4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12715,7 +12715,17 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
-    0) rm -f "$REG/$id.stopped" ;;
+    #
+    # AND THE AUTH-DEAD MARKER FOR THIS ACCOUNT, on rc 0 and only rc 0. A TUI
+    # that came up on `$wrapper` is proof that account's credential
+    # authenticates — the second of the three owners §A.6 gives that marker,
+    # beside the probe's own 403 and an operator `rm`. Deliberately NOT the
+    # `cmd_start` shape one screen down, which clears `swapblocked` on the
+    # ATTEMPT: a refused swap is a stale banner a human act supersedes, while
+    # this is a MEASUREMENT and erasing one without evidence is a guess. rc 2
+    # ("waiting for login") and rc 5 ("hard-blocked at startup … or lost auth")
+    # are the opposite of evidence and are pinned to keep the marker.
+    0) rm -f "$REG/$id.stopped" "$REG/$wrapper-authdead" ;;
     # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
     # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
     # side of the return.

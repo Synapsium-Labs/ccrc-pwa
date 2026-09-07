@@ -207,3 +207,61 @@ describe('_swap_target ranks an auth-dead lane LAST, and never makes it ineligib
     expect(sh('_swap_target claude-demo claude claude')).toBe('claude-b');
   });
 });
+
+describe('a successful spawn is evidence, and clears the marker', () => {
+  // §A.6's second owner. The probe (owner one) clears on a 403 within its
+  // 15-minute cadence; this narrows the stale window to zero for the case where
+  // an operator has just fixed the credential and started a session on it.
+  //
+  // rc 0 ONLY, and that is the whole discipline. `cmd_start` clears
+  // `swapblocked` on the ATTEMPT (ccd:12908) because a swap refusal is a stale
+  // banner an operator supersedes by acting. An auth-dead marker is a
+  // MEASUREMENT: clearing it on an attempt would erase a true fault with no
+  // evidence. rc 2 is "waiting for login" and rc 5 is "hard-blocked at startup
+  // (limit/spend banner, or lost auth)" — both are the OPPOSITE of evidence.
+  // `|| true` IS LOAD-BEARING. `_spawn_settle` ends in `return "$prompt_rc"`
+  // (ccd/ccd:12561), so the rc 2 and rc 5 cases make the `bash -c` exit 2 and 5
+  // — and `makeCcdHarness`'s `sh` is `execFileSync`, which THROWS on any
+  // non-zero exit (ccd runs `set -uo pipefail`, no `-e`, so nothing else
+  // rescues it). Swallowing the code here is what makes those two cases assert
+  // rather than error, which is the only way Step 5's second mutation can be
+  // measured at all.
+  const settle = (id: string, rc: number): string =>
+    sh(`_accept_first_run_prompts() { return ${rc}; }; _tmux() { echo t; };`
+      + ` _inject_spawn_effort() { :; }; _lc_done() { :; }; _spawn_settle ${id} "" || true`);
+
+  const seedOn = (id: string, wrapper: string): void => {
+    const reg = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, `${id}.uuid`), 'u\n');
+    fs.writeFileSync(path.join(reg, `${id}.wrapper`), `${wrapper}\n`);
+  };
+
+  it('clears the marker for the account the session actually spawned on', () => {
+    seedOn('claude-demo', 'claude-a');
+    mark('claude-a', '1757203200 auth-401');
+    settle('claude-demo', 0);
+    expect(fs.existsSync(marker('claude-a'))).toBe(false);
+  });
+
+  it('leaves every OTHER account\'s marker standing', () => {
+    seedOn('claude-demo', 'claude-a');
+    mark('claude-a', '1757203200 auth-401');
+    mark('claude-b', '1757203200 auth-401');
+    settle('claude-demo', 0);
+    expect(fs.existsSync(marker('claude-b'))).toBe(true);
+  });
+
+  it('does NOT clear on rc 2 — "waiting for login" is the opposite of evidence', () => {
+    seedOn('claude-demo', 'claude-a');
+    mark('claude-a', '1757203200 auth-401');
+    settle('claude-demo', 2);
+    expect(fs.existsSync(marker('claude-a'))).toBe(true);
+  });
+
+  it('does NOT clear on rc 5 — hard-blocked at startup, which includes lost auth', () => {
+    seedOn('claude-demo', 'claude-a');
+    mark('claude-a', '1757203200 auth-401');
+    settle('claude-demo', 5);
+    expect(fs.existsSync(marker('claude-a'))).toBe(true);
+  });
+});
