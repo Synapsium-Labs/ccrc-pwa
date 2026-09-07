@@ -5052,7 +5052,42 @@ export interface LifecycleDec {
    *  OUT of this fix's scope — this docstring now states what is true of
    *  every writer rather than what only the flag-carried ones guarantee. */
   readonly reason: string | null;
+  /** `'1'` when a `swap`/`start`/`rehome` act was a DELIBERATE `--cross-pool`
+   *  crossing the operator asked for, `null` otherwise — never absent, and
+   *  never a boolean: ccd's encoder stores every `dec.`/`meas.` value as the
+   *  string it was passed, with no numeric coercion (`meas.attic`/`meas.rc`
+   *  are the standing precedent for what `n()` on a ccd-encoded string
+   *  yields — a permanent null — which is why this is read with `s()`, not
+   *  `n()`). Account pools §5.7.2/§14 O6: the field this project's plan
+   *  chose `dec.`, not `meas.`, for, because it is a DECLARED operator
+   *  choice rather than something the machinery measured about the subject
+   *  — the same distinction `surface`/`actor`/`reason` already draw for
+   *  every other declared flag. Three writers (grep `ccd/ccd` for
+   *  `_crosspool_mark`, its one setter, and its three call sites):
+   *  `cmd_swap --cross-pool`'s success tail, `cmd_start --cross-pool`'s
+   *  creation-only marker, and `cmd_prefer --cross-pool`'s marker. */
+  readonly crosspool: string | null;
 }
+
+/** Derived from the interface, never restated beside it — `LIFECYCLE_MEAS_
+ *  KEY_MAP`'s exact idiom below, applied to `dec` for the first time. Before
+ *  this, `dec.crosspool` shipped (account pools wave 2b, Tasks 5-6) with NO
+ *  scan able to see it: `ccd-lifecycle-contain.test.ts` had a meas-key scan
+ *  but no dec-key equivalent, so a `dec.` word with no interface member —
+ *  the exact shape `crosspool` itself briefly was — was invisible to every
+ *  suite in this project's seven-suite blast radius. `Record<keyof
+ *  LifecycleDec, true>` makes a member added to the interface without a map
+ *  entry a TS2741/TS2739, and a stray map entry with no member a TS2353 —
+ *  the same two-sided compile-time guarantee acts and meas keys already
+ *  have. Module-private: only the derived array is exported. */
+const LIFECYCLE_DEC_KEY_MAP: Record<keyof LifecycleDec, true> = {
+  surface: true, actor: true, reason: true, crosspool: true,
+};
+/** The one list `server/test/ccd-lifecycle-contain.test.ts`'s dec-key scan
+ *  checks ccd's emitted `dec.<key>` names against — imported, not re-typed,
+ *  mirroring `LIFECYCLE_MEAS_KEYS` immediately below. */
+export const LIFECYCLE_DEC_KEYS: readonly (keyof LifecycleDec)[] =
+  Object.keys(LIFECYCLE_DEC_KEY_MAP) as (keyof LifecycleDec)[];
 
 /**
  * D2 — measured about the SUBJECT, read BEFORE any destruction. Every field is
@@ -5061,7 +5096,7 @@ export interface LifecycleDec {
  * that was never taken. `archivedReason: ''` is a blank reason;
  * `archivedReason: null` is a row that was never archived.
  *
- * THIS TWENTY-FIVE IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT —
+ * THIS TWENTY-EIGHT IS CLOSED, AND THAT IS A RULING, NOT AN OVERSIGHT —
  * widened from the original ten in wave 2 (Task 21) because "closed ten, the
  * rest lives on in `raw`" turned out to be the wrong shape for THIS field
  * specifically: `LifecycleEvent.raw` is a per-event escape hatch, but wave
@@ -5082,7 +5117,7 @@ export interface LifecycleDec {
  * half of the ruling. An index signature would let any key through and
  * destroy the closed vocabulary; this project's doctrine runs the other way
  * (`_LC_ACTS` pinned set-equal to `LIFECYCLE_ACTS`, `single-definition.test.ts`
- * failing the build on a second copy of an enumerated value). A 26th key
+ * failing the build on a second copy of an enumerated value). A 29th key
  * ccd starts emitting is a compile error here AND a red
  * `server/test/ccd-lifecycle-contain.test.ts`, which derives ccd's side by
  * scanning `ccd/ccd` rather than hand-maintaining a second list — that is
@@ -5098,6 +5133,21 @@ export interface LifecycleDec {
  * (`ccd:2983`) and `cmd_ws_restore`'s supersede now emits
  * `meas.manifestBytes` (`ccd:4493`), so the union returns to the plan's
  * original 25.
+ *
+ * `home`, `pool`, `reason` — ADDED, account pools wave 2b (Task 6 fix round
+ * 1). Two `rehome` emitters (grep `ccd/ccd` for `_lc_done rehome`) shipped
+ * ahead of this interface: the tick's own re-seed (`_auto_swap_check`, a
+ * retag-driven move) and `cmd_prefer` (an operator's own `.home` write) both
+ * write `meas.from` (already declared), `meas.home` and `meas.reason`; the
+ * tick's re-seed additionally writes `meas.pool`, the project's pool name,
+ * which `cmd_prefer` never sets (its own crossing intent is `dec.crosspool`
+ * instead — a DECLARED choice, not a measured cause). All three shipped
+ * GREEN with no compile error and no red test, because nothing scanned for
+ * an unlisted `meas.` key until the coordinator's review of that same task
+ * found the gap: `ccd-lifecycle-contain.test.ts`'s meas-key scan existed and
+ * would have caught it immediately, but ran against a `LIFECYCLE_MEAS_KEYS`
+ * this interface had not yet been widened to include. The union returns to
+ * 28.
  */
 export interface LifecycleMeas {
   readonly project: string | null;
@@ -5169,6 +5219,22 @@ export interface LifecycleMeas {
   readonly resumed: string | null;
   /** The tombstone record's own path, as `_ws_tombstone` returned it. */
   readonly tombstone: string | null;
+  /** The wrapper a `rehome` set `.home` TO — both `rehome` emitters carry
+   *  this (grep `ccd/ccd` for `_lc_done rehome`: `_auto_swap_check`'s own
+   *  re-seed and `cmd_prefer`). `wrapper` above is a `swap`'s target account;
+   *  this is `rehome`'s. */
+  readonly home: string | null;
+  /** The project's pool name when a `rehome` was the tick's own re-seed
+   *  reacting to a retag — `_auto_swap_check`'s emit only. `cmd_prefer`'s own
+   *  `rehome` never sets this: its crossing intent is `dec.crosspool`
+   *  instead, a DECLARED choice rather than something measured about why the
+   *  move happened. */
+  readonly pool: string | null;
+  /** Which of the two `rehome` emitters fired — `'pool'` (the tick's own
+   *  re-seed) or `'prefer'` (an operator's `ccd prefer`) — a closed
+   *  classification, never free text (see `LifecycleDec.reason` for that).
+   *  Both `rehome` writers set this. */
+  readonly reason: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -5189,7 +5255,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   archivedReason: true, manifestBytes: true, held: true,
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
-  resumed: true, tombstone: true,
+  resumed: true, tombstone: true, home: true, pool: true, reason: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot

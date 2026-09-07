@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { CCD } from './ccdWsHelpers.js';
-import { LIFECYCLE_MEAS_KEYS } from '../../shared/api.js';
+import { LIFECYCLE_MEAS_KEYS, LIFECYCLE_DEC_KEYS } from '../../shared/api.js';
 
 const src = readFileSync(CCD, 'utf8');
 const BEGIN = '# ── lifecycle journal ';
@@ -160,13 +160,33 @@ describe('the meas key vocabulary is ONE list', () => {
   // (`ccd:4493`) — re-measuring the same scan at this HEAD finds TWENTY-FOUR
   // distinct names, and the union with L0's now-twelve is the brief's
   // TWENTY-FIVE.
+  //
+  // FIX ROUND 1 (account pools wave 2b, Task 6 fix round 1): THIS scan is
+  // exactly what would have caught the next drift immediately, and did not,
+  // because it ran against an `all` that had not been widened yet. Task 6
+  // landed `cmd_prefer` and, earlier in the same wave, the tick's re-seed —
+  // both `rehome` emitters (grep `ccd/ccd` for `_lc_done rehome`) — writing
+  // `meas.home` and `meas.reason` (both writers) plus `meas.pool` (the
+  // tick's re-seed only), three keys with no member on `LifecycleMeas` at
+  // the time, shipped and merged with this exact test GREEN throughout,
+  // because `all` (below) was measured against the pre-widening interface.
+  // The coordinator's review is what found the gap; `shared/api.ts`'s own
+  // `LifecycleMeas` docstring has the full account. Re-measuring the scan at
+  // THIS HEAD (`grep -oE "meas\.[a-zA-Z]+" ccd/ccd | sort -u | wc -l`) finds
+  // TWENTY-EIGHT distinct names — every one of them now a declared member,
+  // with no undeclared residue (unlike wave 2's TWENTY-TWO-against-TEN gap
+  // above): this fix round closes both new keys AND the interface at once,
+  // so the "24 emitted, 25 declared" style split the wave-3 paragraph above
+  // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 25', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 28', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
-    // nothing saying so.
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 25').toBe(25);
+    // nothing saying so — the identical failure mode `home`/`pool`/`reason`
+    // themselves shipped with, silently, until this assertion's own `all`
+    // was widened to see them (see the fix-round note above).
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 28').toBe(28);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);
@@ -199,5 +219,49 @@ describe('the meas key vocabulary is ONE list', () => {
     for (const t of TOP) expect.soft(block, `${t} is not routed by the encoder`).toContain(`"${t}"`);
     expect.soft([...src.matchAll(/^\s*TOP = \(/gm)], 'the TOP tuple moved or was duplicated')
       .toHaveLength(1);
+  });
+});
+
+describe('the dec key vocabulary is ONE list', () => {
+  // Mirrors the meas describe above, one string down: `LifecycleDec` is L0's
+  // single source, `LIFECYCLE_DEC_KEYS` is DERIVED from it via
+  // `Object.keys(LIFECYCLE_DEC_KEY_MAP)` exactly the way `LIFECYCLE_MEAS_KEYS`
+  // is — the same idiom, applied to `dec` for the first time.
+  //
+  // THIS GUARD DID NOT EXIST BEFORE ACCOUNT POOLS WAVE 2B (Task 6 fix round
+  // 1), and its absence is exactly why `dec.crosspool` shipped GREEN two
+  // tasks in a row (Task 5's `cmd_swap`, Task 6's own `cmd_start`/
+  // `cmd_prefer`) with no `LifecycleDec` member, no `LIFECYCLE_DEC_KEY_MAP`
+  // entry, and nothing anywhere scanning for one: `ccd-lifecycle-contain.
+  // test.ts` had the meas-key scan above but no dec-key equivalent, so a
+  // `dec.` word with no interface member was invisible to every suite in
+  // this project's seven-suite blast radius. The coordinator's review is
+  // what found the gap; this describe closes it so the same class of defect
+  // — a wire vocabulary widened in `ccd/ccd` with no L0 member and no scan
+  // to notice — cannot recur silently the next time a `dec.` word is added.
+  //
+  // Measured (`grep -oE '\bdec\.[A-Za-z][A-Za-z0-9]*\b' ccd/ccd | sed
+  // 's/^dec\.//' | sort -u`): FIVE distinct tokens, one of them a false
+  // positive the scan below excludes by name — see its own comment.
+  const all = new Set<string>(LIFECYCLE_DEC_KEYS);
+
+  it('every dec.<key> ccd writes is on the list, and the list is exactly 4', () => {
+    // Mutant: emit `dec.newthing` at any call site -> this fails with
+    // `an unlisted dec key: [ 'newthing' ]` — the identical failure mode
+    // `dec.crosspool` itself shipped with, silently, until this test existed.
+    expect.soft(all.size, 'LIFECYCLE_DEC_KEYS drifted from the measured 4').toBe(4);
+    const used = new Set([...src.matchAll(/\bdec\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
+    // `dec.setdefault("surface", "none")` (grep `ccd/ccd` for it, inside the
+    // journal encoder's python3 block) is Python's `dict.setdefault` —
+    // backfilling an undeclared `surface` before the line is written — not a
+    // `dec.<key>` journal key at all. `meas` has no equivalent collision
+    // (nothing anywhere calls `meas.<word>(...)`), which is why the meas
+    // scan above needs no such exclusion. Named explicitly, by the one
+    // literal token that causes it, rather than a general "ignore anything
+    // followed by `(`" heuristic that could just as easily hide a real
+    // `dec.badkey(...)` typo from this very scan.
+    used.delete('setdefault');
+    expect.soft(used.size, 'no dec key found at all — the scan is vacuous').toBeGreaterThan(0);
+    expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted dec key').toEqual([]);
   });
 });
