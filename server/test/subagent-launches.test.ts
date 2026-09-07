@@ -224,6 +224,73 @@ describe('describeSubagents (the watcher join)', () => {
     expect(subsOf(frames)?.[0]?.description).toBeNull();
   });
 
+  it('stops RESOLVING the transcript too, not just reading the record', async () => {
+    // The budget used to gate only the read, not the resolve-and-read block
+    // `wanted` guards, and an id that has exhausted its tries never leaves
+    // `wanted`: the cache only ever gains POSITIVE entries, and nothing else
+    // removes it. So one subagent whose record will never read made a session
+    // pay for that block on every tick for the life of the process, while this
+    // suite's sibling above measured the reads and saw the budget working.
+    //
+    // The bill is a `stat` and a failing `readFile` per tick, NOT a full
+    // ladder: `transcripts.resolve` memoizes, so a held answer re-validates
+    // with one `stat`. This asserts the honest thing — that the given-up id
+    // costs NO transcript work at all — rather than a size it cannot see.
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    seedFleet(home, 'missing2', null);
+    const touched: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      stat: async (p) => { touched.push(p); return localIO.stat(p); },
+      readdir: async (p) => { touched.push(p); return localIO.readdir(p); },
+      realpath: async (p) => { touched.push(p); return localIO.realpath(p); },
+      readFile: async (p) => { touched.push(p); return localIO.readFile(p); },
+    };
+    const { w } = watcherFor(home, io);
+    for (let i = 0; i < 4; i++) await w.tick();   // three tries, then given up on
+    touched.length = 0;
+    await w.tick();
+    const transcript = touched.filter((p) => p.endsWith(`${UUID}.jsonl`) || p.includes('/subagents'));
+    expect(transcript,
+      `a given-up id still cost transcript work: ${JSON.stringify(transcript)}`).toEqual([]);
+  });
+
+  it('a wrapper the roster does not carry does NO transcript work at all', async () => {
+    // `configDirFor` answers `undefined` for a wrapper missing from the
+    // server's roster — a DEPLOYMENT GAP (an account added on the fleet box
+    // and not here, or an agent deployed ahead of the server), not a path.
+    // Folded to `''` it became a value the resolver treats as a real config
+    // root: every rung misses against a relative path, and those misses spend
+    // each id's three tries on a condition no record on disk could ever
+    // satisfy — so when the roster IS fixed, the descriptions stay null for
+    // the life of the process. Two conditions a caller handles differently
+    // must not collapse to one value.
+    const home = mkTmp('ccrc-join-');
+    seedRoster(home);
+    seedFleet(home, 'orphan1', JSON.stringify({ description: 'Never joined' }));
+    // Same row, one field changed: a wrapper no account in the roster claims.
+    writeFileSync(path.join(home, '.cc-sessions', `${ID}.wrapper`), 'claude-not-in-roster');
+    const touched: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      stat: async (p) => { touched.push(p); return localIO.stat(p); },
+      readdir: async (p) => { touched.push(p); return localIO.readdir(p); },
+      realpath: async (p) => { touched.push(p); return localIO.realpath(p); },
+      readFile: async (p) => { touched.push(p); return localIO.readFile(p); },
+    };
+    const { w, frames } = watcherFor(home, io);
+    await w.tick();
+    // A relative path is the tell: every real read in this tree is absolute,
+    // and `path.join('', …)` is what an empty config root produces.
+    const ladder = touched.filter(
+      (p) => !p.startsWith('/') || p.endsWith('.jsonl') || p.includes('/subagents'),
+    );
+    expect(ladder, `no config root, so nothing to resolve: ${JSON.stringify(ladder)}`).toEqual([]);
+    // The row still ships — it just says nothing it cannot measure.
+    expect(subsOf(frames)?.[0]?.description).toBeNull();
+  });
+
   it('a row with no id is never looked up at all', async () => {
     // `id` is null for every row an older hook wrote — there is nothing to
     // join on and no read to make.

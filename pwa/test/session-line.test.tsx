@@ -263,6 +263,25 @@ describe('subagent disclosure', () => {
     expect(screen.getByRole('button', { name: '2 subagents' })).toHaveTextContent('⑂ 2');
   });
 
+  it('renders the agent TYPE when the server omits `description` (D-1251, the second site)', async () => {
+    // The same defect as the graph chip's, in the row this branch added. The
+    // live frame is CAST (`asFleetMsg`), not revived, so a server predating
+    // this ADDITIVE field omits the KEY — a state the fixtures above cannot
+    // produce, since they always set it. `sa.description ?? sa.name` still
+    // shows the name, but `sa.description === null` is FALSE for `undefined`,
+    // so the title read "reviewer — undefined". Both arms now go through
+    // `subagentDescription`, and this pins the second of its two call sites.
+    const row = { name: 'reviewer', startedAt: 1 } as unknown as
+      { name: string; startedAt: number; description: string | null };
+    render(<SessionLine session={s({ subagents: [row] })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: /1 subagent/ }));
+    const name = document.querySelector('.sess-subagent-name');
+    expect(name?.textContent).toBe('reviewer');
+    expect(name?.getAttribute('title'),
+      'an omitted description must not reach the title as "undefined"').toBe('reviewer');
+  });
+
   it('renders no disclosure when subagents is null — no fresh hook data', () => {
     render(<SessionLine session={s({ subagents: null })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByRole('button', { name: /subagent/ })).toBeNull();

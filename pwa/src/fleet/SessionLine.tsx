@@ -21,7 +21,7 @@ import { useId, useRef, useState } from 'react';
 import { useNow } from '../lib/useNow';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  graphReadCount, substrateFault, unmeasuredFields,
+  graphReadCount, subagentDescription, substrateFault, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -563,9 +563,10 @@ export function SessionLine({
                     worth having, it is just not worth the cell. */}
                 <span
                   className="sess-subagent-name"
-                  title={sa.description === null ? sa.name : `${sa.name} — ${sa.description}`}
+                  title={subagentDescription(sa) === null
+                    ? sa.name : `${sa.name} — ${subagentDescription(sa)}`}
                 >
-                  {sa.description ?? sa.name}
+                  {subagentDescription(sa) ?? sa.name}
                 </span>
                 <span className="sess-subagent-elapsed">{subagentElapsed(sa.startedAt, nowMs)}</span>
               </li>

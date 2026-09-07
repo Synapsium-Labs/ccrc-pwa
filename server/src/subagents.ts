@@ -35,13 +35,26 @@ export interface LaunchRecord {
 /**
  * The result of trying to read one. TWO ARMS, NOT THREE.
  *
- * `absent` is deliberately NOT a member. `FleetIO.readFile` folds every
- * failure — ENOENT, EACCES, an over-cap file, a dropped agent round trip — into
- * one `null`, so this layer cannot tell a launch record that was never written
- * from one that would not read. Minting an `absent` arm would fabricate a
- * distinction the port cannot supply, which is the same defect CLAUDE.md's
- * open-issues section already names for `readFile`, pointed the other way.
- * When `FleetIO` grows a measured read for this path, the arm can be earned.
+ * `absent` is deliberately NOT a member — but the REASON has changed, and the
+ * old one is no longer true. This docstring used to say the port could not
+ * supply the distinction and that the arm could be earned "when `FleetIO`
+ * grows a measured read for this path". It has one: `readFileMeasured`
+ * (`io.ts`) answers `MeasuredRead`, and both sides implement it honestly —
+ * `localIO` maps ENOENT alone to `absent`, and the agent lane reports a
+ * `forbidden` path as `unreadable`, never as absent. Main's wave 8 built that;
+ * leaving the sentence standing would have made a shipped comment argue from a
+ * limitation the tree had removed.
+ *
+ * The fold stays anyway, and on its own merits: on THIS path an ENOENT is
+ * genuinely ambiguous. `agent-<id>.meta.json` is missing both when the harness
+ * never wrote one AND when the resolver's winning transcript has no sidecar
+ * directory YET — the record lands after the launch, and a sweep can arrive in
+ * between. An `absent` arm here would read as "this subagent has no record",
+ * and a caller acting on it would give up on strike one and blank the
+ * description of every subagent whose record simply had not landed. So the two
+ * conditions are folded ON PURPOSE, and what bounds the cost is the retry
+ * budget in `describeSubagents`, not a distinction this read cannot honestly
+ * make about intent.
  */
 export type LaunchRead =
   | { found: true; record: LaunchRecord }

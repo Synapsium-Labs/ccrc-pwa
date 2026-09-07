@@ -40,12 +40,38 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { readLaunchRecord, sidecarDirFor, type LaunchRecord } from './subagents.js';
 
-/** Positive launch records held for the process's life. 512 is `resolve.ts`'s
- *  own MEMO_MAX — one bound, one reason, not a second number invented here. */
+/** Positive launch records held for the process's life.
+ *
+ *  512 on its own terms, and NOT borrowed from `resolve.ts`'s MEMO_MAX, which
+ *  this comment used to claim it was: that constant is 256
+ *  (`transcript/resolve.ts:366`), so the sentence was false in the one detail
+ *  it existed to state. The two bounds also measure unrelated things — the
+ *  memo is keyed per `(configDir, uuid, dirGiven)`, this map per agentId — so
+ *  tying them would couple two lifetimes that have no reason to agree.
+ *
+ *  WHAT SATURATION COSTS, stated because the eviction is not the one the memo
+ *  uses. `resolve.ts` re-inserts on a hit, so its 256 are the RECENTLY USED;
+ *  this map does not, so its 512 are the RECENTLY WRITTEN and eviction takes
+ *  the oldest INSERTED — which, once 512 cumulative ids have been seen, can be
+ *  a subagent still on screen while a long-dead one's record stays. Nothing
+ *  removes an entry on `SubagentStop` or on reap either, so the number is a
+ *  ceiling on the leak, not a working set. What that costs is a RE-READ, not a
+ *  blank: an evicted id fails `launchCache.has` and re-enters `wanted`, the
+ *  record file is still on disk, and the description comes back on the next
+ *  sweep. Recency ordering is two lines and is the earned fix the moment a box
+ *  measures the churn; it is not written yet because nothing measures it, and
+ *  an unmeasured guard is the thing this tree refuses. */
 const LAUNCH_CACHE_MAX = 512;
 /** How many times one agentId's record may fail to read before this stops
- *  asking. Three, matching the retry budgets elsewhere in this file: a record
- *  that is not there after three sweeps is not going to appear. */
+ *  asking.
+ *
+ *  Three ON ITS OWN TERMS. This said "matching the retry budgets elsewhere in
+ *  this file", and no budget in this file is three — the only other cardinal
+ *  of the kind is `MAIL_REPLAY_MAX_ATTEMPTS` (20), and the per-pair budgets
+ *  argued around `sweepNames` are ONE retry each. The number answers a race,
+ *  not a hostile peer: the record lands after the launch, so a sweep can
+ *  arrive before it exists, and three sweeps is the window that covers that
+ *  without asking forever about a record no harness ever wrote. */
 const LAUNCH_MAX_TRIES = 3;
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
@@ -1368,24 +1394,53 @@ export class FleetWatcher {
     if (hs.subagents.length === 0) return hs;
     // Only rows carrying an id can be joined at all: `id` is null for every
     // row written by the pre-agent_id hook, and there is nothing to look up.
-    const wanted = hs.subagents.filter((sa) => sa.id !== null && !this.launchCache.has(sa.id));
-    if (wanted.length > 0) {
+    // The budget is part of THIS filter, not of the read below, and that is
+    // the whole point: `wanted` is what decides whether the resolve-and-read
+    // block runs at all. Checked only at the read, an id that has exhausted
+    // its tries stays in `wanted` forever — the cache only ever gains POSITIVE
+    // entries and nothing else removes it — so one permanently-unreadable
+    // record kept a session paying for that block on every tick, for the life
+    // of the process.
+    //
+    // WHAT THAT COSTS, measured rather than assumed: `transcripts.resolve` is
+    // MEMOIZED (`resolve.ts`'s `memo`), so a held answer re-validates with a
+    // single `stat` and the six-rung ladder re-runs only on a vanished winner,
+    // a changed key or an expiry. So the per-tick bill was a `stat` plus a
+    // failing `readFile` per given-up id, not a full resolution — this comment
+    // claimed the ladder, and the ladder is what it costs only in the case
+    // that keeps missing the memo. The move is right either way, and the
+    // honest reason is that the cost never ends, not that it is large.
+    const wanted = hs.subagents.filter(
+      (sa) => sa.id !== null && !this.launchCache.has(sa.id) &&
+        (this.launchMisses.get(sa.id) ?? 0) < LAUNCH_MAX_TRIES);
+    // `configDirFor` answers `undefined` for a wrapper the server's roster does
+    // not carry — a deployment gap, not a path. Folding it to `''` (which this
+    // did, alone among this file's five call sites) hands the resolver a value
+    // it treats as a real config root: every rung then misses, and the misses
+    // burn each id's three tries against a condition no record could satisfy,
+    // so the descriptions stay null for the process's life once the roster is
+    // fixed. Two conditions a caller handles differently must not collapse to
+    // one value; there is nothing to join without a config root, so say so by
+    // not joining.
+    const configDir = configDirFor(this.deps.cfg, r.wrapper);
+    if (wanted.length > 0 && configDir !== undefined) {
       const file = (await this.transcripts.resolve({
-        configDir: configDirFor(this.deps.cfg, r.wrapper) ?? '',
+        configDir,
         dir: r.workdir, registryWorkdir: r.workdir, uuid: r.uuid,
       })).path;
       if (file !== null) {
         const dir = sidecarDirFor(file);
         await Promise.all(wanted.map(async (sa) => {
           const id = sa.id!;
+          // No budget check here: `wanted` above already applied it, and a
+          // second copy of the rule is a second thing to keep true.
           const tries = this.launchMisses.get(id) ?? 0;
-          if (tries >= LAUNCH_MAX_TRIES) return;
           const read = await readLaunchRecord(this.deps.io, dir, id);
           if (read.found) {
             this.launchMisses.delete(id);
-            // Bounded, oldest-out. The id space is per session and a reaped
-            // session's ids never return, so this only has to survive a long
-            // uptime, not a hostile one.
+            // Bounded, oldest-INSERTED-out (see LAUNCH_CACHE_MAX: this is
+            // insertion order, not recency, and an eviction costs a re-read
+            // rather than a blank description).
             if (this.launchCache.size >= LAUNCH_CACHE_MAX) {
               const oldest = this.launchCache.keys().next().value;
               if (oldest !== undefined) this.launchCache.delete(oldest);

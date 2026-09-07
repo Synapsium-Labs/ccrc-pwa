@@ -21,7 +21,7 @@
 // reported.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession } from '../../../shared/api';
+import { subagentDescription, type FleetSession } from '../../../shared/api';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
 import { useNow } from '../lib/useNow';
@@ -50,10 +50,26 @@ export function SubagentsStrip({ sessions, roster, onOpen }: SubagentsStripProps
   // `null` (no hook data) and `[]` (a measurement of zero) are DIFFERENT facts
   // and neither is hoisted into a boolean — SessionLine's stated rule, and a
   // second consumer of this field has to repeat it or the discipline is
-  // pointless. A DEAD session is excluded even though the wire still carries
-  // its pre-exit roster: subagents of a session with no pane are not running.
+  // pointless.
+  //
+  // A session with NO PANE is excluded even though the wire still carries its
+  // pre-exit roster, because those subagents are not running. THE PREDICATE IS
+  // ONE FIELD, not a list of buckets — and getting there took two wrong
+  // enumerations of the same fact. `bucket !== 'dead'` let every archived
+  // workspace keep listing the roster it held when its pane died, clock
+  // counting up. `['dead','archived']` still let through `cleanup`, which is
+  // the bucket the ARCHIVE-ON-MERGE path actually lands in (`sweepPr` flips
+  // the phase, `archiveMerged` runs `ccd ws-archive`), i.e. the common one.
+  // Three of the seven `SessionBucket` members are pane-less, because
+  // `sessionBucket` gates `cleanup`, `archived` and `dead` all behind
+  // `status === 'dead'` and says why: "`status === 'dead'` IS 'no tmux pane'
+  // as this ladder's callers compute it". So read that field, as `SessionLine`
+  // does for this exact decision (`const dead = session.status === 'dead'`)
+  // and as `AccountsScreen` states the rule. A hand-kept subset of a union is
+  // the second copy this repo forbids, `readonly SessionBucket[]` gives no
+  // exhaustiveness check, and it drifted on its first edit.
   const groups = sessions.filter(
-    (s) => s.bucket !== 'dead' && s.subagents !== null && s.subagents.length > 0,
+    (s) => s.status !== 'dead' && s.subagents !== null && s.subagents.length > 0,
   );
 
   // The clock ticks only while there is something to time — `active` exists on
@@ -106,9 +122,10 @@ export function SubagentsStrip({ sessions, roster, onOpen }: SubagentsStripProps
                           reason: `name` is always the agent type. */}
                       <span
                         className="subagents-strip-name"
-                        title={sa.description === null ? sa.name : `${sa.name} — ${sa.description}`}
+                        title={subagentDescription(sa) === null
+                          ? sa.name : `${sa.name} — ${subagentDescription(sa)}`}
                       >
-                        {sa.description ?? sa.name}
+                        {subagentDescription(sa) ?? sa.name}
                       </span>
                       <span className="subagents-strip-elapsed">{elapsed(sa.startedAt, nowMs)}</span>
                     </li>

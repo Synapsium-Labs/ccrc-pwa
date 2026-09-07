@@ -112,6 +112,12 @@ export interface FleetSession {
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
    *  array fields above. */
+  /** `description` is ADDITIVE (it arrived after the field itself) and the live
+   *  frame is CAST, not revived — so a server that predates it OMITS the key
+   *  and this required type is a lie on that one path. Read it through
+   *  `subagentDescription` below, never raw: `undefined ?? name` looks right
+   *  while `undefined === null` is false, which is how it reached a tooltip as
+   *  "reviewer — undefined" at two sites. */
   subagents: { name: string; startedAt: number; description: string | null }[] | null;
   /** How many graph READS this session has made — `hookstate.ts`'s
    *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
@@ -311,6 +317,21 @@ export function substrateFault(
 export function graphReadCount(s: { graphQueries?: number | null }): number | null {
   const v = s.graphQueries ?? null;
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** What ONE subagent is doing — Claude Code's own launch-record `description`,
+ *  joined server-side onto the hook's roster.
+ *
+ *  Here for the reason `graphReadCount` is here, and it is the same field
+ *  discipline: the live frame is CAST, not revived, so a peer that predates
+ *  this field hands the renderer `undefined` where the type says
+ *  `string | null`, and every consumer that reads `sa.description` raw is
+ *  another place that has to remember it. Two already did. `''` folds to
+ *  `null` too — an empty description is not a description, and the fallback to
+ *  the agent type is what the row wants. */
+export function subagentDescription(sa: { description?: string | null }): string | null {
+  const v = sa.description ?? null;
+  return typeof v === 'string' && v.trim() !== '' ? v : null;
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
