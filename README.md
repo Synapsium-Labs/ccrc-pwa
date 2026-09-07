@@ -605,6 +605,16 @@ never enable, and it dies with the row at reap. The PWA's ordinary
 workspace-add composes no flag and stays box-default, and the doctor's `rc`
 check keeps reporting the box flag alone.
 
+The LANE is the third suppressor (2026-09-07): a session that lands on an
+account the roster marks `homeAble: false` — an overflow lane such as the
+ChatGPT/Codex launcher, which holds no claude.ai OAuth and runs Claude Code in
+token mode against a local proxy — spawns without `--remote-control` whatever
+the box flag and the row say, because Remote Control needs a claude.ai token
+with the inference scope and that lane cannot present one. The flag returns on
+the next spawn back on a home-able account. So a session that is not driveable
+from the PWA while it sits on the overflow lane is behaving as designed, not
+misconfigured.
+
 `rc` is a check of its own, deliberately: it reads the flag file and nothing
 else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
 host**, which has no `ccrc.env` at all and is the one box in the topology that

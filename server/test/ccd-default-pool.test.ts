@@ -37,8 +37,8 @@
 // Mutation check #2 (`_swap_target`, Task 1 of the 2026-09-07 follow-up plan
 // — "overflow is a LAST RESORT, not a peer"), measured before that commit:
 // with `_swap_target`'s two-bracket split reverted to the single
-// `best`/`best_score` ranking it replaced, TWO of the fourteen cases in the
-// second `describe` go red — "rotates onto the least-loaded HOME-ABLE account
+// `best`/`best_score` ranking it replaced, TWO of the seven cases in the
+// second `describe` (fourteen in the file) go red — "rotates onto the least-loaded HOME-ABLE account
 // when home is at the ceiling — not onto a cheaper overflow lane" and "a
 // home-able account wins over the overflow lane regardless of score — not
 // merely a tie". Both fail the same way: gpt's real telemetry (`{five: null,
