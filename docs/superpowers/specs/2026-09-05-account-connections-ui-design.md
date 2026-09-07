@@ -204,14 +204,15 @@ but `index.ts` wires the adapter.
 ### 4.1 Provider, auth and models on `AccountDef`
 
 ```ts
-export type ProviderId = 'anthropic' | 'openrouter' | 'openai';
+export type ProviderId = 'anthropic' | 'openrouter' | 'compatible' | 'openai';
 export type ExecSpec =
   | { kind: 'upstream';  secretsFile?: string }
-  | { kind: 'generated'; secretsFile?: string; provider: ProviderId; models?: ModelMap }
-  | { kind: 'external';  secretsFile?: string; provider?: ProviderId };
+  | { kind: 'generated'; secretsFile?: string; provider: ProviderId; baseUrl?: string;
+      models?: ApiKeyModels }
+  | { kind: 'external';  secretsFile?: string; provider?: ProviderId; baseUrl?: string };
 export interface ModelMap { opus: string; sonnet: string; haiku: string; subagent: string }
 export interface ModelChoice { id: string; label?: string }
-export interface OpenRouterModels extends ModelMap { selectable?: ModelChoice[] }
+export interface ApiKeyModels extends ModelMap { selectable?: ModelChoice[] }
 ```
 
 - `secretsFile` becomes legal on ALL three kinds, validated by one hoisted gate
@@ -225,7 +226,7 @@ export interface OpenRouterModels extends ModelMap { selectable?: ModelChoice[] 
   is one) and `parseRoster` WARNS once naming the field it assumed. An `external` entry
   with no `provider` is `undeclared` on the wire — the UI shows it, offers no provider
   operation but enable/disable and remove.
-- `models` is legal only when `provider === 'openrouter'` (a typed key set per arm,
+- `models` is legal on the two api-key providers, `openrouter` and `compatible` (a typed key set per arm,
   three sets not two — gate 39 of the August spec still holds). Values are model ids
   matched by `MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/` — a distinct gate
   from `ID_RE` because OpenRouter ids carry `/`, `.` and `:`.
@@ -238,7 +239,25 @@ export interface OpenRouterModels extends ModelMap { selectable?: ModelChoice[] 
   id plus an optional human label; absent means "the four aliases and nothing else", which is the
   behaviour a roster written before this field already gets. Every alias value must itself appear
   in `selectable` when `selectable` is present — a routing target the operator cannot select is a
-  lane that answers `/model opus` with something the picker never showed.
+  lane that answers `/model opus` with something the picker never showed. (The interface was
+  called `OpenRouterModels` until the base URL generalised, §15.22; the SHAPE did not change,
+  only the name's claim about who may carry it.)
+- **`baseUrl` is the endpoint the lane talks to, and it is the whole of the generalisation**
+  (operator ruling 2026-09-07, §15.22). It is legal on `generated` and, declaratively, on
+  `external` — where it records where a hand-written launcher points without ccrc ever writing
+  that launcher, exactly as `secretsFile` does for its credential. It is REQUIRED when
+  `provider === 'compatible'` and otherwise optional, defaulting to `PROVIDERS[p].baseUrl`.
+  One gate, `BASE_URL_OK`: it must parse as a URL; the scheme must be `https:`, **or** `http:`
+  when the host is a loopback literal (`127.0.0.1`, `[::1]`, `localhost`); no userinfo
+  (`user:pass@` is refused outright, because a URL is not a place to keep a key); no query and
+  no fragment; the path is kept verbatim, since an Anthropic-compatible endpoint may legitimately
+  live under one (`https://openrouter.ai/api/v1`). The loopback exception is not a courtesy — it
+  is how this fleet's existing api-key lanes already run (§4.3), and a plain-`http:` endpoint
+  anywhere else would carry the lane's key across a network in clear.
+- **The endpoint is shown, never hidden.** `baseUrl` is roster data: it rides the wire (§7), the
+  card shows its host, and it is never written into `~/.cc-secrets`. An endpoint that lived only
+  in a 0600 file would be one doctor could not check, the operator could not see, and `ccrc
+  wrappers` would report as converged while the lane talked to somewhere else entirely.
 - Version stays 1. Every new field is absence-permitting; a roster written before this
   spec parses unchanged (pinned by keeping `deploy/accounts.default.json` and
   `DEFAULT_TEST_ROSTER` byte-identical and green).
@@ -252,7 +271,21 @@ export interface OpenRouterModels extends ModelMap { selectable?: ModelChoice[] 
 |---|---|---|---|---|---|
 | anthropic | Claude subscription | a signed-in config dir, or a long-lived OAuth token | `CLAUDE_CODE_OAUTH_TOKEN` (token lanes only) | `login` (default), `paste`, `pane:setup-token` | `auth status` + inference |
 | openrouter | OpenRouter | API key | `ANTHROPIC_AUTH_TOKEN` (+ `ANTHROPIC_API_KEY=""`) | `pkce`, `paste` | inference |
+| compatible | any Anthropic-compatible endpoint | API key | `ANTHROPIC_AUTH_TOKEN` (+ `ANTHROPIC_API_KEY=""`) | `paste` | inference |
 | openai | ChatGPT subscription (external launcher) | launcher-owned | — | `pane:login` | inference |
+
+Each row also carries a default `baseUrl`: `openrouter` is `https://openrouter.ai/api/v1`,
+`compatible` has NONE (the operator states it, and `add` refuses without it), `anthropic` has
+none because Claude Code's own default is the endpoint, and `openai` has none because the lane
+is somebody else's launcher.
+
+`openrouter` and `compatible` are the same lane mechanically — the same `settings.json` env
+block, the same secrets file, the same probe, the same removal order, the same UI — and differ
+in exactly two things: `openrouter` carries a default endpoint and a public catalogue, and
+`compatible` requires the endpoint and has neither. It stays its own id rather than folding into
+`compatible` **because those two differences are what its screens are made of**: PKCE, and a
+model picker with real context windows in it. A provider whose only distinguishing content is a
+constant would not have earned a row; this one has two.
 
 `PROVIDER_IDS = Object.keys(PROVIDERS)` and `GENERATABLE = PROVIDER_IDS.filter(p =>
 PROVIDERS[p].generatable)` are DERIVED. `single-definition.test.ts` gains a describe
@@ -297,14 +330,36 @@ and the server already holds the lane's key), it is **cached** with its fetch ti
 every other measurement on these screens, and it **degrades** — a catalogue that will not load
 leaves a `MODEL_ID_RE`-validated text field and says which of the two the operator is looking at.
 The catalogue is a convenience over the roster, never a source of truth: the roster is what the
-lane runs on.
+lane runs on. **It is OpenRouter's, and only OpenRouter's.** A `compatible` lane has no
+equivalent — an arbitrary Anthropic-compatible endpoint publishes no model list of a shape ccrc
+could know — so that lane always gets the `MODEL_ID_RE`-validated field, which is the same
+degraded arm the OpenRouter lane falls back to when the catalogue will not load. One code path,
+one look, and the sentence that says which of the two you are reading is already required.
 
-Ownership policy for OpenRouter (which upstream providers may serve) is NOT enforced by
-ccrc in v1: the generated lane follows OpenRouter's own recipe (direct, no proxy) and the
-UI shows a note that provider filtering is an OpenRouter account setting. The existing
-`handoff-proxy` lanes keep working as `external` rows. (Operator decision recorded in
-§15 — if the whitelist must stay ccrc-enforced, the lane's `ANTHROPIC_BASE_URL` points
-at the proxy and the plan adds one field; nothing else in this spec moves.)
+**The ownership whitelist is enforced by a PROXY on this fleet, not by an account setting —
+MEASURED 2026-09-07.** `~/.local/bin/cck3` and `~/.local/bin/claude-glm` both point
+`ANTHROPIC_BASE_URL` at `http://127.0.0.1:$HANDOFF_PROXY_PORT` (8642), both start
+`handoff-proxy` if it is not already listening, and both **refuse to run** when
+`~/.handoff/providers-whitelist.json` is absent; the proxy injects that list as `provider.only`
+on every request. So a generated OpenRouter lane pointing straight at
+`https://openrouter.ai/api/v1` would be the first OpenRouter path on this box that does not pass
+the whitelist — worth saying plainly rather than leaving as a footnote about an account setting.
+
+The generalisation is what closes that, and it needs no new mechanism: **the proxy is an
+Anthropic-compatible endpoint.** An operator who wants the whitelist enforced gives the lane a
+`baseUrl` of `http://127.0.0.1:8642` and has it — which is exactly the "the lane's
+`ANTHROPIC_BASE_URL` points at the proxy and the plan adds one field" alternative this paragraph
+used to name, arriving as the same field the operator asked for on other grounds. ccrc still
+does not *require* the proxy, does not start it and never reads the whitelist file: it states
+which endpoint the lane carries and leaves the judgement where it belongs (decision 3 stands,
+now stated in terms of what is actually on the box).
+
+**A correction the same measurement forces.** `cck3` is not a Moonshot-first-party lane: its key
+is `OPENROUTER_API_KEY` and its endpoint is the loopback proxy. What is Moonshot is the
+*upstream* OpenRouter would route to, and the ownership ban bites THERE, as `provider.only` —
+the wrapper even warns on startup when `moonshotai` is missing from the whitelist. Generalising
+the base URL therefore neither invokes nor weakens that ruling; they are different layers, and
+an earlier note in this design's decision 12 said otherwise.
 
 ### 4.4 `configDirSuffix` default and the `.claude*` read glob
 
@@ -355,8 +410,8 @@ feeds a marked token on stdin and greps every output stream and every file outsi
 
 | subcommand | stdin | what it does on the fleet box | result |
 |---|---|---|---|
-| `add --id X --provider P --label L --hue H [--suffix S] [--models JSON] [--method login\|paste\|setup-token] [--credential -]` | the secret, when a credential is pasted | `--method login` (the anthropic default) writes NO secrets file and NO `secretsFile` roster field: the credential is the config dir's own `.credentials.json`, so `add` provisions the home and hands off to `auth-start --method login`. `--method paste` is the token lane and keeps the 0600 file. Refuse on: bad id, duplicate id, suffix collision, suffix outside `.claude*`, unknown provider, external provider (declare instead); then: write `~/.cc-secrets/X-P.env` 0600 (dir 0700), append the roster entry, regenerate accounts.sh, run the wrapper converge for X only, create `~/S` if absent and merge `settings.json` (env block for openrouter; hooks + statusline; skills), **`touch $REG/X-disabled`** so a never-probed lane cannot take placement, and return `{ok, roster}` | roster JSON |
-| `declare --id X [--provider P] --label L --hue H` | — | refuse unless `~/.local/bin/X` is an undeclared, id-shaped executable (the doctor `wr_cands` rule, `-ef` alias collapse — ids and launchers are the same name by construction); append an `external` entry with the optional provider (`openai` for the ChatGPT launcher, `openrouter` for the hand-written proxy lanes, absent = undeclared); regenerate; **`touch $REG/X-disabled`**, the same rule `add` obeys | roster JSON |
+| `add --id X --provider P --label L --hue H [--suffix S] [--base-url URL] [--models JSON] [--method login\|paste\|setup-token] [--credential -]` | the secret, when a credential is pasted | `--method login` (the anthropic default) writes NO secrets file and NO `secretsFile` roster field: the credential is the config dir's own `.credentials.json`, so `add` provisions the home and hands off to `auth-start --method login`. `--method paste` is the token lane and keeps the 0600 file. Refuse on: bad id, duplicate id, suffix collision, suffix outside `.claude*`, unknown provider, external provider (declare instead), `base-url-required` (provider `compatible` with no `--base-url`), `base-url-insecure` (a scheme other than `https:` on a non-loopback host), `base-url-credentials` (userinfo in the URL); then: write `~/.cc-secrets/X-P.env` 0600 (dir 0700), append the roster entry, regenerate accounts.sh, run the wrapper converge for X only, create `~/S` if absent and merge `settings.json` (env block for openrouter; hooks + statusline; skills), **`touch $REG/X-disabled`** so a never-probed lane cannot take placement, and return `{ok, roster}` | roster JSON |
+| `declare --id X [--provider P] [--base-url URL] --label L --hue H` | — | refuse unless `~/.local/bin/X` is an undeclared, id-shaped executable (the doctor `wr_cands` rule, `-ef` alias collapse — ids and launchers are the same name by construction); append an `external` entry with the optional provider (`openai` for the ChatGPT launcher, `openrouter` or `compatible` for the hand-written api-key lanes, absent = undeclared) and the optional `--base-url`, which is DECLARATIVE here — it records where somebody else's launcher points so the card can say so, and ccrc never writes that launcher; regenerate; **`touch $REG/X-disabled`**, the same rule `add` obeys | roster JSON |
 | `credential --id X --credential -` | the secret | re-auth by paste, for TOKEN lanes only — a login lane has no secrets file to replace and re-auths by re-running `auth-start --method login`, which overwrites its `.credentials.json` in place (`not-managed` names the difference). Refuse unless X is generated or upstream-with-declared-secretsFile; write the file atomically (tmp + rename, 0600); no roster change. The answer lists the LIVE sessions on X (`live:[ids]`): a wrapper sources the file at exec time, so a rotated token reaches a pane only when that pane is recreated — the UI says so and offers the existing per-session restart (stop → ensure) one tap at a time, never a fleet-wide sweep | `{ok, live}` |
 | `check --id X` | — | the probe: `timeout 60 "$WRAPPER_DIR/X" -p "Reply with the single word ok." --output-format json --max-turns 1` in a scratch cwd; classify on `api_error_status`/`terminal_reason` (never `subtype`), exit code and the timeout; for `openai` the probe goes through the launcher exactly the same way (it lazily starts the stack) | `HealthRow` |
 | `enable --id X` / `disable --id X` | — | rm / touch `$REG/X-disabled` (the existing `_lane_enabled` file); refuse `disable` on the last enabled home-able lane | `{ok, disabled}` |
@@ -507,7 +562,7 @@ asserts the canary appears in the 0600 file and nowhere else.
 
 | route | body | refusals (code) | answer |
 |---|---|---|---|
-| `POST /api/accounts` | `{id,label,hue?,provider,method:'paste'\|'pkce'\|'pane'\|'declare',credential?,launcher?,models?,suffix?}` | `bad-request`, `invalid-id`, `duplicate-id`, `suffix-collision`, `suffix-outside-read-root`, `unknown-provider`, `external-provider-use-declare`, `hue-taken` (soft: reassigns unless `--hue` explicit), `secret-over-plain-http`, `unsupported` (agent/verb absent), `fleet-disconnected` | `{ok, roster, health?}` — the route runs the smoke test before answering when a credential landed |
+| `POST /api/accounts` | `{id,label,hue?,provider,method:'login'\|'paste'\|'pkce'\|'pane'\|'declare',credential?,launcher?,baseUrl?,models?,suffix?}` | `bad-request`, `invalid-id`, `duplicate-id`, `suffix-collision`, `suffix-outside-read-root`, `unknown-provider`, `external-provider-use-declare`, `base-url-required`, `base-url-insecure`, `base-url-credentials`, `hue-taken` (soft: reassigns unless `--hue` explicit), `secret-over-plain-http`, `unsupported` (agent/verb absent), `fleet-disconnected` | `{ok, roster, health?}` — the route runs the smoke test before answering when a credential landed |
 | `POST /api/accounts/:id/credential` | `{credential}` | as above + `not-managed` | `{ok, health}` |
 | `POST /api/accounts/:id/check` | — | `unknown-account`, `unsupported` | `HealthRow` |
 | `POST /api/accounts/:id/enable` / `disable` | — | `unknown-account`, `last-enabled-home` | `{ok, disabled}` |
@@ -517,9 +572,9 @@ asserts the canary appears in the 0600 file and nowhere else.
 | `POST /api/accounts/:id/auth/code` | `{code}` | `no-auth-pane`, `bad-code` | `{ok}` |
 | `POST /api/accounts/:id/auth/cancel` | — | — | `{ok}` |
 | `GET  /api/accounts/candidates` | — | — | `[{name,bytes}]` |
-| `GET  /api/accounts/openrouter/models` | — | `unsupported`, `catalogue-unreachable` (soft: the UI falls back to a validated field) | `{models:[{id,label,contextLength}], fetchedAt}` — a SERVER-side, cached read of OpenRouter's public catalogue (§4.3). Never fetched from the browser, never a source of truth |
+| `GET  /api/accounts/openrouter/models` | — | `unsupported`, `catalogue-unreachable` (soft: the UI falls back to a validated field) | `{models:[{id,label,contextLength}], fetchedAt}` — a SERVER-side, cached read of OpenRouter's public catalogue (§4.3). Never fetched from the browser, never a source of truth. OpenRouter-only by construction: there is no `compatible` equivalent to fetch, and the route is not generalised to take an arbitrary endpoint — that would make the server fetch a URL the request names |
 | `POST /api/accounts/openrouter/exchange` | `{code, codeVerifier}` | `exchange-failed` | `{key}` is NOT returned; the route chains straight into `POST /api/accounts` semantics with the key and answers as that route does |
-| `GET /api/accounts` | — | — | gains `connect: {openrouterPkce, secretsAllowed, secretsReason?}` (§10), `health?: Record<id,HealthRow>` and each `RosterWire` gains `provider`, `kind`, `telemetry`, `managed` (has a ccrc-writable credential) — all additive, absence-permitting, `FLEET_PROTO` untouched |
+| `GET /api/accounts` | — | — | gains `connect: {openrouterPkce, secretsAllowed, secretsReason?}` (§10), `health?: Record<id,HealthRow>` and each `RosterWire` gains `provider`, `kind`, `telemetry`, `managed` (has a ccrc-writable credential) and `baseUrl?` (an endpoint, not a secret — the card shows its host) — all additive, absence-permitting, `FLEET_PROTO` untouched |
 
 Gating: every route above is a session-gated PWA write (D-1240 class): NOT in `EXEMPT`,
 not box-token, registered in `server.ts` so `auth-gate.test.ts`'s scanner sweeps it (its
@@ -611,6 +666,16 @@ unauthenticated scratch dir as `{"loggedIn": false, "authMethod": "none", "apiPr
 credential alive*, which is the question `auth-dead` exists for. The `-p` probe answers a
 strictly larger question — *can this lane actually do work through whatever base URL and model
 map it carries* — and costs a real request.
+
+**Its exit code is not the answer, and reading it as one is the trap.** MEASURED 2026-09-07 on
+the same scratch dir: `auth status --json`, `auth status` and `auth status --text` all exit **1**
+when `loggedIn` is false — the command SUCCEEDED and reported a fact, and an exit code read as
+"the probe failed" would turn every signed-out lane into `unknown`. The reader parses stdout and
+treats a non-zero exit with parseable JSON as an ANSWER; only unparseable output is a failure.
+Two more shapes measured with it: with stdout not a tty, `--json` and the bare form are
+**byte-identical** (so the flag is passed for intent, not for effect, and the reader must not
+assume the flag is what makes it JSON), and `--text` gives the one human line
+(`Not logged in. Run claude auth login to authenticate.`), which is what the card quotes.
 
 So `check` runs `auth status` FIRST and short-circuits: `loggedIn: false` on an anthropic lane is
 `auth-dead` with no inference spent. Only a lane that claims to be logged in goes on to the
@@ -714,8 +779,10 @@ merge decisions follow, each of them a judge's measured finding rather than a fr
 the ones that change the shape of the product are called out below and the whole set is
 carried on the canvas.
 
-> The canvas (41 frames, 13 states, both themes, phone and 1200px) is the visual authority
-> for everything in this section. Link in the handoff; it is not a tracked artefact.
+> The canvas (**52 frames in 9 groups** — 51 at 390×844 and one at 1200px, both themes) is the
+> visual authority for everything in this section. Link in the handoff; it is not a tracked
+> artefact. The count is measured off the built file, not carried: `51` elements matching
+> `class="phone"` plus the one `phone--desk`.
 
 ### 12.2 Where it lives
 
@@ -795,6 +862,18 @@ an external lane reads `held by the launcher · not ccrc's`. That is not decorat
 difference between a lane ccrc can rotate and one it can only sign out, and it is what makes the
 removal sheet's third sentence true (§12.9).
 
+**An api-key lane's endpoint is a declared register too, and it is on the card.** A lane whose
+`baseUrl` is not its provider's default reads its HOST in mono above the rule —
+`endpoint · api.cortecs.ai`, `endpoint · 127.0.0.1:8642 · loopback` — beside the provider, where
+the roster's other declarations live. It is not hidden behind the fold and not folded into the
+custody line, because "which endpoint does this key go to" is a different question from "where
+does the key live", and on a fleet where one lane can point at a vendor and the next at a
+whitelist proxy on loopback it is the question the operator is actually asking. The default case
+says nothing: an OpenRouter lane at `openrouter.ai/api/v1` and an Anthropic lane both draw no
+endpoint line, because a register that is always the same value teaches the eye to skip it. The
+full record shows the whole URL; the card shows the host, since the host is the part that
+differs.
+
 The two ages are kept apart everywhere. A lane whose credential is dead still shows its last
 reported usage with the age of that reading (`8% / 29% · reported 2 h ago`), because
 "credential dead" and "no telemetry" are two different measurements. An empty bar reads as
@@ -842,8 +921,9 @@ to edit`) while the pane runs.
 
 | provider | the path | what the sheet says |
 |---|---|---|
-| **anthropic** | paste a long-lived token (default), or mint one in a pane | at the validation moment, before anything is written: *"`claude-c` is free · will become `~/.cc-secrets/claude-c-oauth.env` and the wrapper `~/.local/bin/claude-c`"* |
+| **anthropic** | **sign in (default)**, paste a long-lived token, or mint one in a pane | the three are one radio group with their consequences on them, not a hidden default: sign-in reads *"a full lane — Remote Control works"*, the two token methods read *"inference-only token — Remote Control is not available on this lane"* (§15.8), said at the moment of choosing rather than discovered afterwards. At the validation moment, before anything is written, the sheet names what the choice will create: sign-in *"`claude-c` is free · will become the config dir `~/.claude-c` and the wrapper `~/.local/bin/claude-c`; the credential is Claude Code's own `.credentials.json` and there is no secrets file"*, the token methods *"…and `~/.cc-secrets/claude-c-oauth.env`"* |
 | **openrouter** | PKCE when the origin is https and auth is armed; paste always; then the model step | when PKCE is not offered, the reason is a sentence, not a code — the server simply omits `connect.openrouterPkce` — and the paste path is right there. The model step does two jobs and says which is which: the four **routing** aliases (`opus` / `sonnet` / `haiku` / `subagent`) map what ccd and Claude Code ask for onto real ids, and the **allowlist** beneath is what the session picker will offer on this lane. The allowlist is a picker over OpenRouter's live catalogue with each model's context window beside it — served through the server, cached, with its fetch time shown like every other measurement on these screens — degrading to a validated text field with a sentence saying which of the two you are looking at. A note says provider filtering (which upstream may serve a request) is a different question and an OpenRouter account setting, not something ccrc enforces (§4.3) |
+| **compatible** | paste a key, and state the endpoint | the same sheet as OpenRouter with the catalogue step degraded and one field added ahead of the key: **endpoint**, a URL field whose helper text is the gate itself — *"https, or http on loopback"* — and whose refusals are sentences (*"that endpoint is plain http and not loopback: the key would cross the network in clear"*, *"a URL is not a place to keep a key"*). The field is pre-filled with nothing and offers two one-tap fills drawn from what is already on this box: the whitelist proxy at `127.0.0.1:8642` and, when a `compatible` lane already exists, its endpoint. The model step is the OpenRouter step's degraded arm verbatim — the validated field, with the sentence that says so — because there is no catalogue to fetch (§4.3), so the two lanes look the same rather than nearly the same |
 | **openai** | declare an existing launcher, then log in through the pane | the candidates list shows each undeclared, id-shaped executable's **name and size, never its contents**. The row says *"external launcher — ccrc does not manage its credential"*, and the done state carries the standing state: *"the lane stays off until you enable it"* |
 
 **The smoke test runs inside the sheet, and the sheet stays open through it.** The probe is
@@ -876,11 +956,48 @@ is never echoed back), the rejected token is named as still being in the file un
 replaced, and the retry that does not demand a new credential — *"probe again as-is"* — is
 offered beside it.
 
-### 12.6 The pane flows
+### 12.6 The sign-in flow, and the pane flows
 
-Mint-in-a-pane and the OpenAI device login run in a real tmux pane on the fleet box (§6), and
-a tmux pane is a living thing in `DIRECTION`'s sense. That is the one place on these screens
-where light is allowed, and the two rhythms stay apart:
+**The default Anthropic connect is a sign-in, and it has no pane at all.** `claude auth login
+--claudeai` runs in a pipe on the fleet host (§6): it prints an authorize URL, blocks on stdin,
+and takes back a code the operator carries from their browser. Four steps, each stamped, in the
+same mono step ledger the pane flows use — *launched · URL ready · code sent · signed in* — and
+the rhythm rule is unchanged, because it was never about panes: **glow lives on a living
+process**, and a blocked `claude auth login` is one. It breathes while it works and pulses while
+it waits on the operator, exactly as the pane does.
+
+Three things separate the drawing of this flow from the mint pane's, and each is a fact about
+the machine rather than a style choice:
+
+- **There is nothing to attach a terminal drawer to.** The pane flows end in `show the pane`;
+  this one ends in `show what the process printed` — the same disclosure affordance over the
+  helper's captured stdout, line-filtered by the same rule. A drawer that offered to attach to a
+  tmux session that does not exist would be the interface lying about the mechanism.
+- **The scopes are named at the moment of granting.** The authorize URL requests six —
+  `org:create_api_key`, `user:profile`, `user:inference`, `user:sessions:claude_code`,
+  `user:mcp_servers`, `user:file_upload` (measured, §6) — and the sign-in step lists them in mono
+  above the button, with the one that matters marked: *"`user:sessions:claude_code` — this is
+  what Remote Control needs, and it is why this is the default method."* This is the only screen
+  in the design where the operator authorises something on a page ccrc does not own, so it is the
+  one screen that must say what is being authorised. The alternative — a button reading
+  *Open the sign-in page* over silence — is exactly the pattern this design refuses everywhere
+  else.
+- **The custody sentence is shorter here, and it is stronger.** *"the code goes down a pipe to
+  `claude` on the fleet host; the credential is written by Claude Code into
+  `~/.claude-c/.credentials.json` · 0600. ccrc holds nothing — there is no secrets file for this
+  lane."* A signed-in lane has no `~/.cc-secrets` entry at all, and saying so is what makes the
+  removal sheet's "sign this lane out" checkbox legible when the operator reaches it (§12.9).
+
+Its terminal states obey the same rule as the pane's: each says what did *not* happen. The
+600 s bound expiring reads *"the sign-in expired · nothing was written · id, label and hue are
+kept"*; a refused code reads its reason from the status file's own `state: failed` and quotes
+that, never a CLI string nobody has captured. And the done state is a register, not a
+celebration: it names the 0600 path, says the process exited, and still reads `health — not
+measured · probe next`.
+
+**The pane flows.** Mint-in-a-pane and the OpenAI device login run in a real tmux pane on the
+fleet box (§6), and a tmux pane is a living thing in `DIRECTION`'s sense. That is the one place
+on these screens where light is allowed, and the two rhythms stay apart:
 
 - the pane **working** (waiting for the sign-in URL, exchanging the code) breathes phosphor
   at `--breathe-period`;
@@ -1065,9 +1182,9 @@ rather than left to the implementation:
   — `DIRECTION` sets the floor at 44 and `chat.css`'s shipped keycap is already 44;
 - colour is never the sole carrier: every state travels with a glyph **and** a word.
 
-### 12.13 Three defects only a render catches
+### 12.13 Four defects only a render catches
 
-The canvas was measured in a headless browser, not just read. Three defects survived every
+The canvas was measured in a headless browser, not just read. Four defects survived every
 review of the CSS and died the moment the DOM was measured. Each is a rule the implementation
 must carry, and each is the kind that ships silently because the stylesheet *looks* correct.
 
@@ -1092,6 +1209,16 @@ must carry, and each is the kind that ships silently because the stylesheet *loo
   paths mid-string, on the one screen where the operator most needs to read them. `height:
   fit-content` beside the existing `max-height` restores the intent: the well takes its content
   height up to the cap, and the sheet body does the scrolling around it.
+- **A consent list that scrolls has not been shown.** The sign-in frame's whole argument is that
+  the six OAuth scopes are named *before* the operator grants them (§12.6). Drawn in the same
+  capped well as every other machine quotation, the block measured **306px** against the 240px
+  cap — so two of the six sat below an internal scrollbar, on the one screen in this design where
+  the operator authorises something on a page ccrc does not own. The cap is right and stays; the
+  content moved instead (the explanatory line came out of the well and became prose beneath it),
+  and the block now measures 205px with no scroll. The rule the implementation carries is not
+  "make the well bigger": it is that **a well holding a list the operator is agreeing to must fit
+  the cap, and content that will not fit belongs outside the well** — a transcript may scroll, a
+  consent list may not.
 
 ### 12.14 Two shipped defects this work fixes
 
@@ -1273,8 +1400,16 @@ plan's mutation table will name these at minimum:
    then every mutation greys with `unsupported`, never a 502.
 2. **Provider config in `settings.json` env, wrapper unchanged** (§4.3); measured first
    in the plan, fallback named.
-3. **OpenRouter ownership whitelist is an OpenRouter account setting in v1**, not a
-   ccrc-enforced proxy; the `handoff-proxy` lanes stay `external`.
+3. **The ownership whitelist stays out of ccrc's enforcement, and the operator can now reach it
+   anyway.** ccrc does not start `handoff-proxy`, does not read
+   `~/.handoff/providers-whitelist.json` and does not decide which upstream may serve a request.
+   What changed on 2026-09-07 is the accuracy of this ruling's own premise: §4.3 MEASURES that
+   the whitelist on this fleet is enforced by that loopback proxy, not by an OpenRouter account
+   setting, and that both hand-written lanes refuse to run without it. Since the proxy is itself
+   an Anthropic-compatible endpoint, an operator who wants a generated lane to pass the whitelist
+   points its `baseUrl` at `http://127.0.0.1:8642` — the one field decision 22 adds, doing the
+   job this ruling's old alternative described. The `handoff-proxy` lanes still stay `external`
+   (decision 22c).
 4. **OpenAI = manage an external launcher** (declare/login/check/enable/remove); no
    API-key lane, no LiteLLM ownership.
 5. **Secret-bearing routes refuse over plain HTTP** unless auth is armed with an https
@@ -1334,13 +1469,46 @@ plan's mutation table will name these at minimum:
     (a) `pwa/src/lib/models.ts` must stop deciding the picker from `wrapper === 'gpt'` and read
         the roster instead — already named in §12.14 as a defect this work should fix, and the
         allowlist is what makes it necessary rather than merely tidy;
-    (b) the hand-written `cck3` / `claude-glm` lanes are Anthropic-API-compatible api-key lanes
-        pointing at *other* base URLs, not OpenRouter ones. Generalising the generated api-key
-        arm from "OpenRouter" to "any Anthropic-compatible base URL + key" would adopt them
-        properly, at the cost of a `baseUrl` roster field and a policy question (the ownership
-        whitelist bans Moonshot, which is what `cck3` is). Default: leave them `external` as
-        before and keep the generated arm OpenRouter-only. Say so if you want the generalisation
-        — it is a small field and a large policy.
+    (b) whether the generated api-key arm should widen beyond OpenRouter. **GRANTED 2026-09-07;
+        it is now decision 22.** The policy worry attached to it here was mistaken and §4.3
+        records the correction: `cck3` is not a Moonshot-endpoint lane, it is an OpenRouter lane
+        behind the whitelist proxy, so the base-URL field neither invokes nor weakens the
+        ownership ban.
+
+22. **The generated api-key lane takes any Anthropic-compatible base URL** — operator ruling
+    2026-09-07, granting what decision 12 left open. `ProviderId` gains `compatible`, `ExecSpec`
+    gains `baseUrl`, and that is the whole of it: the `settings.json` env block, the 0600 secrets
+    file, the probe, the refusal set, the removal order and every screen are the OpenRouter
+    lane's, unchanged (§4.1–4.3). It costs no wrapper-shape change, because §4.3 already measured
+    that the base URL rides `settings.json` rather than the wrapper — which is also why the
+    August spec's version of this idea was rejected and this one is not: **the objection was
+    always the widened `_wrap_parse_shape`, never the provider** (§16). Three things ride the
+    ruling, each stated so you can reverse one without the others:
+    (a) **the endpoint is shown, not hidden** — `baseUrl` is roster data, on the wire, with its
+        host on the card, and never in `~/.cc-secrets`. Alternative: keep it in the sourced env
+        file, which builds in zero lines and costs doctor the ability to check it, the operator
+        the ability to see it, and `ccrc wrappers` the ability to notice that a roster change
+        never reached the disk.
+    (b) **https, or loopback, and no userinfo** (`BASE_URL_OK`, §4.1). The loopback arm is not a
+        loosening: it is the measured shape of every api-key lane already on this box, and it is
+        what lets an operator point at the whitelist proxy. Alternative: accept any scheme with a
+        warning, which puts the lane's key on a network in clear on the operator's say-so.
+    (c) **the existing `cck3` / `claude-glm` wrappers are DECLARED, never adopted.** They each do
+        things ccrc's four-line generated shape cannot — start the whitelist proxy, choose an arm
+        from `HANDOFF_PROVIDER`, export six model variables, refuse without the whitelist file —
+        and `ccrc wrappers` would rewrite an adopted one INTO that four-line shape, which is data
+        loss, not adoption. So the ruling hands the operator an *equivalent new lane* (same
+        endpoint, same key, ccrc-owned, ccrc-probed) and leaves the hand-written ones exactly
+        where they are, `declare`-able as `external` with a `baseUrl` for the record.
+        Alternative: widen the generated shape to carry a model env block, which reopens
+        `_wrap_parse_shape`, the equivalence triple and every lock in `cmd_wrappers` — the exact
+        cost §4.3 exists to avoid.
+    One consequence worth naming rather than discovering: rostering a metered lane makes it
+    visible to placement, which is the thing those wrappers' own headers say they were built to
+    avoid ("isolated config dir keeps it invisible to ccswap/ccd account logic"). The guard
+    already exists — such a lane is `telemetry: 'none'`, reads a permanent zero, and §4.6's
+    `_ws_least_loaded` fix stops that zero from making it the least-loaded lane forever — and it
+    is one more reason a new lane lands DISABLED (decision 20).
 
 13. **The loud health state is achromatic, not red.** Default: `✕ auth dead` wears the
     shipped `.sess-line--active` reversed slab (`--bg-page` on `--ink-primary`, 16.94 / 15.26)
@@ -1391,13 +1559,15 @@ plan's mutation table will name these at minimum:
 - On the server box: the scheme of `CCRC_AGENT_URL` (names only; `sed -n 's#^CCRC_AGENT_URL=\([a-z]*\)://.*#\1#p'`), and `sha256sum ~/.ccrc/accounts.json` on both boxes (the fleet box's is `da6b3527…` today).
 - A human runs `CLAUDE_CONFIG_DIR=$(mktemp -d) env -u CLAUDE_CODE_OAUTH_TOKEN ~/.local/bin/claude setup-token` once in a scratch tmux window, records every line and prompt verbatim, and cancels before completion; the helper's fake-`claude` replay fixture is written from that transcript.
 - A human opens `/status` in one env-token lane and one upstream-lane pane and records whether Remote Control reports connected (spec-August Q4; does not change this design, but settles what the row may say).
+- `claude auth login --claudeai` prints `Opening browser to sign in…` before the URL: on the fleet box there is no display, so the attempt falls through to printing and the flow works. The helper must not DEPEND on that being accidental — find whether the attempt can be suppressed explicitly (and record the answer, including "it cannot"), so a fleet box that ever grows a display does not open a browser nobody is sitting at.
+- `claude auth status --json` on an AUTHENTICATED lane: the unauthenticated shape is measured (`{"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty", "analyticsDisabled": false, "projectsDirectory": …}`, exit 1); what a signed-in lane adds — and whether it names an account, which would be a label this repo may not commit — is not. Capture it, redact it, and let it decide what the fold may quote.
 
 ## 16. Supersessions of the August spec
 
 | August | now |
 |---|---|
-| §4 four providers incl. `cortecs`, api-key Anthropic | three providers, subscription-only Anthropic |
-| §5 api-key wrapper template, widened `_wrap_parse_shape` | wrapper unchanged; provider config in `settings.json` env |
+| §4 four providers incl. `cortecs`, api-key Anthropic | four provider ids — `cortecs` returns as an INSTANCE of the generic `compatible` lane rather than a name in the table (decision 22); Anthropic stays subscription-only |
+| §5 api-key wrapper template, widened `_wrap_parse_shape` | wrapper unchanged; provider config in `settings.json` env — the base URL rides that block, so the generalisation this table's row above restores costs no shape change at all |
 | §8.1 HTTPS via `tailscale serve`, box-token gating | Caddy/DuckDNS; session-gated; config-stated HTTPS refusal |
 | §8 helper prints only a marker line | helper is a pty proxy with a status file; code delivered by `send-keys` |
 | §10 remove deletes `.cc-limits` only | also markers and `.home` prefs; never the config dir |
