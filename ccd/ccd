@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4673a688410588324b89fdbd87655cc78c42383683a9d8b201df9aec31f1cfa4
+# ccrc:generated 1 sha256=5dd4021136f103c3ddd8fb33bc110ffe1f4f4ef1f4388bcc86547cc28515c5e3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3905,6 +3905,16 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
     # first IN-POOL account, never on a cheaper-looking lane in another pool.
     _pool_ok "$w" "$pps" || continue
     [[ -z "$first" ]] && first="$w"
+    # AFTER `first`, BEFORE the score — the mirror of the `_pool_ok` note above,
+    # and the placement is the whole guard. An auth-dead lane must not be
+    # PREFERRED (it is a measurement that a credential no longer authenticates),
+    # but it must stay reachable as the fallback: a skip written one line higher
+    # empties `first` on a fleet where every in-pool lane is condemned, this
+    # function answers "", and `cmd_ws_add` dies with no destination — for a
+    # reason no operator asked for. Same asymmetry, same reason, as the
+    # unmeasured skip below it: this function can skip a SCORE because it has a
+    # fallback; it can never skip a CANDIDATE.
+    _authdead "$w" && continue
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
@@ -11991,6 +12001,22 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # unknown one that might have been emptier. That is the same trade
     # placement already makes, and the alternative is the magnet.
     sc=$(_limit_score "$cand"); : "${sc:=100}"
+    # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
+    # than at the `_account_ok` line above, which is an unconditional
+    # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
+    # finds no candidate is left wedged on the dead account with no swap.log
+    # line, no swapblocked stamp and no notification — silent in every channel
+    # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
+    # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
+    # preference and must never cost eligibility.
+    #
+    # 100 is the same exact number, for the same exact reason, as the `:=100`
+    # above: `_avail` has already rejected every candidate at or over
+    # SWAP_CEILING (98), so any measured candidate reaching this line is at most
+    # 97 and outranks a condemned one — while 100 is far below `best_score`'s
+    # 999 sentinel, so a condemned candidate is still picked the moment it is
+    # the only one left.
+    _authdead "$cand" && sc=100
     [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
   done
   [[ -n "$best" ]] && echo "$best"

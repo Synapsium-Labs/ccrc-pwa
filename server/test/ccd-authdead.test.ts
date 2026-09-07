@@ -90,3 +90,96 @@ describe('the marker is DOTLESS, so no registry glob can eat it', () => {
     expect(ok('_ws_slug_free demo quiet')).toBe(true);
   });
 });
+
+const writeLimits = (w: string, five: number, seven: number): void =>
+  fs.writeFileSync(path.join(home, '.cc-limits', `${w}.json`),
+    JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
+
+describe('_ws_least_loaded drops an auth-dead lane from SCORING, never from the fallback', () => {
+  it('does not place a new workspace on the cheapest lane when that lane is auth-dead', () => {
+    writeLimits('claude', 50, 50);
+    writeLimits('claude-a', 5, 5);        // cheapest, but dead
+    writeLimits('claude-b', 40, 40);
+    writeLimits('claude-d', 60, 60);
+    mark('claude-a', '1757203200 auth-401');
+    expect(sh('_ws_least_loaded')).toBe('claude-b');
+  });
+
+  it('STILL ANSWERS when every home-able lane is auth-dead — the `first` fallback is reachable', () => {
+    // THE CASE THE SKIP IS PLACED FOR. A health skip written ABOVE
+    // `[[ -z "$first" ]] && first="$w"` empties the fallback here, this
+    // function echoes "", and `cmd_ws_add` dies with no destination on a fleet
+    // whose accounts are all merely UNVERIFIED. Eligibility must survive; only
+    // preference changes.
+    writeLimits('claude', 50, 50);
+    writeLimits('claude-a', 5, 5);
+    writeLimits('claude-b', 40, 40);
+    writeLimits('claude-d', 60, 60);
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) mark(w, '1757203200 auth-401');
+    expect(sh('_ws_least_loaded')).toBe('claude');   // roster declaration order
+  });
+
+  it('an auth-dead lane can still BE the fallback when it is the first placeable one', () => {
+    // No telemetry anywhere: nothing is scorable at all, so both the skip and
+    // the score branch are moot and `first` decides. That `first` is allowed to
+    // be a condemned lane is the whole content of the previous case, stated
+    // where it is visible without four markers.
+    mark('claude', '1757203200 auth-401');
+    expect(sh('_ws_least_loaded')).toBe('claude');
+  });
+});
+
+describe('_swap_target ranks an auth-dead lane LAST, and never makes it ineligible', () => {
+  const seedSession = (id: string, wrapper: string): void => {
+    const reg = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, `${id}.uuid`), 'u\n');
+    fs.writeFileSync(path.join(reg, `${id}.wrapper`), `${wrapper}\n`);
+    fs.writeFileSync(path.join(reg, `${id}.home`), `${wrapper}\n`);
+  };
+
+  it('prefers a measured healthy lane over a cheaper auth-dead one', () => {
+    seedSession('claude-demo', 'claude');
+    writeLimits('claude', 99, 99);        // cur: pinned, must leave
+    writeLimits('claude-a', 5, 5);        // cheapest, but dead
+    writeLimits('claude-b', 40, 40);
+    writeLimits('claude-d', 60, 60);
+    mark('claude-a', '1757203200 auth-401');
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-b');
+  });
+
+  it('STILL RESCUES onto an auth-dead lane when it is the only destination left', () => {
+    // The rescue lane's rule, and the thing to pin hardest: an over-eager
+    // verdict must cost PREFERENCE, never a destination. A `continue` here
+    // leaves `best` empty, `_swap_target` prints nothing, `_auto_swap_check`
+    // returns silently, and a session with a lost-auth screen up stays wedged
+    // with no swap.log line and no notification.
+    //
+    // `|| true` IS LOAD-BEARING, and it is here so this case can FAIL rather
+    // than ERROR. `_swap_target`'s last statement is `[[ -n "$best" ]] && echo
+    // "$best"`, so an empty `best` makes the function — and the `bash -c`
+    // around it — exit 1, and `makeCcdHarness`'s `sh` is `execFileSync`, which
+    // THROWS on a non-zero exit. Without the `|| true` the mutation that turns
+    // the guard into a `continue` would blow up inside the harness instead of
+    // reporting `expected '' to be 'claude-d'`, and an unmeasurable mutation is
+    // the one thing this table may not have.
+    seedSession('claude-demo', 'claude');
+    writeLimits('claude', 99, 99);        // cur: pinned
+    writeLimits('claude-a', 99, 99);      // over the ceiling — _avail rejects
+    writeLimits('claude-b', 99, 99);      // over the ceiling — _avail rejects
+    writeLimits('claude-d', 5, 5);        // the only available lane, and dead
+    mark('claude-d', '1757203200 auth-401');
+    expect(sh('_swap_target claude-demo claude claude || true')).toBe('claude-d');
+  });
+
+  it('an auth-dead lane ties with an unmeasured one and loses the tie to roster order', () => {
+    // Both land at 100 — the block unmeasured already occupies — and the strict
+    // `<` takes the first in pool order. Pinned so a later edit that gave
+    // auth-dead its own worse-than-unmeasured rank has to say so out loud.
+    seedSession('claude-demo', 'claude');
+    writeLimits('claude', 99, 99);        // cur: pinned
+    writeLimits('claude-a', 5, 5);        // dead -> 100
+    mark('claude-a', '1757203200 auth-401');
+    // claude-b and claude-d have no telemetry file at all -> unmeasured -> 100
+    expect(sh('_swap_target claude-demo claude claude')).toBe('claude-a');
+  });
+});
