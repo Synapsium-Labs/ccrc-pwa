@@ -79,6 +79,13 @@ const token = (id: string, value = 'sk-ant-oat01-FIXTURE'): void => {
     `export CLAUDE_CODE_OAUTH_TOKEN=${value}\n`, { mode: 0o600 });
 };
 
+/** An env file whose exact bytes are the subject — non-empty on disk, but not
+ *  necessarily setting the variable the probe wants. */
+const rawToken = (id: string, content: string): void => {
+  fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+  fs.writeFileSync(j('.cc-secrets', `${id}-oauth.env`), content, { mode: 0o600 });
+};
+
 const marker = (id: string): string => j('.cc-sessions', `${id}-authdead`);
 const markerBody = (id: string): string => fs.readFileSync(marker(id), 'utf8');
 
@@ -216,6 +223,22 @@ describe('eligibility is roster-derived', () => {
     expect(r.stderr).toMatch(/no roster at \$HOME\/\.ccrc\/accounts\.json/);
   });
 
+  it('an id carrying whitespace is ONE illegal id, never two legal ones', () => {
+    // The other half of the unquoted-expansion defect. `for id in $IDS` splits on
+    // IFS as well as globbing, so `good-one evil` arrives as two ids that BOTH
+    // pass the grammar gate — and the probe writes markers for two accounts that
+    // do not exist. The gate cannot help: it runs after the splitting.
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'good-one evil', telemetry: 'anthropic' },
+    ] }));
+    token('good-one'); token('evil');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+    const r = run();
+    expect(r.stderr).toMatch(/not a legal account id/);
+    expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
   it('refuses an id that is not a legal account id rather than naming a file after it', () => {
     fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
       { id: '../escape', telemetry: 'anthropic' },
@@ -252,6 +275,38 @@ describe('the secrets contract', () => {
     expect(r.stderr).not.toContain('SENTINEL');
   });
 
+  it('an ambient CLAUDE_CODE_OAUTH_TOKEN is never mistaken for the account\'s own', () => {
+    // The subshell that sources the env file INHERITS this process's
+    // environment, and `CLAUDE_CODE_OAUTH_TOKEN` is precisely what every wrapper
+    // session shell exports — so this is the likeliest path, not a contrived
+    // one. A file that exists and is non-empty but sets nothing must REFUSE; if
+    // `:-` is allowed to fall back to the environ, one account's credential
+    // answers under another account's id and the marker is written to the wrong
+    // name. `-z` cannot catch that, because the fallback filled the value.
+    rawToken('claude', '# a comment, and a typo below\nexport ANTHROPIC_API_KEY=sk-ant-nope\n');
+    token('claude-a');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+    const r = run({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-AMBIENT' });
+    expect(r.stderr).toMatch(/claude: refused — no readable token/);
+    expect(fs.existsSync(marker('claude'))).toBe(false);
+    // Only claude-a's request went out: the ambient value never reached the wire.
+    expect(fs.readFileSync(j('curl-argv'), 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(fs.readFileSync(j('curl-stdin'), 'utf8')).not.toContain('AMBIENT');
+  });
+
+  it('SHELLOPTS=xtrace cannot write the bearer to the journal', () => {
+    // Bash imports SHELLOPTS from the environment, so one stray export — or an
+    // operator running `bash -x` — turns every expansion into a stderr line.
+    // Under the systemd timer stderr IS the persistent journal, so an unguarded
+    // probe writes an OAuth token to disk permanently. `set +x` on line 2 is the
+    // guarantee, and it has to be in force before the first expansion.
+    token('claude', 'sk-ant-oat01-SENTINEL'); token('claude-a', 'sk-ant-oat01-SENTINEL');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+    const r = run({ SHELLOPTS: 'xtrace' });
+    expect(r.stdout).not.toContain('SENTINEL');
+    expect(r.stderr).not.toContain('SENTINEL');
+  });
+
   it('the token never reaches the marker', () => {
     token('claude', 'sk-ant-oat01-SENTINEL'); token('claude-a');
     plantCurl('401', '{"type":"error","error":{"type":"authentication_error"}}');
@@ -267,6 +322,37 @@ describe('pass discipline', () => {
     fs.writeFileSync(j('.ccrc', 'account-health-paused'), '');
     expect(run().status).toBe(0);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('a lock it cannot OPEN is loud — not the quiet exit that means "someone else holds it"', () => {
+    // Two conditions that must not collapse. A held lock is the healthy overlap
+    // and exits 0 in silence; a lock that cannot be opened at all is a broken box
+    // and must say so. Collapsed, the probe no-ops forever on every timer tick,
+    // reporting nothing — in the file whose own text says absence must be loud.
+    token('claude'); token('claude-a');
+    plantCurl('401');
+    fs.mkdirSync(j('.ccrc', 'account-health.lock'));   // EISDIR on `exec 9>`
+    const r = run();
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/account-health: cannot open the lock/);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('the id loop reads from a private fd, so its body cannot eat the roster', () => {
+    // Structural, because the property is DEFENSIVE: a here-string on `done`
+    // becomes the stdin of every command in the body, so the first inner command
+    // that reads stdin swallows the remaining ids and the pass probes one account
+    // in silence. Measured while reverting the curl pipeline to a `-H` form: the
+    // fake curl's `cat` ate the list and 1 request went out instead of 2. Nothing
+    // in the body reads stdin today, which is exactly why this cannot be asserted
+    // behaviourally — and exactly why it would regress unnoticed.
+    const src = fs.readFileSync(PROBE, 'utf8');
+    const read = /while IFS= read -r id <&(\d)/.exec(src);
+    const feed = /done (\d)<<< "\$IDS"/.exec(src);
+    expect(read, 'the loop must read from an explicit fd, not stdin').not.toBeNull();
+    expect(feed, 'the here-string must be attached to that same explicit fd').not.toBeNull();
+    expect(read![1]).toBe(feed![1]);
+    expect(read![1]).not.toBe('0');   // 0 IS stdin — the bug this pins
   });
 
   it('writes a marker atomically — never a partial file another reader can see', () => {

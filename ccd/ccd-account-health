@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below.
 # ccd-account-health — is each Anthropic account's credential still alive?
 #
 # WHY THIS IS A SIBLING EXECUTABLE AND NOT CODE INSIDE `ccd`. `ccd/ccd` makes
@@ -34,6 +35,19 @@
 # never into curl's environ); it reaches curl on STDIN via `-K -`, never in argv,
 # so it is never in the process table; and it is never echoed, never logged, and
 # the body is classified and discarded.
+#
+# `set +x` IS PART OF THAT LIST, not housekeeping. Bash IMPORTS `SHELLOPTS` from
+# the environment, so a single stray `export SHELLOPTS=xtrace` — or an operator
+# debugging with `bash -x` — turns every expansion into a stderr line, and the
+# bearer is measured appearing on four of them. Under the systemd timer stderr is
+# the PERSISTENT JOURNAL, so that is an OAuth token written to disk, permanently,
+# in the file whose own header promises it is never logged. Line 2 because the
+# guarantee has to be in force before the first expansion, not after it.
+#
+# THE URL IS PINNED TO https BY `--proto '=https'`. `CCRC_HEALTH_URL` is
+# overridable for the harness, and a typo'd or edited `http://` would put the
+# bearer on the wire in cleartext. curl refuses the request instead, which lands
+# in the unmeasured class — the right answer, and free.
 #
 # HOME-derived roots with no override, exactly as ccd and ccd-graph-sweep derive
 # theirs: HOME is the harness's single isolation boundary. Every other knob IS
@@ -77,8 +91,20 @@ _ah_token_file() { printf '%s/%s-oauth.env' "$SECRETS_DIR" "$1"; }
 # environment. Empty output means "no usable token" for BOTH an unreadable file
 # and a file that sets nothing — one answer, because the probe does the same
 # thing about each and the caller has already told absence from presence.
+#
+# THE `unset` IS WHAT MAKES THAT SENTENCE TRUE. A subshell INHERITS this
+# process's environment, and `CLAUDE_CODE_OAUTH_TOKEN` is exactly the variable
+# every wrapper session shell exports (`ccrc-wrappers.test.ts`) — so without it, a
+# file that exists and is non-empty but SETS NOTHING (comment-only, a typo'd name,
+# `ANTHROPIC_API_KEY` instead) falls through `:-` to whatever is already in the
+# environ. That is one account's credential answering for another account's id:
+# the marker gets written under the wrong name, and `-z` cannot catch it because
+# the fallback FILLED the value. The worse direction is a live ambient token
+# answering 403-scope and CLEARING a true verdict. Unset first, and the only
+# thing `:-` can fall back to is the empty string the caller already handles.
 _ah_token() {   # <token-file> -> the bearer, or nothing
   ( set +u
+    unset CLAUDE_CODE_OAUTH_TOKEN
     # shellcheck source=/dev/null
     . "$1" >/dev/null 2>&1 || exit 0
     printf '%s' "${CLAUDE_CODE_OAUTH_TOKEN:-}" )
@@ -102,32 +128,64 @@ _ah_mark() {   # <id> <reason>
 _ah_clear() { rm -f "$REG/$1-authdead"; }
 
 # ── the pass ──────────────────────────────────────────────────────────────
-exec 9>"$LOCK"
-# A held lock means the previous pass is still running. A probe is a reading, so
-# a skipped pass costs nothing but 15 minutes — the sweep's `pass-locked` shape.
-flock -n 9 || exit 0
-[ -e "$PAUSE" ] && exit 0
-rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
-
+# PREFLIGHT BEFORE THE LOCK, and `flock` is IN it. Taking the lock is the first
+# thing that USES a tool, so a tool check after it cannot report a missing one:
+# on a box with no `flock`, `flock -n 9` fails and the quiet "someone else holds
+# it" exit below retires the pass — every 15 minutes, forever, silently. Same
+# collapse as the one below, one door up.
 command -v curl >/dev/null 2>&1 \
   || { _ah_say "curl is not on PATH — nothing was measured"; exit 1; }
 command -v jq >/dev/null 2>&1 \
   || { _ah_say "jq is not on PATH — nothing was measured"; exit 1; }
+command -v flock >/dev/null 2>&1 \
+  || { _ah_say "flock is not on PATH — nothing was measured"; exit 1; }
+
+# TWO CONDITIONS, TWO ANSWERS — and they are not the same news. "I could not OPEN
+# my lock" (no ~/.ccrc, not writable, something else at that path) is a broken box
+# and must be LOUD; "another pass already holds it" is the healthy overlap and is
+# quietly fine. Collapsed — which is what a bare `exec 9>"$LOCK"` does, because
+# bash prints its own raw diagnostic, CONTINUES, and leaves `flock -n 9` to fail
+# on a bad fd — the probe exits 0 saying nothing, having measured nothing, and the
+# loud roster refusal below is never even reached. An overloaded null at a seam,
+# in the file whose own text says absence must be loud rather than a silent skip.
+exec 9>"$LOCK" \
+  || { _ah_say 'cannot open the lock at $HOME/.ccrc/account-health.lock — nothing was measured'; exit 1; }
+flock -n 9 || exit 0
+[ -e "$PAUSE" ] && exit 0
+rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
+
 [ -r "$ROSTER" ] \
   || { _ah_say 'no roster at $HOME/.ccrc/accounts.json — nothing says which accounts exist'; exit 1; }
 
 IDS="$(jq -r '.accounts[]? | select(.telemetry == "anthropic") | .id // empty' "$ROSTER" 2>/dev/null)" \
   || { _ah_say 'the roster at $HOME/.ccrc/accounts.json does not parse — nothing was measured'; exit 1; }
 
-# GLOBBING OFF for the split below, and this is the last glob in the file so
-# nothing downstream wants it back. `for id in $IDS` has to be unquoted to split
-# jq's lines, and an unquoted split still PATHNAME-EXPANDS: a roster id spelled
-# `*` would become the contents of the process's cwd — a set of strings the
-# grammar gate below could well accept, at which point the probe names files
-# after directory entries. The gate cannot save it because it runs after the
-# expansion, so the expansion is what has to not happen.
-set -f
-for id in $IDS; do
+# ONE LINE IS ONE ID, and the loop is built so that nothing can make it two.
+# `for id in $IDS` needed the word to be unquoted to split jq's lines at all, and
+# an unquoted expansion does TWO things: pathname expansion (a roster id spelled
+# `*` becomes the contents of the cwd) and IFS splitting (an id spelled
+# `good-one evil` becomes two ids — and BOTH halves pass the grammar gate, so the
+# probe writes markers for accounts that do not exist). `set -f` closed only the
+# first half. `read -r` with an emptied IFS closes both: it takes a whole line
+# verbatim, so an id carrying a space arrives INTACT and is refused as the one
+# illegal id it is. The gate could never have saved either case — it runs after
+# the splitting, and the splitting is what must not happen.
+#
+# The `-n` guard is not decoration: `<<<` on an empty string still feeds ONE empty
+# line, so an eligible set of zero would otherwise enter the loop once and report
+# a phantom illegal id on a perfectly healthy box.
+#
+# FD 8, NOT STDIN, AND THAT IS LOAD-BEARING. A here-string on `done` becomes the
+# stdin of every command in the body, so ONE stdin-reading command inside the loop
+# eats the rest of the id list and the pass silently probes a single account —
+# measured, while reverting the pipeline below to a `-H` form: the fake curl's
+# `cat` swallowed the remaining ids and the pass made 1 request instead of 2. The
+# curl below is shielded today only because its stdin is the `printf` pipe, which
+# makes the safety an accident of the current body rather than a property of the
+# loop. Reading from a private fd makes it the loop's own: the body keeps the
+# script's real stdin, and nothing a later edit adds here can consume the roster.
+[ -n "$IDS" ] || exit 0
+while IFS= read -r id <&8; do
   if [[ ! "$id" =~ $AH_ID_RE ]]; then
     # Refused BY NAME rather than looked for on disk: an id outside the grammar
     # could name a file this probe has no business writing.
@@ -152,8 +210,8 @@ for id in $IDS; do
   # Body and status in ONE capture, so there is no response file on disk at all.
   # `-K -` reads the Authorization header from stdin: never argv, never environ.
   out="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" \
-    | curl -sS -K - -o - -w '\n%{http_code}' --max-time "$CCRC_HEALTH_TIMEOUT" \
-      "$CCRC_HEALTH_URL" 2>/dev/null)"; rc=$?
+    | curl -sS -K - -o - -w '\n%{http_code}' --proto '=https' \
+      --max-time "$CCRC_HEALTH_TIMEOUT" "$CCRC_HEALTH_URL" 2>/dev/null)"; rc=$?
   tok=""
   status="${out##*$'\n'}"
   body="${out%$'\n'*}"
@@ -169,5 +227,5 @@ for id in $IDS; do
     # scope refusal, which is proof of nothing. Write nothing; CLEAR NOTHING.
     _ah_say "$id: unmeasured — HTTP $status"
   fi
-done
+done 8<<< "$IDS"
 exit 0
