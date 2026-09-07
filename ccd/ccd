@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0c58f3d3fa2bc1692a12f2f7924d637d26701d96c4969b3183fcb295bb6923a0
+# ccrc:generated 1 sha256=2735523e7ecf2da9083d9c0b33b7ccf7a2d389347f43469237fbabb9a6d79e9c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1061,21 +1061,27 @@ _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is 
 # for both — nobody decides.
 #
 # SEVERAL CALLERS OF `_pool_ok` NOW BRANCH THREE WAYS ON ITS EXIT CODE —
-# landed this wave: `_swap_target`, `_auto_swap_check`, `cmd_swap`,
-# `cmd_start` and `cmd_prefer` all read rc 2 (undecidable) and rc 1
-# (mismatch) as distinct outcomes. That is no longer an obligation on a
-# later wave; it landed at every site named above. The two call sites this
-# comment used to name as the WHOLE of `_pool_ok`'s callers still fold rc 1
-# into rc 2 exactly as before — `_ws_least_loaded`'s loop and `cmd_ws_add`'s
-# reason builder, quoted where the fold is spelled out below — because
-# neither needs the distinction: "nobody may decide" and "every in-pool
-# lane is unusable" both mean "skip this candidate" to a loop that only
-# ever picks a destination, never refuses outright. The four-word
-# distinction survives AT THAT SEAM for the reason already true when this
-# file had only those two callers: `cmd_ws_add` re-reads the STATE WORD
-# itself, separately from `_pool_ok`, to tell "every in-pool lane is
-# unusable" from "the tag is undecidable" and to print `tag:unreadable` or
-# `tag:malformed`.
+# landed this wave: `_swap_target`, `cmd_swap`, `cmd_start` and `cmd_prefer`
+# each read rc 2 (undecidable) and rc 1 (mismatch) as distinct outcomes
+# directly, at their own `_pool_ok` call. `_auto_swap_check` gets the same
+# distinction a different way, NOT by testing `-eq 2` itself: its own two
+# direct `_pool_ok` calls (the home re-seed and the `aff_verb` assignment)
+# each test only `-eq 1`, and the rc-2 outcome reaches it through its
+# nested call to `_swap_target`, whose early return on rc 2 the comments
+# there already explain — do not go looking for a literal `-eq 2` branch
+# inside `_auto_swap_check` itself; there is none. That is no longer an
+# obligation on a later wave; it landed at every site named above. The two
+# call sites this comment used to name as the WHOLE of `_pool_ok`'s
+# callers still fold rc 1 into rc 2 exactly as before — `_ws_least_loaded`'s
+# loop and `cmd_ws_add`'s reason builder, quoted where the fold is spelled
+# out below — because neither needs the distinction: "nobody may decide"
+# and "every in-pool lane is unusable" both mean "skip this candidate" to
+# a loop that only ever picks a destination, never refuses outright. The
+# four-word distinction survives AT THAT SEAM for the reason already true
+# when this file had only those two callers: `cmd_ws_add` re-reads the
+# STATE WORD itself, separately from `_pool_ok`, to tell "every in-pool
+# lane is unusable" from "the tag is undecidable" and to print
+# `tag:unreadable` or `tag:malformed`.
 #
 # WORD ON STDOUT, NOT AN EXIT CODE. An rc-based reader splits the fourth state
 # across two functions, and a `$(…)` capture that forgot `$?` reads unreadable
@@ -5151,13 +5157,19 @@ EOF
   # the 5-second tick (`_swap_target`, `_auto_swap_check`) LANDED in wave
   # 2b, and so did `--cross-pool`, which now parses on `cmd_swap`,
   # `cmd_start`, `cmd_prefer` and `cmd_enable` (its alias) — every manual
-  # verb the cross-pool guard applies to. Fix round 1 (Finding 2a) once
-  # corrected a prior version of this comment for claiming the last two in
-  # the present tense before either existed; this is the same present
-  # tense, said again now that wave 2b has actually landed it.
+  # verb the cross-pool guard applies to. Measured: `grep -c --
+  # '--cross-pool)' ccd/ccd` finds exactly 5 now (this sentence's own
+  # quoting of the pattern adds one to that): one `case` arm per verb named
+  # above, plus this line, with no other false positive anywhere else in
+  # the file. Fix round 1 (Finding 2a) once corrected a prior version of
+  # this comment for claiming the last two in the present tense before
+  # either existed; this is the same present tense, said again now that
+  # wave 2b has actually landed it.
   #
   # It gates exactly ONE server decision — "may I build a `--cross-pool`
   # argv" (wave 3) — and `capSupported` refuses on no evidence, because the
+  # wrong guess there is a SILENT SUCCESS IF THE FLAG WERE TRAILING: a
+  # trailing flag is just a fourth positional nobody reads, so an old ccd
   # wrong guess there is a SILENT SUCCESS IF THE FLAG WERE TRAILING: a
   # trailing flag is just a fourth positional nobody reads, so an old ccd
   # would silently ignore it and `runCcdOr502` would render exit 0 as

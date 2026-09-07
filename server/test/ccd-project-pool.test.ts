@@ -1132,3 +1132,25 @@ describe('the swap.log project-line comment: rehome and auto-pool are real now',
     expect(src, '`aff_verb=auto-pool` no longer appears — the swap.log comment\'s claim is now false').toMatch(/aff_verb=auto-pool/);
   });
 });
+
+describe('the `pools-v1` header states a --cross-pool arm count that stays honest', () => {
+  it('the number the header claims equals grep -c -- \'--cross-pool)\' ccd/ccd', () => {
+    // Fix round 1 review: `--cross-pool)` (the literal `case` arm shape) is a
+    // clean count with zero false positives elsewhere in the file — no
+    // control-flow parsing needed, unlike the "several callers branch three
+    // ways" claim beside it that this task's report explains was left
+    // unmechanised on purpose. The header names the grep that produces the
+    // count ("Measured: `grep -c -- '--cross-pool)' ccd/ccd` finds exactly
+    // N now") — re-run that same pattern here and require the stated N to
+    // still be true.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('and so did `--cross-pool`');
+    expect(from, 'the pools-v1 --cross-pool sentence could not be found').toBeGreaterThan(-1);
+    const block = src.slice(from, from + 700);
+    const claimed = block.match(/finds exactly (\d+) now/);
+    expect(claimed, 'the header no longer states a --cross-pool arm count in the expected shape').not.toBeNull();
+    const stated = Number(claimed![1]);
+    const live = (src.match(/--cross-pool\)/g) || []).length;
+    expect(live, `grep -c -- '--cross-pool)' ccd/ccd now finds ${live}, but the header still claims ${stated}`).toBe(stated);
+  });
+});
