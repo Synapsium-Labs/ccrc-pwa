@@ -290,6 +290,55 @@ describe('the filter chips say what they are and whether they are on', () => {
   });
 });
 
+describe('the filters actually narrow the list', () => {
+  it('each chip and the project select narrow it, and an empty result says FILTERED, not empty', async () => {
+    // The chip fixtures asserted `aria-pressed` and stopped there, so the
+    // three conjuncts of the predicate — and the `data-state="filtered"`
+    // sentence that distinguishes "these filters match nothing" from "there
+    // are no automations" — were unmeasured. Deleting any conjunct left the
+    // suite green.
+    const rows = [
+      auto({ id: 1, name: 'armed-ccrc', state: 'armed', project: 'ccrc-pwa', provedAt: 1, nextRunAt: 9e12, lastOutcome: 'ok', lastFireAt: 5 }),
+      auto({ id: 2, name: 'paused-other', state: 'paused', project: 'other-proj', lastOutcome: 'failed', lastFireAt: 6 }),
+      auto({ id: 3, name: 'never-fired', state: 'paused', project: 'ccrc-pwa', lastOutcome: null, lastFireAt: null }),
+    ];
+    seedStore({ automations: rows, automationsFrameSeen: true });
+    render(<AutomationsScreen loadAutomations={async () => ({ automations: rows })} />);
+    await screen.findByRole('button', { name: /armed-ccrc/ });
+    const names = (): string[] => screen.getAllByRole('button', { name: /armed-ccrc|paused-other|never-fired/ })
+      .map((b) => b.textContent ?? '');
+    expect(names().length).toBe(3);
+
+    fireEvent.click(screen.getByRole('button', { name: 'state: armed' }));
+    expect(names().length, 'the state conjunct').toBe(1);
+    expect(names()[0]).toContain('armed-ccrc');
+
+    fireEvent.click(screen.getByRole('button', { name: 'state: all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'last outcome: failed' }));
+    expect(names().length, 'the outcome conjunct').toBe(1);
+    expect(names()[0]).toContain('paused-other');
+
+    fireEvent.click(screen.getByRole('button', { name: 'last outcome: never-ran' }));
+    // `never-ran` reads `lastFireAt`; in practice `lastOutcome` answers the
+    // same question, because the claim stamps `running` at open — so this
+    // asserts the ARM, not a difference between the two columns.
+    expect(names().length, 'the never-ran arm').toBe(1);
+    expect(names()[0]).toContain('never-fired');
+
+    fireEvent.click(screen.getByRole('button', { name: 'last outcome: all' }));
+    fireEvent.change(screen.getByLabelText(/project/i), { target: { value: 'other-proj' } });
+    expect(names().length, 'the project conjunct').toBe(1);
+    expect(names()[0]).toContain('paused-other');
+
+    // Two filters that between them match nothing: the sentence must be the
+    // FILTERED one, because "No automations yet." is a claim about the fleet
+    // and this is a claim about the filters.
+    fireEvent.click(screen.getByRole('button', { name: 'state: armed' }));
+    const empty = screen.getByText(/No automations match these filters/);
+    expect(empty).toHaveAttribute('data-state', 'filtered');
+  });
+});
+
 describe('the retired chip is a door, not a dead control', () => {
   it('asks the server for retired rows — neither feed of the live list carries them', async () => {
     // The store's DEFAULT filter appends `state != 'retired'`, deliberately

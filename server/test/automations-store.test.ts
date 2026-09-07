@@ -14,7 +14,10 @@ import { openCoordDb } from '../src/coord/db.js';
 import {
   CoordStore, type FiringOccurrence, type ScheduleStamp, type SettledRun,
 } from '../src/coord/store.js';
-import { AUTOMATION_DETAIL_MAX_BYTES, AUTOMATION_FAILURE_CEILING } from '../../shared/api.js';
+import {
+  AUTOMATION_DETAIL_MAX_BYTES, AUTOMATION_FAILURE_CEILING, AUTOMATION_REFUSALS,
+  type AutomationRefusal,
+} from '../../shared/api.js';
 import type { Cadence } from '../../shared/schedule.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -270,6 +273,37 @@ describe('CoordStore: automations — dueAutomations, the arm gate as a store in
     expect(s.armAutomation(id, t0 + 10_000, t0 + 4)).toEqual({ ok: true, nextRunAt: t0 + 10_000 });
   });
 
+  it('a MANUAL run that bound NO session does not stamp provedAt — the other half of the same gate', () => {
+    // The gate is two conjuncts (`trigger === 'manual' && sessionId !== null`)
+    // and only the trigger half was measured, twice, while the session half
+    // was measured nowhere: deleting it left every suite green. It is the
+    // ONLY mechanism enforcing spec §7's "at least one MANUAL run has settled
+    // WITH A SESSION CREATED" — `armAutomation` and `dueAutomations` both read
+    // `provedAt` alone, so nothing downstream re-measures that a session ever
+    // existed. And the state it excludes is ordinary: every post-claim
+    // refusal settles a manual run with `sessionId` NULL, so a transient one
+    // (`coordinator-paused`, `account-pressed`, `registry-unmeasurable` — the
+    // refusals that deliberately do NOT count toward the ceiling) would have
+    // armed the row, and it would then really fire on the clock, unattended,
+    // having never been proved by hand.
+    const s = store();
+    const t0 = 1_000;
+    const { id } = s.insertAutomation(
+      { name: 'z', project: 'demo', prompt: 'p', cadence: wallClock(), graceMs: 1_000 }, t0,
+    );
+    const claim = s.claimAndOpenRun({ automationId: id, now: t0 + 2, occurrence: manualOccurrence() });
+    if (!('runId' in claim)) throw new Error('unreachable');
+    // No `markAutomationSpawn` at all: this is the precheck-refusal shape,
+    // where the act refuses before it ever reaches a spawn.
+    const settled = s.settleAutomationRun({
+      runId: claim.runId, settlement: { outcome: 'refused', refusal: 'coordinator-paused' }, now: t0 + 3,
+    });
+    expect((settled as SettledRun).proved).toBe(false);
+    expect(s.automation(id)!.provedAt).toBeNull();
+    expect(s.armAutomation(id, t0 + 10_000, t0 + 4),
+      'and the gate still holds after it').toEqual({ ok: false, why: 'never-run-by-hand' });
+  });
+
   it('a SCHEDULE-triggered run that binds a session does NOT stamp provedAt — only a MANUAL run does', () => {
     // A schedule-triggered `automation_runs` row, opened directly by SQL
     // rather than through `claimAndOpenRun`: in production `dueAutomations`
@@ -296,6 +330,69 @@ describe('CoordStore: automations — dueAutomations, the arm gate as a store in
     expect((settled as SettledRun).proved).toBe(false);
     expect(s.automation(id)!.provedAt).toBeNull();
   });
+});
+
+describe('the failure ledger, over its WHOLE vocabulary rather than two examples', () => {
+  /** WHICH REFUSALS ARE THE AUTOMATION'S OWN FAILURE, spelled here as the
+   *  test's own expectation — the store's table is the decision, this is the
+   *  measurement of it. Keyed off the DERIVED `AUTOMATION_REFUSALS`, so a
+   *  refusal added to the union and not decided here fails this fixture
+   *  instead of quietly inheriting whichever answer the store's `Record`
+   *  happened to give it. */
+  const COUNTS: Readonly<Record<AutomationRefusal, boolean>> = {
+    // The automation's own configuration, and its own act.
+    'unknown-project': true,
+    'spawn-refused': true, 'spawn-cut-short': true, 'spawn-unmeasured': true,
+    'spawn-ambiguous': true, 'prompt-refused': true,
+    // The operator's own switches, the fleet's capacity, an unreachable box,
+    // and the ceiling itself — none of them spawned a session or sent a
+    // prompt, so there is no failure of THIS automation to count. An
+    // operator who pauses the fleet across three occurrences must not come
+    // back to a schedule that disarmed itself.
+    'coordinator-paused': false, 'automations-paused': false,
+    'registry-unmeasurable': false, 'no-placeable-account': false,
+    'account-pressed': false, 'cap-concurrency': false, overlap: false,
+    'failure-ceiling': false, unknown: false,
+  };
+
+  it('decides every refusal in the union, and the union has no member this fixture forgot', () => {
+    expect([...AUTOMATION_REFUSALS].sort()).toEqual(Object.keys(COUNTS).sort());
+  });
+
+  for (const refusal of AUTOMATION_REFUSALS) {
+    it(`a refused settle carrying ${refusal} ${COUNTS[refusal] ? 'counts' : 'does not count'} toward the ceiling`, () => {
+      const s = store();
+      const t0 = 1_000;
+      const id = makeArmed(s, t0, t0);
+      const claim = s.claimAndOpenRun({ automationId: id, now: t0 + 10, occurrence: manualOccurrence() });
+      if (!('runId' in claim)) throw new Error('unreachable');
+      const settled = s.settleAutomationRun({
+        runId: claim.runId, settlement: { outcome: 'refused', refusal }, now: t0 + 11,
+      });
+      expect((settled as SettledRun).consecutiveFailures).toBe(COUNTS[refusal] ? 1 : 0);
+      expect(s.automation(id)!.consecutiveFailures).toBe(COUNTS[refusal] ? 1 : 0);
+    });
+  }
+
+  /** The OUTCOME half of the same ledger, for the outcomes a settle can
+   *  carry directly. `refused` is covered by the table above; `running` is
+   *  not a settlement; `skipped`/`missed` are written by `openUnleasedRun`
+   *  and pinned in this file's grace fixtures. */
+  const OUTCOME_COUNTS: Readonly<Record<'ok' | 'lost' | 'failed', number>> = { ok: 0, lost: 1, failed: 1 };
+  for (const outcome of ['ok', 'lost', 'failed'] as const) {
+    it(`a ${outcome} settle leaves consecutiveFailures at ${OUTCOME_COUNTS[outcome]}`, () => {
+      const s = store();
+      const t0 = 1_000;
+      const id = makeArmed(s, t0, t0);
+      const claim = s.claimAndOpenRun({ automationId: id, now: t0 + 10, occurrence: manualOccurrence() });
+      if (!('runId' in claim)) throw new Error('unreachable');
+      const settlement = outcome === 'failed'
+        ? ({ outcome: 'failed', refusal: 'prompt-refused' } as const)
+        : ({ outcome } as const);
+      const settled = s.settleAutomationRun({ runId: claim.runId, settlement, now: t0 + 11 });
+      expect((settled as SettledRun).consecutiveFailures).toBe(OUTCOME_COUNTS[outcome]);
+    });
+  }
 });
 
 describe('CoordStore: automations — the per-parent ring', () => {
@@ -343,6 +440,34 @@ describe('CoordStore: automations — appendRunEvent caps detail at AUTOMATION_D
     expect(events).toHaveLength(1);
     expect(events[0]!.truncatedBytes).toBe(10);
     expect(Buffer.byteLength(events[0]!.detail, 'utf8')).toBe(AUTOMATION_DETAIL_MAX_BYTES);
+  });
+
+  it('never cuts a detail mid-codepoint, and says how many bytes went', () => {
+    // The continuation-byte walk was exercised only with `'x'.repeat(...)`,
+    // where every byte is a codepoint and the walk is a no-op — so deleting
+    // it left the suite green while a real detail (ccd's stderr on a failed
+    // spawn is the largest text stored, and a project name or a branch can
+    // carry any UTF-8) came back with a replacement character at the cut and
+    // a `truncatedBytes` that did not match what was actually dropped.
+    const s = store();
+    const id = makeArmed(s, 1_000, 1_000);
+    const claim = s.claimAndOpenRun({ automationId: id, now: 2_000, occurrence: manualOccurrence() });
+    if (!('runId' in claim)) throw new Error('unreachable');
+    // A 3-byte codepoint straddling the cap: the cap lands one byte into the
+    // last '…', so the walk must drop that whole codepoint.
+    const filler = 'a'.repeat(AUTOMATION_DETAIL_MAX_BYTES - 1);
+    const detail = `${filler}…tail`;
+    expect(Buffer.byteLength(detail, 'utf8')).toBe(AUTOMATION_DETAIL_MAX_BYTES - 1 + 3 + 4);
+    s.appendRunEvent(claim.runId, 'spawn', false, detail, 3_000);
+    const ev = s.automationRunEvents(claim.runId)[0]!;
+    expect(ev.detail, 'the straddling codepoint is dropped whole, never half-written')
+      .toBe(filler);
+    expect(ev.detail.includes('\ufffd'), 'and no replacement character is stored').toBe(false);
+    expect(Buffer.byteLength(ev.detail, 'utf8'),
+      'so the stored text can be SHORTER than the cap — dropping a codepoint costs its whole width')
+      .toBe(AUTOMATION_DETAIL_MAX_BYTES - 1);
+    expect(ev.truncatedBytes, 'and the count is what actually went, measured against what was kept')
+      .toBe(Buffer.byteLength(detail, 'utf8') - (AUTOMATION_DETAIL_MAX_BYTES - 1));
   });
 
   it('reports truncatedBytes: 0, not absent, for an in-cap detail', () => {

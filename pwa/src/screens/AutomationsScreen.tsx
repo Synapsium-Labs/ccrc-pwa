@@ -491,6 +491,11 @@ export function AutomationsScreen({
         {projects.length > 0 && (
           <select
             className="auto-filter-project"
+            // Named, like the chips beside it: the group's own `aria-label`
+            // names the GROUP, not the control, so an unlabelled select in it
+            // is announced by its value alone ("all projects") with no word
+            // for what it selects.
+            aria-label="project"
             value={projectFilter}
             onChange={(e) => setProjectFilter(e.target.value)}
           >

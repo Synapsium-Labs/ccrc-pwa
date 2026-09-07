@@ -639,7 +639,14 @@ describe('FleetWatcher.sweepAutomations — a throwing fireAutomation does not k
     // second session for the same automation.
     advance(10_000 + 1);
     await w.sweepAutomations();
-    await new Promise((r) => { setImmediate(r); });
+    // A REAL wait, not one microtask turn. `fireOne` void-dispatches and the
+    // act's first step is an `io.readdir` against the real filesystem, so a
+    // single `setImmediate` returns long before a re-fired act could reach
+    // `ws-add` — the assertion that stood here measured nothing at all and
+    // would have passed on a tree that DID retry. Only `Date` is faked in
+    // this file, so `setTimeout` is real, and this file's first fixture
+    // completes a whole spawn and prompt well inside this window.
+    await new Promise((resolve) => { setTimeout(resolve, 400); });
     expect(wsAddCalls).toBe(1);
     const row = coord.automation(id)!;
     expect(row.leaseRunId).not.toBeNull();              // still leased — a crash, not a lie
@@ -659,10 +666,13 @@ describe('FleetWatcher.sweepAutomations — the controller ruling: /run only cla
     expect(coord.automationRun(claim.runId)!.outcome).toBe('ok');
     expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
 
-    // A LATER tick must not re-fire the now-settled run.
+    // A LATER tick must not re-fire the now-settled run. A REAL wait, for the
+    // reason the throwing fixture above states in full: a `setImmediate` here
+    // returns before a re-fired act could have reached `ws-add`, so it would
+    // pass whether or not the property held.
     advance(10_000 + 1);
     await w.sweepAutomations();
-    await new Promise((r) => { setImmediate(r); });
+    await new Promise((resolve) => { setTimeout(resolve, 400); });
     expect(calls.filter((c) => c.includes('ws-add')).length).toBe(1);
   });
 
