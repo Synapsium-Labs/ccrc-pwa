@@ -1557,9 +1557,11 @@ PR body: the measured baseline from `## Baseline recorded`, the deploy order, an
 
 *(Filled in by Task 1 Step 9, Task 2 Step 5 and Task 9 Step 4 — this section is the plan's own record and travels with it.)*
 
-- Carrier fixed at: _(timestamp)_ · readings lost before the fix: _(count)_
-- Reproduction, old script vs new, on a zero-query day: _(lines added: 0 vs 1)_
-- Pre-deploy roll-up: _(the `del(.sessions)` line)_
+- Carrier fixed at: **2026-09-07T13:53Z** · readings lost before the fix: **10** (00:07Z-09:07Z on 2026-09-07, every fire before that day's first graphify query)
+- Reproduction, old script vs new, on a zero-query day: **old rc=2, jq error, 0 lines added; new rc=0, 1 line added, `queriesToday:0`**
+- Pre-deploy roll-up (the reading at **13:53:50Z** — NOT the 13:53:58Z line, which is the Step 8 mutation artifact written with the log emptied):
+  `{"ts":"2026-09-07T13:53:50Z","gateOff":false,"queriesToday":66,"denied":5,"zeroQuery":3,"peerRead":0,"claimed":0,"nullPeerRead":23,"heldN":2,"coTenantN":15,"liveN":17}`
+  `nullPeerRead:23` = every row, no field: the proof the hook has not shipped. Its fall is the proof it has.
 - Claims history: rows _(n)_ · programless _(n)_ · holders _(n)_ · projects _(list)_
 - Fleet census at deploy: rows _(n)_ · archived _(n)_ · live _(n)_ · held _(n)_ · with a co-tenant _(n)_
 - Installed-hook fingerprint before deploy: _(IDENTICAL / differs)_
