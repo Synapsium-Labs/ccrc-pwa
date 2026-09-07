@@ -67,6 +67,39 @@ const seed = (): void => {
     _reg_set ${ID} started 1`);
 };
 
+/** `ccd-auto-swap-hold.test.ts`'s AFFINITY fixture, with `_swap_target` and
+ *  `_avail` left REAL: a pane at a clean prompt, a pane pid, and a dispatch
+ *  that logs instead of running systemd-run. */
+const AFFINITY = `
+  tmux() { case "\${1:-}" in
+             capture-pane) printf '%s\\n' "❯ " ;;
+             list-panes)   echo ${PANE_PID} ;;
+           esac; return 0; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
+`;
+
+/** The RESCUE fixture: a real limit banner, matched by the REAL
+ *  `_pane_hard_blocked` — the classifier IS the discriminator here. */
+const BLOCKED = `
+  tmux() { case "\${1:-}" in
+             capture-pane) echo "API Error: 429 Too Many Requests" ;;
+             list-panes)   echo ${PANE_PID} ;;
+           esac; return 0; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
+`;
+
+/** The status file the affinity arm's idle gate reads, under the CURRENT
+ *  account's config dir (`_cfg_dir claude` -> `$HOME/.claude`). */
+const idleStatus = (cfg = '.claude'): void => {
+  const dir = path.join(h.home, cfg, 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${PANE_PID}.json`),
+    JSON.stringify({ status: 'idle', statusUpdatedAt: 1 }));
+};
+
+const tick = (stubs: string, n = 1): string =>
+  h.sh(`${stubs} for ((i=0;i<${n};i++)); do _auto_swap_check ${ID}; done`);
+
 describe('_strand_clear', () => {
   it('writes NOTHING when there is no strand — the `-e` test is what stops the spam', () => {
     seed();
@@ -244,5 +277,171 @@ describe('_swap_target and the pool', () => {
     expect(target('claude', 'claude-b')).toBe('');          // no marker: the guard refuses the wrong-pool home
     h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
     expect(target('claude', 'claude-b')).toBe('claude-b');  // marker: the crossed home is admitted
+  });
+});
+
+describe('the tick re-seeds a wrong-pool home (§5.5.4 step 1)', () => {
+  it('re-seeds inside ONE tick, journals `rehome`, and writes a FIRST .home for a row that had none', () => {
+    seed(); tagPool('demo', 'pool-b'); idleStatus();
+    writeLimits('claude-b', 10, 10); writeLimits('claude-d', 60, 60);
+    expect(h.reg(ID, 'home'), 'the fixture must start with no .home at all').toBeNull();
+    tick(AFFINITY);
+    expect(h.reg(ID, 'home')).toBe('claude-b');
+    const rows = eventsOf(h.home, 'rehome');
+    expect(rows).toHaveLength(1);
+    expect(measOf(rows[0]!))
+      .toMatchObject({ from: 'claude', home: 'claude-b', reason: 'pool', pool: 'pool-b' });
+    expect(swapLog()).toContain(`rehome ${ID}: home claude -> claude-b [pool=pool-b]`);
+  });
+
+  it('CLOBBERS a pre-existing wrong-pool .home — not `_ws_seed_home`, which never overwrites what is already there', () => {
+    // No case in this file plants a `.home` BEFORE the tag it disagrees with,
+    // so none of them can tell `_reg_set` from `_ws_seed_home` swapped in for
+    // it: on a row that starts with no `.home` at all (the case above),
+    // `_ws_seed_home`'s own "set once" guard writes it just as readily as
+    // `_reg_set` does — the two are indistinguishable on a first write. A row
+    // seeded before its project was ever tagged, or hand-set by an operator,
+    // is the one this guards: `_ws_seed_home`'s contract is "never clobber a
+    // deliberate choice", which is exactly backwards here — the retag IS the
+    // new deliberate choice, and it must win over the stale file.
+    seed(); tagPool('demo', 'pool-b');
+    h.sh(`_reg_set ${ID} home claude-a`);
+    writeLimits('claude-b', 10, 10);
+    tick(AFFINITY);
+    expect(h.reg(ID, 'home'), 'the pre-existing wrong-pool home is overwritten').toBe('claude-b');
+    expect(measOf(eventsOf(h.home, 'rehome')[0]!)).toMatchObject({ from: 'claude-a', home: 'claude-b' });
+  });
+
+  it('is IDEMPOTENT: a second tick leaves .home byte-identical and writes no second row', () => {
+    seed(); tagPool('demo', 'pool-b'); idleStatus(); writeLimits('claude-b', 10, 10);
+    tick(AFFINITY);
+    const first = fs.readFileSync(reg(`${ID}.home`));
+    tick(AFFINITY);
+    expect(fs.readFileSync(reg(`${ID}.home`))).toEqual(first);
+    expect(eventsOf(h.home, 'rehome')).toHaveLength(1);
+    expect(logLines('rehome')).toHaveLength(1);
+  });
+
+  it('re-seeds ABOVE the cooldown gates — a session inside SWAP_COOLDOWN still gets its home fixed', () => {
+    // The move waits for the gate (D-1675); the pinned home does not, because a
+    // wrong-pool `.home` is what the affinity arm would pull the session BACK to.
+    seed(); tagPool('demo', 'pool-b'); writeLimits('claude-b', 10, 10);
+    h.sh(`_reg_set ${ID} lastswap "$(date +%s)"`);
+    tick(AFFINITY);
+    expect(h.reg(ID, 'home')).toBe('claude-b');
+    expect(h.calls().join('\n'), 'the MOVE is still gated').not.toContain('dispatch');
+  });
+
+  it('a valid crossing marker on the HOME account survives the re-seed — "stay here on purpose" beats a retag', () => {
+    // Row 44. No case above ever plants a `.crosspool` marker before ticking,
+    // so none of them can tell the shipped `[[ -z "$crossed" ]]` guard from a
+    // mutant that deletes it — both leave `.home` at `claude-b` because
+    // nothing here ever asks for anything else. This is the fixture that
+    // actually distinguishes them: a `prefer`-style marker records the HOME
+    // account (ruling 8), so a wrong-pool `.home` that was crossed to
+    // DELIBERATELY must not be silently re-seeded back into pool.
+    seed(); tagPool('demo', 'pool-b');
+    h.sh(`_reg_set ${ID} home claude; _reg_set ${ID} crosspool "1700000000 pool-b claude"`);
+    writeLimits('claude-b', 10, 10);
+    tick(AFFINITY);
+    expect(h.reg(ID, 'home'), 'the crossed home is left exactly where the marker put it').toBe('claude');
+    expect(eventsOf(h.home, 'rehome'), 'a crossed home is not a rehome').toHaveLength(0);
+  });
+});
+
+describe('the tick moves a retagged session (§5.5.4 step 5)', () => {
+  it('moves on the AFFINITY arm with the verb `auto-pool` — the cause was a retag, not the ceiling', () => {
+    seed(); tagPool('demo', 'pool-b'); idleStatus(); writeLimits('claude-b', 10, 10);
+    tick(AFFINITY);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude-b`);
+    expect(swapLog()).toContain(`auto-pool ${ID}: claude -> claude-b [home=claude-b]`);
+    expect(swapLog(), 'the ceiling did not cause this move').not.toContain('auto-home');
+  });
+
+  it('DEFERS the move while a hold stands — but still re-seeds the home', () => {
+    // The hold rung must not move (§14 O3): a retag is an affinity-class
+    // relocation and a mid-wave worker stays put until release. The re-seed
+    // sits ABOVE the rung, so the deferral is visible rather than invisible.
+    seed(); tagPool('demo', 'pool-b'); idleStatus(); writeLimits('claude-b', 10, 10);
+    fs.writeFileSync(reg(`${ID}.hold`), 'program:demo wave:2/4 run:17');
+    tick(AFFINITY);
+    expect(h.calls().join('\n')).not.toContain('dispatch');
+    expect(h.reg(ID, 'lastswap'), 'a deferred tick stamps nothing').toBeNull();
+    expect(h.reg(ID, 'home'), 'the re-seed runs above the hold rung').toBe('claude-b');
+  });
+
+  it('RESCUES a hard-blocked wrong-pool session at once, IN POOL, past the hold rung', () => {
+    // claude-a is by far the cheapest lane and in the WRONG pool: a rescue that
+    // ignored the filter would land there, which is the crossing ruling 6 forbids.
+    seed(); tagPool('demo', 'pool-b');
+    writeLimits('claude-a', 1, 1); writeLimits('claude-b', 10, 10);
+    fs.writeFileSync(reg(`${ID}.hold`), 'held');
+    tick(BLOCKED);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude-b`);
+    expect(swapLog()).toContain(`auto-rescue ${ID}: claude (blocked) -> claude-b`);
+    expect(fs.existsSync(reg(`${ID}.stranded`)), 'a rescue is not a strand').toBe(false);
+  });
+});
+
+describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', () => {
+  it('marks ONCE over ten ticks, with one log line and one banner', () => {
+    seed(); tagPool('demo', 'pool-b'); plantNotify();
+    disable('claude-b'); disable('claude-d');   // nothing in pool-b, nothing untagged, is placeable
+    tick(BLOCKED, 10);
+    expect(h.calls().join('\n'), 'never cross').not.toContain('dispatch');
+    expect(h.reg(ID, 'stranded'))
+      .toMatch(/^\d{10} claude-a:pool=pool-a claude-b:disabled claude-d:disabled$/);
+    expect(logLines('stranded')).toHaveLength(1);
+    expect(noticeLines()).toHaveLength(1);
+    expect(h.reg(ID, 'lastswap'), 'no stamp, so the first recovery tick rescues at once').toBeNull();
+  });
+
+  it('CLEARS the strand when the pane recovers, and says so', () => {
+    seed(); tagPool('demo', 'pool-b'); plantNotify();
+    disable('claude-b'); disable('claude-d');
+    tick(BLOCKED);
+    expect(fs.existsSync(reg(`${ID}.stranded`))).toBe(true);
+    tick(AFFINITY);
+    expect(fs.existsSync(reg(`${ID}.stranded`))).toBe(false);
+    expect(logLines('unstranded')).toHaveLength(1);
+  });
+
+  it('strands an UNTAGGED project too — the pre-existing SILENT strand, made loud', () => {
+    // ccd:11243 reached this state today with every account at the ceiling and
+    // returned with no marker, no line and no stamp, retrying every 5 s for ever.
+    seed(); plantNotify();                       // deliberately no tag at all
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    tick(BLOCKED, 10);
+    expect(h.calls().join('\n')).not.toContain('dispatch');
+    expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} claude-a:limit claude-b:limit claude-d:limit$/);
+    expect(swapLog()).toContain(`stranded ${ID}: claude (blocked) -> nowhere [pool=-]`);
+    expect(notices()).toContain('no account in pool (untagged) can take it');
+  });
+
+  it('writes NOTHING to swap.log across ten healthy ticks on a never-stranded session', () => {
+    // The `-e` test inside `_strand_clear`, measured at the tick rather than at
+    // the helper: ~20 live sessions x 12 ticks a minute is the real load.
+    seed(); idleStatus();
+    h.sh(`echo sentinel >> "$HOME/.cc-sessions/swap.log"`);
+    const before = fs.readFileSync(reg('swap.log'));
+    tick(AFFINITY, 10);
+    expect(fs.readFileSync(reg('swap.log'))).toEqual(before);
+  });
+
+  it('the marker toggles on every flip while the BANNER is floored', () => {
+    // `_pane_hard_blocked` greps the last eight pane lines, so a scrolling limit
+    // banner flips the verdict tick by tick. Each flip is a legitimate
+    // mark -> clear -> mark; only the banner waits out SWAPBLOCK_COOLDOWN.
+    seed(); tagPool('demo', 'pool-b'); plantNotify();
+    disable('claude-b'); disable('claude-d');
+    for (let i = 0; i < 5; i++) {
+      tick(BLOCKED);
+      expect(fs.existsSync(reg(`${ID}.stranded`)), `blocked tick ${i}`).toBe(true);
+      tick(AFFINITY);
+      expect(fs.existsSync(reg(`${ID}.stranded`)), `clear tick ${i}`).toBe(false);
+    }
+    expect(logLines('stranded')).toHaveLength(5);
+    expect(logLines('unstranded')).toHaveLength(5);
+    expect(noticeLines(), 'one banner, not five').toHaveLength(1);
   });
 });

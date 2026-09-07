@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6f9a0052620093e9bee835a38712e0ca1f7c0155c7c0c32293ff9af4daf4919e
+# ccrc:generated 1 sha256=24112657fca2337819e15711387dd071d040aa7e072328859158a37b61022f11
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11848,13 +11848,12 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   _crosspool_valid "$id" "$pps" "$cur"  && cross_cur=1
   _crosspool_valid "$id" "$pps" "$home" && cross_home=1
   # UNDECIDABLE IS NOT A DECISION. An unreadable or malformed tag means nobody
-  # decides: answer nothing. Task 3 is to make the caller (`_auto_swap_check`)
-  # mark a strand when the pane is hard-blocked and this returns empty; until
-  # that lands, an undecidable tag here just produces the same empty answer as
-  # any other "stay, fine" case, indistinguishable at this call site. Folding
-  # it into "stay" would be right by accident; folding it into "untagged"
-  # would silently lift the constraint, which is the overloaded-null defect
-  # this tree names.
+  # decides: answer nothing. The caller (`_auto_swap_check`) marks a strand
+  # when the pane is hard-blocked and this returns empty; an undecidable tag
+  # here still produces the same empty answer as any other "stay, fine" case,
+  # indistinguishable at this call site. Folding it into "stay" would be right
+  # by accident; folding it into "untagged" would silently lift the
+  # constraint, which is the overloaded-null defect this tree names.
   _pool_ok "$cur" "$pps"; prc=$?
   [[ "$prc" -eq 2 ]] && return 0
   # A WRONG-POOL CURRENT ACCOUNT IS A MUST-LEAVE (ruling 5): `force=pool` skips
@@ -11870,11 +11869,11 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # here and below carry no _account_ok check.
     #
     # NEVER RETURN TO A WRONG-POOL HOME, whatever the reason `home` is
-    # wrong-pool today — hand-set, or simply never retagged. (Once Task 3's
-    # re-seed exists, this guard is also what stops the affinity arm undoing
-    # it on the very next recovery.) The CROSSED home is admitted, and only
-    # the crossed one: `_crosspool_valid` was asked about `$home`
-    # specifically, so a marker written for `wrapper` cannot admit it.
+    # wrong-pool today — hand-set, or simply never retagged. (The home
+    # re-seed in `_auto_swap_check` means this guard is also what stops the
+    # affinity arm undoing it on the very next recovery.) The CROSSED home is
+    # admitted, and only the crossed one: `_crosspool_valid` was asked about
+    # `$home` specifically, so a marker written for `wrapper` cannot admit it.
     _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && _avail "$home" && { echo "$home"; return 0; }                       # home recovered: go back
     [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
@@ -11941,7 +11940,39 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
+  local project pps prc crossed="" new aff_verb=auto-home
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
+  # ── POOLS (§5.5.4) ───────────────────────────────────────────────────────
+  # Read ONCE per tick and BEFORE the cooldown gates below. The re-seed is not
+  # a relocation — nothing restarts, no transcript moves — so it must not wait
+  # 900 s behind a gate that exists to stop swap storms, and it is idempotent
+  # the moment `.home` is back in pool.
+  project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
+  _crosspool_valid "$id" "$pps" "$wrapper" "$home" && crossed=1
+  # HOME RE-SEED (ruling 5). A retag makes a pinned wrong-pool home a lie: the
+  # affinity arm would keep pulling the session back onto it for ever. NOT
+  # `_ws_seed_home` — that never clobbers, and clobbering is the entire point.
+  # A row with no `.home` file at all (pre-2026-07-28) gets one written here
+  # for the first time.
+  if [[ -z "$crossed" ]]; then
+    _pool_ok "$home" "$pps"; prc=$?
+    if [[ "$prc" -eq 1 ]]; then
+      new=$(_ws_least_loaded "$project")
+      if [[ -n "$new" && "$new" != "$home" ]]; then
+        _reg_set "$id" home "$new"
+        _lc_done rehome "$id" "" meas.from "$home" meas.home "$new" \
+          meas.reason pool meas.pool "${pps#named }"
+        echo "$(date '+%F %T') rehome $id: home $home -> $new [pool=${pps#named }]" >> "$REG/swap.log"
+        home="$new"
+      fi
+    fi
+  fi
+  # THE AFFINITY ARM'S LOG VERB, decided here because `wrapper` cannot change
+  # inside a tick: when the CURRENT account is the thing that failed the pool
+  # rule, the move's cause was a retag and the line must say so. An undecidable
+  # tag is not a cause — rc 2 leaves the verb alone.
+  _pool_ok "$wrapper" "$pps"; prc=$?
+  [[ "$prc" -eq 1 && -z "$crossed" ]] && aff_verb=auto-pool
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]] && return 0
   # A refused swap is not retried on the 5-second supervise tick. cmd_swap writes
@@ -11969,8 +12000,22 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # must-leave candidate loop so a hard block always finds a destination when
   # one exists, regardless of what telemetry has to say about cur/home.
   _pane_hard_blocked "$pane" && hard_blocked=1
+  # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
+  # steady state of a healthy session writes nothing at all.
+  [[ -n "$hard_blocked" ]] || _strand_clear "$id"
   target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked")
-  [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
+  # RULING 6, AND THE LINE THAT USED TO SIT HERE IS WHY. `|| return 0`
+  # discarded the one fact worth keeping: a hard-blocked session with nowhere
+  # to go, retried every five seconds with no marker, no log line and no
+  # cooldown stamp. It fires for an UNTAGGED project too — every account at the
+  # ceiling reaches exactly this state — which is the pre-existing silent
+  # strand made loud, not a new behaviour for tagged projects only.
+  if [[ -z "$target" || "$target" == "$wrapper" ]]; then
+    [[ -z "$target" && -n "$hard_blocked" ]] && _strand_mark "$id" "$wrapper" "$project"
+    return 0
+  fi
+  # A destination exists: whatever the pane says, this row is not stranded.
+  _strand_clear "$id"
   _avail "$target" || return 0
   # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
   # anyway -> swap now. The 429/rate-limit patterns also catch an opt-in overflow lane hitting
@@ -12021,7 +12066,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
   [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 0
   _reg_set "$id" lastswap "$now"
-  echo "$(date '+%F %T') auto-home $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
+  echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
   _dispatch_swap "$id" "$target"
   return 0
 }
@@ -13693,12 +13738,12 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
 
 _strand_clear() {   # id — the strand is over; say so exactly once per strand.
   # THE `-e` TEST IS LOAD-BEARING, and it is not a micro-optimisation.
-  # Task 3 is to wire `_auto_swap_check` to call this on EVERY healthy tick of
-  # EVERY session. Once that lands, the 5-second supervise tick means ONE
-  # `unstranded` line per session per tick without this guard — twelve lines a
-  # minute per session, times however many sessions the box is actually
-  # running (measure it; it drifts) — and swap.log, the forensic trail beside
-  # every swap decision, stops being readable by the human it exists for.
+  # `_auto_swap_check` calls this on EVERY healthy tick of EVERY session.
+  # Without this guard the 5-second supervise tick would mean ONE
+  # `unstranded` line per session per tick — twelve lines a minute per
+  # session, times however many sessions the box is actually running
+  # (measure it; it drifts) — and swap.log, the forensic trail beside every
+  # swap decision, would stop being readable by the human it exists for.
   [[ -e "$REG/$1.stranded" ]] || return 0
   rm -f -- "$REG/$1.stranded"
   echo "$(date '+%F %T') unstranded $1" >> "$REG/swap.log"
@@ -13799,14 +13844,16 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   # itself — it takes a new `.home` write (another `prefer`) to change what
   # the `home` argument is checked against.
   #
-  # THIS COMMIT WIRES ONE READER. `_swap_target` (same commit) asks about
-  # `cur` and `home` to gate the must-leave force and the home guard — two of
-  # the four reactions listed above. The other two, and every WRITER and
-  # EXPIRER of this field, are owed to later tasks: Task 3 is the home
-  # re-seed's own read of this; Task 4 is `_crosspool_tick`, which removes an
-  # invalid marker and logs `crosspool-ended` (until it lands, an invalid
-  # marker just keeps failing this predicate, silently, for as long as it
-  # sits on disk); Task 5 is `cmd_swap`'s in-unit refusal, plus the
+  # `_swap_target` (Task 2) asks about `cur` and `home` to gate the
+  # must-leave force and the home guard — two of the four reactions listed
+  # above. The home re-seed in `_auto_swap_check` (Task 3) is this
+  # predicate's second reader: it asks about `wrapper` and `home` before ever
+  # touching `.home`, one tick before `_swap_target`'s own read of the same
+  # marker runs. The fourth reaction, and every WRITER and EXPIRER of this
+  # field, are still owed to later tasks: Task 4 is `_crosspool_tick`, which
+  # removes an invalid marker and logs `crosspool-ended` (until it lands, an
+  # invalid marker just keeps failing this predicate, silently, for as long
+  # as it sits on disk); Task 5 is `cmd_swap`'s in-unit refusal, plus the
   # `swap`/`start --cross-pool` verbs that write the marker; Task 6 is
   # `prefer --cross-pool`. Today the field exists only where a test
   # hand-writes it with `_reg_set`.
