@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=988f54f8d6baa1755f936d20ec2e88e77f18f2e7d347e503c9a2b08db866fc96
+# ccrc:generated 1 sha256=6e916ba5a541f02af7fa63161b078dd30b4664d53a506736ce1d18742b8898fa
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11891,8 +11891,8 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # and `_crosspool_valid`'s account clause no longer matches it next tick.
     # It does NOT end a `home`-recorded (`prefer`) crossing: this loop never
     # touches `.home`, so `cross_home` keeps validating until something else
-    # changes `home`. (Task 4's `_crosspool_tick` is what then removes an
-    # invalid marker and logs `crosspool-ended`.)
+    # changes `home`. (`_crosspool_tick` is what then removes an invalid
+    # marker and logs `crosspool-ended`.)
     _pool_ok "$cand" "$pps" || continue
     _account_ok "$cand" || continue
     _avail "$cand" || continue
@@ -11953,7 +11953,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # wait 900 s behind a gate that exists to stop swap storms, and it is
   # idempotent the moment `.home` is back in pool.
   project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
-  _crosspool_valid "$id" "$pps" "$wrapper" "$home" && crossed=1
+  _crosspool_tick "$id" "$wrapper" "$home" "$pps" && crossed=1
   # ONE BIT, TWO DECISIONS WITH DIFFERENT SUBJECTS — DELIBERATE, review round
   # 1 (Minor 2). `_swap_target` asks `cross_cur`/`cross_home` SEPARATELY,
   # because it answers a per-account question — "may THIS account serve as
@@ -11971,7 +11971,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # separately refuses that same wrong-pool `home` as a destination (its own
   # `cross_home` check asks about `home` alone and finds no match), so the
   # row is left with a home it can neither return to nor have fixed for as
-  # long as the crossing stands — repaired on the first tick after Task 4's
+  # long as the crossing stands — repaired on the first tick after
   # `_crosspool_tick` ends it. Splitting the flag would close this gap, but
   # it would open the hazard the crossing marker exists to prevent: an
   # automatic re-seed silently overwriting the account an operator's `swap
@@ -13882,14 +13882,14 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   # above. The home re-seed in `_auto_swap_check` (Task 3) is this
   # predicate's second reader: it asks about `wrapper` and `home` before ever
   # touching `.home`, one tick before `_swap_target`'s own read of the same
-  # marker runs. The fourth reaction, and every WRITER and EXPIRER of this
-  # field, are still owed to later tasks: Task 4 is `_crosspool_tick`, which
-  # removes an invalid marker and logs `crosspool-ended` (until it lands, an
-  # invalid marker just keeps failing this predicate, silently, for as long
-  # as it sits on disk); Task 5 is `cmd_swap`'s in-unit refusal, plus the
-  # `swap`/`start --cross-pool` verbs that write the marker; Task 6 is
-  # `prefer --cross-pool`. Today the field exists only where a test
-  # hand-writes it with `_reg_set`.
+  # marker runs. `_crosspool_tick` (Task 4) is this field's only EXPIRER: it
+  # runs immediately after that same read, before the re-seed acts on it, and
+  # removes an invalid marker and logs `crosspool-ended` — see its own header
+  # for the two ways a marker goes invalid. The fourth reaction, and every
+  # WRITER of this field, are still owed to later tasks: Task 5 is
+  # `cmd_swap`'s in-unit refusal, plus the `swap`/`start --cross-pool` verbs
+  # that write the marker; Task 6 is `prefer --cross-pool`. Today the field
+  # exists only where a test hand-writes it with `_reg_set`.
   #
   # The `-e` test is FIRST so the steady state of an uncrossed row costs two
   # stats and never a `cat` — `_swap_target` calls this once for `cur` and
@@ -13902,6 +13902,28 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   read -r ts pool acct <<<"$raw" || :
   [[ -n "${pool:-}" && "$pps" == "named $pool" ]] || return 1
   for a in "$@"; do [[ -n "$a" && "$a" == "${acct:-}" ]] && return 0; done
+  return 1
+}
+
+_crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing stands; else END it
+  # THE MARKER MUST EXPIRE, or a stale crossing is indistinguishable from a
+  # live one and the pool machinery stays switched off on that row for ever.
+  # Evaluated once per tick, BEFORE the re-seed consults it. The reason names
+  # which of the two clauses failed, because the remedies differ: a retag is
+  # the operator's own newer instruction, a move off the account is the
+  # affinity arm doing what §2's ruling-8 interpretation says it should.
+  local id="$1" cur="$2" home="$3" pps="$4" raw ts pool acct reason
+  [[ -e "$REG/$id.crosspool" ]] || return 1
+  _crosspool_valid "$id" "$pps" "$cur" "$home" && return 0
+  raw=$(_reg_get "$id" crosspool)
+  read -r ts pool acct <<<"$raw" || :
+  if [[ "$pps" != "named ${pool:-}" ]]; then
+    reason="project pool is now $pps"
+  else
+    reason="moved off ${acct:-<unrecorded>}"
+  fi
+  rm -f -- "$REG/$id.crosspool"
+  echo "$(date '+%F %T') crosspool-ended $id: $reason" >> "$REG/swap.log"
   return 1
 }
 
