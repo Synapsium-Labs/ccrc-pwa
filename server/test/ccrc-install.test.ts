@@ -121,9 +121,14 @@ const TREE_FILES = [
   // for exactly this bare-`node` caller, so this is the complete transitive
   // set — `the fixture tree is the one the generator needs` proves it by
   // running the generator inside the fixture rather than by re-reading the
-  // imports here.
+  // imports here. `shared/base-url.mjs` joined it in the wave that gave
+  // `shared/roster-json.mjs` its first import: the endpoint gate is IMPORTED
+  // rather than hand-copied (D-1854's split-verdict argument), so a fixture
+  // tree missing it fails the generator's first spawn with
+  // `ERR_MODULE_NOT_FOUND`, not a lint warning.
   'shared/generate.mjs',
   'shared/mark.mjs',
+  'shared/base-url.mjs',
   'shared/roster-json.mjs',
   'shared/wrapper.mjs',
   // The node floor doctor reads out of the shipped `package.json`, for BOTH

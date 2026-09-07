@@ -35,9 +35,12 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseRoster } from '../../shared/roster.js';
+import { parseRoster, MODEL_ID_RE } from '../../shared/roster.js';
+import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { markGenerated } from '../../shared/mark.mjs';
+import { rosterFromJson as rosterFromJsonSync } from '../../shared/roster-json.mjs';
+import { baseUrlCases } from './fixtures/baseUrlCases.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -217,6 +220,97 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
   });
 });
 
+// The mirror carries three DERIVED LISTS off `shared/providers.ts` — it must,
+// or it is laxer than the parser on every provider gate, which is the one
+// direction its header (:49-52) forbids. What it must NOT carry is the TABLE:
+// the labels, credentials, env vars, connect methods, probes and catalogues
+// have exactly one home and `providers.test.ts`'s `git ls-files` scan measures
+// that over every tracked file, `.mjs` included.
+//
+// These three assertions are the mechanism §4.2 claimed already existed. It did
+// not: `shared/roster-json.mjs`'s `HUES` is a hand-typed `new Set([…])`, undocumented,
+// with nothing comparing it to `shared/roster.ts`'s `HUES` — its agreement is
+// caught only INDIRECTLY, because hues reach bash through `_ccrc_hue` and a
+// divergent order changes stdout. `provider` reaches no bash at all (§4.3 puts
+// it in `~/<configDirSuffix>/settings.json`), so the indirect mechanism does
+// not exist here and a direct one has to.
+describe('the mirror\'s derived lists agree with the table it cannot import', () => {
+  it('its provider id list is PROVIDER_IDS, in order', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/roster-json.mjs'), 'utf8');
+    const m = /const PROVIDER_IDS = new Set\(\[([^\]]*)\]\);/.exec(src);
+    expect(m, 'shared/roster-json.mjs must declare `const PROVIDER_IDS = new Set([…]);`').not.toBeNull();
+    const mirrored = m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter((s) => s !== '');
+    expect(mirrored).toEqual([...PROVIDER_IDS]);
+  });
+
+  it('its api-key provider list is the table\'s apiKeyModels column', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/roster-json.mjs'), 'utf8');
+    const m = /const API_KEY_PROVIDERS = new Set\(\[([^\]]*)\]\);/.exec(src);
+    expect(m).not.toBeNull();
+    const mirrored = m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter((s) => s !== '');
+    expect(mirrored).toEqual(PROVIDER_IDS.filter((p) => PROVIDERS[p].apiKeyModels));
+  });
+
+  it('its base-url-required list is the table\'s baseUrlRequired column', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/roster-json.mjs'), 'utf8');
+    const m = /const BASE_URL_REQUIRED = new Set\(\[([^\]]*)\]\);/.exec(src);
+    expect(m).not.toBeNull();
+    const mirrored = m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter((s) => s !== '');
+    expect(mirrored).toEqual(PROVIDER_IDS.filter((p) => PROVIDERS[p].baseUrlRequired));
+  });
+
+  it('its MODEL_ID_RE is the same regex, SOURCE for source', () => {
+    // Source, not behaviour, and that is the point: the last time a regex was
+    // copied out of `shared/roster.ts` into this file, the escape text was
+    // emitted as the RAW control bytes it describes — twice in one task, with
+    // identical behaviour, tsc clean and every suite green
+    // (`server/test/source-bytes.test.ts:5-15`, the incident that file is named
+    // after). A behavioural comparison would have passed then too.
+    const src = readFileSync(path.join(ccrcRoot, 'shared/roster-json.mjs'), 'utf8');
+    const m = /const MODEL_ID_RE = (\/.*\/);/.exec(src);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe(MODEL_ID_RE.toString());
+  });
+
+  it('agrees with parseRoster on every row of the endpoint gate\'s own table', () => {
+    // The mirror IMPORTS `BASE_URL_OK` — from `shared/base-url.mjs`, the twin
+    // Task 2 ships for the bare-`node` callers — so what this row measures is
+    // not two spellings of one gate but two PARSERS reaching the same verdict
+    // through it: `parseRoster` calls the `.ts`, `rosterFromJson` calls the
+    // `.mjs`, and the endpoint's legality has to arrive identically at both.
+    // Driven over the SAME rows, the `leastLoaded.ts` pattern one directory
+    // over. Agreement is asserted as "both throw or neither does", never as
+    // "the mirror throws when I expect": a row that stopped being invalid on
+    // the parser side would otherwise keep testing a refusal nobody asks for
+    // any more.
+    const at = (baseUrl: unknown): unknown => ({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane', label: 'team·shared', configDirSuffix: '.claude-lane',
+        exec: baseUrl === undefined
+          ? { kind: 'generated', provider: 'compatible' }
+          : { kind: 'generated', provider: 'compatible', baseUrl },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] });
+    const throws = (f: () => unknown): boolean => { try { f(); return false; } catch { return true; } };
+    for (const c of baseUrlCases) {
+      const spec = at(c.raw);
+      expect(throws(() => parseRoster(spec)), `parseRoster: ${c.why}`).toBe(!c.expect.ok);
+      expect(throws(() => rosterFromJsonSync(spec)), `rosterFromJson: ${c.why}`).toBe(!c.expect.ok);
+    }
+    // …and it agrees by IMPORTING the gate, not by carrying a fourth spelling of
+    // it. Behaviour alone cannot tell those apart today and would stop being
+    // able to the moment one of them drifted, which is the whole lesson of
+    // `source-bytes.test.ts`. Asserted last, so the rows above own the failure
+    // when the gate is merely wrong rather than merely copied.
+    const src = readFileSync(path.join(ccrcRoot, 'shared/roster-json.mjs'), 'utf8');
+    expect(src).toMatch(/^import \{ BASE_URL_OK \} from '\.\/base-url\.mjs';$/m);
+    // The loopback set has exactly two homes (`shared/base-url.ts` and its
+    // `.mjs` twin) and this file is neither of them.
+    expect(src).not.toContain("'127.0.0.1'");
+  });
+});
+
 describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
   const acct = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     id: 'claude', label: 'Claude', configDirSuffix: '.claude',
@@ -260,6 +354,53 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a non-boolean homeAble', roster(acct({ homeAble: 'yes' }))],
     ['an unknown telemetry', roster(acct({ telemetry: 'openai' }))],
     ['an unknown hue', roster(acct({ hue: 'chartreuse' }))],
+    // THE MECHANISM CHECK, added alone and measured red-then-green before the
+    // rows below it were trusted to this harness. `parseRoster` has refused a
+    // non-boolean `hidden` since the field landed (roster.ts:707-712, its
+    // reasoning comment at :702-706 and the `=== true` coercion at :713;
+    // pinned by roster.test.ts:141-146) and the mirror had never heard of the
+    // field at all — measured 2026-09-07: `grep -c hidden shared/roster-json.mjs` -> 0.
+    // So this roster was ACCEPTED by the deploy-side generator, which then
+    // rewrote a box's accounts.sh and wrappers for it, and REFUSED by the
+    // server on boot. The mirror being laxer than the parser is the one
+    // direction its own header (:49-52) says cannot be tolerated (D-1854).
+    ['a non-boolean hidden — a truthy "false" would erase an account', roster(acct({ hidden: 'false' }))],
+
+    // ── the secretsFile gate, on the two kinds it never covered (D-1855) ────
+    // Before this task, `shared/roster-json.mjs`'s two secretsFile gates (see
+    // its `HOISTED (D-1855)` comment) were both conjoined with
+    // `exec['kind'] === 'generated'` while `checkAccount`'s return spread the
+    // value unconditionally, so these paths reached `deploy/gen-wrappers.mjs`'s
+    // manifest unvalidated on `upstream` and `external` entries. Latent until
+    // now: no roster put `secretsFile` on a non-generated entry, and the task
+    // before this one is what creates the callers.
+    ['a parent-directory hop in an UPSTREAM secretsFile', roster(acct({ exec: { kind: 'upstream', secretsFile: '../.ssh/id_ed25519' } }))],
+    ['an absolute EXTERNAL secretsFile', roster(acct(), acct({ id: 'ext', configDirSuffix: '.ext', exec: { kind: 'external', secretsFile: '/etc/shadow' } }))],
+    ['a non-string EXTERNAL secretsFile', roster(acct(), acct({ id: 'ext', configDirSuffix: '.ext', exec: { kind: 'external', secretsFile: 7 } }))],
+
+    // ── provider ───────────────────────────────────────────────────────────
+    // Invisible to the ACCEPT direction: `provider` never reaches accounts.sh
+    // (shared/generate.mjs:206-238 emits ids, home-ability, CCRC_MEASURED, the
+    // upstream id, config dirs, labels and hues, and nothing else), so byte
+    // agreement stays green whether the mirror validates it or not. This table
+    // is the only half of the harness that can see it (D-1861).
+    ['an unknown exec.provider on a generated account', roster(acct({ exec: { kind: 'generated', provider: 'anthorpic' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an unknown exec.provider on an external account', roster(acct(), acct({ id: 'ext', configDirSuffix: '.ext', exec: { kind: 'external', provider: 'claude' } }))],
+    ['a non-string exec.provider', roster(acct({ exec: { kind: 'generated', provider: 7 } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+
+    // ── baseUrl ────────────────────────────────────────────────────────────
+    ['a compatible lane with no exec.baseUrl at all', roster(acct({ exec: { kind: 'generated', provider: 'compatible' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a plain-http exec.baseUrl to somewhere that is not this box', roster(acct({ exec: { kind: 'generated', provider: 'compatible', baseUrl: 'http://orchard-api/v1' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an exec.baseUrl carrying userinfo — a URL is not a place to keep a key', roster(acct({ exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://user:pass@orchard-api/v1' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an exec.baseUrl carrying a query string', roster(acct({ exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/v1?beta=true' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an unparseable exec.baseUrl', roster(acct({ exec: { kind: 'generated', provider: 'compatible', baseUrl: 'orchard-api' } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['an invalid exec.baseUrl on an EXTERNAL account, where it is declarative', roster(acct(), acct({ id: 'ext', configDirSuffix: '.ext', exec: { kind: 'external', provider: 'openrouter', baseUrl: 'http://orchard-api/v1' } }))],
+
+    // ── models ─────────────────────────────────────────────────────────────
+    ['exec.models on a provider that carries no model map', roster(acct({ exec: { kind: 'generated', provider: 'anthropic', models: { opus: 'a/b', sonnet: 'a/c', haiku: 'a/d', subagent: 'a/d' } } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['exec.models missing the subagent alias', roster(acct({ exec: { kind: 'generated', provider: 'openrouter', models: { opus: 'a/b', sonnet: 'a/c', haiku: 'a/d' } } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a model id with a space in it', roster(acct({ exec: { kind: 'generated', provider: 'openrouter', models: { opus: 'a b', sonnet: 'a/c', haiku: 'a/d', subagent: 'a/d' } } }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a selectable list that does not offer what opus routes to', roster(acct({ exec: { kind: 'generated', provider: 'openrouter', models: { opus: 'a/b', sonnet: 'a/c', haiku: 'a/d', subagent: 'a/d', selectable: [{ id: 'a/c' }, { id: 'a/d' }] } } }), acct({ id: 'up', configDirSuffix: '.up' }))],
     ['two accounts with the same id', roster(acct(), acct({ exec: { kind: 'generated' } }))],
     // A label reaches a ONE-LINE status bar (`_ccrc_label`) that
     // `server/src/pane/statusline.ts` parses back out of a tmux capture: an

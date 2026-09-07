@@ -58,6 +58,7 @@ const TREE_FILES = [
   'deploy/accounts.default.json',
   'shared/generate.mjs',
   'shared/mark.mjs',
+  'shared/base-url.mjs',
   'shared/roster-json.mjs',
   'shared/wrapper.mjs',
   'server/package.json',

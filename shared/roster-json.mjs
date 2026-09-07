@@ -66,13 +66,36 @@
 //     `process.exitCode` on import BY DESIGN as a one-shot CLI. A shared
 //     module a second caller merely imports must not inherit that exit
 //     status.
+//  3. `secretsFile` is validated on ALL THREE exec kinds, not only
+//     `generated` — and `provider`, `baseUrl` and `models` are validated and
+//     deliberately NOT returned. The two gates used to be conjoined with
+//     `kind === 'generated'` while the return spread the field unconditionally,
+//     which made this file LAXER than `parseRoster` on the exact direction its
+//     header above says cannot be tolerated (D-1855). The new fields are not
+//     returned because nothing downstream reads them: `generateAccountsSh`
+//     emits ids, home-ability, `CCRC_MEASURED`, the upstream id, config dirs,
+//     labels and hues, and `generateWrapperBody` reads `id`,
+//     `configDirSuffix`, `execKind` and `secretsFile`.
 //
-// Dependency-free on purpose: this file imports nothing, not even `node:*` —
-// bare-`node` runnable, no build step. That is NOT a blanket rule for every
-// file in `shared/`: `shared/mark.mjs` imports `node:crypto`, sanctioned
-// there (see that file's header) because `shared/*.mjs` is deploy-side
-// tooling the PWA never bundles, unlike `shared/*.ts`, where a `node:*`
-// import would break the client bundle. This file simply has no need for one.
+// One import, and only one: `./base-url.mjs`, the endpoint gate, which
+// imports nothing itself. Everything else here is a hand-kept copy, for the
+// reason above; the gate is not, for the reason at its import. That is NOT a
+// blanket rule for every file in `shared/`: `shared/mark.mjs` imports
+// `node:crypto`, sanctioned there (see that file's header) because
+// `shared/*.mjs` is deploy-side tooling the PWA never bundles, unlike
+// `shared/*.ts`, where a `node:*` import would break the client bundle. This
+// file simply has no need for `node:*`.
+
+// THE ONE IMPORT THIS FILE HAS. Every other rule from `shared/roster.ts` above
+// is a hand-kept copy, and the header (:49-52) explains why that is survivable:
+// this file may be STRICTER than the parser, never laxer. THE ENDPOINT GATE IS
+// NOT SURVIVABLE ON THOSE TERMS. A gate that drifted STRICTER here refuses a
+// roster the server boots on — a deploy that fails on bytes the server accepts,
+// which is D-1854's split verdict pointing the other way — so this one decision
+// is imported rather than mirrored. Task 2 ships `shared/base-url.mjs` for
+// exactly this caller and for `deploy/account-op.mjs`, with
+// `shared/base-url.d.mts` beside it and both driven over one case table.
+import { BASE_URL_OK } from './base-url.mjs';
 
 /** Mirrors `shared/roster.ts`'s `ID_RE`. An id becomes a filename under
  *  `~/.local/bin/`, a bash `case` pattern and a session-id prefix; ccd joins
@@ -97,6 +120,38 @@ const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
  *  A label reaches a one-line terminal status bar and the tmux-capture
  *  parser that reads it back; a control byte breaks both. */
 const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
+
+/** Mirrors `shared/providers.ts`'s `PROVIDER_IDS`, which is `Object.keys(PROVIDERS)`.
+ *  A LIST, never the table: the labels, credentials, env vars, connect methods,
+ *  probes and endpoints have exactly one home and a scan over `git ls-files`
+ *  measures that (`server/test/providers.test.ts`). This list is here for the
+ *  reason every other copy in this file is — a bare `node` cannot import the
+ *  TypeScript — and its agreement with `PROVIDER_IDS` is asserted element for
+ *  element by `gen-accounts.test.ts`, which is a stronger mechanism than the
+ *  one `HUES` above has: hues reach bash through `_ccrc_hue` and a divergent
+ *  order changes generated stdout, while `provider` reaches no bash at all
+ *  (§4.3 puts it in the lane's own `settings.json`). */
+const PROVIDER_IDS = new Set(['anthropic', 'openrouter', 'compatible', 'openai']);
+
+/** The providers whose lanes may carry `exec.models` — `PROVIDERS[p].apiKeyModels`.
+ *  Same rule as above; same agreement test. */
+const API_KEY_PROVIDERS = new Set(['openrouter', 'compatible']);
+
+/** The providers that ship NO default endpoint, so an absent `exec.baseUrl` is a
+ *  refusal rather than a fall-through — `PROVIDERS[p].baseUrlRequired`. */
+const BASE_URL_REQUIRED = new Set(['compatible']);
+
+/** Mirrors `shared/roster.ts`'s `MODEL_ID_RE`. Distinct from `ID_RE` above
+ *  because an OpenRouter id carries `/`, `.` and `:`. Compared to its original
+ *  SOURCE for source by `gen-accounts.test.ts`, not by behaviour: the last
+ *  regex copied into this file had its escape text emitted as the raw control
+ *  bytes it describes, behaving identically, and every suite stayed green
+ *  (`server/test/source-bytes.test.ts:5-15`). */
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
+
+/** Mirrors `shared/roster.ts`'s `MODEL_ALIASES` — the four keys ccd and Claude
+ *  Code route on. All four required when `models` is present. */
+const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
 const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
@@ -171,8 +226,14 @@ function checkAccount(raw, index) {
     bad(`account "${id}" has a missing or invalid exec.kind.`,
       `Set exec.kind for account "${id}" to "upstream", "generated" or "external".`);
   }
-  if (exec['kind'] === 'generated' && exec['secretsFile'] !== undefined
-      && typeof exec['secretsFile'] !== 'string') {
+  // HOISTED (D-1855). These two gates were conjoined with
+  // `exec['kind'] === 'generated'` while the return below spread
+  // `secretsFile` with no kind predicate at all, so an `upstream` or `external`
+  // entry carrying `'/etc/shadow'` or `'../.ssh/id_ed25519'` passed validation
+  // untouched and reached `deploy/gen-wrappers.mjs`'s manifest. Latent while no
+  // roster put the field on a non-generated entry; `parseRoster` now makes it
+  // legal on all three kinds, which is what created the callers.
+  if (exec['secretsFile'] !== undefined && typeof exec['secretsFile'] !== 'string') {
     bad(`account "${id}" has a non-string exec.secretsFile.`,
       `Set exec.secretsFile for account "${id}" to a string path relative to $HOME, or remove it.`);
   }
@@ -180,13 +241,103 @@ function checkAccount(raw, index) {
   // `""` and a trailing "/" both resolve to a directory rather than a file;
   // ".." escapes $HOME; a leading "/" ignores it entirely.
   if (
-    exec['kind'] === 'generated' && exec['secretsFile'] !== undefined
+    exec['secretsFile'] !== undefined
     && (exec['secretsFile'] === '' || exec['secretsFile'].startsWith('/') || exec['secretsFile'].endsWith('/')
       || exec['secretsFile'].includes('..') || !SECRETS_SAFE_RE.test(exec['secretsFile']))
   ) {
     bad(`account "${id}" has an invalid exec.secretsFile ${JSON.stringify(exec['secretsFile'])}.`,
       `Set exec.secretsFile for account "${id}" to a path relative to $HOME (e.g. ".cc-secrets/${id}-oauth.env") `
-      + 'using only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", never ending in "/".');
+      + 'using only letters, digits, ".", "_", "-" and "/" — never absolute, never containing "..", never ending in "/".');
+  }
+
+  // `provider`, `baseUrl` and `models` — validated here, returned by nothing.
+  // The emitter reads none of them (`shared/generate.mjs:206-238`) and neither
+  // does the wrapper writer, so returning them would be dead code in the one
+  // file in this tree no typechecker checks (`server/tsconfig.json` sets no
+  // `checkJs`). They are validated because the SERVER refuses to boot on them,
+  // and that is this file's whole job.
+  //
+  // These three gates are INVISIBLE to `gen-accounts.test.ts`'s byte-agreement
+  // direction, because none of the fields reaches `accounts.sh`. The REJECT
+  // table is the only half of that harness that covers them (D-1861), and it
+  // carries a row for each.
+  if (exec['kind'] !== 'upstream') {
+    if (exec['provider'] !== undefined && !PROVIDER_IDS.has(exec['provider'])) {
+      bad(`account "${id}" has an unknown exec.provider ${JSON.stringify(exec['provider'])}.`,
+        `Set exec.provider for account "${id}" to one of ${[...PROVIDER_IDS].join(', ')}, or remove it.`);
+    }
+    // `parseRoster` defaults an absent provider on a `generated` entry to
+    // "anthropic" and WARNS; the mirror does not warn (it emits nothing an
+    // operator reads at deploy time except refusals) but must agree about what
+    // is legal, so it defaults silently for the purpose of the two gates below.
+    const provider = exec['provider'] !== undefined
+      ? exec['provider']
+      : (exec['kind'] === 'generated' ? 'anthropic' : undefined);
+
+    if (exec['baseUrl'] !== undefined) {
+      // The IMPORTED gate, and the verdict is an OBJECT: `{ ok: true, url }` or
+      // `{ ok: false, reason }`, whose `reason` is already the refusal code
+      // every other surface prints. This file never needs `url` — the emitter
+      // and the wrapper writer read neither the endpoint nor anything derived
+      // from it — so it takes the reason and drops the rest.
+      const v = BASE_URL_OK(exec['baseUrl']);
+      if (!v.ok) {
+        const why = v.reason;
+        bad(`account "${id}" has an invalid exec.baseUrl ${JSON.stringify(exec['baseUrl'])}: ${why}.`,
+          `Set exec.baseUrl for account "${id}" to an https:// endpoint, or an http:// one on `
+          + '127.0.0.1, [::1] or localhost — with no user:password, no query string and no fragment.');
+      }
+    } else if (provider !== undefined && BASE_URL_REQUIRED.has(provider)) {
+      bad(`account "${id}" has provider "${provider}" and no exec.baseUrl: base-url-required.`,
+        `Set exec.baseUrl for account "${id}" — provider "${provider}" ships no default endpoint.`);
+    }
+
+    if (exec['kind'] === 'generated' && exec['models'] !== undefined) {
+      if (!API_KEY_PROVIDERS.has(provider)) {
+        bad(`account "${id}" declares exec.models on provider "${provider}", which carries no model map.`,
+          `Remove "models" from account "${id}"'s exec, or set exec.provider to one of `
+          + `${[...API_KEY_PROVIDERS].join(', ')}.`);
+      }
+      if (!isPlainObject(exec['models'])) {
+        bad(`account "${id}" has a non-object exec.models.`,
+          `Set exec.models for account "${id}" to an object with ${MODEL_ALIASES.join(', ')}, or remove it.`);
+      }
+      for (const alias of MODEL_ALIASES) {
+        const v = exec['models'][alias];
+        if (typeof v !== 'string' || !MODEL_ID_RE.test(v)) {
+          bad(`account "${id}" has a missing or invalid exec.models.${alias} ${JSON.stringify(v)}.`,
+            `Set exec.models.${alias} for account "${id}" to a model id: a letter or digit followed by `
+            + 'up to 127 of letters, digits, ".", "_", ":", "/" and "-".');
+        }
+      }
+      const sel = exec['models']['selectable'];
+      if (sel !== undefined) {
+        if (!Array.isArray(sel) || sel.length === 0) {
+          bad(`account "${id}" has an empty or non-array exec.models.selectable.`,
+            `Set exec.models.selectable for account "${id}" to a non-empty array of { "id": … } objects, `
+            + 'or remove it — absent means the four aliases and nothing else.');
+        }
+        sel.forEach((entry, i) => {
+          if (!isPlainObject(entry) || typeof entry['id'] !== 'string' || !MODEL_ID_RE.test(entry['id'])) {
+            bad(`account "${id}" has an invalid exec.models.selectable[${i}].`,
+              `Each entry must be an object with a model-id "id" and an optional string "label".`);
+          }
+          if (entry['label'] !== undefined && (typeof entry['label'] !== 'string' || entry['label'].length === 0)) {
+            bad(`account "${id}" has a non-string exec.models.selectable[${i}].label.`,
+              `Set that entry's "label" to display text, or remove it.`);
+          }
+        });
+        const offered = new Set(sel.map((c) => c['id']));
+        for (const alias of MODEL_ALIASES) {
+          if (!offered.has(exec['models'][alias])) {
+            bad(`account "${id}" routes ${alias} to ${JSON.stringify(exec['models'][alias])}, which its `
+              + 'exec.models.selectable does not offer.',
+              `Add it to exec.models.selectable for account "${id}", or point exec.models.${alias} at a `
+              + 'model the list already offers.');
+          }
+        }
+      }
+    }
   }
 
   const homeAble = raw['homeAble'];
@@ -199,6 +350,20 @@ function checkAccount(raw, index) {
   if (telemetry !== 'anthropic' && telemetry !== 'none') {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
       `Set "telemetry" for account "${id}" to "anthropic" or "none".`);
+  }
+
+  // Mirrors `parseRoster`'s `hidden` gate (shared/roster.ts:707-712, whose
+  // reasoning comment is :702-706). OPTIONAL
+  // — absent is false, which is what makes the field additive to rosters that
+  // predate it — but a PRESENT value must be a boolean. `"false"` is a truthy
+  // string, and truthiness here removes an account from every surface that
+  // lists one. This file had never heard of the field, so a roster carrying
+  // `hidden: "false"` generated cleanly here and refused to boot on the server
+  // (D-1854).
+  const hidden = raw['hidden'];
+  if (hidden !== undefined && typeof hidden !== 'boolean') {
+    bad(`account "${id}" has a non-boolean hidden.`,
+      `Set "hidden" to true or false for account "${id}", or remove the key.`);
   }
 
   // Optional — `parseRoster` auto-assigns one when it is absent, and the
