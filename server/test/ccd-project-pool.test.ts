@@ -1116,3 +1116,19 @@ describe('pools-v1 is safe to advertise before --cross-pool lands on every verb 
     expect(journal).toContain('"id":"demo-pool-a"');
   });
 });
+
+describe('the swap.log project-line comment: rehome and auto-pool are real now', () => {
+  it('`_lc_done rehome` and `aff_verb=auto-pool` both still appear (the re-measurement the comment cites)', () => {
+    // Task 7 (docs-honesty) corrected `cmd_project_pool`'s swap.log comment
+    // from "neither effect exists yet: `rehome` is spec-only, `auto-pool`
+    // appears nowhere in this file" to a statement that both now land, once
+    // `_auto_swap_check`'s home re-seed and affinity arm started actually
+    // writing them. The comment names its own re-measurement
+    // (`grep -n '_lc_done rehome\|aff_verb=auto-pool' ccd/ccd`) — re-run
+    // that same pattern here so a regression that silently dropped either
+    // write reds this suite rather than only leaving the prose stale.
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src, '`_lc_done rehome` no longer appears — the swap.log comment\'s claim is now false').toMatch(/_lc_done rehome/);
+    expect(src, '`aff_verb=auto-pool` no longer appears — the swap.log comment\'s claim is now false').toMatch(/aff_verb=auto-pool/);
+  });
+});

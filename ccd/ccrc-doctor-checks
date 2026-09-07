@@ -2785,9 +2785,21 @@ _check_pools() {
   # sentinel first line, printed only when the source and the `declare -F`
   # both succeeded, is what says MEASURED. Nothing else can — an empty
   # vocabulary and a failed read produce the same empty string by
-  # construction. `|| :` inside the loop keeps a `case` that matches no arm
-  # (an untagged account — the ordinary case) from making the whole
-  # substitution look like a failure.
+  # construction. `|| :` inside the loop is KEPT — it costs nothing — but it
+  # is not what stands between an ordinary untagged account and a false
+  # `unmeasured` against the file this fleet actually runs. Measured on bash
+  # 5.2.21, a `case` that matches no arm returns rc 0, and an empty
+  # `case … esac` — the exact shape `shared/generate.mjs` emits for
+  # `_ccrc_pool` unconditionally, and documents in its own comment ("An
+  # empty `case … esac` is valid bash and answers empty at rc 0, which is
+  # exactly the contract") — returns 0 too. So `_ccrc_pool` cannot fail on
+  # an untagged or unknown id against a GENERATED `accounts.sh`, which is
+  # this file's only writer, and the `measured` sentinel above already
+  # carries the third state on its own, unconditionally. What the `|| :`
+  # nets is an OUT-OF-CONTRACT `_ccrc_pool` — one whose body does not honour
+  # the generator's own "case ends 0" promise — not a shape anyone has
+  # measured to exist on this fleet: nothing writes `accounts.sh` but
+  # `shared/generate.mjs`.
   local known="" vocab=unmeasured raw=""
   if [ -r "$HOME/.ccrc/accounts.sh" ]; then
     raw="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \

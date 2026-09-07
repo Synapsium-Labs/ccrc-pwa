@@ -16,7 +16,7 @@
 //     REAL generated `accounts.sh`, which is the only thing that can prove the
 //     generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
@@ -328,5 +328,26 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
     expect(r.stderr).toContain('no account available for placement —');
     expect(r.stderr).not.toContain('in pool');
     expect(r.stderr).not.toContain(':pool=');
+  });
+});
+
+describe('the `_pool_ok` header states a call-site count that stays honest', () => {
+  it('the number the header claims equals grep -c \'_pool_ok \' ccd/ccd', () => {
+    // Task 7 (docs-honesty) corrected this header from "kept for wave 2b,
+    // not consumed today" to a plain count, exactly the kind of numeric
+    // claim that goes stale the next time a call site is added or removed
+    // without the prose being updated alongside it. The header's own
+    // sentence names the grep that produces the number ("Measured:
+    // `grep -c '_pool_ok ' ccd/ccd` finds N call sites now") — re-run that
+    // same pattern here and require the stated N to still be true.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('THE THIRD CODE IS CONSUMED TODAY');
+    expect(from, 'the _pool_ok header could not be found').toBeGreaterThan(-1);
+    const block = src.slice(from, from + 400);
+    const claimed = block.match(/finds (\d+) call sites now/);
+    expect(claimed, 'the header no longer states a call-site count in the expected shape').not.toBeNull();
+    const stated = Number(claimed![1]);
+    const live = (src.match(/_pool_ok /g) || []).length;
+    expect(live, `grep -c '_pool_ok ' ccd/ccd now finds ${live}, but the header still claims ${stated}`).toBe(stated);
   });
 });

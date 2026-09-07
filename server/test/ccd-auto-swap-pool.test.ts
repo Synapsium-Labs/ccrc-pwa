@@ -516,3 +516,21 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
     expect(noticeLines(), 'one banner, not five').toHaveLength(1);
   });
 });
+
+describe('_reg_purge`s dot-free inventory', () => {
+  it('names the three per-id fields this build adds', () => {
+    // `_reg_purge` matches the SUFFIX SHAPE, not a list, so the purge itself is
+    // already right — but ccd's own comment says an inventory that omits files
+    // is one a future reader trusts and a future writer copies. These three are
+    // registry fields under the one-dot rule and purge with the row; that is
+    // exactly why they need no lifecycle-manifest entry of their own, and this
+    // is the only place that claim is written down.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('The dot-free claim, measured against every registry file');
+    expect(from, 'the inventory comment could not be found').toBeGreaterThan(-1);
+    const block = src.slice(from, from + 1400);
+    for (const f of ['`crosspool`', '`stranded`', '`strandnotify`']) {
+      expect(block, `${f} is written by this build and missing from the inventory`).toContain(f);
+    }
+  });
+});
