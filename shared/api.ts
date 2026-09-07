@@ -4752,14 +4752,17 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
-  | 'rehome'        // A session's HOME account moving. The FIRST emitter has
-                    // landed: the 5-second tick's own re-seed
-                    // (`_auto_swap_check`, account pools §5.5.4, wave 2b,
-                    // `ccd/ccd:11991`) journals `meas.reason pool` when a
-                    // project's retag makes a pinned `.home` disagree with
-                    // it. Task 6 owes the SECOND emitter, `cmd_prefer` (`ccd
-                    // prefer`, an operator's own `.home` write), which will
-                    // journal `meas.reason prefer` at the same act.
+  | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
+                    // landed (account pools, wave 2b): the 5-second tick's
+                    // own re-seed (`_auto_swap_check`, §5.5.4 — grep
+                    // `ccd/ccd` for its `_lc_done rehome` call) journals
+                    // `meas.reason pool` when a project's retag makes a
+                    // pinned `.home` disagree with it; `cmd_prefer` (`ccd
+                    // prefer`, an operator's own `.home` write) journals
+                    // `meas.reason prefer` at the same act — the one
+                    // unconditional `.home` writer in that file, and until
+                    // it landed the only account decision the journal could
+                    // not show.
                     // DISTINCT FROM `swap`: `swap` moves the session it is
                     // running on, `rehome` moves the account it returns to.
                     // This vocabulary is wire-facing and additive-only, so a

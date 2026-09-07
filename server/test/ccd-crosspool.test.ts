@@ -26,9 +26,11 @@
  * `cmd_prefer --cross-pool` and `cmd_ensure`'s strand clear.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness }
+  from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
@@ -391,5 +393,144 @@ describe('the deploy window (§5.8.4)', () => {
     // while never actually reaching the child process — a mutation that made
     // the whole deploy-window mechanism inert while this suite stayed green.
     expect(argv).toContain('CCD_SWAP_AUTO=1 exec ');
+  });
+});
+
+/** Everything `cmd_start`/`cmd_ensure` reach that must not leave the fixture.
+ *  `_alive` is forced false: WS_ADD's `tmux() { :; }` returns 0 for
+ *  `has-session`, which would send every case down the already-running no-op. */
+const START_STUBS = `${WS_ADD} _alive() { return 1; }; _have_systemctl() { return 1; };`;
+
+/** `shFail` above is built on `h.sh`'s `execFileSync`, which — like every
+ *  Node sync exec convenience wrapper — pipes a SUCCESSFUL child's stderr
+ *  straight to the parent's own stderr rather than capturing it, so a
+ *  warning emitted on a zero-exit run (the revival case just below) is
+ *  invisible to `shFail`'s `stderr: ''` success arm: the assertion would
+ *  read empty forever, pass or fail, regardless of what `cmd_start` actually
+ *  printed. `ccd-start-id.test.ts`'s own `run()` hit the identical problem
+ *  for the registry-wins warning and fixed it the same way: `spawnSync`
+ *  captures both streams unconditionally. */
+const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
+  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+    encoding: 'utf8', cwd: h.home, timeout: 15000,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+  });
+  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+};
+
+describe('cmd_start and the pool', () => {
+  it('refuses to CREATE out of pool, and touches nothing', () => {
+    tagPool('demo', 'pool-a');
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    const r = shFail(`${START_STUBS} cmd_start claude-b demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("pool-mismatch: claude-b is in pool 'pool-b'");
+    expect(r.stderr).toContain('ccd start --cross-pool claude-b demo');
+    expect(fs.existsSync(reg('claude-b-demo.uuid')), 'nothing was created').toBe(false);
+  });
+
+  it('WARNS rather than refusing on a REVIVAL — the registry already won the account', () => {
+    // Ruling 5's auto path owns this move; refusing here would refuse to
+    // restart a session the retag put in the wrong pool.
+    tagPool('demo', 'pool-a');
+    const wd = path.join(h.home, 'projects', 'demo');
+    fs.mkdirSync(wd, { recursive: true });
+    h.sh(`_reg_set claude-b-demo uuid ${UUID}
+      _reg_set claude-b-demo wrapper claude-b
+      _reg_set claude-b-demo project demo
+      _reg_set claude-b-demo workdir ${wd}`);
+    const r = run(`${START_STUBS} cmd_start claude-b demo`);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain("which is not in project 'demo''s pool 'pool-a'");
+    expect(h.reg('claude-b-demo', 'wrapper')).toBe('claude-b');
+  });
+
+  it('creates WITH the flag, seeds the crossed home, and writes the marker', () => {
+    tagPool('demo', 'pool-a');
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    h.sh(`${START_STUBS} cmd_start --cross-pool claude-b demo`);
+    expect(h.reg('claude-b-demo', 'wrapper')).toBe('claude-b');
+    expect(h.reg('claude-b-demo', 'home')).toBe('claude-b');
+    expect(h.reg('claude-b-demo', 'crosspool')).toMatch(/^\d{10} pool-a claude-b$/);
+  });
+
+  it('a REVIVAL clears a standing strand', () => {
+    seedRow();
+    h.sh(`_reg_set ${ID} stranded "1700000000 no candidate"`);
+    h.sh(`${START_STUBS} cmd_start ${ID}`);
+    expect(h.reg(ID, 'stranded')).toBeNull();
+  });
+});
+
+describe('cmd_enable strips the flag BEFORE it computes the id', () => {
+  it('journals `enable` for `<wrapper>-<project>`, never for the flag', () => {
+    tagPool('demo', 'pool-a');
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    h.sh(`${START_STUBS} cmd_enable --cross-pool claude-b demo`);
+    const rows = eventsOf(h.home, 'enable');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!['id']).toBe('claude-b-demo');
+    expect(h.reg('claude-b-demo', 'crosspool'), 'the flag reached cmd_start too')
+      .toMatch(/^\d{10} pool-a claude-b$/);
+  });
+});
+
+describe('cmd_prefer', () => {
+  it('journals a `rehome` for the first time (D-1677)', () => {
+    seedRow(); tagPool('demo', 'pool-a');
+    expect(h.sh(`cmd_prefer ${ID} claude-a`)).toContain(`home for ${ID} set to claude-a`);
+    expect(h.reg(ID, 'home')).toBe('claude-a');
+    const rows = eventsOf(h.home, 'rehome');
+    expect(rows).toHaveLength(1);
+    expect(measOf(rows[0]!)).toMatchObject({ from: 'claude', home: 'claude-a', reason: 'prefer' });
+    expect(decOf(rows[0]!)['crosspool'], 'nothing was crossed').toBeUndefined();
+    expect(h.reg(ID, 'crosspool')).toBeNull();
+  });
+
+  it('refuses a crossing that was not asked for', () => {
+    seedRow(); tagPool('demo', 'pool-a');
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('pool-mismatch: claude-b is in pool');
+    expect(r.stderr).toContain(`ccd prefer --cross-pool ${ID} claude-b`);
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('`--cross-pool` moves the HOME, marks it, and the re-seed leaves it alone', () => {
+    // Without the marker this is a no-op within 5 s: the re-seed would rewrite
+    // `.home` back into pool-a on the very next tick.
+    seedRow(); tagPool('demo', 'pool-a'); writeLimits('claude-a', 5, 5);
+    h.sh(`cmd_prefer --cross-pool ${ID} claude-b`);
+    expect(h.reg(ID, 'home')).toBe('claude-b');
+    expect(h.reg(ID, 'crosspool')).toMatch(/^\d{10} pool-a claude-b$/);
+    expect(decOf(eventsOf(h.home, 'rehome')[0]!)['crosspool']).toBe('1');
+    tick(QUIET, 10);
+    expect(h.reg(ID, 'home'), 'the re-seed must not undo a deliberate crossing').toBe('claude-b');
+    expect(eventsOf(h.home, 'rehome'), 'and it must not journal one either').toHaveLength(1);
+  });
+});
+
+describe('cmd_ensure clears the strand only for a human act', () => {
+  const strand = (): void => { h.sh(`_reg_set ${ID} stranded "1700000000 no candidate"`); };
+
+  it('an operator `ccd ensure` clears it', () => {
+    seedRow(); strand();
+    h.sh(`${START_STUBS} cmd_ensure ${ID}`);
+    expect(h.reg(ID, 'stranded')).toBeNull();
+  });
+
+  it('a supervisor re-entering its OWN unit keeps it', () => {
+    // CCD_IN_UNIT is `cmd_supervise`'s own marker. Clearing there would erase
+    // the marker `_auto_swap_check` wrote seconds earlier, in a different
+    // process, and the next tick would re-mark and re-banner.
+    seedRow(); strand();
+    h.sh(`${START_STUBS} cmd_ensure ${ID}`, { CCD_IN_UNIT: '1' });
+    expect(h.reg(ID, 'stranded')).not.toBeNull();
+  });
+
+  it('`_swap_refuse`s in-process fallback keeps it too — the second guard', () => {
+    seedRow(); strand();
+    h.sh(`${START_STUBS} CCD_KEEP_SWAPBLOCK=1 cmd_ensure ${ID}`);
+    expect(h.reg(ID, 'stranded')).not.toBeNull();
   });
 });

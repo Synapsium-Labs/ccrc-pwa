@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=36719063d76d51d67477275312d53681caa6e325bd9c34667cee49d826416675
+# ccrc:generated 1 sha256=dd9ff6932d4b8e30986baf9dd24e678782c0838628c7653fb34340b37b45f81a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12953,6 +12953,21 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # project, and there is NO WORKDIR TO INVENT from an id alone. A single
   # argument with no registry row is therefore refused with the creating
   # form's usage in the message, never resolved to `$PROJECTS_ROOT/<id>`.
+  #
+  # `--cross-pool` IS STRIPPED BEFORE THE ARITY RULE, exactly as `cmd_stop`
+  # strips `--surface`: `$# -ge 2` is what distinguishes the creating form from
+  # the id form, so a flag left in argv would make `ccd start --cross-pool <id>`
+  # read as a creation and mint `--cross-pool-<id>`.
+  local cross="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cross-pool) cross=1; shift ;;
+      --)           shift; args+=("$@"); break ;;
+      *)            args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"    # bash >= 4.4: an empty array here is not an unbound-
+                         # variable error under `set -u`, as in cmd_swap.
   local id wrapper="" project="" workdir=""
   if [[ $# -ge 2 ]]; then
     wrapper="$1"; project="$2"; workdir="${3:-}"
@@ -13005,6 +13020,26 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
 
+  # ── POOL POLICY (§5.5.5), CREATION ONLY ──────────────────────────────────
+  # Placed here rather than at the registry-wins block above because `project`
+  # is only resolved on BOTH forms by the block above it; `regw` is what makes
+  # it creation-only, and that is the whole correctness argument. With a
+  # registry row the registry's account has already WON (the block above), and
+  # `wrapper` is no longer the caller's argument, so a refusal here would
+  # refuse a REVIVAL of a session a retag put in the wrong pool — which
+  # ruling 5 moves at the next idle boundary instead. At most a warning.
+  local pps prc
+  pps=$(_project_pool_state "$project")
+  _pool_ok "$wrapper" "$pps"; prc=$?
+  if [[ -z "$regw" ]]; then
+    [[ "$prc" -eq 2 ]] \
+      && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+    [[ "$prc" -eq 1 && -z "$cross" ]] \
+      && die "pool-mismatch: $wrapper is in pool '$(_acct_pool "$wrapper")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd start --cross-pool $wrapper $project"
+  elif [[ "$prc" -eq 1 ]]; then
+    echo "ccd: warn: $id lives on $wrapper, which is not in project '$project''s pool '${pps#named }' — the auto-swapper relocates it at the next idle boundary" >&2
+  fi
+
   if _alive "$id"; then
     # M5's shape, reachable from a keyboard: a live pane whose unit was never enabled, or was
     # disabled without `--now` some other way. A bare `ccd start` staying a pure no-op here is
@@ -13033,6 +13068,10 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
+  # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
+  # already pinned home to this wrapper, so the marker's account clause is
+  # satisfied by BOTH `wrapper` and `home` from the first tick onward.
+  [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "${pps#named }" "$wrapper"
   local mode=new; [[ "$(_reg_get "$id" started)" == "1" ]] && mode=resume
   # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
   # is the human act §4.4 names as "what would bring this back" (whether typed
@@ -13040,6 +13079,9 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # reasserted the real account above), so a stale refusal must not go on
   # shadowing it.
   rm -f "$REG/$id.swapblocked"
+  # …and a stale strand, at the same altitude and for the same reason: `ccd
+  # start <id>` is the human act §4.4 names as "what would bring this back".
+  _strand_clear "$id"
   # And a stale deliberate-stop stamp, at the same altitude and for the same
   # reason (§4.1: "cleared by ccd start, ccd enable and any successful
   # spawn"). `_spawn`'s own clear only fires on prompt_rc==0, and on THIS path
@@ -13143,6 +13185,13 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   #     visible — the same idiom, and the same argument, as CCD_IN_UNIT itself.
   if [[ "${CCD_IN_UNIT:-}" != 1 && "${CCD_KEEP_SWAPBLOCK:-}" != 1 ]]; then
     rm -f "$REG/$id.swapblocked"
+    # THE STRAND SHARES `swapblocked`'s ARGUMENT VERBATIM, both guards
+    # included. `_auto_swap_check` writes `.stranded` and, seconds later in a
+    # DIFFERENT process, `cmd_supervise` re-enters this function — clearing
+    # there would erase the marker and the next tick would re-mark and
+    # re-banner. Outside this block it would also be erased by `_swap_refuse`'s
+    # in-process `|| cmd_ensure` fallback.
+    _strand_clear "$id"
   fi
   # And the mirror of cmd_start's stopped-clear (see its comment for the full
   # argument): `_spawn`'s success-only clear cannot reach the supervised path
@@ -14268,12 +14317,41 @@ cmd_swap_self() {   # target — run from INSIDE a cc session (terminal, web, or
   cmd_swap "$id" "$target"
 }
 
-cmd_prefer() {   # id wrapper — set a session's HOME account (auto-swap keeps it here, and returns
-  # here whenever home is free again). Default home = the wrapper in the id prefix.
+cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (auto-swap keeps it
+  # here, and returns here whenever home is free again). Default home = the
+  # wrapper in the id prefix.
+  local cross="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cross-pool) cross=1; shift ;;
+      --)           shift; args+=("$@"); break ;;
+      *)            args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"
   local id="${1:?usage: ccd prefer <id> <wrapper>}" w="${2:?usage: ccd prefer <id> <wrapper>}"
   _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  # Shell-only: no whitelist entry and no CCD_ARGV builder, so no route can
+  # reach this. The pool rule still applies — the auto-swapper would otherwise
+  # re-seed this home away on the next tick and the operator would watch their
+  # own choice evaporate.
+  local project pps prc old
+  project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
+  _pool_ok "$w" "$pps"; prc=$?
+  [[ "$prc" -eq 2 ]] \
+    && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+  [[ "$prc" -eq 1 && -z "$cross" ]] \
+    && die "pool-mismatch: $w is in pool '$(_acct_pool "$w")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd prefer --cross-pool $id $w"
+  old=$(_home_for "$id")
   _reg_set "$id" home "$w"
+  local lc_cross=()
+  [[ "$prc" -eq 1 && -n "$cross" ]] \
+    && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }
+  # THE ONE UNCONDITIONAL `.home` WRITER IN THIS FILE, and until now the only
+  # account decision that left no record at all — so the one move an operator
+  # makes by hand was the one the journal could not show.
+  _lc_done rehome "$id" "" meas.from "$old" meas.home "$w" meas.reason prefer "${lc_cross[@]}"
   echo "home for $id set to $w"
 }
 
@@ -14285,6 +14363,18 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # grant no route builds. §3.4 gives it the same one-argument id form as `start` — it takes the
   # SAME two shapes, so it needs its own usage line rather than borrowing start's, or a mistyped
   # `ccd enable` would answer as a verb the operator did not type.
+  # STRIPPED BEFORE `_id`, and that ordering is the whole point: `_id "$1" "$2"`
+  # on an unstripped argv mints `--cross-pool-<wrapper>` and this verb journals
+  # `enable` against a session id that does not exist.
+  local cross="" args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cross-pool) cross=1; shift ;;
+      --)           shift; args+=("$@"); break ;;
+      *)            args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"
   [[ $# -ge 1 ]] || die "usage: ccd enable <id> | ccd enable <wrapper> <project> [workdir]"
   # The id is computed the same way cmd_start computes it — never trusted from
   # a raw argument — so this line names the row cmd_start actually touched,
@@ -14295,7 +14385,7 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
   _lc_done enable "$id" ""
-  cmd_start "$@" || return $?
+  cmd_start ${cross:+--cross-pool} "$@" || return $?
   echo "enabled boot-persistence for $id"
 }
 
