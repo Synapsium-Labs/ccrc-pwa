@@ -2042,3 +2042,170 @@ is never a ledger number.
 - **D-1678** (Task 6) — the panel's design placed `cmd_ensure`'s strand clear three incompatible ways; it
   lives INSIDE the existing `CCD_IN_UNIT`/`CCD_KEEP_SWAPBLOCK` block, sharing `swapblocked`'s argument
   verbatim — a supervisor re-entering its own unit is not a revival. (spec §12 P-17)
+
+
+### Found during execution (2026-09-07) — awaiting allocation
+
+**Twenty-seven, batched into ONE `deviation-request` to the coordinator BEFORE Task 8's gate**, per the wave brief's
+item 8: `dtbd.test.ts` scans tracked file CONTENTS, so the branch cannot be green while a placeholder lives, and a gate
+green on a tree that still carried one proves nothing about the tree that gets pushed. Numbers are substituted here and
+at every reference, and Task 8's gates then re-run on the substituted tree.
+
+Every entry below was MEASURED, not inferred, and most are defects in this plan rather than in its execution: a fixture
+that could not distinguish the shipped guard from its mutation, a dictated comment asserting a lock that does not fire,
+a mutation row whose named red lives in a file three tasks away, a Global Constraint that forbids touching the file the
+plan's own mandated emission requires. Three entries (`mutation-blast-radius`, `anchor-drift-within-commit`,
+`wire-suites-outside-blast-radius`) are METHOD findings kept because each one let a false claim reach a ledger or a
+comment before review caught it.
+
+- **D-TBD-strand-why-order-unmeasured** (Task 1) — the plan dictated a `_strand_why` case whose expected string is
+  reachable under ANY predicate ordering: no fixture candidate failed two predicates at once, so reversing the three
+  arms left the suite 9/9 green while `ccd/ccd` asserted the order in caps. The plan's own inline comment inverted
+  `_avail`'s documented "UNKNOWN IS AVAILABLE" rule, claiming an unmeasured account would otherwise read `limit`.
+  Fixed by putting `claude-a` at the ceiling as well as in the wrong pool. Class: a guard claiming more than it measures.
+- **D-TBD-strand-comments-present-tense** (Task 1) — two comments the plan dictated verbatim assert Task 2's and
+  Task 3's machinery as present fact (`_auto_swap_check` calling the strand helpers; `_swap_target`'s loop having a
+  pool predicate). Both false at Task 1's commit. Re-spelled in the obligation tense. The wave brief's item 3 names
+  this class as wave 2a's most repeated defect; it was reintroduced BY the plan text.
+- **D-TBD-arith-census-five** (Task 1) — `ccd-arith-containment.test.ts`'s prose counts five swept arithmetic sites
+  in two places; `_strand_mark`'s `strandnotify` floor makes six, and the plan's Step 5 added the row without the prose.
+- **D-TBD-cross-pool-lock-per-verb** (Task 5, pre-flight Ruling B) — the plan dictates a `cmd_swap` comment saying
+  `--cross-pool` is "rejected by `_is_valid_wrapper` as a second lock on the target slot". Measured false for `swap`:
+  the flag is collected by the `*)` arm and lands in the `id` slot, which is never wrapper-validated; what
+  `_is_valid_wrapper` refuses is the SHIFTED TARGET, and on a session id colliding with a roster id even that does not
+  fire — the refusal is `no registry for '--cross-pool'`. **Not an inheritance from D-1798: the plan's comment is dated
+  2026-09-05 and D-1798's measurement 2026-09-06, so this is an INDEPENDENT instance of the same wrong belief** (the
+  coordinator measured the dating and is amending D-1798 to name this second home). D-1742's class exactly — the plan
+  mandating a comment nothing holds — and it would have shipped into `ccd/ccd` as production prose asserting a lock
+  that does not fire. Coordinator ruled it MUST be numbered.
+> **WITHDRAWN — the D-1798 pin updates are NOT a deviation.** The coordinator ruled it explicitly: updating the
+> four D-1798 pins is "expected work, and the count error is mine to fix in the ledger". Kept here only so the
+> withdrawal is visible rather than the entry silently vanishing. My Rulings D and E are likewise not deviations
+> (process choices about where obligations 2/3/9 get done).
+
+- **D-TBD-pools-block-census-enrolment** (Tasks 1, 5, 6) — `pools-existence-pairing.test.ts` DISCOVERS pools-relevant
+  functions and `toEqual`s them against a hand-enumerated `CCD_BLOCKS`, so every new `ccd/ccd` function that
+  interpolates `$POOLS_DIR` must be enrolled or the suite reds. The plan names that file in no task.
+- **D-TBD-ownership-restamp** (Tasks 1-7) — every `ccd/ccd` edit must re-stamp the `# ccrc:generated 1 sha256=`
+  provenance marker or `ownership.test.ts` reds. The plan says so in no task, and seven tasks edit that file.
+- **D-TBD-wave2a-claims-falsified** (Task 7, brief obligations 2+3) — six wave-2a comments assert as present fact what
+  this wave falsifies: `_project_pool_state`'s "NO CALLER OF `_pool_ok` BRANCHES THREE WAYS TODAY", `_pool_ok`'s "THE
+  THIRD CODE IS KEPT FOR WAVE 2b, NOT CONSUMED TODAY", `cmd_caps`'s "`--cross-pool` … appears in `ccd/ccd` only as
+  comment text … no verb parses it", `cmd_project_pool`'s "Until wave 2b emits them, this line's justification is a
+  promise", and `cmd_swap`'s "Manual swaps may target ANY valid wrapper; the pool policy only constrains auto-swaps".
+- **D-TBD-doctor-pool-net** (Task 7, brief obligation 9) — `_check_pools`'s comment calls the `|| :` after
+  `_ccrc_pool "$a"` load-bearing. Not reproducible: measured on bash 5.2.21, a non-matching `case` returns 0 and an
+  EMPTY `case … esac` returns 0, and `shared/generate.mjs` emits exactly that shape unconditionally and says so in its
+  own docstring. The third state is held by the unconditional `measured` sentinel. Comment softened; `|| :` kept.
+  **BOUNDARY on the softening (coordinator):** the replacement must NOT say "a net against a hand-written
+  `accounts.sh` whose `_ccrc_pool` ends on a failing command" — that asserts a shape nobody has measured to exist,
+  since `shared/generate.mjs` is the file's only writer. It must say the net covers an OUT-OF-CONTRACT input and NAME
+  it as out of contract, or one unmeasured claim is traded for another a level down. The bash-5.2.21 measurement is
+  evidence about bash, not about which files exist — obligation 7's FILE axis, on the obligation that carries it.
+- **D-TBD-spec-plan-crosspool-namespace** (Task 5) — spec §5.5.5 prose says `meas.crosspool 1` on the lifecycle row
+  while spec §14 O6 rules `dec.crosspool` and the plan implements `dec.`. The plan and the ruling agree; the prose is
+  the spec's own internal slip and is what a later reader would copy.
+- **D-TBD-crosspool-home-clause-unmeasured** (Task 2) — the plan's own case for the crossing marker is written with
+  `cur == home`, which takes `_swap_target`'s unconditional "home is fine: stay" shortcut and is therefore green on
+  pre-Task-2 code; the `[[ -n "$cross_home" ]] ||` escape in the home-recovered branch — the half the case's NAME
+  claims to prove ("admits the crossed home") — is not measured by any fixture in this task. Same class as
+  D-TBD-strand-why-order-unmeasured: a guard claiming more than its fixture can distinguish. UNDER REVIEW.
+- **D-TBD-crosspool-absent-vs-no** (Task 2) — the plan predicted `_crosspool_valid`'s red would arrive as
+  `command not found` making `h.sh` throw. Measured otherwise: the test idiom `_crosspool_valid … && echo yes || echo no`
+  absorbs rc 127, so PER CALL an absent function and a function answering NO are the same observation. RESCOPED after
+  review: at the SUITE level the discrimination survives — renaming `_crosspool_valid` away reds two tests — so the
+  defect is the plan's unreachable red-first prediction plus the standing rule it hides, which is that a describe built
+  on that idiom must carry at least one POSITIVE case or a deleted function reads green. The idiom is reused by Tasks 4-6.
+- **D-TBD-tick-mutation-rows-unmeasurable** (Task 3, pre-flight Ruling A) — two of the plan's nine mutation rows for
+  the tick could not be measured as written: the `_reg_set` -> `_ws_seed_home` row stayed GREEN against the plan's own
+  fixtures (no case carried a pre-existing wrong-pool `.home`, and `_ws_seed_home` never clobbers, so the mutation was
+  invisible), and row 44's named red lives in `ccd-crosspool.test.ts`, a file Tasks 4-6 create and which does not exist
+  when Task 3 runs. **A mutation table that cannot execute where it is written is a defect in the plan, not a licence
+  to skip** (coordinator's words). D-1741's class — a guard that would have shipped unproven. Both fixtures were
+  written IN PLACE during execution rather than deferred, and Task 4's review then measured that the account-clause
+  row is also covered by the same new fixture, so nothing in this wave is scheduled-but-unproven. Coordinator ruled it
+  MUST be numbered. Third and fourth instances of the wave's recurring class.
+- **D-TBD-rehome-l0-doc-stale** (Task 3) — `shared/api.ts`'s `LifecycleAct` union documents `rehome` as "RESERVED, and
+  nothing emits it yet — measured, … with no `_lc_emit` naming it", and separately as a future "will move". Wave 2a
+  wrote it as a promise about wave 2b; the tick's re-seed is now that emitter, so the paragraph is false in BOTH tense
+  directions at once while naming the grep that refutes it. Corrected here under an explicit override of the plan's
+  "no shared file is touched" constraint — comment text only, no type, value, wire field or behaviour.
+- **D-TBD-strand-clear-on-destination-unmeasured** (Task 3) — the plan's mutation table has no row for the
+  `_strand_clear` that fires when `_swap_target` DOES answer a destination; replacing that line with `:` leaves the
+  whole 32-test file green. Not cosmetic: the marker is `_strand_mark`'s own debounce, so a surviving marker silences
+  the row's NEXT genuine strand in both `swap.log` and `notify.sh` — the silent strand this wave abolishes,
+  reintroduced for exactly the rows that already hit it once.
+- **D-TBD-crossed-fold-wrapper-vs-home** (Task 3) — the tick folds `_crosspool_valid`'s `wrapper` and `home` arms into
+  one `crossed` flag while `_swap_target` deliberately keeps them apart, and the plan's row-44 fixture seeds a row
+  where both arms name the same account, so three separate mutations stay green. Ruled: KEEP the fold (an automatic
+  re-seed during a deliberate crossing is the hazard the marker exists to prevent), pin the behaviour, and document
+  the cost — a wrong-pool home stays unfixed for the life of the crossing. Operator may revisit in wave 3+.
+- **D-TBD-crosspool-tick-undecidable-destroys** (Task 4) — the plan's `_crosspool_tick` re-derives WHY `_crosspool_valid`
+  failed from `"$pps" != "named ${pool:-}"`, so every non-`named-<stored>` state takes the retag arm — `unreadable` and
+  `malformed` included. Measured in a fixture HOME: `chmod 000` on the tag for one tick removes the operator's crossing
+  marker irreversibly and writes `crosspool-ended <id>: project pool is now unreadable`, blaming a retag nobody
+  performed. A transient permission fault on `$POOLS_DIR` would end every live crossing on the fleet box inside one
+  tick. Spec §5.7.2 names three failure modes (retag, untag, move off the account); this invented a destructive fourth,
+  against `_swap_target`'s own refusal of the identical fold and against `_pool_ok`'s standing obligation that the
+  cross-pool machinery tell a mismatch (overridable) from an undecidable tag (not overridable). Fixed before Task 5
+  lands a writer, so it was never live.
+- **D-TBD-crosspool-empty-marker-reason** (Task 4) — a `.crosspool` marker that exists but is empty or unreadable leaves
+  the parsed pool empty, so the plan's retag arm emits `project pool is now named pool-a` while the project pool IS
+  still `pool-a`. Given its own third reason.
+- **D-TBD-mutation-blast-radius** (Task 4, method) — "measure whole-file" is not sufficient and this wave proved it
+  twice: Task 2 used a `-t` filter and missed two collateral reds; Task 4 measured whole-file on the NEW file only and
+  reported a permanently-measured guard as unmeasured, which the coordinator had already carried into the ledger as an
+  open debt for Task 6 before review retracted it. The rule is: measure a mutation across every suite that covers the
+  CHANGED CALL SITE.
+- **D-TBD-swap-guard-three-unmeasured** (Task 5) — three guards the plan dictates shipped with NO fixture in the entire
+  blast radius able to see their removal (188/188 green under each): the crossing marker's write SITE (moving
+  `_crosspool_mark` from the success tail into the guard leaves a marker for a swap that later dies, so
+  `_crosspool_tick` eventually logs a fabricated `moved off <account>`); the `CCD_SWAP_AUTO` gate (deleting it makes an
+  operator's mistyped manual swap strand, banner, and stamp `strandnotify`, suppressing the NEXT GENUINE strand banner
+  for a full `SWAPBLOCK_COOLDOWN`); and the guard's standing-crossing arm (neutering it makes the unit refuse a move
+  the pool machinery itself chose). All three fixed with measured cases.
+- **D-TBD-deploy-window-banner-false** (Task 5) — spec §5.8.4's prescribed in-unit `_strand_mark` call produces an
+  operator-facing banner that is measurably false. In the task's own fixture an in-pool account is available and
+  placeable, yet the notify line reads "no account in pool pool-a can take it": `_strand_why` walks pool-AWARE, so it
+  describes the new `ccd`'s world rather than the old supervisor's mistake, and degrades to " no candidate" when the
+  wrong-pool candidate is not in `_pool_for`'s list. The operator is pointed at "fix an account or a limit" when the
+  remedy is "sweep the stale supervisors" — and this banner is the ENTIRE operator-facing payload of §5.8.4. The spec
+  prescribes the call, not the wording; fixed by an additive optional cause parameter on `_strand_mark`, with the
+  debounce and floor untouched. Coordinator holds the veto.
+- **D-TBD-swap-auto-pin-placement-blind** (Task 5) — the plan's `CCD_SWAP_AUTO` assertion is `toContain` on the bare
+  token, so changing `CCD_SWAP_AUTO=1 exec` to `CCD_SWAP_AUTO=1; exec` — one character — makes it a non-exported shell
+  variable the re-exec'd `ccd` never sees, killing the whole deploy-window mechanism with the suite green.
+- **D-TBD-anchor-drift-within-commit** (Task 5, method) — a line anchor re-measured during a fix round went stale
+  inside that same commit, because the round's own +24 lines shifted the cited site after the measurement was taken.
+  `ccd/ccd` already argues against numeric anchors in its own D-1850 comment ("stated as a GREP rather than as line
+  numbers — the numbers this sentence first carried were wrong the day they were written, and would have gone wrong
+  anyway"), and the plan nevertheless dictates numeric `ccd:NNNN` citations throughout. Converted to the grep form.
+- **D-TBD-meas-keys-undeclared** (Tasks 3 + 6) — the plan mandates `_lc_done rehome … meas.home … meas.reason …
+  [meas.pool …]` in its PRODUCED list and in both tasks' code, while its Global Constraints forbid touching
+  `shared/api.ts` — the file whose `LIFECYCLE_MEAS_KEY_MAP` is the single source `LIFECYCLE_MEAS_KEYS` derives from.
+  The result is a branch on which `ccd` emits three meas names L0 does not declare, red at
+  `ccd-lifecycle-contain.test.ts`, and whose `rehome` rows would reach the server and PWA with their three most
+  meaningful fields silently dropped at ingest — the failure that guard's own mutant comment names. An internally
+  contradictory plan, not an execution slip. Fixed additively in its own commit; coordinator notified before push.
+- **D-TBD-dec-crosspool-undeclared** (Tasks 5 + 6, CRITICAL) — `cmd_swap` and `cmd_prefer` emit `dec.crosspool 1`, which
+  `LifecycleDec` does not declare and `reviveDec`'s closed literal drops at ingest. Worse than the meas gap in one
+  specific way: `ccd-lifecycle-contain.test.ts` scans `meas.` keys ONLY, no suite scans `dec.` keys against any list,
+  and no `LIFECYCLE_DEC_KEY_MAP` exists to scan against — so the branch is GREEN on it and nothing would ever have
+  announced it. Spec §14 O6 exists so a crossing is recorded as a DECLARED operator choice; without the declaration
+  every `--cross-pool` row reaches the PWA with exactly that distinction erased. Fixed with the declaration AND a new
+  `dec.`-key scan, because a declaration without a scanner leaves the class live.
+- **D-TBD-start-prefer-undecidable-unmeasured** (Task 6) — the `prc == 2` arm of BOTH new guards is unmeasured:
+  deleting `cmd_start`'s undecidable `die` leaves 189 tests passing and `cmd_prefer`'s leaves 119, and with the line
+  gone `ccd start <w> <p>` against a malformed or unreadable tag CREATES the session silently instead of refusing and
+  naming the file. Collapsing rc 1 into rc 2 (`&& -z "$cross"`, making an undecidable tag overridable) is green in both
+  verbs — a direct hit on `_pool_ok`'s reason for having three exit codes. Task 5 shipped the equivalent case for
+  `cmd_swap` three describes up in the same file.
+- **D-TBD-crosspool-mark-clauses-unmeasured** (Task 6) — `cmd_start`'s marker line can drop `-z "$regw"` or
+  `"$prc" -eq 1`, and `cmd_prefer`'s can drop `"$prc" -eq 1`, all green. The first turns a revival the auto path owns
+  into a standing deliberate crossing; the second and third record a crossing that never happened, which
+  `_crosspool_valid` then holds valid indefinitely so the next legitimate retag is silently treated as pre-authorised.
+- **D-TBD-wire-suites-outside-blast-radius** (Tasks 3-6, method) — `ccd-lifecycle-contain.test.ts` guards what `ccd`
+  may emit on the wire, and it is in NO task's regression list in this plan. So Task 3's three new `meas.` keys went
+  unnoticed through four tasks and two reviews: the suite was never green on the widened emission, it was never RUN.
+  The remedy is a suite-list rule, not a guard change — any change to what `ccd` emits must run `ccd-lifecycle-contain`
+  and its new dec twin, neither of which the pool/swap blast radius includes.
