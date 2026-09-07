@@ -643,7 +643,11 @@ telemetry}` — validated by `shared/roster.ts` (`parseRoster`), whose errors al
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
-placement; `telemetry: 'none'` says the account will never report rate limits,
+placement and out of being any session's default home, while leaving it in the
+auto-swap rotation as an **overflow lane** for as long as it is installed and not
+kill-switched — `touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a
+session that overflowed onto it returns home the moment home has headroom;
+`telemetry: 'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness.
 
 **Getting the file onto a box.** The deploy seeds it, create-if-missing, on
