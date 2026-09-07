@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2d03ce707f573ff32af99a0ac8ebd38a781eff461405406d7c85326b0c48eb62
+# ccrc:generated 1 sha256=2a8e74bf7f6c1eeb82c0e66f9b702c181daf671fe5ce8a383a8eaae64196b8dd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1333,9 +1333,17 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 16 call sites now (a count
-# this sentence's own quoting of the pattern adds one to), not the two this
-# comment used to name as the whole of them. `_swap_target`,
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 16 matching LINES now, 11 of
+# them call sites — the other five are prose, this sentence's own quoting of
+# the pattern among them — not the two this comment used to name as the whole
+# of them. CORRECTED at merge review (M5): this read "finds 16 call sites now
+# (a count this sentence's own quoting of the pattern adds one to)", which
+# asserts 15 call sites, and the answer is 11. `grep -c` counts LINES, and
+# five of the sixteen are comments. Two quantities, so the pin in
+# `ccd-pool-ok.test.ts` now checks both and its message names which is
+# which — it previously computed the line count while the sentence it
+# validated was labelled "call sites", a green suite measuring the wrong
+# thing while its own failure message named the right one. `_swap_target`,
 # `_auto_swap_check`, `cmd_swap`, `cmd_start` and `cmd_prefer` all branch on
 # this exit code three ways now, refusing or acting on an undecidable tag
 # differently from a mismatch. The two ORIGINAL callers still fold rc 1
@@ -5156,8 +5164,7 @@ EOF
   # can refuse a `ws-add`. Wiring it into the auto-swap candidate loop and
   # the 5-second tick (`_swap_target`, `_auto_swap_check`) LANDED in wave
   # 2b, and so did `--cross-pool`, which now parses on `cmd_swap`,
-  # `cmd_start`, `cmd_prefer` and `cmd_enable` (its alias) — every manual
-  # verb the cross-pool guard applies to. Measured: `grep -c --
+  # `cmd_start`, `cmd_prefer` and `cmd_enable` (its alias). Measured: `grep -c --
   # '--cross-pool)' ccd/ccd` finds exactly 5 now (this sentence's own
   # quoting of the pattern adds one to that): one `case` arm per verb named
   # above, plus this line, with no other false positive anywhere else in
@@ -5165,6 +5172,19 @@ EOF
   # this comment for claiming the last two in the present tense before
   # either existed; this is the same present tense, said again now that
   # wave 2b has actually landed it.
+  #
+  # THE FLAG'S REACH IS NARROWER THAN THE GUARD'S, and this comment claimed
+  # otherwise until merge review (M6): it read "every manual verb the
+  # cross-pool guard applies to", which is false. `cmd_swap_self` (`grep -n
+  # '^cmd_swap_self()' ccd/ccd`) has no flag loop and no `--cross-pool`
+  # pass-through — its whole body resolves the calling pane's own id and
+  # tails into `cmd_swap "$id" "$target"` — so the pool guard DOES apply to
+  # `ccd swap-self` and cannot be waived from it. That is the in-session and
+  # mobile path (the one this file's own header sells as "just tell Claude to
+  # run ccd swap-self"), so it is the arm an operator is likeliest to meet
+  # the refusal on and least able to override. The arm COUNT above is
+  # mechanised and honest; the scope was not. Whether `swap-self` should
+  # learn the flag is a wave-3 question, not a capability to claim here.
   #
   # It gates exactly ONE server decision — "may I build a `--cross-pool`
   # argv" (wave 3) — and `capSupported` refuses on no evidence, because the
@@ -14005,7 +14025,9 @@ _crosspool_valid() {   # id pool-state account... -> 0 iff a VALID crossing mark
   #     and either satisfies it.
   # ADDED (final whole-branch review, M-2): `wrapper`/`home` are alternatives
   # this predicate CHECKS, but the record itself is ONE `_reg_set` field
-  # (`_crosspool_mark`, one call, `grep -n '^_crosspool_mark()' ccd/ccd`) —
+  # (`_crosspool_mark` holds exactly one `_reg_set`, `grep -n
+  # '^_crosspool_mark()' ccd/ccd`; it has THREE call sites, which is a
+  # different count and not the one this sentence is about) —
   # single-valued and last-write-wins, not one slot per act. So `swap
   # --cross-pool` then `prefer --cross-pool` on the SAME row silently
   # OVERWRITES the first mark with the second rather than recording both:
@@ -14078,14 +14100,45 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 iff a valid crossing sta
   # marker whose own record cannot be read is neither, and must say so
   # rather than guess at one.
   #
-  # UNDECIDABLE IS NOT A DECISION — the same rule `_swap_target` states in
-  # its own words (ccd:11850). An unreadable or malformed PROJECT tag means
-  # nobody can say whether the crossing still holds, so the marker survives
-  # untouched. Removing it here on an undecidable tag would invent a FOURTH
-  # way for a crossing to end, beyond the three §5.7.2 names (a retag, an
-  # untag, a move off the account) — and a transient permission hiccup on
-  # `$POOLS_DIR` would then end every live crossing on the fleet box inside
-  # one tick, irreversibly, with no writer able to put the marker back.
+  # UNDECIDABLE IS NOT A DECISION — FOR THE PROJECT TAG. That is the only
+  # input this paragraph covers and the only one a mutation confirms; the
+  # scope sentence you are reading was added at merge review (M8), because
+  # without it the assurance reads as covering every input to the same
+  # decision, and it does not. The same rule `_swap_target` states in its own
+  # words (`grep -n 'UNDECIDABLE IS NOT A DECISION' ccd/ccd` finds both
+  # sites). An unreadable or malformed PROJECT tag means nobody can say
+  # whether the crossing still holds, so the marker survives untouched — the
+  # decided-state gate below (`[[ "$pps" == named* || "$pps" == untagged ]]`)
+  # is what enforces that, and deleting it reds a measured case. Removing the
+  # marker on an undecidable tag would invent a FOURTH way for a crossing to
+  # end, beyond the three §5.7.2 names (a retag, an untag, a move off the
+  # account) — and a transient permission hiccup on `$POOLS_DIR` would then
+  # end every live crossing on the fleet box inside one tick, irreversibly,
+  # with no writer able to put the marker back.
+  #
+  # THE ASSURANCE DOES NOT REACH THE OTHER INPUTS TO THIS SAME DECISION, and
+  # said nothing about them until now. `_reg_get` is `cat … 2>/dev/null`
+  # (`grep -n '^_reg_get()' ccd/ccd`): it folds ABSENT, UNREADABLE and EMPTY
+  # into one `""`. That is precisely the overloaded null the ring rules forbid
+  # at a seam — inherited here, not introduced here — and two consequences of
+  # it are live in this function today:
+  #   - the `crosspool` read below reaches `[[ -z "${pool:-}" ]]` and then
+  #     `rm -f` for a marker record that is merely UNREADABLE as readily as
+  #     for one that is empty: an undecidable input ending a crossing, which
+  #     is the exact thing the paragraph above refuses to do for the tag. The
+  #     reason string it logs says "unreadable" for both, because at this
+  #     seam they are the same value;
+  #   - `cur`/`home` arrive from the caller's own `_reg_get` of `.wrapper`
+  #     and `.home`, so a failed read of either presents as `""`,
+  #     `_crosspool_valid`'s account clause cannot match `""`, and the `else`
+  #     arm below logs `moved off <acct>` — a move that never happened.
+  # PROSE ONLY IN THIS ROUND, deliberately. The code fix is a WAVE 3 CARRY
+  # (the merge review's C1) and it carries an EMBARGO: no `--cross-pool` verb
+  # runs on the live fleet until it lands, so there is no marker to lose in
+  # the meantime. Do not "fix" this by widening the gate above without a
+  # measured case per input — what this needs is a read that DISTINGUISHES
+  # absent from unreadable (`server/src/io.ts`'s measured reads are the
+  # pattern), not another predicate over the same collapsed value.
   local id="$1" cur="$2" home="$3" pps="$4" raw ts pool acct reason
   [[ -e "$REG/$id.crosspool" ]] || return 1
   _crosspool_valid "$id" "$pps" "$cur" "$home" && return 0
@@ -14116,7 +14169,12 @@ _crosspool_mark() {   # id project-pool account — record a DELIBERATE crossing
   # comment, "one dot, no more" — grepped, not line-numbered, because Task 7
   # edits that comment block) purges it with the row. `cmd_swap --cross-pool`'s
   # success tail is this field's first writer; `cmd_start --cross-pool` and
-  # `cmd_prefer` are Task 6's, and will call the same spelling.
+  # `cmd_prefer --cross-pool` are Task 6's and HAVE LANDED — three call sites
+  # in all, `grep -n '_crosspool_mark "' ccd/ccd`. CORRECTED at merge review
+  # (M7): this said "will call", in the future tense, while the sibling
+  # header 78 lines up already said "THREE WRITERS now (Task 6 landed the
+  # remaining two)" — two comments in one file disagreeing about the same
+  # fact, which is worse than either being wrong alone.
   _reg_set "$1" crosspool "$(date +%s) $2 $3"
 }
 

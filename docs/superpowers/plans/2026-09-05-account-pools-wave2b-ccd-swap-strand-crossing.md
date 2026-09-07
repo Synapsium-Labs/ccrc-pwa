@@ -4,7 +4,7 @@
 
 **Goal:** Make `ccd`'s automatic account machinery pool-aware — the 5-second auto-swap tick re-seeds a wrong-pool home and moves the session, an empty pool strands loudly instead of crossing, and a deliberate `--cross-pool` crossing leaves a marker that the tick honours until a retag or a move ends it.
 
-**Architecture:** Everything in this wave is `ccd/ccd` bash plus two new vitest suites under `server/test/`. It consumes wave 2a's reader (`_project_pool_state`), predicate (`_pool_ok`), placement (`_ws_least_loaded [project]`) and lifecycle act (`rehome`), and adds: three strand helpers beside `_swap_refuse`; two crossing-marker helpers; three insertions into `_swap_target`; five into `_auto_swap_check`; and the `--cross-pool` flag on the four manual verbs. No server, agent, shared or PWA file is touched. **Every change is under `ccd/`, so this wave is AGENT-FIRST at deploy time** — `bash deploy/deploy.sh agent` ships the fleet host before `bash deploy/deploy.sh` ships the server (Task 8 states the order; the deploy itself is run by the operator or the coordinator, never by this plan's implementer).
+**Architecture:** The wave's centre of gravity is `ccd/ccd` bash. It consumes wave 2a's reader (`_project_pool_state`), predicate (`_pool_ok`), placement (`_ws_least_loaded [project]`) and lifecycle act (`rehome`), and adds: three strand helpers beside `_swap_refuse`; three crossing-marker helpers; three insertions into `_swap_target`; five into `_auto_swap_check`; and the `--cross-pool` flag on the four manual verbs. **What it also carries — and what this paragraph asserted the opposite of until merge review (M1; D-1890, fourth site) — is change outside `ccd/`.** Measured on the shipping tree, `git diff --name-only origin/main...HEAD` names **17 files, 15 of them outside `ccd/`**: `shared/api.ts`, `server/src/coord/journalparse.ts`, ten `server/test` files (two of them new suites), two `pwa/test` files, and this plan. Two sentences that stood here — one denying any server, agent, shared or PWA file was touched, one concluding agent-first at deploy time above a copy-pasteable command block in that order — were both false at this tip and are struck; they are quoted verbatim in D-1890's entry, which is where an obituary belongs. **The deploy order for this wave is SERVER-FIRST**, ruled by the coordinator at merge review; the mechanism, its measurement and the command block are in Task 8 Step 7. The deploy itself is run by the operator or the coordinator, never by this plan's implementer.
 
 **Tech Stack:** bash 5.2 (`set -uo pipefail`, no `-e`), vitest + `makeCcdHarness` fixture HOMEs, `node:sqlite`-free.
 
@@ -18,7 +18,7 @@
 - **No account name, pool name, label, host or IP in any shipped source file or test.** Pool fixture names are `pool-a` and `pool-b`; project fixture names are `demo` and `quiet-basin`; account ids are `DEFAULT_TEST_ROSTER`'s (`server/test/helpers.ts:60`): `claude`, `claude-a`, `claude-b`, `gpt`, `claude-d`. `single-definition.test.ts` and `topology-clean.test.ts` scan the whole tree, docs included.
 - **`FLEET_PROTO` stays 1; the wire is additive-only.** This wave adds no wire field at all — the three new registry fields reach the server in wave 3.
 - **No overloaded null at a seam.** Two conditions a caller handles differently must not collapse to one value. `_pool_ok` answers 0/1/2; `_project_pool_state` answers four words; `_swap_target`'s pre-existing stdout overload is resolved at the caller on `$hard_blocked` and is deliberately **not** widened here.
-- **Agent-first for `ccd/`:** `bash deploy/deploy.sh agent` (fleet host) precedes `bash deploy/deploy.sh` (server). Coordinates come from `~/.ccrc/deploy.env`; no host argument is needed on this fleet.
+- **Deploy order: SERVER-FIRST.** *(This constraint said "agent-first for `ccd/`" at plan time. Corrected at merge review, M1: it is the wrong order for this wave, and stating an order as fact in a Global Constraint is how it survived three other corrections.)* `bash deploy/deploy.sh` (server) precedes `bash deploy/deploy.sh agent` (fleet host), because this wave's `ccd` emits journal keys an older server drops **permanently** — mechanism and measurement in Task 8 Step 7. Coordinates come from `~/.ccrc/deploy.env`; no host argument is needed on this fleet. The repo's own agent-first default (`CLAUDE.md`: a change touching `ccd/`, `session-hook.sh` or `ccd/coordinator-skill/` ships to the fleet host first) still holds for waves that really are `ccd/`-only. This one is not one of those.
 - **`EXEC_COMMANDS = ['tmux','ccd']` stays closed; no `gh` grant is added.** This wave adds no whitelist entry at all.
 - **L0 `shared/*.ts` imports nothing** — untouched by this wave.
 - **Mutation-table discipline:** every guard ships WITH a test that goes RED when the guard is deleted or mutated. Each task's `**Mutation table:**` block names the exact mutation and the expected red, measured before and after.
@@ -1922,7 +1922,7 @@ git commit -m "docs(ccd): the registry inventory names the three fields the pool
 
 ---
 
-### Task 8: Whole-branch gate, and the agent-first deploy order
+### Task 8: Whole-branch gate, and the deploy order
 
 **Files:**
 - Modify: none. This task runs suites and states the order in which the finished branch reaches the fleet.
@@ -1969,27 +1969,35 @@ Expected: PASS. `single-definition` reds on a second copy of a single-sourced va
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-auto-swap-hold.test.ts test/ccd-auto-swap-pool.test.ts test/ccd-crosspool.test.ts test/ccd-swap.test.ts test/ccd-swap-refuse.test.ts test/ccd-account-ok.test.ts test/ccd-start-id.test.ts test/ccd-arith-containment.test.ts`
 Expected: PASS. These are the suites whose subjects this wave edited around; running them together and alone is what separates a real break from the load flakes in Step 1.
 
-- [ ] **Step 7: State the deploy order — AGENT-FIRST (do NOT run it here)**
+- [ ] **Step 7: State the deploy order — SERVER-FIRST (do NOT run it here)**
 
-Its `ccd/` changes are agent-first (Global Constraint #5: `bash deploy/deploy.sh agent` before `bash deploy/deploy.sh`) — but this wave does not change `ccd/` only (D-1890): the branch also carries `shared/api.ts`, `server/src/coord/journalparse.ts`, five `server/test` files and two `pwa/test` files, landed to fix the meas/dec key gaps Tasks 3 and 6's own emissions opened. Whether that changes the actual deploy order for this merge is the coordinator's call to make at merge time, never this plan's implementer's — no step below is run from this branch.
+**SERVER-FIRST — ruled by the coordinator at merge review, and the reverse of what this plan said at plan time (D-1890).** No step below is run from this branch.
+
+This wave does not change `ccd/` only. Measured on the shipping tree: `git diff --name-only origin/main...HEAD` names **17 files, 15 outside `ccd/`** — `shared/api.ts`, `server/src/coord/journalparse.ts`, **ten** `server/test` files, two `pwa/test` files and this plan — landed to fix the meas/dec key gaps Tasks 3 and 6's own emissions opened. *(The count in this sentence read "five `server/test` files" until merge review, M3: wrong in this home and in D-1890's own entry, and it understated by half the non-`ccd/` surface the deploy order has to be decided over.)*
+
+**The mechanism, measured rather than argued.** `cmd_prefer`'s tail emits a `rehome` row **unconditionally** — no pool predicate gates it (`grep -n 'THE ONE UNCONDITIONAL' ccd/ccd`) — so the new `meas.home`/`meas.pool`/`meas.reason` keys reach the journal the moment the new `ccd` is installed, tagged fleet or not. On the server side `parseJournalLine` runs **once**, at ingest: its only caller in `server/src` is `server/src/coord/mirror.ts:161`. `insertLifecycle` binds `measJson` as `JSON.stringify(r.meas)`, where `r.meas` has already been through `reviveMeas`'s closed literal; every reader re-revives from `measJson`, and **nothing in this tree re-parses the stored `raw` column back into `meas`**. And the insert is `INSERT OR IGNORE` under `CREATE UNIQUE INDEX lifecycle_uid ON lifecycle_events(uid) WHERE uid IS NOT NULL` (`server/src/coord/schema.ts`), so a row a pre-branch server has already ingested is **never rewritten by a later sweep**. A `rehome` row landing in an agent-first window therefore loses its three most meaningful fields for good — the text survives in the `raw` column, but no code path ever reads it back, so nothing recovers them.
+
+Ship the server lane first, then the agent lane. The reverse window costs data no re-sweep can restore; a server-first window costs nothing, because a newer server reading an older `ccd`'s narrower rows is exactly the absence-permits case the wire discipline is built for.
 
 The order, exactly as the repo does it (README "Deploy"):
 
 ```bash
-bash deploy/deploy.sh agent    # the fleet host: rsync -> ship ccd + notify.sh (backed up)
+bash deploy/deploy.sh          # FIRST. The server box: build the PWA here (freshness-gated) ->
+                               # rsync -> box npm ci + build -> restart the unit -> health check.
+                               # This lane is what teaches the server the three new `meas.` keys
+                               # and `dec.crosspool` — it must land BEFORE any ccd emits them.
+bash deploy/deploy.sh agent    # SECOND. The fleet host: rsync -> ship ccd + notify.sh (backed up)
                                # + session-hook.sh -> host npm ci + build -> restart the unit
-bash deploy/deploy.sh          # the server box: build the PWA here (freshness-gated) -> rsync
-                               # -> box npm ci + build -> restart the unit -> health check
 ```
 
 Coordinates come from `~/.ccrc/deploy.env` (`CCRC_BOX`, `CCRC_SSH_KEY`, `CCRC_SSH_PORT`, `CCRC_AGENT_BOX`) — machine-local, outside every checkout. **No host argument is needed on this fleet**; the agent lane takes its box from `CCRC_AGENT_BOX` and **never** falls back to `$CCRC_BOX`, which on a two-box fleet is the *server* box. `deploy.sh` has no default target and refuses with exit 2 rather than guessing.
 
 The server lane's gate is `/health` reporting the shipped sha: "The post-deploy health check derives its URL from the box itself — an exposed box is probed through its public origin, a plain one at `http://<host>:7788/health`" (README "Deploy").
 
-Two things about this wave in particular:
+Three things about this wave in particular:
 
 1. **`deploy.sh`'s supervisor sweep matters here more than usual.** Between `install_atomic` and the `try-restart claude-session@*` sweep (behind its mandatory `KillMode=process` preflight), each running supervisor's `_auto_swap_check` is the **old** inode while `_dispatch_swap`'s transient unit runs the **new** `ccd`. That window is exactly what `CCD_SWAP_AUTO=1` and `_strand_mark` in `cmd_swap`'s guard exist for (Task 5): an old supervisor's pool-blind choice is refused with a marker and a banner instead of silently, every `SWAP_COOLDOWN`, for as long as that unit lives. Do not hand-`install_atomic` this build without the sweep.
-2. **Nothing changes until something is tagged.** With no `~/.cc-sessions/pools/` directory, `_project_pool_state` answers `untagged` for every project, `_pool_ok` answers 0 for every account, and every insertion in this wave is a no-op. The rollout is per-project and reversible with `ccd project-pool --project <p> --clear` (wave 2a's verb).
+2. **Nothing changes until something is tagged — EXCEPT the strand layer, which is live on a wholly untagged fleet from the moment this `ccd` is installed.** With no `~/.cc-sessions/pools/` directory, `_project_pool_state` answers `untagged` for every project and `_pool_ok` answers 0 for every account, so every POOL insertion is a no-op and the rollout stays per-project and reversible with `ccd project-pool --project <p> --clear` (wave 2a's verb). **The strand insertions are not pool-gated at all**, and the fourth clause that used to stand here — *"every insertion in this wave is a no-op"* — was false for them (corrected at merge review, M2). Measured: `_strand_mark` has no tagging predicate; `_auto_swap_check`'s strand branch is `[[ -z "$target" && -n "$hard_blocked" ]] && _strand_mark …` and has none either; `ccd`'s own comment three lines above that call already said so in plain words (*"It fires for an UNTAGGED project too — every account at the ceiling reaches exactly this state"*); D-1671 below says "tagged and untagged projects alike"; and the suite pins the untagged wording (`grep -n 'says .(untagged). in the banner' server/test/ccd-auto-swap-pool.test.ts`). So on a fleet where accounts sit at their weekly ceiling, installing this `ccd` starts writing `stranded` lines into `swap.log`, writing the `.stranded`/`.strandnotify` registry fields, and **firing `notify.sh`** — on day one, with nothing tagged anywhere. That is the pre-existing silent strand made loud, which is this wave's point; it is not inert, and this note is read at deploy time by the person least able to afford being told otherwise.
 3. **`dcdb1e4b`'s wave-3 option is no longer a one-revert move — measured 2026-09-07, in an isolated detached worktree.** An earlier review told the coordinator `dcdb1e4b` "reverts cleanly, disjoint file sets, one revert is enough"; that was true when measured at `114ea60d` and has been false since `c7174ea4` and `1ee6b4a8`. Re-measured (`git worktree add --detach <tmpdir> HEAD`, `git revert --no-commit dcdb1e4b` there, `git worktree remove`/`git worktree prune` after): the revert exits **non-zero**, with content conflicts in exactly two files — `shared/api.ts` (2 hunks) and `server/test/ccd-lifecycle-contain.test.ts` (2 hunks). Resolving both by taking the revert side (deleting the `<<<<<<< HEAD` block in each of the four hunks, keeping the empty side) leaves `cd server && npm run build` at exit 0, but **two** suites red, not one: the disclosed `ccd-lifecycle-contain.test.ts` (`every meas.<key> ccd writes is on the list, and the list is exactly 25` fails with `['home','pool','reason']` unlisted — the expected regression) **and, undisclosed, `single-definition.test.ts`** (`Build 9 nouns — the lifecycle journal vocabulary > DERIVES every runtime list from its total map`, 108 passed/1 failed). The second is caused by `1ee6b4a8`, which added the `['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP']` pin to that test's derivation table (`server/test/single-definition.test.ts`, in the `it('DERIVES every runtime list...')` case) — that pin depends on symbols only `dcdb1e4b` defines, so reverting `dcdb1e4b` without also dropping that one array entry leaves `single-definition` red too. **The accurate price of moving `dcdb1e4b` to wave 3 today:** revert it, resolve the two conflicting files by taking the revert side, ALSO remove the `['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP']` entry `1ee6b4a8` added to `single-definition.test.ts`'s derivation table, and accept that the branch then carries `ccd-lifecycle-contain.test.ts` red on `['home','pool','reason']` until wave 3 lands the declarations — the same caveat the original review gave, just for two suites instead of one.
 
 - [ ] **Step 8: Commit nothing**
@@ -2203,8 +2211,9 @@ comment before review caught it.
   [meas.pool …]` in its PRODUCED list and in both tasks' code, while Global Constraint #3 (`FLEET_PROTO` stays 1)
   says **"This wave adds no wire field at all — the three new registry fields reach the server in wave 3."**
   *(Correcting an error of mine: I previously wrote that the plan's Global Constraints forbid touching
-  `shared/api.ts`. The sentence "No server, agent, shared or PWA file is touched" is real, but it lives in the
-  plan's **Architecture** paragraph, not Global Constraints, and it is not the constraint that bites here.)* That
+  `shared/api.ts`. The sentence "No server, agent, shared or PWA file is touched" was real, but it lived in the
+  plan's **Architecture** paragraph, not Global Constraints, and it was not the constraint that bites here. Past
+  tense because merge review (M1) had it struck from that paragraph as false at the tip — fourth site below.)* That
   Global Constraint's tail is the defect, stated precisely: it enumerates the wave's forward surface as three
   REGISTRY fields and never counts a journal key as wire at all — though this same plan's Tasks 3 and 6 mandate
   four of them (`meas.home`, `meas.pool`, `meas.reason`, `dec.crosspool`) landing NOW, not in wave 3. It is the
@@ -2215,7 +2224,11 @@ comment before review caught it.
   that guard's own mutant comment names. An internally contradictory plan, not an execution slip. Fixed additively
   in its own commit; coordinator notified before push. **Second site (extend, no new number):** Task 8 Step 7
   states *"This wave changes `ccd/` only, so it is **agent-first**"* — false in the same premise: the branch also
-  carries `shared/api.ts`, `server/src/coord/journalparse.ts`, five `server/test` files and two `pwa/test` files.
+  carries `shared/api.ts`, `server/src/coord/journalparse.ts`, **ten** `server/test` files and two `pwa/test`
+  files — 17 files, 15 outside `ccd/`, measured with `git diff --name-only origin/main...HEAD` at the shipping
+  tip. *(This said "five" until merge review, M3 — wrong here and in Task 8 Step 7 both. A miscounted premise
+  inside the entry whose whole subject is a miscounted premise, understating by half the surface the deploy
+  order turns on.)*
   The premise is corrected in the plan text; deciding the actual deploy order for a wave that touches both `ccd/`
   and shared/server source is the coordinator's call to make at merge, not restated here. **Third site (extend,
   no new number, corrected 2026-09-07):** the review also told the coordinator `dcdb1e4b` "reverts cleanly,
@@ -2227,7 +2240,14 @@ comment before review caught it.
   `ccd-lifecycle-contain.test.ts` (disclosed) and `single-definition.test.ts` (undisclosed, because that pin
   depends on symbols only `dcdb1e4b` defines). The full recipe — which files conflict, which side to take, which
   extra hunk to drop, and the resulting two-red-suite outcome — is written into Task 8 Step 7 above rather than
-  repeated here.
+  repeated here. **Fourth site (extend, no new number, corrected 2026-09-07 at merge review):** correcting Task 8
+  Step 7's premise left the same false premise standing in two louder places — the **Architecture** paragraph
+  (plan line 7) and **Global Constraint #5** — both asserting agent-first as FACT, one in bold, one above a
+  copy-pasteable command block in that order. Those are the lines a reader of the merged plan runs; Step 7 is
+  what they read afterwards, if at all. The order is now stated once, SERVER-FIRST, with its mechanism, in Step 7,
+  and the other sites point at it rather than restating it. The lesson worth keeping past this wave: correcting the
+  instance a review named is not the same as correcting the claim — a premise repeated in four places needs a grep,
+  not a patch.
 - **D-1891** (Tasks 5 + 6, CRITICAL) — `cmd_swap` and `cmd_prefer` emit `dec.crosspool 1`, which
   `LifecycleDec` does not declare and `reviveDec`'s closed literal drops at ingest. Worse than the meas gap in one
   specific way: `ccd-lifecycle-contain.test.ts` scans `meas.` keys ONLY, no suite scans `dec.` keys against any list,
@@ -2235,12 +2255,32 @@ comment before review caught it.
   announced it. Spec §14 O6 exists so a crossing is recorded as a DECLARED operator choice; without the declaration
   every `--cross-pool` row reaches the PWA with exactly that distinction erased. Fixed with the declaration AND a new
   `dec.`-key scan, because a declaration without a scanner leaves the class live.
-- **D-1892** (Task 6) — the `prc == 2` arm of BOTH new guards is unmeasured:
-  deleting `cmd_start`'s undecidable `die` leaves 189 tests passing and `cmd_prefer`'s leaves 119, and with the line
-  gone `ccd start <w> <p>` against a malformed or unreadable tag CREATES the session silently instead of refusing and
-  naming the file. Collapsing rc 1 into rc 2 (`&& -z "$cross"`, making an undecidable tag overridable) is green in both
-  verbs — a direct hit on `_pool_ok`'s reason for having three exit codes. Task 5 shipped the equivalent case for
-  `cmd_swap` three describes up in the same file.
+- **D-1892** (Task 6) — the `prc == 2` arm of BOTH new guards shipped unmeasured: deleting either verb's
+  undecidable `die` was GREEN, and with the line gone `ccd start <w> <p>` against a malformed or unreadable tag
+  CREATES the session silently instead of refusing and naming the file. Collapsing rc 1 into rc 2
+  (`&& -z "$cross"`, making an undecidable tag overridable) was green in both verbs too — a direct hit on
+  `_pool_ok`'s reason for having three exit codes. Task 5 shipped the equivalent case for `cmd_swap` three
+  describes up in the same file.
+  *(**M4, merge review.** This entry used to say "leaves 189 tests passing and `cmd_prefer`'s leaves 119". Those
+  digits named no suite set, so they were not reproducible and so not a measurement — an unnamed denominator is a
+  number-shaped opinion. Re-measured 2026-09-07 at the shipping tip, with the set stated so anyone can re-run it:
+  `cd server && ./node_modules/.bin/vitest run test/ccd-crosspool.test.ts test/ccd-project-pool.test.ts
+  test/pools-existence-pairing.test.ts test/ccd-lifecycle-contain.test.ts test/lifecycle-wire.test.ts
+  test/ccd-archive.test.ts test/ccd-workspaces.test.ts` — the union of every suite naming `cmd_prefer` or
+  `cmd_start`, so the set covers the CHANGED CALL SITES rather than one file. **Baseline: 7 files / 296 tests /
+  0 failed.** Deleting any ONE of the three verbs' two-line `[[ "$prc" -eq 2 ]] && die …` measures **2 failed /
+  294 passed**: the semantic red is that verb's own case in `ccd-crosspool.test.ts` (`cmd_start and the pool`,
+  `cmd_swap refuses a crossing that was not asked for`, `cmd_prefer` respectively), and the second is
+  `pools-existence-pairing.test.ts > … > guards the guard`, which blocks functions out by line and reds on any
+  deletion — one detection each, one structural byproduct. So ONE case catches each, which is the claim that
+  matters and the one the digits obscured. **A mistake of mine inside this correction, recorded because the
+  measurement discipline is the point:** the first run I labelled "`cmd_start`'s guard" was `cmd_swap`'s — the
+  `_pool_ok "$target"` line, which sits in `cmd_swap` above its detach arm, not in `cmd_start` (whose guard is
+  `_pool_ok "$wrapper"`, under `[[ -z "$regw" ]]`). The digits were right and the label was wrong, which fails
+  the same rule this entry is about, so all three verbs were then measured separately rather than two of them
+  inferred from one run. **A second site, self-found and not in the review:** the `cmd_start` case in the same
+  file carried "left all 189 baseline cases green" — the identical defect, one describe away from the instance
+  M4 named. Both are corrected; the reproducible measurement is written out once and referenced from the other.)*
 - **D-1893** (Task 6) — `cmd_start`'s marker line can drop `-z "$regw"` or
   `"$prc" -eq 1`, and `cmd_prefer`'s can drop `"$prc" -eq 1`, all green. The first turns a revival the auto path owns
   into a standing deliberate crossing; the second and third record a crossing that never happened, which

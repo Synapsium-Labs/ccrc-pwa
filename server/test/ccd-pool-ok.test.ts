@@ -331,29 +331,53 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
   });
 });
 
-describe('the `_pool_ok` header states a call-site count that stays honest', () => {
-  it('the number the header claims equals grep -c \'_pool_ok \' ccd/ccd', () => {
+describe('the `_pool_ok` header states counts that stay honest', () => {
+  it('both numbers the header claims match grep -c \'_pool_ok \' ccd/ccd and its comment split', () => {
     // Task 7 (docs-honesty) corrected this header from "kept for wave 2b,
     // not consumed today" to a plain count, exactly the kind of numeric
     // claim that goes stale the next time a call site is added or removed
     // without the prose being updated alongside it. The header's own
     // sentence names the grep that produces the number ("Measured:
-    // `grep -c '_pool_ok ' ccd/ccd` finds N call sites now") — re-run that
-    // same pattern here and require the stated N to still be true.
+    // `grep -c '_pool_ok ' ccd/ccd` finds N matching LINES now, M of them
+    // call sites") — re-run that same pattern here and require both stated
+    // numbers to still be true.
+    //
+    // CORRECTED AGAIN (merge review, M5): the header used to state ONE
+    // number and label it "call sites", and this pin computed the LINE
+    // count. Both were 16, so the suite was green — validating a quantity
+    // the sentence was not claiming, while its own failure message named the
+    // right one. Five of those sixteen lines are comments, so the real
+    // call-site count is 11 and the header asserted 15. The header now
+    // states both numbers and this pin checks both, each against the thing
+    // it is labelled as.
+    //
+    // The call-site classifier is "the line, trimmed, does not start with
+    // `#`". That is exact for `ccd/ccd` today (measured: the five comment
+    // matches are all whole-line comments, and no code line carries a
+    // trailing comment mentioning the pattern). A future code line with
+    // `_pool_ok ` inside a trailing comment would be counted as a call site
+    // — this pin would then need a real tokenizer, not a looser regex.
     const src = fs.readFileSync(CCD, 'utf8');
     const from = src.indexOf('THE THIRD CODE IS CONSUMED TODAY');
     expect(from, 'the _pool_ok header could not be found').toBeGreaterThan(-1);
     const block = src.slice(from, from + 400);
-    const claimed = block.match(/finds (\d+) call sites now/);
-    expect(claimed, 'the header no longer states a call-site count in the expected shape').not.toBeNull();
-    const stated = Number(claimed![1]);
+    const claimed = block.match(/finds (\d+) matching LINES now, (\d+) of\n?/);
+    expect(claimed, 'the header no longer states its two counts in the expected shape').not.toBeNull();
+    const statedLines = Number(claimed![1]);
+    const statedCalls = Number(claimed![2]);
     // CORRECTED (final whole-branch review, M-1): the header's own cited
     // command is `grep -c`, which counts LINES containing a match, not
     // occurrences — `.match(/g)` counted occurrences instead, silently
     // measuring something else. Both are 16 today only because no line in
     // `ccd/ccd` holds two `_pool_ok ` calls; count lines here so this test
     // measures the same thing the header's cited command measures.
-    const live = src.split('\n').filter((line) => line.includes('_pool_ok ')).length;
-    expect(live, `grep -c '_pool_ok ' ccd/ccd now finds ${live}, but the header still claims ${stated}`).toBe(stated);
+    const matching = src.split('\n').filter((line) => line.includes('_pool_ok '));
+    const calls = matching.filter((line) => !line.trim().startsWith('#'));
+    expect(matching.length,
+      `grep -c '_pool_ok ' ccd/ccd now finds ${matching.length} matching LINES, `
+      + `but the header still claims ${statedLines}`).toBe(statedLines);
+    expect(calls.length,
+      `${calls.length} of those ${matching.length} lines are CALL SITES (the rest are comments), `
+      + `but the header still claims ${statedCalls}`).toBe(statedCalls);
   });
 });

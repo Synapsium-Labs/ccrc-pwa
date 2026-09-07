@@ -211,7 +211,23 @@ describe('an undecidable or unreadable record decides nothing, or lies', () => {
   // pool-a" while the project pool IS, literally, still pool-a — a
   // self-contradicting line that sends the operator hunting for a retag
   // nobody performed. This must get its own third reason instead.
-  it("a marker whose OWN record is unreadable ends with an honest reason, never a fabricated retag", () => {
+  //
+  // RENAMED (merge review, M9). This case was called "…OWN record is
+  // unreadable…", and its fixture writes `_reg_set <id> crosspool ""` — a
+  // zero-byte READABLE file. So it never built unreadability at all, while
+  // the sibling case one describe up builds real unreadability with
+  // `chmod 000`: the technique was in hand and went to the project tag, not
+  // to the marker. Naming it "unreadable" is why the gap M8 records in
+  // `_crosspool_tick`'s header shipped LOOKING covered — a green case whose
+  // title claimed a condition its fixture could not produce.
+  //
+  // The shipped log line still reads `marker record is unreadable` for BOTH
+  // conditions, and that is not a naming slip: `_reg_get` is
+  // `cat … 2>/dev/null`, so at this seam empty and unreadable ARE the same
+  // value and no reason string can tell them apart. Separating them needs a
+  // distinguishing read, which is the wave-3 carry (C1); the `chmod 000`
+  // marker case belongs to that fix, not to this round.
+  it("a marker whose OWN record is EMPTY ends with an honest reason, never a fabricated retag", () => {
     seedRow(); tagPool('demo', 'pool-a');
     h.sh(`_reg_set ${ID} crosspool ""; rm -f "$HOME/.cc-sessions/${ID}.lastswap"`);
     tick(QUIET);
@@ -450,10 +466,19 @@ describe('cmd_start and the pool', () => {
   it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
     // Coordinator review, fix round 1, Important 1. This guard shipped
     // (`[[ "$prc" -eq 2 ]] && die …`) but nothing exercised it: deleting the
-    // line left all 189 baseline cases green, and a malformed or unreadable
-    // tag would CREATE THE SESSION SILENTLY instead of refusing and naming
-    // the file to fix. `cmd_swap`'s own equivalent case, three describes up
-    // in this file, is what this one mirrors.
+    // line was GREEN, and a malformed or unreadable tag would CREATE THE
+    // SESSION SILENTLY instead of refusing and naming the file to fix.
+    // `cmd_swap`'s own equivalent case, three describes up in this file, is
+    // what this one mirrors.
+    //
+    // CORRECTED (merge review, M4): this said "left all 189 baseline cases
+    // green". Same defect as the digits in `cmd_prefer`'s sibling case below
+    // — an unnamed denominator is not a measurement, and M4 named only the
+    // other instance. The reproducible version, suite set and all, is
+    // written out once in that sibling case's comment. Measured against it,
+    // deleting `cmd_start`'s own guard (the `[[ "$prc" -eq 2 ]] && die …`
+    // under its `[[ -z "$regw" ]]` arm) is 2 failed / 294 passed, and the
+    // semantic red is THIS case.
     tagPool('demo', 'Pool Orate');
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
     const r = shFail(`${START_STUBS} cmd_start --cross-pool claude-b demo`);
@@ -570,11 +595,40 @@ describe('cmd_prefer', () => {
   });
 
   it('refuses on an UNDECIDABLE tag even with the flag — nobody decides, so nobody crosses', () => {
-    // Coordinator review, fix round 1, Important 1. Deleting this guard's
-    // `[[ "$prc" -eq 2 ]] && die …` line left 119 of the baseline 189 cases
-    // green — this case, and Important 2's narrowed-guard mutation, are what
-    // catch it: `cmd_prefer`'s own equivalent of `cmd_start`'s and
-    // `cmd_swap`'s undecidable-tag refusal, above.
+    // Coordinator review, fix round 1, Important 1. Before this case existed,
+    // deleting the guard was GREEN — that is the defect it closes. It is
+    // `cmd_prefer`'s own equivalent of `cmd_start`'s and `cmd_swap`'s
+    // undecidable-tag refusal, above; Important 2's narrowed-guard mutation
+    // is the other half of the pair.
+    //
+    // CORRECTED (merge review, M4). This comment used to say the deletion
+    // "left 119 of the baseline 189 cases green". Those digits named no
+    // suite set, so nobody could re-run them and they were not a
+    // measurement — an unnamed denominator is a number-shaped opinion.
+    // Re-measured 2026-09-07 at the shipping tip, with the set stated:
+    //   cd server && ./node_modules/.bin/vitest run \
+    //     test/ccd-crosspool.test.ts test/ccd-project-pool.test.ts \
+    //     test/pools-existence-pairing.test.ts \
+    //     test/ccd-lifecycle-contain.test.ts test/lifecycle-wire.test.ts \
+    //     test/ccd-archive.test.ts test/ccd-workspaces.test.ts
+    // — the union of every suite naming `cmd_prefer` or `cmd_start`, so the
+    // set covers the CHANGED CALL SITES rather than this file alone.
+    // Baseline: 7 files / 296 tests / 0 failed. Delete any ONE of the three
+    // verbs' two-line `[[ "$prc" -eq 2 ]] && die …` and it is 2 failed /
+    // 294 passed — the semantic red being that verb's own case here
+    // (`cmd_start and the pool`, `cmd_swap refuses a crossing that was not
+    // asked for`, or `cmd_prefer`), plus `pools-existence-pairing`'s
+    // "guards the guard", which blocks functions out by line and reds on
+    // any deletion. One semantic detection each, one structural byproduct.
+    //
+    // All three verbs were measured because the first attempt at this
+    // correction mislabelled a call site: the `_pool_ok` line reached by
+    // deleting at what looked like `cmd_start`'s guard is `cmd_swap`'s
+    // (`grep -n '_pool_ok "$target"' ccd/ccd`, inside `cmd_swap`; `cmd_start`'s
+    // is `_pool_ok "$wrapper"` under its `[[ -z "$regw" ]]` arm). The
+    // numbers were right and the attribution was wrong, which is its own
+    // failure mode — so all three are named here rather than two inferred
+    // from one run.
     seedRow(); tagPool('demo', 'Pool Orate');
     const r = shFail(`cmd_prefer --cross-pool ${ID} claude-b`);
     expect(r.code).not.toBe(0);
