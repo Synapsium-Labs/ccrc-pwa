@@ -2500,7 +2500,7 @@ substituted before wave-done.
   and delivers nothing; fd exhaustion makes the open itself fail. `$v` stays empty,
   `_pool_name_valid` fails, the reader answers `malformed`. MEASURED, not assumed (the premise this
   rests on was unmeasured when first written, because Task 2 had not landed): `_pool_ok`
-  (`ccd/ccd:1272`) maps `unreadable` and `malformed` alike to rc 2 through one `*)` arm, so no
+  (`_pool_ok`) maps `unreadable` and `malformed` alike to rc 2 through one `*)` arm, so no
   decider distinguishes them and PLACEMENT REFUSES EITHER WAY. The cost is the doctor proposing
   "rewrite the file as one lowercase token" where the cure is "fix the I/O error" — a wrong
   MESSAGE, never a wrong DECISION. This arm is easily reachable and this wave's own test
@@ -2789,13 +2789,18 @@ coordinator, inside one program — visible in the ledger, and nothing left unis
   blocks, and it had no size bound. `_project_pool_state` was hardened over three rounds against blocking on a FIFO, a
 character device and a symlink to either — a TYPE gate — and then read whatever regular file it
 found straight into a shell variable. Measured by the coordinator: 10 MB took 0.20 s and 32 MB RSS,
-100 MB took 39 s and 979 MB RSS; linear and unbounded. It needs no exotic filesystem to reach —
+100 MB took 39 s and 979 MB RSS — UNBOUNDED, and worse than linear in time at that scale (10x the
+bytes cost ~195x the seconds; memory is the linear one, ~10x for 10x). It needs no exotic filesystem
+to reach —
 `ln -s ~/.cc-sessions/swap.log pools/<p>`, or this branch's own documented alias in the other
 direction, makes every swap-log append grow the tag. **NOT "under `ws-add`'s flock"**, which is what
 the review said and what the first fix wrote back into `ccd/ccd`'s own comment for one round:
-measured, every reachable call — `_ws_least_loaded`'s at `ccd:3851` (entered from `:3979`) and the
-reason builder's at `:3999` — runs BEFORE `exec {lfd}>>"$addlock"` / `flock -n` at `:4044`, and no
-call site follows it. The cost delays one workspace creation and extends no lock hold.
+measured — and recorded as a GREP, not as line numbers, because the numbers this sentence first
+carried were wrong the day they were written:
+`grep -n '_project_pool_state\|_ws_least_loaded\|addlock' ccd/ccd` puts every reachable call
+(`_ws_least_loaded`'s own, and `cmd_ws_add`'s reason builder) ABOVE `cmd_ws_add`'s
+`exec {lfd}>>"$addlock"`, with no call site below it. The cost delays one workspace creation and
+extends no lock hold.
 **Wave 2b puts this function on the 5-second supervisor tick**, which is the arm that makes it
 urgent, and is why it is fixed in the wave that owns the contract rather than the wave that would
 suffer it. Fixed by `read -r -d '' -n 64 v`
@@ -2844,9 +2849,10 @@ already reports the unreadable roster with its own remedy.
 built to enforce D-1848, all of the shape D-1848 is about, found by a reviewer reading the scan
 rather than the code it guards:
 1. **The function-name pattern excluded `-`.** `ccrc-doctor-checks` names four of its own checks
-   with a hyphen (`_check_graphify-path()` at `:3306`; its table lists `graphify-path`), so that
-   function's entire body — and any future `_check_pools-parent()` — sat outside every block the
-   scan built. One character.
+   with a hyphen — ONE, not the four the first draft of this entry and of the scan's own header
+   both claimed: `grep -n '^_check_[A-Za-z0-9_]*-' ccd/ccrc-doctor-checks` finds
+   `_check_graphify-path`, whose table entry is `graphify-path`. That function's entire body — and
+   any future `_check_pools-parent()` — sat outside every block the scan built. One character.
 2. **The floor was satisfiable by ONE function.** "At least 2 qualifying sites per file" was met
    while both `ccd/ccd` hits came from `_project_pool_state` and `cmd_ws_add` and
    `cmd_project_pool` were covered by nothing. Replaced by an exact pinned SET of sites, plus a
@@ -2911,3 +2917,56 @@ literals. The title now says what the pair is evidence for, and `pool-name-parit
 the cross-file half: exactly one capped read per file, the two numbers equal, and the number
 strictly greater than the longest name `POOL_NAME_RE` can match, DERIVED from that regex rather
 than written as a fourth spelling of the grammar.
+
+#### Fix round 8 — one predicate, on the coordinator's authority (2026-09-07)
+
+The scoped re-review passed all six must-fix and both folds by reproduction, and returned ONE blocker
+plus a text list. The coordinator overruled the execution skill's one-fix-wave cap explicitly and
+ledgered the overrule: the cap bounds ping-pong on judgement calls, and this is neither a judgement
+call nor a residual — it is a falsehood the fix wave itself introduced, in the surface an operator
+consults when they have stopped trusting everything else.
+
+**D-1853, EXTENDED — the correction for the false-PASS class was itself an overloaded null.** The new
+closing PASS printed "the pool-vocabulary half is UNMEASURED: `$HOME/.ccrc/accounts.sh` could not be
+read" whenever `known` was empty. `known` is empty in TWO conditions: the read failed, or the read
+SUCCEEDED and no account is tagged. The second is every box on the fleet until someone tags the first
+account, so the moment this deployed the doctor would have told every operator that a file it had
+just read fine could not be read. Reproduced before fixing: with a generated projection whose
+`_ccrc_pool` case has no arms, the readable-but-pool-less box and the mode-000 box printed the
+IDENTICAL sentence. `[ -r … ]` had already established readability and the code then discarded that
+distinction and re-inferred it from an empty result — D-1744's rule (`no overloaded null at a seam`)
+inverted: D-1744 folded `unreadable` into a benign state, this folded a benign state into
+`unreadable`. Same seam, opposite direction, introduced by the correction for the class. **Fourth
+time this program has found its defining defect inside a disclosure written to prevent it.**
+Fixed by carrying the OUTCOME separately from the CONTENT — a sentinel first line printed only when
+the source and the `declare -F` both succeeded, since an empty vocabulary and a failed read produce
+the same empty string by construction — and by printing three sentences for three states. The middle
+one is not UNMEASURED at all: the vocabulary was read and is empty, which is a true and useful thing
+to say. Kept as an extension of D-1853 rather than a new number: it is the same seam and the same
+sentence, corrected.
+`|| :` inside the loop is load-bearing — a `case` that matches no arm is the ORDINARY state of an
+untagged account, and without it a legitimately empty vocabulary can make the whole substitution look
+like a failure.
+
+**CARRY, out of scope for this round and named rather than fixed:** the orphan arm's guard is
+`[ -n "$known" ]`, so it also makes no claim in the measured-and-empty state — where, by its own
+logic, EVERY tagged project names a pool no account is in and will strand. The middle PASS sentence
+now says the arm made no claim and why, which makes the question visible; whether that state should
+be a WARN instead is a decision for whoever owns ruling 6, not for a bounded fix wave.
+
+**THE TEXT LIST, and why the fix is not "correct the numbers".** Every anchor the review flagged was
+in THIS round's own new text and was wrong WHEN WRITTEN — not staled by anyone: `_ws_project_valid`
+at `:3685` (actually `:3717`), `_check_graphify-path` at `:3306` (actually `:3382`), and four flock
+anchors all 8-11 lines short, matching neither head nor base. This is the ~1,220-anchor process
+finding from the wave's own handoff arriving inside the wave, so the correction is the one that
+finding argued for: the anchors are now GREPS for the names themselves, in `ccd/ccd`, in
+`ccrc-doctor-checks`, in three test files and here. A name cannot go stale without the thing going
+with it. Two numeric anchors are deliberately KEPT — `ccd:3685` and `ccd:3709` in
+`pool-name-parity.test.ts` — because there they are the SUBJECT of the sentence rather than a
+pointer: the file's own first correction of the stale anchor named `:3709`, which is stale too, by
+exactly the mechanism it was describing.
+Also corrected: "four of its own checks with a hyphen" is ONE (said twice); "no name `ccd` would ever
+CREATE is omitted" is measured FALSE by this branch's own test, since `-lead` is a name `ccd` creates
+and the doctor omits — the charset is shared, the leading-dash rule is the doctor's alone, and both
+halves are pinned; and "linear and unbounded" sat beside numbers that are super-linear in time
+(10x the bytes cost ~195x the seconds; memory is the linear one).

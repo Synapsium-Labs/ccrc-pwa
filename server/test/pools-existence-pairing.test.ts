@@ -146,8 +146,11 @@
 // house style both files use throughout), not whole-file, so a variable
 // named `f` or `dir` in one function can never be confused with a
 // similarly-named, unrelated variable in another. A function NAME may hold a
-// hyphen: `ccrc-doctor-checks` spells four of its own checks that way
-// (`_check_graphify-path`), and until fix round 7 this scan's name pattern
+// hyphen: `ccrc-doctor-checks` spells one of its own checks that way
+// (`_check_graphify-path`, and its table lists `graphify-path`) — ONE, not
+// the four an earlier draft of this sentence claimed, measured with
+// `grep -n '^_check_[A-Za-z0-9_]*-' ccd/ccrc-doctor-checks` — and until fix
+// round 7 this scan's name pattern
 // excluded `-`, so that function's entire body — and any future
 // `_check_pools-parent()` — sat outside every block it built and was scanned
 // by nothing. The `-L`-pairing window is the statement itself; the
@@ -265,9 +268,10 @@ function closesInline(line: string, afterIdx: number): boolean {
  *  function's body, and every real violation reported three times over. */
 function findFunctionBlocks(lines: string[]): FuncBlock[] {
   const blocks: FuncBlock[] = [];
-  // `-` IS PART OF THE NAME. `ccrc-doctor-checks` names four of its own
-  // checks with one (`_check_graphify-path()` at :3306, and its table lists
-  // `graphify-path`), which bash accepts as a function name and which this
+  // `-` IS PART OF THE NAME. `ccrc-doctor-checks` names one of its own
+  // checks with one (`grep -n '^_check_[A-Za-z0-9_]*-' ccd/ccrc-doctor-checks`
+  // finds `_check_graphify-path`, whose table entry is `graphify-path`), which
+  // bash accepts as a function name and which this
   // pattern excluded until fix round 7 — putting that whole function, and any
   // future `_check_pools-parent()`, outside every block this scan builds.
   const startRe = /^([A-Za-z_][A-Za-z0-9_-]*)\(\)\s*\{/;

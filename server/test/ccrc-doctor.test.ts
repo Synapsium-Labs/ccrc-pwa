@@ -3884,7 +3884,7 @@ describe('ccrc doctor: pools', () => {
   // tag reachable, none of them listable — was reported `pools-unlistable: …
   // so no project's tag can be read — ccd reads this same path`, which is
   // false in both halves. The AUTHORITY is `_project_pool_state`
-  // (`ccd/ccd:1078`): it stats ONE known path (`$POOLS_DIR/<project>`) and
+  // (`_project_pool_state`): it stats ONE known path (`$POOLS_DIR/<project>`) and
   // never enumerates, so SEARCH is all it needs and LIST is what only this
   // check needs.
   //
@@ -4010,6 +4010,34 @@ describe('ccrc doctor: pools', () => {
     expect(line).not.toContain("names a pool this box's roster carries");
   });
 
+  it('says the roster carries NO POOLS when the projection reads fine and no account is tagged', () => {
+    // THE STATE THAT IS EVERY BOX ON THE FLEET TODAY, and the one the first
+    // version of this fix reported as "could not be read". `known` is empty
+    // in TWO conditions — the read failed, or it succeeded and nothing is
+    // tagged — and only the first is UNMEASURED. `DEFAULT_TEST_ROSTER`
+    // carries no `pool` on any account, so `seedAccountsSh` writes a real
+    // generated projection whose `_ccrc_pool` case has no arms: readable,
+    // parseable, and empty. That is the fixture, and it goes through the
+    // generator rather than being hand-written, so the empty-case shape is
+    // the one `ccrc install` really emits.
+    //
+    // Mutation, measured: a scratchpad copy whose closing PASS branches on
+    // `[ -n "$known" ]` alone — the two-state shape — answers this fixture
+    // with the UNMEASURED sentence, i.e. tells the operator a file it just
+    // read could not be read. The third assertion below is the one that reds
+    // on it; the first two stay green, which is the whole defect.
+    const home = healthy('ccrc-doctor-pools-nopools-');
+    seedAccountsSh(home);
+    project(home, 'demo');
+    tag(home, 'demo', 'pool-a');
+    const line = lineFor(runDoctor(home).stdout, 'pools');
+    expect(line).toMatch(/^PASS pools: /);
+    expect(line).toContain('carries NO pools at all');
+    expect(line, 'the projection was readable — saying otherwise is the defect this pins')
+      .not.toContain('could not be read');
+    expect(line).not.toContain("names a pool this box's roster carries");
+  });
+
   it('DOES claim the roster half when ~/.ccrc/accounts.sh was read', () => {
     // The mirror, and without it the pin above is satisfied by a check that
     // never claims the third clause at all — which would be a doctor that
@@ -4116,8 +4144,8 @@ describe('ccrc doctor: pools', () => {
   // matches THAT description and answers `pools-malformed` on the tree and on
   // the cap-deleted copy alike, telling the builds apart not at all. Nor does
   // the over-cap row reach the strip or the grammar test: `read -r -d '' -n 64`
-  // stops short of EOF, returns 0, and the branch at `ccrc-doctor-checks:2882`
-  // buckets `p_malformed` immediately.
+  // stops short of EOF, returns 0, and the `p_malformed` bucket in
+  // `_check_pools` takes it immediately, before any strip or grammar test.
   it('caps its read: 106 bytes of tag is malformed, 56 bytes is legal', () => {
     // WHAT THIS PAIR IS EVIDENCE FOR, EXACTLY: a cap somewhere in [56, 105].
     // It is not evidence for 64, and it is not evidence that the number is

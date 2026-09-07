@@ -282,8 +282,11 @@ describe('_project_pool_state — four words, always rc 0', () => {
     // 2b) on the 5-second supervisor tick. NOT "inside `cmd_ws_add`'s flock",
     // which is what the review said and what this comment repeated for one
     // round: measured, every reachable call runs BEFORE `ws-add` takes its
-    // lock (`ccd:3851` via `:3979`, and `:3999`; the `flock` is `:4044`), so
-    // the cost delays one workspace creation and extends no lock hold. The
+    // lock (`grep -n '_project_pool_state\|_ws_least_loaded\|addlock' ccd/ccd`
+    // — every call sits above `cmd_ws_add`'s `exec {lfd}>>"$addlock"`, none
+    // below it), so the cost delays one workspace creation and extends no
+    // lock hold. Stated as a grep, not as line numbers: the numbers this
+    // comment first carried were wrong when written. The
     // supervisor tick is the arm that makes it urgent. An over-cap read stops SHORT of
     // EOF and so returns 0 from the very branch an embedded NUL returns 0 from,
     // one test above — hence `malformed`, and `malformed` is the right word:
@@ -324,7 +327,7 @@ describe('_project_pool_state — four words, always rc 0', () => {
     // makes for a WELL-FORMED name. `_pool_ok` maps `malformed` to "nobody
     // decides", the safe side — and "nobody decides" here means `_ws_least_loaded`
     // `continue`s past every candidate and `cmd_ws_add` REFUSES placement
-    // ("no account available for placement", `ccd:4030`), NOT that the project
+    // (its own "no account available for placement" die), NOT that the project
     // becomes unconstrained. Saying it the other way round would name the very
     // fold this whole file exists to refuse.
     plantTag('demo', `pool-a${' '.repeat(50)}`);

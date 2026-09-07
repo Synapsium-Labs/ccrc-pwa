@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1ed644d1711785eb12f6e782f2ff459ffae9d9f0d1c7fb7192eb2941d2be9de4
+# ccrc:generated 1 sha256=6a575ec3da50f92ab3b2543de97e72b7725ce7574eb9f303cb218e7ba7773fa2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1173,13 +1173,16 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
   # shell variable, which is not a hang and is just as fatal to a function
   # on the `ws-add` path and, from wave 2b, on the 5-second supervisor tick.
   # NOT "UNDER `cmd_ws_add`'s FLOCK", which is what the review said and what
-  # this comment said back to it for one round: measured, every reachable
-  # call — `_ws_least_loaded`'s at :3851 (entered from :3979) and the reason
-  # builder's at :3999 — runs BEFORE `exec {lfd}>>"$addlock"` / `flock -n`
-  # at :4044, and `grep -n '_project_pool_state' ccd/ccd` finds no call after
-  # it. So the cost delays a workspace creation; it does not extend a lock
-  # hold, and no other `ws-add` waits on it. The supervisor tick is the arm
-  # that makes this urgent, and it is enough on its own.
+  # this comment said back to it for one round. Measured, and stated as a
+  # GREP rather than as line numbers — the numbers this sentence first
+  # carried were wrong the day they were written, and would have gone wrong
+  # anyway: `grep -n '_project_pool_state\|_ws_least_loaded\|addlock' ccd/ccd`
+  # puts every reachable call — `_ws_least_loaded`'s own, and the one in
+  # `cmd_ws_add`'s reason builder — ABOVE `cmd_ws_add`'s `exec {lfd}>>"$addlock"`,
+  # with no call site below it. So the cost delays a workspace creation; it
+  # does not extend a lock hold, and no other `ws-add` waits on it. The
+  # supervisor tick is the arm that makes this urgent, and it is enough on
+  # its own.
   # Measured by the coordinator's review: 10 MB took 0.20 s
   # and 32 MB RSS, 100 MB took 39 s and 979 MB RSS — linear and unbounded.
   # It needs no exotic filesystem to reach: `ln -s ~/.cc-sessions/swap.log

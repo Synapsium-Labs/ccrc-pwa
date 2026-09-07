@@ -190,22 +190,24 @@ describe('the VERB writes where POOLS_DIR_NAME says, on a real box', () => {
 // FILENAME read off the box's own disk. Fix round 7 filters it, and the
 // comment beside that filter makes a CROSS-FILE claim in prose:
 //
-//   "The charset is `_ws_project_valid`'s own (`ccd:3685`,
-//    `^[A-Za-z0-9._-]+$`, no dot-leading), so no name `ccd` would ever
-//    CREATE is omitted — a cross-file claim, and `pool-name-parity.test.ts`
-//    measures it rather than trusting this sentence."
+//   "The charset is `_ws_project_valid`'s own … The charset is shared; the
+//    leading-dash rule is this file's alone, and the parity test pins both
+//    halves rather than trusting this sentence."
 //
 // This is that measurement, and the sentence sends the reader HERE, so a
 // describe that did not exist would make the disclosure itself false.
 //
-// (That quote's LINE ANCHOR is stale and nothing below fixes it — this file
-// may not edit `ccd/ccd`. Measured 2026-09-06: `_ws_project_valid` is at
-// `ccd:3709`, and `ccd:3685` is a line of `_reg_purge`'s comment block. No
-// pin is added for it: an assertion on a line NUMBER reds on every edit
-// above it, which is how the number went stale in the first place.)
+// (THAT SENTENCE ONCE CARRIED A LINE ANCHOR, `ccd:3685`, and once claimed
+// "no name `ccd` would ever CREATE is omitted". Both were wrong. The anchor
+// was wrong WHEN WRITTEN and then went further wrong as edits landed above
+// it — this file's own first correction of it named `ccd:3709`, which is
+// stale too, by exactly the mechanism it was describing. No pin was added
+// for the number and none should be: an assertion on a line NUMBER reds on
+// every edit above it. The anchor is now a `grep` for the function's own
+// name, in both files, which cannot go stale without the name going with it.)
 //
-// WHAT THE MEASUREMENT FOUND IS NOT WHAT THE FIRST HALF OF THAT SENTENCE
-// SAYS. The two filters agree on eight of the nine names below and disagree
+// WHAT THE MEASUREMENT FOUND IS NOT WHAT THE OLD SENTENCE
+// SAID. The two filters agree on eight of the nine names below and disagree
 // on the ninth: `-lead` is a name `ccd` DOES create — `_ws_project_valid`
 // accepts it (`-` is in the charset, and only a leading DOT is refused), and
 // `cmd_project_pool --project -lead --pool <p>` really writes the tag, both

@@ -2772,11 +2772,31 @@ _check_pools() {
   # makes NO CLAIM (an empty `known`): `_check_wrappers` already FAILs loudly
   # for a missing or unreadable roster with its own remedy, and inventing a
   # second verdict for the same condition would hand one fact two vocabularies.
-  local known=""
+  # THREE STATES, NOT TWO, AND `known` CAN ONLY CARRY TWO. An empty `known`
+  # means "the read failed" OR "the read succeeded and no account is tagged" —
+  # and the SECOND is every box on this fleet until someone tags the first
+  # account. Reading emptiness as failure is the overloaded-null rule (this
+  # wave's own rule) inverted: D-1744 folded `unreadable` into a benign state,
+  # and the first version of the PASS below folded a benign state into
+  # `unreadable`, telling every operator that a file it had just read fine
+  # could not be read. `[ -r … ]` above already ESTABLISHED that it was
+  # readable and the old code then threw that away and re-inferred it from an
+  # empty result. So the outcome is carried separately from the content: a
+  # sentinel first line, printed only when the source and the `declare -F`
+  # both succeeded, is what says MEASURED. Nothing else can — an empty
+  # vocabulary and a failed read produce the same empty string by
+  # construction. `|| :` inside the loop keeps a `case` that matches no arm
+  # (an untagged account — the ordinary case) from making the whole
+  # substitution look like a failure.
+  local known="" vocab=unmeasured raw=""
   if [ -r "$HOME/.ccrc/accounts.sh" ]; then
-    known="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
+    raw="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
       && declare -F _ccrc_pool >/dev/null 2>&1 \
-      && for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_pool "$a"; done )" || known=""
+      && { printf 'measured\n'; for a in "${CCRC_ACCOUNTS[@]}"; do _ccrc_pool "$a" || :; done; } )" || raw=""
+    if [ "${raw%%$'\n'*}" = measured ]; then
+      vocab=measured
+      known="${raw#measured}"; known="${known#$'\n'}"
+    fi
   fi
 
   # This box's `*.project` registry rows, read ONCE rather than once per tag —
@@ -2973,11 +2993,14 @@ _check_pools() {
   # projection when it can and silently SKIPS when it cannot, emitting no
   # verdict. So nothing in this file reports that file, and this sentence now
   # says so rather than sending an operator to read a line that is not there.
-  # (On a FLEET box the real finding is louder anyway: `ccd` dies at
-  # `ccd:986` without it. This also runs on the server box, where absence is
-  # ordinary, so the verdict stays a PASS and states its own limit.)
-  if [ -n "$known" ]; then
+  # (On a FLEET box the real finding is louder anyway: `ccd` dies at source
+  # time without it, at its own `no account roster at` guard. This also runs
+  # on the server box, where absence is ordinary, so the verdict stays a PASS
+  # and states its own limit.)
+  if [ "$vocab" = measured ] && [ -n "$known" ]; then
     _dr_pass pools "every project tag under $dir is one legal pool name, names a project that exists, and names a pool this box's roster carries"
+  elif [ "$vocab" = measured ]; then
+    _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — and this box's roster carries NO pools at all: the vocabulary was read and is empty, so the orphan arm had nothing to match against and made no claim"
   else
     _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — the pool-vocabulary half is UNMEASURED: \$HOME/.ccrc/accounts.sh could not be read, and no other check here reports that file (_check_wrappers reads accounts.json, not the projection)"
   fi
