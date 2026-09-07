@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=24112657fca2337819e15711387dd071d040aa7e072328859158a37b61022f11
+# ccrc:generated 1 sha256=988f54f8d6baa1755f936d20ec2e88e77f18f2e7d347e503c9a2b08db866fc96
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11943,12 +11943,40 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   local project pps prc crossed="" new aff_verb=auto-home
   wrapper=$(_reg_get "$id" wrapper); home=$(_home_for "$id")
   # ── POOLS (§5.5.4) ───────────────────────────────────────────────────────
-  # Read ONCE per tick and BEFORE the cooldown gates below. The re-seed is not
-  # a relocation — nothing restarts, no transcript moves — so it must not wait
-  # 900 s behind a gate that exists to stop swap storms, and it is idempotent
-  # the moment `.home` is back in pool.
+  # THIS READ happens once, here, and BEFORE the cooldown gates below — that
+  # is not the same claim as "once per tick": `_project_pool_state` runs
+  # again inside `_swap_target` below, which re-reads `project`/`pps` for its
+  # own must-leave force and its two crossing checks, and twice more on a
+  # strand tick (`_strand_mark` and `_strand_why` each re-read it too) — up to
+  # four calls on the tick's worst path, one on its best. The re-seed is not
+  # a relocation — nothing restarts, no transcript moves — so it must not
+  # wait 900 s behind a gate that exists to stop swap storms, and it is
+  # idempotent the moment `.home` is back in pool.
   project=$(_reg_get "$id" project); pps=$(_project_pool_state "$project")
   _crosspool_valid "$id" "$pps" "$wrapper" "$home" && crossed=1
+  # ONE BIT, TWO DECISIONS WITH DIFFERENT SUBJECTS — DELIBERATE, review round
+  # 1 (Minor 2). `_swap_target` asks `cross_cur`/`cross_home` SEPARATELY,
+  # because it answers a per-account question — "may THIS account serve as
+  # cur, or as home?" — and its own comment says so ("a marker written for
+  # `wrapper` cannot admit it"). This tick asks a different question: "is
+  # THIS ROW under a deliberate crossing AT ALL, for any reason?" — so folding
+  # `wrapper` and `home` into one `crossed` flag here is right for what this
+  # call site decides, not an accidental narrowing of the distinction
+  # `_crosspool_valid` offers.
+  #
+  # THE COST, MEASURED, NOT ASSUMED: a `swap`-style marker recorded on
+  # `wrapper` also suppresses the re-seed of `home` even when `home` is a
+  # DIFFERENT, unrelated wrong-pool account that the marker never named —
+  # `crossed` is set the moment EITHER argument matches. `_swap_target`
+  # separately refuses that same wrong-pool `home` as a destination (its own
+  # `cross_home` check asks about `home` alone and finds no match), so the
+  # row is left with a home it can neither return to nor have fixed for as
+  # long as the crossing stands — repaired on the first tick after Task 4's
+  # `_crosspool_tick` ends it. Splitting the flag would close this gap, but
+  # it would open the hazard the crossing marker exists to prevent: an
+  # automatic re-seed silently overwriting the account an operator's `swap
+  # --cross-pool` deliberately put the session on. The fold stays.
+  # `ccd-auto-swap-pool.test.ts`'s "DELIBERATE FOLD" case pins the cost.
   # HOME RE-SEED (ruling 5). A retag makes a pinned wrong-pool home a lie: the
   # affinity arm would keep pulling the session back onto it for ever. NOT
   # `_ws_seed_home` — that never clobbers, and clobbering is the entire point.
@@ -11969,8 +11997,13 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   fi
   # THE AFFINITY ARM'S LOG VERB, decided here because `wrapper` cannot change
   # inside a tick: when the CURRENT account is the thing that failed the pool
-  # rule, the move's cause was a retag and the line must say so. An undecidable
-  # tag is not a cause — rc 2 leaves the verb alone.
+  # rule, the move's cause was a retag and the line must say so. `[[ "$prc"
+  # -eq 1 ]]` rather than `-ne 0` is CORRECT-BY-CONSTRUCTION, not a guarded
+  # branch worth a fixture of its own: `_swap_target` already returns empty
+  # on rc 2 (`_pool_ok "$cur" "$pps"; [[ "$prc" -eq 2 ]] && return 0`), and
+  # the affinity arm below is unreachable without a non-empty `$target` — so
+  # `prc=2` can never reach this line at all, and writing `-ne 0` here would
+  # cover a case that cannot occur rather than change what the line does.
   _pool_ok "$wrapper" "$pps"; prc=$?
   [[ "$prc" -eq 1 && -z "$crossed" ]] && aff_verb=auto-pool
   now=$(date +%s); last=$(_reg_get "$id" lastswap)

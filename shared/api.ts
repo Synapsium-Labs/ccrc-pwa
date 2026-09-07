@@ -4752,19 +4752,19 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
-  | 'rehome'        // RESERVED, and nothing emits it yet — measured, `rehome`
-                    // appears in `ccd/ccd` only as a member of its `_LC_ACTS`
-                    // vocabulary array (`grep -n '_LC_ACTS\|rehome' ccd/ccd`),
-                    // with no `_lc_emit` naming it. The act it is
-                    // reserved FOR is a session's HOME account moving: the
-                    // pool re-seed (account pools §5.5.4, wave 2b) and `ccd
-                    // prefer`, which writes `.home` and journals nothing.
+  | 'rehome'        // A session's HOME account moving. The FIRST emitter has
+                    // landed: the 5-second tick's own re-seed
+                    // (`_auto_swap_check`, account pools §5.5.4, wave 2b,
+                    // `ccd/ccd:11991`) journals `meas.reason pool` when a
+                    // project's retag makes a pinned `.home` disagree with
+                    // it. Task 6 owes the SECOND emitter, `cmd_prefer` (`ccd
+                    // prefer`, an operator's own `.home` write), which will
+                    // journal `meas.reason prefer` at the same act.
                     // DISTINCT FROM `swap`: `swap` moves the session it is
-                    // running on, `rehome` will move the account it returns
-                    // to. Declared ahead of its writer for the reason `gc`
-                    // below gives — this vocabulary is wire-facing and
-                    // additive-only, so a newer ccd emitting `rehome` at an
-                    // older server is what absence-permits exists to survive.
+                    // running on, `rehome` moves the account it returns to.
+                    // This vocabulary is wire-facing and additive-only, so a
+                    // newer ccd emitting `rehome` at an older server is what
+                    // absence-permits exists to survive.
   | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
                     // per-row removals go out as `destroy` with `verb ws-gc`
                     // (ccd:8699, ccd:8812). A run-level line would need an

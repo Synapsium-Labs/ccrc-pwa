@@ -332,20 +332,66 @@ describe('the tick re-seeds a wrong-pool home (§5.5.4 step 1)', () => {
     expect(h.calls().join('\n'), 'the MOVE is still gated').not.toContain('dispatch');
   });
 
-  it('a valid crossing marker on the HOME account survives the re-seed — "stay here on purpose" beats a retag', () => {
-    // Row 44. No case above ever plants a `.crosspool` marker before ticking,
-    // so none of them can tell the shipped `[[ -z "$crossed" ]]` guard from a
-    // mutant that deletes it — both leave `.home` at `claude-b` because
-    // nothing here ever asks for anything else. This is the fixture that
-    // actually distinguishes them: a `prefer`-style marker records the HOME
-    // account (ruling 8), so a wrong-pool `.home` that was crossed to
-    // DELIBERATELY must not be silently re-seeded back into pool.
+  it('a valid crossing marker on the HOME account (a `prefer`-style crossing) survives the re-seed — "stay here on purpose" beats a retag', () => {
+    // Row 44, fix round 1 (Important 3). The ORIGINAL version of this case
+    // set `wrapper` and `home` to the SAME account (`claude`, seed()'s
+    // default), so the marker's account matched BOTH arguments and the case
+    // could not tell `_crosspool_valid`'s `"$home"` argument from its
+    // `"$wrapper"` one — measured, three separate mutations (dropping either
+    // argument from the call, or dropping `[[ -z "$crossed" ]]` from the
+    // affinity-verb guard below) all stayed green at 32/32. `wrapper` and
+    // `home` are now DIFFERENT accounts: a `prefer`-style marker records the
+    // HOME account (ruling 8), and `wrapper` sits in-pool throughout, so
+    // only a read of `"$home"` can possibly match here.
     seed(); tagPool('demo', 'pool-b');
-    h.sh(`_reg_set ${ID} home claude; _reg_set ${ID} crosspool "1700000000 pool-b claude"`);
+    h.sh(`_reg_set ${ID} wrapper claude-b; _reg_set ${ID} home claude-a; `
+      + `_reg_set ${ID} crosspool "1700000000 pool-b claude-a"`);
+    tick(AFFINITY);
+    expect(h.reg(ID, 'home'), 'the crossed home is left exactly where the marker put it').toBe('claude-a');
+    expect(eventsOf(h.home, 'rehome'), 'a crossed home is not a rehome').toHaveLength(0);
+  });
+
+  it('a valid crossing marker on the WRAPPER account (a `swap`-style crossing) suppresses the auto-pool verb too', () => {
+    // The companion to the case above: `wrapper` is the wrong-pool crossed
+    // account and `home` is ALREADY correct, so the re-seed has nothing to
+    // do here either way — this case is about `crossed`'s OTHER reader, the
+    // affinity-verb decision. A mutant that reads only `"$home"` (dropping
+    // `"$wrapper"` from the `_crosspool_valid` call) or one that drops
+    // `[[ -z "$crossed" ]]` from the verb guard both mislabel this
+    // deliberate crossing as a retag and log `auto-pool` instead of
+    // `auto-home`.
+    seed(); tagPool('demo', 'pool-b'); idleStatus('.claude-a');
+    h.sh(`_reg_set ${ID} wrapper claude-a; _reg_set ${ID} home claude-b; `
+      + `_reg_set ${ID} crosspool "1700000000 pool-b claude-a"`);
     writeLimits('claude-b', 10, 10);
     tick(AFFINITY);
-    expect(h.reg(ID, 'home'), 'the crossed home is left exactly where the marker put it').toBe('claude');
-    expect(eventsOf(h.home, 'rehome'), 'a crossed home is not a rehome').toHaveLength(0);
+    expect(swapLog()).toContain(`auto-home ${ID}: claude-a -> claude-b [home=claude-b]`);
+    expect(swapLog(), 'a deliberate crossing is not a retag').not.toContain('auto-pool');
+  });
+
+  it('DELIBERATE FOLD: a wrapper-arm (`swap`) marker also suppresses the re-seed of an UNRELATED wrong-pool home', () => {
+    // Review round 1, Minor 2. `crossed` is one bit answering "is this row
+    // under a deliberate crossing at all?", folding `_crosspool_valid`'s
+    // separate `wrapper`/`home` answers together — deliberately, per the
+    // comment above the `_crosspool_valid` call. Here the marker names
+    // `wrapper` (a `swap`-style crossing) and `home` is a DIFFERENT account
+    // the marker never mentions, but `home` is ALSO wrong-pool (a plain
+    // pre-existing retag, unrelated to the crossing). The fold means this
+    // unrelated wrong-pool home is left exactly as it was — not fixed —
+    // because `crossed` is set via `wrapper` alone. `_swap_target` will
+    // ALSO refuse to send the session back to this `home` (its own
+    // `cross_home` check asks about `home` specifically and finds no
+    // match), so the row is stuck with a home it can neither return to nor
+    // have repaired until the crossing ends — the documented cost, not a
+    // bug to chase.
+    seed(); tagPool('demo', 'pool-b');
+    h.sh(`_reg_set ${ID} wrapper claude-a; _reg_set ${ID} home claude; `
+      + `_reg_set ${ID} crosspool "1700000000 pool-b claude-a"`);
+    writeLimits('claude-b', 10, 10);
+    tick(AFFINITY);
+    expect(h.reg(ID, 'home'), 'the fold leaves an unrelated wrong-pool home unfixed for the life of the crossing')
+      .toBe('claude');
+    expect(eventsOf(h.home, 'rehome')).toHaveLength(0);
   });
 });
 
@@ -403,6 +449,31 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
     expect(fs.existsSync(reg(`${ID}.stranded`))).toBe(true);
     tick(AFFINITY);
     expect(fs.existsSync(reg(`${ID}.stranded`))).toBe(false);
+    expect(logLines('unstranded')).toHaveLength(1);
+  });
+
+  it('CLEARS the strand on a RESCUE too, even while the pane still shows the SAME banner — ccd:12018\'s `_strand_clear` after the target check is load-bearing', () => {
+    // Review round 1, Important 2. Every case above clears the strand only
+    // via the AFFINITY fixture (a clean pane), which never exercises this
+    // SPECIFIC `_strand_clear` — the one AFTER a destination is found,
+    // reached on the RESCUE path too. Reproduced exactly as measured: strand
+    // first (pool-b empty), then let claude-b recover while the pane STILL
+    // shows the identical 429 banner (hard_blocked stays true across both
+    // ticks, so this never takes the AFFINITY branch at all). Replacing this
+    // line with `:` leaves the marker behind after a successful rescue,
+    // which means the row's NEXT genuine strand is announced nowhere —
+    // `_strand_mark`'s own debounce (`[[ ! -e "$REG/$id.stranded" ]]`) reads
+    // the stale marker and stays silent, the exact silent-strand failure
+    // this task exists to abolish, reintroduced for the rows that already
+    // hit it once.
+    seed(); tagPool('demo', 'pool-b'); plantNotify();
+    disable('claude-b'); disable('claude-d');
+    tick(BLOCKED);
+    expect(fs.existsSync(reg(`${ID}.stranded`))).toBe(true);
+    fs.rmSync(reg('claude-b-disabled'));
+    tick(BLOCKED);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude-b`);
+    expect(fs.existsSync(reg(`${ID}.stranded`)), 'the marker must not survive a rescue').toBe(false);
     expect(logLines('unstranded')).toHaveLength(1);
   });
 
