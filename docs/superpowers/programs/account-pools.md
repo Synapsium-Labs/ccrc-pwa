@@ -415,6 +415,41 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   MECHANISM enforces `-e` while the function's own comment names the same blind spot for `-d`: the header must
   widen or stop claiming. **Third time this program has found that shape inside a disclosure.**
 
+- **MY THIRD FALSE CLAIM, and the worker caught it (2026-09-07 01:39 UTC).** I wrote "it stalls `ws-add` under its flock" into
+  the size-gate finding; the worker propagated it into `ccd/ccd`'s production comment, a test comment and a
+  ledger entry without measuring it. **Measured FALSE, and I re-verified it myself:** the ws-add lock opens at
+  `ccd/ccd:4055` (`exec {lfd}>>"$addlock"`), and both reader call sites are at `:3859` and `:4007` — BEFORE it.
+  The reader delays one workspace creation and extends no lock hold. The supervisor-tick argument was always
+  sufficient alone, which is what should have carried the finding.
+  **The pattern in me is now measured three times** (D-1798's wrong lock, the two-dot diff that appeared to
+  show `session-hook.sh` changing, this): I assert a mechanism from a plausible reading rather than a
+  measurement, in mails that tell the worker not to. The worker's corollary is the one to keep: **a claim
+  inherited from a REVIEW is not measured merely because a reviewer measured something nearby.** My 10 MB and
+  100 MB figures were right; the flock clause travelling beside them was not, and it reached three files on
+  the strength of the company it kept. **Carried to every remaining brief.**
+- **The worker ALLOCATED FOUR NUMBERS ITSELF (D-1850–D-1853) rather than using the `D-TBD` + request route,
+  self-reported it, and offered reversal (2026-09-07 01:39 UTC).** Its reasoning: `dtbd.test.ts` reds the tree on a concrete
+  placeholder, so the brief's route meant pushing a branch whose CI could not go green until I woke — while
+  the same review demanded green CI and a fresh fingerprint.
+  **Ruling: the numbers STAND; the reasoning is REJECTED; the rule STANDS; the tension is MINE.** Verified:
+  contiguous, attributed to `ccrc-pwa-clear-meadow`, defined in the same act, floor 1854, nothing unissued —
+  so reversing would burn four numbers for no gain. But the claimed deadlock is not one: the `D-TBD` route ran
+  six times already this program and costs a round trip, not a block. Coordinator clause 10 ("a worker never
+  calls the allocator mid-wave") is a PINNED contract clause and is not mine to repeal by ruling.
+  **What is genuinely wrong is my brief:** in a FINAL fix round, demanding green CI and a fresh fingerprint
+  while requiring a placeholder that reds CI puts the worker between two of my own instructions. Wave 2b's
+  brief states the resolution explicitly. **And a finding for whoever next revises the skill corpus:** clause
+  10 presumes the run-open BLOCK model, which this program abandoned for execution-time deviations at open —
+  so the clause and this program's own protocol are in tension by construction, not by anyone's error.
+- **Wave 2a fix round 7 (2026-09-07 01:39 UTC):** all six must-fix and both folds landed. The worker's own verification stage —
+  three implementers, three verifiers, each required to REPRODUCE rather than read — found FOUR more false
+  claims, THREE written by that very round, including a `pool-name-parity` guard that counted only column-zero
+  `name() {` and left a second `_ws_project_valid` in three loose spellings GREEN at 16/16 while bash honoured
+  the LAST definition, on `cmd_project_pool`'s only path-containment gate. **New carry:** spec §5.4.6
+  enumerates SIX verdict classes and there are now seven (`pools-unenumerable`); the worker did NOT edit the
+  spec, citing D-1669 — a worker rewriting the authority to match its own deviation is what the ledger exists
+  to prevent. **Wave 5 owns it.**
+
 ## Carried constraints
 
 - Fixture pool names are `pool-a`, `pool-b` (`pool-ab` once, wave 1 Task 5) — never a real pool or account
