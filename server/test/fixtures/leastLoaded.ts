@@ -137,9 +137,11 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         'claude-b': fresh(40, 40),
         'claude-d': fresh(20, 20),
       },
-      expect: { wrapper: 'claude', score: 0 },
-      why: 'both sides apply the rollover rule before scoring, so a reset window frees '
-        + 'the account rather than excluding it for another six days',
+      expect: { wrapper: 'claude-a', score: 10 },
+      why: 'a rolled-over window is UNMEASURED, not measured empty: the zero both sides used to '
+        + 'read here was inferred from a timestamp, never observed, and it beat three accounts '
+        + 'that had honestly reported 10, 20 and 40 — then went on beating them, because nothing '
+        + 'runs on an account nothing was placed on. The cheapest MEASURED account wins',
     },
     {
       name: 'all-rolled-over',

@@ -44,10 +44,24 @@ const writeLimits = (file: string, content: string): void =>
 
 const json = (o: Record<string, number>): string => JSON.stringify(o);
 
-/** readLimits says "unknown" with null; _limit_field says it with an empty
- *  string. Same state, two vocabularies — translate, don't compare literally,
- *  or `String(null)` quietly demands that bash print the word "null". */
-const asShell = (v: number | null): string => (v === null ? '' : String(v));
+/** Two vocabularies AND two domains, so translate the FIXTURE rather than
+ *  weakening either implementation.
+ *
+ *  `readLimits` keeps an inferred zero on the wire and flags it (`five: 0,
+ *  fiveRolledOver: true`) because the accounts screen renders both halves —
+ *  "reset" is a different word from "0%" and from "—". `_limit_field` has no
+ *  second channel: stdout carries one token, and the ranking callers that
+ *  consume it (`_limit_score`, and through it `_avail`, `_ws_least_loaded`,
+ *  `_swap_target`) have exactly one spelling for "nobody measured this", which
+ *  is "". (`_gpt_status`, ccd:1268, is the other direct reader and folds "" to
+ *  0 — see the note in this plan's Task 3 Interfaces for why that fold is
+ *  unreachable here.)
+ *
+ *  So a row is unknown to bash when its value is null OR its rollover flag is
+ *  set. Collapsing that into `v === null` is what let bash print a confident `0`
+ *  for a window that had merely elapsed. */
+const asShell = (v: number | null, rolledOver: boolean): string =>
+  (v === null || rolledOver ? '' : String(v));
 
 describe('_limit_field rollover', () => {
   it('agrees with readLimits on every shared fixture', () => {
@@ -55,9 +69,9 @@ describe('_limit_field rollover', () => {
       const wrapper = c.file.slice(0, -'.json'.length);
       writeLimits(c.file, c.content);
       expect(sh(`_limit_field ${wrapper} five`), `${c.file} five: ${c.why}`)
-        .toBe(asShell(c.expect.five));
+        .toBe(asShell(c.expect.five, c.expect.fiveRolledOver));
       expect(sh(`_limit_field ${wrapper} seven`), `${c.file} seven: ${c.why}`)
-        .toBe(asShell(c.expect.seven));
+        .toBe(asShell(c.expect.seven, c.expect.sevenRolledOver));
     }
   });
 
@@ -282,7 +296,7 @@ describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not 
     // (unknown) and `_avail`'s own `[[ -z "$sc" ]] && return 0` carries the same
     // verdict for an honest reason. Task 3 flips this ONE literal.
     expect(sh('_limit_score claude'),
-      'the reason eligibility holds: an inferred zero today, an honest unknown after').toBe('0');
+      'the reason eligibility holds: an honest unknown, not an inferred zero').toBe('');
   });
 
   it('_swap_target still names a destination when every candidate has rolled over', () => {

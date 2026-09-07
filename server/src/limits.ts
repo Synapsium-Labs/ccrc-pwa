@@ -44,9 +44,28 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  nobody could read it". One known window is not enough either — the score is
  *  a MAXIMUM, so `{five: 3, seven: null}` bounds the truth only from below and
  *  could really be 99. The swap picker learned this first; placement is the
- *  other half of the same lesson. */
+ *  other half of the same lesson.
+ *
+ *  AN INFERRED ZERO IS UNKNOWN, and that is the third site of the same magnet.
+ *  A rolled-over row carries a REAL `0` on the wire — the accounts screen
+ *  renders it as "reset" — but that 0 was derived from a timestamp, never
+ *  observed. Read as a measurement it was the best score on the fleet, so
+ *  placement went there; nothing runs on an account nothing was placed on, so
+ *  nothing ever replaced it. Unlike the two magnets above, this one fires on a
+ *  perfectly healthy fleet, every time a window turns over.
+ *
+ *  ONE rolled window is enough, for the same reason one null window is: the
+ *  score is a maximum, and the elapsed half bounds the truth only from below.
+ *  Both flags are consulted, and either one alone answers null.
+ *
+ *  ccd's mirror says this by saying nothing — `_limit_field` prints "" for a
+ *  window that has ended, which `_limit_score` (its ranking reader) and that
+ *  function's three callers already read as unmeasured. Two languages, one fact. `projected-home.test.ts` runs
+ *  both over the same bytes. */
 const measured = (l: AccountLimits | undefined): number | null =>
-  !l || l.five === null || l.seven === null ? null : Math.max(l.five, l.seven);
+  !l || l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
+    ? null
+    : Math.max(l.five, l.seven);
 
 /**
  * The account a new workspace would land on, and its pressure score.

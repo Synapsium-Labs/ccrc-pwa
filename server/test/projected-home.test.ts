@@ -197,4 +197,44 @@ describe('projectHome ranks unmeasured below measured', () => {
     // `_ws_least_loaded` fixture (`tie`) pins the other side of this.
     expect(projectHome(r, { a: L(50, 50), b: L(50, 50) })).toEqual({ wrapper: 'a', score: 50 });
   });
+
+  it('an INFERRED zero never beats a measured account — the placement magnet, third site', () => {
+    // `L(0, 0)` with both flags set is the shape readLimits produces for an
+    // account whose windows have turned over: the zeroes are real fields on the
+    // wire (the accounts screen renders them as "reset") and they are not
+    // measurements. Before this fix `measured()` read only `five`/`seven`, so
+    // `b` scored 0, beat `a` at 5, and — since nothing runs on an account
+    // nothing was placed on — went on beating it forever.
+    //
+    // Same magnet, same shape, as the two already recorded in this function's
+    // docstring; this is the site that fires on a HEALTHY fleet every time a
+    // window turns over, rather than only on an account nobody ever measured.
+    expect(projectHome(r, {
+      a: L(5, 5),
+      b: { ...L(0, 0), fiveRolledOver: true, sevenRolledOver: true },
+    })).toEqual({ wrapper: 'a', score: 5 });
+  });
+
+  it('ONE rolled window is enough to make the row unmeasured — the score is a maximum', () => {
+    // `measured()` already refuses a HALF-NULL row for this reason, in its own
+    // words: "the score is a MAXIMUM, so `{five: 3, seven: null}` bounds the
+    // truth only from below and could really be 99". A half-INFERRED row is the
+    // same bound reached by a different route — the new 5h window has been
+    // running for an unknown time and nobody has read it — so it gets the same
+    // answer. `b` is not scored at 40 here; `a` at 50 wins by being the only
+    // account anyone has actually measured.
+    //
+    // NOTE, and it is a real divergence recorded as a deviation
+    // (D-TBD-half-rolled-score-divergence): bash does NOT agree on this shape.
+    // `_limit_score` substitutes 0 for a missing half and answers "" only when
+    // BOTH halves are empty, so it scores this row 40. That is why this case
+    // lives HERE, in the TS-only describe, and NOT in the shared leastLoaded
+    // fixtures — a shared case over this shape would red the parity harness by
+    // design. See `_ws_least_loaded`'s third divergence note for why closing it
+    // is not this change's job.
+    expect(projectHome(r, {
+      a: L(50, 50),
+      b: { ...L(0, 40), fiveRolledOver: true },
+    })).toEqual({ wrapper: 'a', score: 50 });
+  });
 });

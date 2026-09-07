@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6a575ec3da50f92ab3b2543de97e72b7725ce7574eb9f303cb218e7ba7773fa2
+# ccrc:generated 1 sha256=d36ba176a78c655f244f8cdd28291785d2137524411951f78d3193775db04e92
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3798,8 +3798,8 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
   #
   # The server's copy (projectHome, server/src/limits.ts) is stricter about
-  # "unknown" in TWO ways this is not, and both are stated here rather than
-  # discovered later:
+  # "unknown" in THREE ways this is not, and all three are stated here rather
+  # than discovered later:
   #
   #   1. It skips an account whose roster entry says telemetry:'none' — an
   #      account that will never report, so its permanent unknown must not read
@@ -3811,9 +3811,25 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   #      substitutes 0 for the missing half (`: "${five:=0}"`) and returns a
   #      real number. With a home-able `{"five":null,"seven":0}`, bash picks
   #      that account at 0 and the server picks the cheapest fully-measured one.
+  #   3. It treats a HALF-ROLLED row as unknown, where _limit_score scores it by
+  #      its surviving half. Since the provenance fix, _limit_field answers ""
+  #      for a window that has ended, so `{five: <ended>, seven: 40}` reaches
+  #      _limit_score as `("" , 40)` — its `: "${five:=0}"` substitutes 0 and the
+  #      wholly-unknown branch does not fire, giving 40, while projectHome's
+  #      measured() reads the row's fiveRolledOver flag and answers unknown.
+  #      Unlike gaps 1 and 2 this one is REACHABLE: it needs only one Anthropic
+  #      account with one window turned over. Not closed here, deliberately —
+  #      relaxing _limit_score's `&&` to `||` would make `_limit_score gpt`
+  #      unknown for gpt's real half-null file, hence `_avail gpt` always true,
+  #      hence _gpt_status unable to report the Codex weekly cap at all. The
+  #      clean close is a second channel on _limit_field (an exit status telling
+  #      "absent" from "inferred") so _limit_score can tell them apart; recorded,
+  #      not chosen. projected-home.test.ts keeps no fixture on this shape,
+  #      because a shared fixture over it would red on parity by design.
   #
-  # Parity holds today because both gaps are reachable only through the SAME
-  # account: gpt is the only telemetry:'none' account and the only one whose
+  # Parity holds today on gaps 1 and 2 ONLY, and they are reachable only
+  # through the SAME account: gpt is the only telemetry:'none' account and the
+  # only one whose
   # file carries a null half (it has no 5h window at all), and gpt is not
   # home-able — absent from CCRC_HOME_ABLE here and from roster.homeAble there —
   # so neither implementation ever scores it. Nothing else writes a half-null
@@ -11725,7 +11741,11 @@ _fmt_eta() {   # epoch-seconds -> "in 42m" / "in 6h" / "in 5d" (coarse on purpos
   else                     printf 'in %dd' $(( (d + 43200) / 86400 )); fi
 }
 
-_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale
+_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" when unknown
+  # FOUR conditions answer "": no file, no value for this field, a caller that
+  # demanded fresher telemetry than exists, and a value whose own window has
+  # ENDED. They mean one thing to every caller — nobody has measured this
+  # window — and what they must NOT mean is 0, which is a measurement.
   local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now reset
   [[ -f "$f" ]] || return 0
   val=$(_limit_json_num "$f" "$field")
@@ -11734,26 +11754,43 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if 
   if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
   # A reading whose own window has already reset describes a window that ENDED.
   # resetAt comes straight from the API (statusline-command.sh), so this is fact,
-  # where the age rules below are inference. It matters because telemetry is only
+  # where the age rule below is inference. It matters because telemetry is only
   # written when a session renders its statusline: an idle account stops
   # reporting entirely, so its last sample can outlive its window by days.
   # Observed 2026-07-27: claude read seven=98 for 14h after its 7d window reset,
   # which excluded it from every pool and stranded two sessions on gpt.
-  # Both rules below rewrite a KNOWN value; neither may conjure one. gpt.json carries
+  # Both rules below RETRACT a known value; neither may conjure one. gpt.json carries
   # `"five": null` with no 5h window at all, and a reset timestamp for a window nobody
   # ever measured says nothing about its value — "unknown" has to stay "" (readLimits
   # keeps it null), or _limit_score's wholly-unknown branch becomes unreachable.
   reset=$(_limit_json_num "$f" "${field}ResetAt")
   if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
-    printf '0'; return 0
+    # WAS `printf '0'`. That 0 was INFERRED from a timestamp, never observed,
+    # and it entered the ranking as the best measurement on the fleet:
+    # _limit_score returned max(0,0)=0, and _ws_least_loaded's strict `<` kept
+    # it over every account that had honestly reported. Nothing runs on the
+    # account it won, so nothing ever replaced the 0 — the emptiest-looking
+    # account was simply the one whose window had lapsed. Same magnet, same
+    # shape, as the two unknown-is-zero defects recorded in _ws_least_loaded and
+    # _swap_target; this is the third site, and unlike those two it fires on a
+    # perfectly healthy fleet every time a window turns over.
+    #
+    # The honest answer is "": this window ended and nobody has measured the new
+    # one. _avail keeps the account ELIGIBLE (see its comment — eligibility and
+    # rank are different questions), _ws_least_loaded skips it, _swap_target
+    # ranks it last at 100. Availability does not change; only preference does.
+    return 0
   fi
   # Fallback when the file carries no resetAt (the gpt 429 exclusion, and files
   # written before those fields existed): a sample older than its own window has
-  # certainly rolled over. (7d decays slowly, so a stale seven only zeroes after
-  # a full week.)
+  # certainly rolled over. (7d decays slowly, so a stale seven only answers
+  # unknown after a full week.) Same answer as the branch above and for the same
+  # reason — this path INFERS that the window turned over, so it may not report
+  # a measurement. The server's mirror sets fiveRolledOver/sevenRolledOver on
+  # exactly this path for exactly this reason (server/src/limits.ts).
   if [[ -n "$val" && -n "$ts" ]]; then
-    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && val=0
-    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && val=0
+    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && return 0
+    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && return 0
   fi
   printf '%s' "$val"
 }
@@ -11801,6 +11838,13 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   #     `ccd-login-screen.test.ts`'s "evacuates even though home carries zero
   #     telemetry" case is exactly that rescue, run over a fleet with no
   #     telemetry files whatsoever: it passes only while unknown is available.
+  #     AND UNKNOWN IS NO LONGER RARE. Since the provenance fix, _limit_field
+  #     answers "" for a window that has merely ENDED, not only for an account
+  #     nobody ever measured — so every account passes through unknown each time
+  #     a window turns over, on a healthy fleet. That makes this function's
+  #     permissiveness load-bearing rather than a corner case: a rolled-over
+  #     account is available today because it scored 0 and available now because
+  #     it scores unknown, which is the same answer for an honest reason.
   #   • Ranking is where unknown must lose, and both ranking sites now make it
   #     lose, by the means each can afford. `_ws_least_loaded` SKIPS an
   #     unmeasured account outright (it has a fallback for the all-unmeasured
@@ -11863,6 +11907,13 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # and a rescue that can only land on measured accounts strands a blocked
     # session every time the fleet has gone quiet (see the ruling on `_avail`).
     # Eligibility must survive; only preference changes.
+    #
+    # And unmeasured now has a SECOND source, routine rather than exceptional:
+    # since the provenance fix a candidate whose window has merely ended reads
+    # unmeasured too. It stays eligible and ranks 100 here, which is the correct
+    # treatment — its old inferred 0 made it the preferred rescue destination on
+    # a fleet where nothing had run on it, which is the magnet this comment
+    # already describes, arriving by a third route.
     #
     # 100 is exact, not a large-ish number. `_avail` above has already rejected
     # every candidate scoring >= SWAP_CEILING (98), so a measured candidate
