@@ -1604,4 +1604,85 @@ PR body: the measured baseline from `## Baseline recorded`, the deploy order, an
 
 ## Deviations found
 
-*(Empty by construction. When a deviation is found during execution, `POST /api/ledger/deviations` mints exactly the count needed and it is DEFINED here in the same act. Never take a number from `GET /api/ledger`'s `floor` — that is what the next POST would mint, not a number you may use. If the allocator is unreachable, write `D-TBD-<slug>` and report it.)*
+**Allocated and defined in one act, from the live allocator, on 2026-09-07.** This section read *"Empty by
+construction"* through execution and was never true in fact — the final whole-branch review named that as
+finding I5. `~/.local/bin/ccrc-api ledger allocate --json -` with `project: ccrc-pwa`, `count: 8` and
+`byId` filled from this pane (`ccrc-pwa-clear-river`) answered
+`{"ok":true,"numbers":[1896,1897,1898,1899,1900,1901,1902,1903],"floor":1904}`, and all eight are defined
+below in that same commit. No number was taken from `GET /api/ledger`'s `floor`. Four of them (D-1896,
+D-1897, D-1898, D-1899) record departures that happened during the build and went unwritten; four
+(D-1900–D-1903) record what the fix wave itself changed against the plan and the spec.
+
+- **D-1896** (Task 4 x Task 5) — **`CCRC_HOLD_MAX` shipped as 127, not the planned 256.** An interface
+  change forced by Task 4's bounded read and visible only once the two tasks met. `_ct_read` caps every
+  registry read at `CCRC_ID_MAX` (128), so a 256 bound is not merely loose, it is **unreachable** — and
+  worse than absent: a 400-character hold arrives truncated to 128, can lose its ` run:<id>` suffix in the
+  cut, and renders as case B (*"It names NO run"*) for a hold that names one. 127 means every value the
+  subject quotes was captured whole. Pinned by `is silent on a hold whose run suffix the read would have
+  cut off`.
+- **D-1897** (Task 8) — **the `dispatch.ts` reorder moved the `/clear`, not the hold.** The plan's literal
+  instruction was to move `CCD_ARGV.wsHold` above the `/clear`. Following it would have broken wave 1:
+  that block is the only place a **fresh spawn** is held, and hoisting it past the resume arm's own
+  preconditions would have needed a second call site, which `unattended-actor.test.ts` forbids by pinning
+  `CCD_ARGV.wsHold` to exactly one occurrence in the file. The shipped shape leaves the hold where it
+  always was and relocates the resume `/clear` to *after* it, gated on `resumed` — reproducing the old
+  `else` arm's scope exactly, on the far side of the hold. Same observable ordering, one call site.
+- **D-1898** (Task 7) — **the SessionStart timing assertion changed FORM, not just its number.** The plan
+  inherited the file's absolute 150 ms PostToolUse budget. Measured on the fleet box under real load, the
+  shipped arm's p95 ranged 136.9–164.5 ms against that 150 — a coin flip, 8/15 passing — while the ERE
+  mutation measured 203.9–227.2 ms; no absolute threshold inside the 39 ms gap could carry ~15% margin on
+  both sides at once. It ships as a **ratio** of SessionStart's p95 to PostToolUse's p95 measured in one
+  interleaved run, `< 4` (shipped 3.03–3.47, mutated 4.48–5.61, non-overlapping). Its masking window — a
+  >=10–13% compound regression in the cheap denominator arm pulls the mutation back under R — now lives in
+  the test's own comment rather than a gitignored file (review finding I5, second half).
+- **D-1899** (Task 3 x Task 5) — **the clip's discharging mutation is `GM_NODES`, not a pathological
+  hold.** Task 3 deferred proving `CARD_MAX_CHARS` to Task 5, expecting a giant `.hold` to overflow the
+  card. It cannot: `_ct_read`'s 128-character cap bounds a hold's contribution before `CCRC_HOLD_MAX` is
+  even consulted, so `a pathological hold cannot delete the card` passes with the clip deleted. The field
+  that actually overflows is `GM_NODES` — `grep -oE '[0-9]+ nodes'` is **unbounded repetition inside a
+  4096-byte head**, captured whole and interpolated straight into the graphify sentence (3000 digits drive
+  the card to 3437 characters). `a pathological node count cannot delete the card` is where it reds, and
+  the hook's own comment claiming every field of that arm is "bounded at the read" was false and is
+  corrected.
+- **D-1900** (whole plan) — **three cross-suite regressions surfaced only at review, because the standing
+  suite list did not name them.** `single-definition`, `typecheck-tests` and `coordinator-skill` each
+  broke on a change whose own task listed a different suite. The per-task suite lists are a *floor*, never
+  the set: a change to `ccd/session-hook.sh` or to a skill file can red a scanner in another package that
+  no task names, and only the whole-suite run finds it. Recorded so the next plan writes its suite lists
+  knowing that.
+- **D-1901** (fix wave, C1 — spec §4.2 Case F) — **the workdir interpolated into the card got a shape gate
+  and a length gate the spec never specified.** Case F said to name the workspace by path on a cwd/workdir
+  disagreement and stopped there, so `$wd` shipped as the **only** string reaching a session's context
+  with neither gate, while the hold bytes, the project and the id each carry both. Two measured
+  consequences: **(a)** with a cwd exactly EQUAL to a workdir longer than `_ct_read`'s 128-character cap,
+  the truncated reading compared unequal and the card asserted a directory disagreement that does not
+  exist beside a path that does not exist — the precise truncation hazard D-1896 was invented for, applied
+  to one field and not its sibling; **(b)** backticks, newlines, ANSI escapes and instruction-shaped prose
+  in a peer-writable registry file landed verbatim in `additionalContext`, re-injected on every compaction
+  for as long as the hold stood — this card being the first mechanism in the tree that pipes another row's
+  registry bytes into a peer session's model context. Shipped as `CCRC_WD_CLASS` (`CCRC_PROJ_CLASS` with
+  `/` **prepended**; appended, the class's trailing `-` falls mid-class and spells the reversed range
+  `_-/`) plus `CCRC_WD_MAX = CCRC_ID_MAX - 1`, and **on failure `wd=""`** — silence, restoring the plain
+  demonstrative rather than a claim the hook cannot measure. The accepted cost is named in the spec
+  amendment: a genuine disagreement whose workdir is unspeakable now reads as "this workspace".
+- **D-1902** (fix wave, I3 — spec §4.2 Case D) — **Case D's "empty" shape shipped unimplemented, and
+  needed its own clause rather than Case D's.** The spec named three shapes — *"a directory at that path,
+  mode 000, **empty**"* — and ruled they get a sentence because doubt reads as HELD. An empty or
+  whitespace-only `.hold` is `_ct_read` rc **0** with an empty value: it passes the length bound, fails the
+  shape gate, and fell to Case C's silence, telling a row that `registry.ts` calls `HOLD_NO_REASON` and
+  that `ws-rm`/`ws-reap` refuse on `-e` alone that there was nothing to say. It could not simply join Case
+  D: that sentence's *"exists but is not a readable file"* would itself be false of a readable, empty
+  file. §4.2 is therefore **five** sentences, not four.
+- **D-1903** (fix wave, M5 — spec §4.4) — **`CARD_MAX_CHARS` raised 1800 -> 2400, re-argued from the
+  STRUCTURAL worst case.** 1800 was sized against the worst combination measured *live on this fleet*
+  (593 + 592 + 176 + 2 = 1363, "cleared by 32%"), which is the wrong quantity for a bound. The worst the
+  code can produce with every **gated** field at its own cap, re-measured from the shipped templates, is
+  graphify 718 (a 12-digit node count, engine and pin each at their 64-byte `head -c` cap, the armed-gate
+  sentence present) + held case A 801 (a 127-character workdir, a 127-character hold, a 40-character id)
+  + co-tenant 247 (a 64-character project) + two one-space joins = **1768** — 32 characters under 1800,
+  not 32%. And because the join order is graphify -> hold -> ccrc, the overflow ate the **co-tenant**
+  sentence mid-word and silently, on exactly the sessions that carry a hold. 2400 clears 1768 by 36% and
+  stays under 10% of the 24576 bytes the neighbour hook emits on the same event. Drop-whole-subject logic
+  on the hot path was considered and refused. The ceiling is not a budget the subjects may spend up to:
+  `GM_NODES` is ungated (D-1899) and can exceed any bound on its own, which is why the clip exists at all
+  and why the number only has to cover the fields that *are* gated.
