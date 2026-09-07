@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2735523e7ecf2da9083d9c0b33b7ccf7a2d389347f43469237fbabb9a6d79e9c
+# ccrc:generated 1 sha256=e7ce819a8024ed38d223d56cd539a5f65bf2e5184f7b551b5bcc44ec54b57ecd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5168,8 +5168,6 @@ EOF
   #
   # It gates exactly ONE server decision — "may I build a `--cross-pool`
   # argv" (wave 3) — and `capSupported` refuses on no evidence, because the
-  # wrong guess there is a SILENT SUCCESS IF THE FLAG WERE TRAILING: a
-  # trailing flag is just a fourth positional nobody reads, so an old ccd
   # wrong guess there is a SILENT SUCCESS IF THE FLAG WERE TRAILING: a
   # trailing flag is just a fourth positional nobody reads, so an old ccd
   # would silently ignore it and `runCcdOr502` would render exit 0 as
