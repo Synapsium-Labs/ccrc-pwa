@@ -516,12 +516,14 @@ const DOCTOR_SITES: string[] = [
   '_check_pools: -e dir',
   '_check_pools: -e f',
 ];
-// `cmd_ws_add` and `cmd_project_pool` are pools-relevant and contribute NO
-// hits — the first never tests a pools path, the second decides from
-// `_project_pool_state` instead. Naming them here is the difference between
-// "the scan found two things" and "the scan read these three functions and
-// two of them hold no existence test at all".
-const CCD_BLOCKS: string[] = ['_project_pool_state', 'cmd_ws_add', 'cmd_project_pool'];
+// `cmd_ws_add`, `cmd_project_pool` and `_strand_why` are pools-relevant and
+// contribute NO hits — the first never tests a pools path, the second decides
+// from `_project_pool_state` instead, and the third (wave 2b) only
+// interpolates `$POOLS_DIR` into an undecidable-tag message, with no `-e`
+// test of its own to pair. Naming them here is the difference between "the
+// scan found two things" and "the scan read these four functions and three
+// of them hold no existence test at all".
+const CCD_BLOCKS: string[] = ['_project_pool_state', 'cmd_ws_add', 'cmd_project_pool', '_strand_why'];
 // One function in the doctor touches a pools path at all. `_check_graphify-path`
 // is now blocked out too (the hyphen fix) but is not pools-relevant, so it
 // never reaches this list — the fixture test for a hyphenated name is what
