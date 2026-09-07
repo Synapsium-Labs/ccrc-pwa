@@ -259,6 +259,62 @@ counters reset on startup and `/clear`, kept on `resume`; silent when the hookst
 the card sentence; `hookstate.ts` revives `null` and `0` apart; `FleetSession` carries the field;
 the chip; the doctor line.
 
+### R6 — the Read nudge, by operator ruling 2026-09-06 (D-1745)
+
+The gate (R5) fires on the question-shaped calls — a search — and leaves `Read` alone because a named
+file is not a question. Measured against what graphify itself ships (D-1746): graphify 0.9.9's own
+`PreToolUse` hooks (`graphify hook-guard search|read`, written into a project's `.claude/settings.json`
+by its installer) nudge on every `Bash` whose command contains a search word anywhere, and on every
+`Read`/`Glob` of a source or doc file; they never block, never stop, and never look at freshness. Being
+project-scoped they reach only the seven projects where someone ran the installer, four of them in
+UNTRACKED files that vanish in a fresh clone or worktree. Over the week before the read side shipped,
+330 of 345 queries came from those projects; the custom-tools worktrees, which lack the untracked file,
+sit at zero. So the Read hole is real — a session can navigate file by file and never trip the gate —
+and the mechanism that closes it has to be the fleet-wide one. **Ruling 2026-09-06 12:49 UTC:** close
+it, as a NUDGE, not a deny: `Edit` requires a prior `Read`, so a deny on `Read` would charge every
+session told to fix a named file one denial before its first edit. graphify's project hooks are left
+where they are — they coexist (the deny fires once per session life, their nudge on every call).
+
+**Where.** The same `PreToolUse` arm, beside the gate. At most ONE stdout line per event: the deny on a
+gated call, or the nudge on a nudged call, never both — a `Read` is never gated and a
+`Grep`/`Glob`/`Bash` is never nudged. Printed after the hookstate write lands, from the deny's own
+print site (D-1689).
+
+**Nudged calls.** `Read` whose `file_path`'s final segment ends in one of graphify 0.9.9's own source
+and doc extensions — `py js ts tsx jsx astro vue svelte go rs java rb c h cpp hpp cc cs kt swift php
+scala lua sh md rst txt mdx` — spelled ONCE in the hook as `GRAPH_NUDGE_READ_RE` and harvested by the
+suite rather than typed a second time, and whose path carries no `graphify-out/` segment: the card
+sends the session to `GRAPH_REPORT.md`, and nudging that read would contradict the card.
+
+**Arm condition — ALL true, or nothing is printed:** the gate's conditions 1–4 (kill-switch
+`$HOME/.ccrc/graph-gate-off` absent; a graph with a readable stamp; freshness `fresh`, same-content, or
+at most `GRAPH_GATE_MAX_BEHIND` behind; `graphQueries` 0). **No bound and no counter:** the nudge is
+advice, spends no denial, and stops the moment the session queries; the reading that measures it is
+R4's own — how soon `graphQueries` leaves 0 in a session that reads first.
+
+**Effect.** stdout, exit 0:
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"<nudge>"}}` — no
+`permissionDecision`, the call proceeds. The nudge, in the card's vocabulary: *graphify: this tree has
+a knowledge graph (<N> nodes, <freshness>) and this session has not queried it yet. Before reading
+files to orient, run: `graphify query "<your question in plain words>"` (`graphify explain "<concept>"`
+for one concept). Reading a named file to edit it needs no query.*
+
+**Cost.** Only a `Read` in an armed session pays: a bash regex on the raw payload refuses a non-source
+path before any jq, then one jq for the path and the same `_hook_graph_measure` the gate pays. A
+session that has queried once pays nothing again.
+
+**Surfaces.** The card's gate sentence becomes *Search tools (Grep, Glob, shell grep/rg/find) are
+gated, and source-file reads are nudged, until this session's first graph query.*; the off-sentence
+and the doctor's `gate on|off` cover both, since there is one kill-switch. README documents the nudge,
+the extension list's provenance, and the coexistence with graphify's project hooks.
+
+**Mutation targets.** Nudge JSON byte-exact on a `.ts` `Read` in a fresh tree at `graphQueries` 0;
+silent after one query; silent for `graphify-out/GRAPH_REPORT.md`; silent for a `.json` (not in the
+list); silent with the kill-switch; silent at 11 behind, nudged at 10; a `Read` is never DENIED (no
+`permissionDecision` in any `Read` output, in every state); a `Grep` in the same state is denied and not
+nudged — one line; the card sentence; fail-open (unparseable hookstate, no tree, registry unwritable →
+silent); the extension regex harvested, not retyped.
+
 ## 3. Rings and invariants
 
 - The hook is shell at the harness seam: it measures and reports, it does not decide. No network, no
@@ -288,6 +344,9 @@ the chip; the doctor line.
 | `~/.local/bin/graphify` replaced when it is a hand-written script | refused test |
 | doctor passes with `graphify` resolving outside the venv | FAIL test |
 | README describes the read side as a `CLAUDE.md` block | derived README guard |
+| R6: `Read` denied instead of nudged | no-`permissionDecision` test |
+| R6: nudge printed on a `graphify-out/` read, or after one query | silence tests |
+| R6: extension list retyped in the suite | harvest guard |
 
 ## 5. Ledger
 
@@ -301,6 +360,8 @@ zero on every project but the one whose project file already carried it; retired
    **Reversed 2026-09-05 (D-1613):** the operator said so, on the R4 reading. R5 is built — §2 "R5 — built".
 2. **R0** removes the block from the three physical files ccrc wrote, on the next `ccrc install`. If you
    would rather remove them by hand, R0 ships report-only.
+4. **R6** (the Read nudge) is built by operator ruling 2026-09-06 (D-1745) — "Let's do it", on the
+   comparison with graphify's shipped hooks (D-1746). Nudge, not deny; graphify's project hooks stay.
 3. **PR #44** is merged on green — it hardens `main` against the data-loss classes for the interim and its
    census is R0's core — and deployed **once**, with this design, not twice.
 

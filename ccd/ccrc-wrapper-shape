@@ -38,11 +38,12 @@
 # Everything here is `_wrap_*` / `WRAPPER_*`, which is neither of the two
 # namespaces already in play in a process that sources this file:
 #   - `_ccrc_*`  — the CLI's helpers (`_ccrc_die`) AND, more importantly, the
-#     five functions `shared/generate.mjs` emits into ~/.ccrc/accounts.sh
+#     six functions `shared/generate.mjs` emits into ~/.ccrc/accounts.sh
 #     (`_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`, `_ccrc_label`,
-#     `_ccrc_hue`) plus `CCRC_ACCOUNTS`/`CCRC_HOME_ABLE`/`CCRC_MEASURED`/
-#     `CCRC_UPSTREAM`. Nothing here may shadow one of those: a doctor run that
-#     redefined `_ccrc_cfg_dir` would be lying to whatever sourced it next.
+#     `_ccrc_hue`, `_ccrc_pool`) plus `CCRC_ACCOUNTS`/`CCRC_HOME_ABLE`/
+#     `CCRC_MEASURED`/`CCRC_UPSTREAM`. Nothing here may shadow one of
+#     those: a doctor run that redefined `_ccrc_cfg_dir` would be lying
+#     to whatever sourced it next.
 #   - `_dr_*`    — `ccrc-doctor-checks`'s own verdict helpers.
 #
 # ── NO PATH LOOKUPS, DELIBERATELY ─────────────────────────────────────────

@@ -1559,10 +1559,11 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
   by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
-  reads. **Stdout is this card on `SessionStart` and the search gate's deny on a gated `PreToolUse`
-  (R5, below) — and empty on every other event**, because a stdout JSON on `PreToolUse` *is* a
-  permission decision and this hook says nothing there unless it means one. Both halves are pinned in
-  both directions by `server/test/session-hook.test.ts`.
+  reads. **Stdout is this card on `SessionStart`, the search gate's deny on a gated `PreToolUse`
+  (R5, below) and the Read nudge's `additionalContext` on a nudged one (R6, below) — at most one of
+  those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
+  read as this hook having something to say about the call, and it says nothing there unless it
+  does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
 - **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
@@ -1656,6 +1657,48 @@ operator's, nothing in this tree writes it, and it needs neither a deploy nor a 
 `$REG/coordinator-paused`'s own shape, a convention with a speed bump. The next reading is the
 gate's own effect: denials beside queries, on a dated day after this deploys, recorded under D-1613
 in the same ledger.
+
+**The Read nudge (R6).** The gate leaves `Read` alone — a named file is not a question — so a session
+can navigate file by file and never meet it, and the operator's ruling of 2026-09-06 (**D-1745**)
+closes that hole fleet-wide as a **nudge, not a deny**: a `Read` is never denied, in any state the
+gate can be in, because `Edit` requires a prior `Read` and denying one would charge every session
+told to fix a named file one denial before its first edit. What made the hole worth closing is
+D-1746's measurement of what graphify itself ships: its own project hooks nudge on `Read`, and 330 of
+the 345 queries in the week before the read side shipped came from the seven projects where someone
+had run its installer — four of them in untracked files a fresh clone or worktree does not carry —
+while ccrc-pwa, with five fresh graphs and no such file, sat at zero.
+
+**What is nudged:** a `Read` whose `file_path` ends in one of the 28 source and doc extensions
+graphify 0.9.9 itself nudges on (`_HOOK_SOURCE_EXTS`, spelled once in the hook as
+`GRAPH_NUDGE_READ_RE` and harvested by the suite rather than retyped, end-anchored and dot-prefixed
+so `.json` can never match `.js`), and whose path carries no `graphify-out/` segment at any depth —
+the card already sends that session to `GRAPH_REPORT.md` by name, and nudging the read it asked for
+would have the two halves of one mechanism contradict each other. **When it is armed:** the gate's
+own conditions 1–4, shared with it rather than copied — the kill-switch `~/.ccrc/graph-gate-off` is
+absent, the tree carries a datable `graphify-out/graph.json`, freshness reads `fresh`, same-content
+or at most 10 commits behind, and `graphQueries` is 0 — and *not* the fifth: there is **no bound and
+no counter**, because advice spends no denial and stops the moment the session queries, so the
+reading that measures it is R4's own, how soon `graphQueries` leaves 0 in a session that reads first.
+The envelope is an `additionalContext` with no `permissionDecision`, so the call proceeds, and it
+reads: *graphify: this tree has a knowledge graph (N nodes, <freshness>) and this session has not
+queried it yet. Before reading files to orient, run: `graphify query "<your question in plain
+words>"` (`graphify explain "<concept>"` for one concept). Reading a named file to edit it needs no
+query.* It is printed from the deny's own print site, after the hookstate write lands (D-1689), so at
+most one line ever leaves a `PreToolUse` — a `Read` is never gated and a `Grep`/`Glob`/`Bash` is
+never nudged — and everything the gate fails open on, the nudge fails open on too. The card's armed
+sentence now says both halves (*search tools … are gated, and source-file reads are nudged, until
+this session's first graph query*), and the off-sentence and the doctor's `gate on` / `gate off` need
+no second form, because `graph-gate-off` is one kill-switch for both.
+
+graphify's own hooks are left exactly where they are and **coexist** (D-1746): `graphify hook-guard
+search` and `graphify hook-guard read`, written into a project's `.claude/settings.json` by its
+installer, nudge on every matching call, never block, never look at freshness, and reach only the
+projects where someone ran that installer — vanishing from a fresh clone or worktree wherever that
+file is untracked. ccrc's half is the fleet-wide one: it reaches every tree on the box with no
+per-project act, it weighs the graph's freshness before it says anything, and it stops the moment the
+session queries — until then the nudge rides every matching read and the deny at most three searches,
+where graphify's keeps nudging for the life of the session (D-1797 corrected an earlier "once per
+session" here that the mechanism never had).
 
 **The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`,
 `OnUnitActiveSec=15min`), walks every tree under `~/projects` and `~/worktrees`, serialized by its

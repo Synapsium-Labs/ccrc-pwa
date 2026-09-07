@@ -27,12 +27,20 @@ import type { RosterWire } from '../../shared/api';
 // fixture is what the tests treat as "what production actually sends". The two
 // cases that differ — a declared-plumbing entry, and an OLDER wire that omits
 // the key altogether — are built by the tests that are about them.
+//
+// `pool: null` is here on exactly the same terms, and every entry is UNTAGGED
+// on purpose: this is the roster a fleet has before anyone tags anything, which
+// is the state every existing test in this suite is implicitly asserting
+// against. A test that needs a tagged account builds one by mapping over this
+// array — `swap-sheet.test.tsx` already does that for `hidden` — rather than
+// tagging entries here and changing what every other test believes production
+// sends.
 export const TEST_ROSTER: RosterWire[] = [
-  { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true, hidden: false },
-  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false },
-  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true, hidden: false },
+  { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true, hidden: false, pool: null },
+  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false, pool: null },
+  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
   // Opt-in only: a lane a session reaches solely by being sent there on
   // purpose, never one ccd's `_ws_least_loaded` chooses on its own.
-  { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false },
-  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true, hidden: false },
+  { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null },
+  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true, hidden: false, pool: null },
 ];
