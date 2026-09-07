@@ -5052,7 +5052,7 @@ export interface LifecycleDec {
    *  OUT of this fix's scope — this docstring now states what is true of
    *  every writer rather than what only the flag-carried ones guarantee. */
   readonly reason: string | null;
-  /** `'1'` when a `swap`/`start`/`rehome` act was a DELIBERATE `--cross-pool`
+  /** `'1'` when a `swap`/`rehome` act was a DELIBERATE `--cross-pool`
    *  crossing the operator asked for, `null` otherwise — never absent, and
    *  never a boolean: ccd's encoder stores every `dec.`/`meas.` value as the
    *  string it was passed, with no numeric coercion (`meas.attic`/`meas.rc`
@@ -5062,10 +5062,18 @@ export interface LifecycleDec {
    *  chose `dec.`, not `meas.`, for, because it is a DECLARED operator
    *  choice rather than something the machinery measured about the subject
    *  — the same distinction `surface`/`actor`/`reason` already draw for
-   *  every other declared flag. Three writers (grep `ccd/ccd` for
-   *  `_crosspool_mark`, its one setter, and its three call sites):
-   *  `cmd_swap --cross-pool`'s success tail, `cmd_start --cross-pool`'s
-   *  creation-only marker, and `cmd_prefer --cross-pool`'s marker. */
+   *  every other declared flag. TWO EMITTERS (grep `ccd/ccd` for
+   *  `dec.crosspool`, measured — not three): `cmd_swap --cross-pool`'s
+   *  success tail and `cmd_prefer --cross-pool`'s marker, journaling a
+   *  `swap` row and a `rehome` row respectively — never a `start` one.
+   *  `_crosspool_mark`, the on-disk `.crosspool` REGISTRY marker's one
+   *  setter, does have a third call site, in `cmd_start --cross-pool`'s
+   *  creation path (grep `ccd/ccd` for `_crosspool_mark`) — but that call
+   *  writes only the registry marker, never this journal key, so no
+   *  `start` row ever carries `dec.crosspool` (D-1895: an earlier revision
+   *  of this docstring enumerated the registry writer's three call sites as
+   *  this journal key's emitters and named `cmd_start` as a third; it never
+   *  emitted one). */
   readonly crosspool: string | null;
 }
 
@@ -5198,8 +5206,13 @@ export interface LifecycleMeas {
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
    *  unit or as an outside request for one (`ccd:10339`). */
   readonly inUnit: number | null;
-  /** The wrapper a swap moved AWAY from; `wrapper` carries the target
-   *  (`cmd_swap`, `ccd:11055`). */
+  /** The account a `swap` OR a `rehome` moved AWAY from — two acts share this
+   *  field, and their destinations ride different keys. A `swap`'s
+   *  destination is `wrapper` above (grep `ccd/ccd` for `_lc_done swap`). A
+   *  `rehome`'s destination is `home` below and it emits no `meas.wrapper`
+   *  at all (grep `ccd/ccd` for `_lc_done rehome`: both `rehome` emitters —
+   *  `_auto_swap_check`'s own re-seed and `cmd_prefer` — set this and
+   *  `home`, never `wrapper`). */
   readonly from: string | null;
   /** How many `refs/ccrc/attic/<id>/` refs `--drop` destroyed this call —
    *  `attic` is the pin count, this is the drop count. */

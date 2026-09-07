@@ -235,9 +235,12 @@ describe('the dec key vocabulary is ONE list', () => {
   //
   // THIS GUARD DID NOT EXIST BEFORE ACCOUNT POOLS WAVE 2B (Task 6 fix round
   // 1), and its absence is exactly why `dec.crosspool` shipped GREEN two
-  // tasks in a row (Task 5's `cmd_swap`, Task 6's own `cmd_start`/
-  // `cmd_prefer`) with no `LifecycleDec` member, no `LIFECYCLE_DEC_KEY_MAP`
-  // entry, and nothing anywhere scanning for one: `ccd-lifecycle-contain.
+  // tasks in a row: Task 5's `cmd_swap` and Task 6's `cmd_prefer` — the
+  // key's only two emitters (D-1895; `cmd_start`'s own Task 6 work is
+  // `_crosspool_mark`'s registry-marker call, never this journal key, so it
+  // is not a third) — with no `LifecycleDec` member, no
+  // `LIFECYCLE_DEC_KEY_MAP` entry, and nothing anywhere scanning for one:
+  // `ccd-lifecycle-contain.
   // test.ts` had the meas-key scan above but no dec-key equivalent, so a
   // `dec.` word with no interface member was invisible to every suite in
   // this project's seven-suite blast radius. The coordinator's review is
