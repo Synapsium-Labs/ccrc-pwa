@@ -5808,16 +5808,16 @@ ACCT_CREDENTIAL=""
 _acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
   local spelling="${1:-}"
   [ "$spelling" = '-' ] \
-    || _acct_refuse 2 credential-not-stdin "--credential takes exactly one spelling, \"-\", which reads the secret from stdin. A value given here would sit in this process's argv, which is world-readable on this box for as long as the process lives. Nothing was written."
+    || _acct_refuse 2 credential-not-stdin "the --credential flag takes exactly one spelling, \"-\", which reads the secret from stdin. A value given here would sit in this process's argv, which is world-readable on this box for as long as the process lives. Nothing was written."
   [ -t 0 ] \
-    && _acct_refuse 2 credential-needs-a-pipe "--credential - reads the secret from a PIPE and stdin here is a terminal. This verb does not prompt: it is driven by the server, and a prompt would have no echo discipline and no interrupt handling. Pipe the secret in, or use 'ccrc passwd' for the one secret this box does prompt for. Nothing was written."
+    && _acct_refuse 2 credential-needs-a-pipe "the --credential - flag reads the secret from a PIPE and stdin here is a terminal. This verb does not prompt: it is driven by the server, and a prompt would have no echo discipline and no interrupt handling. Pipe the secret in, or use 'ccrc passwd' for the one secret this box does prompt for. Nothing was written."
   local v=""
   IFS= read -r v
   # `read` returns 1 at EOF with no delimiter, which is the ordinary shape of a
   # one-line pipe with no trailing newline — so the RETURN CODE is not the test.
   # The VALUE is.
   [ -n "${v//[[:space:]]/}" ] \
-    || _acct_refuse 2 credential-empty "--credential - was given and stdin carried nothing. This verb fails closed rather than writing a credential file with an empty value in it, which would be a lane holding a key that decides nothing. Nothing was written."
+    || _acct_refuse 2 credential-empty "the --credential - flag was given and stdin carried nothing. This verb fails closed rather than writing a credential file with an empty value in it, which would be a lane holding a key that decides nothing. Nothing was written."
   ACCT_CREDENTIAL="$v"
 }
 
@@ -8661,7 +8661,7 @@ _acct_id_or_refuse() {   # <id>
   local id="${1:-}"      # `${1:-}`, not `$1`: this runs under `set -u` and the
   _acct_shape            # caller may legitimately have parsed no --id at all.
   [ -n "$id" ] \
-    || _acct_refuse 2 missing-value "--id is required"
+    || _acct_refuse 2 missing-value "an account id is required: pass --id. Nothing was written."
   [[ "$id" =~ $WRAPPER_ID_RE ]] \
     || _acct_refuse 2 bad-id "\"$id\" is not a legal account id: lowercase letters, digits and hyphens, starting with a letter, at most 32 characters. It becomes a filename under \$HOME/.local/bin. Nothing was written."
   # §4.4 (spec:378-380). `cc-auth-<id>` is the auth pane's tmux session name, and
@@ -8758,7 +8758,7 @@ _acct_declare() {
     case "$1" in
       -h|--help) usage; exit 0 ;;
       --id|--provider|--base-url|--label|--hue|--suffix)
-        [ $# -ge 2 ] || _acct_refuse 2 missing-value "$1 needs a value"
+        [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
         v="$2"; shift ;;
       --id=*|--provider=*|--base-url=*|--label=*|--hue=*|--suffix=*)
         v="${1#*=}" ;;
@@ -9470,7 +9470,7 @@ _acct_credential() {
     case "$1" in
       -h|--help) usage; exit 0 ;;
       --id|--credential)
-        [ $# -ge 2 ] || _acct_refuse 2 missing-value "$1 needs a value"
+        [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
         v="$2"; shift ;;
       --id=*|--credential=*) v="${1#*=}" ;;
       *) _acct_refuse 2 unknown-argument "ccrc account credential has no argument \"$1\"" ;;
@@ -10027,7 +10027,7 @@ _acct_check() {
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
-      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "--id needs a value"; v="$2"; shift ;;
+      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --id takes a value and nothing followed it. Nothing was written."; v="$2"; shift ;;
       --id=*) v="${1#*=}" ;;
       *) _acct_refuse 2 unknown-argument "ccrc account check has no argument \"$1\"" ;;
     esac
@@ -10945,7 +10945,7 @@ _acct_one_id() {   # <verb> [--id X | --id=X]
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
-      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "--id needs a value"; v="$2"; shift ;;
+      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --id takes a value and nothing followed it. Nothing was written."; v="$2"; shift ;;
       --id=*) v="${1#*=}" ;;
       *) _acct_refuse 2 unknown-argument "ccrc account $verb has no argument \"$1\" - it takes only --id" ;;
     esac
@@ -11784,7 +11784,7 @@ _acct_remove() {
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
-      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "--id needs a value"; v="$2"; shift ;;
+      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --id takes a value and nothing followed it. Nothing was written."; v="$2"; shift ;;
       --id=*) v="${1#*=}" ;;
       --keep-credential) keepcred=1; shift; continue ;;
       *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\"" ;;

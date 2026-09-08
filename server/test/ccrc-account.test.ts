@@ -1107,17 +1107,36 @@ function untouched(home: string): { roster: string; secrets: string[]; bins: str
   };
 }
 
-/** D-2002. Eighteen of the twenty-three cases below cannot pass until Task 24
+/** D-2002. Eighteen of the twenty-six cases below cannot pass until Task 24
  *  puts `add` into `ACCT_SUBS`; at THIS commit every one of them answers
- *  `unknown-subcommand`. They are DEFERRED with `it.skip` rather than committed
- *  red — the tree's own idiom (`ccd-session-lifecycle.test.ts:99`) — so that
- *  every commit in this cluster stays green, vitest reports the deferral in its
- *  own output, and a REAL regression at this commit stays visible instead of
- *  hiding among eighteen expected reds. This suffix is the un-skip checklist:
- *  Task 24 deletes it and the `.skip` beside it in one edit. */
+ *  `unknown-subcommand`. They are DEFERRED rather than committed red — the
+ *  tree's own idiom (`ccd-session-lifecycle.test.ts:99`) — so that every commit
+ *  in this cluster stays green, vitest reports the deferral in its own output,
+ *  and a REAL regression at this commit stays visible instead of hiding among
+ *  eighteen expected reds.
+ *
+ *  THE COMPLETION CHECK IS `grep -n 'UNTIL_24' server/test/ccrc-account.test.ts`,
+ *  and it must return NOTHING once Task 24 lands. D-2002 named a grep for the
+ *  SKIP FORM instead, and that check could never come back clean while it was
+ *  written: a docstring explaining a deferral has to name the form it defers
+ *  with, so the grep matched this very comment and reported a site that was not
+ *  a skip. The form is therefore spelled nowhere above — the paragraph says
+ *  "deferred" and lets the constant carry the name. `UNTIL_24` is safe to grep
+ *  for BECAUSE this docstring belongs to it: deleting the constant deletes the
+ *  sentence that mentions it, which is the property the other check lacked.
+ *
+ *  IT IS SEVEN DELETIONS, NOT ONE, across four lines — this constant, the three
+ *  places its suffix is interpolated into a title, and the three `.skip`s beside
+ *  them (two of those titles are literal; the sixteen table rows share one). */
 const UNTIL_24 = ' — SKIPPED UNTIL TASK 24 puts `add` in ACCT_SUBS (D-2002)';
 
 describe('ccrc account add: every identity refusal, before the first byte', () => {
+  // "EVERY" IS THE SET THIS TASK SHIPS, NOT THE SET THAT EXISTS (D-2004). The
+  // pre-pass checks that `--hue` and `--label` were GIVEN and nothing about
+  // what they say, so an unknown hue or an unsafe label is still refused by
+  // Task 24's roster writer — after `_acct_write_secret` has run. Read the
+  // title as a claim about ordering, never about completeness; the arm's own
+  // "EVERY REFUSAL IN THIS ARM" (deploy/account-op.mjs:323) is the exact one.
   const cases: [string, Record<string, string | null>, string, number][] = [
     ['bad-id', { '--id': 'Lab_Dev0' }, 'bad-id', 2],
     ['reserved-id', { '--id': 'auth' }, 'reserved-id', 2],
@@ -1330,6 +1349,14 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // the flag at all, and there is nothing the operator can do with it, so it
     // takes the house table's 1: the tool ran and the answer was bad.
     expect(r.status, r.stderr).toBe(1);
+    // BEFORE THE PARSE, AND THIS ORDER IS THE POINT (review round 1). The
+    // failure this test is most exposed to is its own fixture: a fourth import
+    // appearing in `account-op.mjs` makes this tree incomplete, and node answers
+    // ERR_MODULE_NOT_FOUND at exit 1 with an empty stdout — which is the exact
+    // status this test already expects, so the red arrived at `JSON.parse` as
+    // `SyntaxError: Unexpected end of JSON input` and said nothing about the
+    // cause. This line puts node's own diagnosis in the failure message.
+    expect(r.stdout, r.stderr).not.toBe('');
     const j = JSON.parse(r.stdout ?? '') as Record<string, unknown>;
     expect(j['error']).toBe('base-url-unknown-verdict');
     // IT NAMES WHAT IT HEARD, so the next reader learns WHICH of the two files
@@ -1400,6 +1427,50 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     }
   });
 
+  it('every missing-flag refusal PRINTS — measured on argv, with no caller', () => {
+    // D-2006, AND THE TEST WHOSE ABSENCE HID IT. Every case in the table above
+    // supplies a COMPLETE argv and varies one value, so not one of them reaches
+    // the five paths that refuse an argv for what is NOT on it. Those five are
+    // reachable at this commit exactly as the credential cases are — through
+    // `sourceCall`, with no `add` arm in `ACCT_SUBS` — and they were broken:
+    // each phrased its detail beginning with the flag name, which
+    // `readPairs`' M6 guard (deploy/account-op.mjs:278-285) refuses as a
+    // mis-spelled key, so `_acct_refuse` could not print its own envelope.
+    // Measured before the fix, on all five:
+    //
+    //     rc=1 (documented: 2), stdout 0 bytes
+    //
+    // — the verb's central contract broken on every missing-flag path, with
+    // the two-disagreeing-signals shape `_acct_refuse`'s header (:3757-3809)
+    // calls a documented trap on stderr instead.
+    //
+    // BOTH ASSERTIONS EARN THEIR PLACE, and neither subsumes the other. The
+    // exit code is what reds against THIS defect (1 instead of 2, measured);
+    // `oneObject` is what reds against its other half — a refusal that exits 2
+    // and prints nothing, or prints a line before its answer. A caller parsing
+    // stdout needs both to be true, so both are asserted.
+    const home = box('ccrc-account-add-missingflag-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const partial: [string, string][] = [
+      ['the loop, a flag with nothing after it', '--id'],
+      ['no argv at all', ''],
+      ['--label absent', "--id lab-dev0 --provider compatible"],
+      ['--hue absent', "--id lab-dev0 --provider compatible --label 'lab·dev0'"],
+      ['--provider absent', "--id lab-dev0 --label 'lab·dev0' --hue amber"],
+    ];
+    for (const [what, argv] of partial) {
+      const r = sourceCall(home, `_acct_add_parse ${argv}`);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(2);
+      const j = oneObject(r);
+      expect(j['error'], what).toBe('missing-value');
+      // AND THE FLAG NAME SURVIVES THE REWORDING. Opening with prose is only
+      // half the rule: a sentence that dropped the flag entirely would print
+      // fine and leave the operator a code with no fix. It is now mid-sentence,
+      // which is exactly where `_acct_refuse`'s header says to put it.
+      expect(String(j['detail']), what).toMatch(/--[a-z]/);
+    }
+  });
+
   it.skip(`both flag spellings work, and a flag with no value is exit 2${UNTIL_24}`, () => {
     // `cmd_install`'s rule (:4475-4485): BOTH `--flag VALUE` and `--flag=VALUE`
     // for every value-taking flag, a missing value with its own message, and a
@@ -1428,5 +1499,77 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     const unknown = run(home, ['account', 'add', '--nope', 'x']);
     expect(unknown.code).toBe(2);
     expect(oneObject(unknown)['error']).toBe('unknown-argument');
+  });
+});
+
+// ── THE SCAN THAT MAKES A CONVENTION A MECHANISM (D-2006) ─────────────────
+// `_acct_refuse`'s third argument reaches `deploy/account-op.mjs` as the VALUE
+// of `--detail`, and `readPairs`' M6 guard (:278-285) refuses a value that
+// begins with `--` — it looks like the next `--key`, and consuming it would
+// shift every pair that follows. So a refusal sentence that opens with a flag
+// name cannot be printed AT ALL: the refusal exits 1 with an empty stdout and
+// a `could not print a refusal envelope` line on stderr, which is the exact
+// shape `_acct_refuse`'s own header calls a documented trap.
+//
+// Task 22 met this, reworded its three sentences and wrote the rule in capitals
+// at ccd/ccrc:4090-4093. Task 23 reintroduced it two hundred lines below that
+// sentence, in five places, by transcribing a plan that prescribes the shape
+// eleven times. A CAPITALISED PARAGRAPH IS A REQUEST; this is the mechanism.
+// It covers the whole file, so every future `_acct_refuse` call inherits the
+// guard without anyone having to remember it — the same idiom as
+// `server/test/single-definition.test.ts`'s source scans.
+//
+// AND THE RULE WAS ALREADY WRITTEN DOWN TWICE. `_acct_refuse`'s own header
+// (ccd/ccrc:3805-3809) names the second shape exactly — "a future site spelled
+// `_acct_refuse 2 bad-value \"$sub\"` — the operator's bytes FIRST — would lose
+// it, and is the shape to refuse" — and it was written before either draft that
+// shipped the shape anyway. Two paragraphs stating a rule and no mechanism
+// enforcing it is the whole of D-2006; this is the enforcement.
+describe('ccd/ccrc: no refusal sentence may begin with a flag', () => {
+  it('every `_acct_refuse` call passes a detail its own printer can carry', () => {
+    const lines = readFileSync(CCRC_SRC, 'utf8').split('\n');
+    const calls: { line: number; detail: string }[] = [];
+    let mentions = 0;
+    for (const [i, raw] of lines.entries()) {
+      if (!raw.includes('_acct_refuse')) continue;
+      if (/^\s*#/.test(raw)) continue;            // prose about the function
+      if (/^_acct_refuse\(\)/.test(raw)) continue; // its definition
+      mentions++;
+      // THE DETAIL MUST BE ONE DOUBLE-QUOTED WORD, and that is half the check:
+      // an unquoted detail would word-split into `$4`, `$5`… and arrive at
+      // `account-op.mjs` as a mis-spelled key for the same reason.
+      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
+      expect(m, `ccd/ccrc:${i + 1} calls _acct_refuse in a shape this scan cannot `
+        + 'read, so the rule below went unmeasured on it. Either put the call on '
+        + 'one line as `_acct_refuse <exit> <code> "<detail>"`, or teach this scan '
+        + `the new shape — but do not leave it unread.\n    ${raw.trim()}`).toBeTruthy();
+      calls.push({ line: i + 1, detail: m![1]! });
+    }
+    // A SCAN OVER NOTHING IS GREEN. Both halves: every mention this file found
+    // was parsed, and the count is in the band the shipped verb actually has.
+    expect(calls.length, 'a mention went unparsed').toBe(mentions);
+    expect(calls.length, 'this scan found almost no calls — has _acct_refuse been '
+      + 'renamed, or the section moved out of ccd/ccrc?').toBeGreaterThan(20);
+
+    for (const c of calls) {
+      expect(c.detail.startsWith('--'),
+        `ccd/ccrc:${c.line}: this refusal's detail BEGINS with "--", so `
+        + '`readPairs`\'s M6 guard refuses it as a mis-spelled --key and the '
+        + 'refusal cannot print its own envelope: exit 1 and an empty stdout '
+        + 'instead of the documented code and one JSON object. Open the sentence '
+        + 'with prose and put the flag name mid-sentence — ccd/ccrc:4090-4093 '
+        + `states the rule.\n    ${c.detail}`).toBe(false);
+      // AND THE SHAPE THAT IS NOT LITERALLY `--` BUT BECOMES IT. A detail
+      // opening with a POSITIONAL parameter opens with an argv token, and
+      // inside a flag loop that token IS a flag: `"$1 needs a value"` printed
+      // nothing for exactly the same reason `"--id is required"` did. Named
+      // variables are not caught and must not be — `$sh`, `$shape`, `$dest` and
+      // `$ACCT_ID` are strings this script built, not bytes the operator typed.
+      expect(/^\$(\{?[0-9@*])/.test(c.detail),
+        `ccd/ccrc:${c.line}: this refusal's detail BEGINS with a positional `
+        + 'parameter, which in a flag loop is the flag itself — so at runtime it '
+        + 'begins with "--" and cannot print, exactly as a literal "--" cannot. '
+        + `Name the flag mid-sentence instead.\n    ${c.detail}`).toBe(false);
+    }
   });
 });

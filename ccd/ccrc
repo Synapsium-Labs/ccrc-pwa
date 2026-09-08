@@ -4090,13 +4090,13 @@ _acct_candidates() {
 # EVERY REFUSAL SENTENCE BELOW BEGINS WITH PROSE, AND THAT IS LOAD-BEARING, not
 # style. `_acct_refuse`'s header (:3757-3809) states the rule — the `--` bytes go
 # MID-SENTENCE, because `$3` reaches `account-op.mjs` as the value of `--detail`
-# and a value that BEGINS with `--` is refused there as a mis-spelled key. These
-# three sentences are the first in this file that had a reason to open with a
-# flag name, and the first draft of them did: measured, each produced a stray
-# `{"ok":false,"error":"bad-argv",...}` envelope on stdout AND a `_ccrc_die`
-# sentence on stderr, at exit 1 instead of 2 — the exact two-disagreeing-signals
-# shape that header calls a documented trap. The three tests that pin these
-# codes are what caught it, and are what keeps the wording honest.
+# and a value that BEGINS with `--` is refused there as a mis-spelled key. The
+# first draft of these three opened with a flag name, and each then produced a
+# stray `bad-argv` envelope on stdout AND a `_ccrc_die` sentence on stderr, at
+# exit 1 instead of 2 — the two-disagreeing-signals shape that header calls a
+# documented trap. Task 23 reintroduced it in FIVE sites 200 lines below here
+# (D-2006), so the rule is no longer this paragraph: `ccrc-account.test.ts`'s
+# "no refusal sentence may begin with a flag" scans this whole file for both.
 #
 # THE argv CLAIM ABOVE IS MEASURED, NOT REASONED (Task 22, `strace -f -s 4000
 # -e trace=execve,openat,write` over a full read-then-write of a canary token):
@@ -4292,7 +4292,7 @@ _acct_add_parse() {
       -h|--help) usage; exit 0 ;;
       --id|--provider|--label|--hue|--suffix|--base-url|--models|--method|--credential)
         [ $# -ge 2 ] \
-          || _acct_refuse 2 missing-value "$1 needs a value"
+          || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
         v="$2"; shift ;;
       --id=*|--provider=*|--label=*|--hue=*|--suffix=*|--base-url=*|--models=*|--method=*|--credential=*)
         v="${1#*=}" ;;
@@ -4317,7 +4317,7 @@ _acct_add_parse() {
   # before any path is built from it — `cmd_wrappers`' rule (:2504-2510), which
   # is what makes it hold for a traversing id as well as a merely illegal one.
   [ -n "$ACCT_ID" ] \
-    || _acct_refuse 2 missing-value "--id is required"
+    || _acct_refuse 2 missing-value "an account id is required: pass --id. Nothing was written."
   [[ "$ACCT_ID" =~ $WRAPPER_ID_RE ]] \
     || _acct_refuse 2 bad-id "\"$ACCT_ID\" is not a legal account id: lowercase letters, digits and hyphens, starting with a letter, at most 32 characters. It becomes a filename under \$HOME/.local/bin. Nothing was written."
   # §4.4. `cc-auth-<id>` is the auth pane's tmux session name, and for the id
@@ -4326,9 +4326,9 @@ _acct_add_parse() {
   [ "$ACCT_ID" != auth ] \
     || _acct_refuse 2 reserved-id "\"auth\" is reserved: the auth pane's tmux session is named cc-auth-<id>, which for this id would collide with the pane of a session running on it. Pick another id. Nothing was written."
 
-  [ -n "$ACCT_LABEL" ] || _acct_refuse 2 missing-value "--label is required"
-  [ -n "$ACCT_HUE" ]   || _acct_refuse 2 missing-value "--hue is required"
-  [ -n "$ACCT_PROVIDER" ] || _acct_refuse 2 missing-value "--provider is required"
+  [ -n "$ACCT_LABEL" ] || _acct_refuse 2 missing-value "a human label is required: pass --label. Nothing was written."
+  [ -n "$ACCT_HUE" ]   || _acct_refuse 2 missing-value "a hue is required: pass --hue. Nothing was written."
+  [ -n "$ACCT_PROVIDER" ] || _acct_refuse 2 missing-value "a provider is required: pass --provider. Nothing was written."
 
   # §4.4's default, and it is inside the read root BY CONSTRUCTION.
   #

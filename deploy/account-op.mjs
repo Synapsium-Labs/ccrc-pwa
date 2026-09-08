@@ -199,7 +199,7 @@ function readRoster(file) {
     rosterFromJson(json);
   } catch (e) {
     // The validator's own `remedy` reaches the caller VERBATIM —
-    // `_inst_accounts_sh`'s rule (ccd/ccrc:4396-4399).
+    // `_inst_accounts_sh`'s rule (ccd/ccrc:4729-4733; D-2007 moved this cite).
     const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
     refuse('roster-invalid', `${file}: ${e.message}${remedy}`);
     return null;
