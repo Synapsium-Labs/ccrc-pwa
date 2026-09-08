@@ -1768,12 +1768,21 @@ mean — the first two are what the file's presence alone can say, the last thre
   those bytes are the residue of a claim, not an assignment. Take that to the operator rather than starting
   a wave on it."*
 - **Names no run** (no ` run:` suffix — a close claimed the workspace for its next wave, or a human wrote it
-  by hand, no dispatch placed it): quotes the hold, names the `ccrc-worker` skill as its declared trigger,
-  says *"It names NO run"*, and sends the session to `~/.local/bin/ccrc-api runs list` before acting on it.
-- **Names a run**: quotes the hold, names the same skill, and adds its first read
+  by hand, no dispatch placed it): quotes the hold, says the bytes *"name a program and a wave — what the
+  `ccrc-worker` skill is for"*, says *"It names NO run"*, and sends the session to
+  `~/.local/bin/ccrc-api runs list` before acting on it.
+- **Names a run**: quotes the hold, recommends the same skill, and adds where a brief would be listed
   (`~/.local/bin/ccrc-api mail list --to <id>`, noting an already-acked brief is not listed again) and the
   caveat that the hold can outlive the run that wrote it — whether that run is still open is answered only
   by `runs list`, never by this file.
+
+  Neither sentence describes the skill's *internals*, and that is deliberate (D-1922): they used to call the
+  hold the skill's "declared trigger" and to name the skill's "first read", and both were false — the
+  declared trigger is `program:<slug> wave:N/M` **and** "you are not the session that opened the run", while
+  the hook's gate accepts the `wave:N` shape `holdReason` writes when `waveOf === null` and cannot measure
+  the second condition at all; and the skill's first read is `ccrc-api whoami`, with `mail list` appearing
+  nowhere in it. A card that recommends a skill can be honest; one that describes it goes stale the moment
+  the skill is edited.
 
 One emitted string, two referents: the graphify subject measures the payload's `cwd`; the program subject
 measures the tmux session id. A session that `cd`'d, or a second window opened on the same held id, makes

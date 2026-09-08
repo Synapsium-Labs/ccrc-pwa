@@ -182,13 +182,27 @@ to say.
 the workdir):
 
 > ccrc-program: this workspace is claimed — `~/.cc-sessions/<id>.hold` reads
-> `program:account-pools wave:3/6 run:34`, which is the `ccrc-worker` skill's
-> declared trigger. Run that skill; its first read is
-> `~/.local/bin/ccrc-api mail list --to <id>`, and a brief you already acked is
-> not listed again — the plan it named is the durable record. The hold is
-> written by the ccrc server and can outlive the run that wrote it: whether that
-> run is still open, and whether any brief was sent, are answered only by
+> `program:account-pools wave:3/6 run:34`, which names a program and a wave —
+> what the `ccrc-worker` skill is for. Run that skill. Any brief sent to you is
+> listed by `~/.local/bin/ccrc-api mail list --to <id>`, and one you already
+> acked is not listed again — the plan it named is the durable record. The hold
+> is written by the ccrc server and can outlive the run that wrote it: whether
+> that run is still open, and whether any brief was sent, are answered only by
 > `~/.local/bin/ccrc-api runs list`, never by this file.
+
+**AMENDED at PR time (D-1922).** The two sentences above originally read *"which
+is the `ccrc-worker` skill's declared trigger. Run that skill; its first read is
+…"*. Both clauses were false, which this design does not permit of any sentence
+the card emits. The skill's declared trigger (`worker-skill/SKILL.md:3`) is
+`program:<slug> wave:N/M` **and** *"you are not the session that opened the
+run"* — but the gate accepts `wave:N` with no denominator, the shape
+`holdReason` really writes whenever `waveOf === null` (`rundefs.ts:90-93`), and
+the second condition cannot be measured from the fleet box at all; and the
+skill's first read is `ccrc-api whoami` (SKILL.md:24-33), with `mail list`
+appearing nowhere in it. The replacement says only what the hook measures — the
+bytes name a program and a wave — and RECOMMENDS the skill instead of
+describing it. `mail list --to` survives because it is a real client verb
+(`ccrc-api:100`) whose route excludes acked rows (`outstandingMailFor`).
 
 **Case B — no `run:` suffix.** Two producers reach it: `close.ts:302-305`'s
 anticipatory `holdReason(program, wave+1, waveOf, null)` for a run that does not

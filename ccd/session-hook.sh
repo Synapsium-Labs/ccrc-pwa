@@ -656,15 +656,30 @@ _hook_hold_card() {
   if [ -z "${GM_CWD:-}" ] || { [ -n "$wd" ] && [ "$GM_CWD" != "$wd" ]; }; then
     subj="the workspace \`$id\`${wd:+ (\`$wd\`)}"
   fi
+  # WHAT THESE TWO SENTENCES MAY SAY ABOUT THE WORKER SKILL (D-1922). They
+  # used to call the hold "the `ccrc-worker` skill's declared trigger" and to
+  # name that skill's "first read". Both were false, and this card's whole
+  # promise is that no sentence it emits can be. (a) The skill's declared
+  # trigger (`worker-skill/SKILL.md:3`) is `program:<slug> wave:N/M` AND "you
+  # are not the session that opened the run" — but the gate above accepts
+  # `wave:N` with NO denominator, which `holdReason` really writes whenever
+  # `waveOf === null` (`rundefs.ts:90-93`), and the second condition is not
+  # measurable from this box at all. (b) The skill's first read is
+  # `ccrc-api whoami` (SKILL.md:24-33, "Learn who you are, first"); `mail
+  # list` appears NOWHERE in it. What survives is what the hook can measure:
+  # the bytes name a program and a wave, and `mail list --to` is a real client
+  # verb (`ccrc-api:100`) whose route excludes acked rows
+  # (`outstandingMailFor`). So the card says that, and recommends the skill
+  # rather than describing it.
   # NO ` run:` SUFFIX means no dispatch placed it: `closeRun`'s non-final arm
   # writes `holdReason(program, wave+1, waveOf, null)` for a run that does not
   # exist yet, and `ledger-template.md` still instructs a hand hold.
   case "$h" in
     *" run:"*) ;;
-    *) CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which is the \`ccrc-worker\` skill's declared trigger. It names NO run: a close claimed this workspace for a next wave, or a human wrote it by hand — no dispatch placed it. Run \`~/.local/bin/ccrc-api runs list\` before acting on it; whether any run is open, and whether a brief was sent, are answered there and never by this file."
+    *) CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which names a program and a wave — what the \`ccrc-worker\` skill is for. It names NO run: a close claimed this workspace for a next wave, or a human wrote it by hand — no dispatch placed it. Run \`~/.local/bin/ccrc-api runs list\` before acting on it; whether any run is open, and whether a brief was sent, are answered there and never by this file."
        return 0 ;;
   esac
-  CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which is the \`ccrc-worker\` skill's declared trigger. Run that skill; its first read is \`~/.local/bin/ccrc-api mail list --to $id\`, and a brief you already acked is not listed again — the plan it named is the durable record. The hold can outlive the run that wrote it: whether that run is still open, and whether any brief was sent, are answered only by \`~/.local/bin/ccrc-api runs list\`, never by this file."
+  CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which names a program and a wave — what the \`ccrc-worker\` skill is for. Run that skill. Any brief sent to you is listed by \`~/.local/bin/ccrc-api mail list --to $id\`, and one you already acked is not listed again — the plan it named is the durable record. The hold can outlive the run that wrote it: whether that run is still open, and whether any brief was sent, are answered only by \`~/.local/bin/ccrc-api runs list\`, never by this file."
   return 0
 }
 

@@ -1017,10 +1017,10 @@ _hook_hold_card() {
   # exist yet, and `ledger-template.md` still instructs a hand hold.
   case "$h" in
     *" run:"*) ;;
-    *) CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which is the \`ccrc-worker\` skill's declared trigger. It names NO run: a close claimed this workspace for a next wave, or a human wrote it by hand — no dispatch placed it. Run \`~/.local/bin/ccrc-api runs list\` before acting on it; whether any run is open, and whether a brief was sent, are answered there and never by this file."
+    *) CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which names a program and a wave — what the \`ccrc-worker\` skill is for. It names NO run: a close claimed this workspace for a next wave, or a human wrote it by hand — no dispatch placed it. Run \`~/.local/bin/ccrc-api runs list\` before acting on it; whether any run is open, and whether a brief was sent, are answered there and never by this file."
        return 0 ;;
   esac
-  CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which is the \`ccrc-worker\` skill's declared trigger. Run that skill; its first read is \`~/.local/bin/ccrc-api mail list --to $id\`, and a brief you already acked is not listed again — the plan it named is the durable record. The hold can outlive the run that wrote it: whether that run is still open, and whether any brief was sent, are answered only by \`~/.local/bin/ccrc-api runs list\`, never by this file."
+  CARD_HOLD="ccrc-program: $subj is claimed — \`~/.cc-sessions/$id.hold\` reads \`$h\`, which names a program and a wave — what the \`ccrc-worker\` skill is for. Run that skill. Any brief sent to you is listed by \`~/.local/bin/ccrc-api mail list --to $id\`, and one you already acked is not listed again — the plan it named is the durable record. The hold can outlive the run that wrote it: whether that run is still open, and whether any brief was sent, are answered only by \`~/.local/bin/ccrc-api runs list\`, never by this file."
   return 0
 }
 ```
@@ -1613,6 +1613,12 @@ below in that same commit. No number was taken from `GET /api/ledger`'s `floor`.
 D-1897, D-1898, D-1899) record departures that happened during the build and went unwritten; four
 (D-1900–D-1903) record what the fix wave itself changed against the plan and the spec.
 
+**A ninth was issued separately, at PR time.** `count: 1` from the same allocator answered
+`{"ok":true,"numbers":[1922],"floor":1923}` — the gap from 1904 is other branches' allocations in the
+meantime, which is the allocator working as designed. **D-1922** is defined below in the same act, and it
+is the only one of the nine that changes what a session READS: the other eight moved bounds, tests and
+prose. The floor is now 1923.
+
 - **D-1896** (Task 4 x Task 5) — **`CCRC_HOLD_MAX` shipped as 127, not the planned 256.** An interface
   change forced by Task 4's bounded read and visible only once the two tasks met. `_ct_read` caps every
   registry read at `CCRC_ID_MAX` (128), so a 256 bound is not merely loose, it is **unreachable** — and
@@ -1709,3 +1715,33 @@ D-1897, D-1898, D-1899) record departures that happened during the build and wen
   count is now stated as MODELLED rather than bounded, which is the whole reason this entry exists.
   Third pass on one number; the lesson recorded here is that a sum whose components are each argued in
   prose needs its components re-derived, not its total re-read.
+
+- **D-1922** (PR-time fix wave — spec §4.2 Case A/B) — **the card said two things about the `ccrc-worker`
+  skill that the skill does not support, and this design forbids exactly that.** A seven-agent adversarial
+  pass over the PR body, run before opening it, attacked the branch's central promise — *no sentence the
+  card emits can be false* — and found the promise broken by the card's own longest sentence. Both clauses
+  came verbatim from spec §4.2 Case A, so the spec is amended with them.
+  **(a) *"which is the `ccrc-worker` skill's declared trigger"*.** That skill's declared trigger
+  (`ccd/worker-skill/SKILL.md:3`) is `program:<slug> wave:N/M` **and** *"you are not the session that
+  opened the run"*. The hook's gate is `^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$` —
+  the denominator is OPTIONAL, and `wave:N` with none is not a shape the gate merely tolerates but the one
+  `holdReason` really writes whenever `waveOf === null` (`server/src/coord/rundefs.ts:90-93`), which is
+  every hand hold. So the card asserted a trigger match on a hold that does not match the trigger. The
+  second condition — who opened the run — is not measurable from the fleet box at all, with or without a
+  fork: it lives in `coord.db`, which this hook must never reach.
+  **(b) *"its first read is `~/.local/bin/ccrc-api mail list --to $id`"*.** The skill's first read is
+  `ccrc-api whoami` — SKILL.md:24 (*"Learn who you are, first — and again on every call"*) and clause 1 —
+  and the string `mail list` appears **nowhere** in that file; mail is reached at :149, well after.
+  **The shape of the fix is the finding.** Both clauses failed the same way: the card DESCRIBED another
+  artefact instead of reporting what it measured, so it could go false without a single byte of the hook
+  changing — a skill edit alone would do it, and neither `worker-skill.test.ts` nor `session-hook.test.ts`
+  would go red, because no test relates the two files. The replacement says only what the hook measured
+  (*"which names a program and a wave"*) and RECOMMENDS the skill (*"what the `ccrc-worker` skill is for"*,
+  *"Run that skill"*) rather than describing it. `mail list --to` stays, demoted from a claim about the
+  skill to a claim about the client: it is a real verb (`ccd/ccrc-api:100`, `GET|/api/mail|no|to`) and its
+  route answers `outstandingMailFor`, whose `OUTSTANDING_OR_ABANDONED_SQL` excludes acked rows — so *"one
+  you already acked is not listed again"* is measured, and stands.
+  **What this leaves open, named rather than closed:** the card still has no mechanism forbidding a future
+  sentence from describing another file. The general guard would be a scan relating card text to the
+  artefacts it names, and none exists; the standing defence is this entry and the note now in the hook
+  above the two sentences.

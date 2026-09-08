@@ -1878,6 +1878,33 @@ describe('the program subject', () => {
     expect(text).toContain('ccrc-api mail list --to demo-quiet-basin');
   });
 
+  // D-1922. Both clauses this pins the ABSENCE of came verbatim from spec
+  // §4.2 Case A and were false: the skill's declared trigger is
+  // `program:<slug> wave:N/M` AND "you are not the session that opened the
+  // run" (worker-skill/SKILL.md:3), while the hook's gate accepts the `wave:N`
+  // shape `holdReason` writes whenever `waveOf === null`; and the skill's
+  // first read is `ccrc-api whoami` (SKILL.md:24-33), with `mail list`
+  // appearing nowhere in it. The failure mode is shared and is the reason
+  // this test exists at all: a card sentence that DESCRIBES another artefact
+  // can go false with no byte of this hook changing — a skill edit alone does
+  // it — and nothing else in either suite relates the two files. Mutation:
+  // restore either clause and this reds; the positive assertions above stay
+  // green either way, which is exactly why they were not enough.
+  it('recommends the worker skill without describing it — no trigger claim, no first-read claim (D-1922)', () => {
+    hold('program:account-pools wave:3/6 run:34');
+    const text = plain();
+    expect(text).toContain('names a program and a wave');
+    expect(text).not.toMatch(/declared trigger/i);
+    expect(text).not.toMatch(/first read/i);
+  });
+
+  it('makes the same claim-free recommendation on a suffix-less hold (D-1922)', () => {
+    hold('program:account-pools wave:4/6');
+    const text = plain();
+    expect(text).toContain('names a program and a wave');
+    expect(text).not.toMatch(/declared trigger/i);
+  });
+
   it('never narrates the wave or the role', () => {
     hold('program:account-pools wave:3/6 run:34');
     const text = plain();
