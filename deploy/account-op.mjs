@@ -8,9 +8,9 @@
 // stdout, diagnostics on stderr under this tool's own name, and the SAME
 // exit-code table `ccd/ccrc:24-33` prints to the operator — 0 ok, 1 the tool ran
 // and the answer was bad, 2 a usage error. Nothing translates at the seam, which
-// is `cmd_adopt`'s own argument for `exec "$BASH"` (ccd/ccrc:2908-2922: "the two
+// is `cmd_adopt`'s own argument for `exec "$BASH"` (ccd/ccrc:2921-2938: "the two
 // tools already share ONE exit-code table … so nothing has to be translated at
-// the seam", :2916-2917).
+// the seam", :2929-2930).
 //
 // ── WHO OWNS THE EXIT CODE ────────────────────────────────────────────────
 // Whoever DECIDES. Every op except `refuse` decides its own class and exits
@@ -23,7 +23,7 @@
 // ── NO SECRET EVER REACHES THIS FILE ──────────────────────────────────────
 // Not on argv (world-readable in /proc/<pid>/cmdline), not on stdin, not in a
 // file it opens. `cmd_account` writes the lane's 0600 secrets file itself,
-// in `_exp_env_write`'s umask-077 subshell (ccd/ccrc:3479-3531), and hands this
+// in `_exp_env_write`'s umask-077 subshell (ccd/ccrc:3492-3544), and hands this
 // file only the roster PATH the entry will name. That is why this CLI can be
 // run by hand, logged, and traced without a containment argument.
 //
@@ -36,14 +36,24 @@
 // files and stays three.
 
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-// `HUES` and `LABEL_UNSAFE_RE` are IMPORTED, never re-spelled (D-2004). They are
-// the constants `rosterFromJson` itself decides with, so `check-add` refusing a
-// hue or a label the writer would then refuse is one rule with one home rather
-// than a pre-pass that has its own opinion. They cost this file no closure: it
-// already imports from this module, and `shared/roster-json.mjs` is where they
-// were already declared.
+// FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
+// are the constants `rosterFromJson` itself decides with, so `check-add`
+// refusing a hue, a label, a model id or a model map the writer would then
+// refuse is one rule with one home rather than a pre-pass that has its own
+// opinion. They cost this file no closure: it already imports from this module,
+// and `shared/roster-json.mjs` is where all five were already declared —
+// `export` is the whole of the change on that side.
+//
+// THE THREE THAT ARRIVED IN REVIEW ROUND 1 WERE A HAND COPY BEFORE THEY WERE AN
+// IMPORT. `const ALIASES = ['opus','sonnet','haiku','subagent']` sat in the
+// model block below, character for character `MODEL_ALIASES`, in the one file
+// that already imports its module (D-2022). No scanner saw it —
+// `single-definition.test.ts` looks for provider ROWS and named holders, not for
+// an arbitrary list re-typed — which is why the rule "enumerated once and
+// derived" needs the import to be the easy path rather than the remembered one.
 import {
-  HUES, LABEL_UNSAFE_RE, RosterInvalid, rosterFromJson,
+  API_KEY_PROVIDERS, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
+  RosterInvalid, rosterFromJson,
 } from '../shared/roster-json.mjs';
 import { BASE_URL_OK } from '../shared/base-url.mjs';
 
@@ -435,9 +445,55 @@ function main(argv) {
     // inside a jq program. The four aliases are §4.3's, and an unknown one is a
     // REFUSAL rather than a silent drop: a key the operator typed and this box
     // discarded is a routing decision nobody made and nobody can see.
-    const ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
+    //
+    // ── D-2021: THE THREE CONDITIONS THAT USED TO REACH THE WRITER ──────────
+    // Task 23 shipped this block checking the SHAPE of `--models` and nothing
+    // the roster's own validator checks, so three requests passed the pre-pass,
+    // took the credential, wrote the 0600 secrets file and only then met
+    // `rosterFromJson` inside `add-entry`. MEASURED at c87819e4, each answering
+    // `roster-invalid` at exit 1 with `~/.cc-secrets/<id>-<tag>.env` already on
+    // disk:
+    //
+    //   1. `--models '{"opus":"x"}'` — `rosterFromJson` requires ALL FOUR
+    //      aliases (shared/roster-json.mjs:305-312) and this block required
+    //      none of them.
+    //   2. `--models '{"opus":"a b", …}'` — every value must match
+    //      `MODEL_ID_RE` (:150) and this block asked only for a non-empty
+    //      string.
+    //   3. `--provider anthropic --method paste --models '{…}'` —
+    //      `exec.models` is refused outside `API_KEY_PROVIDERS` (:296-300) and
+    //      this block accepted `--models` on any provider.
+    //
+    // FOUR CODES, NOT ONE, and none of them folded into `models-invalid`: the
+    // three above are three different mistakes with three different fixes
+    // (complete the map, correct a value, drop the flag or change the
+    // provider), and a caller that rendered one sentence for all of them would
+    // be the overloaded seam this arm's own base-url block refuses to be.
+    //
+    // ── AND `selectable`, WHICH IS THE OPPOSITE DISAGREEMENT ────────────────
+    // `check-add` was STRICTER than the roster here, not laxer: the alias loop
+    // below refused `models.selectable` as "not a routing alias" — and
+    // `rosterFromJson` ACCEPTS that key and validates it (:313-339). Refusing it
+    // at `add` is right and stays: wave 1's `add` offers the four aliases, the
+    // `selectable` list is a per-entry catalogue with its own cross-check
+    // against what the four route to, and a flag that silently half-carried it
+    // would be worse than one that says no. But it must be a refusal that SAYS
+    // SO. "not a routing alias" is a sentence about a key the roster format does
+    // not have, and the roster format has this one — so it gets its own code and
+    // its own sentence naming what it is and where it does belong. A refusal
+    // that misnames the operator's key sends them to fix the wrong thing.
     let models = null;
     if (a['models'] !== undefined) {
+      // THE LANE FIRST, before anything judges the value — `base-url-not-supported`
+      // above is the same shape and the same order: a flag that cannot mean
+      // anything on this provider is answered as a flag, not as a bad value.
+      if (!API_KEY_PROVIDERS.has(provider)) {
+        refuse('models-not-supported',
+          `provider "${provider}" carries no model map, so --models cannot mean anything on this `
+          + 'lane: it would be written into the roster and then refused by every reader of it. '
+          + `Drop the flag, or add this account with one of: ${[...API_KEY_PROVIDERS].join(', ')}.`);
+        return 2;
+      }
       let parsed;
       try {
         parsed = JSON.parse(a['models']);
@@ -452,16 +508,43 @@ function main(argv) {
         return 2;
       }
       for (const [k, v] of Object.entries(parsed)) {
-        if (!ALIASES.includes(k)) {
+        if (k === 'selectable') {
+          refuse('selectable-not-supported',
+            '--models carries "selectable". That IS a field of the roster\'s model map, and it is '
+            + `not one this verb writes: 'ccrc account add' takes the four routing aliases `
+            + `(${MODEL_ALIASES.join(', ')}) and nothing else. Add the account with those four, `
+            + `then put "selectable" on its exec.models in ${a['file']} and run 'ccrc install'.`);
+          return 2;
+        }
+        if (!MODEL_ALIASES.includes(k)) {
           refuse('models-invalid',
             `--models names "${k}", which is not a routing alias. The aliases are: `
-            + `${ALIASES.join(', ')}.`);
+            + `${MODEL_ALIASES.join(', ')}.`);
           return 2;
         }
-        if (typeof v !== 'string' || v === '') {
-          refuse('models-invalid', `--models maps "${k}" to something that is not a model id.`);
+        // THE VALUE, against the validator's own regex rather than against
+        // "a non-empty string" — the old test admitted `a b`, which the writer
+        // then refused one step after the secret was written. The sentence is
+        // `rosterFromJson`'s own remedy (:307-310), because the operator is
+        // fixing the same field either way and should not read two descriptions
+        // of one rule.
+        if (typeof v !== 'string' || !MODEL_ID_RE.test(v)) {
+          refuse('bad-model-id',
+            `--models maps "${k}" to ${JSON.stringify(v)}, which is not a model id: a letter or `
+            + 'digit followed by up to 127 of letters, digits, ".", "_", ":", "/" and "-".');
           return 2;
         }
+      }
+      // ALL FOUR OR NONE. Last, so a map that is both incomplete and wrong is
+      // answered about the value the operator actually typed before it is
+      // answered about the ones they did not.
+      const missing = MODEL_ALIASES.filter((k) => !Object.hasOwn(parsed, k));
+      if (missing.length > 0) {
+        refuse('models-incomplete',
+          `--models is missing ${missing.join(', ')}. All four routing aliases are required when `
+          + `--models is given — ${MODEL_ALIASES.join(', ')} — because a roster carrying a partial `
+          + 'map is one no reader will parse. Give all four, or drop the flag.');
+        return 2;
       }
       models = parsed;
     }
@@ -758,7 +841,7 @@ function main(argv) {
     if (names.length !== bytes.length) {
       // A count mismatch is the ONLY way a size could be attached to the wrong
       // name, and a misaligned index cannot be trusted about any of them —
-      // `cmd_wrappers`' witness-index rule (ccd/ccrc:2590-2593), verbatim.
+      // `cmd_wrappers`' witness-index rule (ccd/ccrc:2596-2599), verbatim.
       refuse('bad-argv', `candidates got ${names.length} --name and ${bytes.length} --bytes`);
       return 2;
     }

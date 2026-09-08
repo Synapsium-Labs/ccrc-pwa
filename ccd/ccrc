@@ -3693,7 +3693,7 @@ _exp_status() {
 # difference is what shapes everything below:
 #
 #  - EXACTLY ONE JSON OBJECT ON STDOUT, on every reachable path including every
-#    refusal. `_ccrc_die` prints NOTHING on stdout (:1191), so a refusal under it
+#    refusal. `_ccrc_die` prints NOTHING on stdout (:1198), so a refusal under it
 #    hands the caller an empty body and a bare exit code — "the id you gave is
 #    taken" and "node is not installed" arriving identically, which is the
 #    overloaded seam this repository forbids for every refusal this file CAN
@@ -3726,11 +3726,11 @@ _exp_status() {
 #    right flag and the wrong value" class (:4651-4655, refused at :4670) —
 #    and 1 when the request was legal and the BOX said no (an id already in the
 #    roster, a suffix another account holds). Nothing translates at the seam,
-#    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2908-2922).
+#    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2929-2930).
 #
 #  - THE SECRET NEVER LEAVES BASH. `--credential -` is the only spelling that
 #    reads one (Task 22), it arrives on stdin through a builtin, and it is
-#    written by this file in `_exp_env_write`'s umask-077 subshell (:3479-3531).
+#    written by this file in `_exp_env_write`'s umask-077 subshell (:3492-3544).
 #    `deploy/account-op.mjs` is handed the roster PATH and never the value, which
 #    is why that CLI can be run by hand and logged without a containment
 #    argument.
@@ -3831,7 +3831,7 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # error that did not happen.
   #
   # THE DISCRIMINATOR HERE IS THE EXIT CODE. `_acct_answer`'s IS THE BODY
-  # (`[ -z "$body" ]`, :3919). THAT DIFFERENCE IS DELIBERATE AND MUST NOT BE
+  # (`[ -z "$body" ]`, :3928). THAT DIFFERENCE IS DELIBERATE AND MUST NOT BE
   # "HARMONISED" — harmonising them BREAKS `_acct_answer`. Every op except
   # `refuse` decides its own class and exits with it, so for those a non-zero
   # exit CARRYING a body is the normal refusal and `_acct_answer` must re-emit
@@ -3847,7 +3847,7 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # the new one.
   #
   # NOTHING IS LOST BY DYING ON STDERR ALONE: `refuse()`
-  # (`deploy/account-op.mjs:233-236`) writes its diagnosis to STDERR as well as
+  # (`deploy/account-op.mjs:262-265`) writes its diagnosis to STDERR as well as
   # stdout, and stderr is never captured here, so node's own remedy still
   # reaches the operator verbatim. The die carries node's exit code in the
   # sentence and exits 1 — not "$1", and not 2: once the intended envelope never

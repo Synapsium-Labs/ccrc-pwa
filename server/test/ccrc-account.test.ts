@@ -120,8 +120,8 @@ function shippedSubs(): string[] {
 
 describe('ccrc account: the dispatcher', () => {
   it('with no subcommand answers a JSON refusal at exit 2, never an empty body', () => {
-    // `_ccrc_die` prints NOTHING on stdout (ccd/ccrc:1191); `cmd_expose`'s own
-    // missing-subcommand arm (:3177-3181) prints its sentence on STDERR and
+    // `_ccrc_die` prints NOTHING on stdout (ccd/ccrc:1198); `cmd_expose`'s own
+    // missing-subcommand arm (:3190-3193) prints its sentence on STDERR and
     // exits 2 with an empty stdout. That is right for a verb an operator types
     // and wrong for one the server parses, which is why this verb's refusals
     // leave by a different door.
@@ -573,7 +573,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     // file is there, so `[ -f ]` passes and the operator's fix is different.
     // An unterminated array is a PARSE error, so `.` fails before any line of
     // it runs — which is also why the subshell (`_inst_dirs`' rule, cited at
-    // :3928-3931) matters: a projection that redefined `_ccrc_die` on its way
+    // :3983-3986) matters: a projection that redefined `_ccrc_die` on its way
     // to failing must not be able to take the refusal helper with it.
     const bad = box('ccrc-account-projection-invalid-');
     seedBoxRoster(bad, FIXTURE_ROSTER);
@@ -1115,24 +1115,35 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
   // `rosterFromJson(next)` — after `_acct_write_secret` had already written the
   // 0600 file. That contradicted the arm's own contract, "EVERY REFUSAL IN THIS
   // ARM FIRES BEFORE ANY CALLER HAS WRITTEN A BYTE"
-  // (deploy/account-op.mjs:323-326). Task 24 closes it: `unknown-hue` and
+  // (deploy/account-op.mjs:347-350 — written at :323-326, which is where that
+  // sentence sat BEFORE the same commit inserted fourteen lines above it; the
+  // sweep that re-measured this commit's ccd/ccrc citations modelled one file's
+  // insertion and not the other's). Task 24 closes it: `unknown-hue` and
   // `bad-label` are gates in `check-add`, beside the other identity gates and
   // above the line that derives a path, and the two rows below drive them
   // through the whole verb — so the file the old ordering would have left
   // behind is measured absent by `untouched`.
   //
-  // WHAT STILL ESCAPES, MEASURED RATHER THAN ASSUMED: `--models`. `check-add`
-  // refuses a map that is not an object and any key outside the four routing
-  // aliases, and nothing more — while `rosterFromJson` requires ALL FOUR
-  // aliases present (shared/roster-json.mjs:305-312), requires each value to
-  // match `MODEL_ID_RE` (:150), and refuses `exec.models` on any provider
-  // outside `API_KEY_PROVIDERS` (:296-300). So `--models '{"opus":"x"}'`, a
-  // model id carrying a space, and a model map on an `anthropic` lane are three
-  // requests that still reach `roster-invalid` at exit 1 with the secret
-  // already on disk. They are one field's worth of gate, they belong with the
-  // rest of the model-map validation rather than bolted on here, and no task in
-  // this wave writes them — so this comment names them instead of the title
-  // pretending they do not exist.
+  // AND `--models` IS CLOSED TOO, in review round 1 (D-2021). The paragraph
+  // this replaces named three requests that still reached `roster-invalid` at
+  // exit 1 with the secret already on disk, and all three were re-measured
+  // before the gates were written rather than taken from the note:
+  // `--models '{"opus":"x"}'` (`rosterFromJson` requires ALL FOUR aliases,
+  // shared/roster-json.mjs:305-312), a model id carrying a space (`MODEL_ID_RE`,
+  // :150 — this block only ever asked for a non-empty string), and a model map
+  // on an `anthropic` lane (`exec.models` is refused outside
+  // `API_KEY_PROVIDERS`, :296-300). Each now has its own code in `check-add`,
+  // its own row below, and its own mutation entry measuring that deleting the
+  // gate puts the 0600 file back on disk.
+  //
+  // THE TITLE IS NOW A CLAIM ABOUT COMPLETENESS AS WELL AS ORDERING, which it
+  // was deliberately not before. What keeps it honest is that the gates are
+  // derived from the validator's own constants rather than re-spelled beside it
+  // (D-2022): `check-add` imports `MODEL_ALIASES`, `MODEL_ID_RE` and
+  // `API_KEY_PROVIDERS` from `shared/roster-json.mjs`, so a fifth alias or a
+  // sixth api-key provider cannot make the pre-pass and the writer disagree.
+  // The one place they still differ is `models.selectable`, and that difference
+  // is deliberate, argued at the row for it and in `check-add` itself.
   const cases: [string, Record<string, string | null>, string, number][] = [
     ['bad-id', { '--id': 'Lab_Dev0' }, 'bad-id', 2],
     ['reserved-id', { '--id': 'auth' }, 'reserved-id', 2],
@@ -1182,6 +1193,46 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
       { '--base-url': 'orchard-api/v1' }, 'base-url-unparseable', 2],
     ['a model map that is not an alias map',
       { '--models': '["orchard/opus-1"]' }, 'models-invalid', 2],
+    // ── THE FOUR `--models` GATES D-2021 ADDED ──────────────────────────────
+    // The first three were MEASURED, at c87819e4 and before the gates existed,
+    // answering `roster-invalid` at exit 1 with the 0600 secrets file already
+    // written. So on these three rows the `existsSync` in the shared body is
+    // not a formality: it is the assertion that goes red when the gate is
+    // deleted, which is what makes each of them a D-2004 row rather than a
+    // spelling test.
+    ['a model map missing three of the four aliases',
+      { '--models': '{"opus":"orchard/opus-1"}' }, 'models-incomplete', 2],
+    // A SPACE IN THE VALUE, which is also the only assertion in this file that
+    // `_acct_add`'s `${ACCT_MODELS:+--models "$ACCT_MODELS"}` keeps a
+    // space-carrying value in ONE argv word: a version that word-split would
+    // reach `readPairs` as `--models {"opus":"orchard` plus a stray `opus"…}`
+    // and refuse as `bad-argv`, not as this row's code.
+    ['a model id with a space in it',
+      { '--models': '{"opus":"orchard opus","sonnet":"o/s","haiku":"o/h","subagent":"o/g"}' },
+      'bad-model-id', 2],
+    // THE SECRET THIS ROW WOULD HAVE LEFT IS `lab-dev0-oauth.env`, NOT the
+    // `-compatible` one the shared body names by hand: an anthropic lane on a
+    // token method derives the `-oauth` spelling (`check-add`'s `secretTag`).
+    // `untouched` is what actually catches it, because it lists the whole of
+    // `~/.cc-secrets` rather than one name — which is the reason that helper
+    // reports a listing and not a boolean.
+    ['a model map on a lane that carries none',
+      { '--provider': 'anthropic', '--method': 'paste', '--base-url': null,
+        '--models': '{"opus":"o/o","sonnet":"o/s","haiku":"o/h","subagent":"o/g"}' },
+      'models-not-supported', 2],
+    // NOT AN ORDERING FIX, AND THE ROW SAYS SO. This key was already refused
+    // before the secret write, as `models-invalid` saying it "is not a routing
+    // alias" — a sentence about a key the roster format does not have, said
+    // about one it does: `rosterFromJson` ACCEPTS `models.selectable` and
+    // validates it (shared/roster-json.mjs:313-339). What this gate changes is
+    // the code and the sentence, not the moment, so deleting it leaves the
+    // secret absent either way and moves the row to `models-invalid`. It is
+    // here because a refusal that misnames the operator's key sends them to fix
+    // the wrong thing.
+    ['a selectable list, which the roster has and this verb does not write',
+      { '--models': '{"opus":"o/o","sonnet":"o/s","haiku":"o/h","subagent":"o/g",'
+        + '"selectable":[{"id":"o/o"}]}' },
+      'selectable-not-supported', 2],
   ];
 
   for (const [name, over, code, exit] of cases) {
@@ -1447,7 +1498,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // reachable at this commit exactly as the credential cases are — through
     // `sourceCall`, with no `add` arm in `ACCT_SUBS` — and they were broken:
     // each phrased its detail beginning with the flag name, which
-    // `readPairs`' M6 guard (deploy/account-op.mjs:278-285) refuses as a
+    // `readPairs`' M6 guard (deploy/account-op.mjs:302-308) refuses as a
     // mis-spelled key, so `_acct_refuse` could not print its own envelope.
     // Measured before the fix, on all five:
     //
@@ -1718,6 +1769,63 @@ describe('ccrc account add: the ordered write', () => {
     'the credential appears outside ~/.cc-secrets').toEqual([]);
   });
 
+  it('a complete model map reaches the entry, in one argv word', () => {
+    // THE POSITIVE HALF OF D-2021'S FOUR GATES, and the row that keeps them
+    // honest: four refusals prove a gate refuses, and only this proves it is
+    // not refusing everything. `missing.length >= 0` in place of `> 0` passes
+    // all four rows above and makes no legal model map addable ever again.
+    //
+    // IT IS ALSO THE ONLY PLACE `exec.models` IS MEASURED ON A WRITTEN ENTRY.
+    // `check-add` hands `add-entry` the PARSED object and `add-entry` copies it
+    // onto `exec` — two steps, neither of which any other case in this file
+    // drives with a map that survives them.
+    const home = box('ccrc-account-add-models-ok-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const models = {
+      opus: 'orchard/opus-1', sonnet: 'orchard/sonnet-1',
+      haiku: 'orchard/haiku-1', subagent: 'orchard/haiku-1',
+    };
+    const r = run(home, addArgs({ '--models': JSON.stringify(models) }), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const roster = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
+    const added = roster.accounts.find((x: { id: string }) => x.id === 'lab-dev0');
+    expect(added.exec.models).toEqual(models);
+  });
+
+  it('the plan reader lands the two Task-25 fields in their own slots (D-2025)', () => {
+    // D-2025 RECORDED THIS AS UNVERIFIABLE UNTIL TASK 25, AND IT IS NOT.
+    // `ACCT_BASE_URL_RESOLVED` and `ACCT_MODELS_RESOLVED` are read by nothing
+    // in the shipped verb, so a NUL reader that assigned field 2 to field 3
+    // would be green at this commit and wrong two commits later — the
+    // deviation's own words. But the two are FILE-SCOPE globals, and
+    // `_acct_add` RETURNS on success rather than exiting, so `sourceCall` can
+    // run the whole ordered write and then read them out of the same shell.
+    // That is the cheap assertion the deviation asked for and did not find.
+    //
+    // FIELDS 0 AND 1 NEED NO ROW HERE: `envvar` gates the secret write and
+    // `_acct_write_secret` names the file from it, so a 0-for-1 swap already
+    // reds "writes the secret, then the roster entry" on the file's contents.
+    // These two are the only pair with no consumer, which is exactly why they
+    // are the pair a swap survives.
+    const home = box('ccrc-account-add-fields-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const models = '{"opus":"o/o","sonnet":"o/s","haiku":"o/h","subagent":"o/g"}';
+    const r = sourceCall(home,
+      "_acct_add --id lab-dev0 --provider compatible --label 'lab\u00b7dev0' --hue amber "
+      + `--base-url https://orchard-api/v1 --credential - --models '${models}' >/dev/null\n`
+      + 'printf "BASE=[%s]\\nMODELS=[%s]\\n" "$ACCT_BASE_URL_RESOLVED" "$ACCT_MODELS_RESOLVED"\n',
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    // THE ENDPOINT IS THE NORMALISED ONE, which is also what the roster entry
+    // carries — so this pins that field 2 is the endpoint and not the models
+    // map, and that Task 25 will be handed the value `check-add` resolved
+    // rather than the operator's bytes.
+    expect(r.stdout).toContain('BASE=[https://orchard-api/v1]');
+    expect(r.stdout).toContain(`MODELS=[${models}]`);
+  });
+
   it('the wrapper converge is the whole roster, with no flags (D-1862)', () => {
     // The ruling, pinned in the source rather than asserted in prose: `add`
     // reaches `cmd_wrappers` the way `_inst_wrappers` does — as a function, with
@@ -1736,7 +1844,7 @@ describe('ccrc account add: the ordered write', () => {
 
 // ── THE SCAN THAT MAKES A CONVENTION A MECHANISM (D-2006) ─────────────────
 // `_acct_refuse`'s third argument reaches `deploy/account-op.mjs` as the VALUE
-// of `--detail`, and `readPairs`' M6 guard (:278-285) refuses a value that
+// of `--detail`, and `readPairs`' M6 guard (:302-308) refuses a value that
 // begins with `--` — it looks like the next `--key`, and consuming it would
 // shift every pair that follows. So a refusal sentence that opens with a flag
 // name cannot be printed AT ALL: the refusal exits 1 with an empty stdout and
@@ -1752,7 +1860,7 @@ describe('ccrc account add: the ordered write', () => {
 // `server/test/single-definition.test.ts`'s source scans.
 //
 // AND THE RULE WAS ALREADY WRITTEN DOWN TWICE. `_acct_refuse`'s own header
-// (ccd/ccrc:3805-3809) names the second shape exactly — "a future site spelled
+// (ccd/ccrc:3810-3812) names the second shape exactly — "a future site spelled
 // `_acct_refuse 2 bad-value \"$sub\"` — the operator's bytes FIRST — would lose
 // it, and is the shape to refuse" — and it was written before either draft that
 // shipped the shape anyway. Two paragraphs stating a rule and no mechanism
@@ -1803,5 +1911,66 @@ describe('ccd/ccrc: no refusal sentence may begin with a flag', () => {
         + 'begins with "--" and cannot print, exactly as a literal "--" cannot. '
         + `Name the flag mid-sentence instead.\n    ${c.detail}`).toBe(false);
     }
+  });
+});
+
+// ── THE SCAN THAT KEEPS D-2022 CLOSED ─────────────────────────────────────
+// `deploy/account-op.mjs` used to declare `const ALIASES = ['opus','sonnet',
+// 'haiku','subagent']` — character for character `MODEL_ALIASES`, in the one
+// file that already imports that module. Review round 1 deleted it and derived
+// from the import instead, and THAT ALONE IS A CONVENTION: a future author who
+// re-types the list gets identical behaviour and a green suite, which is
+// exactly how the first copy survived. `single-definition.test.ts` cannot see
+// it — that file scans for provider ROWS and named holders, not for an
+// arbitrary list re-typed — so the mechanism lives here, beside the verb whose
+// pre-pass decides with these constants.
+//
+// IT SCANS CODE, NOT PROSE. Comment lines are stripped first, for the same
+// reason the `_acct_converge` case above strips them: the paragraph that
+// records what the copy LOOKED like has to be allowed to spell it. The cost is
+// stated rather than hidden — a copy re-typed on a trailing comment on a code
+// line would not be seen; a copy that anything DECIDES with would be.
+describe('deploy/account-op.mjs: the validator\'s constants are imported, never re-typed (D-2022)', () => {
+  const OP_SRC = join(REPO, 'deploy', 'account-op.mjs');
+
+  it('derives the aliases, the model-id regex and the api-key providers from the mirror', () => {
+    const src = readFileSync(OP_SRC, 'utf8');
+    const imp = /import \{([^}]*)\} from '\.\.\/shared\/roster-json\.mjs';/.exec(src);
+    expect(imp, 'account-op.mjs no longer imports from shared/roster-json.mjs at all — if the '
+      + 'module moved, point this scan at its new home; do not delete the scan').toBeTruthy();
+    const named = imp![1]!.split(',').map((x) => x.trim()).filter((x) => x !== '');
+    // BOTH DIRECTIONS. Named on the import AND read by the code, because an
+    // import nothing uses is what the next tidy-up deletes — and deleting it is
+    // the first half of re-typing the list.
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    for (const n of ['API_KEY_PROVIDERS', 'HUES', 'LABEL_UNSAFE_RE', 'MODEL_ALIASES', 'MODEL_ID_RE']) {
+      expect(named, `${n} is not imported from the validator`).toContain(n);
+      expect(code.split(n).length - 1,
+        `${n} is imported and never read — an unread import is one deletion away from a copy`)
+        .toBeGreaterThan(1);
+    }
+  });
+
+  it('carries no second spelling of any of them', () => {
+    const src = readFileSync(OP_SRC, 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    // THE ALIAS LIST, as the array or Set literal it was. Scoped to a bracketed
+    // literal on purpose: the `models-invalid` sentence shows the operator
+    // `{"opus":"<id>","sonnet":"<id>",…}` as an EXAMPLE of what to type, which
+    // is prose in a string and not a list this file decides with.
+    expect(code, 'the four routing aliases are re-listed in a literal — import MODEL_ALIASES')
+      .not.toMatch(/\[[^\]]*['"]opus['"][^\]]*['"]subagent['"][^\]]*\]/);
+    // THE REGEX, by its own source text, which is how `gen-accounts.test.ts`
+    // compares this pair across the .ts/.mjs wall: a behavioural comparison
+    // passed the incident `source-bytes.test.ts` is named after.
+    expect(code, 'MODEL_ID_RE is re-spelled here — import it')
+      .not.toContain('A-Za-z0-9._:');
+    // AND THE OTHER TWO THIS FILE DECIDES WITH. `HUES` by a member no other
+    // list in this file has; `LABEL_UNSAFE_RE` by its character class. Neither
+    // collides with `PROVIDER_GENERATABLE`, which is a DIFFERENT set that
+    // legitimately names two of the same providers.
+    expect(code, 'HUES is re-spelled here — import it').not.toContain('cyan');
+    expect(code, 'LABEL_UNSAFE_RE is re-spelled here — import it')
+      .not.toContain('\\u0000-\\u001f');
   });
 });

@@ -135,7 +135,7 @@ const PROVIDER_IDS = new Set(['anthropic', 'openrouter', 'compatible', 'openai']
 
 /** The providers whose lanes may carry `exec.models` — `PROVIDERS[p].apiKeyModels`.
  *  Same rule as above; same agreement test. */
-const API_KEY_PROVIDERS = new Set(['openrouter', 'compatible']);
+export const API_KEY_PROVIDERS = new Set(['openrouter', 'compatible']);
 
 /** The providers that ship NO default endpoint, so an absent `exec.baseUrl` is a
  *  refusal rather than a fall-through — `PROVIDERS[p].baseUrlRequired`. */
@@ -147,11 +147,11 @@ const BASE_URL_REQUIRED = new Set(['compatible']);
  *  regex copied into this file had its escape text emitted as the raw control
  *  bytes it describes, behaving identically, and every suite stayed green
  *  (`server/test/source-bytes.test.ts:5-15`). */
-const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
+export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
 /** Mirrors `shared/roster.ts`'s `MODEL_ALIASES` — the four keys ccd and Claude
  *  Code route on. All four required when `models` is present. */
-const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
+export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
 export const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
