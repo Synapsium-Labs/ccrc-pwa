@@ -38,14 +38,57 @@ beforeEach(() => {
   fs.mkdirSync(j('.cc-sessions'), { recursive: true });
   fs.mkdirSync(j('.ccrc'), { recursive: true });
   seedAccountsSh(home);
+  // EVERY case gets a tmux stub, planted here rather than per test, and that
+  // is a SAFETY control as much as a hermeticity one. The pane probe (F7)
+  // EXECS `tmux`, the box this suite runs on IS the live fleet host, and a
+  // case that forgot to plant one would ask the running fleet's own server
+  // about fixture session names. Planted BEFORE any case can forget, and
+  // shadowing the real binary on PATH — not a shell function, because
+  // `timeout` execs its argv and would never see one.
+  plantTmux(TMUX_GONE);
 });
 
 function run(env: Record<string, string> = {}) {
   return spawnSync('bash', [KEEPALIVE], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, CCRC_KEEPALIVE_TURN_TIMEOUT: '20', ...env },
+    env: {
+      ...process.env,
+      HOME: home,
+      CCRC_KEEPALIVE_TURN_TIMEOUT: '20',
+      PATH: `${j('fixture-bin')}:${process.env.PATH}`,
+      ...env,
+    },
   });
 }
+
+/** The tmux stub. It records the argv it was handed — so a case can assert
+ *  WHICH session name the probe asked about, not merely which verdict came
+ *  back — and then behaves as `body` says. */
+function plantTmux(body: string): void {
+  fs.mkdirSync(j('fixture-bin'), { recursive: true });
+  fs.writeFileSync(j('fixture-bin', 'tmux'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$HOME/tmux-calls"
+${body}
+`, { mode: 0o755 });
+}
+
+/** What the stub was asked, one line per invocation. */
+function tmuxCalls(): string[] {
+  if (!fs.existsSync(j('tmux-calls'))) return [];
+  return fs.readFileSync(j('tmux-calls'), 'utf8').trim().split('\n').filter(Boolean);
+}
+
+/** The ONE message that is evidence a session died — measured from real tmux
+ *  and recorded at `ccd/ccd:1390`, which is also where its polarity is
+ *  argued. This is the default every case gets: a registry row with no live
+ *  pane behind it. */
+const TMUX_GONE = `echo "can't find session: $3" >&2\nexit 1`;
+/** rc 0 for one session name, `gone` for anything else — a live pane. */
+const tmuxLive = (name: string) =>
+  `[ "$3" = "${name}" ] && exit 0\n${TMUX_GONE}`;
+/** One of the two messages that mean "there is no server to ask" (`ccd/ccd`
+ *  measured both). Not evidence of anything about a pane. */
+const TMUX_NO_SERVER = `echo "no server running on /tmp/tmux-1000/default" >&2\nexit 1`;
 
 /** The last pass appended to the census. */
 function lastPass(): any {
@@ -188,6 +231,104 @@ describe('the three skips — a keepalive is for the idle case only', () => {
     expect(r.reason).not.toContain('claude-a-demo');
     expect(r.outcome).toBe('refreshed');
   });
+
+  // ── the OTHER half of `_session_state`'s question: is the PANE alive ──
+  // F7 (fix-wave 2026-09-08). The heartbeat-only reader that F1 landed could
+  // not see `unsupervised` — "a pane with no supervisor" (`ccd/ccd:1829`) —
+  // and that is not an exotic state: `KillMode=process` exists so the tmux
+  // pane and its `claude` SURVIVE their supervisor unit, and deploy.sh's own
+  // sweep prints `claude-session@<id>.service is FAILED — try-restart skipped
+  // it`. The account's telemetry is stale in exactly that state too, because
+  // the statusline that writes it is the thing that stopped — so every other
+  // gate waves the account through and the pass takes a turn beside a running
+  // `claude` on the same CLAUDE_CONFIG_DIR.
+  it('skips an account whose pane is ALIVE though its supervisor heartbeat is stale', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.wrapper'), 'claude-a\n');
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.supervised'),
+      `${Math.floor(Date.now() / 1000) - 999}\n`);
+    plantTmux(tmuxLive('cc-claude-a-demo'));
+    run();
+    const r = row('claude-a');
+    expect(r.outcome,
+      'a keepalive turn was taken on an account a live `claude` pane is sitting on')
+      .toBe('skipped');
+    expect(r.reason).toContain('claude-a-demo');
+    expect(r.reason).toContain('live tmux pane');
+    expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(false);
+  });
+
+  it('asks tmux about ccd’s own session name, not the registry id', () => {
+    // The copied `cc-` prefix is the value a typo would silently DISARM: a
+    // name ccd never created answers `can't find session`, which reads as
+    // `gone`, which reads as "idle, go ahead and spend". Held equal to
+    // `ccd/ccd`'s `_tmux()` by `keepalive-freshness-parity.test.ts`; asked of
+    // a real fixture name here.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'some-stopped-session.wrapper'), 'claude-a\n');
+    run();
+    expect(tmuxCalls()).toContain('has-session -t cc-some-stopped-session');
+  });
+
+  it('skips an account whose pane liveness cannot be MEASURED — the gate fails shut', () => {
+    // "I could not ask tmux" is not "nobody is there". `ccd`'s own probe
+    // refuses to map a missing substrate to `gone`; this file refuses for the
+    // mirror-image reason — an unreachable socket says nothing about whether
+    // a `claude` is running under that config dir — and the refusal has to
+    // cost the turn, not merely a sentence.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.wrapper'), 'claude-a\n');
+    plantTmux(TMUX_NO_SERVER);
+    run();
+    const r = row('claude-a');
+    expect(r.outcome,
+      'an unmeasurable pane read as an idle account and the pass spent a turn on it')
+      .toBe('skipped');
+    expect(r.reason).toContain('could not measure');
+    expect(r.reason, 'the census row names no reason an operator can act on')
+      .toContain('no server running');
+    expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(false);
+  });
+
+  it('an unmeasurable row does not mask a measurably live one later in the walk', () => {
+    // The registry is walked in glob order, so `aaa-…` is probed before
+    // `zzz-…`. An `unknown` is REMEMBERED rather than returned: both answers
+    // refuse the spend, but only one of them can name the session that is
+    // actually sitting on the account.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'aaa-unmeasured.wrapper'), 'claude-a\n');
+    fs.writeFileSync(j('.cc-sessions', 'zzz-live.wrapper'), 'claude-a\n');
+    plantTmux(`[ "$3" = "cc-zzz-live" ] && exit 0\n${TMUX_NO_SERVER}`);
+    run();
+    const r = row('claude-a');
+    expect(r.outcome).toBe('skipped');
+    expect(r.reason, 'the reason named the row it could not measure, not the live one')
+      .toContain('zzz-live');
+    expect(r.reason).toContain('live tmux pane');
+    expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(false);
+  });
+
+  it('does not hang when tmux never answers, and says the deadline in the row', () => {
+    // A SIGSTOPped tmux server blocks its client FOREVER (`ccd/ccd:926`). An
+    // unbounded probe would hang the pass WHILE IT HOLDS THE FLOCK, so every
+    // later tick retires as `pass-locked` — a keepalive that has stopped
+    // without ever saying so. Delete the `timeout` and this case hangs.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.wrapper'), 'claude-a\n');
+    plantTmux('sleep 60');
+    const t0 = Date.now();
+    const r = run();
+    expect(r.status, `stderr:\n${r.stderr}`).toBe(0);
+    expect(Date.now() - t0, 'the probe ran without a deadline').toBeLessThan(25_000);
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason).toContain('did not answer within');
+    expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(false);
+  }, 40_000);
 
   it('skips an account with no wrapper on this box, and says which path', () => {
     run();

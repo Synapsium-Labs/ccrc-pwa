@@ -3,9 +3,35 @@ Description=Probe account credential liveness every 15 minutes
 # No Unit= line: systemd's default — the same-named .service — is the single
 # source of that pairing, exactly as ccrc-ddns.timer records.
 [Timer]
-# 7min rather than the sweep's 5: two oneshots that both fire at boot and both
-# want the network are a herd of two, and this one has nothing urgent to say in
-# the first minutes of an uptime.
+# `OnBootSec=`, DELIBERATELY (D-1981), and the sibling keepalive's `OnActiveSec=`
+# is the opposite call made on purpose. Read both before "harmonising" them.
+#
+# WHAT THE NUMBER ACTUALLY DOES. `OnBootSec=` anchors to MACHINE BOOT, not to
+# when this timer unit is armed. On a boot it is a real 7-minute offset, two
+# minutes behind ccd-graph-sweep.timer's 5: two oneshots that both fire at boot
+# and both want the network are a herd of two, and this one has nothing urgent
+# to say in the first minutes of an uptime.
+#
+# ON A DEPLOY IT IS NO OFFSET AT ALL. The only moment this timer is ever first
+# armed on the fleet host is `deploy.sh agent`'s AGENT_CMD (or `ccrc install`'s
+# enable), and a box taking a deploy has been up for days — so the boot-relative
+# elapse point is already in the past and systemd runs the probe AT ONCE, within
+# AccuracySec. The comment that stood here until 2026-09-08 claimed the herd
+# argument covered that case; it never did, and a justification that is false at
+# the only moment it is tested is worse than none.
+#
+# WHY THAT IS THE RIGHT ANSWER HERE ANYWAY. A pass costs one
+# `curl --max-time 20` per eligible account and NO tokens — it is not the
+# keepalive, which is why that unit chose differently. And what the probe writes
+# is `$REG/<account>-authdead`, a MEASUREMENT which `ccd`'s `_authdead` header
+# insists can be wrong, never joins `_account_ok`, and therefore only ever costs
+# PREFERENCE and never ELIGIBILITY. A deploy is exactly when a wrong standing
+# marker is most likely to be one the shipped probe has just been fixed to
+# clear, and the cheapest correct thing is to re-measure immediately rather than
+# seven minutes into the new build.
+#
+# `Persistent=` would change none of this: it only has an effect on timers
+# configured with `OnCalendar=`.
 OnBootSec=7min
 OnUnitActiveSec=15min
 AccuracySec=1min

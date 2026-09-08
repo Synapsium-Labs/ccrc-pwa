@@ -43,7 +43,12 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 #     and shrinking number of probes, not a permanent drip;
 #   • never a turn on an account a registered session is sitting on — two
 #     `claude` processes under one CLAUDE_CONFIG_DIR is a hazard this script
-#     will not take, and an account with a live session is not idle;
+#     will not take, and an account with a live session is not idle. BOTH
+#     halves of `_session_state`'s notion of "sitting on" are asked — a live
+#     tmux pane OR a fresh supervisor heartbeat — because `KillMode=process`
+#     means a pane and its `claude` outlive their supervisor unit, and the
+#     heartbeat alone reads that session as absent. An account whose pane
+#     liveness cannot be MEASURED reads as occupied too: this gate fails shut;
 #   • never a claim about a refresh it did not measure. The turn's exit code
 #     is a CLAIM; `ts` advancing in the telemetry file is the ARTIFACT.
 #
@@ -386,39 +391,158 @@ _authdead() {   # <wrapper> -> rc 0 iff a valid marker is there; prints the epoc
 # fixture HOME: a bare `.cc-sessions/some-stopped-session.wrapper` with no
 # process, no tmux and no unit produced a false "live" skip on every pass.
 #
-# THE FIX REUSES `_session_state`'s OWN NOTION OF FRESH (`ccd/ccd:1797`),
-# rather than inventing a second one: a session counts here only while its
-# supervisor heartbeat (`$REG/<id>.supervised`, re-stamped on a tick this
-# file's own header measures at ~30s) is younger than KA_SESSION_FRESH — the
-# SAME 120s window `_session_state` uses to call a heartbeat "fresh", by
-# value, for the reason `CCRC_KEEPALIVE_FRESH` above re-spells `SWAP_FRESH`
-# by value: this file sources nothing, so the number is copied, not shared.
-# This is the FALLBACK scope the finding allows when the full notion
-# (`_session_state`'s pane-alive check too, via `_alive`/tmux) cannot be
-# reused from a sibling script: a session with a RUNNING supervisor. A
-# session whose pane just died inside the same 120s window is not
-# distinguished from one still running — the identical ambiguity
-# `_session_state` itself accepts inside its own freshness window, not a
-# new one introduced here. An unreadable or non-numeric heartbeat is
-# SKIPPED, never matched — two unmeasurable values comparing equal is what
-# would hand an account the wrong answer.
+# THE FIX REUSES `_session_state`'s OWN NOTION OF LIVE (`ccd/ccd:1807`),
+# rather than inventing a second one — AND IT REUSES BOTH HALVES OF IT.
+# That function asks tmux whether the PANE is alive FIRST, and reads the
+# supervisor heartbeat only to separate `running` from `unsupervised` — two
+# names for one thing that matters here: a live `claude` process.
+#
+# THE HEARTBEAT ALONE WAS NOT ENOUGH, and the comment that used to stand here
+# defended the gap with a claim that is FALSE in the direction that costs
+# money and safety (F7, fix-wave 2026-09-08). It called the residual ambiguity
+# "the identical ambiguity `_session_state` itself accepts". It is not:
+# `_session_state` resolves a live pane with a dead supervisor by ASKING TMUX,
+# and has a name for it — `unsupervised`, "a pane with no supervisor" — while
+# a heartbeat-only reader sees that session as ABSENT. That state is the
+# opposite of exotic. `KillMode=process` (argued at length in
+# `deploy/deploy.sh`) exists precisely so the tmux pane and its `claude`
+# SURVIVE their supervisor unit; deploy's own sweep prints `warning:
+# claude-session@<id>.service is FAILED — try-restart skipped it`; and
+# `ccd/ccd` records that "on deploy day every pane a pre-fix `ccd start`
+# minted reads `unsupervised`". Nothing re-stamps `$REG/<id>.supervised`
+# after that, so 120s later the heartbeat is stale — and the account's
+# telemetry is stale too, BECAUSE that session's statusline is the very thing
+# that stopped writing. Every other gate then waves the account through and
+# the pass takes a turn beside a running `claude` on the same
+# CLAUDE_CONFIG_DIR: the one hazard this file's header refuses, reachable by
+# the most ordinary event on this fleet, an agent-lane deploy.
+#
+# SO THE ANSWER IS THE DISJUNCTION `_session_state` implies: a session is on
+# this account if its PANE IS ALIVE or its SUPERVISOR HEARTBEAT IS FRESH.
+# Neither half is redundant — the fresh-heartbeat half still covers
+# `restarting`, a dead pane whose supervisor is ticking and about to put a
+# `claude` back under that config dir, which a pane probe alone would read as
+# idle. The heartbeat is read FIRST only because it is a file read and the
+# other is an exec; a disjunction does not care about the order.
+#
+# The window is `_session_state`'s own 120s, by value, for the reason
+# `CCRC_KEEPALIVE_FRESH` above re-spells `SWAP_FRESH` by value: this file
+# sources nothing, so the number is copied, not shared. An unreadable or
+# non-numeric heartbeat is NOT fresh — two unmeasurable values comparing equal
+# is what would hand an account the wrong answer — and it no longer ENDS that
+# row's evaluation either: a row with no heartbeat at all is exactly the
+# `unsupervised` shape, so it falls through to the pane probe.
 KA_SESSION_FRESH=120
+# `ccd/ccd`'s `_tmux()` (`id -> tmux name`) by value. This is the copied value
+# a typo would silently DISARM rather than break: a prefix that does not match
+# what ccd created makes every probe answer `can't find session`, which reads
+# as `gone`, which reads as "idle, go ahead and spend". Held equal to ccd's by
+# `keepalive-freshness-parity.test.ts`, and asked of a real fixture name by
+# `telemetry-keepalive.test.ts`, which asserts the argv tmux was handed rather
+# than only the verdict it produced.
+KA_TMUX_PREFIX='cc-'
+# `SUBSTRATE_PROBE_DEADLINE_S` (`ccd/ccd:926`) by value: the bound on ONE
+# `has-session` probe. A healthy answer is ~8ms, but a SIGSTOPped tmux server
+# blocks its client FOREVER — and an unbounded probe here would hang the pass
+# while it holds the flock, so every later tick would find the lock held and
+# retire as `pass-locked`: a keepalive that has stopped without ever saying so.
+KA_PANE_DEADLINE=8
 
-_ka_session_on() {   # <account> -> the first session id on it with a RUNNING
-                      # supervisor, or nothing
-  local acct="$1" w txt b sid sup now
+# `_session_probe`'s classifier (`ccd/ccd:1424`), re-spelled WITH ITS POLARITY.
+# `tmux has-session` answers three questions with one exit status, and only ONE
+# message is evidence a session died; everything else means "I could not ask".
+# ccd refuses to map a missing substrate to `gone` because that would present
+# every live session as reapable during a cold start. This file refuses for the
+# mirror-image reason: a socket this process cannot reach — a different
+# TMUX_TMPDIR, a stale environment under the timer, a permissions fault, a
+# wording no one has seen — says NOTHING about whether a `claude` is running
+# under that config dir, and "I could not ask" must never spend.
+#
+# tmux ABSENT is in that set too, and it is why this file's preflight does NOT
+# grow a fifth tool. `command -v tmux` at the top would refuse the whole pass
+# on a box with no tmux; leaving it here refuses only the accounts a registry
+# row actually names, and says so per account. MEASURED, so the arm it lands in
+# is not a guess: with no `tmux` on PATH, `timeout 8 tmux …` answers rc 127 with
+# `timeout: failed to run command 'tmux': No such file or directory` on stderr,
+# which is neither 0 nor an empty 124 nor the death sentence — the default arm,
+# `unknown`, carrying words an operator can act on.
+#
+# TWO FACTS, NO SUBSHELL — ccd's own probe form, for its own reason: a verdict
+# returned on stdout cannot also carry tmux's words, and an unmeasured pane
+# whose census row names no reason is the one row an operator can do nothing
+# with. Both globals are assigned on every path out.
+KA_PANE_VERDICT=""
+KA_PANE_DETAIL=""
+_ka_pane_probe() {   # <session id> -> KA_PANE_VERDICT=live|gone|unknown,
+                     #                 KA_PANE_DETAIL (unknown only); rc 0
+  local out rc
+  # A bare `timeout`, like the turn's — this file is Linux-only on the record
+  # (see PORTABILITY above). ccd's probe carves out a `type -t tmux == function`
+  # arm for a stubbed substrate; there is nothing to carve out here, because a
+  # sibling executable spawned by a timer cannot see a caller's shell function
+  # — this script's own suite stubs tmux on PATH, where `timeout` finds it.
+  out="$(timeout "$KA_PANE_DEADLINE" tmux has-session -t "$KA_TMUX_PREFIX$1" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then KA_PANE_VERDICT=live; KA_PANE_DETAIL=""; return 0; fi
+  # rc 124 with nothing said is `timeout`'s own kill: tmux printed no words, so
+  # the reason is SYNTHESIZED rather than left empty.
+  if [ "$rc" -eq 124 ] && [ -z "$out" ]; then
+    KA_PANE_VERDICT=unknown
+    KA_PANE_DETAIL="tmux did not answer within ${KA_PANE_DEADLINE}s"
+    return 0
+  fi
+  case "$out" in
+    *"can't find session"*) KA_PANE_VERDICT=gone;    KA_PANE_DETAIL="" ;;
+    *)                      KA_PANE_VERDICT=unknown
+                            KA_PANE_DETAIL="${out:-tmux exited $rc with no message}" ;;
+  esac
+}
+
+# THREE ANSWERS, NOT TWO, and the caller must not collapse them. "A session is
+# on this account" and "I could not tell whether one is" both refuse the spend,
+# but they are different news — the same split, for the same reason, as the
+# backoff and throttle gates below, which are two `skipped` rows with two
+# reasons because "the same silence to a machine" is not the same fact to an
+# operator. FAIL SHUT is the third answer's whole point: an unmeasurable pane
+# reads as OCCUPIED. The cost is stated rather than hidden — an account whose
+# only session's pane can never be measured is never refreshed, and under §B an
+# unmeasured account ranks last rather than winning placement, so the failure
+# mode is reduced preference, not a magnet.
+_ka_session_on() {   # <account> -> rc 0: a session is measurably ON it (reason on stdout)
+                     #               rc 2: pane liveness UNMEASURABLE (reason on stdout)
+                     #               rc 1: measurably clear (nothing on stdout)
+  local acct="$1" w txt b sid sup now fresh unmeasured=""
   now="$(date +%s)"
   for w in "$REG"/*.wrapper; do
     [ -f "$w" ] || continue
     txt="$(cat "$w" 2>/dev/null)" || continue
     [ "$txt" = "$acct" ] || continue
     b="${w##*/}"; sid="${b%.wrapper}"
-    sup="$(cat "$REG/$sid.supervised" 2>/dev/null)" || continue
-    [[ "$sup" =~ ^[0-9]+$ ]] || continue
-    (( now - sup >= 0 && now - sup < KA_SESSION_FRESH )) || continue
-    printf '%s' "$sid"
-    return 0
+    fresh=0
+    sup="$(cat "$REG/$sid.supervised" 2>/dev/null)" || sup=""
+    [[ "$sup" =~ ^[0-9]+$ ]] && (( now - sup >= 0 && now - sup < KA_SESSION_FRESH )) && fresh=1
+    if (( fresh )); then
+      printf 'session %s has a supervisor heartbeat under %ss old on this account' \
+        "$sid" "$KA_SESSION_FRESH"
+      return 0
+    fi
+    _ka_pane_probe "$sid"
+    case "$KA_PANE_VERDICT" in
+      live)
+        # `_session_state`'s `unsupervised` (or `unclaimed`): a live pane whose
+        # supervisor is not ticking. The `claude` process is real — that is what
+        # `KillMode=process` is for — so this is the case the probe exists for.
+        printf 'session %s has a live tmux pane (%s) on this account, with no fresh supervisor heartbeat' \
+          "$sid" "$KA_TMUX_PREFIX$sid"
+        return 0 ;;
+      unknown)
+        # REMEMBERED, NOT RETURNED, so one unmeasurable row cannot mask a
+        # measurably live one later in the same walk. The first one wins the
+        # reason; the walk continues looking for something it can measure.
+        [ -n "$unmeasured" ] || unmeasured="session $sid: could not measure whether its tmux pane is alive (${KA_PANE_DETAIL}) — refusing to spend"
+        ;;
+    esac
   done
+  [ -n "$unmeasured" ] && { printf '%s' "$unmeasured"; return 2; }
   return 1
 }
 
@@ -541,10 +665,16 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
     _ka_row "$acct" skipped "authdead since $dead" "$fb" "" "" 0
     continue
   fi
-  if sid="$(_ka_session_on "$acct")"; then
-    _ka_row "$acct" skipped \
-      "session $sid has a supervisor heartbeat under ${KA_SESSION_FRESH}s old on this account" \
-      "$fb" "" "" 0
+  # THE REASON IS BUILT BY THE MEASURER, not here: three conditions
+  # (`running`/`unsupervised` by pane, `restarting` by heartbeat, and
+  # unmeasurable) reach this one `skipped` row, and a reason written at the
+  # call site could only name the one the caller happened to assume. rc 1 —
+  # and ONLY rc 1 — is "measurably clear, go on and spend"; every other answer
+  # refuses, which is what makes an unmeasurable pane fail shut here rather
+  # than in a comment.
+  sess_why="$(_ka_session_on "$acct")"; sess_rc=$?
+  if [ "$sess_rc" -ne 1 ]; then
+    _ka_row "$acct" skipped "$sess_why" "$fb" "" "" 0
     continue
   fi
   ts=""; [ -f "$lim" ] && { ts="$(_ka_num "$lim" ts)" || ts=""; }

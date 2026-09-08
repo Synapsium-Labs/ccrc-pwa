@@ -1605,6 +1605,131 @@ The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
   which is also why the branch's own census of placeholders came up one short until it was measured
   instead of remembered.
 
+- **D-1977** — **found and fixed in the review fix-wave (F7, 2026-09-08), after F1's own fix had
+  landed.** `_ka_session_on` decided "a session is on this account" from the freshness of
+  `$REG/<id>.supervised` ALONE, and `_session_state` — the tree's own definition of that question
+  (`ccd/ccd:1807`) — asks tmux whether the PANE is alive FIRST, reading the heartbeat only to
+  separate `running` from `unsupervised`. Both of those are a live `claude` process; the
+  heartbeat-only reader saw `unsupervised` as ABSENT. That state is manufactured by the most
+  ordinary event on this fleet: `KillMode=process` exists so a pane and its `claude` SURVIVE their
+  supervisor unit, `deploy/deploy.sh`'s own sweep prints `claude-session@<id>.service is FAILED —
+  try-restart skipped it`, and `ccd/ccd` records that "on deploy day every pane a pre-fix `ccd
+  start` minted reads `unsupervised`". Nothing re-stamps the heartbeat after that, and the
+  account's telemetry is stale too — because that session's statusline is the very thing that
+  stopped writing — so every other gate waved the account through and the pass would `exec` a
+  second `claude` under a `CLAUDE_CONFIG_DIR` a live one is already using: the ONE hazard the
+  script's header refuses. **A deploy blocker**, since the next act on this branch is an agent-lane
+  deploy to a box carrying ~20 live sessions.
+
+  **The comment defending the gap was itself false**, which is the part worth remembering. It
+  stated the residual ambiguity as only "a session whose pane just died inside the same 120s
+  window" — the HARMLESS direction — and called it "the identical ambiguity `_session_state` itself
+  accepts". `_session_state` accepts no such thing in the direction that costs money: it resolves a
+  live pane with a dead supervisor by ASKING TMUX. A justification that names the safe half of an
+  asymmetry and calls the whole thing symmetric reads, to the next maintainer, as a decision that
+  was measured. This one had not been.
+
+  Fixed by asking both halves — a session is on the account if its pane is alive OR its heartbeat
+  is fresh (the fresh half still covers `restarting`, a dead pane whose supervisor is ticking) —
+  through a locally re-implemented `_ka_pane_probe`, `_session_probe`'s classifier by value, since
+  a sibling executable sources nothing. **Three more values are now copied and therefore pinned**
+  (`keepalive-freshness-parity.test.ts`, extending its two-tier `exactlyOne`): `_tmux()`'s `cc-`
+  prefix — the copy a typo DISARMS rather than breaks, because a name ccd never created answers
+  `can't find session`, which reads as `gone`, which reads as "spend" — `SUBSTRATE_PROBE_DEADLINE_S`,
+  and the one tmux sentence that means death.
+
+  **The third answer is new and deliberate: the gate FAILS SHUT.** `_ka_session_on` returns three
+  outcomes, not two — on it (rc 0), UNMEASURABLE (rc 2), clear (rc 1) — and only rc 1 spends. tmux
+  absent, a socket this process cannot reach, a wedged server, an unrecognised wording: none of
+  them are evidence a pane is dead, and ccd refuses the same mapping for the mirror-image reason
+  (`gone` DESTROYS there, so an absent substrate must never mean it). The stated cost is the one
+  risk row 4 of this plan's own self-review already carries, one condition wider: an account whose
+  only session's pane can never be measured is never refreshed, and under §B an unmeasured account
+  ranks last rather than winning placement — reduced preference, not a magnet. Both refusals write
+  a `skipped` row with their OWN reason, the split the backoff and throttle gates already use.
+
+- **D-1981** — **found and fixed in the review fix-wave (lane C, F8, 2026-09-08), before this
+  branch's agent deploy.** Both new timers were spelled `OnBootSec=` (`ccd-account-health.timer` at
+  7min, `ccd-telemetry-keepalive.timer` at 10min), and `OnBootSec=` anchors to MACHINE BOOT
+  (`man 5 systemd.timer`, Table 1) — not to when the timer unit is armed. The ONLY moment either
+  timer is ever first armed on the fleet host is a deploy: `deploy/deploy.sh`'s AGENT_CMD, or
+  `ccrc install`'s enable, both `systemctl --user enable --now <timer>`. A box taking a deploy has
+  been up for days, so the boot-relative elapse point is already in the past and systemd starts the
+  oneshot AT ONCE, bounded only by `AccuracySec=1min`. **On the one path that installs them, the
+  offsets bought nothing** — and `ccd-account-health.timer`'s own comment claimed the opposite in as
+  many words ("two oneshots that both fire at boot and both want the network are a herd of two"),
+  which is the worse half: a justification that is false at the only moment it is tested.
+
+  **Fixed per timer, because the two cost different things.** The keepalive moves to
+  `OnActiveSec=10min` — anchored to the moment the timer unit itself is activated, so identical to
+  the old behaviour at boot and a real ten minutes at a deploy. It is the one that spends a
+  `timeout 120 claude -p` turn per idle measured account, out of the very windows it exists to
+  measure; on a first install `~/.ccrc/keepalive-state` is EMPTY, so its `lastAttempt` throttle skips
+  nobody and the pass is the largest it will ever take — landing, under `OnBootSec=`, on top of
+  `deploy.sh`'s supervisor sweep while that is `try-restart`ing every `claude-session@*` unit on a box
+  carrying ~20 live sessions. Ten minutes is also long enough for every restarted supervisor's
+  statusline to re-stamp `~/.cc-limits`, which makes those accounts read FRESH and be skipped rather
+  than spent on. `OnActiveSec=` is additionally the honest anchor for a unit in the PER-USER manager,
+  which does not necessarily start at boot at all.
+
+  **The probe deliberately KEEPS `OnBootSec=7min`, and its file now says so at the key.** A pass costs
+  one `curl --max-time 20` per account and no tokens, and what it writes is `$REG/<account>-authdead`
+  — a MEASUREMENT which `ccd`'s `_authdead` header insists can be wrong, never joins `_account_ok`,
+  and therefore only ever costs PREFERENCE and never ELIGIBILITY. A deploy is exactly when a standing
+  marker is most likely to be one the shipped probe has just been fixed to clear, so re-measuring
+  immediately is the cheapest right answer. The asymmetry is the decision; both units argue their own
+  half where the key is, because the next reader's instinct is to make them match.
+
+  `Persistent=` is not the knob for any of this and neither unit reaches for it: it only has an effect
+  on timers configured with `OnCalendar=`. Guard: `server/test/timer-first-run.test.ts` (four cases —
+  the keepalive's anchor, the probe's deliberate one plus the two phrases that carry the argument, the
+  absent `Persistent=`, and a census holding every timer in `deploy/systemd` to exactly one first-run
+  anchor so a fifth cannot arrive with none or with both). Three mutations measured, texts recorded in
+  that file's header.
+
+- **D-1982** — **found and fixed in the same wave (lane C, F9).** The systemd unit files were the one
+  part of the agent deploy that was NOT installed atomically. Every executable on that lane goes
+  through `install_atomic` — whose own header argues why a plain overwrite of a live file is a
+  correctness bug — while `AGENT_BUILD_CMD` placed thirteen units and drop-ins, `claude-session@.service`
+  among them, with plain `cp` into `~/.config/systemd/user/`; `REMOTE_BUILD_CMD` did the same with
+  `ccrc.service`. `cp` opens its destination `O_TRUNC` and then writes, so a copy that dies mid-write
+  — ENOSPC (the condition `ccd` carries `CCD_DISK_FLOOR_GB` for) or a dropped ssh — leaves a
+  TRUNCATED unit at its live name.
+
+  **"The deploy aborts before daemon-reload" is not containment**, which is where the original
+  reasoning stopped. `set -euo pipefail` does abort the chain, but `ccd`'s own `_svc_enable` /
+  `_svc_disable_now` reload on the next session start or stop, and on a box with ~20 live sessions
+  that is minutes away. **And the dangerous truncation is the one that still PARSES.**
+  `ccd/claude-session@.service` carries `KillMode=process` as the LAST key of its `[Service]` section,
+  six lines below `ExecStart=`; a file cut anywhere in that gap is a valid unit that starts fine and
+  kills by `control-group` — so the next `try-restart` takes the tmux pane and every in-flight turn
+  with it. That is the outcome this repo's safety rules exist to prevent, reached without anyone
+  touching tmux. `ccrc update`'s sweep preflight would refuse (it reads `KillMode` first); nothing
+  else on the box does. Two of the thirteen files had a timestamped backup (added by an earlier
+  review's finding I2); the other eleven had none.
+
+  **Fixed with `_inst_atomic`'s shape rather than `install_atomic`'s**, deliberately: these are local
+  copies ON THE BOX out of the tree `rsync` already landed there, so the right idiom is the box-side
+  one `ccrc install` has always used for these same unit files (`ccd/ccrc`'s `_inst_atomic`: temp,
+  chmod, `mv -f` = rename(2)). `_unit_atomic` is that, defined once per remote command string —
+  nothing of ours exists on the box to source — and held byte-equal across the two lanes by the guard.
+  One ssh, no extra round trips, and the two lanes stop disagreeing about the same files. The mode is
+  now STATED (644) rather than inherited, since `cp` over an existing file keeps whatever mode the box
+  had. A stray `<unit>.incoming.<pid>` from a dead run is inert to systemd (it ends in neither a unit
+  suffix nor `.conf`) and the next successful copy of that file sweeps it.
+
+  Guard: `agent/test/deploy-verify.test.ts`, "the unit files install ATOMICALLY". It bans a plain `cp`
+  into `~/.config/systemd/user` in either lane (the way this bug comes back is a fourteenth unit
+  appended in the old shape), holds the two `_unit_atomic` spellings byte-equal, asserts its three
+  mechanisms one by one — and then EXECUTES the extracted chain against a fixture HOME, twice. The
+  first run proves the quoting, which was the real risk of the change (`~` in an argument, `$1`/`$2`/`$$`
+  that must survive to the box unexpanded, and the slice drop-in's `\x2d` escape in remote double
+  quotes) and which no text scan can reach. The second re-runs it under `ulimit -f 0` — the one
+  deterministic way to reproduce ENOSPC-shaped death in a unit test, since the write raises SIGXFSZ
+  after the destination has already been opened `O_TRUNC` — and asserts no live unit was clobbered.
+  Measured: the mutation that writes the live name first leaves `ccrc-agent.service` at 0 bytes and
+  reds that assertion by name.
+
 **One number this plan deliberately does NOT mint:** the roster's structural inability to declare a
 `secretsFile` for the `upstream` account (spec §A.2). This plan *depends* on the convention that
 resolves it (`.cc-secrets/<id>-oauth.env`) and would fail on the primary account without it, but §A's

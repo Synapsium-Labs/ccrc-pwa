@@ -157,3 +157,100 @@ describe('the keepalive borrows _session_state’s own notion of a live supervis
       .toBe(Number(ccdFresh));
   });
 });
+
+/**
+ * A THIRD pair, same two files, and this one is not a number: `_ka_session_on`
+ * now asks the OTHER half of `_session_state`'s question — is the tmux PANE
+ * alive — because a supervisor heartbeat alone cannot see `unsupervised`, "a
+ * pane with no supervisor", which is what `KillMode=process` leaves behind on
+ * every deploy day (F7). Asking tmux means re-spelling three things `ccd/ccd`
+ * already owns, and each is pinned here for a different reason:
+ *
+ *   • THE SESSION NAME (`_tmux()`, `id -> tmux name`). This is the copy a
+ *     typo DISARMS rather than breaks: a prefix ccd never created makes every
+ *     probe answer `can't find session`, which classifies as `gone`, which
+ *     reads as "idle, go ahead and spend a turn" — silently restoring the
+ *     exact defect the probe was added to close. It gets the full three-test
+ *     treatment below.
+ *   • THE DEADLINE (`SUBSTRATE_PROBE_DEADLINE_S`). One bound on one
+ *     `has-session` probe, against one tmux server, from two files on the same
+ *     box: there is one right answer to "how long may this wait", and ccd
+ *     measured it.
+ *   • THE ONE MESSAGE THAT MEANS DEATH. `tmux has-session` answers three
+ *     questions with one exit status and only that sentence is evidence a
+ *     session died; both files must recognise the SAME sentence and classify
+ *     it to `gone`, because everything else means "I could not ask" and must
+ *     not spend. Drift here fails SHUT rather than open — the keepalive would
+ *     stop refreshing rather than double up on a config dir — so it is pinned
+ *     once, not three times.
+ *
+ * The last two are one test each rather than three: `exactlyOne` already
+ * attributes "found N" and "wrong spelling" separately, and the extra pair of
+ * per-side tests earns nothing where the value is not a tunable number.
+ */
+const CCD_TMUX_BROAD = /^[ \t]*_tmux\(\)[ \t]*\{.*$/;
+const CCD_TMUX_NARROW = /^_tmux\(\)[ \t]+\{ echo "([a-z][a-z0-9-]*)\$1"; \}/;
+
+const KA_TMUX_BROAD =
+  /^[ \t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \t]+-[A-Za-z]+)*[ \t]+)?KA_TMUX_PREFIX=.*$/;
+const KA_TMUX_NARROW = /^KA_TMUX_PREFIX='([^']*)'(?=[ \t]|$)/;
+
+const CCD_DEADLINE_BROAD =
+  /^[ \t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \t]+-[A-Za-z]+)*[ \t]+)?SUBSTRATE_PROBE_DEADLINE_S=.*$/;
+const CCD_DEADLINE_NARROW = /^SUBSTRATE_PROBE_DEADLINE_S=([0-9]+)(?=[ \t]|$)/;
+const KA_DEADLINE_BROAD =
+  /^[ \t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \t]+-[A-Za-z]+)*[ \t]+)?KA_PANE_DEADLINE=.*$/;
+const KA_DEADLINE_NARROW = /^KA_PANE_DEADLINE=([0-9]+)(?=[ \t]|$)/;
+
+/** A `case` arm over tmux's own words that classifies to `gone`. Broad: any
+ *  quoted-glob arm assigning that side's verdict variable at all. Narrow: the
+ *  same arm, classifying to `gone`, with the message captured. */
+const CCD_GONE_BROAD = /^[ \t]*\*"[^"]*"\*\)[ \t]*PROBE_VERDICT=.*$/;
+const CCD_GONE_NARROW = /^[ \t]*\*"([^"]*)"\*\)[ \t]*PROBE_VERDICT=gone/;
+const KA_GONE_BROAD = /^[ \t]*\*"[^"]*"\*\)[ \t]*KA_PANE_VERDICT=.*$/;
+const KA_GONE_NARROW = /^[ \t]*\*"([^"]*)"\*\)[ \t]*KA_PANE_VERDICT=gone/;
+
+describe('the keepalive asks tmux the question ccd would ask, about the name ccd created', () => {
+  it('ccd still derives the tmux name by one prefix, in exactly one spelling', () => {
+    expect(exactlyOne(CCD_CONTENT, CCD_TMUX_BROAD, CCD_TMUX_NARROW, 'ccd/ccd _tmux()'))
+      .toMatch(/^[a-z][a-z0-9-]*$/);
+  });
+
+  it('the keepalive still declares KA_TMUX_PREFIX as a bare single-quoted literal', () => {
+    expect(exactlyOne(KEEPALIVE, KA_TMUX_BROAD, KA_TMUX_NARROW, 'the keepalive KA_TMUX_PREFIX'))
+      .toMatch(/^[a-z][a-z0-9-]*$/);
+  });
+
+  it('and the two are the same prefix', () => {
+    const ccdPrefix = exactlyOne(CCD_CONTENT, CCD_TMUX_BROAD, CCD_TMUX_NARROW, 'ccd/ccd _tmux()');
+    const kaPrefix = exactlyOne(KEEPALIVE, KA_TMUX_BROAD, KA_TMUX_NARROW,
+      'the keepalive KA_TMUX_PREFIX');
+    expect(kaPrefix,
+      'the keepalive now probes a tmux name ccd never creates: every probe answers '
+      + '"can’t find session", every live pane reads as gone, and the pass spends a turn '
+      + 'beside a running `claude` on the same CLAUDE_CONFIG_DIR')
+      .toBe(ccdPrefix);
+  });
+
+  it('and it bounds that probe by the same deadline ccd measured', () => {
+    const ccdDeadline = exactlyOne(CCD_CONTENT, CCD_DEADLINE_BROAD, CCD_DEADLINE_NARROW,
+      'ccd/ccd SUBSTRATE_PROBE_DEADLINE_S');
+    const kaDeadline = exactlyOne(KEEPALIVE, KA_DEADLINE_BROAD, KA_DEADLINE_NARROW,
+      'the keepalive KA_PANE_DEADLINE');
+    expect(Number(kaDeadline),
+      'one has-session probe against one tmux server now has two different bounds')
+      .toBe(Number(ccdDeadline));
+  });
+
+  it('and both classify death by the one tmux sentence that means it', () => {
+    const ccdGone = exactlyOne(CCD_CONTENT, CCD_GONE_BROAD, CCD_GONE_NARROW,
+      'ccd/ccd’s `gone` case arm');
+    const kaGone = exactlyOne(KEEPALIVE, KA_GONE_BROAD, KA_GONE_NARROW,
+      'the keepalive’s `gone` case arm');
+    expect(kaGone,
+      'the two files no longer recognise the same tmux message as evidence a session died — '
+      + 'the keepalive now reads a genuinely dead pane as unmeasurable (it fails shut, so it '
+      + 'stops refreshing rather than doubling up), or worse, reads something else as death')
+      .toBe(ccdGone);
+  });
+});
