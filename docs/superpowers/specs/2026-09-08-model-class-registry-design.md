@@ -371,14 +371,18 @@ reasoning field; otherwise the shim leaves the request alone (§15).
 - **Spawning.** `_spawn_start` appends `--model <class>` when the registry's
   `class` is non-empty **and** the class is available on the destination lane
   (§4.3). Aliases only — the destination's env block resolves them.
-- **Rotation is class-aware, as the THIRD predicate in a composed chain.**
-  `_swap_target` already composes #61's overflow bracket (an enabled
-  non-home-able lane is last resort) with account-pools wave 2b's pool
-  predicate (PR #62; an untagged account is a member of every pool by
-  construction, so the two can select a lane neither would alone — ruled to
-  ship and be documented). The class filter is written into that chain, not
-  as a standalone skip: a lane where the session's class C is unavailable is
-  excluded in both brackets, after the pool predicate. Today's gpt lane (`fable: null`) therefore never receives
+- **Rotation is class-aware, as the FOURTH predicate in a composed chain.**
+  `_swap_target` on `main` since PR #62 (merged 4dc87366, 2026-09-08 17:15Z,
+  deployed both lanes) walks candidates through `_pool_ok` → `_account_ok` →
+  `_avail`, composed with #61's overflow bracket (an enabled non-home-able
+  lane is last resort). An untagged account is a member of every pool by
+  construction, so a pool whose home-able members are all wrong-pool empties
+  the home-able bracket and the rotation lands on the untagged overflow lane
+  with no crossing recorded — ruled to ship; the account-pools spec §5.7.3 is
+  the one normative statement of that rule and this document does not
+  restate it. The class filter is ADDED TO that chain, after `_avail`, never
+  beside it: a lane where the session's class C is unavailable is excluded in
+  both brackets. Today's gpt lane (`fable: null`) therefore never receives
   a Fable-class session until Astra is classified — the "comes back as Opus"
   defect becomes impossible rather than merely rarer.
 - **Manual swap may downgrade, explicitly.** `ccd swap <id> <wrapper>
@@ -580,7 +584,10 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
   the verbs are a top-level `ccrc models` group (§10), and `shared/modelenv.mjs`
   ships with its single-writer pin.
 - **Plan 2 — class carried in ccd — starts after account-pools PR #62 is merged
-  AND deployed.** Ruling 275: no per-session registry field and no edit to
+  AND deployed** (satisfied 2026-09-08 17:18Z: merged as 4dc87366, both lanes
+  deployed, `ccd version` on openclaw carries it; the doctor check it carries
+  registers against the AVAILABILITY wording of `pools-orphan-pool` that #62's
+  final review landed). Ruling 275: no per-session registry field and no edit to
   `_swap_target`, `cmd_swap`, `cmd_start`, `cmd_enable`, `cmd_prefer` or
   `cmd_ensure` before that; rebase onto its merge sha; declare `class` through
   wave 2b's registry field inventory; write the class filter as the third
