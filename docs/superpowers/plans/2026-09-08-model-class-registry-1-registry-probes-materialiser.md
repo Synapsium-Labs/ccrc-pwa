@@ -4032,7 +4032,7 @@ MSG
 
   | op | keys | answer |
   |---|---|---|
-  | `lanes` | `--file` | `{ok, op, lanes: [{id, configDirSuffix, anthropic, hasRegistry, probe, baseUrl}]}` |
+  | `lanes` | `--file` | `{ok, op, lanes: [{id, configDirSuffix, anthropic, hasRegistry, registryInvalid, catalogueInvalid, probe, baseUrl}]}` |
   | `show` | `--file --id` | `{ok, op, id, anthropic, registry, derived, catalogue, settingsDrift, orphan?}` |
   | `init` | `--file --id --probe [--base-url]` | the `show` answer, plus `created` |
   | `set-class` | `--file --id --class --model` | the `show` answer, plus `moved` |
@@ -6828,7 +6828,7 @@ MSG
 
 **Interfaces:**
 - Consumes: `deploy/models-op.mjs`'s `lanes` and `materialise` ops (Task 6); `ccd/ccrc-models-probe` (Tasks 4–5); `_models_node` / `_models_answer` / `_models_refuse` / `_models_roster_path` (Task 7).
-- Produces: `ccrc models refresh [<id> | --all]` — probes one lane or every lane that HAS a registry (the probe kind lives in the registry file, so a lane without one has no probe to run), re-materialises each lane it refreshed, and prints one JSON object summarising the run. Exit 0 when every probed lane succeeded, 1 when any failed (the others still ran), 2 usage. Task 10 adds the `litellm` subcommand and the "run it when the visible set changed" step; the timer in Task 11 calls `ccrc models refresh --all`.
+- Produces: `ccrc models refresh [<id> | --all]` — probes one lane or every lane that HAS a registry (the probe kind lives in the registry file, so a lane without one has no probe to run), re-materialises each lane it refreshed, and prints one JSON object summarising the run: `{ok, op: "refresh", refreshed: rows}`, where a successful row is `{id, probe, ok: true, count}` and a failed row is `{id, probe, ok: false, reason}` (a lane whose registry itself does not parse/validate never reaches the probe at all, and is reported as `{id, ok: false, reason}` with no `probe`). Exit 0 when every probed lane succeeded, 1 when any failed (the others still ran), 2 usage. Task 10 adds the `litellm` subcommand and the "run it when the visible set changed" step; the timer in Task 11 calls `ccrc models refresh --all`.
 
 - [ ] **Step 1: Replace Task 7's placeholder expectation and write the new tests**
 
