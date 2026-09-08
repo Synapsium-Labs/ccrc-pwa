@@ -1842,6 +1842,131 @@ describe('ccrc account add: the ordered write', () => {
   });
 });
 
+/** A box whose `ccrc/deploy/account-op.mjs` is TODAY's file with exactly one op
+ *  cut out of it: the named op answers the way an older `main` answers an op it
+ *  does not have — a `usage:` line on STDERR, NOTHING on stdout, exit 2 — and
+ *  every other op is delegated to the real file, unchanged.
+ *
+ *  `skewedBox` above cannot express this. That fixture stands in for a file that
+ *  has only `refuse`, which reaches `_acct_add`'s FIRST re-emit site and can
+ *  never reach the second: `check-add` has to SUCCEED before `add-entry` is
+ *  called at all, and the 0600 secret has to be on disk before that. This is the
+ *  box D-2051 was measured on — `deploy/account-op.mjs` at 5fb8b24d has
+ *  `check-add` and not `add-entry` — written as a shadow of ONE op rather than a
+ *  copy of an old file, so it goes on measuring this seam as the real file grows
+ *  ops rather than pinning one commit's op list.
+ *
+ *  Delegation is `await import` of the real module by absolute path, which works
+ *  because that file's own last line is `process.exitCode = main(process.argv)`:
+ *  importing it RUNS it, argv and all. */
+function staleAtBox(prefix: string, missingOp: string): string {
+  const home = box(prefix);
+  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
+  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
+    `if (process.argv[2] === ${JSON.stringify(missingOp)}) {`,
+    '  process.stderr.write("usage: node deploy/account-op.mjs <refuse|providers|roster'
+      + '|candidates|check-add> [--<key> <value>]\\u2026\\n");',
+    '  process.exitCode = 2;',
+    '} else {',
+    `  await import(${real});`,
+    '}',
+    '',
+  ].join('\n'));
+  return home;
+}
+
+// ── THE SEAM ON `add`'s TWO RE-EMIT PATHS (D-2051) ────────────────────────
+// `_acct_add` captures the callee's stdout twice and, on a non-zero status,
+// re-emits it. When that capture is EMPTY the two sites used to print a blank
+// line and exit with the callee's code — `JSON.parse('')` for the server, at an
+// exit class that says the request was illegal when it was not. Measured on the
+// half-updated box below, before the fix, on both paths: exit 2, stdout one byte
+// (a newline), a `usage:` line on stderr.
+//
+// THE TWO CASES DIFFER IN THE ONE THING A SHARED HELPER MUST NOT FLATTEN. The
+// triage and the `no-answer` wording are identical on both; the clause that says
+// what was written is not, because on the second path the 0600 credential file
+// IS on disk and the retry that overwrites it is this verb's headline ordering
+// property. So the first case asserts the sentence ENDS "Nothing was written."
+// and the second asserts it does not.
+describe('ccrc account add: an empty body is a refusal, never a blank line (D-2051)', () => {
+  it('the check-add call answers at exit 1 with a body, and nothing was written', () => {
+    const home = staleAtBox('ccrc-account-add-stale-check-', 'check-add');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    // THE CLASS IS THIS FILE'S, NOT THE CALLEE'S. `ccd/ccrc:24-33` makes 2 "not
+    // legal on its face, decidable from argv alone"; `_acct_add_parse` had
+    // already accepted this request, so 2 would name the operator for a fault
+    // that is the box's.
+    expect(r.code, 'the callee\'s exit 2 was propagated').toBe(1);
+    const j = oneObject(r);
+    expect(j['ok']).toBe(false);
+    expect(j['error']).toBe('no-answer');
+    expect(String(j['detail'])).toContain('answer to \'check-add\'');
+    expect(String(j['detail'])).toContain('exited 2');
+    expect(String(j['detail'])).toMatch(/half-updated box/);
+    expect(String(j['detail'])).toMatch(/Nothing was written\.$/);
+    // AND THAT LAST SENTENCE IS TRUE HERE: the credential is read AFTER
+    // `check-add` returns, so this path really has touched nothing.
+    expect(existsSync(join(home, '.cc-secrets')), 'a secret was written').toBe(false);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+  });
+
+  it('the add-entry call answers at exit 1 with a body, and names the file it DID write', () => {
+    const home = staleAtBox('ccrc-account-add-stale-entry-', 'add-entry');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('no-answer');
+    expect(String(j['detail'])).toContain('answer to \'add-entry\'');
+    expect(String(j['detail'])).toContain('exited 2');
+
+    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+    expect(String(j['detail']),
+      'the shared sentence flattened this path\'s truth: the secret IS on disk')
+      .not.toContain('Nothing was written');
+    expect(String(j['detail']), 'the operator is not told which file to expect')
+      .toContain(secret);
+    expect(String(j['detail'])).toContain('overwrites it');
+    // A PATH, NEVER CONTENTS (CLAUDE.md): existence facts only.
+    expect(String(j['detail'])).not.toContain(CANARY);
+    // AND BOTH HALVES OF THAT SENTENCE ARE TRUE.
+    expect(existsSync(secret), 'the sentence names a file that is not there').toBe(true);
+    expect(lstatSync(secret).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+  });
+});
+
+// ── THE ROSTER'S MODE IS THE OPERATOR'S (D-2052) ──────────────────────────
+// `add-entry` writes a tmp and renames it over `~/.ccrc/accounts.json`, so the
+// mode the tmp carries BECOMES the roster's mode. A hard-coded literal there
+// discards whatever the operator chose, on the one file this CLI otherwise
+// treats as theirs — the same premise the atomic write is argued from. Measured
+// before the fix: 600 in, 644 out.
+describe('ccrc account add: the roster keeps the mode it had (D-2052)', () => {
+  it('a 0600 roster is still 0600 after the entry lands', () => {
+    const home = box('ccrc-account-add-rostermode-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const roster = join(home, '.ccrc', 'accounts.json');
+    chmodSync(roster, 0o600);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(roster).mode & 0o777,
+      'a write that only added an entry widened the operator\'s roster').toBe(0o600);
+    // AND THE ENTRY LANDED. Without this half, an `add` that refused outright
+    // would pass the assertion above for the wrong reason.
+    const ids = (JSON.parse(readFileSync(roster, 'utf8')) as { accounts: { id: string }[] })
+      .accounts.map((a) => a.id);
+    expect(ids, 'the mode survived because nothing was written').toContain('lab-dev0');
+  });
+});
+
 // ── THE SCAN THAT MAKES A CONVENTION A MECHANISM (D-2006) ─────────────────
 // `_acct_refuse`'s third argument reaches `deploy/account-op.mjs` as the VALUE
 // of `--detail`, and `readPairs`' M6 guard (:302-308) refuses a value that

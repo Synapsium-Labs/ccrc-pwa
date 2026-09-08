@@ -35,7 +35,7 @@
 // gate), and `base-url.mjs` imports nothing at all. So the closure is three
 // files and stays three.
 
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
 // refusing a hue, a label, a model id or a model map the writer would then
@@ -822,9 +822,42 @@ function main(argv) {
     // this CLI — a deliberate, argued exception to the seed-once class
     // (`_inst_roster`), and the reason the write is atomic rather than an
     // in-place edit: an operator's roster must never be observable half-written.
+    //
+    // AND THE MODE IS THE FILE'S OWN, NOT A LITERAL (D-2052). `renameSync`
+    // replaces the inode, so whatever mode the tmp carries BECOMES the roster's
+    // mode — a hard-coded `0o644` here silently discarded an operator's
+    // `chmod 600 ~/.ccrc/accounts.json` on every `add` (measured: 600 before,
+    // 644 after). A file's mode is a distinction this verb RECEIVED from the
+    // operator, on the one file this CLI otherwise treats as theirs, and the
+    // same premise the atomic write is argued from forbids widening it.
+    // `_inst_roster`'s `cp` + `mv` leaves the mode to umask and imposes
+    // nothing, so this verb is no longer the one writer of that file that
+    // overrides the operator. THE TREE HAS ALREADY RULED ON THIS EXACT SHAPE:
+    // `_inst_graph_always_on_off` reads the file's own mode before rewriting it
+    // (`ccd/ccrc:6358-6364`, D-1244 — "forcing 644 would widen a CLAUDE.md an
+    // operator had restricted"). This is that ruling at a second address.
+    //
+    // `& 0o777` DROPS THE SPECIAL NIBBLE (setuid/setgid/sticky), unlike
+    // `_plat_mode`'s `%Mp%Lp`, and that is right for this file: a roster is
+    // JSON that nothing executes, so there is no setuid bit worth carrying and
+    // propagating one through a rename would be a widening of its own.
+    //
+    // `statSync` IS UNGUARDED ON PURPOSE: `readRoster` above read this same
+    // path and returned non-null, so the file provably exists — there is no
+    // absent case to fold. A throw here is a real fault and the `catch` below
+    // reports it as `roster-write`, which is what it is.
+    //
+    // ONE THING THIS DOES NOT CHANGE, said rather than left to be discovered:
+    // `writeFileSync`'s `mode` is masked by the process umask at CREATE, so a
+    // 0664 roster under umask 022 still lands 0644 — exactly as the `0o644`
+    // literal did. Carrying the mode on the create rather than chmod-ing the
+    // tmp afterwards is deliberate: the tmp is never WIDER than the file it
+    // replaces for an instant, which is `_acct_write_secret`'s umask argument
+    // (ccd/ccrc:4144-4147) at this address.
     const tmp = `${a['file']}.tmp.${process.pid}`;
     try {
-      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o644 });
+      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`,
+        { mode: statSync(a['file']).mode & 0o777 });
       renameSync(tmp, a['file']);
     } catch (e) {
       try { unlinkSync(tmp); } catch { /* the failure above is the one to report */ }

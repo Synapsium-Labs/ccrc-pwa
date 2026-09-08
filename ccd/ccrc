@@ -3831,7 +3831,7 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # error that did not happen.
   #
   # THE DISCRIMINATOR HERE IS THE EXIT CODE. `_acct_answer`'s IS THE BODY
-  # (`[ -z "$body" ]`, :3928). THAT DIFFERENCE IS DELIBERATE AND MUST NOT BE
+  # (`[ -n "$body" ] ||`, :3937). THAT DIFFERENCE IS DELIBERATE AND MUST NOT BE
   # "HARMONISED" — harmonising them BREAKS `_acct_answer`. Every op except
   # `refuse` decides its own class and exits with it, so for those a non-zero
   # exit CARRYING a body is the normal refusal and `_acct_answer` must re-emit
@@ -3861,80 +3861,80 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   exit "$1"
 }
 
+# ── THE EMPTY-BODY SEAM, ANSWERED IN ONE PLACE (D-2051) ───────────────────
+# THREE callers reach the same condition — a captured stdout that is EMPTY — and
+# until review round 2 only one of them said anything about it. `_acct_answer`
+# below triaged it; `_acct_add`'s two re-emit sites printed the blank line they
+# had captured and exited with the callee's own code, which is `JSON.parse('')`
+# for the server. Measured on a real half-updated box (`deploy/account-op.mjs`
+# from 5fb8b24d, which has `check-add` and not `add-entry`): exit 2, stdout one
+# byte, a `usage:` line on stderr, and the 0600 secret already on disk.
+#
+# WHY THE BODY IS EMPTY AT ALL: `deploy/account-op.mjs`'s `main` answers an op it
+# does not have with exit 2, a `usage:` line on STDERR and NOTHING on stdout —
+# right for a human who mistyped an op at a shell, where the usage line is what
+# they are looking at, and wrong for this verb, whose whole contract is exactly
+# one JSON object on stdout. Propagated blindly it hands the caller an exit code
+# and an empty body: "the box said no, here is why" and "this build cannot answer
+# you at all" arriving as the same two bytes, which is the overloaded seam
+# CLAUDE.md forbids.
+#
+# THE CONDITION IS REAL. `ccd/ccrc` lands by `install_atomic` and `deploy/` by
+# rsync, so a run can find a ccrc that knows `roster`, `check-add` or `add-entry`
+# beside an `account-op.mjs` that does not. AND BASH CLOSES IT, NOT NODE:
+# teaching that file to print an envelope for an unknown op would fix every skew
+# EXCEPT the one that exists, because the copy that has to do the printing is the
+# OLD one, already on the box. Only the caller can cover for a callee that is
+# older than itself.
+#
+# WHAT IT MEASURES, AND WHAT IT DOES NOT. "stdout was empty" — nothing else. It
+# does not guess WHY, so the code is `no-answer` and the exit node gave is
+# carried in the detail rather than translated away; the CAUSE is conditioned on
+# that exit alone, because skew has a SIGNATURE (an older `main` answers an op it
+# lacks with exactly 2) while an exit above 128 is a KILL no re-install changes.
+#
+# THE CLASS IS 1, NEVER THE CALLEE'S 2. This file's table (:24-33) makes 2 "not
+# legal on its face, decidable from argv alone", and nothing reaching here is
+# that: `_acct_add_parse` accepted the request, and on the `add-entry` path
+# `check-add` accepted it too and a byte was written for it. AND `$3` IS THE
+# CALLER'S SENTENCE, because what was WRITTEN differs by path: nothing on
+# `_acct_answer`'s or at `check-add`, a 0600 credential file at `add-entry`. One
+# helper ending all three "Nothing was written." would flatten two true
+# statements into one false one, the narrowing this repository forbids.
+_acct_no_answer() {   # <rc> <op> <what-was-written> — refuses at 1, never returns
+  local rc="$1" cause
+  if [ "$rc" -eq 2 ]; then
+    cause="The known cause is a half-updated box: ccrc and deploy/account-op.mjs ship together and must be one build, and an older copy of that file answers an op it does not have with exactly this — exit 2, a usage line on stderr and no body at all. Re-run the install (or redeploy), then re-run this."
+  elif [ "$rc" -gt 128 ]; then
+    cause="An exit above 128 is a process that was KILLED rather than one that answered: $rc is signal $((rc - 128)). Look for an OOM kill or a timeout on this box, not for a stale build — re-installing will not change it."
+  else
+    cause="Nothing in this tree is known to exit $rc with an empty body, so this run cannot name a cause. deploy/account-op.mjs's own message on stderr above, if it wrote one, is the only evidence there is."
+  fi
+  _acct_refuse 1 no-answer "deploy/account-op.mjs exited $rc without writing an answer to '$2', so this run has nothing to tell you. $cause $3"
+}
+
 _acct_answer() {   # <op> [--<key> <value>]… — the answer, or a refusal that HAS a body
-  # THE EMPTY-BODY SEAM, CLOSED FOR THE SKEW SHAPE AND NOT FOR ALL OF IT
-  # (Task 21; Task 20's review named it and left it open because nothing could
-  # reach it yet — narrowed at review round 1, which measured what stays open).
+  # THE SEAM ABOVE, ON A PATH THAT ONLY PASSES AN ANSWER THROUGH: nothing this
+  # function has called writes anything, so its clause is the simple one, and
+  # the triage and the wording are `_acct_no_answer`'s, one function up.
   #
-  # WHAT CLOSES HERE: `deploy/account-op.mjs` is PRESENT and merely OLDER. It
-  # still has `refuse`, so the envelope this function asks for can actually be
-  # printed, and the caller hears a refusal instead of two bytes of exit code.
-  #
-  # WHAT DOES NOT, AND CANNOT CLOSE HERE: that file MISSING or broken. Measured
-  # at review round 1 on a box with no `ccrc/deploy/account-op.mjs` — exit 1,
-  # stdout EMPTY, `_ccrc_die` on stderr — because the writer of the refusal is
-  # the file that is gone, so `_acct_refuse` below falls through its own `||`.
-  # That is the OTHER HALF of the seam `_acct_refuse` documents one function up,
-  # reached from this side. Its M7 half — a malformed refusal call answering with
-  # two disagreeing signals — is now CLOSED (D-1983, review round 1, :3813-3861).
-  # THIS half is not, and the close is not what would do it: it needs a refusal
-  # path that does not go through node at all, and every path here does. What the
-  # close did change is the SHAPE of this failure, strictly for the better —
-  # `_acct_refuse` now emits nothing at all on stdout when node fails, so an
-  # absent `account-op.mjs` is one `_ccrc_die` sentence on stderr rather than a
-  # die laid on top of whatever node happened to leave in the pipe.
-  #
-  # `deploy/account-op.mjs`'s `main` answers an op it does not have with exit 2,
-  # a `usage:` line on STDERR and NOTHING on stdout. That is right for a human
-  # who mistyped an op at a shell — the usage line is where a human is looking —
-  # and wrong for this verb, whose whole contract is exactly one JSON object on
-  # stdout. Propagated blindly it hands the caller an exit code and an empty
-  # body: "the box said no, here is why" and "this build cannot answer you at
-  # all" arriving as the same two bytes, which is the overloaded seam CLAUDE.md
-  # forbids.
-  #
-  # THE CONDITION IS REAL AND IT IS THIS COMMIT'S OWN. `ccd/ccrc` lands by
-  # `install_atomic` and `deploy/` by rsync, so a run can find a ccrc that knows
-  # `roster` beside an `account-op.mjs` that does not — a half-updated box.
-  #
-  # WHY BASH AND NOT NODE. Teaching `account-op.mjs` to print an envelope for an
-  # unknown op would fix every skew EXCEPT the one that exists, because the
-  # copy that has to do the printing is the OLD one, already on the box. Only
-  # the caller can cover for a callee that is older than itself.
-  #
-  # WHAT IT MEASURES, AND WHAT IT DOES NOT. "stdout was empty" — nothing else.
-  # It does not guess WHY, so the code is `no-answer` and the exit code node
-  # gave is carried in the detail rather than translated away; the version skew
-  # is named as the known cause, in `cmd_wrappers`' staleness wording, because
-  # it is the only one anybody has seen. A future op that legitimately answers
-  # with nothing would have to say so here.
+  # WHAT STILL CANNOT CLOSE HERE: `account-op.mjs` MISSING or broken — the other
+  # half of the seam `_acct_refuse` documents, whose M7 half IS closed (D-1983,
+  # :3813-3861). Measured at Task 21's review round 1 on a box with no
+  # `ccrc/deploy/account-op.mjs` — exit 1, stdout EMPTY, `_ccrc_die` on stderr —
+  # because the writer of every refusal on either side is the file that is gone,
+  # so `_acct_refuse` falls through its own `||`. Closing it needs a refusal path
+  # that does not go through node at all, and every path here does.
   #
   # CAPTURING IS NOT RE-WORDING. `_acct_node`'s "stdout is the caller's answer,
   # stderr is the caller's remedy" rule survives intact: the body is re-emitted
   # byte for byte and stderr is never captured at all, so node's own remedy
-  # still reaches the operator verbatim while it is being written. `$( )` strips
-  # trailing newlines and the `printf` puts exactly one back, which is the shape
-  # every op writes and the shape `oneObject` pins.
-  #
-  # THE CAUSE SENTENCE IS CONDITIONED ON THE ONE THING THIS FUNCTION MEASURED
-  # (review round 1). Version skew has a SIGNATURE — `main` answers an op it
-  # does not have with exit 2 — and this refusal used to name skew as "the
-  # known cause" unconditionally, which handed "re-run the install" to an
-  # operator whose node was OOM-killed at 137 and whose build is fine. Two
-  # conditions, one remedy, is the same collapse the code above refuses to make;
-  # the code did not guess WHY, and then the prose did.
-  local body rc cause
+  # still reaches the operator verbatim. `$( )` strips trailing newlines and the
+  # `printf` puts exactly one back — the shape every op writes, and what
+  # `oneObject` pins.
+  local body rc
   body="$(_acct_node "$@")"; rc=$?
-  if [ -z "$body" ]; then
-    if [ "$rc" -eq 2 ]; then
-      cause="The known cause is a half-updated box: ccrc and deploy/account-op.mjs ship together and must be one build, and an older copy of that file answers an op it does not have with exactly this — exit 2, a usage line on stderr and no body at all. Re-run the install (or redeploy), then re-run this."
-    elif [ "$rc" -gt 128 ]; then
-      cause="An exit above 128 is a process that was KILLED rather than one that answered: $rc is signal $((rc - 128)). Look for an OOM kill or a timeout on this box, not for a stale build — re-installing will not change it."
-    else
-      cause="Nothing in this tree is known to exit $rc with an empty body, so this run cannot name a cause. deploy/account-op.mjs's own message on stderr above, if it wrote one, is the only evidence there is."
-    fi
-    _acct_refuse 1 no-answer "deploy/account-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. $cause Nothing was written."
-  fi
+  [ -n "$body" ] || _acct_no_answer "$rc" "$1" "Nothing was written."
   printf '%s\n' "$body"
   return "$rc"
 }
@@ -4254,11 +4254,12 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
     ACCT_CREDENTIAL=""
     _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. What nothing cleans up is a temp left by a run that was KILLED between the create and the mv: it is .$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential, and no retry ever reuses the name because it carries the pid. Remove one by hand if you find it."
   fi
-  # UNSET THE MOMENT THE FILE HAS IT — `cmd_passwd`'s `unset p1 p2` (:3123).
-  # Everything after this point in a run can be traced, logged and echoed
-  # without a containment argument, which is the property that makes the canary
-  # test a fact about the verb rather than about one code path through it.
-  ACCT_CREDENTIAL=""
+  # UNSET THE MOMENT THE FILE HAS IT — `cmd_passwd`'s `unset p1 p2` (:3123) — AND
+  # RECORD THE PATH, never the value (D-2051: `_acct_add`'s `add-entry` refusal
+  # has to say this file exists, and only its writer knows that it does).
+  # Everything after this point can be traced, logged and echoed without a
+  # containment argument, which makes the canary test a fact about the verb.
+  ACCT_CREDENTIAL=""; ACCT_SECRET_WRITTEN="$dest"
 }
 
 # ── THE `add` FLAG LOOP ────────────────────────────────────────────────────
@@ -4408,7 +4409,7 @@ _acct_converge() {
 # leaves a lane rostered and not yet converged, and the cure is to converge
 # again. Un-writing an operator's roster entry to tidy up a failed chmod would
 # be the destructive act, on the one file this CLI otherwise treats as theirs.
-ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"
+ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
 _acct_add() {
   _acct_add_parse "$@"
 
@@ -4431,8 +4432,9 @@ _acct_add() {
     ${ACCT_METHOD:+--method "$ACCT_METHOD"})" || rc=$?
   if [ "$rc" -ne 0 ]; then
     # check-add ALREADY PRINTED the envelope on ITS stdout — which this command
-    # substitution captured. Re-emit it verbatim rather than re-wording it: one
-    # refusal, one owner, one set of bytes.
+    # substitution captured, unless it printed NOTHING: the half-updated box, not
+    # a refusal (D-2051). A body is re-emitted verbatim; one refusal, one owner.
+    [ -n "$plan" ] || _acct_no_answer "$rc" check-add "Nothing was written."
     printf '%s\n' "$plan"
     exit "$rc"
   fi
@@ -4461,11 +4463,10 @@ _acct_add() {
   # reason `cmd_wrappers` uses `mapfile -t … < <(…)` at :2601.
   #
   # `secretsfile` IS READ AND NOT YET USED, said out loud rather than left for a
-  # reader to notice: `_acct_write_secret` derives the same path from the same
-  # `envVar` column, and Task 26's answer is what will need the recorded one.
-  # Dropping the field would renumber the three below it for no gain.
+  # reader to notice: what the `add-entry` refusal below names is
+  # `ACCT_SECRET_WRITTEN`, a MEASUREMENT, and Task 26's answer needs this one.
   local secretsfile="" envvar="" nfield=0 fld
-  ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"
+  ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
   while IFS= read -r -d '' fld; do
     case "$nfield" in
       0) secretsfile="$fld" ;;
@@ -4507,10 +4508,13 @@ _acct_add() {
   # `roster-write` — the empty seam this verb exists to close. On success the
   # body is dropped here because Task 26's `added` op composes the final answer
   # from the file; on failure it is re-emitted verbatim, the same shape the
-  # `check-add` call above uses.
-  local added rc2=0
+  # `check-add` call above uses. AN EMPTY capture is NEITHER (D-2051), and here
+  # alone the refusal may not say "Nothing was written." — something was.
+  local added rc2=0 wrote="Nothing was written."
+  [ -n "$ACCT_SECRET_WRITTEN" ] && wrote="The 0600 credential file $ACCT_SECRET_WRITTEN WAS written before this step and nothing rolls it back: no roster entry names it yet, so nothing on this box can run it, and re-running this same command overwrites it."
   added="$(_acct_node add-entry --file "$(_acct_roster_path)" --plan "$plan")" || rc2=$?
   if [ "$rc2" -ne 0 ]; then
+    [ -n "$added" ] || _acct_no_answer "$rc2" add-entry "$wrote"
     printf '%s\n' "$added"
     exit "$rc2"
   fi
@@ -4519,14 +4523,10 @@ _acct_add() {
   _acct_converge
 
   # `_acct_answer`, NOT `_acct_node`, and this is a DEVIATION FROM THE PLAN'S
-  # OWN SNIPPET, argued rather than transcribed. This line is a pure
-  # pass-through of one op's stdout — exactly the shape `_acct_answer` exists
-  # for, and exactly what the `roster` arm of `cmd_account` does with the same
-  # op. Through `_acct_node` a half-updated box (ccrc landed by `install_atomic`,
-  # `deploy/` by rsync) answers this verb's SUCCESS path with an exit code and
-  # an empty body, which is the one seam every other path here closes. Nothing
-  # else changes: the body is re-emitted byte for byte and stderr is never
-  # captured, so node's own remedy still reaches the operator verbatim.
+  # OWN SNIPPET, argued rather than transcribed: this line is a pure
+  # pass-through of one op's stdout — the shape `_acct_answer` exists for, and
+  # what `cmd_account`'s `roster` arm does with the same op. Through
+  # `_acct_node` a half-updated box answers the SUCCESS path with an empty body.
   _acct_answer roster --file "$(_acct_roster_path)" || exit $?
 }
 
