@@ -9,13 +9,21 @@ import { mkTmp } from './tmpHelpers.js';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../../shared/modelenv.mjs';
+import type { Registry } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
 
 let home: string;
 beforeEach(() => { home = mkTmp('ccrc-modelenv-'); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const reg = (over: Record<string, unknown>): Record<string, unknown> =>
+// Fix round 1, follow-up: `over` and the return value are both typed as
+// `Registry` now — the untyped `Record<string, unknown>` this used to return
+// satisfied nothing that took a `Registry`, which `test/tsconfig.tests.json`
+// (server/test/'s own typecheck project, `typecheck-tests.test.ts`) reported
+// as TS2739 at every call site below. `JSON.parse` clones `SEEDED` structurally
+// but returns `any`; typing `over` as `Partial<Registry>` and the return as
+// `Registry` is what makes the merge itself checked, with no cast anywhere.
+const reg = (over: Partial<Registry>): Registry =>
   ({ ...JSON.parse(JSON.stringify(SEEDED)), ...over });
 
 describe('modelEnvBlock', () => {
