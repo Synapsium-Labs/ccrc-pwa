@@ -15531,3 +15531,94 @@ signal, one owner, which is what `_acct_refuse`'s own first sentence already cla
 
 The three reworded sentences stay reworded — they read better as prose — but they are no longer what
 makes the verb correct.
+
+### D-1983, CORRECTED — my justification was half wrong, and the real argument is stronger
+
+Task 22's review upheld the ruling and dismantled two thirds of my reasoning for it. Both corrections
+matter more than the ruling did, so they are recorded rather than quietly folded in.
+
+**My `_acct_answer` precedent claim was HALF WRONG, and following it literally would break that function.**
+I wrote that `_acct_answer` "already decides on the BODY rather than the exit code alone" and offered it
+as the pattern. Measured (`ccd/ccrc:3872-3887`): its discriminator is `[ -z "$body" ]`, **not** the exit
+code — it re-emits a NON-EMPTY body and returns `rc` even when `rc` is non-zero. So under this ruling the
+two functions in the same file use OPPOSITE discriminators, and that is CORRECT rather than an
+inconsistency to be tidied away: `deploy/account-op.mjs:16-20` says every op except `refuse` decides its
+own class and exits with it, so for those a non-zero exit carrying a body IS the normal refusal and
+`_acct_answer` must emit it. `refuse` is the sole op whose contract is "exit 0 means the envelope
+printed", so for it alone a non-zero exit means the body is not yours. **Anyone who later "harmonises"
+these two functions will break `_acct_answer`.**
+
+**The decisive argument is one I did not make.** `_acct_answer`'s own header already carries it: *"Only the
+caller can cover for a callee that is older than itself."* `ccd/ccrc` lands by `install_atomic` and
+`deploy/` lands by rsync, so a fixed `ccrc` can meet an OLD `account-op.mjs` on a half-updated box. A
+caller-side capture works against **every** version of the callee; a callee-side parser change (the
+`--detail=VALUE` single-token form, which is otherwise cleaner) works only against the new one. That is
+why the close belongs in bash, and it is a better reason than "the pattern exists in this file".
+
+**Two refinements measured by the review:** discarding the body is never wrong — `main()`'s `refuse` arm
+has exactly one exit-0 path, and every reachable non-zero return is a `usage:` with no body or a
+`bad-argv` about the wrong error, so there is no exit code at which node's body is the caller's answer.
+And nothing is lost by dying on stderr alone, because `refuse()` (`deploy/account-op.mjs:233-237`) writes
+the diagnosis to **stderr as well as** stdout — so capturing stdout only preserves it verbatim. The die
+must keep node's exit code in its sentence and exit **1**, not 2: once the intended envelope never
+printed, the class is unknowable, and `ccd/ccrc:24-33` makes 1 "the tool ran and the answer was bad".
+
+### D-1984 — the credential is written UNQUOTED into a file that every wrapper sources
+
+**The first defect in this wave that is broken logic rather than a comment that lied**, at eleven tasks.
+Found by Task 22's review, prescribed by the plan itself, and present in TWO writers.
+
+`ccd/ccrc:4130` — and the plan at `:5866` — is `printf 'export %s=%s\n' "$var" "$ACCT_CREDENTIAL" > "$tmp"`.
+`shared/wrapper.mjs:141-143` generates `[ -r "$HOME/<secretsFile>" ] && . "$HOME/<secretsFile>"` into a
+`#!/usr/bin/env bash` launcher, so **that file is SOURCED at every wrapper launch**. Measured by the
+review with a credential whose bytes are shell syntax (the value was never printed; the effect was):
+`VAR_LEN=4` — the token silently truncated — and `embedded command executed: YES`.
+
+Two defects in one line:
+
+1. **Injection.** Bytes in the credential become code running as the fleet user at every launch. The
+   credential arrives PWA → server → agent, across the publicly reachable HTTPS surface.
+2. **Silent corruption of a LEGITIMATE value.** A gateway or `compatible` token containing a space, `#`,
+   `$`, `'`, or a trailing `\r` (a CRLF pipe survives `read -r`) is stored, exits 0, reports success —
+   and the lane then launches with a different token. The block's own header argues *"a token is exactly
+   its bytes"* to justify `IFS=` on the READ; the WRITE then fails to preserve exactly those bytes. A
+   guard claiming more than it measures, in the function's own words.
+
+Nothing in the suite noticed because the fixture canary is `[A-Za-z0-9-]`.
+
+**RULING: `printf 'export %s=%q\n'`, and it applies to BOTH writers.** `%q` is bash's own quoter, identity
+for ordinary tokens, and the only in-tree consumer of `.cc-secrets/*.env` is the bash wrapper that
+sources it (`deploy/notify.sh:29` reads `ccrc-mail.token` raw and never sources it). The rejected
+alternative is a fourth refusal code `credential-charset`: it would match the block's "three conditions,
+three codes" shape, but it would REFUSE legitimate tokens and so violate the very principle — a token is
+exactly its bytes — that the block exists to honour. Quoting preserves that principle; refusing abandons it.
+
+**Task 54's `:14356` writes the same filename with the same idiom and must take the same fix**, or one
+file gets two body formats. The plan already argues for `%q` at `:14395-14399` for a different seam, so
+this is the tree agreeing with itself rather than a new idea.
+
+### D-1985 — line-number citations are this wave's dominant failure class, and per-task re-reading will not end it
+
+Measured across eleven tasks: a stale or wrong `file:line` citation has been a finding in almost every
+one, and Task 22's review found the sharpest variant — **this commit BROKE a citation that was correct at
+BASE**. `_acct_refuse`'s Task-21 paragraph cites the two `unknown-argument` arms at `:4040`/`:4045`; after
+Task 22's insertion those are `:4175`/`:4180`, and `:4040` now lands *inside the comment block Task 22
+added*. The implementer swept its own forward references correctly (three verified) but not citations
+pointing PAST its insertion point from EARLIER in the file.
+
+That is the mechanism, and it is not carelessness: an author checks the numbers they wrote, not the
+numbers their insertion moved. Two of the four citation errors in this task were introduced by a sibling
+task's insertion rather than by the author.
+
+**RULING, three parts:**
+1. **New comments anchor by NAME where a name exists** — the precedent is already in the tree
+   (`ccrc-install-graphify.test.ts:1164`, D-1343).
+2. **A task that INSERTS lines into a file must sweep that file for citations pointing past its insertion
+   point**, not only its own. This is the specific step that failed here and it is cheap: one grep for
+   `<file>:[0-9]` over the file, filtered to numbers greater than the insertion offset.
+3. **A single sweep task before the PR**, not per-task manual re-reads, for the accumulated drift. The
+   review supplied measured values for the pre-existing ones so that sweep does not start from zero:
+   `ccd/ccrc:3709`/`:3720` (`_inst_accounts_sh` is at `:4501`, not `:4093`/`:4075-4100`),
+   `ccd/ccrc:3928` (`_inst_dirs` is at `:5566`, not `:5343-5350`), `ccd/ccrc:934-935`
+   (rule `:2354-2358`, implementation `:2368`), `server/test/ccrc-account.test.ts:104-105` and `:370`,
+   `deploy/account-op.mjs:201`, and `server/test/ccrc-cli.test.ts:590`'s stale `:394`.
