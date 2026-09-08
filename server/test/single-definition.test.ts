@@ -1391,8 +1391,8 @@ describe('the model files, and who reads each one', () => {
       if (/\b(?:writeFileSync|renameSync)\b/.test(l)) return true;
       return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)(?<!\.effort)\.json/.test(l);
     };
-    // Plan 2 adds `ccd/ccd` as a reader of the catalogue (spec §7) — when it
-    // lands, extend BOTH this write-scan's file list AND the readers' list in
+    // Plan 2 adds `ccd/ccd` as a reader of the models directory — the
+    // `.classes.tsv` projection (spec §7), not the catalogue — when it lands, extend BOTH this write-scan's file list AND the readers' list in
     // the `it()` just above, not just one; a reader that never writes belongs
     // only in the second.
     for (const f of ['ccd/ccrc', 'deploy/deploy.sh']) {
@@ -1443,9 +1443,9 @@ describe('the model files, and who reads each one', () => {
     //
     // The sixth, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
     // file — the spec names it three times as the CURRENT hardcoded picker
-    // this design will eventually replace: §2 calls it out by path and line
+    // this design will eventually replace: §1 calls it out by path and line
     // range ("The PWA picker is a hardcoded table keyed on the wrapper
-    // string"), §11 describes what it becomes ("Session picker … becomes
+    // string"), §8 describes what it becomes ("Session picker … becomes
     // data: rows are the four classes …", Plan 3a), and §13.4's migration
     // step 4 is "`pwa/src/lib/models.ts`'s table is deleted, not kept as a
     // fallback." So it is a real, spec-acknowledged sixth holder TODAY, and
@@ -1470,7 +1470,7 @@ describe('the model files, and who reads each one', () => {
     expect(holders).toEqual([
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
-      'pwa/src/lib/models.ts',  // the picker's aliases — spec §2/§11/§13.4, deleted by Plan 3a
+      'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
       'shared/modelenv.mjs',    // the env block's key order and the TSV's
       'shared/models.mjs',      // the twin's mirrored list
       'shared/models.ts',       // CLASSES — the definition, and FAMILY_TOKENS
