@@ -267,7 +267,7 @@ ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
 CLAUDE_CODE_SUBAGENT_MODEL     = classes[subagent]                  (the registry's explicit class-to-slot choice; refused if that slot is null)
-CLAUDE_CODE_MAX_CONTEXT_TOKENS = catalogue.context of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
 ```
 
 The eighth key exists because Claude Code 2.1.263 assumes a **200k window for
@@ -275,12 +275,21 @@ any model id it does not know** and compacts proactively at that window
 (measured 2026-09-08: the startup warning "isn't described by this version's
 model catalog … auto-compact keeps this session within 200k tokens"; docs:
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` applies directly to an unresolved id without
-`[1m]`). The catalogue knows the real window (272k for the GPT-5.6/6 tiers,
-128k for Spark), so the lane default's window is written and a session on
-Sol keeps 36% more context than it would by default.
+`[1m]`). The catalogue's advertised context is not the usable one: the Codex
+catalogue advertises `context_window` 272000 / `max_context_window` 872000 for
+the GPT-5.6 and GPT-6 tiers, but over 2,339 transcripts under `~/.claude-gpt`
+the largest prompt EVER ACCEPTED on gpt-5.6-sol was 196,341 tokens, and
+`~/.handoff/litellm.log` carries 30 "Your input exceeds the context window"
+refusals, every one on gpt-5.6-sol — the usable wall is ~196k, not 272k, and
+Claude Code's own 200k default is already ~2% optimistic. So the key is
+written as `min(catalogue.context, 200000)`: it may LOWER the client's window
+(a 128k model like gpt-5.3-codex-spark must compact at 128k) and never RAISES
+it above the client's own default on an advertised number alone — raising
+above 200k needs a MEASURED ceiling, a future registry field, not this one.
 `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never set: the
-proactive compaction is the behaviour that keeps a 272k lane from hitting the
-provider's 400 ("input exceeds the context window", seen four times today).
+proactive compaction is the behaviour that keeps an unexpectedly large lane
+from hitting the provider's 400 ("input exceeds the context window"). (amended
+2026-09-08, fleet-host measurement; Task 16c)
 
 A `null` slot is written as a **sentinel**, never left unset: unset, the alias
 falls through to Anthropic's own id and the proxied backend answers with an
@@ -319,10 +328,16 @@ sonnet` — so behaviour is unchanged until the operator classifies Astra.
 ### 6.3 LiteLLM's model list is generated
 
 `ccrc models litellm <id>` renders `~/.handoff/litellm-config.yaml` from the
-Codex catalogue: one `chatgpt/<slug>` entry per **visible** model and its
-`[1m]` alias — and **no `reasoning` key**: effort has exactly one owner, the
-shim (below), so config-versus-request precedence inside LiteLLM never
-matters.
+Codex catalogue: one `chatgpt/<slug>` entry per **visible** model, and **no
+`[1m]` alias** — a fleet-host measurement (§6.1: 196,341 tokens the largest
+prompt ever accepted on gpt-5.6-sol, against an advertised 272000, with 30
+refusals past that wall) found no measured window supports the 1M the suffix
+claims, so a `[1m]` name would route a request Claude Code believes has that
+room to a backend with no matching id; `/model <id>[1m]` now fails at LiteLLM
+with an invalid model name, loudly, instead — and **no `reasoning` key**:
+effort has exactly one owner, the shim (below), so config-versus-request
+precedence inside LiteLLM never matters. (amended 2026-09-08, fleet-host
+measurement; Task 16c)
 `drop_params` and `general_settings` are carried verbatim from a template in
 `deploy/`. If LiteLLM is running with a different rendered config, the
 generator STOPS it first (the wrapper's own `stop`; the next lane launch
