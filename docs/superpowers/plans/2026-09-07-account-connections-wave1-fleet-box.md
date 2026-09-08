@@ -15977,6 +15977,27 @@ Worth stating plainly: the world-readability is not the whole harm. `accounts.js
 config dirs, not credentials, so 0644 leaks little. What it destroys is the operator's ability to make
 a decision that STICKS, on the one file this CLI otherwise treats as theirs.
 
+**AMENDED — this tree had already decided it, and the account verb did not look.** Review round 2
+found `_inst_graph_always_on_off` (`ccd/ccrc:6358-6364`) carrying the identical remedy under **D-1244**,
+with the identical argument spelled out: *"forcing 644 would widen a CLAUDE.md an operator had
+restricted."* So D-2052 is not a question nobody had considered; it is a precedent that existed, in this
+same file, and was not applied at the new writer. That is the more useful statement of the defect, and
+the new comment cites D-1244 rather than re-deriving the reasoning.
+
+Two measured notes that keep the fix honest. First, `writeFileSync`'s `mode` is masked by the process
+umask at CREATE, so a 0664 roster under `umask 022` still lands 0644 — identical to what the literal
+did, so no regression, and the tmp can never be wider than the file it replaces. A `chmodSync` after
+the write would close that residual and OVER-DETERMINE the property, leaving the mutation that restores
+`0o644` green — the exact trap `_acct_write_secret`'s own header documents about its `umask`/`chmod`
+pair. It was deliberately not added. Second, `& 0o777` drops the setuid/setgid/sticky nibble, unlike
+`_plat_mode`'s `%Mp%Lp` — right for a JSON file nothing executes, and said in the source rather than
+left to be noticed.
+
+The census that came with it: three more `ccd/ccrc` writers impose a mode on a file they did not create
+(`_inst_accounts_sh`, `_inst_stamp`, `_exp_caddyfile` at 644; `cmd_wrappers` at 0755). All four write
+ccrc-OWNED or REGENERATE-class files whose own headers say so, which is the distinction that makes the
+imposition defensible there and made it wrong here. Nothing in `shared/roster-json.mjs` writes at all.
+
 ### D-2053 — ten pre-existing citations, verified and deliberately NOT swept here
 
 Review round 1 enumerated every `ccd/ccrc` citation at or below the insertion point (19 tokens) and
