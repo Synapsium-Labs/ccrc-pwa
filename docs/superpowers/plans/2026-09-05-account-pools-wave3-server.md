@@ -461,6 +461,7 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 
 **Mutation table:**
 - Row 20 — `project-pools-read.test.ts`. Goes RED when the `rootNames.includes(POOLS_DIR_NAME)` gate is deleted (absent directory would answer `unreadable` instead of `untagged`), when the null-`readdir` arm returns an empty map instead of `{listed:false}` (unlistable would answer `untagged` — the tag silently lifted), when the dot-leading skip is removed, or when a mid-read `absent` is treated as anything but a skip.
+- Row 20a (coordinator ruling 1) — `project-pools-read.test.ts`'s `a tag padded to 64 bytes is malformed, and 63 still strips to a name`. Goes RED three separate ways, which is why it is one case and not three: DELETE the cap entirely and the 64-byte tag strips back to `pool-a` (`tagged`, disagreeing with `ccd`); WEAKEN it to `> 64` and the same case answers `tagged` while the 65-byte input a looser test would have used still passes (D-2010 — the mutant a `> 64`-shaped test cannot see); MOVE it below the strip and the padding is gone before it is measured, so the length check reads 6. The 63-byte half is the anti-mutant: a cap written `>= 63`, or one applied to the STRIPPED value, takes that arm to `malformed` and reds too. The `\0` assertion pins the second arm on its own — delete `.includes('\0')` and only that expectation moves.
 
 **LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:96`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
 
@@ -555,6 +556,24 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('acct-a-demo', ' pool-a');
     const read = await readProjectPools(localIO, cfg(), await rootNames());
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
+    expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
+    expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'malformed' });
+  });
+
+  it('a tag padded to 64 bytes is malformed, and 63 still strips to a name', async () => {
+    // RULING 1's case, and the one that decides the CAP rather than the strip.
+    // `ccd`'s `IFS= read -r -d '' -n 64` succeeds AT 64 characters, so 64 is
+    // already `malformed` there (measured: 63 -> rc 1, 64 -> rc 0). The pair
+    // below is deliberately one byte apart, because a cap written `> 64`
+    // passes the 64 case, strips it, and answers `tagged` — agreeing with
+    // `ccd` on 65 and disagreeing on exactly the boundary (D-2010).
+    tag('demo', 'pool-a' + ' '.repeat(58));        // 6 + 58 = 64
+    tag('quiet-basin', 'pool-b' + ' '.repeat(57)); // 6 + 57 = 63
+    // And a NUL inside the first 64 bytes, which is the cap's other arm: the
+    // shell read meets its delimiter and returns 0, so `malformed` there too.
+    tag('acct-a-demo', 'pool-a\0pool-b');
+    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    expect(poolFor(read, 'demo')).toEqual({ state: 'malformed' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'malformed' });
   });
@@ -732,14 +751,26 @@ export async function readProjectPools(
       tags.set(name, { state: 'unreadable' });
       continue;
     }
-    // THE CAP COMES FIRST, exactly as it does on the other side. `ccd` reads
-    // the tag with `IFS= read -r -d '' -n 64` (`grep -n "read -r -d '' -n 64"
-    // ccd/ccd`) and answers `malformed` when that read succeeds — i.e. when 64
-    // bytes arrive without hitting EOF, or when a NUL is embedded. Both cut at
-    // the same byte here, BEFORE the strip, or the two readers disagree on a
-    // hand-constructible input: a valid name plus 58+ bytes of trailing
-    // whitespace is `malformed` there and would be `tagged` here.
-    if (read.content.length > 64 || read.content.includes('\0')) {
+    // THE CAP COMES FIRST, exactly as it does on the other side, and the
+    // COMPARISON IS `>=`, NOT `>` (D-2010 — this line said `> 64` for one
+    // commit). `ccd` reads the tag with `IFS= read -r -d '' -n 64`
+    // (`grep -n "read -r -d '' -n 64" ccd/ccd`) and answers `malformed` when
+    // that read SUCCEEDS. `read -n 64` succeeds when it gets its 64 characters
+    // OR meets the NUL; it fails only at EOF before either. So a 64-byte file
+    // is ALREADY malformed there — measured, not reasoned: 63 bytes rc 1,
+    // 64 bytes rc 0, 65 bytes rc 0. `> 64` would pass a 64-byte tag straight
+    // to the strip and answer `tagged` for the one input the cap exists to
+    // catch. `ccd`'s own comment names the same boundary from the other end:
+    // "a tag padded with 58+ characters of trailing whitespace", and
+    // `pool-a` + 58 spaces is exactly 64.
+    //
+    // BYTES vs UTF-16 UNITS, said once so nobody re-derives it: `.length`
+    // counts UTF-16 code units and `read -n` counts characters in the shell's
+    // locale, so the two agree only for ASCII. That is sufficient here because
+    // anything non-ASCII fails `POOL_NAME_RE` below and is `malformed` on both
+    // sides regardless of which side's cap it trips — the boundary only ever
+    // decides an all-ASCII input, where the three units coincide.
+    if (read.content.length >= 64 || read.content.includes('\0')) {
       tags.set(name, { state: 'malformed' });
       continue;
     }
@@ -3380,6 +3411,35 @@ is never a ledger number.
   spec's own else-structure reads; an undecidable tag is then refused by `cmd_swap`'s guard one box over
   and reaches the caller as a 502 carrying `ccd`'s sentence.
 
+### Carry triage — what wave 3 takes from wave 2b, and what it does not
+
+The brief listed five carries plus two W3 items and asked which are taken. Answered once, here,
+rather than a decision per task. **Every "not taken" below is a scope answer, not a judgement that
+the finding is wrong** — four of the five are `ccd/` behaviour and plan:21 makes this wave
+server-only.
+
+| Carry | Taken? | Why |
+|---|---|---|
+| **I-2** — §5.8.4's deploy-window mechanism | **TAKEN** (coordinator ruling D) | The code half shipped in 2b and states the correction at the assignment itself; the SPEC still asserted the mechanism I-2 falsified, and the mitigation row still listed it. Docs-only, no `ccd/` file. Both corrected, and `git grep I-2` over the spec is no longer empty — it was, which is why nobody had noticed for four days. |
+| **W3-2** — the ornamental absence assertions | **TAKEN** | `server/test/ccd-auto-swap-pool.test.ts` is a `server/test/` file, so plan:21 permits it. See the row below for what was actually unfalsifiable. |
+| **D-1916** — `cmd_project_pool`'s census walks `CCRC_ACCOUNTS`, placement walks `CCRC_HOME_ABLE` | not taken | A behaviour hunk in `cmd_project_pool`. `ccd/`, and its own red-first test. Wave 5. |
+| **D-1917** — `_strand_mark`'s banner names a pool, its census names `_pool_for` | not taken | `ccd/`; and the banner string is asserted VERBATIM, so rewording it is a test change in the same commit. Wave 5. |
+| **D-1919** — `_sanitize_anthropic`'s warning never reaches `carry_rc` | not taken | `ccd/`, and it is #61's exposure rather than this program's. Wave 5, or #61's owner. |
+| **D-1918** — README has no account-pools section | not taken **here, and it needs an owner** | Docs-only, so plan:21 does not forbid it — but the README is the canonical system overview for the WHOLE product, and a pools section written before the server half exists would document a half-feature. It belongs at the end of the program, not inside a wave. Flagged to the coordinator rather than silently dropped. |
+| **W3-1** | n/a | The brief's W3-1 has no referent in any plan or spec (`git grep 'W3-1'` over `docs/` is empty; so is `W3-2`, which is why both are quoted from the brief rather than cited). Reported to the coordinator; not invented here. |
+| **D-1957** — the `ccd:NNNN` citation sweep | not taken | Explicitly a `ccd/` sweep, and its own count drifts under it. **A count with no ref is not a measurement**, so: `git show <ref>:ccd/ccd \| grep -c 'ccd:[0-9]'` (lines) and `\| grep -o 'ccd:[0-9]\+' \| wc -l` (occurrences) give **143/154** as recorded, **146/157** at `cf1c8005` (the figure mailed to the coordinator, correct for the ref it was taken at) and **149/160** at `db580771` — C1 added three. Three refs, three answers, one sweep: that is the argument for doing it as one deliberate pass at a named ref, not in pieces. |
+
+**W3-2, measured rather than accepted.** The case is
+`server/test/ccd-auto-swap-pool.test.ts`'s overflow-lane case; the assertions are `:564`, `:566`,
+`:570` and `:571`. The tick DISPATCHES — it never runs `cmd_swap` — so `:570`
+(`h.reg(ID,'crosspool')` is null) and `:571` (`swapLog()` has no `cross-pool`) assert the absence of
+two artifacts that only `cmd_swap` writes: **unfalsifiable in this fixture, by construction, whatever
+the tick decides.** `:566` (`.not.toContain('--cross-pool')`) IS load-bearing — `_svc_run_detached`
+records the whole argv — and it is the one the brief mislabelled; `:562-563`'s `toMatch` is the
+SEARCH the brief meant, and a trailing flag would leave it green, which is exactly why `:566` has to
+exist beside it. Fix is Option A: a sibling case that runs `cmd_swap` for real against the same
+fixture, where both artifacts are writable and their absence therefore means something.
+
 ### Found during execution
 
 Allocated in their own calls at the moment they were found, never taken from a gap in the plan-time
@@ -3401,3 +3461,39 @@ block above.
   **Spec drift this does NOT fix, flagged for wave 5:** §5.4.4's algorithm block, its step 4, and the
   "every reader strips trailing whitespace" sentence all predate the cap and describe a reader that no
   longer exists on either side. Wave 5 corrects the spec; this wave does not edit it.
+- **D-2009 (2026-09-08)** (no task — REPORTED, NOT TAKEN; `ccd`, so out of this wave's scope by
+  plan:21) — **D-2000 is wider than the tag, and this half needs no project to be tagged.**
+  `_project_pool_state`'s first statement is the empty-argument short-circuit
+  (`[[ -n "${1-}" ]] || { echo untagged; return 0; }`, `ccd/ccd:1148`), and it precedes that
+  function's own anomaly checks: `$REG` not a searchable directory (`:1167`), `$POOLS_DIR` a dangling
+  symlink / a regular file / unsearchable (`:1177-1180`). Every one of those answers `unreadable`,
+  which is what makes the three `prc -eq 2` refusals fire (`:13703` `cmd_start`, `:14952` `cmd_swap`,
+  `:15198` `cmd_prefer` — each `die "pool tag for $project is $pps … nothing was touched"`).
+  But all three feed `_project_pool_state` from `project=$(_reg_get "$id" project)`, and `_reg_get`
+  folds unreadable to `""` — so **the condition that would trigger the registry-unreadable arm is the
+  same condition that empties its argument.** An unsearchable `$REG` makes every `.project` read
+  fail, every call takes the `:1148` arm, and `:1167` — the guard written for "a registry you cannot
+  enter tells you nothing about a field" — cannot fire at any of its three call sites. It is dead in
+  the exact state it was written for.
+  **Why this changes D-2000's reachability argument, not its ordering.** D-2000 was deferred on the
+  measurement that it is inert while no project is tagged, which is correct for the TAG-level effect:
+  with `$POOLS_DIR` absent, a readable `.project` answers `untagged` too, so the placement outcome is
+  unchanged. This arm is different — it is a REFUSAL that does not happen, and it is reachable today,
+  tags or no tags. **Blast radius measured honestly and it is small:** on an unsearchable `$REG` the
+  rest of each verb (`_reg_set`, the journal writes) fails too, so what is lost is a clean
+  "nothing was touched" refusal, not a proven bad placement. Not a reason to re-order; a reason the
+  ledger should not record "inert" as the whole of it.
+  Reported to the coordinator (mail 315) under its own invitation to challenge ruling C. See D-2000.
+- **D-2010 (2026-09-08)** (Task 2) — **the mirrored cap was off by one, in my own pre-flight commit,
+  at exactly the boundary the ruling exists to align.** Ruling 1 said mirror `ccd`'s 64-byte cap; I
+  wrote `read.content.length > 64`. Measured in a shell rather than reasoned about:
+  `IFS= read -r -d '' -n 64 v < f` returns **1** for a 63-byte file, **0** for a 64-byte file and
+  **0** for a 65-byte file — `read -n N` succeeds when it gets its N characters or meets the
+  delimiter, and fails only at EOF before either. So `ccd` calls a 64-byte tag `malformed`, and
+  `> 64` passed it to the strip and answered `tagged`. `ccd`'s own comment names the same boundary
+  from the other end — "a tag padded with 58+ characters of trailing whitespace" — and `pool-a`
+  plus 58 spaces is 64 bytes exactly, i.e. the ruling's own worked example is the input the first
+  version got wrong. Fixed to `>= 64`. The reason this survived writing is worth more than the fix:
+  a mirror is only as good as the SIDE-BY-SIDE, and I had quoted `ccd`'s expression without running
+  it. Row 20a's 63/64 pair is one byte apart on purpose — a case built on a 65-byte input passes
+  under both spellings and cannot see this mutant at all.
