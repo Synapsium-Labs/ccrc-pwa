@@ -127,17 +127,24 @@ states.
 
 ### 4.1 The `models` block (roster, user-owned)
 
-Present on every account whose provider is not `anthropic`. Absent on
+Present on every account whose `exec.provider` is not `anthropic`. Absent on
 Anthropic accounts: their four classes are the client's own defaults and are
 shown read-only.
 
 ```json
-"models": {
-  "classes": { "haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra", "opus": "gpt-5.6-sol", "fable": null },
-  "shortlist": "catalogue",
-  "effort": { "haiku": "high", "sonnet": "high", "opus": "max", "fable": "max" }
+"exec": {
+  "kind": "external", "provider": "openai",
+  "models": {
+    "classes": { "haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra", "opus": "gpt-5.6-sol", "fable": null },
+    "shortlist": "catalogue",
+    "effort": { "haiku": "high", "sonnet": "high", "opus": "max", "fable": "max" }
+  }
 }
 ```
+
+It sits on `exec`, where the account-connections spec already places its map
+(§4.1 there: `provider` and `models` on the `generated` and `external` kinds),
+so the two designs describe one field.
 
 - `classes` — four slots, always all four keys, each a concrete id or `null`.
   `null` means *this class is unavailable on this lane*, never "use a
