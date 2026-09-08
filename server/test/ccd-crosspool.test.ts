@@ -26,6 +26,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness }
   from './ccdWsHelpers.js';
@@ -504,13 +505,17 @@ describe('C1 — the tick MEASURES its own inputs, so a transient failure never 
       // guard is in, and its answer IS the relocation.
       fs.chmodSync(marker, 0o000);
       try {
-        expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
-          'an unreadable marker is not a licence to relocate off the crossed account')
-          .toBe('');
+        // RC 2, NOT rc 0 WITH EMPTY STDOUT (#67 review, S4). The first
+        // version of this case asserted `.toBe('')` alone, which was true for
+        // "nobody can say" AND for "stay put, everything is fine" — so it
+        // pinned the fold instead of the fix. Read the answer, not the silence.
+        expect(h.sh(`_swap_target ${ID} claude-b claude-b; echo "rc=$?"`),
+          'an unreadable marker is not a licence to relocate — and it says so as rc 2')
+          .toBe('rc=2');
       } finally { fs.chmodSync(marker, 0o644); }
-      expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
-        'readable again: the crossing is honoured and the session stays')
-        .toBe('');
+      expect(h.sh(`_swap_target ${ID} claude-b claude-b; echo "rc=$?"`),
+        'readable again: the crossing is honoured, the session stays, and THAT is rc 0')
+        .toBe('rc=0');
     });
 
   it('a record that fails the FIRST read and succeeds on the second still decides nothing', () => {
@@ -601,8 +606,9 @@ describe('C1 — the tick MEASURES its own inputs, so a transient failure never 
     fs.rmSync(marker);
     fs.symlinkSync('/nonexistent/target', marker);
     expect(h.sh(`_crosspool_valid ${ID} "named pool-a" claude-b; echo "rc=$?"`)).toBe('rc=2');
-    expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
-      'a marker path nobody can measure is not a licence to relocate').toBe('');
+    expect(h.sh(`_swap_target ${ID} claude-b claude-b; echo "rc=$?"`),
+      'a marker path nobody can measure is not a licence to relocate — rc 2, not silence')
+      .toBe('rc=2');
   });
 
   it('a marker path that is a DANGLING SYMLINK decides nothing — and no re-seed rides it', () => {
@@ -654,13 +660,13 @@ describe('C1 — the tick MEASURES its own inputs, so a transient failure never 
     writeLimits('claude', 5, 5);
     const marker = reg(`${ID}.crosspool`);
     fs.rmSync(marker); fs.mkdirSync(marker);
-    expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
+    expect(h.sh(`_swap_target ${ID} claude-b claude-b; echo "rc=$?"`),
       'an unreadable marker is not a licence to relocate off the crossed account')
-      .toBe('');
+      .toBe('rc=2');
     fs.rmdirSync(marker);
     crossed('pool-a', 'claude-b');
-    expect(h.sh(`_swap_target ${ID} claude-b claude-b`),
-      'readable again: the crossing is honoured and the session stays').toBe('');
+    expect(h.sh(`_swap_target ${ID} claude-b claude-b; echo "rc=$?"`),
+      'readable again: the crossing is honoured and the session stays').toBe('rc=0');
   });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -1129,5 +1135,192 @@ describe('cmd_ensure clears the strand only for a human act', () => {
     seedRow(); strand();
     h.sh(`${START_STUBS} CCD_KEEP_SWAPBLOCK=1 cmd_ensure ${ID}`);
     expect(h.reg(ID, 'stranded')).not.toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R1/R2 — the #67 review's findings, measured. C1's first version put two
+// guards at the TOP of `_auto_swap_check` and returned from the WHOLE tick, and
+// everything the LIMIT-RESCUE lane needs sits below them. The result traded an
+// inert defect (C1's own, embargoed — no `.crosspool` marker exists on the box)
+// for a live one on every session: a row whose `.home` merely became unreadable
+// was never evacuated when it hit a limit, every five seconds, forever, with no
+// marker and no banner. On `origin/main` `_home_for` fell back to a valid
+// account and that rescue was entirely sound, so this was strictly a regression.
+describe('R1 — an unmeasurable input costs the CROSSING, never the rescue', () => {
+  const unreadable = (field: string): string => {
+    // A DIRECTORY in the field's place, not `chmod 000`: `cat` refuses with
+    // EISDIR at every uid including root, and `-e` stays true, so this case
+    // needs no `skipIf` and measures the same rung on the machine most likely
+    // to run the suite as root. The same technique the C1 cases above use.
+    const p = reg(`${ID}.${field}`);
+    fs.rmSync(p, { force: true });
+    fs.mkdirSync(p);
+    return p;
+  };
+
+  it('an unreadable `.home` still lets a limit-blocked session be RESCUED', () => {
+    // THE REGRESSION, end to end. `claude` is pinned at the ceiling and
+    // `claude-a` is wide open, so a healthy tick evacuates. The only thing
+    // wrong with this row is that its `.home` cannot be read — which the
+    // crossing decision needs and the rescue does not.
+    seedRow(); plantNotify();
+    writeLimits('claude', 99, 99);
+    writeLimits('claude-a', 1, 1);
+    unreadable('home');
+    tick(BLOCKED);
+    expect(h.calls().join('\n'), 'the rescue must still fire — this is what regressed')
+      .toContain(`dispatch ${ID} -> claude-a`);
+    expect(swapLog(), 'and it is logged as a rescue').toContain(`auto-rescue ${ID}:`);
+    // AND THE CROSSING HALF IS STILL REFUSED, which is the half `.home` really
+    // does decide. Nothing may re-seed a home nobody could read.
+    expect(swapLog(), 'no rehome may ride an unmeasurable home')
+      .not.toContain(` rehome ${ID}:`);
+    expect(swapLog(), 'and the stand-still is still SAID').toContain('tick-undecidable');
+  });
+
+  it('an unreadable `.home` never lets the session go BACK to it — the empty-name walk', () => {
+    // WHY `hrc` IS AN ARGUMENT AND NOT AN EMPTY `home`. Measured, and it is
+    // the reason this fix is shaped the way it is: `_account_ok ""` is TRUE,
+    // because `[[ -x "$WRAPPER_DIR/" ]]` tests the DIRECTORY and a directory is
+    // searchable. So passing `""` as home would walk straight into the
+    // home-recovered arm — D-1993's defect wearing `_swap_target`'s clothes.
+    expect(h.sh('_account_ok ""; echo "rc=$?"'),
+      'the premise: an empty account name PASSES _account_ok').toBe('rc=0');
+    seedRow(); plantNotify();
+    writeLimits('claude', 99, 99);
+    writeLimits('claude-a', 1, 1);
+    unreadable('home');
+    tick(BLOCKED);
+    const argv = h.calls().join('\n');
+    expect(argv, 'never a dispatch to the empty account name').not.toMatch(/dispatch \S+ -> *$/m);
+    expect(argv, 'the rescue picked a REAL account').toContain('-> claude-a');
+  });
+
+  it('an unreadable `.wrapper` STRANDS LOUDLY rather than standing still in silence', () => {
+    // The one value the tick genuinely cannot proceed without — `cur` is
+    // `_swap_target`'s first input and `_strand_why` names it in every
+    // sentence. So it still returns; what changed is that it no longer returns
+    // with nothing an operator can see. `swap.log` is not a surface: measured,
+    // `grep -rn 'swap\.log' server/src agent/src shared pwa/src` finds three
+    // hits and all three are comments. `.stranded` IS one.
+    seedRow(); plantNotify();
+    writeLimits('claude', 99, 99);
+    unreadable('wrapper');
+    tick(BLOCKED);
+    expect(String(h.reg(ID, 'stranded')),
+      'the row carries a strand the server can put on the phone')
+      .toMatch(/^\d{10} wrapper could not be measured/);
+    expect(noticeLines().join('\n'), 'and a banner fires').toContain('STRANDED');
+    expect(swapLog(), 'and the swap.log line is still there for the box')
+      .toContain('tick-undecidable');
+  });
+
+  it('…but NOT when the pane is merely quiet — an unmeasured field is not a strand', () => {
+    // The discipline that keeps the line above from being the very defect it
+    // replaces. A session standing still on an unreadable field may be idle,
+    // mid-turn, or perfectly happy; marking it stranded would be a fabricated
+    // positive claim, which is what S5 is about one seam up.
+    seedRow(); plantNotify();
+    unreadable('wrapper');
+    tick(QUIET);
+    expect(h.reg(ID, 'stranded'), 'a quiet pane is not stranded').toBeNull();
+    expect(noticeLines(), 'and nothing is announced').toHaveLength(0);
+  });
+});
+
+describe('R2 — `_swap_target` answers THREE conditions, and the caller acts on all three', () => {
+  it('an undecidable crossing record strands with ITS OWN cause, not `_strand_why`’s sentence', () => {
+    // The fabricated strand. With `_swap_target` folding "nobody can say" into
+    // "stay put", an empty answer plus a hard-blocked pane became
+    // `_strand_mark` with the stock reason — "no account in pool X can take
+    // it" — a DURABLE POSITIVE CLAIM, on the phone and in a banner, that is
+    // flatly false when an in-pool account is sitting there free. A strand is
+    // louder and more convincing than the relocation C1 removed, so
+    // fabricating one is the worse end of the same defect.
+    seedRow('claude-b'); tagPool('demo', 'pool-a'); plantNotify();
+    crossed('pool-a', 'claude-b');
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude', 1, 1);            // an in-pool account IS free
+    const marker = reg(`${ID}.crosspool`);
+    fs.rmSync(marker); fs.mkdirSync(marker);   // unreadable at every uid
+    tick(BLOCKED);
+    const stranded = String(h.reg(ID, 'stranded'));
+    expect(stranded, 'it strands — silence would be the other half of R1')
+      .toMatch(/^\d{10} the crossing record could not be read/);
+    expect(stranded, 'and it must NOT claim nobody could take it')
+      .not.toContain('no account in pool');
+    expect(h.calls().join('\n'), 'and nothing is dispatched off an unread crossing')
+      .not.toContain('dispatch');
+  });
+});
+
+describe('R4 — the observability of standing still is itself pinned', () => {
+  it('`_tick_undecidable` is silent and harmless when its own log cannot be written', () => {
+    // WHAT THIS CASE MEASURES, AND WHAT IT DOES NOT — said out loud because the
+    // first version of it measured NOTHING. It asserted that the line is
+    // written "even when the stamp cannot be written", over a fixture in which
+    // the stamp wrote perfectly well; the mutation it was written for left the
+    // suite green. Measured, then rewritten. The ornamental-assertion class
+    // again, in the case added to close a review finding about observability.
+    //
+    // What IS falsifiable here: `_tick_undecidable` runs inside the 5-second
+    // supervise loop, so when its append cannot land it must fail QUIETLY —
+    // otherwise every row in that state emits shell errors into the supervise
+    // journal on every tick, which is the review's "three new stderr lines per
+    // row per tick" and is strictly worse than the silence it replaces.
+    //
+    // A DIRECTORY at `swap.log`: the append fails with EISDIR at every uid,
+    // including root, so this needs no `skipIf`.
+    // STDERR IS CAPTURED TO A FILE, not read off `shFail` — measured, and this
+    // is the third assertion today that turned out to be structurally
+    // unfalsifiable: `shFail`'s SUCCESS branch hard-codes `stderr: ''`
+    // (`ccdWsHelpers`-shaped helper, defined above), so
+    // `expect(r.stderr).toBe('')` is true for every command that exits 0,
+    // whatever it printed. A redirect inside the snippet is the only place the
+    // real bytes exist.
+    seedRow();
+    const log = reg('swap.log');
+    fs.rmSync(log, { force: true });
+    fs.mkdirSync(log);
+    const errFile = path.join(h.home, 'tick-err');
+    const out = h.sh(`_tick_undecidable ${ID} wrapper 2>"${errFile}"; echo "rc=$?"`);
+    expect(fs.readFileSync(errFile, 'utf8'),
+      'no shell noise into the supervise journal, every tick, per row').toBe('');
+    expect(out, 'and it never fails the tick around it').toBe('rc=0');
+    fs.rmdirSync(log);
+  });
+
+  it('the debounce holds: one line per episode, not one per tick', () => {
+    seedRow();
+    h.sh(`_tick_undecidable ${ID} wrapper`);
+    const once = swapLog().split('\n').filter((l) => l.includes('tick-undecidable')).length;
+    expect(once, 'the first call says it').toBe(1);
+    h.sh(`_tick_undecidable ${ID} wrapper; _tick_undecidable ${ID} wrapper`);
+    expect(swapLog().split('\n').filter((l) => l.includes('tick-undecidable')).length,
+      'and the stamp the first one left silences the rest of the episode').toBe(once);
+    h.sh(`_tick_decided ${ID}`);
+    h.sh(`_tick_undecidable ${ID} wrapper`);
+    expect(swapLog().split('\n').filter((l) => l.includes('tick-undecidable')).length,
+      'a decided tick ends the episode, and the next one is announced again').toBe(once + 1);
+  });
+
+  it('`_reg_read` refuses a FIFO on a TYPE check — it never opens one', () => {
+    // `_reg_read` runs inside the `cmd_supervise` loop. `cat` on a FIFO with
+    // no writer blocks in `open(2)` forever: no exit code, no stdout, a
+    // supervisor hung permanently. `_project_pool_state` already carries this
+    // precondition and the paragraph arguing it; `_reg_read` copied that
+    // function's level ORDER and dropped its loudest guard. The 5s timeout is
+    // the assertion: without the type check this call never returns.
+    seedRow();
+    const p = reg(`${ID}.wrapper`);
+    fs.rmSync(p, { force: true });
+    execFileSync('mkfifo', [p]);
+    // `timeout 5` in a CHILD shell, so a regression fails this case in five
+    // seconds with rc 124 instead of wedging the whole suite — the failure mode
+    // is a hang, and a test for a hang must not be able to hang.
+    const out = h.sh(`timeout 5 bash -c 'source "${CCD}"; _reg_read ${ID} wrapper'; echo "rc=$?"`);
+    expect(out, 'a FIFO is UNREADABLE, decided without opening it (124 = it hung)')
+      .toBe('rc=2');
   });
 });
