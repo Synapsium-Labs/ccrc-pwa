@@ -1,13 +1,15 @@
 // Move-to-another-account sheet — plus the shared account-picker row that
-// NewSessionSheet reuses. Target rows exclude the session's current account;
-// each carries the account chip and its live limit gauges from the fleet
-// store (or honestly says "limits unknown"), and the least-loaded target
-// wears a mono "suggested" tag. Tapping a target opens a QuickConfirm whose
+// NewSessionSheet reuses. Target rows exclude the session's current account
+// and every lane that cannot take work (kill-switched, or a credential the
+// health probe measured dead); each carries the account chip and its limit
+// gauges from `GET /api/accounts` (or honestly says "limits unknown"), and the
+// least-loaded target — least loaded by MEASURED numbers only — wears a mono
+// "suggested" tag. Tapping a target opens a QuickConfirm whose
 // consequence sentence does the explaining; confirming posts api.swap — the
 // restart itself then plays out over the fleet stream.
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import type { FleetSession, RosterWire } from '../../../shared/api';
+import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
 import { limitBand } from '../components/LimitBar';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
@@ -15,18 +17,33 @@ import { toast } from '../components/Toast';
 import { accountHue, accountLabel, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import { useDisabledWrappers } from './useProjectedHome';
+import { useAccountUsage } from './useProjectedHome';
 import './fleet.css';
 
-export type AccountLimits = { five: number | null; seven: number | null } | null;
+/** One account's row as `GET /api/accounts` carries it, or `null` when there is
+ *  no row for that account — the poll has not landed, or telemetry has never
+ *  mentioned this account at all (`readLimits` builds a row per
+ *  `~/.cc-limits/*.json`, plus any markered lane, and nothing else).
+ *
+ *  THE WHOLE ROW, not the `{five, seven}` pair this used to be. The pair came
+ *  off the live fleet frame (`FleetSession.limits`) and carried no provenance,
+ *  so a window that had merely ROLLED OVER — a rate-limit window whose reset
+ *  time elapsed, whose `0` is inferred from a timestamp and was never observed
+ *  — was indistinguishable from an account something had measured empty. It
+ *  therefore scored 0, won `leastLoaded`, and wore the "suggested" tag on a
+ *  fleet where nothing had run on it in days. `AccountUsage` answers that with
+ *  `fiveRolledOver`/`sevenRolledOver`, and this sheet was already fetching it.
+ *  (`server/src/limits.ts`'s `measured()` and ccd's `_limit_score` are the same
+ *  decision on the same fact, one layer down.) */
+export type AccountFacts = AccountUsage | null;
 
-/** The accounts a session may be moved to. `disabled` names lanes ccd's
- *  kill-switch has switched off — they are excluded, because offering a swap
- *  target that cannot take work is worse than offering none. */
+/** The accounts a session may be moved to. `unusable` names lanes that cannot
+ *  take work — they are excluded, because offering a swap target that cannot
+ *  take work is worse than offering none. */
 export function pickableWrappers(
   roster: readonly RosterWire[],
   sessions: FleetSession[],
-  disabled: readonly string[] = [],
+  unusable: readonly string[] = [],
 ): string[] {
   // `string[]`, not the roster's own id type: a live session can report a
   // wrapper the roster doesn't have an entry for at all (a build running an
@@ -36,17 +53,44 @@ export function pickableWrappers(
   for (const s of sessions) {
     if (!all.includes(s.wrapper)) all.push(s.wrapper);
   }
-  return all.filter((w) => !disabled.includes(w));
+  return all.filter((w) => !unusable.includes(w));
 }
 
-/** An account's live limits, read off any fleet session on that wrapper —
- *  limits are per-account, so the first session that knows them speaks for
- *  all. Null when no live session carries them. */
-export function limitsFor(sessions: FleetSession[], wrapper: string): AccountLimits {
-  for (const s of sessions) {
-    if (s.wrapper === wrapper && s.limits !== null) return s.limits;
-  }
-  return null;
+/** The lanes that cannot take work, from the accounts poll's own rows.
+ *
+ *  TWO facts, ONE affordance — `AccountsScreen` already says this in the same
+ *  words and renders them through one `data-disabled` attribute: `disabled` is
+ *  the operator's kill-switch (`~/.cc-sessions/<w>-disabled`, touched by hand),
+ *  `authDead` is the health probe's durable verdict (`<w>-authdead`, a
+ *  credential that did not authenticate). The server keeps them apart for good
+ *  reason — intent cannot be wrong, a measurement can — but here they answer
+ *  the same question, "can a session be moved onto this lane and run?", and the
+ *  answer is no either way. Swapping onto an auth-dead account produces a
+ *  session that cannot authenticate, which is a worse outcome than the swap
+ *  simply not being offered.
+ *
+ *  `=== true` ON BOTH, never truthiness. `authDead` is ADDITIVE on the wire
+ *  (`shared/api.ts`, on `RosterWire.hidden`'s terms, no `FLEET_PROTO` bump): a
+ *  server built before it OMITS it, and ABSENCE MEANS NOT CONDEMNED, so an
+ *  older payload must keep offering every account exactly as it does today.
+ *  `disabled` is spelled the same way it always was.
+ *
+ *  `null` rows — nothing landed, or the poll failed — exclude NOTHING, which is
+ *  `useAccountUsage`'s own stated failure posture: an account offered that
+ *  turns out to be unusable is recoverable (ccd refuses the swap), while one
+ *  hidden because telemetry hiccuped looks like it does not exist. */
+export function unusableWrappers(rows: readonly AccountUsage[] | null): string[] {
+  return (rows ?? [])
+    .filter((a) => a.disabled === true || a.authDead === true)
+    .map((a) => a.wrapper);
+}
+
+/** One account's row out of the poll, or `null` when the poll has none for it.
+ *  Account-level facts are per-ACCOUNT, so a single row speaks for every
+ *  session on that lane — which is what the old `limitsFor(sessions, wrapper)`
+ *  was really saying when it took the first live session's copy of them. */
+export function factsFor(rows: readonly AccountUsage[] | null, wrapper: string): AccountFacts {
+  return (rows ?? []).find((a) => a.wrapper === wrapper) ?? null;
 }
 
 /** Load score for "suggested" ranking — the tighter of the two windows, or
@@ -70,19 +114,52 @@ export function limitsFor(sessions: FleetSession[], wrapper: string): AccountLim
  *  have been at 99. A recommendation built on that is a guess about the number
  *  that would have decided it.
  *
+ *  AN INFERRED ZERO IS UNKNOWN TOO, and it is the same magnet reaching through
+ *  a seam this function could not see. A rolled-over window carries a REAL `0`
+ *  — `server/src/limits.ts` writes it the moment a `resetAt` lapses or a sample
+ *  outlives its own window — but that 0 was DERIVED FROM A TIMESTAMP, never
+ *  observed. Read as a measurement it is the best score on the fleet, so the
+ *  account wins every placement; nothing runs on an account nothing was moved
+ *  to, so nothing ever replaces the inferred number, and the account nobody has
+ *  touched in days stays "suggested" forever. Unlike the two above, this one
+ *  fires on a perfectly healthy fleet, every time a window turns over.
+ *
+ *  ONE rolled window is enough, for the same reason one null window is: the
+ *  score is a maximum, and the elapsed half bounds the truth only from below.
+ *
+ *  THIS IS `server/src/limits.ts`'s `measured()`, TERM FOR TERM — the same
+ *  disjuncts in the same order over the same fields, and ccd's `_limit_score`
+ *  is the third copy of the same decision in bash. Deliberately not a second
+ *  spelling of one rule: the swap picker learned the null half first and
+ *  placement learned the inferred zero first, and they are the same lesson.
+ *  The one difference is punctuation, not meaning — `=== true` rather than
+ *  `measured()`'s bare truthiness, because this side reads the flags off the
+ *  WIRE, where a field can simply be absent, while `limits.ts` reads a value it
+ *  built itself. On every value `AccountUsage`'s declared `boolean` can carry,
+ *  the two forms decide identically.
+ *
  *  Not scoring is not a refusal to help: an account with no score is simply
- *  not ranked, its gauges still say `—`, and it remains tappable. What is gone
- *  is ccrc telling the reader it is the emptiest pool. */
-const load = (l: AccountLimits): number | null =>
-  l === null || l.five === null || l.seven === null ? null : Math.max(l.five, l.seven);
+ *  not ranked, its gauges still say `—` (or `reset`, which is the rolled-over
+ *  window saying so out loud), and it remains tappable. What is gone is ccrc
+ *  telling the reader it is the emptiest pool. */
+const load = (l: AccountFacts): number | null =>
+  l === null || l.five === null || l.seven === null
+  || l.fiveRolledOver === true || l.sevenRolledOver === true
+    ? null
+    : Math.max(l.five, l.seven);
 
 /** The least-loaded wrapper among those whose BOTH limit windows were actually
- *  read; null if none was. */
-export function leastLoaded(sessions: FleetSession[], wrappers: string[]): string | null {
+ *  MEASURED — read, and not inferred from an elapsed window; null if none was.
+ *  `null` is the honest answer when every candidate is unscoreable: no target
+ *  wears the tag, rather than one wearing it off a number nobody took. */
+export function leastLoaded(
+  rows: readonly AccountUsage[] | null,
+  wrappers: string[],
+): string | null {
   let best: string | null = null;
   let bestLoad = Infinity;
   for (const w of wrappers) {
-    const score = load(limitsFor(sessions, w));
+    const score = load(factsFor(rows, w));
     if (score !== null && score < bestLoad) {
       bestLoad = score;
       best = w;
@@ -92,9 +169,20 @@ export function leastLoaded(sessions: FleetSession[], wrappers: string[]): strin
 }
 
 /** One thin gauge row — mono label · track · tabular percentage. Spans only,
- *  so the row stays valid inside the AccountRow button. */
-function Gauge({ label, value }: { label: string; value: number | null }): ReactNode {
-  const pct = value === null ? null : Math.min(100, Math.max(0, value));
+ *  so the row stays valid inside the AccountRow button.
+ *
+ *  THE THREE-WAY IS `AccountsScreen`'s `Bar`, WORD FOR WORD: "reset" (an
+ *  inferred zero) ≠ a measured "0%" ≠ "—" (nobody measured it). That screen
+ *  already owns the vocabulary for exactly this state and this is the same fact
+ *  on a second surface, so it says the same word rather than inventing a second
+ *  visual language for it. The track is left EMPTY for a rolled-over window,
+ *  which is what `Bar` renders too — its fill is `width: 0%` there, because the
+ *  0 it would draw is the inferred one. A confident bar and the word "reset"
+ *  would contradict each other in the same row. */
+function Gauge({ label, value, rolledOver }: {
+  label: string; value: number | null; rolledOver: boolean;
+}): ReactNode {
+  const pct = rolledOver || value === null ? null : Math.min(100, Math.max(0, value));
   return (
     <span className="acct-gauge">
       <span>{label}</span>
@@ -106,22 +194,26 @@ function Gauge({ label, value }: { label: string; value: number | null }): React
           />
         )}
       </span>
-      <span className="acct-gauge-pct">{pct === null ? '—' : `${Math.round(pct)}%`}</span>
+      <span className="acct-gauge-pct">
+        {rolledOver ? 'reset' : pct === null ? '—' : `${Math.round(pct)}%`}
+      </span>
     </span>
   );
 }
 
-/** A tappable account row: chip (label + hue), live limit gauges, chevron.
- *  Shared by SwapSheet (targets) and NewSessionSheet (step 1). */
+/** A tappable account row: chip (label + hue), limit gauges, chevron.
+ *  Shared by SwapSheet (targets) and NewSessionSheet (step 1) — ONE row
+ *  component, so both pickers say the same thing about the same account, and
+ *  both are fed from the same source (`useAccountUsage`) for the same reason. */
 export function AccountRow({
   wrapper,
-  limits,
+  facts,
   suggested = false,
   onPick,
   roster,
 }: {
   wrapper: string;
-  limits: AccountLimits;
+  facts: AccountFacts;
   suggested?: boolean;
   onPick: (wrapper: string) => void;
   roster: readonly RosterWire[];
@@ -148,12 +240,12 @@ export function AccountRow({
       </span>
       {suggested && <span className="acct-suggested">suggested</span>}
       <span className="acct-gauges">
-        {limits === null ? (
+        {facts === null ? (
           <span className="acct-unknown">limits unknown</span>
         ) : (
           <>
-            <Gauge label="5h" value={limits.five} />
-            <Gauge label="7d" value={limits.seven} />
+            <Gauge label="5h" value={facts.five} rolledOver={facts.fiveRolledOver === true} />
+            <Gauge label="7d" value={facts.seven} rolledOver={facts.sevenRolledOver === true} />
           </>
         )}
       </span>
@@ -256,9 +348,22 @@ export function SwapSheet({
   // is the actual invariant and closing is only the way it usually ends.
   useEffect(() => { setTarget(null); }, [open, session.id]);
 
-  const disabledWrappers = useDisabledWrappers(open);
-  const wrappers = pickableWrappers(roster, sessions, disabledWrappers).filter((w) => w !== session.wrapper);
-  const suggested = leastLoaded(sessions, wrappers);
+  // ONE SOURCE FOR EVERY ACCOUNT-LEVEL FACT THIS SHEET SHOWS OR RANKS ON, and
+  // it is the poll, not the fleet frame. The frame's `FleetSession.limits` used
+  // to feed the gauges while the poll fed eligibility, and that is two sources
+  // describing one account: the frame carries `{five, seven}` with no
+  // provenance, so it would have gone on drawing a confident `0%` on the very
+  // row the poll had just refused to score. `useAccountUsage`'s docstring
+  // carries the measurement that settles which one wins — both are the same
+  // server-side `readLimits` map, and the frame is the lossy copy.
+  //
+  // `sessions` is still read, for a different fact: `pickableWrappers` unions
+  // in wrapper IDS reported by live sessions that this build's roster has no
+  // entry for. That is membership, not measurement.
+  const accounts = useAccountUsage(open);
+  const wrappers = pickableWrappers(roster, sessions, unusableWrappers(accounts))
+    .filter((w) => w !== session.wrapper);
+  const suggested = leastLoaded(accounts, wrappers);
 
   const move = (wrapper: string): void => {
     void (async () => {
@@ -323,7 +428,7 @@ export function SwapSheet({
             <AccountRow
               key={w}
               wrapper={w}
-              limits={limitsFor(sessions, w)}
+              facts={factsFor(accounts, w)}
               suggested={w === suggested}
               onPick={setTarget}
               roster={roster}

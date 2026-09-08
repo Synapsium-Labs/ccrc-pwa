@@ -1,5 +1,5 @@
 // New-session sheet — two steps in one sheet. Step 1: pick the account
-// (shared AccountRow chips with live limit gauges from the fleet store).
+// (shared AccountRow chips with limit gauges from GET /api/accounts).
 // Step 2: pick the project — searchable list from api.projects, with
 // registry projects first, most recently active on top. The confirm row
 // narrates the action in plain language ("Start OpenClawHetzner on
@@ -15,8 +15,8 @@ import { toast } from '../components/Toast';
 import { accountLabel } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import { AccountRow, limitsFor, pickableWrappers } from './SwapSheet';
-import { useDisabledWrappers } from './useProjectedHome';
+import { AccountRow, factsFor, pickableWrappers, unusableWrappers } from './SwapSheet';
+import { useAccountUsage } from './useProjectedHome';
 import './fleet.css';
 
 
@@ -34,7 +34,12 @@ export function NewSessionSheet({
 }: NewSessionSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
-  const disabledWrappers = useDisabledWrappers(open);
+  // The SAME poll the picker's eligibility already came from, now also the
+  // source of its gauges — this sheet was fetching every account row and using
+  // one boolean off it while reading its numbers off the live fleet frame,
+  // which carries no provenance and no row for an account with no live session.
+  // One source per fact; see `useAccountUsage`.
+  const accounts = useAccountUsage(open);
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
   const [project, setProject] = useState<ProjectRow | null>(null);
@@ -130,13 +135,16 @@ export function NewSessionSheet({
         <>
           <p className="sheet-copy">Pick the account it runs on — you can move it later.</p>
           <div className="acct-list">
-            {/* A kill-switched lane cannot start a session either — offering
-                it here is the same bug SwapSheet's picker had, one layer up. */}
-            {pickableWrappers(roster, sessions, disabledWrappers).map((w) => (
+            {/* A lane that cannot take work cannot start a session on it
+                either — a kill-switched account, or one whose credential the
+                health probe measured dead. Offering either here is the same bug
+                SwapSheet's picker had, one layer up, and `unusableWrappers` is
+                the one rule both pickers ask. */}
+            {pickableWrappers(roster, sessions, unusableWrappers(accounts)).map((w) => (
               <AccountRow
                 key={w}
                 wrapper={w}
-                limits={limitsFor(sessions, w)}
+                facts={factsFor(accounts, w)}
                 onPick={setWrapper}
                 roster={roster}
               />

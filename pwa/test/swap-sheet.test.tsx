@@ -6,8 +6,9 @@
 // directions, ~15 minutes). This suite pins the sheet SAYING SO. A control
 // that quietly undoes itself is worse than one that admits it will.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { FleetSession } from '../../shared/api';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { AccountUsage, FleetSession } from '../../shared/api';
+import { api } from '../src/lib/api';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
@@ -225,5 +226,224 @@ describe('SwapSheet does not promise a held session an automatic return', () => 
       expect(c.textContent).toMatch(/but a program hold defers that/i);
       expect(c.textContent).toMatch(/was not measured from here/i);
     });
+  });
+});
+
+// ————————————————————————————————————————————————————————————————————————
+// PROVENANCE. This sheet is the last reader on the branch that scored a
+// telemetry number without asking where it came from.
+//
+// An account whose rate-limit window has merely ENDED reports `{five: 0}` —
+// `server/src/limits.ts` writes that 0 the moment a `resetAt` lapses or a
+// sample outlives its own window — and sets `fiveRolledOver`. The 0 is
+// INFERRED FROM A TIMESTAMP; nothing observed it. Scored as a measurement it
+// is the best number on the fleet, so the account wins `leastLoaded` and wears
+// "suggested"; nothing runs on an account nothing is moved to, so no real
+// number ever replaces the inferred one and it wins FOREVER. ccd
+// (`_limit_score`) and `server/src/limits.ts` (`measured()`) each closed this
+// on their own side; this is the third copy of the same decision, and the one
+// a human reads while rescuing a wedged session by hand.
+//
+// NO WIRE CHANGE WAS NEEDED. `GET /api/accounts` already ships the whole
+// `AccountUsage` row — both rollover flags, `disabled` and `authDead` — and
+// this sheet was already polling it on open and every 20s after, then throwing
+// everything away except `a.disabled === true`.
+const acct = (over: Partial<AccountUsage>): AccountUsage => ({
+  wrapper: 'claude', five: 0, seven: 0, ts: null,
+  fiveResetAt: null, sevenResetAt: null,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
+});
+
+const stubAccounts = (accounts: AccountUsage[]): void => {
+  vi.spyOn(api, 'accounts').mockResolvedValue({
+    accounts, projected: null, roster: [],
+  });
+};
+
+/** The sheet, opened on `claude` (team·max), against a fleet store the test
+ *  chooses — so a case can put the frame and the poll in deliberate conflict. */
+const renderSwap = (sessions: FleetSession[] = []): void => {
+  render(
+    <SwapSheet
+      session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
+      open
+      onClose={vi.fn()}
+      fleet={storeWith(sessions)}
+    />,
+  );
+};
+
+describe('SwapSheet does not rank an account on an inferred zero', () => {
+  it('never suggests an account whose 5h window merely rolled over', async () => {
+    stubAccounts([
+      // The magnet: 0% with the flag set. Nothing measured this.
+      acct({ wrapper: 'claude2', five: 0, seven: 0, fiveRolledOver: true }),
+      // Honestly reporting, and much fuller — it must still win.
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('suggested'));
+    expect(screen.getByRole('button', { name: /team·alt/ })).not.toHaveTextContent('suggested');
+  });
+
+  it('never suggests one whose 7d window rolled over either — one elapsed half is enough', async () => {
+    // The score is a MAXIMUM, so the ended half bounds the truth only from
+    // below: `{five: 4, seven: <ended>}` could really be at 99.
+    stubAccounts([
+      acct({ wrapper: 'claude2', five: 4, seven: 0, sevenRolledOver: true }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('suggested'));
+    expect(screen.getByRole('button', { name: /team·alt/ })).not.toHaveTextContent('suggested');
+  });
+
+  it('still suggests an account MEASURED empty — the fix narrows, it does not refuse every zero', async () => {
+    // The other direction, and it is what separates this from "distrust 0".
+    // A measured 0 is the best possible target and saying so is the whole
+    // point of the tag; only the INFERRED zero is disqualified.
+    stubAccounts([
+      acct({ wrapper: 'claude2', five: 0, seven: 0 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
+    // …and it renders as the measurement it is, not as a reset.
+    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('0%');
+    expect(screen.getByRole('button', { name: /team·alt/ })).not.toHaveTextContent('reset');
+  });
+
+  it('suggests NOBODY when every candidate is unscoreable — no suggestion beats a wrong one', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true }),
+      acct({ wrapper: 'claude-corp', five: 0, seven: 30, fiveRolledOver: true }),
+      acct({ wrapper: 'gpt', five: null, seven: 12 }),
+    ]);
+    renderSwap();
+    // Wait for the poll before asserting an ABSENCE: every row says "limits
+    // unknown" until it lands, so this would otherwise pass against the
+    // pre-poll state and measure nothing.
+    await waitFor(() => expect(screen.getAllByText('reset')).toHaveLength(3));
+    expect(screen.queryByText('suggested')).not.toBeInTheDocument();
+    // Not scoring is not hiding: every target is still listed and tappable.
+    for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+  });
+
+  it('renders a rolled-over window as "reset", never as a confident 0%', async () => {
+    // `AccountsScreen`'s `Bar` already owns this vocabulary — "reset" (an
+    // inferred zero) ≠ "0%" (measured) ≠ "—" (nobody measured) — and this is
+    // the same fact on a second surface, so it says the same word rather than
+    // inventing a second visual language for it.
+    // `44`, not a round `40`: "40%" CONTAINS "0%", so the negative assertion
+    // below would fire on the honest half and this test would pass for the
+    // wrong reason (measured, first run).
+    stubAccounts([acct({ wrapper: 'claude2', five: 0, seven: 44, fiveRolledOver: true })]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('reset'));
+    expect(row).not.toHaveTextContent('0%');
+    // The measured half is untouched — the flags are per-window.
+    expect(row).toHaveTextContent('44%');
+    // AND THE TRACK IS LEFT EMPTY on the rolled half — exactly one fill in
+    // this row, the honest one. A bar drawn beside the word "reset" would
+    // contradict it in the same row, and the width would be a number nobody
+    // took: `limits.ts` happens to zero the value when it sets the flag, so a
+    // fill would be invisible TODAY, which is precisely why only a DOM count
+    // can hold the rule.
+    expect(row.querySelectorAll('.limit-fill')).toHaveLength(1);
+  });
+});
+
+describe('SwapSheet does not offer a lane that cannot take work', () => {
+  it('never offers an account the health probe measured AUTH-DEAD', async () => {
+    // Swapping there produces a session that cannot authenticate. `disabled`
+    // (the operator's kill-switch) and `authDead` (the probe's measurement)
+    // are different facts the server deliberately keeps apart, but they answer
+    // this sheet's one question the same way.
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();
+  });
+
+  it('never SUGGESTS one either — an excluded lane cannot be the recommendation', async () => {
+    // The exclusion has to happen before the ranking, not after it: an
+    // auth-dead account at 3/4 is the emptiest number on this fleet.
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('suggested'));
+    expect(screen.queryByText('team·alt')).not.toBeInTheDocument();
+  });
+
+  it('an OLDER server that omits authDead condemns nothing — absence is not a verdict', async () => {
+    // `authDead` is ADDITIVE on the wire (no `FLEET_PROTO` bump), so a server
+    // built before it simply omits the key. `=== true`, never truthiness: an
+    // omitted field must leave every account rendering exactly as it does
+    // today, offered AND rankable.
+    const older: Record<string, unknown> = { ...acct({ wrapper: 'claude2', five: 8, seven: 22 }) };
+    delete older.authDead;
+    stubAccounts([
+      older as unknown as AccountUsage,
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
+    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
+  });
+});
+
+describe('SwapSheet reads one source for one account', () => {
+  // THE SEAM THIS CLOSES. The gauges used to come off the live fleet frame
+  // (`FleetSession.limits`, `{five, seven}` and no provenance) while
+  // eligibility came off `GET /api/accounts` — two sources describing one
+  // account, so the sheet could draw a confident bar on the very row it had
+  // just refused to score. `server/src/fleet.ts` builds that frame field from
+  // `readLimits(...)[wrapper]` and this route builds these rows from the same
+  // call, so the frame is a strictly LOSSY copy of the poll: same numbers,
+  // minus the flags, minus every account with no live session on it. The poll
+  // wins, and these pin that it is the ONLY reader.
+  it('ignores the frame\'s number when the poll says that window merely reset', async () => {
+    const live = fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 1, seven: 1 } });
+    stubAccounts([
+      acct({ wrapper: 'claude2', five: 0, seven: 0, fiveRolledOver: true }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap([live]);
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('reset'));
+    // The frame's 1% is nowhere on the row, and it did not win the ranking.
+    expect(row).not.toHaveTextContent('1%');
+    expect(row).not.toHaveTextContent('suggested');
+    expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('suggested');
+  });
+
+  it('says "limits unknown" for an account the poll has no row for, frame or no frame', async () => {
+    // `readLimits` builds a row per `~/.cc-limits/*.json` plus any markered
+    // lane and nothing else, so an account telemetry has never mentioned has
+    // no row — and the frame's copy of a number the poll never carried is not
+    // a second opinion this sheet is entitled to.
+    const live = fleetSession({ id: 'claude-dev0:a', wrapper: 'claude-dev0', limits: { five: 5, seven: 5 } });
+    stubAccounts([acct({ wrapper: 'claude-corp', five: 62, seven: 71 })]);
+    renderSwap([live]);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('71%'));
+    const row = screen.getByRole('button', { name: /team·d/ });
+    expect(row).toHaveTextContent('limits unknown');
+    expect(row).not.toHaveTextContent('5%');
+    expect(row).not.toHaveTextContent('suggested');
   });
 });

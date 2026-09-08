@@ -1290,15 +1290,48 @@ until the sweep has run. The server lane's final gate is `/health` reporting the
   two differently. It is harmless today only because the one file with a null half (gpt's) is absent
   rather than retracted. The recorded close remains a second channel — an exit status separating the
   two — as its own change.
-- **D-1928** — `FleetSession.limits` (`shared/api.ts:41`) carries
+- **D-1928** — `FleetSession.limits` (`shared/api.ts`) carries
   `{five, seven}` and no provenance, so `pwa/src/fleet/SwapSheet.tsx`'s `load` ranks an inferred `0`
   as the emptiest pool and awards it the "suggested" tag — the exact defect that function's own
   docstring exists to prevent, reached through a seam it cannot see. `SessionLine.tsx` and
-  `SessionActionsSheet.tsx` render the same two numbers with the same collapse. **Found, not fixed:**
-  §B holds the wire still by design, and closing this means an additive `FleetSession.limits` field
-  threaded through `reviveFleetSession` (which returns a literal, so a new field is a compile error
-  until every path computes it), `server/src/fleet.ts:408`, and the PWA's three readers. Additive and
-  absence-permitting, so it needs no `FLEET_PROTO` bump when someone does it.
+  `SessionActionsSheet.tsx` render the same two numbers with the same collapse.
+
+  **FIXED in SwapSheet — AND THE ROUTE THIS ENTRY ORIGINALLY PRESCRIBED WAS WRONG.** It said: an
+  additive `FleetSession.limits` field threaded through `reviveFleetSession`, `server/src/fleet.ts`
+  and the PWA's three readers, additive and absence-permitting so no `FLEET_PROTO` bump. Do not do
+  that. **The measurement that withdraws it:** `GET /api/accounts` ALREADY ships the whole
+  `AccountUsage` row per account — `five`, `seven`, `ts`, `fiveResetAt`, `sevenResetAt`,
+  `fiveRolledOver`, `sevenRolledOver`, `disabled` and `authDead` — and `SwapSheet` was ALREADY
+  fetching it, on sheet-open and every 20 s after, through `useProjectedHome.ts`'s
+  `useDisabledWrappers`, which threw all of it away except `a.disabled === true`. Worse, the two wire
+  shapes are the SAME server-side map: `server/src/fleet.ts` sets a session's `limits` from
+  `readLimits(...)[r.wrapper]` and the `/api/accounts` handler builds its rows from the same
+  `readLimits` call, so the frame is a strictly LOSSY projection of the payload the PWA is already
+  holding — same numbers, minus both flags, minus `disabled`/`authDead`, minus every account with no
+  live session on it. Widening the frame would have put a THIRD copy of one fact on a SECOND wire and
+  left two sources live for one account's numbers, which is the seam, not the fix.
+
+  **What shipped instead:** the poll owns every account-level fact both pickers show or rank on, and
+  the frame is no longer read for any of them. `useDisabledWrappers` became `useAccountUsage`
+  (returns the rows whole); `SwapSheet.tsx`'s `limitsFor(sessions, wrapper)` — the frame read — is
+  deleted in favour of `factsFor(rows, wrapper)`; `load` gained `measured()`'s two rollover disjuncts
+  term for term, so an inferred zero is unscoreable and nothing wears "suggested" off it; a
+  rolled-over window renders `AccountsScreen`'s own word, **reset**, with an empty track rather than
+  a confident `0%`; and `unusableWrappers` excludes `authDead === true` on the same terms `disabled`
+  was already excluded on, so a credential the probe measured dead is not offered as a swap target.
+  `NewSessionSheet` is the other caller of the shared `AccountRow` and moved with it — it was
+  polling the same endpoint for the same one boolean. **The cost, stated:** the frame is live-pushed
+  and the poll runs every 20 s, so a gauge can now be up to 20 s stale and is blank until the first
+  poll lands. That is inside the noise of telemetry that is only written when a session renders its
+  statusline; an unrecoverable provenance is not. No wire change, no `FLEET_PROTO` bump, nothing
+  added to `FleetSession`.
+
+  **Still open, and NOT closed by this:** `SessionLine.tsx` and `SessionActionsSheet.tsx` still
+  render the frame's two numbers with the same collapse. Neither RANKS, so neither can produce this
+  entry's self-reinforcing failure — but both can still draw a confident `0%` for a window that
+  merely ended. Whoever closes those should reach for the same route, not the withdrawn one: they are
+  per-session surfaces, so the open question there is whether they may poll `/api/accounts` at all or
+  need the fact carried some other way — and the answer must not be "widen the frame" by default.
 
 **Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
 1924 → 1954) covering all five plans on this branch, defined in the same act. The

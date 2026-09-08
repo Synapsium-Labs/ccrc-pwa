@@ -1,5 +1,6 @@
-// Task 10 — lifecycle UI: NewSessionSheet (account rows from the fleet store
-// with live limits; account+project selection arms a confirm that posts the
+// Task 10 — lifecycle UI: NewSessionSheet (account rows with their limits off
+// GET /api/accounts — the one source for an account-level fact, see
+// `useAccountUsage`; account+project selection arms a confirm that posts the
 // exact body), SwapSheet (excludes the current wrapper, suggests the least
 // loaded, posts the target through a QuickConfirm), the stop flow (QuickConfirm
 // fires api.stop only on confirm), and the header overflow menu ("Change
@@ -96,7 +97,8 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
-/** Stubs GET /api/accounts — the endpoint useDisabledWrappers polls. */
+/** Stubs GET /api/accounts — the endpoint `useAccountUsage` polls, and the
+ *  ONLY source either picker reads an account's numbers or eligibility from. */
 const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({
     accounts,
@@ -118,19 +120,31 @@ const PROJECTS = {
 // — NewSessionSheet —
 
 describe('NewSessionSheet', () => {
-  it('renders all five account rows with labels and the fleet-store limits', () => {
+  // WAS "…and the fleet-store limits". The gauges no longer come off the live
+  // fleet frame: `FleetSession.limits` is `{five, seven}` with no provenance,
+  // and this sheet was already polling `GET /api/accounts`, which carries the
+  // same numbers PLUS the rollover flags that say whether a `0` was measured or
+  // merely inferred. One source per fact — see `useAccountUsage`.
+  it('renders all five account rows with labels and the polled account limits', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+    ]);
     vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
     render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
 
     for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // Live limits ride the rows that have a session on that account…
-    expect(screen.getByText('62%')).toBeInTheDocument();
+    // The polled rows ride the accounts they were measured for…
+    expect(await screen.findByText('62%')).toBeInTheDocument();
     expect(screen.getByText('71%')).toBeInTheDocument();
     expect(screen.getByText('8%')).toBeInTheDocument();
     expect(screen.getByText('22%')).toBeInTheDocument();
-    // …and the accounts without one say so instead of faking a gauge.
+    // …and the accounts telemetry has never mentioned say so instead of faking
+    // a gauge. `readLimits` builds a row per `~/.cc-limits/*.json` plus any
+    // markered lane and nothing else, so an account that has never run has no
+    // row at all — exactly the state this renders.
     expect(screen.getAllByText(/limits unknown/)).toHaveLength(3);
   });
 
@@ -335,7 +349,13 @@ describe('NewSessionSheet — a five-minute wait says so', () => {
 // — SwapSheet —
 
 describe('SwapSheet', () => {
-  it('lists only the other accounts and marks the least loaded as suggested', () => {
+  it('lists only the other accounts and marks the least loaded as suggested', async () => {
+    // The numbers come off `GET /api/accounts`, not the fleet frame — that is
+    // the only source that says whether a `0` was measured or inferred.
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+    ]);
     render(
       <SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={makeFleet()} />,
     );
@@ -345,8 +365,9 @@ describe('SwapSheet', () => {
     for (const label of ['team·alt', 'team·b', 'gpt']) {
       expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
     }
-    // claude2 (8/22) is the least loaded of the accounts with known limits.
-    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
+    // claude2 (8/22) is the least loaded of the accounts with measured limits.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
   });
 
   it('confirming the move posts the target wrapper', async () => {
@@ -510,41 +531,49 @@ describe('SwapSheet', () => {
   // `server/src/fleet.ts` passes it through as a NON-null `limits` object, so
   // the unreadable account scored 0% and was recommended as the emptiest pool
   // — while its own gauges rendered '—'.
-  it('never suggests an account whose limits were not read — an unread window is not 0%', () => {
-    const fleet = storeWith([
-      fleetSession(),  // claude, the current account: excluded as a target
-      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 8, seven: 22 } }),
+  it('never suggests an account whose limits were not read — an unread window is not 0%', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),   // the current account: excluded as a target
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
       // The whole limits file failed to read: both windows unknown.
-      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: null, seven: null } }),
+      acct({ wrapper: 'claude-corp', five: null, seven: null }),
     ]);
-    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
     expect(screen.getByRole('button', { name: /team·b/ })).not.toHaveTextContent('suggested');
-    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
     // And it still says so where the reader can see it, rather than 0%.
     expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('—');
   });
 
-  it('never suggests on a HALF-read account either — max() of one known window is a lower bound', () => {
+  it('never suggests on a HALF-read account either — max() of one known window is a lower bound', async () => {
     // `{five: 3, seven: null}` scored 3 under `?? 0` and beat a measured 8,
     // while its unread 7-day window could have been at 99. The score is a
     // maximum; one window cannot produce it.
-    const fleet = storeWith([
-      fleetSession(),
-      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 8, seven: 22 } }),
-      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: { five: 3, seven: null } }),
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: 8, seven: 22 }),
+      acct({ wrapper: 'claude-corp', five: 3, seven: null }),
     ]);
-    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
     expect(screen.getByRole('button', { name: /team·b/ })).not.toHaveTextContent('suggested');
-    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested');
   });
 
-  it('suggests nobody at all when no account has both windows read', () => {
-    const fleet = storeWith([
-      fleetSession(),
-      fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: null, seven: null } }),
-      fleetSession({ id: 'claude-corp:b', wrapper: 'claude-corp', limits: null }),
+  it('suggests nobody at all when no account has both windows read', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude2', five: null, seven: null }),
+      // claude-corp has no row at all — telemetry has never mentioned it.
     ]);
-    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={fleet} />);
+    render(<SwapSheet session={fleetSession()} open onClose={vi.fn()} fleet={storeWith([])} />);
+    // Wait for the poll to land before asserting an ABSENCE, or this passes
+    // against the pre-poll state and measures nothing. claude2's row is the
+    // sentinel: it has a ROW with both windows unread, so it renders two `—`
+    // gauges, which no row renders before the poll arrives (they all say
+    // "limits unknown" until then).
+    expect(await screen.findAllByText('—')).toHaveLength(2);
     expect(screen.queryByText('suggested')).not.toBeInTheDocument();
     // Every target is still offered and still tappable — not scoring is not
     // hiding.
@@ -573,7 +602,7 @@ describe('SwapSheet', () => {
 
   it('does not poll /api/accounts while the sheet is closed', () => {
     // SwapSheet mounts unconditionally from both its callers (open only
-    // toggles the inner vaul Sheet), so without gating useDisabledWrappers on
+    // toggles the inner vaul Sheet), so without gating useAccountUsage on
     // `open` this would poll forever in the background, visible or not.
     const accounts = vi.spyOn(api, 'accounts');
     render(<SwapSheet session={{ id: 'demo', wrapper: 'claude', project: 'demo', home: 'claude' }}
