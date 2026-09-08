@@ -2358,6 +2358,15 @@ target before overwriting anything — and a backup copy that *fails* aborts
 the deploy before `rsync --delete` can destroy the state it failed to save.
 The agent deploy installs `ccd` BEFORE restarting the agent — the agent
 caches `ccd caps` at boot, so the reverse order pins a stale verb set.
+Every file either lane replaces on the box lands **atomically** — executables
+through `install_atomic` (scp to a temp name, chmod, `mv -f`), the thirteen
+systemd units and drop-ins through the box-side `_unit_atomic` that mirrors it.
+Neither is tidiness: `cp` opens its destination `O_TRUNC` before it writes, so
+a copy killed mid-write (ENOSPC, a dropped ssh) would leave a truncated unit at
+its live name — and the dangerous truncation is the one that still *parses*,
+because `claude-session@.service` carries `KillMode=process` as the last key of
+its `[Service]` section and a unit cut above it kills by control-group instead,
+taking the tmux pane on the next restart.
 
 **Ordering between the two targets.** A change that touches `ccd/` — the hook
 script in particular — must ship to the fleet host *before or with* the server,

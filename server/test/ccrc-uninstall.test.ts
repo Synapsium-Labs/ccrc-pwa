@@ -120,6 +120,10 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
   // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
   writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
+  // spec 2026-09-07 §C: the sixth `_inst_bins` executable (account-health,
+  // just above, already took the fifth).
+  writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
   // ── the FIFTH name in ~/.local/bin, and the only one that is not a ccrc
   // binary (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
   // pinned venv's own engine. The venv is planted too, because the proof this
@@ -144,7 +148,9 @@ function plantInstalledBox(home: string): void {
   for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
     'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
-    'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
+    'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+    'ccd-account-health.service', 'ccd-account-health.timer',
+    'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -315,7 +321,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
       'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
-      'ccd-graph-sweep.service', 'ccd-graph-sweep.timer']) {
+      'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+      'ccd-account-health.service', 'ccd-account-health.timer',
+      'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -326,6 +334,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-account-health.timer');
+    expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).
@@ -474,7 +484,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // on every session's PATH: worse than the box was before ccrc, because the
     // pip shim that used to answer there was copied aside by the install and
     // never put back.
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'graphify']) {
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
+      'ccd-telemetry-keepalive', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);

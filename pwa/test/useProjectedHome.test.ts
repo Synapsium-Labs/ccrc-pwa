@@ -50,7 +50,7 @@ describe('useProjectedHome', () => {
 
   // Review fix round 1, Minor 2 (Task 13): `active` gates the poll for a
   // caller (`StartProgramSheet`) mounted unconditionally at screen level,
-  // the same shape `useDisabledWrappers`'s own `active` param already
+  // the same shape `useAccountUsage`'s own `active` param already
   // covers one function down in the source file.
   describe('active (Task 13 review fix round 1, Minor 2)', () => {
     it('defaults to true — every pre-existing caller (no argument) keeps polling exactly as before', () => {

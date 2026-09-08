@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=dcbd88c2d15bd4d28e21015c6ebde95b4701523ddd0af7bbad8bbea1af3367db
+# ccrc:generated 1 sha256=daba7da7b143bbf1f0f012230ea22ddbc6730855cfc85c39d6000e3b4fe93691
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -773,7 +773,8 @@ WORKTREES_ROOT="$HOME/worktrees"
 # THE PROJECT POOL TAG lives in a DOTLESS registry subdirectory, one file per
 # project (spec §4, approach B). Outside every git tree and every session cwd,
 # beside the switches an operator already hand-touches (`<w>-disabled`,
-# `coordinator-paused`, `mail-disabled`) — `ls ~/.cc-sessions/pools/` shows
+# `coordinator-paused`, `mail-disabled`) and the one marker a MACHINE writes
+# there (`<account>-authdead`, see `_authdead`) — `ls ~/.cc-sessions/pools/` shows
 # every tag and `echo pool-a > pools/demo` is the 2 am idiom.
 #
 # DOTLESS, and that is measured rather than assumed: every registry glob is
@@ -1072,6 +1073,31 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
+# The account-health probe's durable verdict, in the same `"<epoch> <reason>"`
+# format `swapblocked` uses. WRITTEN BY `ccd-account-health` (a sibling
+# executable, never this file — ccd makes no outbound network call, and adding
+# one would be a new dependency class); CLEARED by that probe on a 403, by a
+# successful spawn (`_spawn_settle`), and by an operator `rm`.
+#
+# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob:
+# `_reg_purge`, `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*`
+# and skip any suffix containing a dot, so `$REG/claude-authdead` is invisible
+# to all three even when a session id spells it exactly.
+#
+# NOT `-disabled`. That name is OPERATOR intent, has no writer in this tree, and
+# both its conjuncts in `_account_ok` are things a human did. This one is a
+# MEASUREMENT, which can be wrong — so it never joins `_account_ok`, and its two
+# consumers rank-last (`_swap_target`) and skip-scoring (`_ws_least_loaded`)
+# instead. A rescue must always have a destination.
+#
+# THE DIGITS GATE, exactly as `_auto_swap_check` validates `swapblocked`'s epoch
+# (ccd/ccd:12229-12230): the field is bytes off disk. Here it also decides the answer — an
+# empty or half-written marker is NOT a verdict, and reading one as "dead" would
+# let a truncated write bar an account nothing ever measured.
+_authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands for it
+  local t; t=$(cat "$REG/$1-authdead" 2>/dev/null); t="${t%% *}"
+  [[ "$t" =~ ^[0-9]+$ ]]
+}
 _pool_name_valid() { [[ "${1-}" =~ $POOL_NAME_RE ]]; }   # value -> 0 iff it is a legal pool name
 # THE ONLY READER OF THE PROJECT TAG in this file. Four words, ALWAYS rc 0,
 # and it may never `die`: every decider calls it once per decision and one of
@@ -3912,10 +3938,12 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # UNKNOWN IS NOT UNPLACEABLE either. On a fresh box nothing has reported yet,
   # and refusing to place work there would break first run, so if NO account was
   # measured this falls back to the first _account_ok account in iteration order
-  # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
+  # THAT THE HEALTH PROBE HAS NOT CONDEMNED — and only if every one of them is
+  # condemned, to the first condemned one. Same rule, same two tiers, same
+  # answer, as the server's projectHome (server/src/limits.ts).
   #
   # The server's copy (projectHome, server/src/limits.ts) is stricter about
-  # "unknown" in TWO ways this is not, and both are stated here rather than
+  # "unknown" in exactly ONE way this is not, and it is stated here rather than
   # discovered later:
   #
   #   1. It skips an account whose roster entry says telemetry:'none' — an
@@ -3924,21 +3952,33 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   #      gap did not close with it: the generated file carries ids, home-ability
   #      and the upstream id, and no telemetry field at all (shared/
   #      generate.mjs), so bash still has nothing to consult.
-  #   2. It treats a HALF-measured row as unknown, where _limit_score
-  #      substitutes 0 for the missing half (`: "${five:=0}"`) and returns a
-  #      real number. With a home-able `{"five":null,"seven":0}`, bash picks
-  #      that account at 0 and the server picks the cheapest fully-measured one.
   #
-  # Parity holds today because both gaps are reachable only through the SAME
-  # account: gpt is the only telemetry:'none' account and the only one whose
-  # file carries a null half (it has no 5h window at all), and gpt is not
-  # home-able — absent from CCRC_HOME_ABLE here and from roster.homeAble there —
-  # so neither implementation ever scores it. Nothing else writes a half-null
-  # file: statusline-command.sh emits both fields for every Anthropic account.
-  # But `_limit_score`'s own `:=0` defaults and `_limit_five`'s back-compat shim
-  # exist precisely because a file CAN be missing a key, so this is an agreement
-  # of circumstance, not of rule. `projected-home.test.ts` runs both sides over
-  # the same fixtures and says so the day the circumstance changes.
+  # THERE USED TO BE A SECOND, AND BRIEFLY A THIRD; BOTH ARE NOW CLOSED, and
+  # what closed them is one line — `_limit_score`'s `[[ -z "$five" || -z
+  # "$seven" ]]`, which was `&&` with `: "${five:=0}"` filling the gap.
+  #   • The old gap 2 was the HALF-MEASURED row: `{"five":null,"seven":0}`
+  #     scored 0 in bash and unknown on the server.
+  #   • The old gap 3 was the HALF-ROLLED row, created by the provenance fix
+  #     itself: `{five: <window ended>, seven: 5}` scored 5 in bash and unknown
+  #     on the server. Unlike gap 2 that one was REACHABLE by any Anthropic
+  #     account at any 5h reset, and it was the placement magnet this file's
+  #     first paragraph describes, surviving through the readable half — which
+  #     is why it was closed in the same change that opened it rather than
+  #     recorded and deferred.
+  # Both were one defect wearing two faces: a score is a MAXIMUM, so one known
+  # half bounds the truth only from below, and a bound from below is not a
+  # score. `_limit_score` now says so, and `half-rolled-window` in
+  # projected-home.test.ts's shared fixtures asserts the two sides agree on it.
+  #
+  # Gap 1 is reachable only through gpt: it is the only telemetry:'none'
+  # account, and it is not home-able — absent from CCRC_HOME_ABLE here and from
+  # roster.homeAble there — so neither implementation ever scores it. That is
+  # still an agreement of circumstance rather than of rule, and
+  # `projected-home.test.ts` runs both sides over the same fixtures so it says
+  # so the day the circumstance changes. (`_limit_five`'s back-compat shim
+  # survives as the standing evidence that a limits file CAN be missing a key;
+  # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
+  # — they were the mechanism of the gap, not a defence against it.)
   #
   # THE FOUR CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
   # (PR #61, 2026-09-07; the count is corrected at the wave-2b merge, which
@@ -3978,18 +4018,19 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
   # the loose form of it ("unmeasured never wins") is contradicted two lines
   # below by this function's own fallback: PREFER MEASURED ACCOUNTS; IF NONE IS
-  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER. Skipping
-  # here and ranking-last in `_swap_target` are the two affordable spellings of
-  # the same preference — this function can skip because it HAS that fallback,
-  # and the rescue loop cannot because its "no candidate" answer strands a stuck
-  # session. `_avail` stays permissive because it answers eligibility, not rank.
+  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER THAT THE
+  # HEALTH PROBE HAS NOT CONDEMNED. Skipping here and ranking-last in
+  # `_swap_target` are the two affordable spellings of the same preference —
+  # this function can skip because it HAS that fallback, and the rescue loop
+  # cannot because its "no candidate" answer strands a stuck session. `_avail`
+  # stays permissive because it answers eligibility, not rank.
   # Full reasoning on `_avail`.
   #
   # CCRC_HOME_ABLE is in roster declaration order (shared/generate.mjs emits
-  # roster.homeAble as-is), and that order is load-bearing twice over: the
-  # `first` fallback below takes the first placeable account, and the tie-break
-  # is a STRICT `<`, so the first home-able account also wins every tie. The
-  # server's `projectHome` ranks ties by the same declaration order.
+  # roster.homeAble as-is), and that order is load-bearing twice over: each
+  # fallback tier below takes the first placeable account IN ITS TIER, and the
+  # tie-break is a STRICT `<`, so the first home-able account also wins every
+  # tie. The server's `projectHome` ranks ties by the same declaration order.
   #
   # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
   # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
@@ -4011,18 +4052,64 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
   # is no second channel on this seam — stdout carries a wrapper name — so the
   # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  #
+  # WHAT "" NEVER MEANS IS "every in-pool lane is condemned", and that is why
+  # `cmd_ws_add`'s reason builder needs no auth-dead arm: this function answers
+  # a lane in that case (see the tiers at the end of the loop). Both meanings ""
+  # does carry are things a human declared or must repair; a health verdict is a
+  # measurement that can be wrong.
   local pps; pps=$(_project_pool_state "${1-}")
-  local best="" bs=1000 first="" w sc
+  local best="" bs=1000 first="" condemned="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
-    # AFTER `_account_ok`, BEFORE `first`: the fallback below must land on the
-    # first IN-POOL account, never on a cheaper-looking lane in another pool.
+    # AFTER `_account_ok`, BEFORE EITHER FALLBACK: both must land on an IN-POOL
+    # account, never on a cheaper-looking lane in another pool.
     _pool_ok "$w" "$pps" || continue
+    # TWO FALLBACK TIERS, AND THE SPLIT IS THE WHOLE GUARD. An auth-dead lane
+    # must not be PREFERRED — it is a measurement that a credential no longer
+    # authenticates — but it must stay ELIGIBLE, because that measurement can be
+    # wrong and no destination at all is worse than a bad one (`_authdead`'s
+    # header: it never joins `_account_ok`). Those two are compatible only with
+    # a SECOND fallback, which is what this branch builds: `first` collects the
+    # first candidate NOBODY CONDEMNED, `condemned` the first condemned one, and
+    # the condemned tier is reached below only when `first` is empty — i.e. only
+    # when every in-pool lane is condemned.
+    #
+    # BOTH ONE-VARIABLE SPELLINGS ARE WRONG, and this function shipped the first
+    # of them (D-1954). Assigning a single `first` ABOVE this skip takes the
+    # first candidate in roster order whether or not the probe has condemned it,
+    # so on a fleet where nothing is measured — a fresh box, or every window
+    # rolled over at once — placement lands on a lane measured DEAD while a
+    # healthy lane sits one position behind it. Assigning it BELOW the skip is
+    # the other wrong answer: it empties the fallback on an all-condemned fleet,
+    # this function answers "", and `cmd_ws_add` dies with no destination for a
+    # reason no operator asked for. The pair of variables is what satisfies both.
+    if _authdead "$w"; then
+      [[ -z "$condemned" ]] && condemned="$w"
+      continue
+    fi
     [[ -z "$first" ]] && first="$w"
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
+  # THREE TIERS, WIDENING: the cheapest MEASURED lane nobody condemned; then the
+  # first UNMEASURED lane nobody condemned; then — only when every in-pool lane
+  # is condemned — the first CONDEMNED one, in the same roster declaration order
+  # every other answer here uses.
+  #
+  # THE LAST TIER IS A LANE, NOT "". That is the deliberate half of the decision
+  # and it is not the same call as the all-disabled one: `""` above means
+  # ELIGIBILITY IS EXHAUSTED — an operator switched every lane off, or a wrapper
+  # is missing, or the pool tag is undecidable — and every one of those is
+  # something a human did or must fix before work can land. A health verdict is
+  # neither: it is a MEASUREMENT, it can be wrong, and letting it empty this
+  # function would let one bad probe run wedge every `ws-add` on the box.
+  # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
+  # The server's `projectHome` (server/src/limits.ts) makes both calls the same
+  # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
+  # day either side changes its mind is the day the suite says so.
   [[ -z "$best" ]] && best="$first"
+  [[ -z "$best" ]] && best="$condemned"
   echo "$best"
 }
 
@@ -11990,7 +12077,11 @@ _fmt_eta() {   # epoch-seconds -> "in 42m" / "in 6h" / "in 5d" (coarse on purpos
   else                     printf 'in %dd' $(( (d + 43200) / 86400 )); fi
 }
 
-_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if unknown/stale
+_limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" when unknown
+  # FOUR conditions answer "": no file, no value for this field, a caller that
+  # demanded fresher telemetry than exists, and a value whose own window has
+  # ENDED. They mean one thing to every caller — nobody has measured this
+  # window — and what they must NOT mean is 0, which is a measurement.
   local f="$LIMITS_DIR/$1.json" field="$2" maxage="${3:-0}" val ts now reset
   [[ -f "$f" ]] || return 0
   val=$(_limit_json_num "$f" "$field")
@@ -11999,39 +12090,76 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" if 
   if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
   # A reading whose own window has already reset describes a window that ENDED.
   # resetAt comes straight from the API (statusline-command.sh), so this is fact,
-  # where the age rules below are inference. It matters because telemetry is only
+  # where the age rule below is inference. It matters because telemetry is only
   # written when a session renders its statusline: an idle account stops
   # reporting entirely, so its last sample can outlive its window by days.
   # Observed 2026-07-27: claude read seven=98 for 14h after its 7d window reset,
   # which excluded it from every pool and stranded two sessions on gpt.
-  # Both rules below rewrite a KNOWN value; neither may conjure one. gpt.json carries
+  # Both rules below RETRACT a known value; neither may conjure one. gpt.json carries
   # `"five": null` with no 5h window at all, and a reset timestamp for a window nobody
   # ever measured says nothing about its value — "unknown" has to stay "" (readLimits
   # keeps it null), or _limit_score's wholly-unknown branch becomes unreachable.
   reset=$(_limit_json_num "$f" "${field}ResetAt")
   if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
-    printf '0'; return 0
+    # WAS `printf '0'`. That 0 was INFERRED from a timestamp, never observed,
+    # and it entered the ranking as the best measurement on the fleet:
+    # _limit_score returned max(0,0)=0, and _ws_least_loaded's strict `<` kept
+    # it over every account that had honestly reported. Nothing runs on the
+    # account it won, so nothing ever replaced the 0 — the emptiest-looking
+    # account was simply the one whose window had lapsed. Same magnet, same
+    # shape, as the two unknown-is-zero defects recorded in _ws_least_loaded and
+    # _swap_target; this is the third site, and unlike those two it fires on a
+    # perfectly healthy fleet every time a window turns over.
+    #
+    # The honest answer is "": this window ended and nobody has measured the new
+    # one. _avail keeps the account ELIGIBLE (see its comment — eligibility and
+    # rank are different questions, and it refuses only on a KNOWN half at the
+    # ceiling), _ws_least_loaded skips it, _swap_target ranks it last at 100.
+    # Availability does not change; only preference does — and that holds for a
+    # row with only ONE window ended, because _limit_score answers "" unless
+    # both halves are measured.
+    return 0
   fi
   # Fallback when the file carries no resetAt (the gpt 429 exclusion, and files
   # written before those fields existed): a sample older than its own window has
-  # certainly rolled over. (7d decays slowly, so a stale seven only zeroes after
-  # a full week.)
+  # certainly rolled over. (7d decays slowly, so a stale seven only answers
+  # unknown after a full week.) Same answer as the branch above and for the same
+  # reason — this path INFERS that the window turned over, so it may not report
+  # a measurement. The server's mirror sets fiveRolledOver/sevenRolledOver on
+  # exactly this path for exactly this reason (server/src/limits.ts).
   if [[ -n "$val" && -n "$ts" ]]; then
-    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && val=0
-    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && val=0
+    [[ "$field" == "five"  && $((now - ts)) -gt 18000  ]] && return 0
+    [[ "$field" == "seven" && $((now - ts)) -gt 604800 ]] && return 0
   fi
   printf '%s' "$val"
 }
 _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
 
-_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" if wholly unknown
+_limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
   # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
   # free 5h window but an exhausted week is NOT a good landing spot, and an account nearing
   # its weekly cap should evacuate just like one nearing its 5h cap.
+  #
+  # EITHER HALF UNKNOWN MAKES THE ROW UNKNOWN. This was `&&` — "" only when
+  # BOTH halves were empty — with `: "${five:=0}"` substituting 0 for the
+  # missing one. That substitution is the same unknown-is-zero magnet the
+  # provenance fix removed from _limit_field, surviving through the half that
+  # was still readable: `{five: <window ended>, seven: 5}` scored 5, which made
+  # an account whose 5h state nobody had measured the emptiest-looking on the
+  # fleet, and _ws_least_loaded's strict `<` sent placement there. The score is
+  # a MAXIMUM, so one known half bounds the truth only from BELOW — it could
+  # really be 99 — and a bound from below is not a score.
+  #
+  # This is a RANK, and rank is the only thing it answers. Eligibility asks a
+  # different question and needs only that lower bound, so `_avail` reads
+  # `_limit_field` itself rather than routing through here; see its comment.
+  # Splitting the two is what let this guard tighten without stripping the gpt
+  # lane of its only exclusion — measured: with `_avail` still reading this
+  # function, gpt's real `{"five": null, "seven": 99}` went from EXCLUDED to
+  # "enabled, available" and three _gpt_status assertions went red.
   local five seven
   five=$(_limit_field "$1" five 0); seven=$(_limit_field "$1" seven 0)
-  [[ -z "$five" && -z "$seven" ]] && return 0
-  : "${five:=0}"; : "${seven:=0}"
+  [[ -z "$five" || -z "$seven" ]] && return 0
   (( seven > five )) && printf '%s' "$seven" || printf '%s' "$five"
 }
 
@@ -12086,12 +12214,34 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   #     `ccd-login-screen.test.ts`'s "evacuates even though home carries zero
   #     telemetry" case is exactly that rescue, run over a fleet with no
   #     telemetry files whatsoever: it passes only while unknown is available.
+  #     AND UNKNOWN IS NO LONGER RARE. Since the provenance fix, _limit_field
+  #     answers "" for a window that has merely ENDED, not only for an account
+  #     nobody ever measured — so every account passes through unknown each time
+  #     a window turns over, on a healthy fleet. That makes this function's
+  #     permissiveness load-bearing rather than a corner case: a rolled-over
+  #     account was available because it scored 0 and is available now because
+  #     no KNOWN half sits at the ceiling — the same answer for an honest
+  #     reason, and reached without consulting a score at all (next bullet).
   #   • Ranking is where unknown must lose, and both ranking sites now make it
   #     lose, by the means each can afford. `_ws_least_loaded` SKIPS an
   #     unmeasured account outright (it has a fallback for the all-unmeasured
   #     fleet, so skipping costs nothing). `_swap_target` cannot skip — a
   #     rescue with no destination strands a stuck session — so it ranks
   #     unmeasured LAST instead, eligible but never preferred.
+  #   • ELIGIBILITY NEEDS ONLY A LOWER BOUND; RANK NEEDS A FULL MEASUREMENT.
+  #     That is why this function reads `_limit_field` directly instead of
+  #     asking `_limit_score`, which now answers "" whenever EITHER half is
+  #     unknown. A single KNOWN half at or above the ceiling is already PROOF
+  #     there is no headroom, whatever the other half turns out to be — so it
+  #     refuses. Nothing known says nothing, so it admits. The extension is
+  #     byte-identical to the `max(five, seven) < SWAP_CEILING` this replaced:
+  #     for a fully-measured row `max < C` is exactly "neither half >= C", for a
+  #     wholly-unknown row both spellings admit, and for a half-known row the
+  #     old `: "${five:=0}"` made the score the known half anyway. What changes
+  #     is only WHICH function it depends on, and that is the whole point: it
+  #     frees `_limit_score` to be strict about rank without taking gpt's only
+  #     exclusion with it (`{"five": null, "seven": 99}` must stay excluded, and
+  #     _gpt_status's entry guard at ccd:1254 is this function).
   #
   # An earlier version of this comment claimed the three sites could not be
   # aligned without breaking something. That was true only of the alignment it
@@ -12105,9 +12255,11 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   # Placement's fallback is the one deliberate exception, and it is a fallback
   # rather than a ranking: prefer measured accounts; if NONE is measured, take
   # the first home-able account in roster order.
-  local w="$1" sc
-  sc=$(_limit_score "$w"); [[ -z "$sc" ]] && return 0      # no telemetry at all = assume free
-  [[ "$sc" -lt "$SWAP_CEILING" ]]
+  local w="$1" five seven
+  five=$(_limit_field "$w" five 0); seven=$(_limit_field "$w" seven 0)
+  [[ -n "$five"  && "$five"  -ge "$SWAP_CEILING" ]] && return 1
+  [[ -n "$seven" && "$seven" -ge "$SWAP_CEILING" ]] && return 1
+  return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
 _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing = stay put
@@ -12236,11 +12388,41 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # session every time the fleet has gone quiet (see the ruling on `_avail`).
     # Eligibility must survive; only preference changes.
     #
-    # 100 is exact, not a large-ish number. `_avail` above has already rejected
-    # every candidate scoring >= SWAP_CEILING (98), so a measured candidate
-    # that reaches this line is at most 97 and always outranks an unmeasured
-    # one — while 100 is still far below `best_score`'s 999 sentinel, so an
-    # unmeasured candidate is picked the moment it is the only one left.
+    # And unmeasured now has a SECOND source, routine rather than exceptional:
+    # since the provenance fix a candidate whose window has merely ended reads
+    # unmeasured too — EITHER window, since `_limit_score` answers "" unless
+    # both halves are measured. It stays eligible and ranks 100 here, which is
+    # the correct treatment — its old inferred 0 made it the preferred rescue
+    # destination on a fleet where nothing had run on it, which is the magnet
+    # this comment already describes, arriving by a third route. `_avail` above
+    # still admits it, and admits it for a reason that no longer depends on this
+    # function's score: it refuses only a KNOWN half at the ceiling.
+    #
+    # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
+    # — not one. This paragraph used to cite `_avail` alone ("has already
+    # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
+    # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
+    # does not reject on a SCORE any more, it refuses only a KNOWN half at the
+    # ceiling. The derivation that actually holds:
+    #
+    #   1. A candidate reaches the comparison below carrying a NUMBER only if
+    #      `_limit_score` returned one, and it returns one only when BOTH
+    #      halves are measured.
+    #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
+    #
+    # Both halves known and both < 98 makes their max <= 97, so every SCORED
+    # candidate outranks 100 — while 100 is still far below `best_score`'s 999
+    # sentinel, so an unmeasured candidate is picked the moment it is the only
+    # one left.
+    #
+    # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
+    # the split it is eligible and SCORELESS at the same time — one half at 40,
+    # the other's window merely ended: `_avail` admits it (no known half at the
+    # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
+    # tier at 100, NOT in the measured one, and that is correct — one known half
+    # bounds the truth only from below. A reader sent to `_avail` for the <= 97
+    # claim would conclude the opposite.
+    #
     # Unmeasured candidates tie with each other at 100 and the strict `<` takes
     # the first in pool order, i.e. roster declaration order, the same
     # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
@@ -12252,6 +12434,57 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # unknown one that might have been emptier. That is the same trade
     # placement already makes, and the alternative is the magnet.
     sc=$(_limit_score "$cand"); : "${sc:=100}"
+    # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
+    # than at the `_account_ok` line above, which is an unconditional
+    # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
+    # finds no candidate is left wedged on the dead account with no swap.log
+    # line, no swapblocked stamp and no notification — silent in every channel
+    # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
+    # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
+    # preference and must never cost eligibility.
+    #
+    # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+    # This was `sc=100` — the same number as the `:=100` above — until fix round
+    # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
+    # TELEMETRY, because telemetry is written by a session rendering its
+    # statusline and nothing can run there. So its last sample ages out
+    # (`_limit_field` retracts a window that has ended), `_limit_score` answers
+    # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
+    # entire effect was the few hours in which a condemned lane still carried
+    # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
+    # marked lane earlier in roster order BEAT a healthy quiet one at the strict
+    # `-lt` below — a rescue landing on the account we have measured as dead.
+    # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
+    # tick of wrongness.
+    #
+    # THE FULL ORDER, derived rather than asserted — the derivation above
+    # applies unchanged, and this number extends it by exactly one:
+    #
+    #   measured  <= 97   both halves known (`_limit_score`) and neither at the
+    #                     ceiling (`_avail`) — see the two facts above
+    #   unmeasured   100   eligible, no score: never measured, window ended, or
+    #                     half-measured
+    #   auth-dead    101   eligible, and measured as not authenticating
+    #   sentinel     999   `best_score`'s initial value
+    #
+    # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+    # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
+    # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+    # is still far below the 999 sentinel, so a condemned candidate is picked
+    # the moment it is the only one left — eligibility is untouched by this
+    # change, only preference. That is the same rule the `:=100` above obeys and
+    # the reason this line is an assignment and not a `continue`.
+    #
+    # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
+    # walk below now sorts candidates into two: home-able ones compete for
+    # `best`, overflow ones for `obest`, and the brackets are consulted in
+    # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+    # condemned lane ranks last IN ITS OWN bracket rather than being pushed
+    # out of the rotation: a condemned overflow lane still beats no
+    # destination at all, which is the same eligibility-vs-preference rule
+    # the paragraph above derives. The two changes compose because one sets
+    # the score and the other only chooses which bracket reads it.
+    _authdead "$cand" && sc=101
     if _is_home_able "$cand"; then
       [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
     else
@@ -13089,7 +13322,17 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
   case "$prompt_rc" in
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
-    0) rm -f "$REG/$id.stopped" ;;
+    #
+    # AND THE AUTH-DEAD MARKER FOR THIS ACCOUNT, on rc 0 and only rc 0. A TUI
+    # that came up on `$wrapper` is proof that account's credential
+    # authenticates — the second of the three owners §A.6 gives that marker,
+    # beside the probe's own 403 and an operator `rm`. Deliberately NOT the
+    # `cmd_start` shape one screen down, which clears `swapblocked` on the
+    # ATTEMPT: a refused swap is a stale banner a human act supersedes, while
+    # this is a MEASUREMENT and erasing one without evidence is a guess. rc 2
+    # ("waiting for login") and rc 5 ("hard-blocked at startup … or lost auth")
+    # are the opposite of evidence and are pinned to keep the marker.
+    0) rm -f "$REG/$id.stopped" "$REG/$wrapper-authdead" ;;
     # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
     # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
     # side of the return.

@@ -1,6 +1,7 @@
 # C1 — the crossing tick measures its own inputs
 
-**Base:** `origin/main` `4dc87366` (wave 2b, #62). **Branch:** `ws/clear-meadow`.
+**Base:** `origin/main` `4dc87366` (wave 2b, #62), merged forward to `d0064e6e` (#66).
+**Branch:** `ws/clear-meadow`.
 **Scope:** `ccd/ccd` + `server/test/ccd-crosspool.test.ts`. **Deploy: AGENT-FIRST.**
 
 This is not a wave. It is the one carry wave 2b filed under `## Wave-3 carries` that ships under an
@@ -221,8 +222,12 @@ mechanism guard they cover also has a case that runs at EVERY uid, built with a 
 field's place — `cat` refuses it with EISDIR whoever runs it, and `-e` stays true so the read is
 genuinely reached (D-1997).
 
-At the tip, all three packages: **server 260 files / 7047 passed / 56 skipped / 0 failed**,
-**agent 18 / 292**, **pwa 78 / 2140**.
+At the tip, all three packages: **server 266 files / 7196 passed / 56 skipped / 0 failed**,
+**agent 18 / 293**, **pwa 78 / 2167**. (That tip includes a merge of `origin/main` `d0064e6e` —
+PR #66, account health and provenance — which landed mid-work and also edits `ccd/ccd`. Its only
+conflict with C1 was the generated provenance marker on line 2, resolved by re-stamping the merged
+bytes; the two changes touch disjoint functions, and both censuses below still measure the same
+after it. Before that merge, C1 alone was server 260 / 7047, agent 18 / 292, pwa 78 / 2140.)
 
 One tree-wide guard moved and is recorded rather than worked around: `ccd-pool-ok.test.ts` holds
 `_pool_ok`'s header to its own census, and C1's new measurement paragraph in `_auto_swap_check`

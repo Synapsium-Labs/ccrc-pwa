@@ -1444,6 +1444,79 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
   });
 });
 
+// — the account-health probe's token convention —
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files', () => {
+  // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
+  // so the mandatory upstream account cannot declare where its credential
+  // lives — and a roster-driven probe would silently skip the primary account.
+  // The convention closes that, and the files that spell it CANNOT share a
+  // constant: `ccd-account-health` and `ccd-telemetry-keepalive` are each
+  // installed alone into $HOME/.local/bin with no library beside them, and
+  // `ccrc-doctor-checks` is loaded by `ccrc` through ${BASH_SOURCE[0]} on a box
+  // that may not have either of them at all.
+  // So the agreement is MEASURED, the way `.ccrc/remote-control`'s four
+  // spellings are: an exact holder list, and a value comparison.
+  //
+  // THE THIRD HOLDER IS A WIDENING, and it is written down rather than waved
+  // through. `ccd-telemetry-keepalive` sources the file it names — it does not
+  // merely test for it — because the account it is about to spend a turn on
+  // must carry its own credential and the roster structurally cannot say where
+  // that lives for the upstream account. It is therefore the same convention,
+  // used by a third consumer, and the value comparison below covers it exactly
+  // as it covers the other two. A FOURTH holder should have to argue again.
+  const NEEDLE = '-oauth.env';
+
+  it('is spelled by exactly those three files, each named here BY NAME', () => {
+    expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
+      'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
+      'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
+    ]);
+  });
+
+  it('and all three build the same path from an id', () => {
+    // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
+    // lines whose trimmed start is `#`, and each file names the file TWICE in
+    // shell — once building the path and once in an operator-facing message
+    // that quotes it back (`_ah_say`'s refusal; `bad+=(…)`'s FAIL detail). A
+    // bare `.includes(NEEDLE)` therefore counts 2 on each side and this pin
+    // would be red on arrival for a reason that is not a defect. The message
+    // copies are a feature — an operator is told the exact path — so the
+    // filter names the construction instead of forbidding the mention.
+    const probe = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-health'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('printf'));
+    const doctor = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('[ -s '));
+    // The keepalive's constructing line is its readability TEST — `[ -r "…" ]
+    // && . "…"` — which names the path twice on ONE line. That is deliberate
+    // there (the guard and the source must not be able to disagree about which
+    // file they mean), so the filter counts LINES and `shape` reads the first
+    // quoted path on the line, which is the one the guard tests.
+    const keepalive = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-telemetry-keepalive'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('[ -r '));
+    expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
+    expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
+    expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
+    // A REAL comparison, not a tautology. Each line is reduced to the path it
+    // BUILDS, with the two files' different spellings of "the secrets dir" and
+    // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
+    // "$SECRETS_DIR" "$1"` and the doctor's `[ -s "$HOME/.cc-secrets/$id-oauth.env" ]`
+    // both reduce to the SAME literal. A `shape` that returned a constant for
+    // anything matching the filter (the first draft of this pin did) could
+    // never fail, which is the failure mode this whole file exists to catch.
+    const shape = (l: string): string => {
+      const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
+      expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
+      return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
+        .replace('$SECRETS_DIR/$acct', '<dir>/<id>');
+    };
+    expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
+    expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
+    expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
+      .toBe('<dir>/<id>-oauth.env');
+  });
+});
+
 // — Build 4, Task 10: the wave's own two definitions —
 describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   // The type's fingerprint: the union as it is declared, not every mention.
@@ -2211,5 +2284,88 @@ describe('graphify — one pin, one census path', () => {
     const holders = holdersOf('graph-sweep.json');
     expect(holders).toEqual(
       ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
+  });
+});
+
+describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
+  // The same shape as "extraction finding — one path to the ccd script"
+  // above, applied to a copy that was made for a stated reason and copied
+  // anyway: `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each
+  // carried their own `TREE_FILES` / `TREE_STUBS` / `installFixtureTree`,
+  // both headers citing the same excuse (importing a sibling `.test.ts` module
+  // for its helpers double-registers that file's `describe` blocks). The
+  // excuse argued for a THIRD file with no `describe()` in it, not for two
+  // copies — `installTreeFixture.ts` is that file. The cost of the old shape
+  // was measured, not theoretical: an edit to one `TREE_FILES` that missed the
+  // other broke 34 tests in the file nobody touched.
+  //
+  // Scans `server/test` AND `server/test-e2e`, which `ROOTS` above
+  // deliberately does not cover, for the same reason the ccd-script-path
+  // finding does: these are TEST files, and the fixture they define is data
+  // no shipped source ring owns. The sibling directory is in scope for the
+  // same reason the ccd-script-path finding put it there — an e2e run that
+  // needs the same `ccrc install` tree is exactly the shape that would reach
+  // for its own `TREE_FILES` copy rather than importing this one, and a scan
+  // that stopped at `server/test` would score that copy no hit at all.
+  const testDir = path.join(ccrcRoot, 'server', 'test');
+  const testDirs = [testDir, path.join(ccrcRoot, 'server', 'test-e2e')];
+  const testFiles = testDirs.flatMap(sources);
+
+  // Matches the shape of an ASSIGNMENT to an array literal, not a reference or
+  // an import — an `import { … } from './installTreeFixture.js'` line has no
+  // assignment-to-a-bracket in it, so a consumer importing the shared list is
+  // not mistaken for a second holder of it. (This comment deliberately never
+  // spells the three characters the pattern hunts for adjacently, the same
+  // reason the ccd-script-path finding above avoids writing its own literal.)
+  const DEFINES_TREE_FILES = /\bTREE_FILES\s*=\s*\[/;
+  const DEFINES_TREE_STUBS = /\bTREE_STUBS\s*:\s*Record<string,\s*string>\s*=\s*\{/;
+  const DEFINES_INSTALL_FIXTURE_TREE = /(?:export\s+)?function\s+installFixtureTree\(/;
+
+  it('found the test tree it is scanning', () => {
+    // A scan over an empty list passes everything. Each directory is checked
+    // separately so a moved or renamed sibling turns this red on its own,
+    // rather than the other directory's file count silently covering for it
+    // (the same reason the ccd-script-path finding's own version of this
+    // check does it directory-by-directory rather than on the flattened sum).
+    for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
+    expect(testFiles.length).toBeGreaterThan(40);
+    expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
+  });
+
+  it('TREE_FILES is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_TREE_FILES.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('TREE_STUBS is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_TREE_STUBS.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('installFixtureTree is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_INSTALL_FIXTURE_TREE.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('is what the two former copy sites now import', () => {
+    // Not just "the copies are gone" — that is satisfied by deleting the
+    // fixture. Each former copy site must still reach the shared module.
+    for (const f of ['ccrc-install.test.ts', 'ccrc-install-graphify.test.ts']) {
+      const src = readFileSync(path.join(testDir, f), 'utf8');
+      expect(src, f).toMatch(
+        /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
+    }
   });
 });

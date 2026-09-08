@@ -28,11 +28,12 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
 const agentRoot = path.resolve(here, '..', '..', 'agent');
+const pwaRoot = path.resolve(here, '..', '..', 'pwa');
 
 // `typescript/bin/tsc` is not an exported subpath, so resolve the package's
 // main entry and walk to the bin next to lib/ — a bare `tsc` would depend on
@@ -40,16 +41,32 @@ const agentRoot = path.resolve(here, '..', '..', 'agent');
 const req = createRequire(import.meta.url);
 const TSC = path.resolve(path.dirname(req.resolve('typescript')), '..', 'bin', 'tsc');
 
-function typecheck(cwd: string, project: string, extra: string[] = []): { code: number; out: string } {
-  const r = spawnSync(process.execPath, [TSC, '-p', project, '--noEmit', ...extra], {
+// pwa pins `typescript ~6.0.2`; server/agent pin `^7.0.2` — different majors,
+// not just different patch levels (measured: 6.0.3 vs 7.0.2 installed today).
+// `cwd` alone does NOT make `TSC` above check pwa under pwa's own compiler:
+// TS 7's `tsc` entrypoint is a thin shim that shells out to a native binary
+// resolved via `@typescript/typescript-<platform>`, and that resolution is
+// anchored to `getExePath.js`'s OWN location inside `typescript/lib/`, not to
+// the spawned process's `cwd`. So `TSC` always runs server's 7.0.2 native
+// binary regardless of which project it is pointed at — spawning it against
+// `pwa/tsconfig.json` would silently substitute a compiler pwa's own
+// `npm run build` and CI's `Typecheck` step never run. `PWA_TSC` resolves
+// `typescript` from pwa's own package.json instead, so the binary that
+// actually runs is the one under `pwa/node_modules` (verified: `--version`
+// there reports 6.0.3, matching pwa's pin).
+const pwaReq = createRequire(pathToFileURL(path.join(pwaRoot, 'package.json')).href);
+const PWA_TSC = path.resolve(path.dirname(pwaReq.resolve('typescript')), '..', 'bin', 'tsc');
+
+function typecheck(cwd: string, project: string, extra: string[] = [], tsc: string = TSC): { code: number; out: string } {
+  const r = spawnSync(process.execPath, [tsc, '-p', project, '--noEmit', ...extra], {
     cwd, encoding: 'utf8',
   });
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
 /** Absolute paths of every file tsc actually put in the program. */
-const programFiles = (cwd: string, project: string): string[] =>
-  typecheck(cwd, project, ['--listFiles']).out
+const programFiles = (cwd: string, project: string, tsc: string = TSC): string[] =>
+  typecheck(cwd, project, ['--listFiles'], tsc).out
     .split('\n').map((l) => l.trim()).filter((l) => l.startsWith('/'));
 
 describe('every test file typechecks — the directory the gates could not see', () => {
@@ -66,6 +83,50 @@ describe('every test file typechecks — the directory the gates could not see',
     expect(r.out, `agent/test/ has type errors:\n${r.out}`).toBe('');
     expect(r.code).toBe(0);
   }, 120_000);
+});
+
+// pwa's gap is shaped differently from server's and agent's, so it gets its own
+// describe rather than a third row above. `pwa/tsconfig.json` ALREADY includes
+// `src`, `test`, `vite.config.ts` and `../shared` (measured: every .ts/.tsx file
+// on disk under pwa/ lives under one of those, so there is no excluded
+// directory to add a `test/tsconfig.tests.json` project for). The hole is not
+// "a directory outside every project" — it is that NOTHING inside `vitest run`
+// (pwa's `npm test`) ever asks tsc to check that project. `pwa/vite.config.ts`
+// sets `test.typecheck.enabled = true`, but Vitest's typecheck runner only
+// type-checks files matching its own default `typecheck.include`
+// (`**/*.{test,spec}-d.?(c|m)[jt]s?(x)`, `vitest/dist/chunks/defaults.*.js`) —
+// exactly `test/auth-wire.test-d.ts` and `test/sheet.test-d.tsx`, both
+// deliberate type-level assertions, not a whole-project check. So a broken
+// type anywhere else under `src/`, `test/` or `../shared` (which pwa bundles)
+// is invisible to `vitest run` and thus to this repo's own convention of
+// running each package by `cd pwa && npm run test` — pwa/vite.config.ts's own
+// comment on `typecheck.enabled` already says as much: "the only thing that
+// catches a revert is a separate `tsc --noEmit` nobody is obliged to run".
+// That separate check exists — CI's `Typecheck` step and `npm run build` both
+// run pwa's `tsconfig.json` — but both are plumbing outside any vitest suite,
+// exactly the kind of gate this file's own header explains a spawned tsc
+// closes: once the check is a vitest assertion, it is inside the same gate
+// list as everything else in this file and cannot be silently dropped.
+describe('pwa: the whole package typechecks — vitest\'s own typecheck mode does not reach it', () => {
+  it('pwa/ is clean under tsconfig.json', () => {
+    // PWA_TSC, not TSC: this must be the SAME compiler pwa's own `npm run
+    // build` and CI's `Typecheck` step run, or the failure message below
+    // (and the equivalence it claims) would be false. See PWA_TSC's comment.
+    const r = typecheck(pwaRoot, 'tsconfig.json', [], PWA_TSC);
+    expect(r.out, `pwa has type errors that only 'npm run build' or CI's separate Typecheck step would catch:\n${r.out}`).toBe('');
+    expect(r.code).toBe(0);
+  }, 120_000);
+
+  it('PWA_TSC really is pwa\'s own installed compiler, not the server-resolved one', () => {
+    // Guard the guard: if this ever collapsed back to the shared `TSC`
+    // constant, the assertion above would silently start measuring pwa's
+    // project with whatever major server/agent happen to pin instead of
+    // pwa's own — exactly the equivalence-that-isn't this file used to ship.
+    expect(PWA_TSC.startsWith(pwaRoot + path.sep), `PWA_TSC (${PWA_TSC}) is not under pwa's own node_modules`).toBe(true);
+    const pwaPkg = JSON.parse(readFileSync(path.join(pwaRoot, 'node_modules', 'typescript', 'package.json'), 'utf8')) as { version: string };
+    const r = spawnSync(process.execPath, [PWA_TSC, '--version'], { encoding: 'utf8' });
+    expect(r.stdout).toContain(pwaPkg.version);
+  });
 });
 
 describe('the tests-inclusive projects really do cover the directory', () => {
@@ -110,8 +171,15 @@ describe('the tests-inclusive projects really do cover the directory', () => {
   // move from a two-name file list to a directory scan.
   const IGNORED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.vite']);
 
-  /** Every `.ts` file in a package that some typecheck project must contain.
-   *  Discovered by walking the package root, not listed. */
+  /** Every `.ts`/`.tsx` file in a package that some typecheck project must
+   *  contain. Discovered by walking the package root, not listed.
+   *  `.tsx` matters here specifically for pwa: server and agent are pure
+   *  backend TypeScript with zero `.tsx` files, so a filter that only
+   *  matched `.ts` happened to be complete for both of them — and would
+   *  have silently dropped 104 of pwa's 170 source files (every component
+   *  and screen) from this census the moment pwa was added, the same "one
+   *  directory looked covered because the check couldn't see the rest"
+   *  shape this file's header already warns about, one file-extension over. */
   function typeSources(root: string): string[] {
     const out: string[] = [];
     const walk = (dir: string): void => {
@@ -137,7 +205,10 @@ describe('the tests-inclusive projects really do cover the directory', () => {
         // load flake" every full-suite run kept re-diagnosing (it was never
         // load: it was this race, and it finally fired on the quiet CI box).
         if (e.name.startsWith('__')) continue;
-        if (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) out.push(abs);
+        // `.d.ts` is a real, common exclusion (declaration files, not
+        // sources to typecheck); `.d.tsx` is not a TypeScript-recognized
+        // extension at all, so no analogous exclusion exists for it.
+        if (e.name.endsWith('.tsx') || (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts'))) out.push(abs);
       }
     };
     walk(root);
@@ -145,22 +216,45 @@ describe('the tests-inclusive projects really do cover the directory', () => {
   }
 
   /** The union of everything the package's own projects put in a program. */
-  const covered = (root: string, projects: string[]): Set<string> =>
-    new Set(projects.flatMap((p) => programFiles(root, p)));
+  const covered = (root: string, projects: string[], tsc: string = TSC): Set<string> =>
+    new Set(projects.flatMap((p) => programFiles(root, p, tsc)));
 
-  const PACKAGES: [pkg: string, root: string, projects: string[], floor: number][] = [
-    ['server', serverRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 100],
-    ['agent', agentRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 15],
+  const PACKAGES: [pkg: string, root: string, projects: string[], floor: number, tsc: string][] = [
+    ['server', serverRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 100, TSC],
+    ['agent', agentRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 15, TSC],
+    // pwa gets ONE project, not two. Unlike server/agent, `pwa/tsconfig.json`
+    // never excluded `test/` in the first place (it already sets `noEmit:
+    // true` and lists `src`, `test`, `vite.config.ts` and `../shared` in one
+    // `include` — there was never a build-vs-tests split to bridge with a
+    // second `tsconfig.tests.json`), so a second project here would just be a
+    // duplicate of the first with nothing new to include. Measured 170 .ts/
+    // .tsx files on disk under pwa/ (88 src, 81 test, 1 vite.config.ts); 100
+    // is a floor with real slack under that, not a rounding of it.
+    // PWA_TSC, not TSC — same reason as the clean-check above: pwa's own
+    // compiler, not server's, must be the one deciding what's "in program".
+    ['pwa', pwaRoot, ['tsconfig.json'], 100, PWA_TSC],
   ];
 
   it.each(PACKAGES)('%s: EVERY .ts file in the package is in some typecheck project — directories discovered, not listed',
-    (pkg, root, projects, floor) => {
-      const inProgram = covered(root, projects);
+    (pkg, root, projects, floor, tsc) => {
+      const inProgram = covered(root, projects, tsc);
       const onDisk = typeSources(root);
 
       // Guard the guard, both directions. A walk that found nothing would pass
       // every assertion below without checking anything — the same "gate that
       // cannot fail" this whole file exists to retire.
+      //
+      // CORRECTION to df550077's commit message: it closed with "The floor is
+      // not what catches [the missing-.tsx regression]; the extension match
+      // is." That is true only of the COMPOUND mutation described one
+      // sentence earlier (extension clause removed AND floor also lowered to
+      // 50 — 61% of pwa invisible and green). Under the single mutation of
+      // just deleting the `.tsx` clause above, with the floor left at 100 as
+      // shipped, THIS assertion is exactly what reds (66 onDisk vs floor
+      // 100) — the floor is today's real catch for that regression, not
+      // immune to it. What the extension match uniquely buys is that
+      // correctness stops depending on whatever floor value someone later
+      // picks; it is not what fires today.
       expect(onDisk.length, `the ${pkg} walk found almost no .ts files`).toBeGreaterThan(floor);
 
       const uncovered = onDisk.filter((f) => !inProgram.has(f));
