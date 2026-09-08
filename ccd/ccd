@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8b3b6ebfe4d77557fea472b4d734a3454bb7b67a8aa0e6998cb154ae857f6427
+# ccrc:generated 1 sha256=f4f8222371d545b3fd24fb014180fdbf96bc1e0e334ad44245b6a961a63623fc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -819,23 +819,13 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # to rather than replaced.
 #
 # AMENDED at the wave-2b merge (account pools). Two clauses above used to be
-# unconditional and are not. "No home-able account has headroom" named only
-# `_avail`; "leaves again the moment home has headroom" named only the
-# home-recovered arm. Since wave 2b the rotation's filter is `_pool_ok`, then
-# `_account_ok`, then `_avail`, so the home-able bracket empties for THREE
-# reasons rather than one — and the newest of them is not a limit at all:
-# RETAGGING A PROJECT INTO A POOL WITH NO HEALTHY HOME-ABLE MEMBER empties it
-# while every account is perfectly healthy, and the rotation then lands on an
-# untagged overflow lane. That is the composed rule; `_swap_target`'s own
-# bracket paragraph states it in full and the ledger carries it as a ruled
-# divergence, not a defect (D-1908). The four #61 CLAUSES this merge amended —
-# this one, the two "passed `_account_ok` and `_avail`" sites and
-# `_default_pool`'s "comes back the moment" — are D-1911; the walk count two
-# thousand lines down is D-1912 (this sentence's own miscount is D-1961). Those five are #61's own text. This merge also
-# amended prose of wave 2b's own (`_strand_why`'s header D-1910, the
-# `_pool_ok` header's line/call-site counts, `cmd_project_pool` D-1915/D-1916,
-# `_strand_mark` D-1917) — so "four" counts one named class, not every comment
-# this merge touched, and this sentence used to read as though it counted both. Operator decision 2026-09-07, reversing
+# unconditional and are not: the rotation's filter is `_pool_ok`, then
+# `_account_ok`, then `_avail`, and the return home is pool-gated. What that
+# composes to — including the case where a retag empties the home-able bracket
+# with every account healthy — is stated ONCE, in **spec §5.7.3**. Ruled, not a
+# defect (D-1908). Deviations for the prose this merge amended: #61's own four
+# clauses D-1911 and its walk count D-1912; wave 2b's own `_strand_why` header
+# D-1910, `cmd_project_pool` D-1915/D-1916, `_strand_mark` D-1917. Operator decision 2026-09-07, reversing
 # the 2026-07-26 rule under which such a lane was opt-in only, reached solely
 # by having it as HOME (`ccd prefer <id> gpt`).
 # On both dates "an account that is not home-able" meant `gpt` — ccgpt, Claude
@@ -5730,23 +5720,14 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # the FLEET's roster copy is the authority — the server's can lag it
     # (§3.3).
     #
-    # "WHEN IT BITES, IT BITES LOUDLY: AN EMPTY POOL STRANDS" stood here and is
-    # no longer true in every case (D-1915; the census/placement mismatch
-    # below is D-1916; the severed sentence this replaces is D-1963) — corrected at the wave-2b merge, because
-    # PR #61 changed what happens when a pool has no usable member. If an
-    # untagged overflow lane is installed and not kill-switched it is a member
-    # of EVERY pool (`_pool_ok` answers 0 for an untagged account against any
-    # pool), so a pool with no home-able member does not strand: the rotation
-    # lands on the overflow lane instead, silently and with no crossing record.
-    # Nor does it always bite for `ws-add`: that refusal builds its reason with
-    # `_pool_ok`, which serves any UNTAGGED account for any pool, so a roster
-    # with an untagged HOME-ABLE account places into this pool quite happily.
-    # So, precisely: an empty pool strands an existing session only when no
-    # overflow lane is available to take it, and refuses placement only when
-    # every home-able account carries a tag naming some other pool.
-    # ("REFUSES placement either way" stood here for one commit and was false
-    # for exactly that reason — corrected in the fix round after the merge
-    # review, D-1962.)
+    # "WHEN IT BITES, IT BITES LOUDLY: AN EMPTY POOL STRANDS" stood here and
+    # was falsified by PR #61 (D-1915). Three successive rewrites of the
+    # replacement were each false in turn — D-1963, D-1962, and the
+    # existence-for-availability substitution that followed it (D-1972) — each
+    # one re-derived the rule instead of citing it. NOTHING IS RESTATED HERE
+    # NOW: the conditions under which such a pool strands, and the conditions
+    # under which it refuses placement, are in **spec §5.7.3**, which is their
+    # only home. Do not re-derive them at this call site.
     #
     # THIS CENSUS IS ALSO WIDER THAN PLACEMENT, and that gap is older than the
     # merge: it walks `CCRC_ACCOUNTS` while placement walks `CCRC_HOME_ABLE`,
@@ -12119,31 +12100,13 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   # home-able candidate passed `_pool_ok`, `_account_ok` and `_avail` this tick — never because it
   # merely outscored one.
   #
-  # THE COMPOSED RULE, AND IT IS THE ONE THING HERE THAT NEITHER PARENT SAYS ALONE — read this
-  # before filing it as a bug. `_pool_ok` is the FIRST of the three filters (the `|| continue`
-  # below), and it answers 0 for an UNTAGGED ACCOUNT against ANY pool: an empty `_acct_pool` means
-  # the account declines to be constrained, so an untagged overflow lane is a member of EVERY pool
-  # by construction. Compose that with the last-resort bracket and a state appears that neither
-  # PR #61 nor wave 2b produces alone — project tagged, every IN-POOL home-able account at the
-  # ceiling, healthy home-able accounts sitting in ANOTHER pool, an untagged lane installed: the
-  # in-pool home-able bracket is empty, the healthy out-of-pool accounts are refused by `_pool_ok`,
-  # and the rotation lands on the overflow lane. #61 alone picks a healthy Anthropic account; wave
-  # 2b alone strands and banners; together they overflow.
+  # THE COMPOSED RULE — read **spec §5.7.3** before filing anything here as a bug. It is the only
+  # home for that rule; this comment marks the seam and does not restate it. Ruled and shipped by
+  # operator decision 2026-09-08 (D-1908); the divergence from spec §1 is RULED, not fixed.
   #
-  # SHIPPED DELIBERATELY, operator ruling 2026-09-08, and the RECORD is the part worth reading:
-  # this move carries NO crossing marker, NO `cross-pool` log line and NO `dec.crosspool`, because
-  # under this file's own definition it crosses nothing — a pool constrains TAGGED accounts, and an
-  # untagged lane is exempt by construction rather than by exception. Spec §1's "crossings are
-  # explicit and recorded" is not violated by it; that rule simply never reached this case. The
-  # divergence is RULED, not fixed, and the ledger carries it as D-1908. Do NOT
-  # "repair" this by making `_pool_ok` refuse untagged accounts. Stated precisely, because the loose
-  # form of it understates the blast radius (corrected in the fix round after the merge review, D-1967):
-  # that change refuses EVERY untagged account, home-able ones included — `claude-d` in the test
-  # roster, and on a live box every account until someone tags them all — and it bites only for
-  # NAMED-POOL projects, since an `untagged` project state returns 0 before the account is examined
-  # at all. So it does not merely take the overflow lane out of every pool; it makes a tagged project
-  # unservable by any untagged account, which silently re-imposes the 2026-07-26 rule the operator
-  # reversed on 2026-09-07 and breaks placement for every roster that has not been fully tagged.
+  # The seam is the three `|| continue` lines immediately below. Being untagged buys a candidate
+  # `_pool_ok` and nothing else — §5.7.3 says what that does and does not imply, and warns against
+  # the "repair" that would undo it (D-1967).
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
     # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
@@ -14221,16 +14184,12 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # function is byte-identical to before: `why` still computes from
   # `_strand_why`, and the banner still reads its original sentence.
   #
-  # WHAT "$pdesc" NAMES, AND WHAT `$why` NAMES, ARE NOT THE SAME SET — noted at
-  # the wave-2b merge as D-1917, no text changed. The sentence says "no account in pool
-  # $pdesc", while `$why` is the `_pool_for` census, which is WIDER than the
-  # pool: an untagged account is servable for every pool (`_pool_ok`'s untagged
-  # rule), so after PR #61 an installed overflow lane can appear in `$why` as
-  # `gpt:limit` under a banner naming one pool. This is pre-existing looseness
-  # rather than a regression — `POOLED_TEST_ROSTER`'s own `claude-d` is equally
-  # untagged and already shows up in that census — and the banner text is
-  # asserted VERBATIM by `ccd-auto-swap-pool.test.ts`, so rewording it is a test
-  # change in the same commit, not a comment. Left as it is, said out loud here.
+  # WHAT "$pdesc" NAMES, AND WHAT `$why` NAMES, ARE NOT THE SAME SET — D-1917,
+  # no text changed. The sentence says "no account in pool $pdesc"; `$why` is
+  # the `_pool_for` census, which is wider than the pool, for the reason spec
+  # §5.7.3 gives. Pre-existing looseness rather than a regression, and the
+  # banner text is asserted VERBATIM by `ccd-auto-swap-pool.test.ts`, so
+  # rewording it is a test change in the same commit, not a comment.
   local id="$1" w="$2" p="$3" cause="${4:-}" now pps pool pdesc why nts banner=1 msg
   now=$(date +%s)
   pps=$(_project_pool_state "$p")

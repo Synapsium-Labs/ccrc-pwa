@@ -8,8 +8,8 @@ serve a project when either side is untagged or the names agree. Every place `cc
 for a session — fresh placement, the 5-second auto-swap tick, a manual swap or start — applies that one
 rule, and so does the server before it builds the argv. Retagging a project moves its running
 sessions into the right pool on the auto-swapper's own clock. An empty pool strands loudly rather than
-crossing — **unless the roster carries an untagged account, which is servable for every pool; §5.7.3**.
-A deliberate crossing needs its own flag and leaves a record.
+crossing, except where an untagged account is AVAILABLE to take it (**§5.7.3**, which is the only place
+this rule is stated). A deliberate crossing needs its own flag and leaves a record.
 
 This document records what was **measured**, not what was assumed: every mechanism below is anchored
 to a `file:line` in the tree at `f6fb08f2` (the `ccd/ccd` script did not change between the panel's
@@ -26,7 +26,7 @@ shipped file, no test, and no design document.
 |---|---|
 | Mark accounts as corporate or personal | A named `pool` field on the roster (`~/.ccrc/accounts.json`), **emitted into `accounts.sh`** so a disagreement between the two hand-owned copies is visible to `rosterAgreement` (§5.3). Names, not a binary, by ruling 1. |
 | Label each project corporate or personal | A one-file marker per project at `~/.cc-sessions/pools/<project>` on the fleet box, written by a new whitelisted verb from the phone or by a shell (§5.4). Chosen over two alternatives by a lensed panel (§4). |
-| Auto-swap rotation honours the labels | One bash predicate at **every** account decision in `ccd` (§5.5), mirrored by one pure server module for the forecast and the 409 (§5.6). Retag moves running sessions (§5.5.4), empty pool strands loudly (§5.8) **except where an untagged account serves it (§5.7.3)**, crossings are explicit and recorded (§5.7) **for every move a pool actually constrains (§5.7.3)**. |
+| Auto-swap rotation honours the labels | One bash predicate at **every** account decision in `ccd` (§5.5), mirrored by one pure server module for the forecast and the 409 (§5.6). Retag moves running sessions (§5.5.4), empty pool strands loudly (§5.8), crossings are explicit and recorded (§5.7). Both of the last two have one stated exception, in §5.7.3 and nowhere else. |
 
 ---
 
@@ -39,7 +39,7 @@ shipped file, no test, and no design document.
 | 3 | What does untagged mean? | **Unconstrained** — today's behaviour. Tagging only tightens. The PWA flags untagged projects. Nothing strands on rollout. |
 | 4 | Manual cross-pool swaps? | **Refused, with a deliberate override.** PWA hides mismatched accounts by default; API answers 409 with a named slug; a separate explicit flag distinct from the transcript-loss `--force`; every crossing logged. |
 | 5 | Retag while sessions run? | **Move them automatically.** A wrong-pool current account is a must-leave; move at the next idle turn boundary (immediately if hard-blocked); re-seed the pinned home inside the pool. |
-| 6 | Pool has no account with headroom? | **Stay in pool, make it loud.** Never cross. Visible stranded state (marker, log line, chips, notify banner); resumes when an in-pool account regains headroom. **Amended 2026-09-08 (§5.7.3, D-1958):** "in pool" means *servable for* the pool, and an UNTAGGED account is servable for every pool — so an untagged overflow lane is an in-pool destination, not a crossing, and the session takes it rather than stranding. The ruling is unchanged; what changed underneath it is that PR #61 put such a lane back into the rotation. It still never crosses to a TAGGED account of another pool. |
+| 6 | Pool has no account with headroom? | **Stay in pool, make it loud.** Never cross. Visible stranded state (marker, log line, chips, notify banner); resumes when an in-pool account regains headroom. **Amended 2026-09-08 (D-1958):** unchanged as a ruling; what changed underneath it is that PR #61 put an untagged overflow lane back into the rotation, and "in pool" has always meant *servable for* the pool. The conditions under which such a lane is taken rather than stranded are stated in **§5.7.3** and nowhere else. It still never crosses to a TAGGED account of another pool. |
 | 7 | Where does the project tag live? | **`~/.cc-sessions/pools/<project>`** — a registry subdirectory marker (§4, approach B). |
 | 8 | What does a deliberate crossing mean afterwards? | **It sticks until a retag or a move.** A per-session marker records it; the pool machinery leaves the session alone while the project's pool and the account are unchanged; automatic moves never cross. |
 | 9 | Two adversarial lenses (seams, rollout) never ran. | **Fold into the spec's self-review**, no re-run. §6 (seams) and §11 (rollout) are that review. |
@@ -231,7 +231,7 @@ export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
 
 #### 5.4.6 Doctor
 
-`ccd/ccrc-doctor-checks`: `pools` added to `CCRC_DOCTOR_CHECKS` (`:166`); `_dr_check_pools` on the roster-vs-wrappers template — reports, resolves nothing. Verdicts, each its own line with its own remedy: WARN `pools-stale` (no directory and no `*.project` row for the name; remedy `ccd project-pool --project <p> --clear`); FAIL `pools-malformed` (rewrite as one token); WARN `pools-orphan-pool` (no account in `accounts.json` carries the name — this pool is empty and will strand, ruling 6); WARN `pools-tmp-leak` (a dot-leading entry; `rm`); FAIL `pools-unlistable` / `pools-unreadable <p>` (permissions). No directory → PASS "no project pools tagged".
+`ccd/ccrc-doctor-checks`: `pools` added to `CCRC_DOCTOR_CHECKS` (`:166`); `_dr_check_pools` on the roster-vs-wrappers template — reports, resolves nothing. Verdicts, each its own line with its own remedy: WARN `pools-stale` (no directory and no `*.project` row for the name; remedy `ccd project-pool --project <p> --clear`); FAIL `pools-malformed` (rewrite as one token); WARN `pools-orphan-pool` (no account in `accounts.json` carries the name — the pool is empty of TAGGED members; whether a session of such a project strands depends on §5.7.3); WARN `pools-tmp-leak` (a dot-leading entry; `rm`); FAIL `pools-unlistable` / `pools-unreadable <p>` (permissions). No directory → PASS "no project pools tagged".
 
 ### 5.5 The deciders in `ccd`
 
@@ -338,9 +338,34 @@ Every crossing writes one `swap.log` line `cross-pool <id>: <cur> -> <target> [p
 
 **The consequence.** After PR #61 (operator decision 2026-09-07) an installed, non-kill-switched overflow lane is a member of `_pool_for`'s candidate set and of `_swap_target`'s last-resort bracket. Since it is untagged, it is in every pool. So when a project's tagged pool has no home-able member with headroom, the rotation can land on that lane **while healthy accounts sit refused in another pool** — an answer neither PR #61 nor wave 2b produces alone.
 
+> **THE NORMATIVE STATEMENT. This paragraph is the single home for it; every other site in the tree
+> POINTS here and none restates it.**
+>
+> A candidate is taken only if it passes **all three** predicates of `_swap_target`'s loop, in this
+> order (`ccd/ccd:12164-12166`, quoted verbatim):
+>
+> ```bash
+> _pool_ok "$cand" "$pps" || continue
+> _account_ok "$cand" || continue
+> _avail "$cand" || continue
+> ```
+>
+> **Being untagged buys a candidate exactly one of those three, `_pool_ok`, and nothing else.** An
+> untagged account — home-able or overflow — is *servable for* every pool, so a project whose tagged
+> pool is empty is not thereby rescued: that account must ALSO be installed and not kill-switched
+> (`_account_ok`) and under `SWAP_CEILING` (`_avail`). An untagged account that exists and is
+> kill-switched, uninstalled, or at its ceiling **strands the session exactly as before**.
+>
+> So: **existence is necessary and never sufficient.** Any sentence of the form "it strands unless the
+> roster has an untagged account" is false — the true form is "unless an untagged account is
+> AVAILABLE", which is a per-tick fact and not a roster fact. This distinction is why the rule is
+> stated once: it was paraphrased into roughly ten hand-written homes and drifted in two consecutive
+> correction rounds, each fixing a derived sentence while leaving the premise it derived from
+> (D-1972, D-1976).
+
 **Such a move is NOT a crossing and is NOT recorded as one:** no `.crosspool` marker, no `cross-pool` log line, no `dec.crosspool`, no `--cross-pool` required. Nothing was overridden, because nothing constrained it. `_swap_target` and the wave-2b plan carry the same statement, and `ccd-auto-swap-pool.test.ts` pins it as a mechanism rather than a claim.
 
-**The design consequence to keep in view:** the operator's guarantee "a session on a pool-tagged project runs only on that pool's accounts" holds for tagged accounts and is silent about untagged ones. If a future wave wants the stronger guarantee, the change is a roster rule — every account carries a tag — and **not** a change to `_pool_ok`, which would take the overflow lane out of every pool and re-impose the 2026-07-26 rule the operator reversed.
+**The design consequence to keep in view:** the operator's guarantee "a session on a pool-tagged project runs only on that pool's accounts" holds for tagged accounts and is silent about untagged ones. If a future wave wants the stronger guarantee, the change is a roster rule — every account carries a tag — and **not** a change to `_pool_ok`. That change refuses every untagged account, home-able ones included, and only for named-pool projects (an `untagged` project state returns 0 before the account is examined), so it would break placement on any roster not yet fully tagged.
 
 ### 5.8 The strand — ruling 6
 
@@ -486,7 +511,7 @@ The three per-id fields need no manifest entry of their own: they are registry f
 | A legacy row without `.project` resolves to the `pools/` directory → EISDIR → fail-shut strand | `[[ -n "$1" ]] || untagged` in the reader (§5.4.3) |
 | Marker collides with a session id's fields | Dotless subdirectory; the `acct-a-demo` collision test (§11 row 9) |
 | Hand-typed tag with two tokens or uppercase | `malformed`; creation refuses naming the file; doctor FAIL; the verb cannot write it |
-| Pool named that no account carries | Route `warning: 'unknown-pool'`; verb stderr; doctor WARN `pools-orphan-pool`; strand is loud when it bites |
+| Pool named that no account carries | Route `warning: 'unknown-pool'`; verb stderr; doctor WARN `pools-orphan-pool`; strand is loud when it bites (§5.7.3 for when it does) |
 | Project directory renamed or removed | Tag orphaned; doctor WARN `pools-stale`; running sessions stay constrained under the registry's old `project` string (the safer direction); `--clear` never checks existence |
 | Crossing undone by the pool machinery | `.crosspool` marker with validity (§5.7.2) |
 | `cmd_start` refuses a revival, or revives wrong-pool unchecked | Guard after the registry-wins block, creation-only; server mirrors (§5.5.5, §5.6) |

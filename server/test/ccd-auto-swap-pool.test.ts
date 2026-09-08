@@ -529,18 +529,16 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
     // THE ONE STATE NEITHER PARENT PRODUCES ALONE, pinned as a mechanism rather
     // than left to the prose. Operator ruling 2026-09-08 (D-1908): ship as merged.
     //
-    // Project tagged `pool-b`. Its in-pool home-able members are pinned at the
-    // ceiling. `claude`/`claude-a` are HEALTHY and untouched — they have no
-    // limits file at all, so `_avail` treats them as available — but they sit in
-    // `pool-a`, so `_pool_ok` refuses them. `gpt` is untagged, which under
-    // `_pool_ok`'s own rule (`[[ -z "$ap" || "$ap" == "$pp" ]]`) makes it a
-    // member of EVERY pool, and PR #61 put an installed, non-kill-switched lane
-    // back into `_pool_for`. So the home-able bracket is empty while healthy
-    // home-able accounts exist, and the last-resort bracket wins.
+    // THE FIXTURE, which is what this comment may state: project tagged
+    // `pool-b`; its in-pool home-able members pinned at the ceiling;
+    // `claude`/`claude-a` HEALTHY and untouched, with no limits file at all, in
+    // `pool-a`; `gpt` untagged, installed, wide open. WHY that state produces
+    // this answer is spec §5.7.3's to say, not this comment's — it was restated
+    // in ten hand-written homes and drifted in two consecutive rounds (D-1976).
     //
-    // Pure #61 would pick a healthy Anthropic account here; pure wave 2b would
-    // strand and banner. The merge picks gpt. That divergence is RULED, not a
-    // defect, and it carries its own ledger number.
+    // What this case adds beyond §5.7.3: pure #61 would pick a healthy Anthropic
+    // account here and pure wave 2b would strand; the merge picks gpt. Ruled,
+    // not a defect (D-1908).
     //
     // THE SECOND HALF OF THE RULING IS THE RECORD, and it is the half a comment
     // could not enforce: this move is NOT a crossing under this tree's own
@@ -712,46 +710,67 @@ describe('_reg_purge`s dot-free inventory', () => {
   });
 });
 
-describe('the candidate-walk count in `ccd/ccd` stays honest (A1)', () => {
-  it('both numbers #61\'s block claims match its own cited grep', () => {
+describe('the candidate-walk count in `ccd/ccd` stays honest', () => {
+  it('the heading numeral and both stated counts match the block\'s OWN cited command', () => {
     // A MECHANISM, NOT A COMMENT. #61's "THE FOUR CANDIDATE WALKS DO NOT AGREE"
-    // block states a count and cites the grep that produces it. Until the fix
-    // round after the wave-2b merge review (D-1956) it said "finds four" while the cited
-    // command answers FIVE — four walks plus one PROSE line inside
-    // `_default_pool` quoting the pattern — so the sentence written to stop the
-    // number drifting could not be re-measured, and nothing anywhere pinned it:
-    // `git grep -n 'CANDIDATE WALKS' -- server/test` was empty, so changing the
-    // digit to seven kept every suite green.
+    // block states a count and cites the grep that produces it. It said "finds
+    // four" while the cited command answers FIVE — four walks plus one PROSE
+    // line quoting the pattern — and nothing pinned it (D-1956).
     //
-    // Same shape as `ccd-pool-ok.test.ts`'s `_pool_ok` header pin, deliberately:
-    // that one had this exact defect (one number, labelled as the thing it was
-    // not counting) and was corrected once already. Two quantities are stated,
-    // so both are checked, and each message names which one is wrong.
+    // STRENGTHENED in the third review round, on two measured weaknesses of the
+    // first version of this pin:
+    //  (a) it anchored on `indexOf('CANDIDATE WALKS DO NOT AGREE')`, which
+    //      begins AFTER the heading's numeral, so rewriting the heading to
+    //      "THE SEVEN CANDIDATE WALKS" stayed green. Measured (D-1974). The
+    //      heading word is now parsed and checked too.
+    //  (b) it ran a HAND-TRANSCRIBED JS copy of the shell pattern the comment
+    //      cites, so editing the cited command left the pin measuring the old
+    //      one — this repo's own booked class, "a copied guard is an unpinned
+    //      guard" (D-1797, and D-1975 here). The pattern is now EXTRACTED from the comment text
+    //      and executed, so the pin cannot drift from the command it validates.
     //
     // The walk/prose split is "the line, trimmed, does not start with `#`" —
-    // exact for `ccd/ccd` today (measured: the one prose match is a whole-line
-    // comment). A code line with the pattern inside a trailing comment would be
-    // miscounted as a walk, and this pin would then need a real tokenizer.
+    // exact for `ccd/ccd` today. A code line carrying the pattern inside a
+    // trailing comment would be miscounted, and this pin would then need a real
+    // tokenizer rather than a looser regex.
     const src = fs.readFileSync(CCD, 'utf8');
-    const from = src.indexOf('CANDIDATE WALKS DO NOT AGREE');
-    expect(from, "#61's candidate-walk block could not be found").toBeGreaterThan(-1);
-    // FLATTENED before matching: the claim wraps across comment lines, so a
-    // line-oriented regex misses it and the pin would fail for the wrong
-    // reason. (It did, on the first run of this very test.)
-    const block = src.slice(from, from + 900).replace(/\n\s*#\s?/g, ' ');
+    const at = src.indexOf('CANDIDATE WALKS DO NOT AGREE');
+    expect(at, "#61's candidate-walk block could not be found").toBeGreaterThan(-1);
+    // Start BEFORE the heading numeral, and flatten: the claim and the cited
+    // command both wrap across comment lines, so a line-oriented match misses
+    // them and the pin would fail for the wrong reason. (It did, on its first
+    // run, which is why this is written down rather than merely done.)
+    const block = src.slice(Math.max(0, at - 60), at + 900).replace(/\n\s*#\s?/g, ' ');
+
+    const WORDS: Record<string, number> = {
+      ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5, SIX: 6,
+      SEVEN: 7, EIGHT: 8, NINE: 9, TEN: 10, ELEVEN: 11, TWELVE: 12,
+    };
+    const heading = block.match(/THE ([A-Z]+) CANDIDATE WALKS DO NOT AGREE/);
+    expect(heading, 'the block no longer opens with a spelled-out numeral').not.toBeNull();
+    const headingCount = WORDS[heading![1]!];
+    expect(headingCount, `"${heading![1]}" is not a numeral this pin knows`).toBeDefined();
+
     const claimed = block.match(/finds (\d+) matching LINES, (\d+) of them walks/);
     expect(claimed, 'the block no longer states its two counts in the expected shape').not.toBeNull();
     const statedLines = Number(claimed![1]);
     const statedWalks = Number(claimed![2]);
-    // The block's own cited pattern, re-run here rather than paraphrased.
-    const re = /for (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")/;
+
+    // THE BLOCK'S OWN COMMAND, extracted and run — never a copy of it.
+    const cited = block.match(/`grep -cE '(.+?)' ccd\/ccd`/);
+    expect(cited, 'the block no longer cites a `grep -cE` command to re-run').not.toBeNull();
+    const re = new RegExp(cited![1]!);
     const matching = src.split('\n').filter((line) => re.test(line));
     const walks = matching.filter((line) => !line.trim().startsWith('#'));
+
     expect(matching.length,
-      `the block's own grep now finds ${matching.length} matching LINES, `
-      + `but it still claims ${statedLines}`).toBe(statedLines);
+      `the block's own cited grep now finds ${matching.length} matching LINES, `
+      + `but it claims ${statedLines}`).toBe(statedLines);
     expect(walks.length,
       `${walks.length} of those ${matching.length} lines are WALKS (the rest are prose), `
-      + `but the block still claims ${statedWalks}`).toBe(statedWalks);
+      + `but the block claims ${statedWalks}`).toBe(statedWalks);
+    expect(headingCount,
+      `the heading says ${heading![1]} walks while the block's own numbers say ${walks.length}`)
+      .toBe(walks.length);
   });
 });
