@@ -267,7 +267,20 @@ ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
 CLAUDE_CODE_SUBAGENT_MODEL     = classes[subagent]                  (the registry's explicit class-to-slot choice; refused if that slot is null)
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = catalogue.context of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
 ```
+
+The eighth key exists because Claude Code 2.1.263 assumes a **200k window for
+any model id it does not know** and compacts proactively at that window
+(measured 2026-09-08: the startup warning "isn't described by this version's
+model catalog … auto-compact keeps this session within 200k tokens"; docs:
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` applies directly to an unresolved id without
+`[1m]`). The catalogue knows the real window (272k for the GPT-5.6/6 tiers,
+128k for Spark), so the lane default's window is written and a session on
+Sol keeps 36% more context than it would by default.
+`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never set: the
+proactive compaction is the behaviour that keeps a 272k lane from hitting the
+provider's 400 ("input exceeds the context window", seen four times today).
 
 A `null` slot is written as a **sentinel**, never left unset: unset, the alias
 falls through to Anthropic's own id and the proxied backend answers with an
@@ -597,6 +610,7 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
 | 5e | `refresh` and `litellm` as account ids | refused in `ccrc models`' first slot, since the verb group would read them as verbs (Plan 1 deviation B-4) |
 | 6 | Hidden Codex models | excluded from `"catalogue"` discovery lists; addable explicitly |
 | 7 | Where classification happens | the Accounts screen; the verb exists for scripts and doctor's remedies |
+| 8 | Mechanism for class → model on a lane | the four `ANTHROPIC_DEFAULT_*_MODEL` vars (documented, measured: the wire carries the lane's id, the statusline shows it, Plan 2's reverse lookup keys on it). Measured alternative, 2026-09-08: `modelOverrides` (`{"claude-opus-5": "gpt-5.6-sol"}`) is the ONLY setting that silences the unrecognized-model warning and keeps Claude Code's feature detection for the Claude model it stands in for — but the client then believes it is running that Claude model (its window, its name in the statusline and the PWA), so it is recorded here as a follow-up spike, not adopted. `modelPicker` rows relabel the in-session picker (user-scope settings, i.e. per lane) and are a candidate for §8's picker on the lane itself; `behavesAs`, named by the binary's warning, is undocumented and had no measurable effect in `-p` mode. |
 
 ## 16. Out of scope
 
