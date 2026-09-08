@@ -7,11 +7,17 @@
 // `shared/models.ts`, which the server and the PWA bundle and which re-exports
 // every function, `MODEL_ID_RE`, the two error classes and the sentinel
 // constant straight from this file. See `shared/models.ts` for the TYPES
-// (`Registry`, `Catalogue`, `ModelClass`, …) and for `CLASSES`/`PROBE_KINDS`
-// as exported, `as const` TypeScript values — this file keeps its own private
-// copies of those two arrays below, unexported, solely because it cannot
-// import `shared/models.ts` without creating an import cycle (`.ts` imports
-// `.mjs`, so `.mjs` cannot import `.ts` back).
+// (`Registry`, `Catalogue`, `ModelClass`, …) and for its OWN `CLASSES`/
+// `PROBE_KINDS`, an `as const` literal that derives `ModelClass`/`ProbeKind`
+// as TYPES — a job only `.ts` can do, so that copy stays there rather than
+// re-exporting this file's runtime one. This file exports its own `CLASSES`/
+// `PROBE_KINDS` too (fix round 1, finding 3, 2026-09-08): every bare-`node`
+// caller that needs the runtime list — `shared/modelenv.mjs` among them —
+// imports it from HERE rather than keeping a third hand-copy.
+// `server/test/models.test.ts` still pins the two arrays to agree
+// element-for-element, since this file cannot import `shared/models.ts`
+// without creating an import cycle (`.ts` imports `.mjs`, so `.mjs` cannot
+// import `.ts` back).
 //
 // SINGLE SOURCE since fix round 1 (2026-09-08 review), controller ruling: the
 // first task-2 draft had this file and `shared/models.ts` each carrying a full,
@@ -25,15 +31,17 @@
 //
 // It imports nothing, not even `node:*`.
 
-/** Private copy of `shared/models.ts`'s exported `CLASSES`, in the same
- *  order. Kept here, unexported, only because this file cannot import the
- *  `.ts` (see the file header) — `server/test/models.test.ts` pins the two
- *  arrays to agree element-for-element, so a change to one alone reds. */
-const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
+/** The runtime twin of `shared/models.ts`'s own `as const` `CLASSES`, in the
+ *  same order — that file keeps its own literal because only `.ts` can derive
+ *  `ModelClass` as a TYPE from it (see the file header); this is the value
+ *  every bare-`node` caller imports, `shared/modelenv.mjs` among them (fix
+ *  round 1, finding 3). `server/test/models.test.ts` pins the two arrays to
+ *  agree element-for-element, so a change to one alone reds. */
+export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
 
-/** Private copy of `shared/models.ts`'s exported `PROBE_KINDS`, in the same
- *  order and for the same reason as `CLASSES` above. */
-const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
+/** Same arrangement as `CLASSES` above, for `shared/models.ts`'s own
+ *  `PROBE_KINDS`. */
+export const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
 
 /** A model id, as the account-connections branch defines it.
  *

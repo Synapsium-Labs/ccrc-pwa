@@ -3,10 +3,15 @@
 // TypeScript caller import it with types. The names and the shape are
 // `shared/models.ts`'s exactly.
 import type {
-  Catalogue, CatalogueModel, DerivedModels, ModelClass, Registry,
+  Catalogue, CatalogueModel, DerivedModels, ModelClass, ProbeKind, Registry,
 } from './models.js';
 
-export type { Catalogue, CatalogueModel, DerivedModels, ModelClass, Registry };
+export type { Catalogue, CatalogueModel, DerivedModels, ModelClass, ProbeKind, Registry };
+// Fix round 1, finding 3 (2026-09-08): the runtime twin of `shared/models.ts`'s
+// own `as const` `CLASSES`/`PROBE_KINDS` — see `shared/models.mjs` for why
+// that file keeps a separate export rather than this one re-exporting it.
+export declare const CLASSES: readonly ModelClass[];
+export declare const PROBE_KINDS: readonly ProbeKind[];
 export declare const MODEL_ID_RE: RegExp;
 export declare class RegistryInvalid extends Error { readonly field: string }
 export declare class CatalogueInvalid extends Error {}

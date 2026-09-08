@@ -31,12 +31,7 @@
 // hitting the provider's 400 ("input exceeds the context window").
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
-
-/** Mirrors `shared/models.ts`'s `CLASSES`, in the same order — see
- *  `shared/models.mjs`'s copy for why this is duplicated rather than imported
- *  from the TypeScript, and how the two are compared. */
-const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
+import { CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
 
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
