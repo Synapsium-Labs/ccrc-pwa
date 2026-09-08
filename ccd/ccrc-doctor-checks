@@ -2785,9 +2785,21 @@ _check_pools() {
   # sentinel first line, printed only when the source and the `declare -F`
   # both succeeded, is what says MEASURED. Nothing else can — an empty
   # vocabulary and a failed read produce the same empty string by
-  # construction. `|| :` inside the loop keeps a `case` that matches no arm
-  # (an untagged account — the ordinary case) from making the whole
-  # substitution look like a failure.
+  # construction. `|| :` inside the loop is KEPT — it costs nothing — but it
+  # is not what stands between an ordinary untagged account and a false
+  # `unmeasured` against the file this fleet actually runs. Measured on bash
+  # 5.2.21, a `case` that matches no arm returns rc 0, and an empty
+  # `case … esac` — the exact shape `shared/generate.mjs` emits for
+  # `_ccrc_pool` unconditionally, and documents in its own comment ("An
+  # empty `case … esac` is valid bash and answers empty at rc 0, which is
+  # exactly the contract") — returns 0 too. So `_ccrc_pool` cannot fail on
+  # an untagged or unknown id against a GENERATED `accounts.sh`, which is
+  # this file's only writer, and the `measured` sentinel above already
+  # carries the third state on its own, unconditionally. What the `|| :`
+  # nets is an OUT-OF-CONTRACT `_ccrc_pool` — one whose body does not honour
+  # the generator's own "case ends 0" promise — not a shape anyone has
+  # measured to exist on this fleet: nothing writes `accounts.sh` but
+  # `shared/generate.mjs`.
   local known="" vocab=unmeasured raw=""
   if [ -r "$HOME/.ccrc/accounts.sh" ]; then
     raw="$( . "$HOME/.ccrc/accounts.sh" 2>/dev/null \
@@ -2912,10 +2924,15 @@ _check_pools() {
     if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then
       p_stale+=("$n")
     fi
-    # ORPHAN is about the POOL: no rostered account carries the name, so this
-    # pool is EMPTY and every session of this project will strand rather than
-    # cross (ruling 6). WARN, not FAIL — the pool may be about to gain an
-    # account (O5).
+    # ORPHAN is about the POOL: no TAGGED account carries the name, so no
+    # account is in it BY TAG. WARN, not FAIL — the pool may be about to gain
+    # an account (O5).
+    #
+    # WHETHER A SESSION OF SUCH A PROJECT STRANDS IS NOT DECIDED HERE. This
+    # comment said "will strand rather than cross (ruling 6)" and then, for one
+    # round, said it strands "only when neither exists" — both wrong, the second
+    # because existence is not availability (D-1959, D-1972). The rule has ONE
+    # home: spec §5.7.3. Do not restate it here.
     if [ -n "$known" ] && ! _pool_has_line "$v" "$known"; then
       p_orphan+=("$n ($v)")
     fi
@@ -2970,7 +2987,7 @@ _check_pools() {
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#p_orphan[@]}" -gt 0 ]; then
-    _dr_warn pools "pools-orphan-pool: $(_dr_join ${p_orphan[@]+"${p_orphan[@]}"}) — no account in this box's roster is in that pool, so a hard-blocked session of these projects will strand rather than cross" \
+    _dr_warn pools "pools-orphan-pool: $(_dr_join ${p_orphan[@]+"${p_orphan[@]}"}) — no account in this box's roster is TAGGED into that pool. A hard-blocked session of these projects strands rather than crossing unless some untagged account is AVAILABLE to take it — installed, not kill-switched, and under the swap ceiling" \
       "either tag an account into the pool in \$HOME/.ccrc/accounts.json and redeploy the agent lane, or retag the project: ccd project-pool --project <p> --pool <name>"
     [ "$rc" -eq 1 ] || rc=2
   fi

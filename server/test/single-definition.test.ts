@@ -2075,6 +2075,13 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
       // there is no private twin, and there must not be one: see the third
       // `it` below.
       ['LC_REFUSAL_TOKENS', 'LC_REFUSAL_WORD'],
+      // Account pools wave 2b: the same idiom, applied to `meas` and `dec`
+      // key vocabularies (`LIFECYCLE_MEAS_KEY_MAP`/`LIFECYCLE_DEC_KEY_MAP`,
+      // both module-private in shared/api.ts). `tsc` already pins each MAP
+      // against its interface both ways; this is what pins the exported
+      // LIST as DERIVED rather than hand-written (D-1890).
+      ['LIFECYCLE_MEAS_KEYS', 'LIFECYCLE_MEAS_KEY_MAP'],
+      ['LIFECYCLE_DEC_KEYS', 'LIFECYCLE_DEC_KEY_MAP'],
     ] as const) {
       expect.soft(api, `${list} must derive from ${map}`)
         .toMatch(new RegExp(`export const ${list}[^=]*=\\s*\\n?\\s*Object\\.keys\\(${map}\\)`));
