@@ -1114,3 +1114,103 @@ convention with a speed bump, in this repo's own words for `coordinator-paused`.
 **wave 3 may be built and merged; wave 3's SERVER DEPLOY is gated on D-2000 landing and deploying.**
 Enforceable at the deploy step rather than by anyone's restraint, and it costs the wave nothing.
 D-2000 is no longer a wave-5 item: it is a wave-3 deploy prerequisite, taken as its own small ccd PR.
+
+## 2026-09-08 21:45Z — the deploy had already happened, and I was carrying that it had not
+
+I resumed holding "the fleet runs `4dc87366`; the operator has HELD the agent deploy pending the R1
+fix." I measured rather than repeated it, and it was false. The installed `~/.local/bin/ccd` hashes
+byte-for-byte to `db580771` and was written at **21:10:30Z**, 39 minutes after `db580771` was committed
+at 20:31Z. The box has been running C1 — merged #66 and #67 — since then, **without R1's fix**: the
+exact state the hold existed to prevent.
+
+**Standing rule: a HOLD is a state of the world, not a decision you can carry forward.** A decision I
+recorded stays true until someone reverses it; a hold I recorded is a claim about a box, and boxes move
+while a coordinator is asleep. Every fact in a coordinator's standing state that names a machine —
+a deployed sha, a running fleet, a held gate — has to be re-measured on resume, not restated. Nothing
+in mail told me the deploy had run, and nothing was obliged to.
+
+### R1's live exposure, measured: zero — and zero of the steady state only
+
+C1's guards refuse the whole tick when `_reg_read <id> wrapper` answers non-zero or empty, or when
+`_home_measured` answers rc 2. Against every live row: **26 rows, 0 missing `.wrapper`, 0 empty, 0
+unreadable, 0 dangling `.home`, `$REG` `-d && -x` true.** One row has an ABSENT `.home` — rc 1, not
+rc 2, so `_home_measured` falls through to `_id_wrapper` and decides. **Not one row trips either
+guard.** The rescue-lane regression is real in the code and unreachable on the fleet as it stands, so
+no rollback is warranted.
+
+What that measurement is NOT: every trip condition is a state a row PASSES THROUGH rather than rests
+in — mid-creation before `.wrapper` lands, a field removed out of band, a one-tick permission hiccup.
+**Zero at one instant across 26 rows measures the steady state; a 5-second tick lives in the
+transient.** The fix ships red-first at the worker's pace, not at emergency speed, and the mutation to
+measure is a row whose `.wrapper` is absent while its pane is hard-blocked: pre-C1 it still reached
+`_swap_target` and could be rescued off a dead account; post-C1 it logs `_tick_undecidable` and stands
+still.
+
+### The embargo is lifted — and the sentence saying so jumped its own gate
+
+D-1999 gated the lift on the DEPLOY, not the merge sha. The deploy is verified by sha, so **the embargo
+is lifted as of 21:10Z.** But `ccd/ccd:14766` already asserted "C1, LANDED 2026-09-08, and the EMBARGO
+IT CARRIED IS LIFTED" — written at merge time, 39 minutes before the deploy made it true. It is correct
+now by timing rather than by construction, and the line stays.
+
+**Standing rule: a comment asserting a deploy-gated fact is unfalsifiable from inside the tree.** No
+test, no scan and no reviewer with the whole repo in front of them can tell whether it holds, because
+the fact it claims does not live in the repo — which is the same blind spot as the misattribution class,
+approached from the other side. The mechanism-shaped version names the GATE ("lifted once the fleet runs
+this sha") rather than the outcome, because a gate is checkable and an outcome is not.
+
+## D-TBD-mv-symlink-dir — `_plat_mv_notdir`'s darwin arm, from an outside session
+
+`claude-OpenClawHetzner` (mail 320, working on an unrelated branch) found that `_plat_mv_notdir`'s
+darwin arm mishandles one destination shape. Confirmed on GNU coreutils 9.4 — `mv -f -- src dest` with
+`dest` a symlink TO A DIRECTORY returns **0** with `dest` still the symlink and `src` moved INSIDE it.
+The function's stated contract is `# <src> <dest> -> 0 iff <src> is now at <dest>`; on that shape the
+darwin arm returns 0 with its own postcondition false. Measured across all five shapes, it is **exactly
+one shape wide**: symlink-to-file, dangling symlink and plain file all replace correctly, and a plain
+directory is caught by the guard's `return 1`.
+
+Three things make it more than a platform nit:
+
+- **The guard's exception and the command's blind spot are the same set.** The header calls `-L` before
+  `-d` "the whole correctness of the Darwin arm", enumerating two outcomes for a symlink-to-dir dest —
+  `-T` replaces it, `[ -d ]` would wrongly refuse it — and the code performs a **third** that neither
+  branch contemplates. `! -L` is the only path by which a destination `-d` calls a directory reaches a
+  bare `mv -f`.
+- **The test has never run.** `macos-platform.test.ts:391` is `describe.skipIf(!IS_DARWIN)` and the
+  `_plat_mv_notdir` case is inside it. Measured on the fleet box: **38 passed, 10 SKIPPED.** Adding a
+  symlink case there would add a comment, not a mechanism. Both arms are pure bash and CAN be pinned in
+  a suite that runs on linux, by driving `CCD_OS=darwin` after sourcing the platform block.
+- **The fix removes a bet rather than placing one.** Today's arm is correct only if BSD `mv` does not
+  follow a symlink to a directory, which nobody has measured. After `rm -f` the destination does not
+  exist, and no `mv` can move into a thing that is not there — so "unverified on darwin" is the argument
+  FOR the fix, not a reason to wait for a mac.
+
+### The sixth instance of the misattribution class, and this one is mine
+
+The atomicity paragraph above the function says *"every destination is `$REG/<id>.<field>`, and this
+function is its only writer — so the race is unreachable here rather than tolerated."* Measured against
+`origin/main`, **four of the five call sites are outside `$REG`**: `$plist` (`:552`), `$_LC_DIR/errors`
+(`:2496`), `$_sl_file` (`:13953`), and **`$POOLS_DIR/$project` (`:5926`) — which wave 2a added.** We
+added a call site and left the sentence standing. The conclusion survives (nothing in the tree creates a
+*directory* at any of those paths, so the race stays unreachable); the argument that proves it does not.
+
+Found by an outside session looking at something else. Fifty-four review agents found none of the four
+instances in wave 2b, and none of them would have found this one either: a reviewer checks whether a
+claim is true of the code in front of them and never opens the call sites the claim quantifies over.
+
+**Disposition: its own small ccd PR, queued BEHIND R1–R5 and D-2000. Not a pools wave item** — wave 3's
+Global Constraint forbids any file under `ccd/`, wave 4 is PWA, wave 5 is docs. Both boxes are linux, so
+the darwin arm is inert here and **cost and benefit of shipping it today are both about zero** — the
+both-sides inertness test from the entry above, applied deliberately this time. No number is minted yet:
+a `D-N` is DEFINED in a plan, and one written into this ledger without a plan definition raises
+`deviation-refs.test.ts`'s tree scan without raising its plan scan, reddening the suite.
+
+### A near miss worth recording
+
+I began this measurement reading `ccd/ccd` from my own worktree and citing line numbers from it. My
+branch is a docs-only branch that has never merged `origin/main`, so its `ccd/ccd` was **pre-C1, 1,528
+lines behind** — the platform block happened to be byte-identical, but every call-site line number I had
+written down was wrong. Caught only because `grep -n '^_reg_read'` came back empty on a function I had
+just read in the deployed file. **Standing rule: a coordinator citing source in a report anchors to
+`origin/main` explicitly, never to its own checkout** — the branch a coordinator sits on is the one tree
+in the fleet with no reason to be current.
