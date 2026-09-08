@@ -1182,7 +1182,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // stay server-side.
     return {
       accounts,
-      projected: projectHome(deps.cfg.roster, limits),
+      // THE UNTAGGED FORECAST, said out loud (account pools, spec §5.6): this
+      // field answers "where would a new workspace land on a project with no
+      // pool tag", which is what it has always meant and is now the only thing
+      // it can mean. Per-project placement rides `ProjectRow.placement` on
+      // `GET /api/projects`.
+      projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }),
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,

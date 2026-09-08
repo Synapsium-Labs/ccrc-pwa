@@ -26,6 +26,18 @@ export interface LeastLoadedCase {
    *  file both implementations already read). Omitted/empty means no lane is
    *  declared off. */
   disabled?: string[];
+  /** Per-account pool tags for this case, keyed by account id. Absent or
+   *  missing for an account means UNTAGGED — today's roster, and today's
+   *  behaviour: an untagged account serves any project (ruling 3). The runner
+   *  projects this into BOTH `accounts.json` (the server's roster) and
+   *  `accounts.sh` (`_ccrc_pool`, ccd's), so the two sides read one fact. */
+  pools?: Record<string, string>;
+  /** The project this placement is for, and the tag on it. Absent means the
+   *  ZERO-ARG call both sides already make — `_ws_least_loaded` with no
+   *  positional and `projectHome` with `{state:'untagged'}` — which is why
+   *  every pre-pool case above stays byte-identical. `tag: null` writes no
+   *  marker: a named but untagged project. */
+  project?: { name: string; tag: string | null };
   /** Wrappers carrying a `<w>-authdead` marker — the account-health probe's
    *  verdict, in the same registry directory as `-disabled` and read on the same
    *  `readdir`. It ranks an account out of SCORING on both sides AND out of the
@@ -272,6 +284,43 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       why: 'a present-but-malformed marker is not a verdict — ccd requires the first '
         + 'field to be all digits and is fail-open otherwise, and the server must agree '
         + 'or a hand-edited file condemns an account ccd still places on',
+    },
+    {
+      name: 'pool-filters-cheapest',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95), 'claude-d': fresh(60, 60) },
+      pools: { claude: 'pool-b', 'claude-a': 'pool-b', 'claude-b': 'pool-a', 'claude-d': 'pool-a' },
+      project: { name: 'demo', tag: 'pool-a' },
+      expect: { wrapper: 'claude-d', score: 60 },
+      why: 'the cheapest account on the box is in the other pool — both sides must skip it '
+        + 'and take the cheapest IN-pool account, not the cheapest account',
+    },
+    {
+      name: 'untagged-account-serves-tagged-project',
+      files: { claude: fresh(1, 1), 'claude-a': fresh(20, 20), 'claude-b': fresh(30, 30), 'claude-d': fresh(40, 40) },
+      pools: { claude: 'pool-b' },
+      project: { name: 'demo', tag: 'pool-a' },
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'an untagged account is UNCONSTRAINED and serves a tagged project (ruling 3) — '
+        + 'only the one account tagged into the other pool is skipped',
+    },
+    {
+      name: 'tagged-account-serves-untagged-project',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95), 'claude-d': fresh(60, 60) },
+      pools: { 'claude-a': 'pool-b' },
+      project: { name: 'demo', tag: null },
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'tagging only tightens: an untagged PROJECT constrains nobody, so the tagged '
+        + 'account still wins on price',
+    },
+    {
+      name: 'pool-empty-all-disabled',
+      files: { claude: fresh(50, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(90, 95), 'claude-d': fresh(60, 60) },
+      pools: { claude: 'pool-a', 'claude-a': 'pool-b', 'claude-b': 'pool-b', 'claude-d': 'pool-b' },
+      disabled: ['claude'],
+      project: { name: 'demo', tag: 'pool-a' },
+      expect: null,
+      why: 'the pool has exactly one member and it is declared off: nothing is placeable '
+        + 'and both sides must admit it rather than cross (ruling 6)',
     },
   ];
 }

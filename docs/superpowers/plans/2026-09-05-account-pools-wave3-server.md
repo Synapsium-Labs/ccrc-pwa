@@ -1238,6 +1238,7 @@ git commit -m "feat(pools): a strand is a fail-shut axis on the row, never a bla
 
 ---
 
+### Task 4 — DONE 2026-09-08 (3/3 mutations red)
 ### Task 4: `projectHome` takes the pool, `projectPlacement` forecasts per project, and one fixture drives both languages
 
 **Files:**
@@ -1402,8 +1403,13 @@ Add a `projectPlacement` describe at the end of the file:
 ```ts
 describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
   const L = (five: number | null, seven: number | null): AccountLimits =>
+    // `authDead` joined `AccountLimits` in #66, AFTER this plan's block was
+    // written — a required member, so the plan's literal no longer typechecks.
+    // `false` is the right value here: this describe is about the POOL
+    // dimension and a condemned lane would change which account wins for a
+    // reason that has nothing to do with it.
     ({ five, seven, ts: 1, fiveResetAt: null, sevenResetAt: null,
-       fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+       fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
 
   it('forecasts the in-pool account for a tagged project', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
