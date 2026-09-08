@@ -643,8 +643,21 @@ if [ "$TARGET" = "agent" ]; then
   # fleet host is DEPLOYED day to day and installed rarely; without it the box
   # keeps refusing builds over `.remember/` and `.superpowers/` files that ccrc
   # itself wrote there. 644, not 755: it is data the sweep reads, never run.
+  # Kept ADJACENT to the sweep install above (D-1160/D-1161's own guard,
+  # `graph-noise-ship.test.ts`, allows at most 3 executable lines of drift) —
+  # the two later installs below (account-health, telemetry-keepalive) sit
+  # AFTER this pair rather than between them for exactly that reason
+  # (D-1945).
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
   install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
+  # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on
+  # the same terms — a sibling executable, so `ccd` itself stays network-free.
+  install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755
+  # spec 2026-09-07 §C: the telemetry keepalive, unconditional here exactly as
+  # its two siblings above — the agent lane only ever ships to a fleet host, so
+  # there is no server-role branch to gate it against the way `ccd/ccrc`'s own
+  # `_inst_bins` has to.
+  install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -667,16 +680,61 @@ if [ "$TARGET" = "agent" ]; then
   # is plainly named, the DESTINATION must be the escaped name or systemd
   # never reads it. Inside this single-quoted block, "\x2d" sits in remote
   # double quotes, where bash preserves the backslash.
-  AGENT_BUILD_CMD='cd ~/ccrc/agent && npm ci && npm run build \
+  #
+  # `_unit_atomic` (D-1982), AND WHY THE UNIT FILES ARE NOT ALLOWED A PLAIN `cp`.
+  # Every executable on this lane goes through `install_atomic`; until this
+  # helper existed the unit files were the ONE part of the agent deploy that
+  # did not, and they are the higher-stakes half. `cp` opens its destination
+  # `O_TRUNC` and then writes, so a copy that dies mid-write — ENOSPC (a real
+  # condition on this box, which is why `ccd` carries CCD_DISK_FLOOR_GB) or an
+  # ssh that drops — leaves a TRUNCATED unit at its live name. `set -euo
+  # pipefail` then aborts the deploy before AGENT_CMD's `daemon-reload`, which
+  # sounds like containment and is not: `ccd`'s own `_svc_enable`/
+  # `_svc_disable_now` reload on the next session start or stop, and on a box
+  # with ~20 live sessions that is minutes away.
+  #
+  # THE HAZARD IS THE TRUNCATION THAT STILL PARSES, not the one that fails
+  # loudly. `ccd/claude-session@.service` carries `KillMode=process` as the LAST
+  # key of its `[Service]` section, six lines below `ExecStart=`. A file cut
+  # anywhere in that gap is a valid unit that starts fine and kills by
+  # `control-group` — so the next `try-restart` takes the tmux pane and every
+  # in-flight turn with it, which is the one outcome this repo's safety rules
+  # exist to prevent, arrived at without anyone touching tmux. `ccrc update`'s
+  # sweep preflight would refuse (it reads KillMode first); nothing else on the
+  # box does.
+  #
+  # THE SHAPE IS `_inst_atomic`'s, NOT `install_atomic`'s, deliberately. These
+  # are local copies on the box out of the tree rsync already landed there, so
+  # the fix is the box-side idiom `ccrc install` has always used for these same
+  # unit files (`ccd/ccrc`'s `_inst_atomic`: temp, chmod, `mv -f` = rename(2)) —
+  # one ssh, no extra round trips, and the two lanes stop disagreeing about the
+  # same thirteen files. A stray `<unit>.incoming.<pid>` from a dead run is
+  # inert to systemd (it ends in neither a unit suffix nor `.conf`) and the next
+  # successful copy of that file sweeps it, exactly as `install_atomic`'s own
+  # trailing `rm -f` does. The mode is stated (644) rather than inherited: `cp`
+  # over an existing file KEEPS whatever mode the box had, so a unit that ever
+  # landed at the wrong mode stayed there for ever.
+  #
+  # NO `&&` INSIDE THE HELPER BODY, and that is not style: deploy-verify reads
+  # this block by splitting it on `&&`, so a body spelled with `&&` would be
+  # torn across the links it scans. `|| return 1` says the same thing.
+  AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
+cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
-    && cp ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ \
-    && cp ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/ \
+    && _unit_atomic ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ccrc-agent.service \
+    && _unit_atomic ~/ccrc/ccd/claude-session@.service ~/.config/systemd/user/claude-session@.service \
     && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
-    && cp ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/ \
-    && cp ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/" \
-    && cp ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/ \
-    && cp ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ \
-    && cp ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/'
+    && _unit_atomic ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/limits.conf \
+    && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/ccd-account-health.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
@@ -761,6 +819,8 @@ if [ "$TARGET" = "agent" ]; then
     && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
+    && systemctl --user enable --now ccd-account-health.timer \
+    && systemctl --user enable --now ccd-telemetry-keepalive.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"
@@ -1015,8 +1075,16 @@ else
   # build/restart chain that can abort the deploy. The helper is not named in
   # this comment for the reason the agent lane's twin records.
   install_ccrc_shim
-  REMOTE_BUILD_CMD='cd ~/ccrc/server && npm ci && npm run build \
-    && mkdir -p ~/.config/systemd/user && cp ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/'
+  # The server lane's one unit file, through the SAME `_unit_atomic` the agent
+  # lane defines — see that block's header for why a plain `cp` over a live unit
+  # is a correctness bug rather than a tidiness one. The stakes are smaller here
+  # (one unit, no sessions on this box), the mechanism is identical, and the two
+  # spellings of the helper are held byte-equal by `deploy-verify.test.ts` so
+  # this copy cannot drift into being a second, weaker idea.
+  REMOTE_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
+cd ~/ccrc/server && npm ci && npm run build \
+    && mkdir -p ~/.config/systemd/user \
+    && _unit_atomic ~/ccrc/deploy/ccrc.service ~/.config/systemd/user/ccrc.service'
   "${SSH[@]}" "$BOX" "$REMOTE_BUILD_CMD"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review; see the agent chain's identical comment above

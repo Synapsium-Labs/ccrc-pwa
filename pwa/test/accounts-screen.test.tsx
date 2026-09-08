@@ -22,7 +22,7 @@ const nowSec = Math.floor(Date.now() / 1000);
 const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   wrapper: 'claude', five: 0, seven: 0, ts: nowSec - 3600,
   fiveResetAt: null, sevenResetAt: null,
-  fiveRolledOver: false, sevenRolledOver: false, disabled: false, ...over,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
@@ -311,5 +311,41 @@ describe('AccountsScreen — tap targets', () => {
     }));
     render(<AccountsScreen />);
     expect(await screen.findByRole('button', { name: 'alpha work' })).toHaveClass('accounts-session');
+  });
+});
+
+describe('an auth-dead lane', () => {
+  it('renders switched off through the SAME data-disabled attribute, not a second one', async () => {
+    // The affordance is EXTENDED, deliberately: `.accounts-row[data-disabled]`
+    // already carries the greyed fill (fleet.css) and `.accounts-disabled-note`
+    // already carries the note's type. A second attribute would mean a second
+    // CSS rule, a second selector in every test, and two vocabularies for one
+    // idea — "this lane cannot take work".
+    stubAccounts([acct({ wrapper: 'claude', authDead: true })]);
+    render(<AccountsScreen />);
+    const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(row).toHaveAttribute('data-disabled', 'true');
+  });
+
+  it('says WHY it is off, and says something different from the operator switch', async () => {
+    stubAccounts([acct({ wrapper: 'claude', authDead: true })]);
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/sign-in expired/)).toBeInTheDocument();
+    expect(screen.queryByText('disabled on the fleet host')).toBeNull();
+  });
+
+  it('names BOTH when both are true — an operator switch does not hide a measurement', async () => {
+    stubAccounts([acct({ wrapper: 'claude', disabled: true, authDead: true })]);
+    render(<AccountsScreen />);
+    expect(await screen.findByText(/disabled on the fleet host; sign-in expired/)).toBeInTheDocument();
+  });
+
+  it('an older server that omits the field renders the lane as normal', async () => {
+    // Absence-permits, at the one reader. The offline snapshot and every stale
+    // build depend on this: `=== true`, never truthiness.
+    stubAccounts([{ ...acct({ wrapper: 'claude' }), authDead: undefined } as unknown as AccountUsage]);
+    render(<AccountsScreen />);
+    const row = (await screen.findByText('team·max')).closest('[data-disabled]') as HTMLElement;
+    expect(row).toHaveAttribute('data-disabled', 'false');
   });
 });
