@@ -190,23 +190,50 @@ done
 #             not what breaks. This is the one that was measured breaking.
 #   jq      — `--argjson` and `--slurpfile` both arrived in jq 1.5; `-r`, `-c`,
 #             `-n`, `-s` and `--arg` predate it. PROBED through `--argjson`,
-#             which pins the whole set with one call. A jq that lacks them fails
-#             INSIDE `_ka_row`, so every row is silently dropped from a census
-#             that still says `ok`.
+#             which pins the whole set with one call.
+#             CORRECTED (round 3), because the sentence here was measured
+#             FALSE: this is NOT a silent row-drop. `_ka_finish`'s own census
+#             assembly passes `--argjson fresh`, so a jq without it fails that
+#             final `jq -cs` on EVERY pass — including a skip-only pass that
+#             took no turns at all — and the script exits 1 saying `census
+#             assembly failed`, writing no census file. Loud, and already
+#             refusing. Do not go looking for the dropped rows; there are none.
+#             THE PROBE IS STILL WORTH ITS LINES, for two reasons that survive
+#             the correction: it refuses BEFORE the lock and before any turn, so
+#             a box with an ancient jq stops spending instead of paying for a
+#             turn it can never record; and it names `jq` and the version it
+#             wants, where the pre-probe failure named only the last thing to
+#             break. An unattributed refusal is a support ticket; an attributed
+#             one is a fix.
 #   flock   — the `-n <fd>` form (as against `flock <file> <cmd>`) is what this
 #             script uses, and a flock that cannot do it fails EXACTLY as a held
 #             lock does, so the quiet `pass-locked` arm retires every pass for
 #             ever. PROBED against a private, never-contended file, where a
 #             working flock cannot fail.
-#   timeout — NOTHING TO PROBE, and this is the reason rather than an omission.
-#             The only spellings used are `timeout <whole seconds> <cmd>`, which
-#             GNU coreutils, busybox and macOS's gtimeout all accept, and the
-#             rc-124 convention. The 124 is used ONLY to choose between two
-#             reason strings ("timeout after Ns" and "exit N"), so an
-#             implementation that signals differently degrades a sentence and
-#             never spends, wedges or miscounts. A probe would have to burn a
-#             real wall-clock timeout on every pass to learn something the
-#             census already says honestly either way.
+#   timeout — NOTHING TO PROBE **ON THIS FLEET'S TARGET**, which is the honest
+#             scope and not the universal claim this comment used to make. The
+#             spellings used are `timeout <whole seconds> <cmd>` and the rc-124
+#             convention, and BOTH are GNU coreutils' — the documented
+#             deployment target (Linux, and `ccd-telemetry-keepalive` is
+#             Linux-only by product shape besides; see PORTABILITY above).
+#             There, 124 is used ONLY to choose between two reason strings
+#             ("timeout after Ns" and "exit N"), and a probe would have to burn
+#             a real wall-clock timeout on every pass to learn something the
+#             census already says honestly.
+#             THE MEASURED EXCEPTION, recorded for whoever ports this somewhere
+#             leaner: busybox 1.36's `timeout` is NOT equivalent, and the
+#             difference is worse than a degraded sentence.
+#               • a child that IGNORES SIGTERM: busybox returns rc 0 and the
+#                 child KEEPS RUNNING past the deadline. This script would read
+#                 that as a clean turn while an orphaned `claude` process
+#                 survives the pass — a wedge, and the one failure mode the
+#                 whole deadline exists to prevent;
+#               • a child that dies from SIGTERM: busybox returns 143 (128+15),
+#                 not 124, so a genuine timeout is misclassified as
+#                 `failed "exit 143"`.
+#             A port to a busybox userland therefore needs a real capability
+#             probe here (and, for the first bullet, a `-k`-style kill escalation
+#             this script does not currently ask for). On GNU it needs neither.
 probe="$(date +%s%3N 2>/dev/null)"
 [[ "$probe" =~ ^[0-9]{13,}$ ]] \
   || { _ka_say "date does not support GNU %3N (answered '$probe') — nothing was measured"; exit 1; }
