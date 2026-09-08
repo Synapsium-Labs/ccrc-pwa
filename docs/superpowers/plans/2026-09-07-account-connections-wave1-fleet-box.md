@@ -15866,7 +15866,15 @@ did in this task), `check-add` derives from them, and the local copy is deleted.
 the block LAST, `printf '%s\n' "$want"` with nothing after it"*. There is no append path in `ccd/ccrc`
 — `grep -n '\$want' ccd/ccrc` returns three unrelated hits and `graphify-always-on` survives only as
 the two marker strings the REMOVAL path matches (`:6311-6312`). The writer was `_inst_graph_always_on`,
-and D-1245 took it back out (`551a6cb6`).
+and D-1245 took it back out (`6a26a9a3`).
+
+**CORRECTED, and the correction is the deviation's own subject.** This entry first said `551a6cb6`
+removed it. That commit ADDED it — 118 insertions, D-1243, "Everything kept the graph fresh; nothing
+made anyone read it". The remover is `6a26a9a3` (D-1245). The error came from reading `git log -S` as
+a list of removals when it lists every commit that CHANGED the count of a string, additions included,
+and it was repeated into the review brief before the review round measured both commits and caught it.
+A deviation about a citation that names the wrong thing, naming the wrong thing. The class does not
+exempt the prose written about it.
 
 It was already wrong on `origin/main`, where `:5321-5326` is `_inst_graph_always_on_off`'s own banner —
 the function that REMOVES the block, cited as the one that writes it. At this branch's BASE it had
@@ -15909,3 +15917,85 @@ reader that mis-assigns field 2 to field 3 is green here and wrong two commits l
 Recorded rather than fixed, because inventing a consumer to make it testable would be worse. Task 25
 must treat these two as UNVERIFIED inputs and pin them on arrival — the first commit that reads them is
 the first commit that can measure them.
+
+### D-2051 — `add`'s two re-emit paths carry the empty-body seam `_acct_answer` exists to close
+
+`_acct_add` captures the callee's stdout twice — once for `check-add`, once for `add-entry` — and on a
+non-zero status re-emits it verbatim:
+
+```bash
+added="$(_acct_node add-entry …)" || rc2=$?
+if [ "$rc2" -ne 0 ]; then printf '%s\n' "$added"; exit "$rc2"; fi
+```
+
+When the body is EMPTY that prints a blank line and exits with the callee's code. Measured on a real
+half-updated box (current `ccrc`, `deploy/account-op.mjs` from `5fb8b24d`, which has `check-add` and
+not `add-entry`): **exit 2, stdout one byte — a newline, stderr a `usage:` line, and the 0600 secret
+already on disk.** `JSON.parse('')` for any machine caller. This is the condition
+`_acct_answer` was written for, in its own words: "the box said no, here is why" and "this build cannot
+answer you at all" arriving as the same two bytes.
+
+**Three defects in one seam, and only the first is the one D-2024 named.**
+
+1. **The body is lost.** `_acct_answer`'s empty-body triage — which distinguishes version skew (exit 2)
+   from a killed process (>128) from an unknown cause, and says so — is bypassed on both paths.
+2. **The exit class is wrong.** It propagates the callee's **2**, which `ccd/ccrc:24-33` defines as
+   "not legal on its face, decidable from argv alone". The request WAS legal; a byte was written for
+   it. `no-answer` at **1** is the truthful class.
+3. **The remedy sentence would be false.** `_acct_answer`'s ends "Nothing was written." On the
+   `add-entry` path the secret HAS been written, and the whole point of the ordering is that the
+   operator can retry over it. A shared helper that says "Nothing was written" on that path would
+   state the opposite of this task's headline property.
+
+So the fix is not to route both sites through `_acct_answer` unchanged: the triage and the sentence are
+shared, and the "what was written" clause is the caller's, because the two callers genuinely differ.
+That is the distinction an adapter may not narrow, arriving from the other direction — the risk here is
+a helper that FLATTENS two true statements into one false one.
+
+D-2024 observed that the plan closed this seam everywhere it was thinking about refusals and left it
+open on the success path. This is the same sentence one level down: the review round closed the success
+path and left it open on the two paths IT was not thinking about. Third instance of the pattern in one
+task.
+
+### D-2052 — `add-entry` widens the operator's roster from whatever they chose to 0644
+
+`writeFileSync(tmp, …, { mode: 0o644 })` then `renameSync` replaces the inode, so the mode on
+`~/.ccrc/accounts.json` after `add` is 0644 no matter what it was before. Measured: `chmod 600` the
+roster, run `add`, read the mode — **644**.
+
+The arm's own comment calls this file "USER-OWNED" and argues the atomic write from exactly that
+premise: "an operator's roster must never be observable half-written". Discarding the permission bits
+that operator chose, on a box with co-tenants, is the same premise violated by the same write.
+`_inst_roster` does not do it — its `cp` + `mv` leaves the mode to umask — so this verb is now the one
+writer of that file that imposes a mode.
+
+An adapter may not narrow a distinction it received, and a file's mode is a distinction received.
+Remedy: carry `statSync(file).mode & 0o777` onto the tmp. The file provably exists — `readRoster`
+succeeded above — so there is no absent case to fold.
+
+Worth stating plainly: the world-readability is not the whole harm. `accounts.json` names lanes and
+config dirs, not credentials, so 0644 leaks little. What it destroys is the operator's ability to make
+a decision that STICKS, on the one file this CLI otherwise treats as theirs.
+
+### D-2053 — ten pre-existing citations, verified and deliberately NOT swept here
+
+Review round 1 enumerated every `ccd/ccrc` citation at or below the insertion point (19 tokens) and
+confirmed the +182 shift is exactly right — no missed shift, no over-shift. It repaired six citations
+inside the four files the task touched, and found ten more, all wrong BEFORE this branch existed, in
+regions the task does not touch:
+
+`ccd/ccrc:933-935` → `:2354-2358`/`:2368`; `:3029` → `:4677-4692`; `:3081-3082` → none of `:473`,
+`:932`, `:2008` is a `read`; `:4639` → `:2291-2304`; `:4677` → `:2325-2332`; `:5217` → `:2855-2862`;
+`:1772` → `ccd/ccd:13407`; `:1889` → `shared/api.ts:2303`; and outside `ccd/` entirely, `install.sh:28`
+and `install-sh.test.ts:188` both cite `:1613-1624` for `cmd_install`'s flag loop, which is at
+`:4657-4667`.
+
+**Not repaired, deliberately.** A diff whose subject is `add` is the wrong place to carry a ten-site
+sweep of unrelated prose: it makes the diff unreviewable for the thing it is actually for, and it is
+how D-1985 got its name. They are recorded here with their measured targets so the sweep is a
+transcription rather than a re-investigation, and so that a later reader does not have to rediscover
+that they were known.
+
+The `:3081-3082` entry is the interesting one and must not be "fixed" by picking the nearest match: it
+cites three lines for a `read` and none of the three is one, so its referent has to be FOUND before it
+can be repointed — or reworded as history if it went the way D-2023's did.
