@@ -8146,12 +8146,15 @@ Append to `server/test/single-definition.test.ts`, after the `one ~/.ccrc/build.
 ```ts
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
-  // FOUR paths, each with a writer and a set of readers, and the whole reason
-  // to register them here is that they cross LANGUAGES: the catalogue is
-  // written by bash-and-python and read by TypeScript; the TSV is written by
-  // node and read (from Plan 2) by bash; the effort map is written by node and
-  // read by python in another repository. None of those pairs can share a
-  // constant, so agreement has to be a red suite instead.
+  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // writer/reader rows below (the models directory, the catalogue, the
+  // registry, the LiteLLM config, the ownership whitelist) — each with a
+  // writer and a set of readers, and the whole reason to register them here
+  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
+  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
+  // by bash; the effort map is written by node and read by python in another
+  // repository. None of those pairs can share a constant, so agreement has to
+  // be a red suite instead.
   //
   // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
   // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
@@ -8218,23 +8221,65 @@ describe('the model files, and who reads each one', () => {
     // behind — and `deriveModels` retires every model a catalogue omits, so a
     // wrong catalogue is a warning on every surface about models that answer
     // fine.
+    //
+    // `_probe_mv_notdir`, not a bare `mv -f`: the probe cannot source ccd's
+    // platform block (it ships as its own executable), so it cannot spell
+    // GNU's `mv -fT` either — `macos-platform.test.ts`'s GNU-only scan
+    // forbids that flag at any call site outside the block. The local helper
+    // carries the same refusal (`$OUT` a directory -> refuse, rather than
+    // "succeeding" by dropping the file inside it), so a bare
+    // `mv -f "$NORM" "$OUT"` is still no longer a substring of the file.
     const probe = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-models-probe'), 'utf8');
-    expect(probe).toContain('mv -f "$NORM" "$OUT"');
+    // An exact COUNT of the call sites, not `toContain`: a `toContain` is
+    // satisfied by any one of the three (the catalogue rename, the
+    // stale-mark rewrite, the `--endpoints` answer) and stays green if a
+    // fourth staged write is added without going through the helper, or if
+    // one of the three loses it back to a bare `mv`. Measured 2026-09-08
+    // against HEAD (`grep -Fc '_probe_mv_notdir "$NORM" "$OUT"'
+    // ccd/ccrc-models-probe`): 3.
+    expect((probe.match(/_probe_mv_notdir "\$NORM" "\$OUT"/g) ?? []).length).toBe(3);
+    // A write is `mv`/`cp`/`tee` — or this repo's other two spellings of an
+    // atomic install, `install_atomic` (deploy.sh's helper) and
+    // `_inst_atomic` (ccrc's own, `_` is a word character so `\b` still
+    // anchors it) — naming the CATALOGUE path (`<id>.json`, not
+    // `<id>.classes.json`, the REGISTRY's own row below, and not
+    // `<id>.effort.json`, the materialiser's file, §6.4 — neither is a second
+    // catalogue writer), or a `>`/`>>` redirect whose TARGET is the catalogue
+    // path — not merely a line that contains both a `>` and the path
+    // anywhere in it. Without the target anchor this false-positives on
+    // Task 9's own read, already in `ccd/ccrc` today: `jq '.models | length'
+    // "$HOME/.ccrc/models/$id.json" 2>/dev/null` — a stderr redirect that
+    // shares the line with the path it is reading, not writing.
+    const CATALOGUE_PATH = /\.ccrc\/models\/[^ ]*(?<!\.classes)(?<!\.effort)\.json/;
+    const writesDirectly = (l: string): boolean => {
+      if (!CATALOGUE_PATH.test(l)) return false;
+      if (/\b(?:mv|cp|tee|install|install_atomic|_inst_atomic)\b/.test(l)) return true;
+      if (/\b(?:writeFileSync|renameSync)\b/.test(l)) return true;
+      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)(?<!\.effort)\.json/.test(l);
+    };
+    // Plan 2 adds `ccd/ccd` as a reader of the models directory — the
+    // `.classes.tsv` projection (spec §7), not the catalogue — when it lands, extend BOTH this write-scan's file list AND the readers' list in
+    // the `it()` just above, not just one; a reader that never writes belongs
+    // only in the second.
     for (const f of ['ccd/ccrc', 'deploy/deploy.sh']) {
       const code = codeLines(path.join(ccrcRoot, f));
-      expect(code.filter((l) => /\.ccrc\/models\/[^ ]*\.json/.test(l) && /(>|mv |cp |tee )/.test(l)),
+      expect(code.filter(writesDirectly),
         `${f} writes a catalogue directly instead of running the probe`).toEqual([]);
     }
   });
 
-  it('the REGISTRY file is named by exactly two files, and edited by one of them', () => {
+  it('the REGISTRY file is named by exactly three files, and edited by one of them', () => {
     // `<id>.classes.json` is the operator's own file (§4.1), edited only
     // through the verbs — so the verbs' node half is the one program that
-    // writes it, and every write passes the validator. `shared/models.ts` names
-    // the path in its header because that is where the type is defined; it
-    // holds no fs call at all (it is L0 and imports nothing). A bash holder
-    // would be a second, unvalidated editor of the same bytes.
-    expect(spell('classes.json')).toEqual(['deploy/models-op.mjs', 'shared/models.ts']);
+    // writes it, and every write passes the validator. `shared/models.ts`
+    // names the path in its header because that is where the type is
+    // defined. `shared/models.mjs` names it a second time, in `parseRegistry`'s
+    // own docstring — measured 2026-09-08: the single-source ruling moved the
+    // validator ITSELF into this file, so the sentence describing what the
+    // validator validates moved with it. Neither file holds an fs call (both
+    // are L0 and import nothing) — a bash holder would be a second,
+    // unvalidated editor of the same bytes.
+    expect(spell('classes.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts']);
   });
 
   it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
@@ -8257,20 +8302,44 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the four class names are enumerated only where a walk needs the sequence', () => {
-    // A file may list all four ONLY if it walks them in order. Five do — the
-    // TypeScript source, its bare-`node` twin, the materialiser, the verbs'
-    // node half, and `ccd/ccrc` (whose bash walk is what answers a class typo
-    // at exit 2). A sixth is a copy.
+    // A file may list all four ONLY if it walks them in order. SIX print,
+    // and FIVE of them walk it: the TypeScript source, its bare-`node` twin,
+    // the materialiser, the verbs' node half, and `ccd/ccrc` (whose bash walk
+    // is what answers a class typo at exit 2).
+    //
+    // The sixth, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
+    // file — the spec names it three times as the CURRENT hardcoded picker
+    // this design will eventually replace: §1 calls it out by path and line
+    // range ("The PWA picker is a hardcoded table keyed on the wrapper
+    // string"), §8 describes what it becomes ("Session picker … becomes
+    // data: rows are the four classes …", Plan 3a), and §13.4's migration
+    // step 4 is "`pwa/src/lib/models.ts`'s table is deleted, not kept as a
+    // fallback." So it is a real, spec-acknowledged sixth holder TODAY, and
+    // Plan 3a is the task that removes it — when that lands, this row comes
+    // OUT of the list below rather than staying as a permanent exception, and
+    // the list shrinks back to five.
+    //
+    // Until then it matches through the QUOTED-literal arm — its `/model
+    // <alias>` rows quote the same four words as Claude Code CLI
+    // slash-command aliases (`row('Opus 5', 'opus', 'opus')` literally
+    // contains `'opus'`), not as a classification walk — so tightening the
+    // bare-word arm (the fix for a match found in PROSE) cannot exclude it
+    // without also excluding the five real holders, which reach the quoted
+    // arm the same way. Named here rather than carved out of the corpus, per
+    // the same rule this file's header states for every other scan: the list
+    // is what the scan actually finds, honestly reconciled, not narrowed to
+    // fit a prediction written before the code existed.
     const enumerates = (src: string): boolean =>
       ['haiku', 'sonnet', 'opus', 'fable'].every((c) =>
         new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(src));
     const holders = MODELS_CORPUS.filter((f) => enumerates(codeOf(f))).map(rel).sort();
     expect(holders).toEqual([
-      'ccd/ccrc',              // MODELS_CLASSES — the usage-error gate
-      'deploy/models-op.mjs',  // CLASSES — the mutation walk
-      'shared/modelenv.mjs',   // the env block's key order and the TSV's
-      'shared/models.mjs',     // the twin's mirrored list
-      'shared/models.ts',      // CLASSES — the definition, and FAMILY_TOKENS
+      'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'deploy/models-op.mjs',   // CLASSES — the mutation walk
+      'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
+      'shared/modelenv.mjs',    // the env block's key order and the TSV's
+      'shared/models.mjs',      // the twin's mirrored list
+      'shared/models.ts',       // CLASSES — the definition, and FAMILY_TOKENS
     ]);
   });
 
