@@ -5,13 +5,18 @@
 // session home the moment home has room (measured live in swap.log, both
 // directions, ~15 minutes). This suite pins the sheet SAYING SO. A control
 // that quietly undoes itself is worse than one that admits it will.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
 import { api } from '../src/lib/api';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
+
+const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -359,14 +364,146 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
   });
 });
 
-describe('SwapSheet does not offer a lane that cannot take work', () => {
-  it('never offers an account the health probe measured AUTH-DEAD', async () => {
-    // Swapping there produces a session that cannot authenticate. `disabled`
-    // (the operator's kill-switch) and `authDead` (the probe's measurement)
-    // are different facts the server deliberately keeps apart, but they answer
-    // this sheet's one question the same way.
+// THE RULING, AND THE NINE-MUTATION TABLE THIS REPLACES.
+//
+// `c35cf90c` shipped this block pinning "an auth-dead lane is never offered".
+// That pins the wrong rule, and `_authdead`'s own header in ccd/ccd is the
+// adjudication — quoted at the marker's definition, one line below the name:
+//
+//     NOT `-disabled`. That name is OPERATOR intent … This one is a
+//     MEASUREMENT, which can be wrong — so it never joins `_account_ok`, and
+//     its two consumers rank-last (`_swap_target`) and skip-scoring
+//     (`_ws_least_loaded`) instead. A rescue must always have a destination.
+//
+// A probe verdict may cost PREFERENCE; it must never cost ELIGIBILITY. Four
+// implementations make this one decision — `_swap_target` (sc=101, an
+// assignment and deliberately not a `continue`), `_ws_least_loaded` (the
+// `condemned` fallback), `projectHome` (the two-tier fallback, D-1954) — and
+// this sheet was the only one that inverted it, on the single surface a human
+// uses to rescue a session BY HAND, where a false-positive marker cannot
+// self-correct (nothing runs on a condemned lane, so nothing refreshes it).
+//
+// The assertions below are the same nine states, re-pointed at the rule that
+// is actually correct. They are not deleted: a guard that pins the wrong rule
+// is worse than no guard, and dropping it silently is worse still.
+describe('a probe verdict costs preference, never eligibility', () => {
+  it('OFFERS an account the health probe measured AUTH-DEAD — a rescue must have a destination', async () => {
+    // WAS "never offers". The inverted rule emptied this picker on an
+    // all-condemned fleet, which is the one state it exists for.
     stubAccounts([
       acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('71%'));
+    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
+  });
+
+  it('marks it in AccountsScreen\'s own words, through AccountsScreen\'s own attribute', async () => {
+    // Not a second visual language for a state that already has one: the
+    // screen says "sign-in expired on the fleet host" and carries it on
+    // `data-disabled`, and this is the same fact on a second surface.
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('sign-in expired on the fleet host'));
+    expect(row).toHaveAttribute('data-disabled', 'true');
+    // A healthy neighbour carries neither, so the mark is about the lane and
+    // not about the row component.
+    const healthy = screen.getByRole('button', { name: /team·b/ });
+    expect(healthy).toHaveAttribute('data-disabled', 'false');
+    expect(healthy).not.toHaveTextContent('sign-in expired');
+    // The frozen numbers are still shown — the mark explains them, it does not
+    // replace them — and the CSS that greys their fill is the accounts screen's
+    // rule, restated for the picker row rather than reinvented.
+    expect(row).toHaveTextContent('3%');
+    expect(declValue(ruleIn(fleetCss, ".acct-list .acct-row[data-disabled='true'] .limit-fill"), 'background'))
+      .toBe('var(--edge-subtle)');
+  });
+
+  it('and the marked row is still TAPPABLE — the mark is the whole cost', async () => {
+    // The point of keeping it: `cmd_swap` performs no eligibility check at all
+    // ("Manual swaps may target ANY valid wrapper; the pool policy only
+    // constrains auto-swaps"), so the human-directed move onto a condemned
+    // lane is a supported act, not an accident this sheet has to prevent.
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('sign-in expired on the fleet host'));
+    fireEvent.click(row);
+    expect(await screen.findByText('Move to team·alt?')).toBeInTheDocument();
+  });
+
+  it('never SUGGESTS one — the tag is the preference the verdict DOES cost', async () => {
+    // Unchanged in outcome, changed in mechanism: the lane used to be missing
+    // from the ranked set because it was missing from the sheet. Now it is on
+    // the sheet and `load` refuses to score it — an auth-dead account at 3/4
+    // is the emptiest number on this fleet and must still lose.
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('suggested'));
+    expect(screen.getByRole('button', { name: /team·alt/ })).not.toHaveTextContent('suggested');
+  });
+
+  it('does not wait for a condemned lane\'s telemetry to age out — a FRESH sample loses too', async () => {
+    // The reachable window `condemned`'s docstring names: nothing runs on the
+    // lane so nothing refreshes its statusline, but its last sample stays
+    // fresh for hours. Here it is the ONLY fully-measured row on the fleet —
+    // every other candidate is unscoreable — so a staleness-based fix would
+    // still hand it the tag. Nobody wears it instead.
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4, ts: Math.floor(Date.now() / 1000) }),
+      acct({ wrapper: 'claude-corp', five: null, seven: null }),
+      acct({ wrapper: 'gpt', five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('sign-in expired'));
+    expect(screen.queryByText('suggested')).not.toBeInTheDocument();
+  });
+
+  it('ALL-CONDEMNED still offers every lane — one bad probe run cannot empty this picker', async () => {
+    // THE CASE THAT SHIPPED, and the one the old table had no test for: one
+    // 401-for-everyone tick from `ccd-account-health` marks every roster
+    // account, and the operator opened this sheet to rescue a wedged session
+    // onto a picker with no rows, no reason and no rescue. `_ws_least_loaded`
+    // and `projectHome` both grew a condemned fallback tier in this same commit
+    // range precisely so that cannot happen to `ws-add`.
+    stubAccounts([
+      acct({ wrapper: 'claude', authDead: true, five: 9, seven: 9 }),
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', authDead: true, five: 62, seven: 71 }),
+      acct({ wrapper: 'gpt', authDead: true, five: 1, seven: 1 }),
+      acct({ wrapper: 'claude-dev0', authDead: true, five: 5, seven: 5 }),
+    ]);
+    renderSwap();
+    await waitFor(() =>
+      expect(screen.getAllByText('sign-in expired on the fleet host')).toHaveLength(4));
+    for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+    // No recommendation, and no empty-state copy: there is nothing empty here.
+    expect(screen.queryByText('suggested')).not.toBeInTheDocument();
+    expect(screen.queryByText(/switched off on the fleet host/)).not.toBeInTheDocument();
+  });
+
+  it('an OPERATOR\'s kill switch still removes the lane — intent cannot be wrong', async () => {
+    // The other direction, and what keeps this fix from becoming "offer
+    // everything". `disabled` is a file a human touched; it is not a
+    // measurement and it does not get a marked row.
+    stubAccounts([
+      acct({ wrapper: 'claude2', disabled: true, five: 3, seven: 4 }),
       acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
     ]);
     renderSwap();
@@ -375,24 +512,23 @@ describe('SwapSheet does not offer a lane that cannot take work', () => {
     expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();
   });
 
-  it('never SUGGESTS one either — an excluded lane cannot be the recommendation', async () => {
-    // The exclusion has to happen before the ranking, not after it: an
-    // auth-dead account at 3/4 is the emptiest number on this fleet.
+  it('a lane that is BOTH is removed — the switch decides, the measurement cannot override it', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude2', disabled: true, authDead: true, five: 3, seven: 4 }),
       acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('suggested'));
-    expect(screen.queryByText('team·alt')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('71%'));
+    expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('sign-in expired on the fleet host')).not.toBeInTheDocument();
   });
 
   it('an OLDER server that omits authDead condemns nothing — absence is not a verdict', async () => {
     // `authDead` is ADDITIVE on the wire (no `FLEET_PROTO` bump), so a server
     // built before it simply omits the key. `=== true`, never truthiness: an
     // omitted field must leave every account rendering exactly as it does
-    // today, offered AND rankable.
+    // today — offered, rankable, and UNMARKED.
     const older: Record<string, unknown> = { ...acct({ wrapper: 'claude2', five: 8, seven: 22 }) };
     delete older.authDead;
     stubAccounts([
@@ -402,7 +538,57 @@ describe('SwapSheet does not offer a lane that cannot take work', () => {
     renderSwap();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /team·alt/ })).toHaveTextContent('suggested'));
-    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /team·alt/ })).toHaveAttribute('data-disabled', 'false');
+    expect(screen.queryByText('sign-in expired on the fleet host')).not.toBeInTheDocument();
+  });
+});
+
+// An empty list is a sentence, not a silence. Both pickers rendered
+// `wrappers.map(...)` into a bare `<div className="acct-list">` with no zero
+// branch, so every way of arriving at zero came out as an empty box under the
+// words "Pick where it should live meanwhile" — no rows, no reason, no rescue.
+// `AccountsStrip` already refuses that three doors down ("checking accounts…" /
+// "no accounts reporting" / "all lanes disabled"); this is that rule here.
+describe('SwapSheet says WHY it has nothing to offer', () => {
+  it('every other lane switched off — named as the operator act it is', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'gpt', disabled: true }),
+      acct({ wrapper: 'claude-dev0', disabled: true }),
+    ]);
+    renderSwap();
+    expect(await screen.findByText(
+      'Every other account is switched off on the fleet host — turn one back on from Accounts.',
+    )).toBeInTheDocument();
+    for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.queryByRole('button', { name: new RegExp(label) })).not.toBeInTheDocument();
+    }
+  });
+
+  it('no other lane at all is a DIFFERENT sentence — the two causes never share one silence', () => {
+    // A one-account roster: nothing was excluded, there is simply nowhere
+    // else. Collapsing this into the "switched off" copy would blame an
+    // operator for a fleet that has one account.
+    const roster = TEST_ROSTER.filter((a) => a.id === 'claude');
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s], roster)} />);
+    expect(screen.getByText('No other account to move this session to yet.')).toBeInTheDocument();
+    expect(screen.queryByText(/switched off on the fleet host/)).not.toBeInTheDocument();
+  });
+
+  it('a poll that never landed excludes NOTHING and says nothing — fail-open, unchanged', async () => {
+    // `useAccountUsage`'s stated posture, and the one thing this round must not
+    // turn fail-closed: with no rows, `disabledWrappers` returns `[]`, so every
+    // lane is offered and no empty-state copy can fire.
+    vi.spyOn(api, 'accounts').mockRejectedValue(new Error('offline'));
+    renderSwap();
+    for (const label of ['team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+    await waitFor(() => expect(api.accounts).toHaveBeenCalled());
+    expect(screen.queryByText(/switched off on the fleet host/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No other account/)).not.toBeInTheDocument();
   });
 });
 

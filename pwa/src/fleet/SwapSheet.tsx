@@ -1,12 +1,15 @@
 // Move-to-another-account sheet — plus the shared account-picker row that
-// NewSessionSheet reuses. Target rows exclude the session's current account
-// and every lane that cannot take work (kill-switched, or a credential the
-// health probe measured dead); each carries the account chip and its limit
-// gauges from `GET /api/accounts` (or honestly says "limits unknown"), and the
-// least-loaded target — least loaded by MEASURED numbers only — wears a mono
-// "suggested" tag. Tapping a target opens a QuickConfirm whose
-// consequence sentence does the explaining; confirming posts api.swap — the
-// restart itself then plays out over the fleet stream.
+// NewSessionSheet reuses. Target rows exclude the session's current account and
+// every lane an OPERATOR has switched off; a lane the health PROBE measured
+// auth-dead is still offered, marked in AccountsScreen's own words, and never
+// suggested (the ruling is quoted in full on `disabledWrappers`). Each row
+// carries the account chip and its limit gauges from `GET /api/accounts` (or
+// honestly says "limits unknown"), and the least-loaded target — least loaded
+// by MEASURED numbers only — wears a mono "suggested" tag. An empty list SAYS
+// why it is empty rather than rendering a silent nothing. Tapping a target
+// opens a QuickConfirm whose consequence sentence does the explaining;
+// confirming posts api.swap — the restart itself then plays out over the fleet
+// stream.
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
@@ -37,13 +40,18 @@ import './fleet.css';
  *  decision on the same fact, one layer down.) */
 export type AccountFacts = AccountUsage | null;
 
-/** The accounts a session may be moved to. `unusable` names lanes that cannot
- *  take work — they are excluded, because offering a swap target that cannot
- *  take work is worse than offering none. */
+/** Every account a picker could offer, before anything is taken away:
+ *  the roster's own ids plus any wrapper a live session reports that this
+ *  build's roster has no entry for.
+ *
+ *  `excluded` is what may not be offered AT ALL, and the only thing either
+ *  picker passes here is `disabledWrappers` — the operator's kill switch.
+ *  A health-probe verdict deliberately does NOT come through this parameter;
+ *  see `disabledWrappers` for the ruling that keeps it out. */
 export function pickableWrappers(
   roster: readonly RosterWire[],
   sessions: FleetSession[],
-  unusable: readonly string[] = [],
+  excluded: readonly string[] = [],
 ): string[] {
   // `string[]`, not the roster's own id type: a live session can report a
   // wrapper the roster doesn't have an entry for at all (a build running an
@@ -53,36 +61,105 @@ export function pickableWrappers(
   for (const s of sessions) {
     if (!all.includes(s.wrapper)) all.push(s.wrapper);
   }
-  return all.filter((w) => !unusable.includes(w));
+  return all.filter((w) => !excluded.includes(w));
 }
 
-/** The lanes that cannot take work, from the accounts poll's own rows.
+/** The lanes an OPERATOR has switched off — the ONE fact that costs a lane its
+ *  place in either picker. (D-1978.)
  *
- *  TWO facts, ONE affordance — `AccountsScreen` already says this in the same
- *  words and renders them through one `data-disabled` attribute: `disabled` is
- *  the operator's kill-switch (`~/.cc-sessions/<w>-disabled`, touched by hand),
- *  `authDead` is the health probe's durable verdict (`<w>-authdead`, a
- *  credential that did not authenticate). The server keeps them apart for good
- *  reason — intent cannot be wrong, a measurement can — but here they answer
- *  the same question, "can a session be moved onto this lane and run?", and the
- *  answer is no either way. Swapping onto an auth-dead account produces a
- *  session that cannot authenticate, which is a worse outcome than the swap
- *  simply not being offered.
+ *  ONE OF THE TWO CONDEMNED STATES, NOT BOTH, and the split is the whole point.
+ *  This function used to fold `authDead` in beside `disabled` "because they
+ *  answer the same question". They do not, and `_authdead`'s own header in
+ *  ccd/ccd rules on it at the marker's definition:
  *
- *  `=== true` ON BOTH, never truthiness. `authDead` is ADDITIVE on the wire
- *  (`shared/api.ts`, on `RosterWire.hidden`'s terms, no `FLEET_PROTO` bump): a
- *  server built before it OMITS it, and ABSENCE MEANS NOT CONDEMNED, so an
- *  older payload must keep offering every account exactly as it does today.
- *  `disabled` is spelled the same way it always was.
+ *      NOT `-disabled`. That name is OPERATOR intent … This one is a
+ *      MEASUREMENT, which can be wrong — so it never joins `_account_ok`, and
+ *      its two consumers rank-last (`_swap_target`) and skip-scoring
+ *      (`_ws_least_loaded`) instead. A rescue must always have a destination.
+ *
+ *  So a probe verdict may cost PREFERENCE and must never cost ELIGIBILITY:
+ *    - `disabled` (`~/.cc-sessions/<w>-disabled`, touched by a human) is INTENT.
+ *      It cannot be wrong, and a lane carrying it is not offered at all.
+ *    - `authDead` (`<w>-authdead`, written by `ccd-account-health`) is a
+ *      MEASUREMENT. The lane stays PICKABLE, is MARKED with AccountsScreen's own
+ *      words, and can never be SUGGESTED — `condemned` below is that one
+ *      predicate, and `load`/`AccountRow` are its two consumers, exactly the
+ *      shape `_ws_least_loaded` and `projectHome` (server/src/limits.ts) already
+ *      hold. All four implementations of this decision now agree; this file was
+ *      the one that inverted it, and an all-condemned fleet answered the human
+ *      rescuing a wedged session with an EMPTY picker.
+ *
+ *  WHAT ACTUALLY HAPPENS ON A TAP (D-1979), stated because the sentence this
+ *  replaces got it backwards: NOTHING refuses the swap. `cmd_swap` gates on
+ *  `_is_valid_wrapper`, a registry entry, target≠current, an executable wrapper
+ *  and a transcript match — it reads neither marker, and says so in its own
+ *  header ("Manual swaps may target ANY valid wrapper; the pool policy only
+ *  constrains auto-swaps"), and `POST /api/sessions/:id/swap` adds no check of
+ *  its own. That is deliberate and it is the ruling working: a manual,
+ *  human-directed rescue is exactly the case a probe verdict must not veto. The
+ *  list below is therefore the WHOLE gate for `disabled`, and for `authDead` it
+ *  is deliberately not a gate at all — only a mark.
+ *
+ *  `=== true`, never truthiness, on both flags. `authDead` is ADDITIVE on the
+ *  wire (`shared/api.ts`, on `RosterWire.hidden`'s terms, no `FLEET_PROTO`
+ *  bump): a server built before it OMITS it, and ABSENCE MEANS NOT CONDEMNED.
  *
  *  `null` rows — nothing landed, or the poll failed — exclude NOTHING, which is
- *  `useAccountUsage`'s own stated failure posture: an account offered that
- *  turns out to be unusable is recoverable (ccd refuses the swap), while one
- *  hidden because telemetry hiccuped looks like it does not exist. */
-export function unusableWrappers(rows: readonly AccountUsage[] | null): string[] {
+ *  `useAccountUsage`'s own stated failure posture, and the residual risk is now
+ *  named rather than argued away: during a poll gap a switched-off lane IS
+ *  offered and a tap on it WILL move the session there (see above — nothing
+ *  refuses it), and the operator learns it from the session failing to come
+ *  back rather than from a refusal. That is still the better half of the trade,
+ *  because hiding every account whenever telemetry hiccups makes a healthy
+ *  fleet look like it does not exist, and the swap it would have prevented is
+ *  undone by another swap. */
+export function disabledWrappers(rows: readonly AccountUsage[] | null): string[] {
   return (rows ?? [])
-    .filter((a) => a.disabled === true || a.authDead === true)
+    .filter((a) => a.disabled === true)
     .map((a) => a.wrapper);
+}
+
+/** The health probe's durable verdict on ONE account, read off the poll's own
+ *  row: `~/.cc-sessions/<w>-authdead` stands for it.
+ *
+ *  ONE PREDICATE, TWO CONSUMERS, which is `projectHome`'s own phrase for the
+ *  identical shape on the server (`server/src/limits.ts`: "`_ws_least_loaded`
+ *  reads `_authdead` once per candidate and spends the answer twice"). Here the
+ *  two consumers are `load` — a condemned lane is not scored, so it can never
+ *  wear "suggested" — and `AccountRow`, which marks the row. What NEITHER does
+ *  is remove it: eligibility is not this fact's to spend.
+ *
+ *  Not scoring it is not the same as waiting for its telemetry to age out, and
+ *  that window is the reachable half: nothing runs on a condemned lane, so it
+ *  cannot refresh its own statusline, but its LAST sample stays fresh for hours
+ *  — and a lane that stopped working at 3% is the emptiest number on the fleet
+ *  for that whole window. It would win the tag on the strength of having died.
+ *
+ *  `=== true` through an optional chain: `null` facts (no row for this account
+ *  at all) are NOT a verdict, and neither is an older server's omitted field. */
+export function condemned(facts: AccountFacts): boolean {
+  return facts?.authDead === true;
+}
+
+/** Why a picker has nothing to offer — a distinct token per cause, because the
+ *  two are not the same sentence and `null` (there IS something to offer) is
+ *  not either. (D-1980.) The component words them; this decides which fact
+ *  is true.
+ *
+ *  It exists because both pickers used to render `wrappers.map(...)` into a
+ *  bare `<div className="acct-list">` with no zero branch, so "every lane is
+ *  switched off" and "the roster has not arrived" both came out as an empty box
+ *  under the words "Pick where it should live meanwhile". `AccountsStrip`
+ *  already refuses that in the same file tree — three named placeholders rather
+ *  than one silence — and this is that rule on the pickers. */
+export type PickerEmptiness = 'none-known' | 'all-switched-off' | null;
+
+export function pickerEmptiness(
+  candidates: readonly string[],
+  offered: readonly string[],
+): PickerEmptiness {
+  if (offered.length > 0) return null;
+  return candidates.length === 0 ? 'none-known' : 'all-switched-off';
 }
 
 /** One account's row out of the poll, or `null` when the poll has none for it.
@@ -138,12 +215,21 @@ export function factsFor(rows: readonly AccountUsage[] | null, wrapper: string):
  *  built itself. On every value `AccountUsage`'s declared `boolean` can carry,
  *  the two forms decide identically.
  *
+ *  AND A CONDEMNED LANE IS NOT SCORED AT ALL — the fourth disjunct, and the
+ *  only one that is not about the number. `projectHome` spells it as a separate
+ *  `.filter(notCondemned)` BEFORE `measured()` rather than a disjunct inside it,
+ *  which is the same composite by a different arrangement; the disjunct is what
+ *  this side can do without a filter step, and `condemned` is the shared
+ *  predicate either way. Its own docstring carries the reason the flag cannot
+ *  be left to telemetry staleness.
+ *
  *  Not scoring is not a refusal to help: an account with no score is simply
  *  not ranked, its gauges still say `—` (or `reset`, which is the rolled-over
  *  window saying so out loud), and it remains tappable. What is gone is ccrc
- *  telling the reader it is the emptiest pool. */
+ *  telling the reader it is the emptiest pool. That is the WHOLE cost a
+ *  measurement is allowed to charge — preference, never eligibility. */
 const load = (l: AccountFacts): number | null =>
-  l === null || l.five === null || l.seven === null
+  condemned(l) || l === null || l.five === null || l.seven === null
   || l.fiveRolledOver === true || l.sevenRolledOver === true
     ? null
     : Math.max(l.five, l.seven);
@@ -204,7 +290,17 @@ function Gauge({ label, value, rolledOver }: {
 /** A tappable account row: chip (label + hue), limit gauges, chevron.
  *  Shared by SwapSheet (targets) and NewSessionSheet (step 1) — ONE row
  *  component, so both pickers say the same thing about the same account, and
- *  both are fed from the same source (`useAccountUsage`) for the same reason. */
+ *  both are fed from the same source (`useAccountUsage`) for the same reason.
+ *
+ *  A lane the health probe CONDEMNED is rendered here rather than removed
+ *  upstream, and it says so in `AccountsScreen`'s own words ("sign-in expired
+ *  on the fleet host") through `AccountsScreen`'s own `data-disabled`
+ *  attribute — the second vocabulary this file is careful not to invent, for
+ *  the same reason `Gauge` borrows "reset" from `Bar`. The row stays TAPPABLE:
+ *  a measurement can be wrong, and the manual swap it feeds accepts the target
+ *  regardless (see `disabledWrappers`), so removing the affordance would only
+ *  hide the one destination a bad probe run left. `condemned` is the single
+ *  reader of the flag on this side. */
 export function AccountRow({
   wrapper,
   facts,
@@ -232,14 +328,26 @@ export function AccountRow({
     color: `var(${colorVar})`,
     background: hue === undefined ? 'var(--bg-raised)' : `var(${colorVar}-tint)`,
   };
+  const off = condemned(facts);
   return (
-    <button type="button" className="acct-row" onClick={() => onPick(wrapper)}>
+    <button
+      type="button"
+      className="acct-row"
+      data-disabled={off ? 'true' : 'false'}
+      onClick={() => onPick(wrapper)}
+    >
       <span className="chip" style={chipStyle}>
         <i aria-hidden="true" />
         {accountLabel(roster, wrapper)}
       </span>
       {suggested && <span className="acct-suggested">suggested</span>}
       <span className="acct-gauges">
+        {/* Above the gauges, not instead of them: the numbers are still true of
+            the last moment anything ran there, and this is the sentence that
+            says why they stopped moving. `data-disabled` greys their fills for
+            the reason AccountsScreen greys its own — a frozen crit-red bar
+            reads as live pressure on a lane nothing is running on. */}
+        {off && <span className="acct-condemned">sign-in expired on the fleet host</span>}
         {facts === null ? (
           <span className="acct-unknown">limits unknown</span>
         ) : (
@@ -361,9 +469,22 @@ export function SwapSheet({
   // in wrapper IDS reported by live sessions that this build's roster has no
   // entry for. That is membership, not measurement.
   const accounts = useAccountUsage(open);
-  const wrappers = pickableWrappers(roster, sessions, unusableWrappers(accounts))
-    .filter((w) => w !== session.wrapper);
+  // TWO lists, because an empty picker has to be able to say WHICH emptiness it
+  // is. `others` is every lane this build knows of except the one the session
+  // is already on; `wrappers` is that minus the lanes an operator switched off.
+  // A lane the probe condemned is in BOTH — it is offered, marked and unranked.
+  const switchedOff = disabledWrappers(accounts);
+  const others = pickableWrappers(roster, sessions).filter((w) => w !== session.wrapper);
+  const wrappers = others.filter((w) => !switchedOff.includes(w));
+  const emptiness = pickerEmptiness(others, wrappers);
   const suggested = leastLoaded(accounts, wrappers);
+  // The two causes, worded for THIS picker. `null` renders the rows instead.
+  const emptyNote =
+    emptiness === null
+      ? null
+      : emptiness === 'none-known'
+        ? 'No other account to move this session to yet.'
+        : 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
 
   const move = (wrapper: string): void => {
     void (async () => {
@@ -424,16 +545,20 @@ export function SwapSheet({
           Pick where it should live meanwhile.
         </p>
         <div className="acct-list">
-          {wrappers.map((w) => (
-            <AccountRow
-              key={w}
-              wrapper={w}
-              facts={factsFor(accounts, w)}
-              suggested={w === suggested}
-              onPick={setTarget}
-              roster={roster}
-            />
-          ))}
+          {emptyNote === null ? (
+            wrappers.map((w) => (
+              <AccountRow
+                key={w}
+                wrapper={w}
+                facts={factsFor(accounts, w)}
+                suggested={w === suggested}
+                onPick={setTarget}
+                roster={roster}
+              />
+            ))
+          ) : (
+            <p className="acct-none">{emptyNote}</p>
+          )}
         </div>
       </Sheet>
       <QuickConfirm

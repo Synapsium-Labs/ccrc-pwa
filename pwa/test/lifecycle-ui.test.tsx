@@ -228,6 +228,86 @@ describe('NewSessionSheet', () => {
   });
 });
 
+// STEP 1 ANSWERS THE ELIGIBILITY RULING THE SAME WAY THE SWAP PICKER DOES, and
+// that is a decision this suite states rather than an accident of the two
+// sheets sharing `AccountRow`. A swap is the RESCUE of a wedged session; this
+// starts a brand-new one, so "a rescue must always have a destination" does not
+// reach it directly. It reaches it by the fleet-side twin: `ws-add` is what
+// this sheet is a phone-shaped copy of, and `_ws_least_loaded` grew a
+// condemned-lane fallback tier ("letting it empty this function would let one
+// bad probe run wedge every `ws-add` on the box"), which `projectHome` mirrors.
+// Both of those are AUTOMATIC placement — the stricter setting — so a human
+// choosing on purpose cannot be the one barred. The full case is on
+// NewSessionSheet.tsx at the seam; these are the states it claims.
+describe('NewSessionSheet step 1 — the same eligibility ruling as the swap picker', () => {
+  it('offers and MARKS an auth-dead lane, and never lets it be suggested', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    const row = await screen.findByRole('button', { name: /team·alt/ });
+    await waitFor(() => expect(row).toHaveTextContent('sign-in expired on the fleet host'));
+    expect(row).toHaveAttribute('data-disabled', 'true');
+    // NewSessionSheet never passes `suggested`, so the tag is absent for a
+    // different reason than in SwapSheet — assert the pick instead, which is
+    // the fact this sheet actually owns.
+    fireEvent.click(row);
+    expect(await screen.findByText(/on team·alt — change/)).toBeInTheDocument();
+  });
+
+  it('ALL-CONDEMNED still offers every lane — one bad probe run cannot wedge a new session', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude', authDead: true }),
+      acct({ wrapper: 'claude2', authDead: true }),
+      acct({ wrapper: 'claude-corp', authDead: true }),
+      acct({ wrapper: 'gpt', authDead: true }),
+      acct({ wrapper: 'claude-dev0', authDead: true }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    await waitFor(() =>
+      expect(screen.getAllByText('sign-in expired on the fleet host')).toHaveLength(5));
+    for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/switched off on the fleet host/)).not.toBeInTheDocument();
+  });
+
+  it('an operator kill switch still removes the lane here too', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();
+  });
+
+  it('says WHY it is empty when every lane is switched off — never a silent list', async () => {
+    // The wedge in its remaining reachable form. The old sheet rendered a bare
+    // `<div className="acct-list">` under "Pick the account it runs on".
+    stubAccounts([
+      acct({ wrapper: 'claude', disabled: true }),
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'gpt', disabled: true }),
+      acct({ wrapper: 'claude-dev0', disabled: true }),
+    ]);
+    vi.spyOn(api, 'projects').mockResolvedValue(PROJECTS);
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={makeFleet()} />);
+    expect(await screen.findByText(
+      'Every account is switched off on the fleet host — turn one back on from Accounts.',
+    )).toBeInTheDocument();
+    for (const label of ['team·max', 'team·alt', 'team·b', 'gpt', 'team·d']) {
+      expect(screen.queryByRole('button', { name: new RegExp(label) })).not.toBeInTheDocument();
+    }
+  });
+});
+
 describe('NewSessionSheet — a five-minute wait says so', () => {
   /** The sheet, open, with `api.createSession` HANGING — the state the operator is
    *  in for up to five minutes after Task 108 raises the `start`/`enable` budgets.

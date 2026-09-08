@@ -1333,11 +1333,112 @@ until the sweep has run. The server lane's final gate is `/health` reporting the
   per-session surfaces, so the open question there is whether they may poll `/api/accounts` at all or
   need the fact carried some other way — and the answer must not be "widen the frame" by default.
 
+  **AMENDED 2026-09-08 — one clause above is FALSIFIED, read D-1978 before this paragraph.** The
+  sentence "`unusableWrappers` excludes `authDead === true` on the same terms `disabled` was already
+  excluded on" describes what shipped and describes a DEFECT. Excluding a health-probe verdict "on
+  the same terms" as an operator kill switch is exactly what `_authdead`'s own header in `ccd/ccd`
+  forbids. The rest of D-1928 — the withdrawn wire route, the one-source-per-fact measurement, the
+  rollover disjuncts, the `reset` vocabulary, the 20 s cost — stands unchanged and was not touched.
+
 **Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
 1924 → 1954) covering all five plans on this branch, defined in the same act. The
 "allocator unreachable" claim this paragraph used to carry was **wrong** — the fleet box reaches the
 server over `CCRC_SERVER_URL`, and `ccrc-api ledger allocate` is a row in that client's closed table.
 The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
+
+---
+
+Found by the whole-branch review of this branch's own six commits, and all three are in code
+`c35cf90c` shipped. **Minted 2026-09-08** as one contiguous block of three (`D-1978`–`D-1980`,
+floor → 1981) and defined in the same act.
+
+- **D-1978** — `pwa/src/fleet/SwapSheet.tsx`'s `unusableWrappers` folded `authDead === true` in
+  beside `disabled === true` as one hard exclusion, so a lane the credential probe had condemned was
+  removed from the swap picker and from `NewSessionSheet`'s account step. That INVERTS the ruling
+  `_authdead`'s own header states at the marker's definition (`ccd/ccd`): "NOT `-disabled`. That name
+  is OPERATOR intent … This one is a MEASUREMENT, which can be wrong — so it never joins
+  `_account_ok`, and its two consumers rank-last (`_swap_target`) and skip-scoring
+  (`_ws_least_loaded`) instead. A rescue must always have a destination." A probe verdict may cost
+  PREFERENCE and must never cost ELIGIBILITY; `disabled` is the opposite — operator intent, cannot be
+  wrong, and rightly costs eligibility. Four implementations of this one decision existed and three
+  agreed: `_swap_target` ranks a condemned lane last (`sc=101`, an assignment its own comment says is
+  deliberately not a `continue`), `_ws_least_loaded` falls back to `condemned`, and `projectHome`
+  (`server/src/limits.ts`, D-1954) has a two-tier fallback for exactly this. The PWA was the fourth
+  and the only inverted one — on the single surface a human uses to rescue a wedged session BY HAND,
+  where a false-positive marker cannot self-correct, because nothing runs on a condemned lane to
+  refresh its own statusline.
+
+  **FIXED.** `unusableWrappers` is now `disabledWrappers` and filters `disabled === true` alone —
+  that list is the whole hard exclusion, and it is the only thing either picker passes to
+  `pickableWrappers`. `authDead` moved to a separate one-line predicate, `condemned(facts)`, with two
+  consumers and no third: `load` refuses to score a condemned lane (so it can never wear "suggested",
+  which is the preference the verdict IS allowed to cost), and `AccountRow` marks the row with
+  `AccountsScreen`'s own words — "sign-in expired on the fleet host" — through `AccountsScreen`'s own
+  `data-disabled` attribute, no second visual language for a state that already has one. The row
+  stays TAPPABLE. That is one predicate spent twice, which is `projectHome`'s own shape for the same
+  fact ("`_ws_least_loaded` reads `_authdead` once per candidate and spends the answer twice").
+
+  The scoring half is not a staleness fix and must not be mistaken for one: a condemned lane cannot
+  refresh its telemetry, but its LAST sample stays fresh for hours, and a lane that stopped working
+  at 3% is the emptiest number on the fleet for that whole window — it would win the tag on the
+  strength of having died. `load` force-nulls it outright.
+
+  **NewSessionSheet answers the same way, and that is a stated decision, not a shared helper's side
+  effect** (the seam carries the argument). A swap is the RESCUE of a wedged session, so "a rescue
+  must always have a destination" does not reach a first placement directly. It reaches it by the
+  fleet-side twin: this sheet is a phone-shaped `ws-add`, and `_ws_least_loaded` grew its
+  condemned-lane fallback precisely so "one bad probe run" cannot "wedge every `ws-add` on the box",
+  with `projectHome` mirroring it. Both of those are AUTOMATIC placement — the stricter setting — so
+  a human choosing on purpose cannot be the party barred. If the two pickers ever must diverge, the
+  divergence is a parameter to the shared rule, never a second copy of it.
+
+- **D-1979** — the docstring that justified `unusableWrappers`'s fail-OPEN direction on `null` rows
+  rested on a refusal that does not exist: "an account offered that turns out to be unusable is
+  recoverable (ccd refuses the swap)" (`SwapSheet.tsx`, restated in `useProjectedHome.ts`).
+  `cmd_swap` performs NO eligibility check — not for `-disabled`, not for `-authdead`. Its gates are
+  `_is_valid_wrapper`, a registry entry, target ≠ current, an executable wrapper and an advisory
+  transcript match; `_account_ok` is never called on that path and `_authdead` "never joins
+  `_account_ok`" by design. Its own header says so outright: "Manual swaps may target ANY valid
+  wrapper; the pool policy only constrains auto-swaps." `POST /api/sessions/:id/swap` adds no check
+  either. The same docstring two paragraphs earlier asserted the CONTRARY — that swapping onto an
+  auth-dead account "is a worse outcome than the swap simply not being offered" — and both could not
+  be true.
+
+  **FIXED, documentation only, and `cmd_swap` is deliberately UNCHANGED.** A manual, human-directed
+  rescue is exactly the case D-1978's ruling protects, so adding an eligibility gate at the route or
+  in ccd would re-inflict the defect one layer down. The contradictory half was deleted: for
+  `authDead` the picker is now not a gate at all, only a mark. What replaces the false clause is what
+  actually happens — nothing refuses the swap; the offered list is the WHOLE gate for `disabled`; and
+  the residual risk of the fail-open `null`-rows posture is named rather than argued away (during a
+  poll gap a switched-off lane IS offered and a tap WILL move the session there, and the operator
+  learns it from the session failing to come back). The posture itself is kept: hiding every account
+  whenever telemetry hiccups makes a healthy fleet look like it does not exist, and the swap it would
+  have prevented is undone by another swap.
+
+- **D-1980** — both pickers rendered `wrappers.map(...)` into a bare `<div className="acct-list">`
+  with no zero branch, so every way of reaching an empty list came out as a silent empty box: in
+  `SwapSheet` under the words "Pick where it should live meanwhile", in `NewSessionSheet` under "Pick
+  the account it runs on". With D-1978's inversion standing, one all-401 probe tick reached it across
+  the whole fleet; the degenerate case needs no fleet-wide event at all (one condemned lane out of
+  two home-able accounts). `AccountsStrip` already refuses this three doors down, with three named
+  placeholders rather than one silence, and `AccountsScreen`'s `projectionLine` does the same for
+  placement.
+
+  **FIXED.** `pickerEmptiness(candidates, offered)` answers a distinct token per cause —
+  `'none-known'`, `'all-switched-off'`, or `null` when there is something to offer — and each
+  component words its own two sentences, so "the roster has not arrived / there is only one account"
+  is never blamed on an operator who switched nothing off. It cannot fire before the poll lands,
+  structurally rather than by a guard: with `null` rows `disabledWrappers` excludes nothing, so the
+  switched-off arm has no way to be reached from a hiccup.
+
+  **Measured, 12 mutations, all RED** across `pwa/test/swap-sheet.test.tsx` and
+  `pwa/test/lifecycle-ui.test.tsx`, including the one that restores `c35cf90c`'s exclusion verbatim
+  (8 red), the one that stops `disabled` costing eligibility (7 red), the one that makes
+  `NewSessionSheet` diverge by copy (2 red), and the one that deletes the picker row's greying rule
+  from `fleet.css` (1 red). `c35cf90c`'s own nine-mutation table pinned "authDead excluded" as
+  correct; those assertions were REWRITTEN to pin the rule above rather than deleted, and the
+  all-condemned case the old table had no test for — the state that shipped the wedge — is now one of
+  them.
 
 ---
 

@@ -113,9 +113,19 @@ export function useProjectedHome(active: boolean = true): ProjectedHome | null |
  *  not overload this null further.
  *
  *  A FAILED POLL LEAVES THE LAST GOOD ANSWER STANDING (the `catch` writes
- *  nothing), for `useDisabledWrappers`'s original reason: showing an account
- *  that turns out to be unusable is recoverable — ccd refuses the swap — while
- *  dropping one because telemetry hiccuped looks like it does not exist. */
+ *  nothing), for `useDisabledWrappers`'s original reason, with its false half
+ *  removed: dropping an account because telemetry hiccuped makes a healthy lane
+ *  look like it does not exist, and that is the worse half of the trade. The
+ *  reason it was paired with — "showing an account that turns out to be
+ *  unusable is recoverable, ccd refuses the swap" — was simply not true (D-1979).
+ *  `cmd_swap` reads NEITHER marker (its own header: "Manual swaps may target
+ *  ANY valid wrapper; the pool policy only constrains auto-swaps") and
+ *  `POST /api/sessions/:id/swap` adds no check, so a swap onto a lane this hook
+ *  was too stale to report as switched off simply happens. It is recoverable in
+ *  the only sense that survives measurement — another swap undoes it, and the
+ *  session's failure to come back is what tells the operator — not because
+ *  anything downstream refuses. `disabledWrappers` (SwapSheet.tsx) carries the
+ *  full argument and the ruling that governs the other marker. */
 export function useAccountUsage(active: boolean): readonly AccountUsage[] | null {
   const [rows, setRows] = useState<readonly AccountUsage[] | null>(null);
 

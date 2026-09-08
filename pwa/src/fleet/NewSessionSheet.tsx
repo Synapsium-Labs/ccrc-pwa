@@ -15,7 +15,13 @@ import { toast } from '../components/Toast';
 import { accountLabel } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import { AccountRow, factsFor, pickableWrappers, unusableWrappers } from './SwapSheet';
+import {
+  AccountRow,
+  disabledWrappers,
+  factsFor,
+  pickableWrappers,
+  pickerEmptiness,
+} from './SwapSheet';
 import { useAccountUsage } from './useProjectedHome';
 import './fleet.css';
 
@@ -115,6 +121,32 @@ export function NewSessionSheet({
   const filtered =
     needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
 
+  // THE SAME RULE THE SWAP PICKER ASKS, AND THAT IS A DECISION, NOT A SHARED
+  // HELPER'S SIDE EFFECT (D-1978). The two surfaces were re-examined separately, because
+  // a swap is the RESCUE of a wedged session while this starts a brand-new one,
+  // and "a rescue must always have a destination" does not obviously reach a
+  // first placement. It reaches it by a different route: the fleet-side twin of
+  // THIS sheet is `ws-add`, whose `_ws_least_loaded` was given a condemned-lane
+  // fallback tier for exactly this case — "letting it empty this function would
+  // let one bad probe run wedge every `ws-add` on the box" — and the server's
+  // `projectHome` mirrors it ("filtering condemned lanes out of the fallback
+  // altogether answers `null` on an all-condemned fleet"). Both of those are
+  // AUTOMATIC placement, which is the stricter setting; a human choosing on
+  // purpose is the looser one. So there is no reading on which a new session
+  // should be barred from a lane `ws-add` would still place work on, and the
+  // two pickers do not diverge. If they ever must, the divergence is a
+  // PARAMETER to the shared rule — never a second copy of it here.
+  const switchedOff = disabledWrappers(accounts);
+  const candidates = pickableWrappers(roster, sessions);
+  const wrappers = candidates.filter((w) => !switchedOff.includes(w));
+  const emptiness = pickerEmptiness(candidates, wrappers);
+  const emptyNote =
+    emptiness === null
+      ? null
+      : emptiness === 'none-known'
+        ? 'No accounts to start a session on yet.'
+        : 'Every account is switched off on the fleet host — turn one back on from Accounts.';
+
   const start = async (): Promise<void> => {
     if (wrapper === null || project === null || starting) return;
     setStarting(true);
@@ -135,20 +167,24 @@ export function NewSessionSheet({
         <>
           <p className="sheet-copy">Pick the account it runs on — you can move it later.</p>
           <div className="acct-list">
-            {/* A lane that cannot take work cannot start a session on it
-                either — a kill-switched account, or one whose credential the
-                health probe measured dead. Offering either here is the same bug
-                SwapSheet's picker had, one layer up, and `unusableWrappers` is
-                the one rule both pickers ask. */}
-            {pickableWrappers(roster, sessions, unusableWrappers(accounts)).map((w) => (
-              <AccountRow
-                key={w}
-                wrapper={w}
-                facts={factsFor(accounts, w)}
-                onPick={setWrapper}
-                roster={roster}
-              />
-            ))}
+            {/* A lane an OPERATOR switched off is not offered — intent cannot
+                be wrong. A lane the health PROBE condemned is offered, marked
+                by `AccountRow`, and never suggested: see `disabledWrappers`
+                for the ruling and the paragraph above for why this sheet
+                answers it the same way SwapSheet does. */}
+            {emptyNote === null ? (
+              wrappers.map((w) => (
+                <AccountRow
+                  key={w}
+                  wrapper={w}
+                  facts={factsFor(accounts, w)}
+                  onPick={setWrapper}
+                  roster={roster}
+                />
+              ))
+            ) : (
+              <p className="acct-none">{emptyNote}</p>
+            )}
           </div>
         </>
       ) : (
