@@ -51,12 +51,12 @@ ID_RE='^[a-z][a-z0-9-]{0,31}$'
 
 die() { echo "$PROG: $*" >&2; exit 1; }
 usage() {
-  echo "usage: $PROG <accountId> <probe> [--base-url <url>] [--out <path>]" >&2
+  echo "usage: $PROG <accountId> <probe> [--base-url <url>] [--endpoints <modelId>] [--out <path>]" >&2
   echo "       <probe> is codex, openrouter or compatible — the registry file's own probe kind" >&2
 }
 usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
 
-ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""
+ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""
 [ $# -ge 1 ] || usage_die "an account id is required"
 ACCOUNT="$1"; shift
 [ $# -ge 1 ] || usage_die "a probe kind is required"
@@ -65,6 +65,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --base-url) [ $# -ge 2 ] || usage_die "--base-url needs a value"; BASE_URL="$2"; shift 2 ;;
     --out)      [ $# -ge 2 ] || usage_die "--out needs a value";      OUT="$2";      shift 2 ;;
+    --endpoints) [ $# -ge 2 ] || usage_die "--endpoints needs a model id"; ENDPOINTS="$2"; shift 2 ;;
     -h|--help)  usage; exit 0 ;;
     *) usage_die "unknown argument: $1" ;;
   esac
@@ -79,6 +80,25 @@ case "$PROBE_KIND" in
   anthropic) usage_die "anthropic lanes have no catalogue to probe — their four classes are Claude Code's own defaults and they carry no registry file (spec §5). Nothing was written." ;;
   *) usage_die "unknown probe kind \"$PROBE_KIND\": it must be one of codex, openrouter, compatible" ;;
 esac
+
+# `compatible` ships NO default endpoint — only the operator can know one, which
+# is why the registry file carries `baseUrl` for it (round-2 ruling 10) — so an
+# absent base URL is a refusal rather than a fall-through. `openrouter` has a
+# default and takes none.
+[ "$PROBE_KIND" != "compatible" ] || [ -n "$BASE_URL" ] \
+  || usage_die "probe kind \"compatible\" needs --base-url: it ships no default endpoint, so only the lane's registry file can say where it talks to"
+
+# `--endpoints` is a DIFFERENT QUESTION and gets a different answer shape: not
+# "what does this lane advertise" but "which providers serve this one model",
+# which is what the ownership whitelist is checked against at discovery-add
+# (§5). It writes the provider's raw body and never a catalogue, so it must
+# name its own destination and must never be able to touch a lane's file.
+if [ -n "$ENDPOINTS" ]; then
+  [ "$PROBE_KIND" = "openrouter" ] \
+    || usage_die "--endpoints is an OpenRouter question: only its /models/{author}/{slug}/endpoints route answers which providers serve a model"
+  [ -n "$OUT" ] \
+    || usage_die "--endpoints needs --out: the body is the answer to one question, not this lane's catalogue, and writing it to ~/.ccrc/models/$ACCOUNT.json would destroy one"
+fi
 
 MODELS_DIR="$HOME/.ccrc/models"
 [ -n "$OUT" ] || OUT="$MODELS_DIR/$ACCOUNT.json"
@@ -142,6 +162,25 @@ _fetch() {
   if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW"; return; fi
   case "$PROBE_KIND" in
     codex) _fetch_codex ;;
+    openrouter)
+      # The LIST needs no credential (§5). `--fail` so a 4xx/5xx is a non-zero
+      # exit rather than an error page written into $RAW as if it were a
+      # catalogue; `-sS` so the transcript carries the reason and not a
+      # progress bar.
+      if [ -n "$ENDPOINTS" ]; then
+        curl -sS --fail --max-time 30 \
+          "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
+      else
+        curl -sS --fail --max-time 30 'https://openrouter.ai/api/v1/models' > "$RAW"
+      fi
+      ;;
+    compatible)
+      # The lane's own token, when the box has one. Best effort by design: a
+      # 404 leaves "never probed" and the discovery list has to be explicit (§5).
+      local auth=()
+      [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ] || auth=(-H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN")
+      curl -sS --fail --max-time 30 ${auth[@]+"${auth[@]}"} "${BASE_URL%/}/v1/models" > "$RAW"
+      ;;
     *) echo "$PROG: probe kind \"$PROBE_KIND\" has no fetch arm in this build" >&2; return 1 ;;
   esac
 }
@@ -202,7 +241,69 @@ def codex_models(raw):
         })
     return out
 
-ARMS = {"codex": codex_models}
+def _price(v):
+    # OpenRouter prices are decimal STRINGS ("0.000005", "0"). A zero price is
+    # a fact — a free model — and must survive as 0 rather than becoming None,
+    # which every surface renders as "price unknown".
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None
+
+def openrouter_models(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
+        fail("the OpenRouter catalogue has no `data` array — the endpoint's shape has drifted")
+    out = []
+    for i, m in enumerate(raw["data"]):
+        if not isinstance(m, dict):
+            fail("OpenRouter data[%d] is not an object" % i)
+        mid = m.get("id")
+        if not isinstance(mid, str) or not mid:
+            fail("OpenRouter data[%d] has no id" % i)
+        top = m.get("top_provider") if isinstance(m.get("top_provider"), dict) else {}
+        pricing = m.get("pricing") if isinstance(m.get("pricing"), dict) else {}
+        out.append({
+            "id": mid, "label": m.get("name") or mid,
+            "context": num(m.get("context_length")),
+            "maxContext": num(top.get("max_completion_tokens")),
+            # OpenRouter advertises no reasoning levels: EMPTY is "unknown",
+            # which `effortFile` reads as "leave the operator's level alone".
+            "efforts": [],
+            "hidden": False,
+            "priceIn": _price(pricing.get("prompt")),
+            "priceOut": _price(pricing.get("completion")),
+        })
+    return out
+
+def compatible_models(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
+        fail("the /v1/models response has no `data` array")
+    out = []
+    for i, m in enumerate(raw["data"]):
+        if not isinstance(m, dict):
+            fail("/v1/models data[%d] is not an object" % i)
+        mid = m.get("id")
+        if not isinstance(mid, str) or not mid:
+            fail("/v1/models data[%d] has no id" % i)
+        # A bare /v1/models says the id and nothing more. Everything else is
+        # null rather than guessed: a fabricated context window would be sized
+        # against by Claude Code's auto-compaction, which is exactly the class
+        # of lie the [1m] suffix incident was (infra/handoff/ccgpt:108-113).
+        out.append({
+            "id": mid, "label": mid, "context": None, "maxContext": None,
+            "efforts": [], "hidden": False, "priceIn": None, "priceOut": None,
+        })
+    return out
+
+ARMS = {
+    "codex": codex_models,
+    "openrouter": openrouter_models,
+    "compatible": compatible_models,
+}
 if probe not in ARMS:
     fail("no normaliser arm for probe kind %r in this build" % probe)
 
@@ -251,9 +352,25 @@ PY
 mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
 
 if ! _fetch 2>"$TMPD/fetch.err"; then
+  # `--endpoints` NEVER marks a catalogue stale: it did not ask about the
+  # catalogue, and a whitelist question that could not be answered must not
+  # change what the surfaces say about a lane's models.
+  if [ -n "$ENDPOINTS" ]; then
+    echo "$PROG: the OpenRouter endpoints call for \"$ENDPOINTS\" failed: $(tr '\n' ' ' < "$TMPD/fetch.err" | cut -c1-300)" >&2
+    exit 1
+  fi
   _mark_stale "the $PROBE_KIND catalogue fetch for \"$ACCOUNT\" failed: $(tr '\n' ' ' < "$TMPD/fetch.err" | cut -c1-300)"
   exit 1
 fi
+
+if [ -n "$ENDPOINTS" ]; then
+  # The RAW endpoints body IS the answer — no normaliser, no catalogue shape.
+  # Same mode discipline as the catalogue write: 0600 before the rename.
+  chmod 600 "$RAW" || die "could not set the mode on the endpoints answer"
+  mv -f "$RAW" "$OUT" || die "could not move the endpoints answer into place at $OUT"
+  exit 0
+fi
+
 if ! _normalise 2>"$TMPD/norm.err"; then
   _mark_stale "the $PROBE_KIND response for \"$ACCOUNT\" was refused: $(tr '\n' ' ' < "$TMPD/norm.err" | cut -c1-300)"
   exit 1

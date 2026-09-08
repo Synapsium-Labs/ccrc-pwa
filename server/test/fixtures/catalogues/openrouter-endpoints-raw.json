@@ -1,0 +1,10 @@
+{
+  "data": {
+    "id": "z-ai/glm-5.2",
+    "name": "Z.AI: GLM 5.2",
+    "endpoints": [
+      {"name": "Cortecs | z-ai/glm-5.2", "provider_name": "Cortecs", "context_length": 131072},
+      {"name": "Z.AI | z-ai/glm-5.2", "provider_name": "Z.AI", "context_length": 131072}
+    ]
+  }
+}

@@ -293,3 +293,108 @@ describe('the test seam is a seam and not a second code path', () => {
     expect(fs.readFileSync(PROBE, 'utf8').split('\n')[0]).toBe('#!/usr/bin/env bash');
   });
 });
+
+const OPENROUTER_RAW = path.join(here, 'fixtures', 'catalogues', 'openrouter-raw-page.json');
+const COMPATIBLE_RAW = path.join(here, 'fixtures', 'catalogues', 'compatible-raw.json');
+const ENDPOINTS_RAW = path.join(here, 'fixtures', 'catalogues', 'openrouter-endpoints-raw.json');
+
+describe('the OpenRouter arm (§5)', () => {
+  it('carries ids, labels, context and PRICES, and flags nothing hidden', () => {
+    const r = run(['router', 'openrouter'], { CCRC_MODELS_PROBE_FIXTURE: OPENROUTER_RAW });
+    expect(r.code).toBe(0);
+    expect(curlCalls()).toEqual([]);
+    const cat = parseCatalogue(catalogueAt('router'));
+    expect(cat.probe).toBe('openrouter');
+    expect(cat.models.map((m) => m.id))
+      .toEqual(['anthropic/claude-opus-4.5', 'z-ai/glm-5.2', 'qwen/qwen3.5-9b']);
+    const opus = cat.models[0]!;
+    expect(opus.label).toBe('Anthropic: Claude Opus 4.5');
+    expect(opus.context).toBe(200000);
+    expect(opus.maxContext).toBe(64000);
+    expect(opus.priceIn).toBeCloseTo(0.000005, 12);
+    expect(opus.priceOut).toBeCloseTo(0.000025, 12);
+    // OpenRouter advertises no reasoning levels — an EMPTY list, which
+    // `effortFile` reads as "unknown", never as "none offered".
+    expect(opus.efforts).toEqual([]);
+    expect(cat.models.every((m) => !m.hidden)).toBe(true);
+  });
+
+  it('a null max_completion_tokens is null, not zero', () => {
+    run(['router', 'openrouter'], { CCRC_MODELS_PROBE_FIXTURE: OPENROUTER_RAW });
+    const cat = parseCatalogue(catalogueAt('router'));
+    expect(cat.models.find((m) => m.id === 'qwen/qwen3.5-9b')!.maxContext).toBeNull();
+  });
+
+  it('a zero price is ZERO, not null — a free model is a fact, not a gap', () => {
+    run(['router', 'openrouter'], { CCRC_MODELS_PROBE_FIXTURE: OPENROUTER_RAW });
+    const cat = parseCatalogue(catalogueAt('router'));
+    expect(cat.models.find((m) => m.id === 'qwen/qwen3.5-9b')!.priceIn).toBe(0);
+  });
+
+  it('refuses a body with no data array', () => {
+    const p = path.join(home, 'no-data.json');
+    fs.writeFileSync(p, JSON.stringify({ models: [] }));
+    expect(run(['router', 'openrouter'], { CCRC_MODELS_PROBE_FIXTURE: p }).code).toBe(1);
+  });
+});
+
+describe('the compatible arm (§5)', () => {
+  it('needs a base URL', () => {
+    const r = run(['lane', 'compatible']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--base-url/);
+  });
+
+  it('carries the ids and nothing else — a bare /v1/models says nothing more', () => {
+    const r = run(['lane', 'compatible', '--base-url', 'https://api.cortecs.ai'],
+      { CCRC_MODELS_PROBE_FIXTURE: COMPATIBLE_RAW });
+    expect(r.code).toBe(0);
+    const cat = parseCatalogue(catalogueAt('lane'));
+    expect(cat.probe).toBe('compatible');
+    expect(cat.models).toEqual([
+      { id: 'glm-5.2', label: 'glm-5.2', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null },
+      { id: 'qwen3.5-9b', label: 'qwen3.5-9b', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null },
+    ]);
+  });
+
+  it('a 404 leaves "never probed" — no file, exit 1 (§5)', () => {
+    const r = run(['lane', 'compatible', '--base-url', 'https://api.cortecs.ai'],
+      { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'nope') });
+    expect(r.code).toBe(1);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'lane.json'))).toBe(false);
+  });
+});
+
+describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
+  it('writes the RAW endpoints body to --out and no catalogue at all', () => {
+    const out = path.join(home, 'endpoints.json');
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', out],
+      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW });
+    expect(r.code).toBe(0);
+    const body = JSON.parse(fs.readFileSync(out, 'utf8')) as { data: { endpoints: unknown[] } };
+    expect(body.data.endpoints).toHaveLength(2);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'router.json'))).toBe(false);
+  });
+
+  it('requires --out — the body is an ANSWER to one question, not a lane\'s catalogue', () => {
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2'],
+      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--endpoints needs --out/);
+  });
+
+  it('is refused on any probe kind but openrouter', () => {
+    const r = run(['gpt', 'codex', '--endpoints', 'gpt-5.6-sol', '--out', path.join(home, 'e.json')]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--endpoints is an OpenRouter question/);
+  });
+
+  it('a failed fetch under --endpoints never marks any catalogue stale', () => {
+    run(['router', 'openrouter'], { CCRC_MODELS_PROBE_FIXTURE: OPENROUTER_RAW });
+    const before = fs.readFileSync(path.join(home, '.ccrc', 'models', 'router.json'), 'utf8');
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', path.join(home, 'e.json')],
+      { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'nope') });
+    expect(r.code).toBe(1);
+    expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'router.json'), 'utf8')).toBe(before);
+  });
+});
