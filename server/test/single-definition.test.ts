@@ -1195,8 +1195,22 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     expect(code.filter((l) => l.includes('$HOME/.ccrc/build.json'))).toEqual([
       'BOX_STAMP_FILE="$HOME/.ccrc/build.json"',
     ]);
-    expect(code.filter((l) => l.includes('jq -r')).length,
-      'a second jq parse of the stamp has appeared in ccrc').toBe(1);
+    // Scoped to `_box_build_fields`'s OWN body, not the whole file: the
+    // `ccrc models` verbs carry their own `jq -r` parses of catalogues and
+    // registries (twelve, measured 2026-09-08), none of them the stamp, and a
+    // file-wide count conflates "a second parse of THIS stamp" with "this file
+    // now parses other JSON too". The needle inside the function cannot be
+    // "a jq -r line that also names $BOX_STAMP_FILE" — the function reads a
+    // local `stamp` (defaulting from `$BOX_STAMP_FILE`, so a shipped stamp
+    // handed to it by `_inst_stamp`'s validate arm can be checked with the
+    // same parser), so the literal `$BOX_STAMP_FILE` never appears on the
+    // parse line itself; the function body is what the file's own structure
+    // makes exact.
+    const body = /_box_build_fields\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no _box_build_fields').toBeTruthy();
+    const bodyCode = body![1]!.split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(bodyCode.filter((l) => l.includes('jq -r')).length,
+      'a second jq parse of the stamp has appeared inside _box_build_fields').toBe(1);
   });
 
   it('both verbs reach the stamp through that one reader, not around it', () => {
@@ -1233,6 +1247,187 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     const deploySh = readFileSync(path.join(ccrcRoot, 'deploy', 'deploy.sh'), 'utf8');
     expect(deploySh.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('.ccrc/build.json')))
       .toEqual(['  install_atomic "$stamp" .ccrc/build.json 644']);
+  });
+});
+
+// — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
+describe('the model files, and who reads each one', () => {
+  // FOUR paths, each with a writer and a set of readers, and the whole reason
+  // to register them here is that they cross LANGUAGES: the catalogue is
+  // written by bash-and-python and read by TypeScript; the TSV is written by
+  // node and read (from Plan 2) by bash; the effort map is written by node and
+  // read by python in another repository. None of those pairs can share a
+  // constant, so agreement has to be a red suite instead.
+  //
+  // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
+  // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
+  // `shared/modelenv.mjs` are invisible to it — and `deploy/` is not one of the
+  // bash roots, so `deploy/models-op.mjs` is invisible to `BASH` too. A rule
+  // about "who writes this file" run over either corpus alone would pass by
+  // looking at nothing at all, which is this suite's own oldest lesson.
+  const walk = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__') || e === 'node_modules') continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...walk(p)); continue; }
+      if (/\.(tsx?|mjs|mts)$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+  const MODELS_CORPUS = [...new Set([
+    ...ALL, ...BASH,
+    ...walk(path.join(ccrcRoot, 'shared')),
+    ...walk(path.join(ccrcRoot, 'deploy')),
+  ])];
+  /** Comments stripped for bash, kept otherwise — `codeLines`' own rule, and
+   *  the reason the probe (which says in a COMMENT that it never touches the
+   *  registry) is not a holder of that path. */
+  const codeOf = (f: string): string =>
+    (BASH.includes(f) ? codeLines(f).join('\n') : readFileSync(f, 'utf8'));
+  const spell = (needle: string): string[] =>
+    MODELS_CORPUS.filter((f) => codeOf(f).includes(needle)).map(rel).sort();
+
+  it('the corpus is real: it holds the four files this design added', () => {
+    // Guards every row below: a corpus that had gone empty would make each of
+    // them pass over nothing.
+    const names = MODELS_CORPUS.map(rel);
+    for (const f of ['shared/models.mjs', 'shared/modelenv.mjs',
+      'deploy/models-op.mjs', 'ccd/ccrc-models-probe']) {
+      expect(names, `${f} is outside the corpus this describe scans`).toContain(f);
+    }
+  });
+
+  // THESE LISTS GROW WITH PLANS 2 AND 3a, deliberately and BY NAME — each of
+  // those plans has a step that edits the rows below by hand:
+  //   Plan 2 adds `'ccd/ccd'`               (the class carry's reader of the
+  //     TSV's third column and of the catalogue), beside its agreement test.
+  //   Plan 3a adds `'ccd/ccrc-doctor-checks'` (the doctor's per-lane check,
+  //     which reads the catalogue and the settings block through the shipped
+  //     `shared/models.mjs` / `shared/modelenv.mjs`).
+  // So the settled end state of the first assertion is the four-row list
+  //   ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/ccrc-models-probe']
+  // in `holdersOf`'s own sort order. It is left at TWO rows here on purpose:
+  // an exact match that is widened by the plan that widens the code is the
+  // guard; a list written ahead of the code is a list nobody measured. Turning
+  // any row into a pattern would retire the guard outright.
+
+  it('the models directory is spelled by exactly these bash tools', () => {
+    expect(holdersOf('.ccrc/models')).toEqual([
+      'ccd/ccrc',              // cmd_models and its helpers — the verbs
+      'ccd/ccrc-models-probe', // the catalogue's writer
+    ]);
+  });
+
+  it('the probe is the ONLY thing that writes a catalogue', () => {
+    // A second writer is how a box would carry a catalogue no probe stands
+    // behind — and `deriveModels` retires every model a catalogue omits, so a
+    // wrong catalogue is a warning on every surface about models that answer
+    // fine.
+    //
+    // `mv -fT`, not `mv -f`: measured 2026-09-08 against the shipped probe —
+    // the final rename onto `$OUT` carries `-T` (refuse when `$OUT` names a
+    // directory rather than "succeeding" by dropping the file inside it,
+    // ccrc-models-probe:396-400's own reasoning), so a bare `mv -f "$NORM"
+    // "$OUT"` is no longer a substring of the file at all.
+    const probe = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-models-probe'), 'utf8');
+    expect(probe).toContain('mv -fT "$NORM" "$OUT"');
+    // A write is `mv`/`cp`/`tee` naming the CATALOGUE path (`<id>.json`, not
+    // `<id>.classes.json` — that file is the REGISTRY, and has its own row
+    // below), or a `>`/`>>` redirect whose TARGET is the catalogue path — not
+    // merely a line that contains both a `>` and the path anywhere in it.
+    // Without the target anchor this false-positives on Task 9's own read,
+    // already in `ccd/ccrc` today: `jq '.models | length'
+    // "$HOME/.ccrc/models/$id.json" 2>/dev/null` — a stderr redirect that
+    // shares the line with the path it is reading, not writing. Without the
+    // `.classes.json` exclusion this false-positives on a registry write,
+    // which is a real, separate, deliberate writer (the verbs) and not a
+    // second catalogue writer at all.
+    const CATALOGUE_PATH = /\.ccrc\/models\/[^ ]*(?<!\.classes)\.json/;
+    const writesDirectly = (l: string): boolean => {
+      if (!CATALOGUE_PATH.test(l)) return false;
+      if (/\b(?:mv|cp|tee)\b/.test(l)) return true;
+      if (/\b(?:writeFileSync|renameSync)\b/.test(l)) return true;
+      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)\.json/.test(l);
+    };
+    for (const f of ['ccd/ccrc', 'deploy/deploy.sh']) {
+      const code = codeLines(path.join(ccrcRoot, f));
+      expect(code.filter(writesDirectly),
+        `${f} writes a catalogue directly instead of running the probe`).toEqual([]);
+    }
+  });
+
+  it('the REGISTRY file is named by exactly three files, and edited by one of them', () => {
+    // `<id>.classes.json` is the operator's own file (§4.1), edited only
+    // through the verbs — so the verbs' node half is the one program that
+    // writes it, and every write passes the validator. `shared/models.ts`
+    // names the path in its header because that is where the type is
+    // defined. `shared/models.mjs` names it a second time, in `parseRegistry`'s
+    // own docstring — measured 2026-09-08: the single-source ruling moved the
+    // validator ITSELF into this file, so the sentence describing what the
+    // validator validates moved with it. Neither file holds an fs call (both
+    // are L0 and import nothing) — a bash holder would be a second,
+    // unvalidated editor of the same bytes.
+    expect(spell('classes.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts']);
+  });
+
+  it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
+    // `ccgpt` (another repository) reads the same path from its own
+    // `${CCGPT_CONFIG:-…}` default, which is why the helper here honours the
+    // same override rather than hardcoding the default: two tools, one file,
+    // and only one of them is in this repo to be pinned.
+    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
+      '_models_litellm_path()     { printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }',
+    ]);
+  });
+
+  it('the ownership whitelist is read by exactly one thing in this repo', () => {
+    // `handoff-proxy` and `claude-glm` read it too — in the monorepo, which
+    // this scan cannot see. Within this repo it must stay one reader, because
+    // a second one would be a second opinion about which providers may serve.
+    expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
+  });
+
+  it('the four class names are enumerated only where a walk needs the sequence', () => {
+    // A file may list all four ONLY if it walks them in order. Five do — the
+    // TypeScript source, its bare-`node` twin, the materialiser, the verbs'
+    // node half, and `ccd/ccrc` (whose bash walk is what answers a class typo
+    // at exit 2).
+    //
+    // Measured 2026-09-08: a sixth holder prints, and it is not a copy of
+    // THIS design's sequence — `pwa/src/lib/models.ts` (commit fe3ba926,
+    // untouched by this branch, predates the model-class registry entirely)
+    // is the session model/effort PICKER, whose `/model <alias>` rows quote
+    // the same four words as Claude Code CLI slash-command aliases, not as a
+    // classification walk. Its match is through the QUOTED-literal arm
+    // (`row('Opus 5', 'opus', 'opus')` literally contains `'opus'`), so
+    // tightening the bare-word arm — the fix for a match found in PROSE —
+    // cannot exclude it without also excluding the five real holders, which
+    // reach the quoted arm the same way. Named here rather than carved out of
+    // the corpus, per the same rule this file's header states for every other
+    // scan: the list is what the scan actually finds, honestly reconciled,
+    // not narrowed to fit a prediction written before the code existed.
+    const enumerates = (src: string): boolean =>
+      ['haiku', 'sonnet', 'opus', 'fable'].every((c) =>
+        new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(src));
+    const holders = MODELS_CORPUS.filter((f) => enumerates(codeOf(f))).map(rel).sort();
+    expect(holders).toEqual([
+      'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
+      'deploy/models-op.mjs',   // CLASSES — the mutation walk
+      'pwa/src/lib/models.ts',  // modelOptions' aliases — unrelated feature, see above
+      'shared/modelenv.mjs',    // the env block's key order and the TSV's
+      'shared/models.mjs',      // the twin's mirrored list
+      'shared/models.ts',       // CLASSES — the definition, and FAMILY_TOKENS
+    ]);
+  });
+
+  it('and the scan is looking at something — the four really are in the definition', () => {
+    // Guards the guard: an `enumerates` that had gone vacuous would turn the
+    // list above into every source in the tree.
+    const src = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
+    expect(src).toContain("export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;");
   });
 });
 
