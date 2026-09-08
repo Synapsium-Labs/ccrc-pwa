@@ -15824,6 +15824,13 @@ Same shape as D-1907 one level up: a number derived by arithmetic over a documen
 measuring the artefact. A count in a plan step is a claim about the tree, and the tree is the arbiter.
 Later tasks' counts are to be measured and REPORTED, never asserted from the plan.
 
+**RECURRED AT TASK 25, which is the point of recording it.** That step predicts "**65 tests** (58 + 7
+here)"; the file held **89** before the task and **96** after. Both predictions were built by adding
+remembered per-task counts to a number that was already wrong, so the error compounds forward: every
+later task's count in this plan is derived from the same broken chain and none of them can be trusted.
+No further deviation is spent on the recurrence — the standing rule is that a count in any remaining
+step is to be MEASURED and reported, and a mismatch is expected rather than alarming.
+
 ### D-2021 — D-2004 is closed for hue and label, and OPEN for `--models`
 
 `check-add` now refuses `unknown-hue` and `bad-label` before the first byte. Three conditions still
@@ -16020,3 +16027,111 @@ that they were known.
 The `:3081-3082` entry is the interesting one and must not be "fixed" by picking the nearest match: it
 cites three lines for a `read` and none of the three is one, so its referent has to be FOUND before it
 can be repointed — or reworded as history if it went the way D-2023's did.
+
+**EXTENDED BY TASK 25 — an eleventh site, six displaced pointers, and a citation FORM nobody had looked
+for.**
+
+The eleventh: `server/test/ccrc-cli.test.ts:198` carries the same wrong `ccd/ccrc:1040-1048` as the
+`cmd_wrappers` entry above. One wrong citation, copied — so the sweep must grep for the CLAIM, not
+visit the sites in this list.
+
+Six live pointers Task 25's +172 shift displaced, in files that task was forbidden to touch. Targets
+measured, so the sweep is transcription: `deploy/account-op.mjs:220` `:4911-4915`→`:5083-5087`;
+`:808` `:4882-4887`→`:5054-5059`; `:821` `:4926-4928`→`:5098-5100`; `:837` `:6358-6364`→`:6530-6536`;
+`server/test/ccrc-install-graphify.test.ts:1139` `:6311-6312`→`:6483-6484`; `:1155`
+`:6356-6357`→`:6528-6529`.
+
+And the form: **bare `ccrc:N-M`, with no `ccd/` prefix** — seven sites (`ccrc-doctor-checks:899`,
+`:1103`, `:2678`, `ccd/ccd:4916`, `ccd/ccrc:5668`, `ccrc-doctor.test.ts:2023`,
+`ccrc-install.test.ts:3312`). Every previous census in this wave searched for `ccd/ccrc:` and was
+structurally blind to it, exactly as D-2005's sweep was blind to the `§N:NNN` form. All seven happen to
+target lines above every insertion point so far, so none is wrong today — which is why it was found by
+looking BEFORE sweeping rather than by a failure. That is the corrected practice D-2005 asked for,
+performed for the first time.
+
+One more, already repaired in source rather than deferred: the plan's `ccrc-install.test.ts:1966-2042`
+for the 23-entry `_inst_*` spine understates it — the regex is at `:1966` and the array runs
+`:1971-2047`.
+
+### D-2120 — Task 25's step makes eight existing tests red, and the plan does not mention it
+
+`_acct_provision` refuses when `$HOME/.cc-sessions/<installer>` is missing or not executable. Every one
+of the eight `add`-success cases Task 24 shipped seeds a fixture home with no `.cc-sessions` at all, so
+adding this step turns all eight red at once. The plan's Step 5 says only "PASS, 65 tests".
+
+The behaviour is right and the fixture was wrong: `_acct_provision`'s refusal is the correct answer on a
+box with no installers, and the only box this verb ever runs on is one `ccrc install` has already
+touched. So the recorders are planted beside `plantUpstream` in all eight, and the fixture now models an
+installed box.
+
+What is worth recording is the SHAPE of the omission, because it will recur: a task that adds a step to
+an existing chain changes the answer of every test that drives the chain, and a plan written per-task
+lists only the tests that task ADDS. Nothing in a plan step tells you which EXISTING cases you are about
+to invalidate — that is measured by running them, which is why HARD RULE 1 names the task's own suite
+first and why "PASS, unchanged" is never assumed.
+
+### D-2121 — the plan prescribes a backup name `prune_backups` can never reclaim
+
+Task 25's Step 4 spells the settings backup `date -u +%Y%m%dT%H%M%SZ`. Measured against the tree:
+`BOX_BACKUP_ROOT`'s own note makes the NAME part of a contract — *"`prune_backups`' glob
+(deploy.sh:68-72) — a backup named outside that shape is one nothing reclaims"* — and every existing
+writer under `$HOME/ccrc-backups` spells it `date +%Y%m%d-%H%M%S`: `_exp_caddyfile` (`ccd/ccrc:3591`),
+the two `cmd_backup` sites (`:6481`, `:6623`), `_upd_backup` (`:6878`), and
+**`install-session-hooks.sh:38` — the file this whole merge is copied from, clause for clause.**
+
+So the prescribed name would have written a directory under the pruned root that the pruner's glob does
+not match: backups accumulating without bound on the fleet box, one per rewritten `settings.json`,
+forever. Not a cosmetic divergence — a slow leak on a box whose disk sat at 92% within the last month.
+
+Shipped as `date +%Y%m%d-%H%M%S` with the reason in the source and an assertion pinning the SHAPE so it
+cannot drift back. The `-u`/`T`/`Z` form is not wrong in general — it is used at `ccd/ccrc:2480`, `:5490`
+and `:6304` — it is wrong *under this root*, which is exactly the kind of locality a plan snippet cannot
+carry and a measurement can.
+
+### D-2122 — the jq programs live beside their consumer, not in the constants block, and the reason is citation cost
+
+Task 25's Files list puts `JQ_ACCT_MANAGED`/`JQ_ACCT_SET`/`JQ_ACCT_CLEAR` "in the constants block".
+They ship next to `_acct_settings_env` instead. Three measured grounds:
+
+(i) **The tree has no jq-constants convention to break.** `grep -n '^JQ_[A-Z_]*=' ccd/ccrc` returns
+these three and nothing else. The model file for this entire merge puts `JQ_UNMANAGED` at
+`install-session-hooks.sh:86`, immediately above its use at `:118-121`.
+
+(ii) **The constants block's own argument does not reach them.** What lives there is what a writer and a
+reader in DIFFERENT sections both need — `ACCT_SECRETS_DIR`'s case. These three have exactly one reader.
+
+(iii) **The citation cost is triple, and a fifth of it is unrepairable.** Measured: inserting at the
+constants block shifts ~98 line citations tree-wide, ~20 of them in files this task may not touch;
+inserting beside the consumer shifts ~30, six unrepairable. D-1985's rule is precisely *do not move
+lines whose citers you are not allowed to sweep*, and this is that rule deciding a placement rather than
+merely auditing one afterwards.
+
+Accepted. The plan's Files list is a snapshot; where a constant lives is a property of who reads it.
+
+### D-2123 — three of Task 25's predicted observations cannot occur, and each fails differently
+
+A plan predicts what you will SEE — a red assertion's text, a mutation's failure. Task 25 predicts three
+that the tree cannot produce. They are one family and three distinct faces, and together they say that a
+prescribed observation is a hypothesis, not a result.
+
+1. **A fixture that cannot lose the property (mutation 3).** The `already` fixture is byte-for-byte what
+   `jq .` emits, so deleting the byte-level converge check rewrote the file IDENTICALLY and only the
+   backup-directory assertion reddened — the headline claim, "not re-serialised, not re-indented", could
+   not fail. A converged fixture that is already in the writer's own output format cannot detect a
+   writer that reformats. Fixed by giving it four-space indent (still converged under `jq -S`, which is
+   what the guard actually compares), and the mutation now reds on the byte assertion as intended.
+2. **A stated reason that is false (mutation 5).** The plan says deleting the `jq empty` pre-validation
+   means "the operator's unparseable file is now REPLACED rather than left alone". Measured: it is not.
+   The merge itself refuses (`settings-merge`, exit 1) and the file is byte-identical. What the guard
+   buys is the DISTINCTION — `settings-invalid` ("your file is bad, here it is") versus `settings-merge`
+   ("this is a bug in ccrc") — which is *no overloaded null at a seam*, not write-protection. The test
+   measures the right thing; only the plan's account of why is wrong.
+3. **A red text the assertion order makes unreachable (Step 2).** Step 2 predicts
+   `stdout carried 0 lines, not one: expected 1 to be 2` from `oneObject`, but the plan's own test code
+   asserts the exit code first, so what you actually see is `expected 127 to be +0`. The predicted text
+   is real and belongs to a later assertion that never runs.
+
+Face 1 is the same defect as D-2019 (Task 24's mutation 2 took `rm`'s status and could never
+demonstrate its property) — that is now twice in two tasks, so the standing instruction holds: **every
+prescribed mutation is a thing to VERIFY, and a mutation that cannot red on the assertion it names is a
+finding, not a nuisance.**
