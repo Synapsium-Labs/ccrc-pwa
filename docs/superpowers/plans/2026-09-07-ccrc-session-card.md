@@ -1683,17 +1683,29 @@ D-1897, D-1898, D-1899) record departures that happened during the build and wen
   A 860 (a 127-character workdir, a 127-character hold whose reason names a run — the longer of the two
   case-A sentences — and a 40-character id, modelled: `$id` has a shape gate but no length bound and
   appears more than once across these sentences, so this is an assumption, not a ceiling; the longest id
-  live on this fleet today is 29, `expoAI-assistant-keen-prairie`) + co-tenant 244 (a 64-character project)
-  + two one-space joins = **1825** — not the fix wave's 1768: its own 801 for held case A undercounted the
-  true 860 by 59. Against 1800 that is **not** headroom: 1825 exceeds it by 25 characters, and the old
-  bound truncates exactly this combination mid-word inside the co-tenant sentence
-  (`… returns the five peer rules.` cut to `… ret`). The fix wave's own "32 characters of headroom, not
-  32%" claim had the right units and the wrong sign — the shipped 1800 carried **negative** headroom
-  against its own structural worst case, so raising it to 2400 closed a live silent-truncation risk rather
-  than widening a comfortable margin. And because the join order is graphify -> hold -> ccrc, that overflow
-  ate the **co-tenant** sentence mid-word and silently, on exactly the sessions that carry a hold. 2400
-  clears 1825 by 575 characters (about 32%) and stays under 10% of the 24576 bytes the neighbour hook emits
-  on the same event. Drop-whole-subject logic on the hot path was considered and refused. The ceiling is
-  not a budget the subjects may spend up to: `GM_NODES` is ungated (D-1899) and can exceed any bound on its
-  own, which is why the clip exists at all and why the number only has to cover the fields that *are*
-  gated.
+  live on this fleet today is 29, `expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project
+  and a two-digit count) + two one-space joins = **1826** — not the fix wave's 1768: its own 801 for held
+  case A undercounted the true 860 by 59. Against 1800 that is **not** headroom: 1826 exceeds it by 26
+  characters, and the old bound truncates exactly this combination mid-word inside the co-tenant sentence
+  (`… returns the five peer rules.` cut to `… re`). The fix wave's own "32 characters of headroom, not
+  32%" claim had the right units and the wrong sign — the 1800 this branch carried until this entry had
+  **negative** headroom against its own structural worst case, so raising it to 2400 closed a
+  silent-truncation risk rather than widening a comfortable margin. And because the join order is
+  graphify -> hold -> ccrc, that overflow would eat the **co-tenant** sentence mid-word and silently, on
+  exactly the sessions that carry a hold. No session ever received it: the card has never been deployed,
+  and 1800 existed only inside this branch. 2400 clears 1826 by 574 characters (about 31%) and stays under
+  10% of the 24576 bytes the neighbour hook emits on the same event. Drop-whole-subject logic on the hot
+  path was considered and refused. The ceiling is not a budget the subjects may spend up to: `GM_NODES` is
+  ungated (D-1899) and can exceed any bound on its own, which is why the clip exists at all and why the
+  number only has to cover the fields that *are* gated.
+
+  **Corrected once more before the PR (2026-09-08), by an adversarial re-measurement of this very
+  entry.** The co-tenant component was 244, and 244 is the sentence at `CT_N = 1`. `$CT_N` is
+  interpolated un-padded and the singular and plural halves are the same length (`other supervised row
+  names` / `other supervised rows name`, 26 characters each), so the count's DIGITS are the whole of the
+  difference: 244 / 245 / 246 at one, two and three digits. The pre-deploy baseline in this plan records
+  `coTenantN:15` — the two-digit shape is the live one — so the structural sum is **1826**, not 1825.
+  Nothing downstream moves: 2400 was never close. What moves is the claim's standing — like the id, the
+  count is now stated as MODELLED rather than bounded, which is the whole reason this entry exists.
+  Third pass on one number; the lesson recorded here is that a sum whose components are each argued in
+  prose needs its components re-derived, not its total re-read.

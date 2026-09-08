@@ -730,27 +730,33 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # — same content as HEAD`, D-1368 — and the armed-gate sentence) + §4.2 held
 # case A 860 (a 127-character workdir in the subject, a 127-character hold
 # whose reason NAMES A RUN — the longer of the two case-A sentences the code
-# can emit — and a 40-character id) + co-tenant 244 (a 64-character project) +
-# two one-space joins = 1825, not the fix wave's 1768: its own 801 for held
-# case A undercounted the true 860 by 59. THE ID LENGTH IS A MODEL, NOT A
-# BOUND — `$id` carries a shape gate but no length cap and appears more than
-# once across these sentences, so 1825 assumes a 40-character id rather than
-# proving a ceiling; the longest id live on this fleet today is 29
-# (`expoAI-assistant-keen-prairie`).
+# can emit — and a 40-character id) + co-tenant 245 (a 64-character project and
+# a TWO-DIGIT count — see below) + two one-space joins = 1826, not the fix
+# wave's 1768: its own 801 for held case A undercounted the true 860 by 59.
+# TWO OF THE THREE COMPONENTS ARE MODELLED, NOT BOUNDED. `$id` carries a shape
+# gate but no length cap and appears more than once across these sentences, so
+# 1826 assumes a 40-character id rather than proving a ceiling (the longest id
+# live on this fleet today is 29, `expoAI-assistant-keen-prairie`); and
+# `$CT_N` is interpolated un-padded, so each extra digit adds one character —
+# 244 at one co-tenant, 245 at the two-digit counts this fleet actually
+# carries (`coTenantN:15` in the pre-deploy baseline), 246 at three. The
+# singular/plural halves are the same length, so the digits are the whole of
+# it. 245 is the live shape and what the sum above uses.
 #
-# AGAINST THE OLD 1800 THIS WAS NEVER HEADROOM. 1825 exceeds 1800 by 25
-# characters, so the shipped 1800 did not clear its own structural worst case
-# — it silently truncated it, mid-word, inside the CO-TENANT sentence
-# (`… returns the five peer rules.` cut to `… ret`), on exactly the join order
-# (graphify -> hold -> ccrc) already named as the risk: the subject naming the
-# route to the peer rules is the one that vanishes, on exactly the sessions
-# carrying a hold. The fix wave's "32 characters of headroom, not 32%" claim
-# had the right units and the wrong sign: the 1800 it describes carried
-# NEGATIVE headroom against its own structural worst case, so raising it to
-# 2400 closed a live silent-truncation risk rather than widening a comfortable
-# margin.
+# AGAINST THE OLD 1800 THIS WAS NEVER HEADROOM. 1826 exceeds 1800 by 26
+# characters, so the 1800 this branch carried until D-1903 did not clear its
+# own structural worst case: it truncates that combination silently, mid-word,
+# inside the CO-TENANT sentence (`… returns the five peer rules.` cut to `… re`),
+# on exactly the join order (graphify -> hold -> ccrc) already named as the
+# risk — the subject naming the route to the peer rules is the one that
+# vanishes, on exactly the sessions carrying a hold. No session ever received
+# it: the card has never been deployed, and 1800 existed only inside this
+# branch. The fix wave's "32 characters of headroom, not 32%" claim had the
+# right units and the wrong sign: the 1800 it describes carried NEGATIVE
+# headroom against its own structural worst case, so raising it to 2400 closed
+# a silent-truncation risk rather than widening a comfortable margin.
 #
-# 2400 clears 1825 by 575 characters (about 32%) and is still under 10% of the
+# 2400 clears 1826 by 574 characters (about 31%) and is still under 10% of the
 # 24576 bytes the neighbour hook on this same compact SessionStart
 # (`~/.cc-handoff/restore.sh`) already emits. It is a ceiling, never a budget
 # the subjects may spend up to: `GM_NODES` is ungated (see

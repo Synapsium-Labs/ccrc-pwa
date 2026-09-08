@@ -398,18 +398,22 @@ subject exists for.
 > id, **modelled**: `$id` has a shape gate but no length bound and appears
 > more than once across these sentences, so this figure is an assumption and
 > not a ceiling; the longest id live on this fleet today is 29,
-> `expoAI-assistant-keen-prairie`) + co-tenant **244** (a 64-character
-> project) + two one-space joins = **1825** — not the fix wave's 1768; its own
-> 801 for held case A undercounted the true 860 by 59. Against 1800 that is
-> **not** headroom: 1825 exceeds it by **25 characters**, and the old bound
-> silently clips exactly this combination mid-word inside the CO-TENANT
-> sentence (`… returns the five peer rules.` truncated to `… ret`) — the same
-> mid-word loss the join order (graphify → hold → ccrc) was already named as
-> risking. The fix wave's own "32 characters of headroom" claim had the wrong
-> sign: the shipped 1800 carried **negative** headroom against its own
-> structural worst case, so raising it to 2400 closed a live silent-truncation
-> risk rather than widening a comfortable margin. 2400 clears 1825 by
-> **575 characters** (about 32%) and stays under 10% of the 24576
+> `expoAI-assistant-keen-prairie`) + co-tenant **245** (a 64-character
+> project and a **two-digit count**, also modelled rather than bounded: `$CT_N`
+> is interpolated un-padded and the singular and plural halves are the same
+> length, so the count's digits are the whole of the difference — 244 / 245 /
+> 246 at one, two and three digits, and `coTenantN:15` in §8.2's baseline says
+> two is the live shape) + two one-space joins = **1826** — not the fix wave's
+> 1768; its own 801 for held case A undercounted the true 860 by 59. Against
+> 1800 that is **not** headroom: 1826 exceeds it by **26 characters**, and the
+> old bound silently clips exactly this combination mid-word inside the
+> CO-TENANT sentence (`… returns the five peer rules.` truncated to `… re`) —
+> the same mid-word loss the join order (graphify → hold → ccrc) was already
+> named as risking. The fix wave's own "32 characters of headroom" claim had
+> the wrong sign: 1800 carried **negative** headroom against its own
+> structural worst case, so raising it to 2400 closed a silent-truncation
+> risk rather than widening a comfortable margin. 2400 clears 1826 by
+> **574 characters** (about 31%) and stays under 10% of the 24576
 > bytes the neighbour hook already emits on this event. Drop-whole-subject logic
 > on the hot path was considered and **refused**: the bound is the cheaper
 > answer. The ceiling is not a budget the subjects may spend up to — `GM_NODES`

@@ -1809,15 +1809,17 @@ the armed-gate sentence present) + held case A **860** (a 127-character workdir,
 reason names a run — the longer of the two case-A sentences the code can emit — and a 40-character id,
 **modelled**: `$id` carries a shape gate but no length bound and appears more than once across these
 sentences, so this is an assumption and not a ceiling; the longest id live on this fleet today is 29,
-`expoAI-assistant-keen-prairie`) + co-tenant 244 (a 64-character project) + two joins = **1825**, not the
-fix wave's 1768 — its own 801 for held case A undercounted the true 860 by 59. Against 1800 that is **not**
-headroom: 1825 exceeds it by **25 characters**, and re-running the same combination against a copy of this
-file with `CARD_MAX_CHARS=1800` clips the assembled card mid-word inside the co-tenant sentence
-(`… returns the five peer rules.` cut to `… ret`) — exactly the mid-word loss the join order
-(graphify → hold → ccrc) was already named as risking. The shipped 1800 did not comfortably clear its own
-structural worst case; it carried **negative** headroom against it, so the raise to 2400 closed a live
-silent-truncation risk rather than widening a comfortable margin. 2400 clears 1825 by **575 characters**
-(about 32%) and is still under 10% of the neighboring `~/.cc-handoff/restore.sh` hook's own 24576-byte
+`expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
+is interpolated un-padded and the singular and plural halves are the same length, so the count's digits are
+the whole of the difference: 244 / 245 / 246 at one, two and three digits, and the fleet's live shape is
+two) + two joins = **1826**, not the fix wave's 1768 — its own 801 for held case A undercounted the true 860
+by 59. Against 1800 that is **not** headroom: 1826 exceeds it by **26 characters**, and re-running the same
+combination against a copy of this file with `CARD_MAX_CHARS=1800` clips the assembled card mid-word inside
+the co-tenant sentence (`… returns the five peer rules.` cut to `… re`) — exactly the mid-word loss the join
+order (graphify → hold → ccrc) was already named as risking. 1800 did not comfortably clear its own
+structural worst case; it carried **negative** headroom against it, so the raise to 2400 closed a
+silent-truncation risk rather than widening a comfortable margin. 2400 clears 1826 by **574 characters**
+(about 31%) and is still under 10% of the neighboring `~/.cc-handoff/restore.sh` hook's own 24576-byte
 `additionalContext` cap on this same compact event. It is a ceiling and never a budget to spend up to: the
 node count is ungated (`grep -oE '[0-9]+ nodes'` is
 unbounded repetition inside a 4096-byte head) and can exceed any bound on its own, which is why the clip
