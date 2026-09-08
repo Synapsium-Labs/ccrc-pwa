@@ -4005,6 +4005,141 @@ _acct_candidates() {
   _acct_answer candidates ${args[@]+"${args[@]}"} || exit $?
 }
 
+# ── THE CREDENTIAL: ONE DOOR, AND IT IS SHUT WHEN NOTHING IS BEHIND IT ─────
+# `--credential -` is the ONLY spelling that reads a secret (spec §5). Two
+# guards, for two different failures:
+#
+#  1. A LITERAL IS REFUSED, not merely discouraged. `cmd_passwd`'s header
+#     (:2960-2968) records the measurement: anything on argv is world-readable
+#     in /proc/<pid>/cmdline for the life of the process, and a here-string is
+#     not an escape — bash implements `<<<` with a temp file on disk. A flag
+#     whose safe use is a convention is not a guard.
+#
+#  2. THE TTY GATE INVERTS HERE, and nowhere else in this file. All three of
+#     this file's other `[ -t 0 ]` gates — `cmd_passwd` (:3026), `cmd_expose`
+#     (:3221) and `_inst_agent_env` (:4593) — refuse a PIPE, because
+#     under `curl … | bash` stdin is the installer script and a `read` would
+#     take a line of shell as the operator's answer. This flag exists for the
+#     machine caller and requires a pipe, so it refuses a TERMINAL — a human
+#     typing a token at an unprompted read is `cmd_passwd`'s shape, with its
+#     two traps and its echo discipline, and this is not that verb.
+#
+# EMPTY IS A REFUSAL, NOT AN EMPTY VALUE. A caller that opened the pipe and
+# wrote nothing has told us nothing, and a 0600 file holding
+# `export ANTHROPIC_AUTH_TOKEN=` is a key that decides nothing — the empty
+# distinction `_exp_env_write` (:3501-3505) already refuses one level down.
+#
+# `IFS=` on the read is `cmd_passwd`'s D-142 rule (:3081): without it bash
+# strips leading and trailing whitespace, and a token is exactly its bytes.
+#
+# EVERY REFUSAL SENTENCE BELOW BEGINS WITH PROSE, AND THAT IS LOAD-BEARING, not
+# style. `_acct_refuse`'s header (:3757-3809) states the rule — the `--` bytes go
+# MID-SENTENCE, because `$3` reaches `account-op.mjs` as the value of `--detail`
+# and a value that BEGINS with `--` is refused there as a mis-spelled key. These
+# three sentences are the first in this file that had a reason to open with a
+# flag name, and the first draft of them did: measured, each produced a stray
+# `{"ok":false,"error":"bad-argv",...}` envelope on stdout AND a `_ccrc_die`
+# sentence on stderr, at exit 1 instead of 2 — the exact two-disagreeing-signals
+# shape that header calls a documented trap. The three tests that pin these
+# codes are what caught it, and are what keeps the wording honest.
+#
+# THE argv CLAIM ABOVE IS MEASURED, NOT REASONED (Task 22, `strace -f -s 4000
+# -e trace=execve,openat,write` over a full read-then-write of a canary token):
+# the run forks exactly THREE processes — mkdir, chmod, mv — and none of their
+# argv carries the token, because `printf` is a builtin and so there is no
+# fourth execve for it to ride. Exactly ONE write() in the whole run carries the
+# token, to the temp fd inside ~/.cc-secrets that `mv -f` then renames. Nothing
+# is written to /dev/tty — bash opens it for job control and never writes there
+# — which is the one path that would have escaped the captured stdout and stderr
+# the tests assert on.
+ACCT_CREDENTIAL=""
+_acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
+  local spelling="${1:-}"
+  [ "$spelling" = '-' ] \
+    || _acct_refuse 2 credential-not-stdin "the --credential flag takes exactly one spelling, \"-\", which reads the secret from stdin. A value given here would sit in this process's argv, which is world-readable on this box for as long as the process lives. Nothing was written."
+  [ -t 0 ] \
+    && _acct_refuse 2 credential-needs-a-pipe "the --credential - flag reads the secret from a PIPE, and stdin here is a terminal. This verb does not prompt: it is driven by the server, and a prompt would have no echo discipline and no interrupt handling. Pipe the secret in, or use 'ccrc passwd' for the one secret this box does prompt for. Nothing was written."
+  local v=""
+  IFS= read -r v
+  # `read` returns 1 at EOF with no delimiter, which is the ordinary shape of a
+  # one-line pipe with no trailing newline — so the RETURN CODE is not the test.
+  # The VALUE is.
+  [ -n "${v//[[:space:]]/}" ] \
+    || _acct_refuse 2 credential-empty "the --credential - flag was given and stdin carried nothing. This verb fails closed rather than writing a credential file with an empty value in it, which would be a lane holding a key that decides nothing. Nothing was written."
+  ACCT_CREDENTIAL="$v"
+}
+
+_acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forget it
+  # `_exp_env_write`'s discipline (:3492-3544) at a different address: `umask
+  # 077` INSIDE the writing subshell so the temp is 0600 from its FIRST byte —
+  # never world-readable in the window between create and chmod, the reason that
+  # function's header states at :3489-3491 — then chmod and `mv -f` in the same
+  # directory, and `rm -f "$tmp"` on any failure (:3532-3535's shape).
+  #
+  # WHAT EACH HALF OF THAT ACTUALLY DECIDES, measured at Task 22 because the
+  # mutation table would otherwise credit the wrong one. Deleting `chmod 600`
+  # outright leaves every assertion in `ccrc-account.test.ts` GREEN — the
+  # `umask 077` alone already creates the temp at 0600, so the chmod is a belt
+  # to that brace and can only ever WIDEN if it is wrong (`chmod 644` in its
+  # place reds the mode assertion, 420 where 384 was expected). And the SUBSHELL
+  # is not decoration: measured, moving `umask 077` outside it leaves the
+  # process's umask at 0077 AFTER this function returns, so every file the rest
+  # of the run creates is silently narrowed (a later `touch` came back 600 where
+  # the unmutated run gives 664). `add` writes the roster and the wrappers after
+  # calling this, so that is a consequence rather than a style point — and no
+  # assertion in this file can see it, which is why it is written down here.
+  #
+  # `mkdir -p -m 0700` AND NO CHMOD. The mode applies to a directory this call
+  # CREATES and to nothing else (POSIX); an EXISTING ~/.cc-secrets is left
+  # exactly as the operator has it, which is `cmd_wrappers`' rule for the
+  # analogous directory (:2354-2358, implemented :2368). Widening a directory an
+  # operator narrowed would be worse than the state this found; the 0600 on the
+  # FILE is what protects the secret.
+  #
+  # The temp name carries a leading dot, `cmd_wrappers`' spelling for a
+  # roster-derived destination (the rule is stated in the negative at
+  # :4820-4825). Nothing below distinguishes it from `<dest>.tmp.$$`, because
+  # `.env` already puts both outside `WRAPPER_ID_RE`; it is the consistent
+  # spelling, not a measured guard.
+  local id="$1" provider="$2" var="$3" tag dest tmp
+  # shellcheck disable=SC2174  # -m applying to the deepest directory ONLY is
+  # the intent, and an EXISTING directory keeping the operator's mode is the
+  # rule this function is written to obey — see the paragraph above.
+  mkdir -p -m 0700 "$ACCT_SECRETS_DIR" \
+    || _acct_refuse 1 secrets-dir "cannot create $ACCT_SECRETS_DIR (0700) — nothing was written"
+  # THE NAME SAYS WHAT THE FILE CARRIES, and it is derived from the THIRD
+  # argument rather than from the second, for the reason `check-add` derives it
+  # the same way (Task 23's plan literal, `secretTag`): a lane exporting
+  # `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth token and its file is
+  # `<id>-oauth.env` — §6:507, §7:472, §11 and §12.5's spelling, and the one
+  # every anthropic lane on this fleet already has
+  # (`server/test/helpers.ts:69`) — while an api-key lane's file is
+  # `<id>-<provider>.env`, §4.3:318's spelling. §5:413's `X-P.env` is the
+  # general shape both obey. THE TWO DERIVATIONS MUST STAY ONE RULE: `add`
+  # writes this path into `exec.secretsFile`, the generated wrapper sources
+  # whatever that field says (`shared/wrapper.mjs:141-143`),
+  # `ccd-account-auth`'s `setup-token` capture writes the same name on re-auth
+  # (Task 54), and Task 28 REFUSES rather than guessing when the roster and this
+  # derivation disagree (`secrets-path-unmanaged`).
+  tag="$provider"
+  [ "$var" = CLAUDE_CODE_OAUTH_TOKEN ] && tag=oauth
+  dest="$ACCT_SECRETS_DIR/$id-$tag.env"
+  tmp="$ACCT_SECRETS_DIR/.$id-$tag.env.tmp.$$"
+  if ! (
+    umask 077
+    printf 'export %s=%s\n' "$var" "$ACCT_CREDENTIAL" > "$tmp"
+  ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
+    rm -f "$tmp"
+    ACCT_CREDENTIAL=""
+    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites whatever a previous attempt left."
+  fi
+  # UNSET THE MOMENT THE FILE HAS IT — `cmd_passwd`'s `unset p1 p2` (:3123).
+  # Everything after this point in a run can be traced, logged and echoed
+  # without a containment argument, which is the property that makes the canary
+  # test a fact about the verb rather than about one code path through it.
+  ACCT_CREDENTIAL=""
+}
+
 cmd_account() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
@@ -6918,13 +7053,23 @@ _uninst_purge() {
 }
 
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
-# and server/test/ccd-workspaces.test.ts:394 source ccd itself, to call one
+# and server/test/ccd-workspaces.test.ts:487 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
-# — same guard ccd carries at its own dispatch (ccd/ccd:8578). (Round-1
+# — same guard ccd carries at its own dispatch (ccd/ccd:13487). (Round-1
 # review, Minor 4: this comment used to cite server/test/roster-generate.test.ts,
 # which sources the GENERATED ~/.ccrc/accounts.sh — a different file, whose
 # `_ccrc_*` helpers come from shared/generate.mjs, not from ccd. Fixed to name
 # the tests that actually source ccd.)
+#
+# TASK 22: THAT ROUND-1 FIX NAMED THE RIGHT FILES AND TWO WRONG LINES, and it
+# stood that way for a whole build — which is why this note exists rather than a
+# silent re-edit. Measured at Task 22: `ccd-workspaces.test.ts:394` is a
+# `.toBe(false)` inside a `_reg_purge` assertion (its `source "${CCD}"` is at
+# :487), and `ccd/ccd:8578` is a comment inside an attic helper (that guard is
+# at :13487). Both corrected by READING THE TARGET LINE — the step the round-1
+# fix skipped, and the only one that distinguishes a correction from a
+# reroll. `ccd-clip.test.ts:32` was re-read and HOLDS. The same wrong `:394`
+# survives in server/test/ccrc-cli.test.ts:590, deliberately out of scope here.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
 # ── top-level argument parsing ──────────────────────────────────────────

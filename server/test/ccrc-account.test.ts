@@ -18,8 +18,10 @@
 //     here because they are right, not because a scanner demands them.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import * as pty from 'node-pty';
 import {
-  chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -727,5 +729,197 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     const r = run(home, ['account', 'candidates']);
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('no-answer');
+  });
+});
+
+/** A marked, obviously-fake token. It appears in exactly one place on a healthy
+ *  box and this suite proves it. */
+const CANARY = 'CANARY-3d7f52-not-a-real-token';
+
+/** Every regular file under `home`, EXCLUDING symlinks — the fixture symlinks
+ *  `~/ccrc/deploy` and `~/ccrc/shared` at the repository, and following those
+ *  would walk the whole checkout. */
+function filesUnder(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir)) {
+    const p = join(dir, e);
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) filesUnder(p, out);
+    else if (st.isFile()) out.push(p);
+  }
+  return out;
+}
+
+/** Sources `ccd/ccrc` and calls one function — the `BASH_SOURCE` guard at
+ *  ccd/ccrc:7073 exists for exactly this, and `ccd-clip.test.ts:32` /
+ *  `ccd-workspaces.test.ts:487` already do it to `ccd`. Task 24 gives these two
+ *  helpers a caller; proving them before that caller exists is what stops a
+ *  defect in either from hiding inside `add`'s longer transcript. */
+function sourceCall(home: string, script: string, stdin = ''): Result {
+  const r = spawnSync(BASH, ['-c', `. "${ccrcIn(home)}"\n${script}`],
+    { env: env(home), encoding: 'utf8', input: stdin });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** The same one sourced call, but on a REAL TERMINAL.
+ *
+ *  `ccrc`'s other three `[ -t 0 ]` gates are each pinned with a pty for the
+ *  reason `ccrc-passwd.test.ts:100` states — without a terminal the refusing
+ *  branch is the ONLY one a test can reach — and each pins the deletion of its
+ *  guard as a mutation (`ccrc-passwd.test.ts:484`, `ccrc-expose.test.ts:262`,
+ *  `ccrc-install.test.ts:3352`). This gate INVERTS: it refuses the terminal. It
+ *  is pinned the same way anyway, because the inversion does not change the
+ *  fact that a pipe-only test can never reach the branch, and a guard no test
+ *  can reach is a guard nothing measures. Task 22's plan carried no test for
+ *  this code at all; without this one, deleting the `[ -t 0 ]` line leaves the
+ *  whole file green.
+ *
+ *  A pty merges the two streams and terminates lines with CR, so this asserts
+ *  on the STREAM rather than through `oneObject` — the claim is about which
+ *  branch ran, and the one-object stdout contract is already pinned by the
+ *  piped cases above. */
+function sourceCallTty(home: string, script: string): Promise<Result> {
+  return new Promise((resolve) => {
+    const p = pty.spawn(BASH, ['-c', `. "${ccrcIn(home)}"\n${script}`], {
+      name: 'xterm-color', cols: 200, rows: 40, cwd: home,
+      env: env(home) as Record<string, string>,
+    });
+    let out = '';
+    let done = false;
+    const finish = (code: number): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
+    };
+    const timer = setTimeout(() => { p.kill(); finish(-1); }, 20_000);
+    p.onData((d) => { out += d; });
+    p.onExit(({ exitCode }) => finish(exitCode));
+  });
+}
+
+describe('ccrc account: the credential reads from stdin or not at all', () => {
+  it('refuses a literal value — argv is world-readable', () => {
+    // cmd_passwd's header (ccd/ccrc:2960-2968): nothing on argv, and no
+    // here-string either (bash implements `<<<` with a temp file on disk).
+    const home = box('ccrc-account-cred-argv-');
+    const r = sourceCall(home, `_acct_read_credential '${CANARY}'`);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('credential-not-stdin');
+    // The refusal must not echo back what it refused.
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('refuses a TERMINAL — the one place in this file the tty gate inverts', async () => {
+    // `cmd_passwd` (ccd/ccrc:3026), `cmd_expose` (:3221) and `_inst_agent_env`
+    // (:4593) all REQUIRE a terminal, because under `curl … | bash` stdin is
+    // the installer script. This flag is driven by the server and requires a
+    // pipe, so it refuses the terminal instead — three conditions, three codes,
+    // and this is the third.
+    const home = box('ccrc-account-cred-tty-');
+    const r = await sourceCallTty(home, '_acct_read_credential -');
+    expect(r.code).toBe(2);
+    expect(r.stdout).toContain('"error":"credential-needs-a-pipe"');
+    // A refusal, not a prompt: nothing was read, so nothing can have been kept.
+    expect(r.stdout).not.toContain('READ-OK');
+  });
+
+  it('refuses empty stdin — fail closed against a caller that forgot the body', () => {
+    const home = box('ccrc-account-cred-empty-');
+    const r = sourceCall(home, '_acct_read_credential -', '');
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('credential-empty');
+  });
+
+  it('refuses whitespace-only stdin for the same reason', () => {
+    const home = box('ccrc-account-cred-blank-');
+    const r = sourceCall(home, '_acct_read_credential -', '   \n');
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('credential-empty');
+  });
+
+  it('reads a piped token and never prints it', () => {
+    const home = box('ccrc-account-cred-ok-');
+    const r = sourceCall(home,
+      '_acct_read_credential -\n[ -n "$ACCT_CREDENTIAL" ] && echo READ-OK', `${CANARY}\n`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('READ-OK');
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('the canary lands in one 0600 file under a 0700 dir, and in no other file or stream', () => {
+    const home = box('ccrc-account-cred-canary-');
+    const r = sourceCall(home,
+      '_acct_read_credential -\n_acct_write_secret lab-dev0 compatible ANTHROPIC_AUTH_TOKEN',
+      `${CANARY}\n`);
+    expect(r.code).toBe(0);
+
+    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+    expect(readFileSync(secret, 'utf8'))
+      .toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
+    expect(lstatSync(secret).mode & 0o777).toBe(0o600);
+    // 0700 because `mkdir -p -m 0700` CREATED it — this fixture had no
+    // ~/.cc-secrets. An existing one keeps the operator's mode; see the header.
+    expect(lstatSync(join(home, '.cc-secrets')).mode & 0o777).toBe(0o700);
+
+    // NEITHER STREAM.
+    expect(r.stdout, 'the credential reached stdout').not.toContain(CANARY);
+    expect(r.stderr, 'the credential reached stderr').not.toContain(CANARY);
+
+    // NO OTHER FILE. The whole fixture HOME, minus the one file that is
+    // supposed to hold it — which is the assertion, not a courtesy: a temp file
+    // left behind, a shell history, a log line, all land here.
+    const leaked = filesUnder(home)
+      .filter((p) => p !== secret)
+      .filter((p) => { try { return readFileSync(p, 'utf8').includes(CANARY); } catch { return false; } });
+    expect(leaked, 'the credential appears outside ~/.cc-secrets').toEqual([]);
+
+    // AND NO TEMP FILE SURVIVES A SUCCESSFUL WRITE, under either naming rule.
+    expect(readdirSync(join(home, '.cc-secrets')).sort()).toEqual(['lab-dev0-compatible.env']);
+  });
+
+  it('forgets the credential the moment the file has it', () => {
+    // `cmd_passwd`'s `unset p1 p2` (:3123), pinned rather than asserted in a
+    // comment: everything after this point in a run can be traced, logged and
+    // echoed without a containment argument, and that is a property of the
+    // VARIABLE, which only a read of the variable can measure.
+    const home = box('ccrc-account-cred-forget-');
+    const r = sourceCall(home,
+      '_acct_read_credential -\n'
+      + '_acct_write_secret lab-dev0 compatible ANTHROPIC_AUTH_TOKEN\n'
+      + 'printf "AFTER=[%s]\\n" "$ACCT_CREDENTIAL"', `${CANARY}\n`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('AFTER=[]');
+  });
+
+  it('a write that cannot land is secret-write, and nothing is left where the key goes', () => {
+    // The one injection that reaches the WRITE rather than a cheaper guard: the
+    // directory exists and is not writable, so `mkdir -p -m 0700` is a no-op on
+    // it (POSIX: the mode applies only to a directory it creates) and the
+    // redirection into the temp is what fails.
+    const home = box('ccrc-account-cred-nowrite-');
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+    chmodSync(join(home, '.cc-secrets'), 0o500);
+    const r = sourceCall(home,
+      '_acct_read_credential -\n_acct_write_secret lab-dev0 compatible ANTHROPIC_AUTH_TOKEN',
+      `${CANARY}\n`);
+    chmodSync(join(home, '.cc-secrets'), 0o700);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('secret-write');
+    expect(readdirSync(join(home, '.cc-secrets'))).toEqual([]);
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('a second write overwrites the file in place, at 0600', () => {
+    // The property Task 24's ordering relies on: "a failure after the secret
+    // write leaves a 0600 file a retry overwrites and nothing else" (spec §5).
+    const home = box('ccrc-account-cred-retry-');
+    const call = '_acct_read_credential -\n'
+      + '_acct_write_secret lab-dev0 compatible ANTHROPIC_AUTH_TOKEN';
+    expect(sourceCall(home, call, 'first-token-value\n').code).toBe(0);
+    expect(sourceCall(home, call, `${CANARY}\n`).code).toBe(0);
+    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+    expect(readFileSync(secret, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
+    expect(lstatSync(secret).mode & 0o777).toBe(0o600);
   });
 });
