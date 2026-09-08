@@ -101,8 +101,8 @@ function run(home: string, args: string[], stdin = ''): Result {
  *  printed a progress line before its answer would still parse at a call site
  *  that used `.split('\n')[0]`. It is also what catches the failure this
  *  cluster is most exposed to: `add` calls two of `ccrc install`'s own
- *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4093,
- *  :4099, :2891). Every `add` case below runs through here. */
+ *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4644,
+ *  :4650, :2891). Every `add` case below runs through here. */
 function oneObject(r: Result): Record<string, unknown> {
   const lines = r.stdout.split('\n');
   expect(lines[lines.length - 1], 'stdout is not newline-terminated').toBe('');
@@ -367,7 +367,7 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
     expect(String(j['detail'])).toContain('unknown hue');
     // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
-    // (ccd/ccrc:4299-4302): re-wording a fix into a shrug helps nobody.
+    // (ccd/ccrc:4634-4636): re-wording a fix into a shrug helps nobody.
     expect(String(j['detail'])).toContain('cyan, violet, blue, magenta, amber, green');
   });
 
@@ -495,7 +495,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
   });
 
   it('refuses when it cannot size an id-shaped file, instead of listing one without a size', () => {
-    // THE GUARD AT ccd/ccrc:3972-3973, WHICH NOTHING PINNED UNTIL REVIEW
+    // THE GUARD AT ccd/ccrc:4027-4028, WHICH NOTHING PINNED UNTIL REVIEW
     // ROUND 1 (deleting both lines left this file at 25 passed). The verb's own
     // comment states the direction and it is not the obvious one: an id-shaped,
     // undeclared file this run cannot SIZE is a REFUSAL and not a skip, because
@@ -540,7 +540,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
 
   it('tells a missing projection from an unsourceable one, in the projection\'s own vocabulary', () => {
     // THE OTHER TWO GUARDS IN THIS FUNCTION, WHICH NOTHING PINNED EITHER
-    // (ccd/ccrc:3926-3927 and :3933-3937). Review round 1 pinned the
+    // (ccd/ccrc:3981-3982 and :3988-3992). Review round 1 pinned the
     // `unmeasurable` guard above and left its two siblings in the same function
     // unpinned — which is the "correcting the instance is not correcting the
     // claim" failure, so they are closed here in the same breath.
@@ -730,11 +730,63 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('no-answer');
   });
+
+  it('a malformed refusal call is ONE signal on ONE stream, never a body about another error', () => {
+    // D-1983. `deploy/account-op.mjs`'s `refuse` op can exit non-zero (2,
+    // bad-argv) HAVING ALREADY written an envelope to stdout — for the wrong
+    // error — and `_acct_refuse` used to fire `_ccrc_die` on top of it. A
+    // detail that BEGINS with `--` is the reachable shape (M6 reads it as a
+    // mis-spelled key), and Task 22's own three refusal sentences were the
+    // first callers in the file to open with a flag name. Measured before the
+    // fix, verbatim: exit 1, a `{"ok":false,"error":"bad-argv",…}` object on
+    // stdout AND a `ccrc:` sentence on stderr — a caller parsing stdout gets a
+    // well-formed answer about an error that did not happen.
+    //
+    // The close is caller-side ON PURPOSE and this test cannot see why, so it
+    // is said here: `ccd/ccrc` lands by `install_atomic` and `deploy/` by
+    // rsync, so a fixed `ccrc` can meet an OLD `account-op.mjs`. A capture
+    // works against every version of the callee; a parser change in node works
+    // only against the new one.
+    const home = box('ccrc-account-refuse-malformed-');
+    const r = sourceCall(home, '_acct_refuse 2 some-code "--leading dashes in the detail"');
+    // NODE'S EXIT CODE IS CARRIED, NOT PROPAGATED: 1, this file's "the tool ran
+    // and the answer was bad", because once the intended envelope never printed
+    // the class is unknowable — not 2, and not the caller's "$1".
+    expect(r.code).toBe(1);
+    expect(r.stdout, 'a body about the wrong error reached stdout').toBe('');
+    expect(r.stderr).toContain('deploy/account-op.mjs exited 2');
+    expect(r.stderr).toContain('bug in ccrc');
+    // Node's own diagnosis still reaches the operator: stderr is never captured.
+    expect(r.stderr).toContain('bad-argv');
+  });
+
+  it('and an ORDINARY refusal is unchanged — one object on stdout, the caller\'s class', () => {
+    // The other direction of the same close: the capture must not turn every
+    // refusal into a die. `_acct_answer`'s discriminator is the BODY
+    // (`[ -z "$body" ]`) and this one's is the EXIT CODE, and that difference
+    // is deliberate — every op except `refuse` decides its own class and exits
+    // with it, so harmonising the two would break `_acct_answer`.
+    const home = box('ccrc-account-refuse-ordinary-');
+    const r = sourceCall(home, '_acct_refuse 2 some-code "an ordinary sentence"');
+    expect(r.code).toBe(2);
+    const j = oneObject(r);
+    expect(j['error']).toBe('some-code');
+    expect(j['detail']).toBe('an ordinary sentence');
+  });
 });
 
 /** A marked, obviously-fake token. It appears in exactly one place on a healthy
  *  box and this suite proves it. */
 const CANARY = 'CANARY-3d7f52-not-a-real-token';
+
+/** A second marked non-secret, whose BYTES ARE SHELL SYNTAX — a space, a `#`,
+ *  a `$( )` and a balanced pair of single quotes. It is what the canary above
+ *  cannot be: `[A-Za-z0-9-]` is precisely the input for which `printf %q` and
+ *  `printf %s` produce the same file, which is why nothing in this suite
+ *  noticed D-1984 until a fixture stopped agreeing with them. Its command
+ *  substitution targets a file INSIDE the fixture HOME, so "did a byte of this
+ *  run" is a `existsSync` rather than an argument. */
+const SHELL_SYNTAX = `NOT-A-SECRET-a b$(touch "$HOME/EXECUTED")c#d'e'f`;
 
 /** Every regular file under `home`, EXCLUDING symlinks — the fixture symlinks
  *  `~/ccrc/deploy` and `~/ccrc/shared` at the repository, and following those
@@ -751,7 +803,7 @@ function filesUnder(dir: string, out: string[] = []): string[] {
 }
 
 /** Sources `ccd/ccrc` and calls one function — the `BASH_SOURCE` guard at
- *  ccd/ccrc:7073 exists for exactly this, and `ccd-clip.test.ts:32` /
+ *  ccd/ccrc:7195 exists for exactly this, and `ccd-clip.test.ts:32` /
  *  `ccd-workspaces.test.ts:487` already do it to `ccd`. Task 24 gives these two
  *  helpers a caller; proving them before that caller exists is what stops a
  *  defect in either from hiding inside `add`'s longer transcript. */
@@ -792,7 +844,14 @@ function sourceCallTty(home: string, script: string): Promise<Result> {
       clearTimeout(timer);
       resolve({ code, stdout: out, stderr: '' });   // a pty merges the two streams
     };
-    const timer = setTimeout(() => { p.kill(); finish(-1); }, 20_000);
+    // 19s, NOT 20s — `ccrc-install.test.ts:3377`'s number and its reason.
+    // `server/vitest.config.ts:87` sets `testTimeout: 20_000` on linux, so a
+    // 20s timer here TIES with the runner and loses: measured at review round
+    // 1, vitest won at 20012ms, `p.kill()` never ran and the pty `bash` was
+    // left for worker teardown to reap. A second under it makes this helper's
+    // own cleanup the thing that fires, and turns the M5 mutation from a
+    // 20s runner timeout into `expected -1 to be 2` with the child reaped.
+    const timer = setTimeout(() => { p.kill(); finish(-1); }, 19_000);
     p.onData((d) => { out += d; });
     p.onExit(({ exitCode }) => finish(exitCode));
   });
@@ -812,7 +871,7 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
 
   it('refuses a TERMINAL — the one place in this file the tty gate inverts', async () => {
     // `cmd_passwd` (ccd/ccrc:3026), `cmd_expose` (:3221) and `_inst_agent_env`
-    // (:4593) all REQUIRE a terminal, because under `curl … | bash` stdin is
+    // (:4715) all REQUIRE a terminal, because under `curl … | bash` stdin is
     // the installer script. This flag is driven by the server and requires a
     // pipe, so it refuses the terminal instead — three conditions, three codes,
     // and this is the third.
@@ -908,6 +967,75 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
     expect(oneObject(r)['error']).toBe('secret-write');
     expect(readdirSync(join(home, '.cc-secrets'))).toEqual([]);
     expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('a token whose bytes are SHELL SYNTAX survives the round trip, and executes nothing', () => {
+    // D-1984. This file is SOURCED, not read: `shared/wrapper.mjs:141-143`
+    // generates `[ -r "$HOME/<secretsFile>" ] && . "$HOME/<secretsFile>"` into
+    // every wrapper, so an unquoted write turns credential bytes into code
+    // running as the fleet user at every launch. Measured before the `%q` fix
+    // with THIS fixture: the sourced variable came back 14 bytes of 48 and the
+    // embedded command substitution EXECUTED.
+    //
+    // Nothing here prints the value. `READ_LEN` is what the reader kept,
+    // `SOURCED_LEN` what a wrapper would get back, `BYTES=exact` compares the
+    // two INSIDE the shell (so the value never reaches argv or a message), and
+    // the side-effect file is how "executed nothing" is measured rather than
+    // argued. The old canary could not have caught this: it is `[A-Za-z0-9-]`,
+    // which is exactly the input for which `%q` and `%s` agree.
+    const home = box('ccrc-account-cred-shell-');
+    const r = sourceCall(home,
+      '_acct_read_credential -\n'
+      + 'exp="$ACCT_CREDENTIAL"\n'      // before the write forgets it
+      + '_acct_write_secret lab-dev0 compatible ANTHROPIC_AUTH_TOKEN\n'
+      // Sourced the way a generated wrapper sources it, byte for byte.
+      + '[ -r "$HOME/.cc-secrets/lab-dev0-compatible.env" ] '
+      + '&& . "$HOME/.cc-secrets/lab-dev0-compatible.env"\n'
+      + 'printf "READ_LEN=%s SOURCED_LEN=%s\\n" '
+      + '"${#exp}" "${#ANTHROPIC_AUTH_TOKEN}"\n'
+      + '[ "$ANTHROPIC_AUTH_TOKEN" = "$exp" ] && echo BYTES=exact || echo BYTES=differ\n',
+      `${SHELL_SYNTAX}\n`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`READ_LEN=${SHELL_SYNTAX.length} SOURCED_LEN=${SHELL_SYNTAX.length}`);
+    expect(r.stdout).toContain('BYTES=exact');
+    // EXECUTED NOTHING: the fixture's own command substitution would have
+    // created this file, and did, before the fix.
+    expect(existsSync(join(home, 'EXECUTED')),
+      'a byte of the credential ran as code').toBe(false);
+  });
+
+  it('the temp is 0600 AT THE MOMENT chmod is called, not merely afterwards', () => {
+    // The end state is OVER-DETERMINED and so pins neither line: measured at
+    // review round 1, deleting `chmod 600` alone is GREEN and deleting `umask
+    // 077` alone is GREEN — either one on its own delivers 0600 to the
+    // destination — and only deleting BOTH reds (436 where 384 was expected).
+    // What the umask uniquely buys is the WINDOW `_exp_env_write`'s header
+    // states (ccd/ccrc:3489-3491): the temp is 0600 from its first byte and is
+    // never world-readable between create and chmod. A window is invisible in
+    // an end state, so this plants a `chmod` RECORDER first on PATH which stats
+    // the temp BEFORE delegating to the real one. Pristine records 600; with
+    // `umask 077` deleted it records 644 while every other assertion in this
+    // file stays green — which is the mutation this test exists to red.
+    const home = box('ccrc-account-cred-window-');
+    writeFileSync(join(home, '.local', 'bin', 'chmod'),
+      '#!/bin/sh\n'
+      + '[ -e "$2" ] && printf \'mode-when-chmod-was-called=%s\\n\' '
+      + '"$(stat -c %a "$2")" >> "$HOME/chmod-record"\n'
+      + 'for c in /usr/bin/chmod /bin/chmod; do [ -x "$c" ] && exec "$c" "$@"; done\n'
+      + 'exit 127\n', { mode: 0o755 });
+    const r = sourceCall(home,
+      '_acct_read_credential -\n_acct_write_secret lab-dev0 compatible ANTHROPIC_AUTH_TOKEN',
+      `${CANARY}\n`);
+    expect(r.code).toBe(0);
+    // Named, because "chmod was never called" and "it was called on a
+    // world-readable temp" are two different defects and an ENOENT names
+    // neither. Deleting `chmod 600` reds here; deleting `umask 077` reds below.
+    expect(existsSync(join(home, 'chmod-record')),
+      'chmod was never called on the temp at all').toBe(true);
+    expect(readFileSync(join(home, 'chmod-record'), 'utf8').trim())
+      .toBe('mode-when-chmod-was-called=600');
+    // The recorder must not have become a second copy of the secret.
+    expect(readFileSync(join(home, 'chmod-record'), 'utf8')).not.toContain(CANARY);
   });
 
   it('a second write overwrites the file in place, at 0600', () => {

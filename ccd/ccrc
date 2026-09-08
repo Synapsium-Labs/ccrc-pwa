@@ -2585,7 +2585,7 @@ cmd_wrappers() {
   # size is the length of its target string — `gpt -> ccgpt` stats as 33 bytes
   # while the file behind it is 7.8 KB, and a scan that measured the link would
   # then read the target whole. (`ccrc-doctor-checks:2542` passes `-L` for the
-  # same reason, and so does `_acct_candidates` at :3971 — every sizing caller
+  # same reason, and so does `_acct_candidates` at :4026 — every sizing caller
   # in this tree spells it the same way. This parenthetical used to say doctor's
   # gate OMITTED `-L` and call that "a separate defect, recorded"; it names no
   # deviation because there is none, and it was false when written. Corrected at
@@ -3706,7 +3706,7 @@ _exp_status() {
 #    refusal goes through `_acct_refuse` like any other box-said-no.
 #
 #    THE RULE BINDS WHAT THIS VERB CALLS, NOT ONLY WHAT IT PRINTS.
-#    `_inst_accounts_sh` (:4093, :4099) and `cmd_wrappers` (:2891) both write
+#    `_inst_accounts_sh` (:4644, :4650) and `cmd_wrappers` (:2891) both write
 #    their transcript to STDOUT, which is right for `install` and wrong here, so
 #    `_acct_converge` (Task 24) redirects them and contains their `_ccrc_die`.
 #
@@ -3717,13 +3717,13 @@ _exp_status() {
 #    hand-rolled envelope into a body nobody can parse. So bash owns argv,
 #    refusal classes, tty rules and side effects; `deploy/account-op.mjs` owns
 #    every byte of stdout. That is the split `deploy/gen-accounts.mjs:4-11` and
-#    `_inst_accounts_sh` (:4075-4100) already draw, applied to an answer instead
+#    `_inst_accounts_sh` (:4623-4651) already draw, applied to an answer instead
 #    of a generated file.
 #
 #  - ONE EXIT-CODE TABLE, TWO DECIDERS. Whoever decides owns the code, on this
 #    file's own table (:24-33): 2 when the request was not legal on its face —
 #    decidable from argv alone, which is `cmd_install`'s "the operator typed the
-#    right flag and the wrong value" class (:3824-3828, refused at :3841-3844) —
+#    right flag and the wrong value" class (:4372-4376, refused at :4391) —
 #    and 1 when the request was legal and the BOX said no (an id already in the
 #    roster, a suffix another account holds). Nothing translates at the seam,
 #    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2908-2922).
@@ -3785,7 +3785,10 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # PARAGRAPH DID NOT (corrected at review round 1). Task 21 added NINE call
   # sites, not four: `_acct_answer` x1, `_acct_shape` x3, `_acct_candidates`
   # x3, and `cmd_account` x2 — the two `unknown-argument` refusals at the
-  # `roster` and `candidates` arms (:4040, :4045). Those last two are the ones
+  # `roster` and `candidates` arms (:4297, :4302 — this pair read :4040, :4045
+  # until review round 1, which is the citation Task 22's own insertion broke;
+  # :4040 had by then landed inside the comment block that insertion added).
+  # Those last two are the ones
   # the first wording both under-counted and mis-described: it said "nothing yet
   # passes an operator's own bytes here", and they pass `"$1"`, which is exactly
   # the operator's own argument after `shift`. So this IS the day the paragraph
@@ -3807,8 +3810,54 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # The second fact is a property of how each sentence is WRITTEN, not of the
   # mechanism. A future site spelled `_acct_refuse 2 bad-value "$sub"` — the
   # operator's bytes FIRST — would lose it, and is the shape to refuse.
-  _acct_node refuse --code "$2" --detail "$3" \
-    || _ccrc_die "could not print a refusal envelope for \"$2\": $3 — and the caller of this verb parses stdout, so it must hear about that rather than read an empty body"
+  # THE SEAM ABOVE IS NOW CLOSED, AND THE PARAGRAPHS ABOVE ARE KEPT AS THE
+  # HISTORY OF WHY (D-1983, review round 1). Task 22 made the trap reachable —
+  # all three of its refusal sentences opened with the literal `--credential`,
+  # M6 fired on each, and each produced exit 1 with a stray `bad-argv` envelope
+  # on stdout AND a `_ccrc_die` sentence on stderr. Rewording them so they open
+  # with prose fixed those three sentences; it did not fix the function, because
+  # the property it relies on is POSITIONAL (how a sentence happens to be
+  # written) and positional properties do not survive twelve more subcommands.
+  # A comment is a request; this is the mechanism.
+  #
+  # CAPTURE, THEN DECIDE ON THE EXIT CODE — AND DISCARD THE BODY ON NON-ZERO.
+  # `refuse` is the ONE op whose contract is "exit 0 means the envelope
+  # printed" (`deploy/account-op.mjs:15-21`), so for it alone a non-zero exit
+  # means the body on stdout is not the caller's answer: `main()`'s `refuse` arm
+  # has exactly one exit-0 path, and every reachable non-zero return is either a
+  # `usage:` with no body at all or a `bad-argv` envelope about the WRONG error.
+  # There is no exit code at which node's body here is the answer to "$2"/"$3",
+  # so emitting it could only ever hand the caller a well-formed object about an
+  # error that did not happen.
+  #
+  # THE DISCRIMINATOR HERE IS THE EXIT CODE. `_acct_answer`'s IS THE BODY
+  # (`[ -z "$body" ]`, :3919). THAT DIFFERENCE IS DELIBERATE AND MUST NOT BE
+  # "HARMONISED" — harmonising them BREAKS `_acct_answer`. Every op except
+  # `refuse` decides its own class and exits with it, so for those a non-zero
+  # exit CARRYING a body is the normal refusal and `_acct_answer` must re-emit
+  # it and return that code. `refuse` is the sole exception, and this is the
+  # sole function that calls it.
+  #
+  # WHY THE CLOSE IS HERE AND NOT IN NODE. `_acct_answer`'s own header says it:
+  # only the caller can cover for a callee that is older than itself. `ccd/ccrc`
+  # lands by `install_atomic` and `deploy/` by rsync, so a fixed `ccrc` can meet
+  # an OLD `account-op.mjs` on a half-updated box. This capture works against
+  # EVERY version of the callee; teaching `account-op.mjs` a `--detail=VALUE`
+  # single-token form — otherwise the cleaner parser change — works only against
+  # the new one.
+  #
+  # NOTHING IS LOST BY DYING ON STDERR ALONE: `refuse()`
+  # (`deploy/account-op.mjs:233-236`) writes its diagnosis to STDERR as well as
+  # stdout, and stderr is never captured here, so node's own remedy still
+  # reaches the operator verbatim. The die carries node's exit code in the
+  # sentence and exits 1 — not "$1", and not 2: once the intended envelope never
+  # printed, the class is unknowable, and 1 is this file's "the tool ran and the
+  # answer was bad" (:24-32). One refusal, one signal, one owner.
+  local envelope rc
+  envelope="$(_acct_node refuse --code "$2" --detail "$3")"; rc=$?
+  [ "$rc" -eq 0 ] \
+    || _ccrc_die "could not print a refusal envelope for \"$2\" (deploy/account-op.mjs exited $rc): $3 — and the caller of this verb parses stdout, so it must hear about that rather than read a body about some other error. This is a bug in ccrc, not a fact about your box: a malformed call to the refusal printer, whose own message is on stderr above."
+  printf '%s\n' "$envelope"
   exit "$1"
 }
 
@@ -3825,9 +3874,15 @@ _acct_answer() {   # <op> [--<key> <value>]… — the answer, or a refusal that
   # at review round 1 on a box with no `ccrc/deploy/account-op.mjs` — exit 1,
   # stdout EMPTY, `_ccrc_die` on stderr — because the writer of the refusal is
   # the file that is gone, so `_acct_refuse` below falls through its own `||`.
-  # That is the trap `_acct_refuse` documents one function up (:3810-3811), reached
-  # from the other side, and closing it is the same seam change that paragraph
-  # declines: it needs a refusal path that does not go through node at all.
+  # That is the OTHER HALF of the seam `_acct_refuse` documents one function up,
+  # reached from this side. Its M7 half — a malformed refusal call answering with
+  # two disagreeing signals — is now CLOSED (D-1983, review round 1, :3813-3861).
+  # THIS half is not, and the close is not what would do it: it needs a refusal
+  # path that does not go through node at all, and every path here does. What the
+  # close did change is the SHAPE of this failure, strictly for the better —
+  # `_acct_refuse` now emits nothing at all on stdout when node fails, so an
+  # absent `account-op.mjs` is one `_ccrc_die` sentence on stderr rather than a
+  # die laid on top of whatever node happened to leave in the pipe.
   #
   # `deploy/account-op.mjs`'s `main` answers an op it does not have with exit 2,
   # a `usage:` line on STDERR and NOTHING on stdout. That is right for a human
@@ -3925,7 +3980,7 @@ _acct_candidates() {
   local sh="$HOME/.ccrc/accounts.sh"
   [ -f "$sh" ] \
     || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
-  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5343-5350): the projection
+  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5690-5701): the projection
   # declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` in the SAME `_ccrc_*`
   # namespace as `_ccrc_die`, and sourcing it here would let a generator change
   # redefine a refusal helper mid-verb. Only the id list crosses back.
@@ -4017,7 +4072,7 @@ _acct_candidates() {
 #
 #  2. THE TTY GATE INVERTS HERE, and nowhere else in this file. All three of
 #     this file's other `[ -t 0 ]` gates — `cmd_passwd` (:3026), `cmd_expose`
-#     (:3221) and `_inst_agent_env` (:4593) — refuse a PIPE, because
+#     (:3221) and `_inst_agent_env` (:4715) — refuse a PIPE, because
 #     under `curl … | bash` stdin is the installer script and a `read` would
 #     take a line of shell as the operator's answer. This flag exists for the
 #     machine caller and requires a pipe, so it refuses a TERMINAL — a human
@@ -4054,6 +4109,22 @@ _acct_candidates() {
 # the tests assert on.
 ACCT_CREDENTIAL=""
 _acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
+  # THE TWO BOUNDS THE argv/file/stream CLAIM ABOVE DOES NOT COVER, CLOSED HERE
+  # (review round 1). Both are CALLER-imposed shell options, not defects in this
+  # function, and `cmd_passwd` has the identical exposure — so this is a
+  # narrowing, not a regression fix. Measured with a marked non-secret, counting
+  # occurrences rather than printing any: under `bash -x` the value appeared on
+  # stderr 3 times and now 0; under `set -a` it appeared in a child's environ
+  # once and now 0. `local -` makes the two `set` changes local to this function
+  # and bash restores them on return (measured: tracing resumes at the caller's
+  # very next line), so an operator debugging the REST of a run keeps xtrace.
+  # `export -n` is the third token because `set +a` alone cannot close the case
+  # where `ccrc` was SOURCED into a shell that already had allexport on: the
+  # file-scope `ACCT_CREDENTIAL=""` below carries the export attribute by then,
+  # and only removing it un-exports the variable (measured: 1 occurrence, then
+  # 0). What this does NOT claim: a caller who exports the value itself, or
+  # `strace` on this process, or a core dump — none of those go through here.
+  local -; set +x +a; export -n ACCT_CREDENTIAL
   local spelling="${1:-}"
   [ "$spelling" = '-' ] \
     || _acct_refuse 2 credential-not-stdin "the --credential flag takes exactly one spelling, \"-\", which reads the secret from stdin. A value given here would sit in this process's argv, which is world-readable on this box for as long as the process lives. Nothing was written."
@@ -4077,11 +4148,22 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # directory, and `rm -f "$tmp"` on any failure (:3532-3535's shape).
   #
   # WHAT EACH HALF OF THAT ACTUALLY DECIDES, measured at Task 22 because the
-  # mutation table would otherwise credit the wrong one. Deleting `chmod 600`
-  # outright leaves every assertion in `ccrc-account.test.ts` GREEN — the
-  # `umask 077` alone already creates the temp at 0600, so the chmod is a belt
-  # to that brace and can only ever WIDEN if it is wrong (`chmod 644` in its
-  # place reds the mode assertion, 420 where 384 was expected). And the SUBSHELL
+  # mutation table would otherwise credit the wrong one — and NEITHER of them
+  # was pinned until review round 1, which is the half this paragraph used to
+  # leave out. The END STATE is over-determined: deleting `chmod 600` alone is
+  # GREEN and deleting `umask 077` alone is GREEN, because either line on its
+  # own delivers 0600 to the destination; only deleting BOTH reds (436 where 384
+  # was expected). So the mode IS pinned and the MECHANISM was not, and a reader
+  # of this paragraph would have credited the umask for a property no assertion
+  # measured. What the umask uniquely buys is the WINDOW — the temp is 0600 from
+  # its first byte, never world-readable between create and chmod, the reason
+  # `_exp_env_write`'s header states at :3489-3491 — and a window is not visible
+  # in an end state. `ccrc-account.test.ts` now plants a `chmod` recorder on PATH
+  # that stats the temp BEFORE delegating to the real one: pristine records 600,
+  # and with `umask 077` deleted it records 644 while every other assertion in
+  # the file stays green. `chmod 644` in the chmod's place still reds the mode
+  # assertion (420 where 384 was expected), which is the other line's own pin.
+  # And the SUBSHELL
   # is not decoration: measured, moving `umask 077` outside it leaves the
   # process's umask at 0077 AFTER this function returns, so every file the rest
   # of the run creates is silently narrowed (a later `touch` came back 600 where
@@ -4096,11 +4178,26 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # operator narrowed would be worse than the state this found; the 0600 on the
   # FILE is what protects the secret.
   #
+  # NO STRAY SWEEP, DELIBERATELY UNDECIDED (review round 1). `cmd_wrappers`
+  # carries the idiom for one (:2874-2884) and this function does not: the
+  # failure PATH removes its own temp, but a process KILLED between the create
+  # and the `mv` leaves `.<id>-<tag>.env.tmp.<pid>` behind, 0600 and holding a
+  # live credential, and the `$$` in the name means no retry ever reuses it. The
+  # `secret-write` sentence below says so rather than promising otherwise, which
+  # is all this round changed; adding the sweep is a design decision (it would
+  # have to age or PID-check the strays, because a concurrent `add` for another
+  # account is a legitimate owner of one) and is recorded here as open.
+  #
   # The temp name carries a leading dot, `cmd_wrappers`' spelling for a
   # roster-derived destination (the rule is stated in the negative at
-  # :4820-4825). Nothing below distinguishes it from `<dest>.tmp.$$`, because
+  # :4942-4947). Nothing below distinguishes it from `<dest>.tmp.$$`, because
   # `.env` already puts both outside `WRAPPER_ID_RE`; it is the consistent
   # spelling, not a measured guard.
+  # The same shell-option bound `_acct_read_credential` states above, for the
+  # same reason: this function handles the value too. `export -n` is not
+  # repeated because the read always runs first and it is that call which
+  # removes the attribute.
+  local -; set +x +a
   local id="$1" provider="$2" var="$3" tag dest tmp
   # shellcheck disable=SC2174  # -m applying to the deepest directory ONLY is
   # the intent, and an EXISTING directory keeping the operator's mode is the
@@ -4125,13 +4222,37 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   [ "$var" = CLAUDE_CODE_OAUTH_TOKEN ] && tag=oauth
   dest="$ACCT_SECRETS_DIR/$id-$tag.env"
   tmp="$ACCT_SECRETS_DIR/.$id-$tag.env.tmp.$$"
+  # `%q`, NOT `%s`, AND THE FILE IS THE REASON (D-1984, review round 1). This
+  # file is SOURCED, not read: `shared/wrapper.mjs:141-143` generates
+  # `[ -r "$HOME/<secretsFile>" ] && . "$HOME/<secretsFile>"` into every
+  # wrapper, so whatever lands here is CODE running as the fleet user at every
+  # launch. Written with `%s` it had two defects in one line, both measured with
+  # a fixture whose bytes are shell syntax (the value was never printed; the
+  # effect was): the sourced variable came back 14 bytes of a 48-byte token, and
+  # an embedded command substitution EXECUTED. So a token carrying a space, a
+  # `#`, a `$`, a `'` or a trailing CR was silently truncated while this verb
+  # exited 0 and reported success — and any byte of it could run.
+  #
+  # `%q` is bash's own quoter and it is IDENTITY for an ordinary token, which is
+  # why the canary never noticed: today's fixtures are `[A-Za-z0-9-]`. The
+  # rejected alternative was a fourth refusal code (`credential-charset`): it
+  # would match this block's "three conditions, three codes" shape and would
+  # REFUSE legitimate tokens, abandoning the principle the read above exists to
+  # honour — a token is exactly its bytes. Quoting keeps that principle; a
+  # charset refusal trades it away.
+  #
+  # THE ONLY IN-TREE CONSUMER OF `.cc-secrets/*.env` IS A BASH SOURCE, which is
+  # what makes `%q` safe rather than merely stricter: `deploy/notify.sh:29`
+  # reads `ccrc-mail.token` raw and never sources it, and that is a different
+  # file. Any future non-bash reader of THIS file would have to unquote, and
+  # would be the caller that has to say so.
   if ! (
     umask 077
-    printf 'export %s=%s\n' "$var" "$ACCT_CREDENTIAL" > "$tmp"
+    printf 'export %s=%q\n' "$var" "$ACCT_CREDENTIAL" > "$tmp"
   ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     ACCT_CREDENTIAL=""
-    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites whatever a previous attempt left."
+    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. What nothing cleans up is a temp left by a run that was KILLED between the create and the mv: it is .$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential, and no retry ever reuses the name because it carries the pid. Remove one by hand if you find it."
   fi
   # UNSET THE MOMENT THE FILE HAS IT — `cmd_passwd`'s `unset p1 p2` (:3123).
   # Everything after this point in a run can be traced, logged and echoed
@@ -4149,7 +4270,8 @@ cmd_account() {
   esac
 
   # BY NAME, ONCE, AND BEFORE THE FIRST REFUSAL IS PRINTED — `cmd_install`'s
-  # guard (:3864-3865) in its own shape. Without it a box with no node cannot
+  # guard (stated :4398-4410, probed :4412) in its own shape. Without it a box
+  # with no node cannot
   # even hear "that id is taken": the refusal would arrive as `_acct_node`
   # failing, i.e. as a missing dependency wearing a bad request's clothes. THIS
   # refusal is the ONLY path with no JSON on stdout, and it says so — node
