@@ -906,3 +906,40 @@ would have noticed. Rule, now standing: **the agent lane installs from MERGED MA
 and the deploy first asserts `git merge-base --is-ancestor <the other lane's sha> <the sha being
 deployed>`.** Asserted here before either lane ran; it passed, and `_answer_two_option_dialog` was
 measured byte-identical to main's in the merged file with the trust branch calling it.
+
+### Both carries confirmed — and W3-1 is sharper than I wrote it
+
+The worker re-measured both rather than accepting them, and W3-2 with a MUTATION PAIR rather than by
+reading, "because reading is how it got shipped wrong the first time". Probe: an unconditional
+`_reg_set "$1" crosspool …` plus a `cross-pool MUTANT` line as the first statement of `cmd_swap`'s
+body, so any execution of `cmd_swap` writes both artifacts the case asserts absent. Result: **probe
+GREEN (1 passed, 39 skipped), positive control RED at :562** when `--cross-pool` is added to
+`_dispatch_swap`'s built command. Green under the probe is the proof: `cmd_swap` never executes under
+`BLOCKED_REAL_DISPATCH`, so `:570` and `:571` cannot fail against their real writers (`_crosspool_mark`
+at `:14416`, the success-tail echo at `:14670`). One arm of three is mechanised. `ccd/ccd` restored,
+tree clean, nothing pushed.
+
+**W3-1 restated, because "the count is wrong" was the wrong diagnosis.** The count is CORRECT and
+UNNAMED. Measured identical at `833fd98e`, `cf1c8005` and `4dc87366`: `grep -cE 'ccd:[0-9]+'` → 146
+lines / 157 occurrences, `grep -cE 'ccd:[0-9]{2,}'` → 143 / 154, which is exactly what the prose says.
+So it is **not staleness and not drift — it is a missing command.** The pattern that makes the number
+true was never written down, which is why no re-measurement caught it, and it is one entry away from
+D-1956, whose whole subject is a count whose cited command disagrees with it.
+
+### Where the leak actually was: the summary, not the measurement
+
+D-1955's ENTRY is literally accurate — it enumerates all three blindnesses, and its "Fixed by…"
+sentence describes only the argv capture and closes "reds exactly THAT CASE", singular. The wave-done
+MAIL then summarised it as all three fixed. The entry asserted no more than it measured; the summary
+of the entry did. **This is the leak that matters to a coordinator, because a coordinator consumes
+summaries** — the same reason coordinator clause 7 says a relayed quote has not been measured. Ask for
+the measurement, not the sentence about it.
+
+**And the correction to me did not hold, by the same mechanism.** The worker corrected my claim that
+the surviving `39` sits inside a deviation entry, reporting instead a test comment at
+`ccd-auto-swap-pool.test.ts:558` and adding that `grep -rn 'of 39\|39 cases\|32 green'` "finds that one
+line and nothing else in this program". Measured on `4dc87366`: there are **two** surviving `39`s in
+different files, and the plan's one at `:2571` IS inside D-1973's entry (heading at `:2570`). The
+three-alternative pattern could not match the plan's phrasing ("said 39 in seven places"), so a
+narrower grep carried a wider conclusion. Neither `39` is a live assertion; both describe history.
+Recorded because it is the same class as everything above, produced while correcting an instance of it.
