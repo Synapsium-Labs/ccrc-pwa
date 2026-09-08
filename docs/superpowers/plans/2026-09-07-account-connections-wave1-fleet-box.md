@@ -15777,3 +15777,135 @@ Together with D-2005 (a sweep is only as complete as its pattern census) this cl
 the same class: a sweep must be checked for COVERAGE (which forms did you look for), for SHIFT (did the
 line move as computed), and for REFERENT (does the target say what the citing sentence claims). D-1907
 did the second, D-2005 named the first, and this names the third.
+
+### D-2018 — the plan hands `add-entry` an envelope and reads it as a plan
+
+Task 24's Step 4 passes `--plan "$plan"`, where `$plan` is `check-add`'s whole answer,
+`{"ok":true,"plan":{…}}`. Step 3's arm does `plan = JSON.parse(a['plan'])` and then reads
+`plan.provider`, `plan.id`, `plan.configDirSuffix` — the INNER object's fields, off the OUTER one.
+Transcribed verbatim the two halves do not compose: measured, `add` fails with
+`the entry for "undefined" would make …accounts.json unparseable: accounts[3] has an invalid id
+undefined`, and it fails AFTER the secret has been written, so the plan's own headline property is
+what reports the defect.
+
+Fixed at the READER, not at the caller. Bash hands back the exact bytes it captured — the same bytes
+it re-emits verbatim on refusal — so nothing in bash reshapes an answer node wrote, which is
+`_acct_node`'s standing rule. `add-entry` unwraps, and gains a `bad-argv` refusal naming a missing
+`plan` object, because the alternative failure mode names neither the caller's mistake nor its fix.
+
+This is the second Task-2x plan defect of the same family as D-2003: two halves of one plan, each
+correct alone, contradicting each other at the seam. Both were found by transcription, not by review.
+
+### D-2019 — the plan's mutation 2 cannot demonstrate the property it was written for
+
+Step 6's mutation 2 is `|| { rm -f "$ACCT_SECRETS_DIR/$ACCT_ID-$ACCT_PROVIDER.env"; exit $?; }` on the
+`add-entry` call. `$?` there is **`rm`'s** status, not `add-entry`'s — and `rm -f` on a file that
+exists succeeds — so the mutant exits 0 and the case reds on the exit code rather than on the secret's
+absence. The mutation was meant to show that a plausible-looking rollback destroys the one artefact a
+retry can reuse; as written it shows only that the exit code moved.
+
+Run in the corrected form (`|| { rc2=$?; rm -f …; }`) it reds exactly as intended:
+`the secret is gone, so a retry has nothing to overwrite: expected false to be true`, while
+`-t "the retry overwrites"` still PASSES — which is the whole point, a rollback that looks harmless
+and is not.
+
+A mutation table is a measurement, so a mutation that reds for the wrong reason is a false green with
+extra steps. Every remaining task's table entries are to be read as prescriptions to VERIFY, not to
+transcribe.
+
+### D-2020 — the plan's expected test count was wrong at BASE, and arithmetic is why
+
+Step 5 predicts "**58 tests** (28 + Task 23's 23 + 7 here)". Measured at BASE, `ccrc-account.test.ts`
+already held **68** cases (50 passing, 18 deferred), and after this task it holds **78**. The
+prediction was not made stale by later work — it was never true, because it was computed by adding
+remembered per-task counts instead of measuring the file.
+
+Same shape as D-1907 one level up: a number derived by arithmetic over a document rather than by
+measuring the artefact. A count in a plan step is a claim about the tree, and the tree is the arbiter.
+Later tasks' counts are to be measured and REPORTED, never asserted from the plan.
+
+### D-2021 — D-2004 is closed for hue and label, and OPEN for `--models`
+
+`check-add` now refuses `unknown-hue` and `bad-label` before the first byte. Three conditions still
+reach `roster-invalid` at exit 1 with the 0600 secret already on disk, measured against
+`shared/roster-json.mjs`:
+
+1. **A partial map.** `rosterFromJson:305-312` requires ALL FOUR aliases; `check-add` requires none of
+   them, so `--models '{"opus":"x"}'` passes the pre-pass.
+2. **A model id with illegal bytes.** `MODEL_ID_RE` (`:150`) admits a letter or digit then up to 127 of
+   `[A-Za-z0-9._:/-]`; `check-add` never tests the VALUES.
+3. **A model map on a lane that carries none.** `:296-300` refuses `exec.models` outside
+   `API_KEY_PROVIDERS`; `check-add` accepts `--models` on any provider.
+
+(`models.selectable` is the opposite case — `check-add` is STRICTER and refuses it as "not a routing
+alias", which is its own disagreement and not this one.)
+
+The describe block's comment names these three specifically rather than gesturing at incompleteness,
+which is the corrected form of what D-2004 objected to. The close lands in Task 24's review round with
+D-2022, because the two share the constants they need.
+
+### D-2022 — `check-add` hand-copies `MODEL_ALIASES` into a file that imports its module
+
+`deploy/account-op.mjs:438` declares `const ALIASES = ['opus','sonnet','haiku','subagent']`, a
+character-for-character copy of `MODEL_ALIASES` (`shared/roster-json.mjs:154`) — in the one file that
+already imports from that module. "Single-source-of-truth values are enumerated once and derived" is
+this repository's own rule, and the scanners did not catch it because `single-definition.test.ts`
+looks for provider ROWS and named holders, not for an arbitrary list re-typed.
+
+It is the same wall D-1860 named — a bare `node` cannot import the TypeScript — but the answer here is
+not a sixth mirror: the `.mjs` mirror ALREADY EXISTS and is already imported. Copying out of it is
+strictly worse than importing from it.
+
+Closed with D-2021: `MODEL_ALIASES`, `MODEL_ID_RE` and `API_KEY_PROVIDERS` become exports of
+`shared/roster-json.mjs` (existing constants, no new copies, exactly as `HUES` and `LABEL_UNSAFE_RE`
+did in this task), `check-add` derives from them, and the local copy is deleted.
+
+### D-2023 — a citation whose referent was DELETED from the tree: the fourth face
+
+`server/test/ccrc-install-graphify.test.ts:1132` reads *"the append path (`ccd/ccrc:5321-5326`) writes
+the block LAST, `printf '%s\n' "$want"` with nothing after it"*. There is no append path in `ccd/ccrc`
+— `grep -n '\$want' ccd/ccrc` returns three unrelated hits and `graphify-always-on` survives only as
+the two marker strings the REMOVAL path matches (`:6311-6312`). The writer was `_inst_graph_always_on`,
+and D-1245 took it back out (`551a6cb6`).
+
+It was already wrong on `origin/main`, where `:5321-5326` is `_inst_graph_always_on_off`'s own banner —
+the function that REMOVES the block, cited as the one that writes it. At this branch's BASE it had
+drifted further, onto `stamp_build`'s skip-cause prose, and Task 24's insertion moved it +182 again.
+
+So this is the fourth face of the class D-1907, D-2005 and D-2007 opened, and the first one no sweep
+can fix: COVERAGE asks which forms you looked for, SHIFT asks whether the line moved as computed,
+REFERENT asks whether the target says what the citing sentence claims — and this asks **whether the
+referent still exists at all**. Shifting it is wrong and repointing it is wrong, because the code it
+names is in no file. It must be reworded as history, naming the function and the commit that removed
+it, which is the remedy D-1907 already prescribed for replaced prose and which no mechanical check can
+perform.
+
+Two more of the same face, found and repaired in this task: `oneObject`'s docstring and
+`ccd/ccrc:3709` both cited `cmd_wrappers`' summary line as `:2891`, which is a COMMENT; the `printf
+'summary: …'` is `:2904`. Wrong at BASE, and shifted cleanly by every sweep that touched them.
+
+### D-2024 — the plan's own snippet would have left `add`'s SUCCESS path with an empty body
+
+Task 24's Step 4 ends `_acct_add` with `_acct_node roster --file "$(_acct_roster_path)" || exit $?`.
+That is a bare pass-through of one op's stdout, which is precisely what `_acct_answer` exists for and
+precisely what `cmd_account`'s own `roster)` arm does with the same op. Through `_acct_node`, a
+half-updated box — `ccrc` lands by `install_atomic`, `deploy/` by rsync, so a new caller can meet an
+old callee — answers this verb's **success** path with an exit code and no body: the empty seam every
+other path in `_acct_add` was written to close, left open on the one path that reports success.
+
+Shipped as `_acct_answer`, argued in source rather than transcribed. Nothing else changes: the body is
+re-emitted byte for byte and stderr is never captured, so node's own remedy still reaches the operator.
+
+The deviation worth recording is not the swap but what it says about the plan: the seam was closed
+everywhere the plan was THINKING about refusals, and left open on the path it was not.
+
+### D-2025 — two variables this commit writes and nothing reads
+
+`ACCT_BASE_URL_RESOLVED` and `ACCT_MODELS_RESOLVED` are set by `_acct_add` from the checked plan and
+read by nothing until Task 25, which is what Task 24's "Produces" asks for. It means neither has a test
+standing over it at this commit: the four-field NUL reader is pinned only by `nfield -eq 4`, so a
+reader that mis-assigns field 2 to field 3 is green here and wrong two commits later.
+
+Recorded rather than fixed, because inventing a consumer to make it testable would be worse. Task 25
+must treat these two as UNVERIFIED inputs and pin them on arrival — the first commit that reads them is
+the first commit that can measure them.
