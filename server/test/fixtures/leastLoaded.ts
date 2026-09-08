@@ -105,9 +105,9 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         gpt: c({ five: null, seven: 0, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 400000 }),
       },
       expect: { wrapper: 'claude-b', score: 60 },
-      why: 'gpt is not home-able, so it is an opt-in lane a session reaches only by having it '
-        + 'as HOME (ccd\'s roster header) and it is absent from CCRC_HOME_ABLE, the array '
-        + '_ws_least_loaded iterates — it must never win, however free it looks',
+      why: 'gpt is not home-able: an overflow lane the auto-swapper may rotate onto (ccd\'s '
+        + 'roster header) but absent from CCRC_HOME_ABLE, the array _ws_least_loaded '
+        + 'iterates — placement must never pick it, however free it looks',
     },
     {
       name: 'disabled-lane-skipped',

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d90a29110afee4b60f31f484dd635042370de980a7a73bceb8604cc64838d1c6
+# ccrc:generated 1 sha256=cdb2cfa5fcca1e3bb2926169d023b47ccd9d08d79aebae857239d2f283730e33
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -801,15 +801,24 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # gone: VALID_WRAPPERS, the literal `gpt` appended inside _is_valid_wrapper, and
 # the `case` arms of _cfg_dir and _id_wrapper.
 #
-# An account that is NOT home-able is an OPT-IN lane, never general overflow
-# (user decision 2026-07-26, when "an account that is not home-able" meant `gpt`
-# — ccgpt, Claude Code on the ChatGPT-sub Codex backend — by name, which is why
-# so many rules below used to say `gpt` where they meant this): a session
-# reaches such a lane solely by having it as its HOME (`ccd prefer <id> gpt`),
-# because a 272k window and unofficial-client risk are not things a project
-# should inherit by accident. It also has no Anthropic-style 5h/7d telemetry, so
-# it reads as free until a 429 writes an exclusion into cc-limits (see
-# _auto_swap_check).
+# An account that is NOT home-able is an OVERFLOW-ONLY lane: never a placement
+# target and never a default HOME — CCRC_HOME_ABLE is the whole of that answer
+# — but, while installed and not kill-switched, a candidate chosen only when
+# NO home-able account has headroom (`_swap_target`'s last-resort bracket:
+# home-able candidates are tried first, and a non-home-able one is picked
+# only when that bracket comes up empty — never merely because it scored
+# better), and one that leaves again the moment home has headroom
+# (`_default_pool`, `_swap_target`). Operator decision 2026-09-07, reversing
+# the 2026-07-26 rule under which such a lane was opt-in only, reached solely
+# by having it as HOME (`ccd prefer <id> gpt`).
+# On both dates "an account that is not home-able" meant `gpt` — ccgpt, Claude
+# Code on the ChatGPT-sub Codex backend — by name, which is why so many rules
+# below used to say `gpt` where they meant this. The 272k window and the
+# unofficial-client caveat stand: they are why such a lane is still never a
+# HOME (no project STARTS there by accident), and why the kill-switch below is
+# the brake. It has no Anthropic-style 5h/7d telemetry of its own — ccgpt-usage
+# publishes its weekly figure into cc-limits on a timer, and a 429 writes an
+# exclusion there (see _auto_swap_check) — so an unmeasured one reads as free.
 #
 # Any lane, home-able or not, is instantly killable: `touch $REG/<account>-disabled`
 # and `_lane_enabled` stops offering it as an automatic destination (`_account_ok`).
@@ -1264,10 +1273,10 @@ _project_pool_state() {   # project -> "named <n>" | untagged | unreadable | mal
 _account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }
 # Same file ($GPT_DISABLE_FILE == $REG/gpt-disabled), same semantics, one
 # definition. No production caller left — `_default_pool` used to be it, and now
-# asks `_account_ok "$home"` about whichever account the session actually calls
-# home — so this survives as the NAME of the equivalence, which
-# ccd-account-ok.test.ts pins: the gpt kill-switch is the general per-lane
-# kill-switch, not a second mechanism beside it.
+# asks `_account_ok` about every rostered account that is not home-able,
+# whichever session is asking (2026-09-07) — so this survives as the NAME of
+# the equivalence, which ccd-account-ok.test.ts pins: the gpt kill-switch is
+# the general per-lane kill-switch, not a second mechanism beside it.
 _gpt_enabled() { _account_ok gpt; }
 _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
   [[ -x "$WRAPPER_DIR/gpt" ]] || { echo "not installed"; return; }
@@ -1316,13 +1325,14 @@ _gpt_status() {   # human-readable state of the gpt overflow lane (for `ccd ls`)
 }
 # Membership over the roster itself, not over a list this file keeps beside it.
 # The hardcoded `gpt` that used to be appended after "${VALID_WRAPPERS[@]}" here
-# — the established idiom for adding an opt-in lane — has nothing left to add:
-# every rostered account is a valid wrapper, and an opt-in lane is now expressed
-# by being absent from CCRC_HOME_ABLE rather than by being named in this line.
+# — the established idiom for adding an overflow lane — has nothing left to add:
+# every rostered account is a valid wrapper, and an overflow-only lane is now
+# expressed by being absent from CCRC_HOME_ABLE rather than named in this line.
 _is_valid_wrapper() { local w="$1" v; for v in "${CCRC_ACCOUNTS[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
 # The placement half of the same question, and the general form of every rule
 # below that used to say `gpt`: an account that is not home-able is one a
-# session may only reach by having it as HOME.
+# session is never PLACED on and never seeded with as HOME. It may still be
+# rotated onto as overflow — that is `_default_pool`'s question, not this one.
 _is_home_able() { local w="$1" v; for v in "${CCRC_HOME_ABLE[@]}"; do [[ "$w" == "$v" ]] && return 0; done; return 1; }
 # THE ACCOUNT SIDE of the pool rule. `_ccrc_pool` is generated into
 # `~/.ccrc/accounts.sh` (shared/generate.mjs) with one `case` arm per TAGGED
@@ -3862,6 +3872,22 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # survives as the standing evidence that a limits file CAN be missing a key;
   # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
   # — they were the mechanism of the gap, not a defence against it.)
+  #
+  # THE THREE CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
+  # (PR #61, 2026-09-07). PLACEMENT — this function — iterates CCRC_HOME_ABLE
+  # and never scores an overflow lane, so the parity above still holds for it
+  # exactly as written. ROTATION — `_swap_target` — walks `_pool_for`, which
+  # since #61 includes every installed, non-kill-switched lane that is NOT
+  # home-able, and it DOES score such a lane with `_limit_score`: gpt's
+  # half-null file reads as 0 there. That reading cannot beat an Anthropic
+  # account, because `_swap_target` keeps overflow lanes in a bracket of their
+  # own and reaches it only when no home-able candidate passed `_account_ok`
+  # and `_avail` — the 0 orders overflow lanes among themselves and nothing
+  # else. `_strand_why` (account pools, wave 2b) mirrors `_swap_target`'s walk,
+  # so it names an overflow lane too. A reader who finds this function refusing
+  # a lane the rotation accepts is looking at the design, not at a drift:
+  # a workspace never STARTS on the Codex lane, but a session whose every
+  # home-able account is at the ceiling may end up there until one recovers.
   #
   # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
   # the loose form of it ("unmeasured never wins") is contradicted two lines
@@ -11722,27 +11748,60 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
 }
 
 _default_pool() {   # id -> wrappers this session may auto-swap between.
-  # Free swapping across ALL home-able accounts (explicit user decision 2026-07-03).
-  # An account that is NOT home-able is not a general overflow target (user
-  # decision 2026-07-26, made about `gpt` when gpt was the only such account):
-  # only a session whose HOME is that account may rotate onto it —
-  # a project deliberately homed on gpt, nothing else. Everything else stays on the home-able
-  # accounts, so no project silently lands on the Codex lane with its 272k
-  # window and unofficial-client risk.
+  # Free swapping across ALL home-able accounts (explicit user decision 2026-07-03),
+  # PLUS every rostered account that is NOT home-able but is ENABLED — installed
+  # (`-x $WRAPPER_DIR/<w>`) and not kill-switched (`$REG/<w>-disabled` absent),
+  # which is exactly `_account_ok`.
+  #
+  # BEING HOME-ABLE AND BEING IN THE ROTATION ARE TWO DIFFERENT QUESTIONS
+  # (operator decision 2026-09-07, reversing the 2026-07-26 rule that kept a
+  # non-home-able lane out of every pool unless it was that session's HOME):
+  #   - CCRC_HOME_ABLE answers where a session may be PLACED and what it may be
+  #     seeded with as HOME (`_ws_least_loaded`, `_ws_seed_home`). A lane absent
+  #     from it is never a placement target and never a default home, so no
+  #     project silently STARTS on the Codex lane with its 272k window.
+  #   - the kill-switch answers whether an enabled lane may RECEIVE overflow:
+  #     `touch $REG/<w>-disabled` removes it from every pool on the next tick —
+  #     which is what GPT_DISABLE_FILE's own comment has promised since it
+  #     existed, and was not true between 2026-07-26 and this change.
+  # A session that overflows onto such a lane comes back the moment its home
+  # has headroom again (`_swap_target`'s "home recovered" arm), so the lane only
+  # ever carries work its home account could not take.
+  #
+  # HOME-ABLE MEMBERS ARE LISTED UNCONDITIONALLY, the non-home-able ones only
+  # when enabled, and the asymmetry is deliberate: "disabled excludes a lane as
+  # a DESTINATION; it never evacuates a session already there" is enforced by
+  # `_swap_target`'s per-candidate `_account_ok`, and `ccd-account-ok.test.ts`
+  # pins it there. Filtering the home-able half here too would be a second copy
+  # of that rule; filtering the overflow half here is what makes the kill-switch
+  # the operator's opt-out for the whole rotation rather than for one session.
   # Narrow per session with a space-separated list in the registry `pool` field.
+  #
+  # `$1` is the session id every caller passes (`_pool_for`); the default pool
+  # is currently the same for every session, so it is accepted and unused.
   #
   # A SPACE-JOINED STRING, not an array, and `_swap_target` consumes it through
   # an UNQUOTED `for cand in $(_pool_for "$id")` — word splitting is the
   # interface. That is safe only because every token here is a rostered id, and
   # `shared/roster.ts`'s ID_RE (^[a-z][a-z0-9-]{0,31}$) admits no whitespace.
-  # `_is_valid_wrapper` below is what keeps a stale registry `home` — an account
-  # dropped from the roster since — from putting an unvetted token into that
-  # split.
-  local pool="${CCRC_HOME_ABLE[*]}" home
-  home=$(_reg_get "$1" home)
-  if [[ -n "$home" ]] && _is_valid_wrapper "$home" && ! _is_home_able "$home" && _account_ok "$home"; then
-    pool="$pool $home"
-  fi
+  # Every token is drawn from CCRC_ACCOUNTS — the roster — and never from a
+  # registry field, so a stale `home` naming an account dropped from the roster
+  # since cannot put an unvetted token into that split.
+  #
+  # ORDER: home-able accounts first, in roster order, then the overflow lanes in
+  # roster order. This is no longer the tie-break BETWEEN the two classes — as
+  # of the "overflow is a last resort" rule (`_swap_target`, 2026-09-07) a
+  # home-able candidate wins over a non-home-able one regardless of score, by
+  # ranking the two classes in separate brackets rather than one comparison.
+  # What this order still decides: the STRICT-`<` tie-break `_swap_target` uses
+  # WITHIN each bracket — among home-able candidates tied on score, or among
+  # overflow lanes tied on score — which is roster declaration order, same as
+  # `_ws_least_loaded` and `projectHome`.
+  local pool="${CCRC_HOME_ABLE[*]}" w
+  for w in "${CCRC_ACCOUNTS[@]}"; do
+    _is_home_able "$w" && continue
+    _account_ok "$w" && pool="$pool $w"
+  done
   echo "$pool"
 }
 # TWO MEANINGS OF ONE WORD, IN ONE FILE, and this is the sentence that keeps
@@ -11990,7 +12049,7 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
   # blocked wrapper, so home is never the blocked lane, and a forced call
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
-  local id="$1" cur="$2" home="$3" force="${4:-}" cand best="" best_score=999 sc
+  local id="$1" cur="$2" home="$3" force="${4:-}" cand best="" best_score=999 obest="" obest_score=999 sc
   if [[ "$cur" == "$home" ]]; then
     [[ -z "$force" ]] && { _avail "$home" && return 0; }                     # home is fine: stay
   else
@@ -12000,7 +12059,25 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     _account_ok "$home" && _avail "$home" && { echo "$home"; return 0; }     # home recovered: go back
     [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
   fi
-  # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the least-loaded AVAILABLE account
+  # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the
+  # least-loaded AVAILABLE account.
+  #
+  # AN OVERFLOW LANE IS A LAST RESORT, NOT A PEER (review finding, 2026-09-07). This loop used to
+  # rank every candidate — home-able and overflow alike — in one `best`/`best_score` comparison,
+  # and a non-home-able lane's real telemetry can score BETTER than every Anthropic account's:
+  # gpt's actual `~/.cc-limits/gpt.json` is `{"five": null, "seven": 0}`, scoring 0, which made it
+  # the FIRST destination for any session leaving a pinned home, ahead of Anthropic accounts sitting
+  # at 20-90%. A good score cannot buy back the two reasons that is wrong: the lane's context window
+  # (272k, against live sessions that carry 325k-698k tokens of context and would simply be stuck
+  # once landed) and its unofficial-client risk (ccgpt drives Claude Code against a non-Anthropic
+  # backend, not something a session should land on for having the cheapest number this tick).
+  #
+  # So home-able candidates keep today's ranking in `best`/`best_score`, unchanged; non-home-able
+  # ones rank the SAME way — by score, strict `<`, roster-order tie-break — but in a SEPARATE
+  # bracket, `obest`/`obest_score`, that the code after this loop only ever falls back to when the
+  # home-able bracket came up empty. Overflow means overflow: a lane is chosen only when NO
+  # home-able candidate passed `_account_ok` and `_avail` this tick — never because it merely
+  # outscored one.
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
     _account_ok "$cand" || continue
@@ -12053,7 +12130,9 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     #
     # Unmeasured candidates tie with each other at 100 and the strict `<` takes
     # the first in pool order, i.e. roster declaration order, the same
-    # tie-break `_ws_least_loaded` and `projectHome` use.
+    # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
+    # this 100, apply INSIDE each bracket separately — the two brackets never
+    # compare scores against each other at all.
     #
     # The cost, stated: a fleet whose measured accounts all sit just under the
     # ceiling now sends a rescue to a busy-but-known account instead of a quiet
@@ -12100,10 +12179,28 @@ _swap_target() {   # id cur home [force] -> echo destination wrapper, or nothing
     # the moment it is the only one left — eligibility is untouched by this
     # change, only preference. That is the same rule the `:=100` above obeys and
     # the reason this line is an assignment and not a `continue`.
+    #
+    # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
+    # walk below now sorts candidates into two: home-able ones compete for
+    # `best`, overflow ones for `obest`, and the brackets are consulted in
+    # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+    # condemned lane ranks last IN ITS OWN bracket rather than being pushed
+    # out of the rotation: a condemned overflow lane still beats no
+    # destination at all, which is the same eligibility-vs-preference rule
+    # the paragraph above derives. The two changes compose because one sets
+    # the score and the other only chooses which bracket reads it.
     _authdead "$cand" && sc=101
-    [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
+    if _is_home_able "$cand"; then
+      [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
+    else
+      [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
+    fi
   done
-  [[ -n "$best" ]] && echo "$best"
+  # Keep the function's existing exit-code shape (empty stdout + non-zero exit when nothing
+  # qualifies): a `return 0` only on the branch that actually echoes something, so falling off the
+  # end with both brackets empty leaves the caller the same "no destination" signal as before.
+  [[ -n "$best" ]] && { echo "$best"; return 0; }
+  [[ -n "$obest" ]] && echo "$obest"
 }
 
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
@@ -12134,9 +12231,9 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
-  #  2026-07-26 with the same decision that took gpt out of the rotation: gpt is
-  #  no longer a destination for projects that didn't ask for it. A session whose
-  #  HOME is gpt still swaps onto it through the normal pool.)
+  #  2026-07-26 and stays removed. A lane that is not home-able re-entered the
+  #  rotation on 2026-09-07 through `_default_pool`, as an ordinary candidate
+  #  ranked by its own telemetry — never again as a model-specific rescue path.)
   # Classify BEFORE picking a target, and pass the verdict in as `force`: a
   # hard block (limit/spend banner, OR lost auth) must win over telemetry that
   # says the wrapper is fine. Rate limits write cc-limits, so a 429 already
@@ -12152,7 +12249,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   [[ -n "$target" && "$target" != "$wrapper" ]] || return 0
   _avail "$target" || return 0
   # Hard-blocked (a real limit/spend banner is up, or auth was lost): the session is stuck
-  # anyway -> swap now. The 429/rate-limit patterns also catch an opt-in overflow lane hitting
+  # anyway -> swap now. The 429/rate-limit patterns also catch an overflow lane hitting
   # its own backend's usage cap (the gpt lane's ChatGPT-sub Codex cap surfaces as "API Error:
   # 429 ..."). When the exhausted account is one that is NOT home-able, write a
   # cc-limits/<account>.json exclusion so OTHER sessions stop rotating into it until the 5h
@@ -12160,6 +12257,15 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # telemetry of its own (see the header), so this is its only "pool is full" signal. Home-able
   # accounts report for themselves and must not have a synthetic exclusion written over the
   # sample statusline-command.sh maintains.
+  #
+  # CAVEAT, stated rather than fixed (2026-09-07): `ccgpt-usage`'s 20-minute
+  # timer rewrites `gpt.json` UNCONDITIONALLY with whatever the Codex backend
+  # reports, so on this fleet the exclusion this writes holds at most until
+  # that next poll overwrites it — not until the 5h window this comment
+  # describes actually rolls over. `$REG/<w>-disabled`, the kill-switch, is the
+  # only durable brake on a non-home-able lane; a code fix (skip the timer's
+  # write while an exclusion is fresh, or fold the two writers into one) is
+  # deferred.
   if [[ -n "$hard_blocked" ]]; then
     # _is_valid_wrapper first, so a stale registry `wrapper` — an account since
     # dropped from the roster — cannot name the file this writes.
@@ -12644,6 +12750,17 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # passed empty, and `--remote-control` with an empty operand is not a thing
   # the wrapper accepts.
   #
+  # NEVER on a lane that is not home-able (Task 2, 2026-09-07): Remote Control
+  # needs a claude.ai OAuth token carrying the inference scope, and a
+  # non-home-able lane is an external backend — ccgpt runs Claude Code in
+  # token mode against a local proxy, and its config dir holds no claude.ai
+  # OAuth at all — so the flag would be refused, or hang the spawn on a
+  # handshake that can never complete. `$wrapper` is already set above (the
+  # incomplete-registry guard reads it), so this costs nothing extra to check.
+  # This mirrors `_spawn_settle`'s `_is_home_able` guard around
+  # `_inject_spawn_effort`: the same "the external backend doesn't take
+  # Claude-specific input" reasoning, gating a different line of the same spawn.
+  #
   # PER-SESSION OVERRIDE (task #37, ruling 2026-08-13): a row stamped `rc=off`
   # at creation — `ccd ws-add --no-rc`, the dispatch path's spelling of "this
   # pane is a dispatched worker" — never gets the flag, whatever the box says.
@@ -12651,7 +12768,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # absent or garbled field follows the box (D-99's fail-safe direction, per
   # session) — never "strip RC from a session nobody marked".
   rcflag=""
-  _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
+  _is_home_able "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -12780,7 +12897,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
-  # (those are the opt-in external backends — gpt/Codex today — which don't take it, so the
+  # (those are the external backends — gpt/Codex today — which don't take it, so the
   # injection would just error into the prompt box). Keyed on home-ability rather than on the
   # literal `gpt` since the roster became data — merged from main, whose reasoning stands
   # unchanged here.
@@ -13983,7 +14100,7 @@ cmd_swap() {   # [--force] id target-wrapper — move a session to another accou
   # Fill them so the resumed session is valid. Anthropic -> Anthropic needs no
   # fixup, and neither does a move ONTO an external lane. Keyed on home-ability
   # rather than on the name `gpt` (merged from main, whose roster-becomes-data
-  # refactor made the literal wrong): a non-home-able account is the opt-in
+  # refactor made the literal wrong): a non-home-able account is the
   # external backend by definition — and sanitizing is safe in the over-eager
   # direction anyway, since it only rewrites text blocks that are already empty.
   #

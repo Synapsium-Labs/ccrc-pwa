@@ -97,7 +97,7 @@ describe('AccountsScreen — a roster entry the operator declared plumbing', () 
     const roster = TEST_ROSTER.map((a) => (a.id === 'claude' ? { ...a, hidden: true } : a));
     stubAccounts([acct({ wrapper: 'claude2', five: 12, seven: 4 })], null, roster);
     render(<AccountsScreen />);
-    // The real accounts, including the opt-in lane and ones telemetry has
+    // The real accounts, including the overflow lane and ones telemetry has
     // never mentioned — the invariant below, unchanged.
     expect(await screen.findByText('team·alt')).toBeInTheDocument();
     expect(screen.getByText('team·b')).toBeInTheDocument();
