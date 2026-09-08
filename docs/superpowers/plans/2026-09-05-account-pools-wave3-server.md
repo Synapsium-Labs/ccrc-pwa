@@ -77,6 +77,7 @@ there would leave its own branch tip unmoved and wedge every close with `stale-t
 
 ---
 
+### Task 1 — DONE 2026-09-08 (5/5 mutations red)
 ### Task 1: `server/src/poolrule.ts` — the server's L1 mirror of the rule
 
 **Files:**

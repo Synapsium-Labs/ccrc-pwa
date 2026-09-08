@@ -2693,6 +2693,22 @@ export interface ProjectedHome {
 }
 
 /**
+ * Where a new workspace for ONE PROJECT would land, once that project's pool
+ * tag is applied (`GET /api/projects`'s `placement`). `ProjectedHome` above is
+ * the same forecast for an UNTAGGED project and stays exactly what it was.
+ *
+ * THREE MEMBERS, and `unmeasurable` is a VALUE, not a null (spec §5.6): a
+ * project whose tag could not be read has no forecast, and saying `none` there
+ * would claim a measurement — "nothing can take this project" — that nobody
+ * made. `none` carries the pool it was looking in (`null` for an untagged
+ * project) so a renderer can say WHICH pool is empty without re-deriving it.
+ */
+export type ProjectPlacement =
+  | { kind: 'projected'; wrapper: string; score: number }
+  | { kind: 'none'; pool: string | null }
+  | { kind: 'unmeasurable' };
+
+/**
  * One roster entry as the wire carries it — the PWA's entire view of an
  * account's identity, and deliberately NOT the parsed `AccountDef`
  * (`shared/roster.ts`). `configDirSuffix`, `exec` and `telemetry` describe how
