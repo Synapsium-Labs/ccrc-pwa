@@ -1,0 +1,8 @@
+[Unit]
+Description=Run the telemetry keepalive every 15 minutes (spec 2026-09-07 §C)
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+AccuracySec=1min
+[Install]
+WantedBy=timers.target
