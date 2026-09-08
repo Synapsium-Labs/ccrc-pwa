@@ -7844,8 +7844,18 @@ Expected: FAIL — `systemd/ccrc-models.service is not in the repo`, then (after
 Description=Refresh every lane's model catalogue (model-class registry, added 2026-09-08)
 [Service]
 Type=oneshot
+# user units carry no ~/.local/bin on PATH (measured on the fleet host); ccgpt
+# and litellm live only there, so the codex-lane step needs it spelled out.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# one probe per registered lane at --max-time 30, plus a codex render/restart;
+# a multi-lane pass can outrun the 90s default and get SIGTERM'd mid-run
+TimeoutStartSec=300
 ExecStart=%h/.local/bin/ccrc models refresh --all
 ```
+
+(Fix round 1, Finding 1 + Folded Minor B: `Environment=PATH=` and `TimeoutStartSec=300` were added
+after the reviewer measured the fleet host's user-unit PATH directly — see the fix-round section at
+the end of this task.)
 
 `deploy/systemd/ccrc-models.timer`:
 
@@ -7871,10 +7881,14 @@ In `deploy/deploy.sh`, beside `install_atomic ccd/ccd-graph-sweep .local/bin/ccd
   # exactly as its two siblings above: the agent lane only ever ships to a
   # fleet host, so there is no server-role branch to gate it against. The
   # rsync of `ccd/` above ALSO lands it at ~/ccrc/ccd/, which is where the
-  # verbs resolve it from; this copy is the one an operator can run by hand and
-  # the one the timer's ExecStart reaches through the ccrc launcher.
+  # verbs resolve it from; this copy is the one an operator can run by hand.
   install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755
 ```
+
+(Fix round 1, Folded Minor A: the original comment's closing clause — "and the one the timer's
+ExecStart reaches through the ccrc launcher" — was false. The launcher execs `~/ccrc/ccd/ccrc`,
+`CCRC_HERE` resolves to `~/ccrc/ccd`, and the verbs run `$CCRC_HERE/ccrc-models-probe` — the rsync'd
+copy, not this one. Deleted.)
 
 - [ ] **Step 5: Install and enable the timer**
 
