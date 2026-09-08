@@ -15709,3 +15709,71 @@ corpus — `grep -oE` for each candidate shape and count them — and state the 
 that names its patterns can be checked; one that reports only a hit count cannot be distinguished from a
 complete one. The three forms known in this corpus today are `spec:NNN`, `` `:NNN` `` beside a `§`, and
 `§N:NNN`. There may be a fourth; the point of this entry is that nobody has looked.
+
+### D-2006 — a refusal sentence that begins with a flag cannot be printed AT ALL, and the convention that avoids it now gets a scan
+
+D-1983 closed the seam where a malformed refusal produced TWO contradictory signals. It did not close the
+thing that makes the call malformed: **`readPairs` refuses a `--detail` value beginning with `--`**
+(`deploy/account-op.mjs:278-285`, the M6 guard), so a refusal sentence that legitimately opens with a
+flag name cannot be printed. Task 22 met this, reworded its three sentences, and wrote the rule in
+capitals at `ccd/ccrc:4090-4093`: *"EVERY REFUSAL SENTENCE BELOW BEGINS WITH PROSE, AND THAT IS
+LOAD-BEARING, not style."*
+
+**Task 23 reintroduced it two hundred lines below that sentence**, in five places (`ccd/ccrc:4295`,
+`:4320`, `:4329`, `:4330`, `:4331`), by transcribing the plan faithfully. Measured by review:
+
+```
+ccrc account add --id        →  rc=1 (documented: 2),  stdout 0 bytes
+```
+
+The verb's central contract — exactly one JSON object on stdout — is broken on **every missing-flag
+path**, and the PWA/server caller gets nothing to parse. A pre-existing green test
+(`the dispatcher and the printed list are the same list, in both directions`) goes RED the moment Task 24
+puts `add` in `ACCT_SUBS`.
+
+**This is a wave-level defect, not Task 23's.** The plan prescribes a `--`-leading detail **ELEVEN
+times** — `:5811`, `:5813`, `:5820` (Task 22, reworded during execution but still wrong in the plan),
+`:6702`, `:6711-6713` (Task 23), `:8664` (27), `:8761`, `:9473` (28/29), `:10030`, `:10948`, `:11787`
+(31/32). Every future task that transcribes verbatim reintroduces it.
+
+**RULING, two parts, because rewording alone has now failed twice:**
+
+1. **Reword the five live sentences**, and amend the plan's eight remaining prescriptions so the next
+   task does not inherit them.
+2. **Add the scan that makes the convention a mechanism.** A source test over `ccd/ccrc` that reds when
+   any `_acct_refuse` call's third argument begins with `--`. This repository's own idiom — the same
+   shape as `single-definition.test.ts`'s source scan — and it covers Tasks 27 through 32 automatically,
+   without anyone having to remember. I rejected a reworded sentence as "a convention where a mechanism
+   is needed" in D-1983 and then shipped exactly that; the scan is the part I owed.
+
+**Rejected alternatives, and why.** A `--detail=VALUE` single-token form or positional args for `refuse`
+would fix it structurally, but both change the callee's protocol, and `_acct_answer`'s own header carries
+the argument against that: *"only the caller can cover for a callee that is older than itself"* — `ccrc`
+lands by `install_atomic` and `deploy/` by rsync, so a new caller can meet an old callee on a
+half-updated box. A scan over the caller costs nothing and works against every version.
+
+**It was measurable at this commit and the skip did not hide it.** `sourceCall`
+(`ccrc-account.test.ts:810`) already drives `_acct_add_parse` directly; one case with `--id` and no value
+would have caught all five without `add` being in `ACCT_SUBS`. What was missing was a NEGATIVE-argv
+`sourceCall` case, not a red test.
+
+### D-2007 — a `+N` sweep verifies the shift, not the referent
+
+Task 23's citation sweep corrected 14 references and reported *"each verified by reading the target
+line."* Thirteen hold. The fourteenth, `deploy/account-op.mjs:201-202`, cites `ccd/ccrc:4396-4399` for
+*"`_inst_accounts_sh`'s rule"* — but `:4396-4399` is `cmd_account`'s dispatcher arms. `_inst_accounts_sh`
+is at `:4720-4748` and the rule meant is `:4729-4733`.
+
+**The correction was mechanically right and semantically wrong.** At BASE the same comment read
+`:4299-4302`, which pointed at the same wrong place; the sweep shifted a citation that was *already*
+pointing at the wrong code by exactly the right amount, and the shift verified clean.
+
+So "verified by reading the target line" has two readings, and only the weaker one was performed:
+confirming the line MOVED as computed, versus confirming the line SAYS WHAT THE COMMENT CLAIMS. A sweep
+can only ever restore a citation to its original referent — **if the original was wrong, a perfect sweep
+preserves the error and certifies it.**
+
+Together with D-2005 (a sweep is only as complete as its pattern census) this closes the third face of
+the same class: a sweep must be checked for COVERAGE (which forms did you look for), for SHIFT (did the
+line move as computed), and for REFERENT (does the target say what the citing sentence claims). D-1907
+did the second, D-2005 named the first, and this names the third.
