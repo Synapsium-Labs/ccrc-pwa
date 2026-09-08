@@ -180,6 +180,18 @@ Absent file on a non-Anthropic lane = "no registry" — every class unavailable,
 and doctor says so. Anthropic lanes never have one: their four classes are the
 client's own defaults, shown read-only.
 
+**Lifecycle (ruled with the account-connections owner, mails 284/285).** The
+file is keyed by account id and so has a roster row's lifecycle, but it is
+**reaped only by its owner**: `ccrc models <id> rm` (§10) deletes the registry,
+the catalogue, the `.classes.tsv`, the `.effort.json` and clears exactly the
+seven env keys the materialiser owns from the lane's settings — nothing else
+in that file. `ccrc account remove` (that spec's Task 32) never deletes under
+`~/.ccrc/models/`; it measures and REPORTS a registry it left behind, naming
+`ccrc models <id> rm` as the remedy, and doctor reports an **orphan** (a
+registry whose id is in no roster row) the same way. **Disable and enable never
+touch the registry**: the kill-switch is a brake on a lane that stays in the
+rotation, and this file describes the lane, not its availability.
+
 ### 4.2 The catalogue (generated, per account)
 
 `~/.ccrc/models/<accountId>.json`, written atomically by the probe (temp +
@@ -433,6 +445,7 @@ ccrc models <id> set-class <class> <modelId|none>
 ccrc models <id> set-subagent <class>
 ccrc models <id> set-effort <class> <level|default>
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
+ccrc models <id> rm                                   # reap: registry, catalogue, tsv, effort file, and the seven env keys; idempotent, exit 0 when nothing is there
 ccrc models refresh [<id> | --all]                    # probe(s) + LiteLLM step; the timer's entry point
 ccrc models litellm <id>                              # render + (re)start; idempotent
 ccd swap <id> <wrapper> [--as-class <c>]              # existing verb, new flag (after PR #62, §14)
@@ -463,6 +476,10 @@ contract `ccrc` states for its verbs.
   refuse every request anyway).
 - **LiteLLM restart fails**: the generator reports it, keeps the previous
   config file in place (`.prev`), and `ccrc doctor` flags the mismatch.
+- **Orphan registry** (`<id>.classes.json` whose id is in no roster row, e.g.
+  after `ccrc account remove`): `ccrc models <id> show` says `orphan: no roster
+  row`; doctor (Plan 2) names it with the remedy `ccrc models <id> rm`; nothing
+  reaps it automatically.
 - **Settings block drift** (someone edited the lane's settings by hand): doctor
   detects sentinel/value mismatch against the registry file; `ccrc models
   <id> show` names the differing keys; re-materialise fixes.
@@ -545,7 +562,7 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
   wave 2b's registry field inventory; write the class filter as the third
   predicate in the composed chain (§7) after reading that wave's crossing
   section.
-- **Plan 3a — routes, the Models section, the picker, doctor — starts after
+- **Plan 3a — routes, the Models section, the picker — starts after
   Plan 1, and BEFORE Plan 2** whenever #62 has not merged by then: both add
   rows to `server/test/single-definition.test.ts`'s exact-match lists, so they
   run in sequence on the one branch, never concurrently, and whichever lands
@@ -553,7 +570,9 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
   `/api/accounts` row (composes with wave 3, mail 279), touches `shared/api.ts`
   only by adding one interface and one optional field, and leaves
   `SwapSheet.tsx`, `NewSessionSheet.tsx`, `stores/fleet.ts` and `lib/pools.ts`
-  alone.
+  alone. **The doctor check is Plan 2's**, not 3a's: `ccd/ccrc-doctor-checks`
+  is a `ccd/` file PR #62 edits, sourced by `ccrc` through `BASH_SOURCE`, and
+  shipped in the one rsync with ccd on the agent lane (mail 286).
 - **Plan 3b — the SwapSheet downgrade choice — starts after account-pools wave 4
   merges** (it rewrites `SwapSheet.tsx`).
 - **Fold-in — `classes` into `exec.models` as an optional sibling — is decided
