@@ -251,7 +251,7 @@ describe('the models dispatcher', () => {
     const src = fs.readFileSync(CCRC_SRC, 'utf8');
     const m = /^MODELS_BOX_SUBS="([^"]*)"$/m.exec(src);
     expect(m, 'ccd/ccrc has no file-scope MODELS_BOX_SUBS').toBeTruthy();
-    expect(m![1]!.split(' ').filter(Boolean).sort()).toEqual(['refresh']);
+    expect(m![1]!.split(' ').filter(Boolean).sort()).toEqual(['litellm', 'refresh']);
   });
 });
 
@@ -787,6 +787,22 @@ describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a muta
 });
 
 describe('ccrc models refresh', () => {
+  // Controller ruling on this task: a successfully-refreshed CODEX lane now
+  // runs the litellm step (§5), which shells out to `pgrep` (is the proxy
+  // running?) and, conditionally, `ccgpt stop`. The fixture HOME rule forbids
+  // reaching this box's real binaries, so every test in this describe gets a
+  // functional stub — not just the ones that name `gpt` explicitly — planted
+  // BEFORE each case, the same shape `describe('ccrc models litellm')`'s own
+  // `pgrep`/`ccgpt` helpers use. Harmless for a test that never refreshes a
+  // codex lane: the litellm step never runs there (§5, "non-codex lanes never
+  // trigger the litellm step"), so the stub just sits unused.
+  beforeEach(() => {
+    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/pgrep-calls"\nexit 1\n', { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 0\n', { mode: 0o755 });
+  });
+
   it('with no argument is a usage error naming both forms', () => {
     const r = run(['models', 'refresh']);
     expect(r.code).toBe(2);
@@ -799,7 +815,7 @@ describe('ccrc models refresh', () => {
     expect(r.code).toBe(0);
     const b = oneObject(r);
     expect(b['ok']).toBe(true);
-    expect(b['refreshed']).toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9 }]);
+    expect(b['refreshed']).toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
   });
 
@@ -994,7 +1010,8 @@ describe('ccrc models refresh', () => {
     fs.writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
     const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(0);
-    expect(oneObject(r)['refreshed']).toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9 }]);
+    expect(oneObject(r)['refreshed'])
+      .toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9, litellm: 'rendered' }]);
     const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.json'), 'utf8'));
     expect(cat.models).toHaveLength(9);
   });
@@ -1030,5 +1047,160 @@ describe('ccrc models refresh', () => {
     expect(r.code).toBe(1);
     expect(oneObject(r)['error']).toBe('registry-invalid');
     expect(String(oneObject(r)['detail'])).toContain('subagent');
+  });
+
+  // Controller ruling on this task: the beforeEach's functional stubs prove
+  // the litellm step BEHAVES correctly; this proves it never falls through to
+  // whatever real `pgrep`/`ccgpt` this box happens to have on PATH if a stub
+  // were ever missing — the same poisoned-tools pattern `env()` uses for
+  // curl, systemctl and launchctl (`poisonLog`), applied here to the two
+  // binaries this step is new for. Poisoned rather than stubbed: both always
+  // exit 97 and log their argv, so `_models_litellm_running`'s nonzero-exit
+  // "not running" reading holds even under a poison, and the assertion is
+  // that `ccgpt`'s poison log — the restart step — stays EMPTY: a restart is
+  // not expected when nothing looks like it is running.
+  it('never reaches a real pgrep or ccgpt — poisoned, and no restart fires when neither looks running', () => {
+    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/pgrep-poison"\n'
+      + 'echo "ccrc tests must never reach a real pgrep" >&2\nexit 97\n', { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-poison"\n'
+      + 'echo "ccrc tests must never reach a real ccgpt" >&2\nexit 97\n', { mode: 0o755 });
+    run(['models', 'gpt', 'init', 'codex']);
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(0);
+    expect(poisonLog('ccgpt')).toEqual([]);
+  });
+});
+
+describe('ccrc models litellm', () => {
+  const configPath = (): string => join(home, '.handoff', 'litellm-config.yaml');
+
+  /** A `pgrep` that answers "LiteLLM is running" or "it is not", and records
+   *  its argv — the probe `ccrc` uses to decide whether a restart is owed. */
+  const pgrep = (running: boolean): void =>
+    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/pgrep-calls"\n${running ? 'echo 4242\nexit 0' : 'exit 1'}\n`,
+      { mode: 0o755 });
+
+  /** A `ccgpt` that records its argv instead of stopping a real proxy. */
+  const ccgpt = (): void =>
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 0\n', { mode: 0o755 });
+
+  const calls = (name: string): string[] => {
+    const p = join(home, `${name}-calls`);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+  };
+
+  beforeEach(() => {
+    pgrep(false); ccgpt();
+    run(['models', 'gpt', 'init', 'codex']);
+    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    fs.rmSync(join(home, 'ccgpt-calls'), { force: true });
+    fs.rmSync(configPath(), { force: true });
+    fs.rmSync(`${configPath()}.prev`, { force: true });
+  });
+
+  it('renders the config from the lane\'s catalogue, with no reasoning key', () => {
+    const r = run(['models', 'litellm', 'gpt']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['changed']).toBe(true);
+    const yaml = fs.readFileSync(configPath(), 'utf8');
+    // Scoped to the GENERATED block, not the whole file — the shipped
+    // template's own header comment (carried verbatim) legitimately says
+    // "reasoning" explaining why there is none; `litellm-render.test.ts`'s
+    // own template-level case already bans a literal `reasoning:` key
+    // anywhere, including in a comment.
+    expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toContain('reasoning');
+    expect(yaml).toContain('  - model_name: gpt-6-astra');
+    expect(yaml).toContain('  - model_name: gpt-6-astra[1m]');
+    expect(yaml).not.toContain('gpt-reserve');
+  });
+
+  it('is idempotent — a second run reports changed:false and touches nothing', () => {
+    run(['models', 'litellm', 'gpt']);
+    const before = fs.statSync(configPath()).mtimeMs;
+    const r = run(['models', 'litellm', 'gpt']);
+    expect(oneObject(r)['changed']).toBe(false);
+    expect(fs.statSync(configPath()).mtimeMs).toBe(before);
+  });
+
+  it('keeps the previous config beside the new one', () => {
+    fs.mkdirSync(join(home, '.handoff'), { recursive: true });
+    fs.writeFileSync(configPath(), 'model_list: []\n');
+    run(['models', 'litellm', 'gpt']);
+    expect(fs.readFileSync(`${configPath()}.prev`, 'utf8')).toBe('model_list: []\n');
+  });
+
+  it('does NOT restart LiteLLM when it is not running', () => {
+    run(['models', 'litellm', 'gpt']);
+    expect(calls('ccgpt')).toEqual([]);
+  });
+
+  it('restarts LiteLLM when it IS running and the config changed, and says it did', () => {
+    pgrep(true);
+    const r = run(['models', 'litellm', 'gpt']);
+    expect(r.code).toBe(0);
+    expect(calls('ccgpt')).toEqual(['stop']);
+    expect(r.stderr).toMatch(/stopped the running LiteLLM proxy/);
+  });
+
+  it('does NOT restart when the config did not change, even if it is running', () => {
+    run(['models', 'litellm', 'gpt']);
+    pgrep(true);
+    fs.rmSync(join(home, 'ccgpt-calls'), { force: true });
+    run(['models', 'litellm', 'gpt']);
+    expect(calls('ccgpt')).toEqual([]);
+  });
+
+  it('refuses a never-probed lane rather than rendering an empty list', () => {
+    fs.rmSync(join(home, '.ccrc', 'models', 'gpt.json'));
+    const r = run(['models', 'litellm', 'gpt']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('never-probed');
+    expect(fs.existsSync(configPath())).toBe(false);
+  });
+
+  it('refuses a lane whose probe is not codex', () => {
+    run(['models', 'router', 'init', 'openrouter']);
+    const r = run(['models', 'litellm', 'router']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('not-a-codex-lane');
+  });
+
+  it('needs an id', () => {
+    expect(run(['models', 'litellm']).code).toBe(2);
+  });
+});
+
+describe('refresh runs the litellm step for a codex lane (§5)', () => {
+  const configPath = (): string => join(home, '.handoff', 'litellm-config.yaml');
+  beforeEach(() => {
+    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    run(['models', 'gpt', 'init', 'codex']);
+  });
+
+  it('a first refresh of the gpt lane renders the config', () => {
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(0);
+    expect(fs.existsSync(configPath())).toBe(true);
+    expect((oneObject(r)['refreshed'] as { litellm: string }[])[0]!.litellm).toBe('rendered');
+  });
+
+  it('a second refresh with the same catalogue leaves it alone', () => {
+    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const before = fs.statSync(configPath()).mtimeMs;
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(fs.statSync(configPath()).mtimeMs).toBe(before);
+    expect((oneObject(r)['refreshed'] as { litellm: string }[])[0]!.litellm).toBe('unchanged');
+  });
+
+  it('a non-Codex lane\'s refresh never touches the LiteLLM config', () => {
+    run(['models', 'router', 'init', 'openrouter']);
+    const orRaw = join(here, 'fixtures', 'catalogues', 'openrouter-raw-page.json');
+    run(['models', 'refresh', 'router'], { CCRC_MODELS_PROBE_FIXTURE: orRaw });
+    expect(fs.existsSync(configPath())).toBe(false);
   });
 });

@@ -49,6 +49,7 @@ import {
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../shared/modelenv.mjs';
+import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
 
@@ -410,6 +411,7 @@ const OPS = {
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
   materialise: { keys: ['file', 'id'], required: ['file', 'id'] },
   rm: { keys: ['file', 'id'], required: ['file', 'id'] },
+  litellm: { keys: ['file', 'id', 'template', 'out'], required: ['file', 'id', 'template', 'out'] },
 };
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
@@ -573,6 +575,58 @@ function main(argv) {
 
   if (opName === 'show') {
     out({ ok: true, op: 'show', ...describe(account, registry, catalogue) });
+    return 0;
+  }
+
+  if (opName === 'litellm') {
+    // §6.3. The DESTINATION and the TEMPLATE are both passed in rather than
+    // resolved here, so this op can be measured against a fixture HOME and so
+    // `ccd/ccrc` stays the one place that knows where a deployed box keeps its
+    // LiteLLM config.
+    //
+    // It is the CODEX lane's, keyed on the registry's probe kind (round-2
+    // ruling 10): rendering `chatgpt/<id>` entries from another provider's
+    // catalogue would produce a config naming models the backend has never
+    // heard of.
+    if (registry === null || registry.probe !== 'codex') {
+      return refuse(1, 'not-a-codex-lane',
+        `account "${a.id}" has `
+        + `${registry === null ? 'no class registry' : `probe "${registry.probe}"`}. The LiteLLM `
+        + 'model list is the Codex lane\'s, and rendering it from another probe\'s catalogue would '
+        + 'produce a config that names models the backend has never heard of.');
+    }
+    if (catalogue === null) {
+      return refuse(1, 'never-probed',
+        `account "${a.id}" has never been probed, so there is no catalogue to render a model list `
+        + `from. Run 'ccrc models refresh ${a.id}' first. Nothing was written.`);
+    }
+    let text;
+    try {
+      text = renderLitellmConfig(readFileSync(a.template, 'utf8'), catalogue);
+    } catch (e) {
+      if (e instanceof LitellmTemplateInvalid) return refuse(1, 'template-invalid', e.message);
+      return refuse(1, 'template-unreadable', `${a.template} could not be read: ${e.message}`);
+    }
+    let previous = null;
+    try { previous = readFileSync(a.out, 'utf8'); } catch { previous = null; }
+    if (previous === text) {
+      out({ ok: true, op: 'litellm', id: a.id, path: a.out, changed: false });
+      return 0;
+    }
+    try {
+      mkdirSync(path.dirname(a.out), { recursive: true });
+      // The PREVIOUS bytes are kept beside the new ones (§11): if LiteLLM will
+      // not come back up on the rendering, the operator needs the config that
+      // was working, and `ccrc doctor` needs something to compare against.
+      if (previous !== null) writeFileSync(`${a.out}.prev`, previous, { mode: 0o600 });
+      const tmp = `${a.out}.ccrc.tmp`;
+      writeFileSync(tmp, text, { mode: 0o600 });
+      renameSync(tmp, a.out);
+    } catch (e) {
+      return refuse(1, 'config-unwritable', `${a.out} could not be written: ${e.message}`);
+    }
+    out({ ok: true, op: 'litellm', id: a.id, path: a.out, changed: true,
+      models: catalogue.models.filter((m) => !m.hidden).length });
     return 0;
   }
 

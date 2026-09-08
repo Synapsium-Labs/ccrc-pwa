@@ -1116,7 +1116,7 @@ MODELS_SUBS="discovery init rm set-class set-effort set-subagent show"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
-MODELS_BOX_SUBS="refresh"
+MODELS_BOX_SUBS="refresh litellm"
 
 # The words that are never read as an account id in `ccrc models <here>`.
 # It is the GRAMMAR and not the implementation, so it lists both box-wide
@@ -1160,6 +1160,11 @@ already running).
             change it — each re-writing that lane's own settings.json.
             "ccrc models refresh <id>|--all" probes the provider catalogues
             those classes are classified against
+            . "ccrc models litellm <id>" regenerates the Codex lane's
+            LiteLLM model list from that catalogue — one entry per visible
+            model and no reasoning keys, because effort has exactly one
+            owner — and restarts the proxy only if it is holding the
+            previous rendering
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -4074,6 +4079,42 @@ _models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fr
   return "$rc"
 }
 
+# Where a box keeps LiteLLM's config, and the template it is rendered from. The
+# destination is the ONE thing `ccgpt` and this verb must agree about
+# (`infra/handoff/ccgpt:20` reads `${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}`),
+# so the same override is honoured here.
+_models_litellm_path()     { printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }
+_models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
+
+# "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
+# starts it with (`infra/handoff/ccgpt:95`: `litellm --config "$CONFIG" …`).
+# NOT a port check: the port answering says something is listening, not that it
+# is listening on THESE bytes, and the question here is exactly whether the
+# process holds a config this run just replaced.
+_models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
+
+# Render, and restart only if BOTH halves are true: the bytes changed AND a
+# proxy is holding the old ones. In-flight gpt turns fail once and retry (§6.3),
+# which is a cost worth paying for a config that has changed and not one for a
+# config that has not.
+_models_litellm() {   # <accountId> -> prints the op's JSON body
+  local file body rc
+  file="$(_models_roster_path)"
+  body="$(_models_answer litellm --file "$file" --id "$1" \
+            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; rc=$?
+  printf '%s\n' "$body"
+  [ "$rc" -eq 0 ] || return "$rc"
+  if [ "$(printf '%s' "$body" | jq -r '.changed')" = "true" ] && _models_litellm_running; then
+    if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
+      echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
+    else
+      echo "$PROG: the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand; until then this box serves the old model list. The previous config is at $(_models_litellm_path).prev." >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # The box-wide half of the verb group: the CATALOGUES the class registries are
 # classified against, which is a different question from a lane's own classes
 # and runs on a different cadence — a timer runs `--all` hourly
@@ -4129,7 +4170,7 @@ _models_box_sub() {   # <subcommand> [args…]
           || _models_refuse registry-invalid 1 "$invalid"
       fi
 
-      local rows=() failed=0 n i id probe baseurl count reginvalid row
+      local rows=() failed=0 n i id probe baseurl count reginvalid row lit
       n="$(printf '%s' "$wanted" | jq 'length')"
       i=0
       while [ "$i" -lt "$n" ]; do
@@ -4154,10 +4195,29 @@ _models_box_sub() {   # <subcommand> [args…]
           # same run.
           _models_node materialise --file "$file" --id "$id" >/dev/null 2>&1 || true
           count="$(jq '.models | length' "$HOME/.ccrc/models/$id.json" 2>/dev/null || echo 0)"
-          row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" '{id:$id, probe:$p, ok:true, count:$c}')"
+          # §5: the LiteLLM step runs for a CODEX lane, and the RENDERER
+          # decides whether anything changed — comparing bytes it just
+          # produced against the bytes on disk is a stronger question than
+          # "did the visible set change", and it is the same question,
+          # because the visible set is the only input the rendering has.
+          lit="skipped"
+          if [ "$probe" = "codex" ]; then
+            local lbody
+            if lbody="$(_models_litellm "$id" 2>/dev/null)"; then
+              [ "$(printf '%s' "$lbody" | tail -n1 | jq -r '.changed')" = "true" ] \
+                && lit="rendered" || lit="unchanged"
+            else
+              lit="failed"
+            fi
+          fi
+          row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
+            '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.
+          # No `litellm` field here — the step never ran, and Fix round 1's
+          # own ruling already dropped `count` from a failed row for the same
+          # reason: neither is a fact about a lane the probe never reached.
           row="$(jq -cn --arg id "$id" --arg p "$probe" --arg reason "$MODELS_REFRESH_REASON" \
             '{id:$id, probe:$p, ok:false, reason:$reason}')"
           failed=1
@@ -4172,6 +4232,14 @@ _models_box_sub() {   # <subcommand> [args…]
       printf '%s\n' "$(jq -cn --argjson rows "$(printf '%s\n' "${rows[@]+${rows[@]}}" | jq -cs 'map(select(. != null))')" \
         '{ok: ($rows | all(.ok)), op: "refresh", refreshed: $rows}')"
       [ "$failed" -eq 0 ] || return 1
+      return 0
+      ;;
+    litellm)
+      local id="${1:-}"
+      [ -n "$id" ] || _models_refuse missing-argument 2 "ccrc models litellm needs a lane id: ccrc models litellm <id>"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models litellm takes one lane id, and got \"$1\""
+      _models_litellm "$id" || exit $?
       return 0
       ;;
     *) _models_refuse internal-no-arm 1 "ccrc models lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
