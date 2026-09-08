@@ -21,11 +21,11 @@ describe('readLimits', () => {
     writeFileSync(path.join(dir, 'gpt.json'), 'not json');
 
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
-    expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+    expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60, fiveResetAt: now + 3600, sevenResetAt: now + 86400, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
     expect(l['claude-a'].five).toBe(0);
     expect(l['claude-a'].seven).toBe(80);
     expect(l['claude-b']).toMatchObject({ five: 0, seven: 0 });
-    expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+    expect(l['gpt']).toEqual({ five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
   });
 });
 
@@ -144,7 +144,7 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
     const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
     expect(l['claude-a']).toEqual({
       five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null,
-      fiveRolledOver: false, sevenRolledOver: false, disabled: true,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: true, authDead: false,
     });
   });
 
@@ -166,5 +166,36 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
     expect(l['autocompact']).toBeUndefined();
     expect(l['bogus-lane']).toBeUndefined();
     expect(Object.keys(l)).toEqual([]);
+  });
+
+  it('surfaces an auth-dead lane the same way a disabled one is surfaced', () => {
+    // A lane can be condemned before it has ever written telemetry, and a lane
+    // absent from `out` is indistinguishable from one nobody measured — which
+    // scores as the emptiest account on the fleet. Same hole, same closure.
+    const home = mkTmp('ccrc-limits-authdead-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'claude-a-authdead'), '1757203200 auth-401');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    return readLimits(localIO, cfg).then((l) => {
+      expect(l['claude-a']).toMatchObject({ authDead: true, disabled: false, five: null });
+    });
+  });
+
+  it('never fabricates a row for an -authdead marker that names no account', () => {
+    // `inRoster`'s job, and the reason the `-disabled` loop already has it: the
+    // registry holds dotless fleet-wide switches too, and a marker for an
+    // account the roster does not have must not become a phantom row on
+    // GET /api/accounts.
+    const home = mkTmp('ccrc-limits-authdead-phantom-');
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'not-an-account-authdead'), '1757203200 auth-401');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    return readLimits(localIO, cfg).then((l) => {
+      expect(Object.keys(l)).not.toContain('not-an-account');
+    });
   });
 });

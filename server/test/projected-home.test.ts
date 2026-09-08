@@ -70,6 +70,20 @@ const seedDisabled = (wrappers: string[]): void => {
   }
 };
 
+/** `<w>-authdead` in `.cc-sessions` — the account-health probe's marker, in the
+ *  same directory `<w>-disabled` lives in, so both implementations read it off
+ *  the one `readdir`/glob they already do. */
+const seedAuthDead = (wrappers: string[]): void => {
+  const dir = path.join(home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of fs.readdirSync(dir)) {
+    if (name.endsWith('-authdead')) fs.rmSync(path.join(dir, name));
+  }
+  for (const w of wrappers) {
+    fs.writeFileSync(path.join(dir, `${w}-authdead`), '1757203200 auth-401');
+  }
+};
+
 /** `_limit_score` says "wholly unknown" with an empty string, and `|| '0'` IS
  *  reached — by `all-rolled-over`, whose expected winner is unmeasured on both
  *  sides the moment the provenance fix lands (until then it is an inferred 0 on
@@ -88,6 +102,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
     async (_name, c) => {
       seed(c.files);
       seedDisabled(c.disabled ?? []);
+      seedAuthDead(c.authDead ?? []);
       const cfg = loadConfig({ CCRC_HOME: home });
       const projected = projectHome(cfg.roster, await readLimits(localIO, cfg));
 
@@ -137,7 +152,7 @@ describe('projectHome ranks unmeasured below measured', () => {
   ] });
   const L = (five: number | null, seven: number | null): AccountLimits =>
     ({ five, seven, ts: 1, fiveResetAt: null, sevenResetAt: null,
-       fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+       fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
 
   it('an unmeasured account never beats a measured one', () => {
     // The bug, in one line: before Task 6 this returned `{ wrapper: 'b',
@@ -236,5 +251,34 @@ describe('projectHome ranks unmeasured below measured', () => {
       a: L(50, 50),
       b: { ...L(0, 40), fiveRolledOver: true },
     })).toEqual({ wrapper: 'a', score: 50 });
+  });
+});
+
+// PINNED HERE AND NOT IN `leastLoaded.ts`, and the reason is the parity
+// runner's THIRD assertion rather than a preference. That runner demands
+// `shellScore(c.expect.wrapper) === c.expect.score`, and this is the one shape
+// where the two languages agree on the ACCOUNT and cannot agree on the NUMBER:
+// `projectHome` drops every condemned lane from `scored`, empties it, and takes
+// the pre-existing `scored.length === 0` fallback — which reports score 0 —
+// while `_limit_score claude` still reads the 80 that is really on disk.
+//
+// The ACCOUNT is what this case is about, and both sides answer `claude`. The
+// score divergence is recorded as a deviation rather than smuggled through a
+// fixture field that would let any FUTURE case disagree quietly — which is the
+// one thing a parity harness may not allow.
+describe('every home-able lane condemned — both sides still place', () => {
+  it('falls back to the first home-able account in roster declaration order', async () => {
+    const n = now();
+    const fresh = (five: number, seven: number): string => JSON.stringify(
+      { five, seven, ts: n - 60, fiveResetAt: n + 9000, sevenResetAt: n + 400000 });
+    seed({ claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) });
+    seedDisabled([]);
+    seedAuthDead(['claude', 'claude-a', 'claude-b', 'claude-d']);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const projected = projectHome(cfg.roster, await readLimits(localIO, cfg));
+    // NOT null, and not the cheapest lane: ccd assigns `first` BEFORE its own
+    // skip, so a fleet whose every lane is merely UNVERIFIED still places work.
+    expect(projected?.wrapper, 'the server refuses to place on an all-condemned fleet').toBe('claude');
+    expect(sh('_ws_least_loaded'), 'ccd disagrees').toBe('claude');
   });
 });

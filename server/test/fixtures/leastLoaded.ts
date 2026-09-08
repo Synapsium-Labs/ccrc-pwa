@@ -26,6 +26,13 @@ export interface LeastLoadedCase {
    *  file both implementations already read). Omitted/empty means no lane is
    *  declared off. */
   disabled?: string[];
+  /** Wrappers carrying a `<w>-authdead` marker — the account-health probe's
+   *  verdict, in the same registry directory as `-disabled` and read on the same
+   *  `readdir`. It ranks an account out of SCORING on both sides, and out of
+   *  neither side's fallback: ccd assigns `first` BEFORE its skip, so the TS
+   *  must drop the account from `scored` and leave `live`/`scorable[0]` alone.
+   *  Omitted/empty means nothing is condemned. */
+  authDead?: string[];
   /** `null` iff every home-able lane is disabled — nothing is placeable, and
    *  both sides must say so in their own idiom (see the runner). */
   expect: { wrapper: string; score: number } | null;
@@ -185,6 +192,14 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       why: 'every home-able window has turned over, so nothing is measured — both sides fall '
         + 'back to the first home-able account in roster order rather than answering '
         + '"nothing is placeable"',
+    },
+    {
+      name: 'authdead-loses-scoring',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      authDead: ['claude-a'],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'the cheapest lane is condemned, so the cheapest lane nobody condemned wins — '
+        + 'a health verdict costs preference, never eligibility',
     },
   ];
 }

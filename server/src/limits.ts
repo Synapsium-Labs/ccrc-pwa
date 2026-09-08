@@ -24,6 +24,17 @@ export interface AccountLimits {
    *  the account: the server knows the difference between "no telemetry" and
    *  "switched off", and collapsing them loses it. */
   disabled: boolean;
+  /** The account-health probe's durable verdict
+   *  (`~/.cc-sessions/<wrapper>-authdead`, `"<epoch> <reason>"`) is standing:
+   *  something measured this credential and it did not authenticate. A POSITIVE
+   *  FLAG for `disabled`'s exact reason — "no telemetry" and "measured dead" are
+   *  different facts, and collapsing them loses the one a person acts on.
+   *
+   *  NOT the same fact as `disabled` and never folded into it: that marker is
+   *  operator INTENT, which cannot be wrong; this is a MEASUREMENT, which can
+   *  be. That difference is why `projectHome` spends it on SCORING only, and why
+   *  ccd's `_account_ok` never sees it at all. */
+  authDead: boolean;
 }
 
 const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
@@ -97,12 +108,16 @@ const measured = (l: AccountLimits | undefined): number | null =>
  * reports honestly and gpt is held out by `homeAble`. An unmeasured account now
  * ranks BELOW every measured one instead of above them.
  *
- * Two accounts are excluded from scoring for two different reasons, and
+ * Three accounts are excluded from scoring for two different reasons, and
  * conflating them is what produced the bug:
  *   - `telemetry: 'none'` (`shared/roster.ts`) — this account will NEVER report,
  *     so its permanent unknown must not be read as permanent emptiness.
  *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:252)
  *     gates `_ws_least_loaded` on exactly that marker.
+ *   - `authDead` — the health probe measured this credential dead, so its
+ *     telemetry describes a lane nothing can run on. It leaves SCORING only;
+ *     unlike the two above it, it does not leave `live`, because ccd's own
+ *     fallback does not exclude it either.
  *
  * UNKNOWN IS ALSO NOT UNPLACEABLE. On a fresh install nothing has reported yet,
  * so if excluding unmeasured accounts could empty the field, this would return
@@ -132,7 +147,15 @@ export function projectHome(roster: Roster, limits: Record<string, AccountLimits
   const live = roster.homeAble.filter((a) => limits[a.id]?.disabled !== true);
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
+  // AN AUTH-DEAD ACCOUNT LEAVES THE SCORED SET AND NOTHING ELSE, and the
+  // asymmetry is a mirror, not a preference. `_ws_least_loaded` assigns its
+  // `first` fallback BEFORE its own `_authdead … && continue`, so a fleet whose
+  // every home-able lane is condemned still places work on the first one in
+  // roster order. Filtering `live` or `scorable` here instead would make this
+  // side answer a different account — or `null` — and `projected-home.test.ts`
+  // drives both languages over one seeded HOME precisely to catch that.
   const scored = scorable
+    .filter((a) => limits[a.id]?.authDead !== true)
     .map((a) => ({ wrapper: a.id, score: measured(limits[a.id]) }))
     .filter((s): s is { wrapper: string; score: number } => s.score !== null);
   // `scorable[0] ?? live[0]!`: a roster whose every home-able account opts out
@@ -153,6 +176,12 @@ export async function readLimits(
   const regNames = (await io.readdir(cfg.registryDir)) ?? [];
   const disabledLanes = new Set(
     regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)),
+  );
+  // The same `readdir`, a second suffix. Both markers are dotless per-account
+  // files in one directory, so this costs nothing beyond a second pass over a
+  // list already in memory.
+  const authDeadLanes = new Set(
+    regNames.filter((n) => n.endsWith('-authdead')).map((n) => n.slice(0, -'-authdead'.length)),
   );
   const out: Record<string, AccountLimits> = {};
   for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
@@ -199,11 +228,11 @@ export async function readLimits(
       }
 
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
-                       disabled: disabledLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                        sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                       disabled: disabledLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
     }
   }
   // A lane can be markered off before it ever writes telemetry (fresh
@@ -224,12 +253,18 @@ export async function readLimits(
   // `ACCOUNT_ORDER` at import time — a shape runtime roster data cannot have,
   // since at import time there is no roster yet. `accounts-route.test.ts` pins
   // the phantom row's absence.
-  for (const wrapper of disabledLanes) {
+  //
+  // …the same for a lane the PROBE condemned before anything ran on it. Absent
+  // is indistinguishable from unknown, which scores as the emptiest account on
+  // the fleet — the exact self-reinforcing hole `disabled` exists to close, and
+  // an auth-dead lane falls into it identically. `inRoster` is doing the same
+  // job for both: the registry also holds dotless markers that name no account.
+  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes])) {
     if (wrapper in out) continue;
     if (!inRoster(cfg.roster, wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                     disabled: true };
+                     disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
   }
   return out;
 }
