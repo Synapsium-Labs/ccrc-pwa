@@ -1772,12 +1772,14 @@ MSG
 - Produces:
   ```js
   export class ModelEnvInvalid extends Error {}
+  export const MODEL_ENV_KEYS                             // → the seven key names, frozen
   export function modelEnvBlock(registry)                // → the seven env keys
   export function mergeSettingsEnv(settingsPath, block)  // → { changed: boolean }
+  export function clearSettingsEnv(settingsPath, keys)   // → { changed: boolean }
   export function effortFile(registry, catalogue)        // → { byModel: { [modelId]: level } }
   export function classesTsv(registry, catalogue)        // → 'haiku\t<id>\tassigned\n' × 4
   ```
-  Tasks 6–10 call all four; Plan 2 reads `classesTsv`'s output from bash and branches on its THIRD column; the monorepo shim (Task 13) reads `effortFile`'s output.
+  Tasks 6–10 call `modelEnvBlock`, `effortFile` and `classesTsv`; Plan 2 reads `classesTsv`'s output from bash and branches on its THIRD column; the monorepo shim (Task 13) reads `effortFile`'s output. `clearSettingsEnv` is `ccrc models <id> rm`'s whole settings step (Task 6): called with `MODEL_ENV_KEYS` so the seven names are spelled once, at their point of origin, rather than a second time at every call site (spec §4.1 Lifecycle, §10, §11).
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -1793,7 +1795,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  ModelEnvInvalid, classesTsv, effortFile, mergeSettingsEnv, modelEnvBlock,
+  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../../shared/modelenv.mjs';
 import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
 
@@ -1946,6 +1948,61 @@ describe('mergeSettingsEnv', () => {
   });
 });
 
+describe('MODEL_ENV_KEYS', () => {
+  it('is the seven keys modelEnvBlock writes, frozen, so a caller never spells them twice', () => {
+    expect([...MODEL_ENV_KEYS].sort()).toEqual(Object.keys(modelEnvBlock(SEEDED)).sort());
+    expect(Object.isFrozen(MODEL_ENV_KEYS)).toBe(true);
+  });
+});
+
+describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1 Lifecycle, §10)', () => {
+  const settings = (): string => path.join(home, '.claude-gpt', 'settings.json');
+
+  it('clears exactly the seven keys, leaving every other env key untouched', () => {
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings(), JSON.stringify({
+      alwaysThinkingEnabled: true,
+      env: { ...modelEnvBlock(SEEDED), DISABLE_TELEMETRY: '1' },
+    }, null, 2));
+    const r = clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+    expect(r).toEqual({ changed: true });
+    const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
+    expect(j.alwaysThinkingEnabled).toBe(true);
+    expect(j.env).toEqual({ DISABLE_TELEMETRY: '1' });
+  });
+
+  it('removes env entirely once emptied by the deletion, rather than writing {}', () => {
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings(), JSON.stringify({ env: modelEnvBlock(SEEDED) }, null, 2));
+    clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+    const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
+    expect(Object.keys(j)).toEqual([]);
+  });
+
+  it('a missing settings file is changed:false, and nothing is written', () => {
+    const r = clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+    expect(r).toEqual({ changed: false });
+    expect(fs.existsSync(settings())).toBe(false);
+  });
+
+  it('a second call is idempotent — changed:false, and rewrites nothing', () => {
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings(), JSON.stringify({ env: modelEnvBlock(SEEDED) }, null, 2));
+    clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+    const before = fs.statSync(settings()).mtimeMs;
+    const r = clearSettingsEnv(settings(), MODEL_ENV_KEYS);
+    expect(r).toEqual({ changed: false });
+    expect(fs.statSync(settings()).mtimeMs).toBe(before);
+  });
+
+  it('refuses a settings file that is not JSON, rather than overwriting it', () => {
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    fs.writeFileSync(settings(), '{ this is not json');
+    expect(() => clearSettingsEnv(settings(), MODEL_ENV_KEYS)).toThrow(ModelEnvInvalid);
+    expect(fs.readFileSync(settings(), 'utf8')).toBe('{ this is not json');
+  });
+});
+
 describe('classesTsv — three columns, availability as its own marker (§7)', () => {
   it('is four lines in CLASSES order: class, modelId, state', () => {
     expect(classesTsv(SEEDED, CODEX)).toBe(
@@ -2087,6 +2144,22 @@ export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
 }
 
+/** The seven keys `modelEnvBlock` writes, frozen so a caller iterates them
+ *  rather than spelling them a second time. `clearSettingsEnv(path,
+ *  MODEL_ENV_KEYS)` is `ccrc models <id> rm`'s whole settings step (spec §4.1
+ *  Lifecycle, §10, §11) — the single-writer pin below counts this export as
+ *  the one place these seven names originate, so a caller that respelled them
+ *  would be a second definition and not merely a second writer. */
+export const MODEL_ENV_KEYS = Object.freeze([
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_FABLE_MODEL',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+]);
+
 const slot = (registry, cls) => {
   const v = registry.classes[cls];
   return typeof v === 'string' && v.length > 0 ? v : null;
@@ -2211,6 +2284,69 @@ export function mergeSettingsEnv(settingsPath, block) {
 }
 
 /**
+ * `(settingsPath: string, keys: readonly string[]) => { changed: boolean }`
+ *
+ * `ccrc models <id> rm`'s whole settings step (spec §4.1 Lifecycle, §10, §11):
+ * deletes exactly the given keys from a lane's settings `env`, and nothing
+ * else. Other env keys are left untouched and every other top-level key is
+ * left untouched too — the same "this lane owns its own settings" rule
+ * `mergeSettingsEnv` keeps, in the other direction. An `env` left EMPTY by the
+ * deletion is removed rather than kept as `{}`, so a fully-reaped lane's
+ * settings file carries no trace of the block.
+ *
+ * A MISSING settings file is not an error: there is nothing to clear, nothing
+ * is written, and `{ changed: false }` comes back — `rm` is idempotent, and a
+ * second call against an already-reaped lane must be silent.
+ *
+ * Written tmp + rename, the same atomicity `mergeSettingsEnv` uses.
+ *
+ * @throws {ModelEnvInvalid} on a settings file that is not JSON, or whose top
+ *   level is not an object — the same refusal `mergeSettingsEnv` makes, for
+ *   the same reason: the alternative is destroying a hand-edited file to
+ *   reap seven keys from it.
+ */
+export function clearSettingsEnv(settingsPath, keys) {
+  let json;
+  try {
+    const text = readFileSync(settingsPath, 'utf8');
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      throw new ModelEnvInvalid(
+        `${settingsPath} is not valid JSON (${e.message}), so this run will not rewrite it. Fix the `
+        + 'file by hand, then re-run — nothing was written.');
+    }
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) throw e;
+    if (e.code === 'ENOENT') return { changed: false };
+    throw new ModelEnvInvalid(`${settingsPath} could not be read: ${e.message}. Nothing was written.`);
+  }
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+    throw new ModelEnvInvalid(
+      `${settingsPath} does not hold a JSON object, so it is not a Claude Code settings file. `
+      + 'Nothing was written.');
+  }
+  const env = (typeof json.env === 'object' && json.env !== null && !Array.isArray(json.env))
+    ? json.env : {};
+  let changed = false;
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(env, k)) { delete env[k]; changed = true; }
+  }
+  if (!changed) return { changed: false };
+  if (Object.keys(env).length === 0) delete json.env;
+  else json.env = env;
+  const tmp = `${settingsPath}.ccrc.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, settingsPath);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* the tmp may never have been created */ }
+    throw new ModelEnvInvalid(`${settingsPath} could not be written: ${e.message}.`);
+  }
+  return { changed: true };
+}
+
+/**
  * `(registry: Registry, catalogue: Catalogue | null) => { byModel: Record<string,string> }`
  *
  * The lane's default effort per class, re-keyed BY MODEL ID so `ccgpt-proxy`
@@ -2285,9 +2421,13 @@ export interface ModelEnv {
   CLAUDE_CODE_SUBAGENT_MODEL: string;
 }
 export declare class ModelEnvInvalid extends Error {}
+export declare const MODEL_ENV_KEYS: readonly string[];
 export declare function modelEnvBlock(registry: Registry): ModelEnv;
 export declare function mergeSettingsEnv(
   settingsPath: string, block: Record<string, string>,
+): { changed: boolean };
+export declare function clearSettingsEnv(
+  settingsPath: string, keys: readonly string[],
 ): { changed: boolean };
 export declare function effortFile(
   registry: Registry, catalogue: Catalogue | null,
@@ -2372,12 +2512,53 @@ describe('§6.1 — one writer of the model env block', () => {
     expect(tracked()).toContain('shared/modelenv.mjs');
   });
 });
+
+// §4.1 Lifecycle and §10: `ccrc models <id> rm` deletes the same seven keys
+// `clearSettingsEnv` owns — a SECOND function that deleted them (rather than
+// calling `clearSettingsEnv`) would be a second opinion about what "reaped"
+// means, resolved by whichever ran last, exactly like a second writer. This
+// is its own describe rather than folded into the one above: the two
+// predicates ask different questions of the same corpus and a single holders
+// list conflating "writes" and "deletes" would stop naming which one broke.
+/** A file DELETES the block if it spells `MODEL_ENV_KEYS` — the frozen export
+ *  that is the one place these seven names originate — AND reaches a settings
+ *  file in the same breath, either by deleting a key off an `env` object or by
+ *  rewriting the file outright. Importing or logging the export is not
+ *  deleting it, which is why the second half of the conjunction is here too. */
+export function deletesTheBlock(src: string): boolean {
+  if (!/MODEL_ENV_KEYS/.test(src)) return false;
+  return /(delete\s+env\[|writeFileSync|renameSync)/.test(src) && /settings\.json/.test(src);
+}
+
+describe('§4.1 Lifecycle, §10 — one deleter of the model env block\'s keys', () => {
+  it('is also shared/modelenv.mjs, and nothing else in the tree', () => {
+    const holders = tracked()
+      .filter((rel) => {
+        try { return deletesTheBlock(readFileSync(path.join(REPO, rel), 'utf8')); }
+        catch { return false; }
+      })
+      .filter((rel) => !rel.startsWith('server/test/') && !rel.startsWith('pwa/test/')
+        && !rel.startsWith('agent/test/'))
+      .sort();
+    expect(holders).toEqual(['shared/modelenv.mjs']);
+  });
+
+  it('the predicate is not vacuous — it catches a second deleter and ignores prose', () => {
+    expect(deletesTheBlock(
+      'import { MODEL_ENV_KEYS } from "./modelenv.mjs";\n'
+      + 'for (const k of MODEL_ENV_KEYS) { delete env[k]; }\n'
+      + "// env belongs to a lane's settings.json")).toBe(true);
+    expect(deletesTheBlock('// MODEL_ENV_KEYS is the export clearSettingsEnv iterates'))
+      .toBe(false);
+    expect(deletesTheBlock('writeFileSync(p, "hello"); // settings.json')).toBe(false);
+  });
+});
 ```
 
 - [ ] **Step 7: Run the pin to verify it passes**
 
 Run: `cd server && npx vitest run test/modelenv-single-writer.test.ts`
-Expected: PASS, 3 tests. If `holders` comes back with an extra path, read that file — a second writer is either a bug to fix or a `mergeSettingsEnv` call whose file also happens to mention the variables, in which case tighten the predicate rather than adding an exception, and record which you did.
+Expected: PASS, 5 tests. If either `holders` comes back with an extra path, read that file — a second writer or deleter is either a bug to fix or a call whose file also happens to mention the variables, in which case tighten the predicate rather than adding an exception, and record which you did.
 
 - [ ] **Step 8: Measured mutation check — the single-writer pin catches a second writer**
 
@@ -2393,6 +2574,21 @@ export function bad(p) {
 
 then `git add deploy/second-writer.mjs` (the scan is over TRACKED files) and run `cd server && npx vitest run test/modelenv-single-writer.test.ts`.
 Expected: one case red — `is shared/modelenv.mjs, and nothing else in the tree`, reporting `[ 'deploy/second-writer.mjs', 'shared/modelenv.mjs' ]`. Then `git rm -f --cached deploy/second-writer.mjs && rm deploy/second-writer.mjs` and re-run; expected PASS.
+
+- [ ] **Step 8b: Measured mutation check — the single-writer pin catches a second deleter**
+
+Create a throwaway `deploy/second-deleter.mjs`:
+
+```js
+import { MODEL_ENV_KEYS } from '../shared/modelenv.mjs';
+export function bad(env) {
+  for (const k of MODEL_ENV_KEYS) delete env[k];
+}
+// env came from a lane's settings.json
+```
+
+then `git add deploy/second-deleter.mjs` and run `cd server && npx vitest run test/modelenv-single-writer.test.ts`.
+Expected: one case red — `is also shared/modelenv.mjs, and nothing else in the tree`, reporting `[ 'deploy/second-deleter.mjs', 'shared/modelenv.mjs' ]`. Then `git rm -f --cached deploy/second-deleter.mjs && rm deploy/second-deleter.mjs` and re-run; expected PASS.
 
 - [ ] **Step 9: Write the alias-only fixture and its guard**
 
@@ -2525,6 +2721,16 @@ Expected: one case red — `ADDS and UPDATES, and never removes another key …`
 Change `if (row !== undefined && row.efforts.length > 0 && !row.efforts.includes(level)) continue;` to `if (false) continue;`. Run `cd server && npx vitest run test/modelenv.test.ts`.
 Expected: one case red — `drops a level the catalogue says that model does not offer`. Then change it to `if (row === undefined || !row.efforts.includes(level)) continue;` and re-run: expected two DIFFERENT cases red — `keeps an unvalidatable level when there is no catalogue at all` and `keeps a level when the catalogue lists the model with NO efforts at all`. Restore the original and re-run; expected PASS. (Both directions are measured because the rule is an asymmetry, and only a mutation in each direction shows the asymmetry is load-bearing.)
 
+- [ ] **Step 16b: Measured mutation check — clearSettingsEnv deletes ONLY the given keys**
+
+In `clearSettingsEnv`, change `for (const k of keys) {` to `for (const k of Object.keys(env)) {` (deleting every env key rather than the ones named). Run `cd server && npx vitest run test/modelenv.test.ts`.
+Expected: one case red — `clears exactly the seven keys, leaving every other env key untouched`, on `expect(j.env).toEqual({ DISABLE_TELEMETRY: '1' })` (now `{}`). Restore and re-run; expected PASS.
+
+- [ ] **Step 16c: Measured mutation check — an emptied env is removed, not left as `{}`**
+
+Change `if (Object.keys(env).length === 0) delete json.env; else json.env = env;` to `json.env = env;`. Run `cd server && npx vitest run test/modelenv.test.ts`.
+Expected: one case red — `removes env entirely once emptied by the deletion, rather than writing {}`, on `expect(Object.keys(j)).toEqual([])` (now `['env']`). Restore and re-run; expected PASS.
+
 - [ ] **Step 17: Commit**
 
 ```bash
@@ -2552,6 +2758,13 @@ and a retired class keeps the id the operator assigned it.
 The §6.1 alias-only rule becomes a test over every TRACKED settings file, and the
 env block gains a single-writer pin the .tsx?-filtered single-definition scan
 could never have caught.
+
+`clearSettingsEnv` and its frozen `MODEL_ENV_KEYS` are `ccrc models <id> rm`'s
+whole settings step (Task 6): deletes exactly the seven keys the materialiser
+owns, off ANY lane's env, and removes an env left empty by the deletion — nothing
+else in that file moves. The single-writer pin now also pins the single DELETER
+of those keys, for the same reason a second writer would be two opinions about
+what a lane routes to.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG
@@ -3676,21 +3889,22 @@ MSG
 - Test: `server/test/models-op.test.ts`
 
 **Interfaces:**
-- Consumes: `rosterFromJson`, `RosterInvalid` from `shared/roster-json.mjs` (already on `main`, READ ONLY — nothing here writes the roster); `parseRegistry`, `parseCatalogue`, `deriveModels`, `availableFor`, `RegistryInvalid`, `CatalogueInvalid`, `MODEL_ID_RE` from `shared/models.mjs` (Task 2); `modelEnvBlock`, `mergeSettingsEnv`, `effortFile`, `classesTsv`, `ModelEnvInvalid` from `shared/modelenv.mjs` (Task 3).
+- Consumes: `rosterFromJson`, `RosterInvalid` from `shared/roster-json.mjs` (already on `main`, READ ONLY — nothing here writes the roster); `parseRegistry`, `parseCatalogue`, `deriveModels`, `availableFor`, `RegistryInvalid`, `CatalogueInvalid`, `MODEL_ID_RE` from `shared/models.mjs` (Task 2); `modelEnvBlock`, `mergeSettingsEnv`, `clearSettingsEnv`, `MODEL_ENV_KEYS`, `effortFile`, `classesTsv`, `ModelEnvInvalid` from `shared/modelenv.mjs` (Task 3).
 - Produces, as a CLI invoked `node deploy/models-op.mjs <op> [--key value]…`:
 
   | op | keys | answer |
   |---|---|---|
   | `lanes` | `--file` | `{ok, op, lanes: [{id, configDirSuffix, anthropic, hasRegistry, probe, baseUrl}]}` |
-  | `show` | `--file --id` | `{ok, op, id, anthropic, registry, derived, catalogue, settingsDrift}` |
+  | `show` | `--file --id` | `{ok, op, id, anthropic, registry, derived, catalogue, settingsDrift, orphan?}` |
   | `init` | `--file --id --probe [--base-url]` | the `show` answer, plus `created` |
   | `set-class` | `--file --id --class --model` | the `show` answer, plus `moved` |
   | `set-subagent` | `--file --id --class` | the `show` answer |
   | `set-effort` | `--file --id --class --level` | the `show` answer |
   | `discovery` | `--file --id --action [--model] [--endpoints]` | the `show` answer, plus `servedBy` |
   | `materialise` | `--file --id` | `{ok, op, id, wrote: {settings, classes, effort} \| null}` |
+  | `rm` | `--file --id` | `{ok, op, id, removed: string[], settings: 'cleared'\|'unchanged'\|'orphan'}` |
 
-  Exit 0 on an answer, 1 on a refusal with a body, 2 on bad argv. Every mutation re-materialises before it answers. Tasks 7–10 call it through `ccd/ccrc`.
+  Exit 0 on an answer, 1 on a refusal with a body, 2 on bad argv. Every mutation re-materialises before it answers. Tasks 7–10 call it through `ccd/ccrc`. `rm` is a REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): it deletes, in order, the registry, the catalogue, the TSV and the effort file — each `rm -f`, absent is fine — then `clearSettingsEnv`s the lane's settings when the roster has a row for `<id>`; an ORPHAN id (no roster row) skips that step and reports `settings: 'orphan'`. `rm` is idempotent (a second run answers `removed: []`) and runs before the `no-such-account` gate below, on files alone, never through the registry or catalogue validators — a file that does not even parse is still reaped. `show` on an orphan id (a registry file whose id the roster has no row for) answers rather than refusing: `orphan: true`, every class unavailable, no `settingsDrift` to report.
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -3934,6 +4148,22 @@ describe('show', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
     expect(op('show', '--file', rosterPath(), '--id', 'gpt').body['settingsDrift']).toEqual([]);
     expect(op('show', '--file', rosterPath(), '--id', 'router').body['settingsDrift']).toEqual([]);
+  });
+
+  it('an ORPHAN registry — no roster row for this id — answers orphan:true, no class available (§11)', () => {
+    // §11: `ccrc account remove` deliberately never deletes under
+    // ~/.ccrc/models/, so a registry can outlive the roster row it was
+    // classified for. There is no account to route a session through, so
+    // every class reads as unavailable regardless of what the registry itself
+    // assigns, and there is no settings.json to compare it against.
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath('gpt'), 'utf8'));
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code).toBe(0);
+    expect(r.body['orphan']).toBe(true);
+    expect((r.body['derived'] as { available: string[] }).available).toEqual([]);
+    expect(r.body['settingsDrift']).toEqual([]);
   });
 });
 
@@ -4344,6 +4574,67 @@ describe('materialise', () => {
     expect(r.body['error']).toBe('anthropic-lane');
   });
 });
+
+describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  });
+
+  it('removes all four generated files, in order, and clears exactly the seven env keys', () => {
+    const p = path.join(home, '.claude-gpt', 'settings.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.env.DISABLE_TELEMETRY = '1';
+    fs.writeFileSync(p, JSON.stringify(j, null, 2));
+    const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['removed']).toEqual([
+      regPath('gpt'),
+      path.join(home, '.ccrc', 'models', 'gpt.json'),
+      path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'),
+      path.join(home, '.ccrc', 'models', 'gpt.effort.json'),
+    ]);
+    expect(r.body['settings']).toBe('cleared');
+    expect(fs.existsSync(regPath('gpt'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.json'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json'))).toBe(false);
+    const after = settingsOf('.claude-gpt');
+    expect(after.env['DISABLE_TELEMETRY']).toBe('1');
+    expect(Object.keys(after.env)).not.toContain('ANTHROPIC_MODEL');
+  });
+
+  it('is idempotent: a second call removes nothing and reports settings:unchanged', () => {
+    op('rm', '--file', rosterPath(), '--id', 'gpt');
+    const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['removed']).toEqual([]);
+    expect(r.body['settings']).toBe('unchanged');
+  });
+
+  it('on an id the roster has no row for — an ORPHAN — skips the settings step and says so', () => {
+    fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath('gpt'), 'utf8'));
+    const r = op('rm', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code).toBe(0);
+    expect(r.body['removed']).toEqual([regPath('ghost')]);
+    expect(r.body['settings']).toBe('orphan');
+    // …and the still-live gpt lane, whose id the roster DOES have, is untouched.
+    expect(fs.existsSync(regPath('gpt'))).toBe(true);
+  });
+
+  it('reaps a registry that does not even parse — rm -f semantics, not a validated read', () => {
+    fs.writeFileSync(regPath('gpt'), '{ this is not json');
+    const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(fs.existsSync(regPath('gpt'))).toBe(false);
+  });
+
+  it('never touches the roster', () => {
+    const before = fs.readFileSync(rosterPath(), 'utf8');
+    op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(fs.readFileSync(rosterPath(), 'utf8')).toBe(before);
+  });
+});
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -4381,6 +4672,12 @@ Expected: FAIL — `spawnSync` cannot find `deploy/models-op.mjs`, so `stdout` i
 //     `<id>.effort.json` are rewritten after every accepted mutation, so no
 //     surface can read a registry the lane's own settings do not match.
 //
+// `rm` (spec §4.1 Lifecycle, §10, §11) is a DELIBERATE exception to rules 2 and
+// 3: it is a REAP, not a mutation, and re-validating or materialising a
+// registry it is about to delete would be pointless — worse, it would refuse to
+// reap a registry that no longer parses, which is exactly the file this verb
+// exists to clean up. It still obeys rule 1.
+//
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
 // verbatim" contract (`ccd/ccrc:3955-3962` reads it that way), and
@@ -4397,7 +4694,7 @@ import {
   parseCatalogue, parseRegistry,
 } from '../shared/models.mjs';
 import {
-  ModelEnvInvalid, classesTsv, effortFile, mergeSettingsEnv, modelEnvBlock,
+  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../shared/modelenv.mjs';
 
 const SELF = 'models-op';
@@ -4439,6 +4736,10 @@ const HOME = process.env['HOME'] ?? '';
 const modelsDir = () => path.join(HOME, '.ccrc', 'models');
 const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
 const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
+// `rm` names these two directly — `materialise` builds the same two paths off
+// an `account`, which an ORPHAN id has none of.
+const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);
+const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
 
 function out(o) { process.stdout.write(`${JSON.stringify(o)}\n`); }
 
@@ -4674,6 +4975,28 @@ function describe(account, registry, catalogue) {
   };
 }
 
+/** §11's ORPHAN: a registry file whose id is in no roster row — typically
+ *  after `ccrc account remove`, which deliberately never deletes under
+ *  ~/.ccrc/models/ and names `ccrc models <id> rm` as the remedy. There is no
+ *  ACCOUNT here to read a `configDirSuffix` or a `telemetry` field from, so
+ *  every class reads as UNAVAILABLE regardless of what the registry itself
+ *  assigns — nothing routes a session to this id — and `settingsDrift` is
+ *  meaningless with no settings.json to compare the registry against. */
+function orphanDescribe(id, registry, catalogue) {
+  const derived = deriveModels(registry, catalogue);
+  return {
+    id,
+    orphan: true,
+    anthropic: false,
+    registry,
+    derived: { ...derived, available: [] },
+    catalogue: catalogue === null
+      ? null
+      : { fetchedAt: catalogue.fetchedAt, stale: catalogue.stale, count: catalogue.models.length },
+    settingsDrift: [],
+  };
+}
+
 /** `--endpoints` + the ownership whitelist (§5). The whitelist holds SLUGS
  *  (`google-ai-studio`); an endpoints body holds DISPLAY NAMES
  *  (`Google AI Studio`), so the two are compared through one normalisation and
@@ -4722,6 +5045,7 @@ const OPS = {
   'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
   materialise: { keys: ['file', 'id'], required: ['file', 'id'] },
+  rm: { keys: ['file', 'id'], required: ['file', 'id'] },
 };
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
@@ -4782,7 +5106,60 @@ function main(argv) {
   }
 
   const account = findAccount(json, a.id);
+
+  if (opName === 'rm') {
+    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the four
+    // generated files this design owns and clears exactly the seven settings
+    // keys `modelEnvBlock` writes — nothing else in that file. It runs BEFORE
+    // the no-such-account and anthropic-lane gates below, and never routes the
+    // registry or catalogue through their validators: `rm -f` semantics apply
+    // to each of the four files on its own, so a broken (unparseable)
+    // registry or catalogue is still reaped rather than blocking the one verb
+    // that exists to clean it up. `ccrc account remove` deliberately never
+    // deletes under ~/.ccrc/models/ and names this verb as the remedy, so an
+    // ORPHAN — no roster row for this id — is the expected case, not an
+    // error: there is no configDirSuffix to find a settings.json through, so
+    // the settings step is skipped, and the answer says so.
+    const removed = [];
+    for (const p of [registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id)]) {
+      try {
+        unlinkSync(p);
+        removed.push(p);
+      } catch (e) {
+        if (e.code !== 'ENOENT') return refuse(1, 'unwritable', `${p} could not be removed: ${e.message}.`);
+      }
+    }
+    let settings = 'orphan';
+    if (account !== null) {
+      const settingsPath = path.join(HOME, account.configDirSuffix, 'settings.json');
+      try {
+        settings = clearSettingsEnv(settingsPath, MODEL_ENV_KEYS).changed ? 'cleared' : 'unchanged';
+      } catch (e) {
+        if (e instanceof ModelEnvInvalid) return refuse(1, 'settings-unwritable', e.message);
+        throw e;
+      }
+    }
+    out({ ok: true, op: 'rm', id: a.id, removed, settings });
+    return 0;
+  }
+
   if (account === null) {
+    if (opName === 'show') {
+      // §11's ORPHAN: a registry file exists for an id the roster has no row
+      // for. Not an error — `ccrc account remove` leaves it there on purpose —
+      // so `show` answers rather than refusing, with every class read as
+      // unavailable: there is no account to route a session through, whatever
+      // the registry itself assigns.
+      const cat0 = readCatalogue(a.id);
+      if (cat0.err !== undefined) return refuse(1, cat0.err[0], cat0.err[1]);
+      const reg0 = readRegistry(a.id, cat0.catalogue);
+      if (reg0.err !== undefined) return refuse(1, reg0.err[0], reg0.err[1]);
+      if (reg0.invalid !== undefined) return refuseRegistry(reg0.invalid, a.id);
+      if (reg0.registry !== null) {
+        out({ ok: true, op: 'show', ...orphanDescribe(a.id, reg0.registry, cat0.catalogue) });
+        return 0;
+      }
+    }
     return refuse(1, 'no-such-account',
       `${a.file} has no account "${a.id}". Its ids are: `
       + `${(json.accounts ?? []).map((x) => x.id).join(', ')}.`);
@@ -5041,6 +5418,21 @@ Expected: one case red — `a catalogue file that is not a catalogue refuses rat
 At the end of `main`'s mutation path, add `writeFileSync(a.file, JSON.stringify(json, null, 2) + '\n');` just before the `out(...)`. Run `cd server && npx vitest run test/models-op.test.ts`.
 Expected: one case red — `NOTHING here ever rewrites the roster`. Remove the line and re-run; expected PASS. (Ruling 280 is the whole reason this plan exists in its current shape; the rule deserves a mechanism, not a comment.)
 
+- [ ] **Step 11b: Measured mutation check — `rm` actually deletes**
+
+In the `rm` op's loop, comment out `unlinkSync(p);` (keep `removed.push(p);`). Run `cd server && npx vitest run test/models-op.test.ts`.
+Expected: one case red — `removes all four generated files, in order, and clears exactly the seven env keys`, on the `fs.existsSync(...)` assertions (the body still reports every path as `removed`). Restore and re-run; expected PASS.
+
+- [ ] **Step 11c: Measured mutation check — the settings step is skipped ONLY for a true orphan**
+
+Change `if (account !== null) {` (in the `rm` op) to `if (false) {`. Run `cd server && npx vitest run test/models-op.test.ts`.
+Expected: one case red — `removes all four generated files, in order, and clears exactly the seven env keys`, now reporting `settings: 'orphan'` for a lane the roster DOES have a row for. Restore and re-run; expected PASS.
+
+- [ ] **Step 11d: Measured mutation check — an orphan `show` answers rather than refusing**
+
+Change `if (reg0.registry !== null) {` (in the `account === null` branch) to `if (false) {`. Run `cd server && npx vitest run test/models-op.test.ts`.
+Expected: one case red — `an ORPHAN registry — no roster row for this id — answers orphan:true, no class available (§11)`, now getting `no-such-account` at exit 1 instead of an answer. Restore and re-run; expected PASS.
+
 - [ ] **Step 12: Commit**
 
 ```bash
@@ -5066,6 +5458,13 @@ answers to ccd's question.
 Assigning a class clears it from the model that had it — §8's radio rule lives in
 the verb, because the verb is what scripts and doctor's remedies use.
 
+`rm` reaps rather than mutates (spec §4.1 Lifecycle, §11): it runs before the
+no-such-account and anthropic-lane gates, deletes the four generated files by
+`rm -f` semantics alone — never through the registry or catalogue validators —
+and clears exactly the seven settings keys `clearSettingsEnv` owns, skipping that
+step for an ORPHAN id the roster has no row for. `show` on such an id answers
+rather than refusing, with every class read as unavailable.
+
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG
 )"
@@ -5088,7 +5487,7 @@ MSG
   ccrc models <id> show [--json]
   ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]
   ```
-  a **top-level verb group**, not a subcommand of `ccrc account` — that verb is the account-connections branch's and is not on `main` (round-2 ruling 5). Exactly one JSON object on stdout on every path; the human summary goes to STDERR, and `--json` suppresses it. Exit 0 ok, 1 refusal with a body, 2 usage. Tasks 8, 9 and 10 extend the same dispatcher.
+  a **top-level verb group**, not a subcommand of `ccrc account` — that verb is the account-connections branch's and is not on `main` (round-2 ruling 5). Exactly one JSON object on stdout on every path; the human summary goes to STDERR, and `--json` suppresses it. Exit 0 ok, 1 refusal with a body, 2 usage. Tasks 8, 9 and 10 extend the same dispatcher. `show` also answers, rather than refusing, on an ORPHAN id — the roster has no row for it, but a registry file exists (spec §11): `orphan: true`, every class unavailable. Task 8's `rm` is the remedy.
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -5324,6 +5723,18 @@ describe('ccrc models <id> show', () => {
     const r = run(['models', 'gpt', 'show']);
     expect(oneObject(r)['settingsDrift']).toEqual(['ANTHROPIC_MODEL']);
     expect(r.stderr).toMatch(/settings\.json has drifted/);
+  });
+
+  it('an ORPHAN registry — no roster row for this id — answers orphan:true rather than refusing (§11)', () => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'ghost.classes.json'),
+      fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'), 'utf8'));
+    const r = run(['models', 'ghost', 'show']);
+    expect(r.code).toBe(0);
+    const b = oneObject(r);
+    expect(b['orphan']).toBe(true);
+    expect((b['derived'] as { available: string[] }).available).toEqual([]);
   });
 
   it('a refusal still carries exactly one JSON object on stdout', () => {
@@ -5749,22 +6160,23 @@ MSG
 
 ---
 
-## Task 8: `ccrc models <id> set-class | set-subagent | set-effort | discovery`
+## Task 8: `ccrc models <id> set-class | set-subagent | set-effort | discovery | rm`
 
 **Files:**
-- Modify: `ccd/ccrc` — `MODELS_SUBS`, four new arms in `_models_lane_sub`, and two new helpers `_models_class_ok` / `_models_endpoints`
-- Test: `server/test/ccrc-models.test.ts` (four new describes)
+- Modify: `ccd/ccrc` — `MODELS_SUBS`, five new arms in `_models_lane_sub`, and two new helpers `_models_class_ok` / `_models_endpoints`
+- Test: `server/test/ccrc-models.test.ts` (five new describes)
 
 **Interfaces:**
-- Consumes: `_models_answer`, `_models_lane_sub`, `MODELS_SUBS`, `MODELS_CLASSES`, `_models_refuse` (Task 7); `deploy/models-op.mjs`'s `set-class`, `set-subagent`, `set-effort` and `discovery` ops (Task 6); `ccd/ccrc-models-probe --endpoints` (Task 5).
+- Consumes: `_models_answer`, `_models_lane_sub`, `MODELS_SUBS`, `MODELS_CLASSES`, `_models_refuse` (Task 7); `deploy/models-op.mjs`'s `set-class`, `set-subagent`, `set-effort`, `discovery` and `rm` ops (Task 6); `ccd/ccrc-models-probe --endpoints` (Task 5).
 - Produces:
   ```
   ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
   ccrc models <id> set-subagent <haiku|sonnet|opus|fable>
   ccrc models <id> set-effort <haiku|sonnet|opus|fable> <level|default>
   ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
+  ccrc models <id> rm
   ```
-  Each re-materialises on success (the node half does it) and refuses with the field named on any validation failure. `discovery add` on a lane whose registry names `openrouter` runs the endpoints call first and refuses when no ownership-whitelisted provider serves the model (§5).
+  Each of the first four re-materialises on success (the node half does it) and refuses with the field named on any validation failure. `discovery add` on a lane whose registry names `openrouter` runs the endpoints call first and refuses when no ownership-whitelisted provider serves the model (§5). `ccrc models <id> rm` (spec §4.1 Lifecycle, §10, §11) takes no arguments and is a REAP, not a mutation: it delegates straight to the node op and answers with its JSON — the registry, catalogue, TSV and effort file are deleted and the seven settings keys are cleared, idempotently, and it skips the settings step (and says so) on an ORPHAN id the roster has no row for.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5958,24 +6370,72 @@ describe('ccrc models <id> discovery', () => {
     });
   });
 });
+
+describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+  });
+
+  it('removes all four files and clears exactly the seven env keys, leaving another env key', () => {
+    const p = join(home, '.claude-gpt', 'settings.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.env.DISABLE_TELEMETRY = '1';
+    fs.writeFileSync(p, JSON.stringify(j, null, 2));
+    const r = run(['models', 'gpt', 'rm']);
+    expect(r.code).toBe(0);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(true);
+    expect((b['removed'] as string[]).length).toBe(4);
+    expect(b['settings']).toBe('cleared');
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.classes.json'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.effort.json'))).toBe(false);
+    const after = JSON.parse(fs.readFileSync(p, 'utf8'));
+    expect(after.env.DISABLE_TELEMETRY).toBe('1');
+    expect(Object.keys(after.env)).not.toContain('ANTHROPIC_MODEL');
+  });
+
+  it('a second run exits 0 with removed: []', () => {
+    run(['models', 'gpt', 'rm']);
+    const r = run(['models', 'gpt', 'rm']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['removed']).toEqual([]);
+  });
+
+  it('refuses an argument at exit 2', () => {
+    const r = run(['models', 'gpt', 'rm', 'extra']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-argument');
+  });
+
+  it('an orphan — a registry for an id the fixture roster has no row for — reports settings: orphan', () => {
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'ghost.classes.json'),
+      fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'), 'utf8'));
+    const r = run(['models', 'ghost', 'rm']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['settings']).toBe('orphan');
+  });
+});
 ```
 
-Also update the `spells its per-lane subcommand list once, at file scope` case's expected list to the full six:
+Also update the `spells its per-lane subcommand list once, at file scope` case's expected list to the full seven:
 
 ```ts
     expect(m![1]!.split(' ').filter(Boolean).sort())
-      .toEqual(['discovery', 'init', 'set-class', 'set-effort', 'set-subagent', 'show']);
+      .toEqual(['discovery', 'init', 'rm', 'set-class', 'set-effort', 'set-subagent', 'show']);
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd server && npx vitest run test/ccrc-models.test.ts`
-Expected: FAIL — the subcommand-list case reports the two-element list, and every new case gets `unknown-subcommand` at exit 2 because the four subcommands are not in `MODELS_SUBS` yet.
+Expected: FAIL — the subcommand-list case reports the two-element list, and every new case gets `unknown-subcommand` at exit 2 because the five subcommands are not in `MODELS_SUBS` yet.
 
 - [ ] **Step 3: Widen `MODELS_SUBS`**
 
 ```bash
-MODELS_SUBS="discovery init set-class set-effort set-subagent show"
+MODELS_SUBS="discovery init rm set-class set-effort set-subagent show"
 ```
 
 - [ ] **Step 4: Add the class gate and the endpoints helper**
@@ -6023,7 +6483,7 @@ _models_endpoints() {   # <accountId> <modelId> -> sets MODELS_ENDPOINTS_TMP
 }
 ```
 
-- [ ] **Step 5: Add the four arms**
+- [ ] **Step 5: Add the five arms**
 
 In `_models_lane_sub`'s `case "$sub"`, before the `*)` arm:
 
@@ -6101,6 +6561,15 @@ In `_models_lane_sub`'s `case "$sub"`, before the `*)` arm:
       esac
       return 0
       ;;
+    rm)
+      # A REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): no arguments,
+      # and no class or endpoints gate above it — it delegates straight to the
+      # node op and answers with its own JSON, on an ORPHAN id exactly as much
+      # as on one the roster has a row for.
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id rm takes no arguments, and got \"$1\""
+      _models_answer rm --file "$file" --id "$id" || exit $?
+      return 0
+      ;;
 ```
 
 - [ ] **Step 6: Run the tests to verify they pass**
@@ -6123,12 +6592,17 @@ Expected: one case red — `leaves no endpoints temp file behind`. Restore both 
 Change `_models_class_ok`'s loop to `return 0` unconditionally. Run `cd server && npx vitest run test/ccrc-models.test.ts`.
 Expected: three cases red — `refuses a class that is not one of the four, at exit 2, before node` under `set-class` (which now gets exit 1 and `unknown-class` from node), and the equivalents under `set-subagent` and `set-effort`. Restore and re-run; expected PASS.
 
+- [ ] **Step 9b: Measured mutation check — `rm` takes no arguments**
+
+In the `rm` arm, change `[ $# -eq 0 ] || _models_refuse unknown-argument 2 …` to `:`. Run `cd server && npx vitest run test/ccrc-models.test.ts`.
+Expected: one case red — `refuses an argument at exit 2`, under `ccrc models <id> rm`, which now runs the node op instead of refusing. Restore and re-run; expected PASS.
+
 - [ ] **Step 10: Commit**
 
 ```bash
 git add ccd/ccrc server/test/ccrc-models.test.ts
 git commit -m "$(cat <<'MSG'
-feat(ccrc): set-class, set-subagent, set-effort and discovery
+feat(ccrc): set-class, set-subagent, set-effort, discovery and rm
 
 `discovery` names the set discovery and classification operate on, and it is
 deliberately NOT the account-connections branch's `selectable`, which is a picker
@@ -6146,6 +6620,11 @@ only on that lane, and its answer is a temp file removed on every path.
 A class typo is a usage error answered in bash, at exit 2, and "subagent" gets a
 sentence of its own: it is a real field of the registry, and refusing it as
 merely unknown would be a lie about this file's vocabulary.
+
+`rm` (spec §4.1 Lifecycle, §11) is a reap and takes no arguments: it delegates
+straight to the node op, idempotently, and works the same on an orphan id — one
+the roster has no row for — as on a live lane, skipping only the settings step
+that id has no configDirSuffix for.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG

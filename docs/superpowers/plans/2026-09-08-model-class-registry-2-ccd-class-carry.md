@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make a session's model CLASS survive an account swap and a restart — ccd records the class each session is running, spawns with `--model <class>`, and never rotates a session onto a lane that cannot run its class.
+**Goal:** Make a session's model CLASS survive an account swap and a restart — ccd records the class each session is running, spawns with `--model <class>`, and never rotates a session onto a lane that cannot run its class — and give `ccrc doctor` a `models` check, one PASS/WARN/FAIL per non-Anthropic lane.
 
-**Architecture:** `ccd/statusline-command.sh` is the only process on the box that sees Claude Code's own `session_id` and concrete `model.id` together, so it publishes one file per session uuid under `~/.cc-sessions/model/`. `ccd/ccd` maps its registry `uuid` back through that file to a concrete id, turns the id into one of the four classes (the family token on an Anthropic lane; a reverse lookup in the materialised `~/.ccrc/models/<account>.classes.tsv` — three columns, `class<TAB>modelId<TAB>state` — on every other lane), stores the answer in a new registry field `class`, and consults it in three places: the spawn line, the rotation's candidate filter, and the manual `ccd swap` gate. All of it reads files Plan 1's `ccrc models` verbs write; nothing here writes the roster, and nothing here reads it.
+**Architecture:** `ccd/statusline-command.sh` is the only process on the box that sees Claude Code's own `session_id` and concrete `model.id` together, so it publishes one file per session uuid under `~/.cc-sessions/model/`. `ccd/ccd` maps its registry `uuid` back through that file to a concrete id, turns the id into one of the four classes (the family token on an Anthropic lane; a reverse lookup in the materialised `~/.ccrc/models/<account>.classes.tsv` — three columns, `class<TAB>modelId<TAB>state` — on every other lane), stores the answer in a new registry field `class`, and consults it in three places: the spawn line, the rotation's candidate filter, and the manual `ccd swap` gate. All of it reads files Plan 1's `ccrc models` verbs write; nothing here writes the roster, and nothing here reads it. A second `ccd/` file, `ccd/ccrc-doctor-checks`, gets its own `models` check the same way (Task 12): read via node, the same registry and catalogue files, and `shared/models.mjs`/`shared/modelenv.mjs` as the single definitions of what is retired and what the env block should hold — the doctor check moved here from Plan 3a (mail 286, 2026-09-08) because `ccd/ccrc-doctor-checks` is a `ccd/` file PR #62 edits and is shipped with `ccd` on the agent lane.
 
-**Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/statusline-command.sh`), `jq` 1.7 (the `ccd ls` unclassified COUNT only — availability is read out of the tsv's third column and needs no JSON at all), vitest 4 (`server/test/*.test.ts`, `agent/test/*.test.ts`) driving the real scripts against fixture HOMEs through `makeCcdHarness`.
+**Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/statusline-command.sh`, `ccd/ccrc-doctor-checks`), `jq` 1.7 (the `ccd ls` unclassified COUNT only — availability is read out of the tsv's third column and needs no JSON at all), node ESM `.mjs` twins for the bash doctor reader (`shared/models.mjs`, `shared/modelenv.mjs`, Plan 1's), vitest 4 (`server/test/*.test.ts`, `agent/test/*.test.ts`) driving the real scripts against fixture HOMEs through `makeCcdHarness`.
 
-**Spec:** `docs/superpowers/specs/2026-09-08-model-class-registry-design.md`, at its current tip **`d3048253`** ("docs(models): registry is its own per-account file until account-connections merges; subagent is an explicit class-to-slot choice; discovery scope named apart from selectable; Plan 3 splits behind wave 4", measured 2026-09-08 with `git -C <this worktree> log -1 --oneline`) — this plan implements **§7 in full**, the `ccd ls` lane line (§7 last bullet), and `ccd swap <id> <wrapper> --as-class <class>` (§10, last line). §4.3's derived states are consumed here; they are COMPUTED in Plan 1 and reach ccd already computed, in the third column of `<account>.classes.tsv`.
+**Spec:** `docs/superpowers/specs/2026-09-08-model-class-registry-design.md`, at its current tip **`d3048253`** ("docs(models): registry is its own per-account file until account-connections merges; subagent is an explicit class-to-slot choice; discovery scope named apart from selectable; Plan 3 splits behind wave 4", measured 2026-09-08 with `git -C <this worktree> log -1 --oneline`) — this plan implements **§7 in full**, the `ccd ls` lane line (§7 last bullet), `ccd swap <id> <wrapper> --as-class <class>` (§10, last line), and **§8's last bullet** (`ccrc doctor`'s `models` check, moved here from Plan 3a, mail 286, 2026-09-08). §4.3's derived states are consumed here; they are COMPUTED in Plan 1 and reach ccd already computed, in the third column of `<account>.classes.tsv`.
 
 **Skeleton:** `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-skeleton.md`. Its "ccd registry (Plan 2)" section is this plan's contract **as amended by its final section, "Rulings round 2" (mails 279 and 280, 2026-09-08), which overrides everything above it**: no roster `ModelsBlock` (WITHDRAWN — the registry is its own per-account file), `discovery` everywhere the skeleton wrote `shortlist`, an EXPLICIT `subagent` class, a top-level `ccrc models` verb group, and a THREE-COLUMN `<account>.classes.tsv` whose third column carries availability as its own marker.
 
@@ -277,8 +277,10 @@ Copied from the spec and from the skeleton's Conventions; every task's requireme
 | `server/test/ccd-swap-as-class.test.ts` | Create | The refusal sentence, `--as-class`, its validation, and the detached re-entry carrying the flag. |
 | `server/test/ccd-ls-lane-classes.test.ts` | Create | `_lane_class_note` and the `ccd ls` lane line. |
 | `server/test/ccd-models-agreement.test.ts` | Create | ccd's bash reader and `shared/models.ts`'s `availableFor` / `familyClassOf` / `classOfModel` answer identically over one fixture set, with the tsv written by the real `classesTsv(registry, catalogue)`. |
-| `server/test/single-definition.test.ts` | Modify | Register ccd as the second reader: one spelling per tool of each generated path, and the agreement test named by path. |
+| `server/test/single-definition.test.ts` | Modify | Register ccd as the second reader: one spelling per tool of each generated path, and the agreement test named by path. Task 12 widens the `.ccrc/models` holder list with `ccd/ccrc-doctor-checks`. |
 | `agent/test/whitelist.test.ts` | Modify | `--as-class` rides the existing `['swap']` prefix grant; no new grant. |
+| `ccd/ccrc-doctor-checks` | Modify | Task 12 (moved from Plan 3a, mail 286): `models` in `CCRC_DOCTOR_CHECKS` directly after `pools`, and `_check_models` — a fresh catalogue, no retired class id, an env block that matches the registry, and an orphaned registry file with no roster row (spec §11, mail 284). |
+| `server/test/ccrc-doctor.test.ts` | Modify | Task 12: the `describe('ccrc doctor: models', …)` — twelve cases — plus the widened `RosterEntry` (`telemetry`) and bumped `HEALTHY_SKIPS`. |
 
 **Not touched by this plan, deliberately:** `deploy/deploy.sh` and `agent/test/deploy-verify.test.ts` (this plan ships no new file — `ccd/ccd` and `ccd/statusline-command.sh` are already installed by the agent lane, `deploy/deploy.sh:649` `install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755`, pinned at `agent/test/deploy-verify.test.ts:595`); `agent/src/whitelist.ts` (the `['swap']` prefix at `agent/src/whitelist.ts:323` already permits every token after it, and `swap` is not in `REQUIRED_VERB_FLAG` at `agent/src/whitelist.ts:240-242`); the whole PWA and every server route (Plans 3a and 3b); `ccd/ccrc` (Plan 1, which owns the whole `ccrc models` verb group); `shared/roster.ts`, `shared/roster-json.mjs`, `deploy/account-op.mjs` and `cmd_account` (the account-connections branch's, not on `main`, and forbidden to every plan in this program by ruling 280).
 
@@ -294,7 +296,7 @@ Copied from the spec and from the skeleton's Conventions; every task's requireme
 **Interfaces:**
 - Consumes: nothing.
 - Produces: a recorded merge sha, `$MERGE_SHA`, that Task 2 rebases onto. Nothing in
-  Tasks 2-11 may run until every checkbox here is ticked.
+  Tasks 2-12 may run until every checkbox here is ticked.
 
 **Why a whole task.** Until #62 is merged and on the boxes, every one of this plan's
 write sites is a file another wave is actively editing: `_swap_target`, `cmd_swap`,
@@ -5255,11 +5257,611 @@ MSG
 
 ---
 
+### Task 12: `ccrc doctor` gains a `models` check
+
+Gated like every Plan 2 task on PR #62 merged and deployed; register the check AFTER #62's fix round rewrote `_dr_warn pools …` at `ccd/ccrc-doctor-checks:2985` and its comment at `:2928` (mail 286).
+
+Spec §8's last bullet: one check per non-Anthropic lane — catalogue present and not stale, no retired class ids, and a sentinel-free env block that matches the registry, with re-materialise as the remedy.
+
+**Files:**
+- Modify: `ccd/ccrc-doctor-checks:166-196` (the table — `models` goes after `pools`) and its check bodies (add `_check_models` after `_check_wrappers`)
+- Modify: `server/test/ccrc-doctor.test.ts` (new describe; `RosterEntry`; `HEALTHY_SKIPS`)
+- Modify: `server/test/single-definition.test.ts` — Plan 1's `.ccrc/models` holder list gains `'ccd/ccrc-doctor-checks'` (Step 10b)
+- Idiom copied from: `ccd/ccrc-doctor-checks`'s `_check_wrappers` (its roster ladder — the node reader, the distinct exit codes, and the TSV whose control bytes are escaped because the verdict line is read by a human on a terminal that ACTS on them); `ccd/ccrc-doctor-checks:203-207` (`_dr_pass`/`_dr_warn`/`_dr_fail`/`_dr_skip`, and the contract that a non-PASS carries exactly one remedy line); `server/test/ccrc-doctor.test.ts:1088-1116` (the table census, which makes a table entry with no `_check_<name>` function red)
+
+**Interfaces:**
+- Consumes: Plan 1's `shared/models.mjs` (`parseRegistry`, `parseCatalogue`, `deriveModels`, `availableFor`) and `shared/modelenv.mjs` (`modelEnvBlock(registry)`, which throws `ModelEnvInvalid` when every class is null or the subagent slot is null) — both reached at `${CCRC_HERE%/*}/shared/…`, the same relative shape the shipped tree already uses to reach a sibling module; the registry file `~/.ccrc/models/<id>.classes.json`, the catalogue `~/.ccrc/models/<id>.json`, and the materialised three-column `~/.ccrc/models/<id>.classes.tsv`, all written by Plan 1's `ccrc models` verbs. This plan's own Task 1 (the measured gate — PR #62 merged and deployed) and Task 2 (the rebase onto #62's merge sha, after which every `ccd/ccrc-doctor-checks` line number below is re-located by its text, never by the number).
+- Produces: `CCRC_DOCTOR_CHECKS` gains `models`; `_check_models` in `ccd/ccrc-doctor-checks`.
+
+- [ ] **Step 1: Write the failing doctor tests**
+
+Append to `server/test/ccrc-doctor.test.ts`:
+
+```ts
+// ── the models check (spec §8's last bullet) ──────────────────────────────
+// Four findings, two classes, and the split is the point: a lane the box
+// cannot ROUTE to (a retired class id, an env block that disagrees with the
+// registry) is a FAIL, while a lane that is merely UNTOLD (never probed, stale,
+// unseeded) — or carrying disk debris (an ORPHANED registry file, spec §11,
+// mail 284) — is a WARN. Collapsing them would either cry wolf on a fresh box
+// or report a healthy one while `--model fable` dies at the provider.
+//
+// SCOPE IS `telemetry: "none"`, declared in the roster — the box's own
+// statement that this lane does not bill through Anthropic, so it is the lane
+// whose four aliases the materialiser owns. An entry with no `telemetry` at
+// all is a roster `parseRoster` would refuse and the `wrappers` check above
+// owns — this check skips it rather than reporting a second fault for one
+// cause, which is also why every OTHER fixture in this file keeps its
+// existing verdict counts. THE ORPHAN FINDING IS THE ONE EXCEPTION: it scans
+// against the WHOLE roster, because an id `ccrc account remove` dropped is
+// gone from the roster entirely, not merely reclassified — telemetry:"none"
+// has nothing to say about a lane that no longer exists.
+
+/** An openai lane, its registry, its catalogue and its settings env block, as
+ *  the materialiser leaves them (spec §6.1). Each test starts from `healthy()`
+ *  and breaks exactly ONE of them. */
+function seedClassedLane(home: string, over: {
+  registry?: unknown | null; catalogue?: unknown | null; env?: Record<string, string> | null;
+} = {}): void {
+  writeRoster(home, [UPSTREAM, {
+    id: 'gpt', configDirSuffix: '.claude-gpt', exec: { kind: 'external' }, telemetry: 'none',
+  }]);
+  mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+  if (over.registry !== null) {
+    writeFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'), JSON.stringify(over.registry ?? {
+      probe: 'codex',
+      classes: { haiku: 'gpt-5.6-luna', sonnet: 'gpt-5.6-terra', opus: 'gpt-5.6-sol', fable: null },
+      subagent: 'sonnet', discovery: 'catalogue',
+    }));
+  }
+  if (over.catalogue !== null) {
+    writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), JSON.stringify(over.catalogue ?? {
+      probe: 'codex', fetchedAt: 1789000000, stale: false,
+      models: [
+        { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', context: null, maxContext: null, efforts: ['high'], hidden: false, priceIn: null, priceOut: null },
+        { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', context: null, maxContext: null, efforts: ['high'], hidden: false, priceIn: null, priceOut: null },
+        { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', context: null, maxContext: null, efforts: ['max'], hidden: false, priceIn: null, priceOut: null },
+      ],
+    }));
+  }
+  if (over.env !== null) {
+    mkdirSync(join(home, '.claude-gpt'), { recursive: true });
+    writeFileSync(join(home, '.claude-gpt', 'settings.json'), JSON.stringify({
+      env: over.env ?? {
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.6-luna',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.6-terra',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-5.6-sol',
+        ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
+        ANTHROPIC_MODEL: 'gpt-5.6-sol',
+        ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-luna',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'gpt-5.6-terra',
+      },
+    }, null, 2));
+  }
+  writeBinary(home, 'gpt');
+}
+
+describe('ccrc doctor: models', () => {
+  it('SKIPS a box with no lane to classify — there is nothing to measure', () => {
+    // The healthy fixture is one upstream account. PASS would claim an
+    // agreement nobody measured; WARN would report a fault there is none.
+    const r = runDoctor(healthy('ccrc-doctor-models-skip-'));
+    expect(anyVerdictFor(r.stdout, 'models')).toMatch(/^SKIP models: /);
+  });
+
+  it('PASSES a lane whose catalogue is fresh, whose classes are all advertised, and whose env matches', () => {
+    const home = healthy('ccrc-doctor-models-ok-');
+    seedClassedLane(home);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models'), out).toMatch(/^PASS models: /);
+    expect(lineFor(out, 'models')).toContain('gpt');
+  });
+
+  it('WARNS a lane that has never been probed, and names the verb that fixes it', () => {
+    const home = healthy('ccrc-doctor-models-unprobed-');
+    seedClassedLane(home, { catalogue: null });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models')).toMatch(/^WARN models: .*never probed/);
+    expect(remedyAfter(out, 'models')).toContain('ccrc models refresh');
+  });
+
+  it('WARNS a stale catalogue, naming the lane', () => {
+    const home = healthy('ccrc-doctor-models-stale-');
+    seedClassedLane(home, { catalogue: {
+      probe: 'codex', fetchedAt: 1789000000, stale: true, lastError: '401',
+      models: [{ id: 'gpt-5.6-luna', label: 'L', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null }],
+    } });
+    expect(lineFor(runDoctor(home).stdout, 'models')).toMatch(/^WARN models: .*stale/);
+  });
+
+  it('WARNS a lane with NO registry file at all, and names init (spec §13.1)', () => {
+    const home = healthy('ccrc-doctor-models-unseeded-');
+    seedClassedLane(home, { registry: null, catalogue: null, env: null });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models')).toMatch(/^WARN models: .*no model-class registry/);
+    expect(remedyAfter(out, 'models')).toContain('ccrc models <id> init');
+  });
+
+  it('FAILS a class whose id the provider no longer advertises, naming id AND class', () => {
+    const home = healthy('ccrc-doctor-models-retired-');
+    seedClassedLane(home, { catalogue: {
+      probe: 'codex', fetchedAt: 1789000000, stale: false,
+      models: [
+        { id: 'gpt-5.6-luna', label: 'L', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null },
+        { id: 'gpt-5.6-terra', label: 'T', context: null, maxContext: null, efforts: [], hidden: false, priceIn: null, priceOut: null },
+      ],
+    } });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'models');
+    expect(line).toMatch(/^FAIL models: /);
+    expect(line).toContain('gpt-5.6-sol');
+    expect(line).toContain('opus');
+    // Spec §4.3: the registry file is the operator's, so the remedy is to
+    // REASSIGN, never "ccrc will clear it for you".
+    expect(remedyAfter(out, 'models')).toContain('ccrc models <id> set-class');
+  });
+
+  it('FAILS an env block that disagrees with the registry, naming the key', () => {
+    const home = healthy('ccrc-doctor-models-drift-');
+    seedClassedLane(home, { env: {
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.6-luna',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.6-terra',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-5.5',            // hand-edited on the box
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
+      ANTHROPIC_MODEL: 'gpt-5.6-sol',
+      ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-luna',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'gpt-5.6-terra',
+    } });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models')).toMatch(/^FAIL models: .*ANTHROPIC_DEFAULT_OPUS_MODEL/);
+    expect(remedyAfter(out, 'models')).toContain('ccrc models');
+  });
+
+  it('FAILS a settings file the materialiser has never written', () => {
+    const home = healthy('ccrc-doctor-models-nosettings-');
+    seedClassedLane(home, { env: null });
+    expect(lineFor(runDoctor(home).stdout, 'models')).toMatch(/^FAIL models: .*settings/);
+  });
+
+  it('FAILS a catalogue file that exists and does not parse — which is NOT "never probed"', () => {
+    // `server/src/models.ts` collapses the two on the wire because the remedy is
+    // the same there; doctor is the surface whose whole job is to name the
+    // difference, so it must not collapse them.
+    const home = healthy('ccrc-doctor-models-corrupt-');
+    seedClassedLane(home);
+    writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), '{ not json');
+    expect(lineFor(runDoctor(home).stdout, 'models')).toMatch(/^FAIL models: .*cannot be read/);
+  });
+
+  it('FAILS a registry file that exists and does not parse — which is NOT "no registry"', () => {
+    const home = healthy('ccrc-doctor-models-badreg-');
+    seedClassedLane(home, { registry: { probe: 'codex' } });
+    expect(lineFor(runDoctor(home).stdout, 'models')).toMatch(/^FAIL models: .*registry.*cannot be read|does not parse/);
+  });
+
+  it('FAILS a lane whose every class is null — the materialiser cannot derive ANTHROPIC_MODEL', () => {
+    // Spec §11: "All four slots null: the materialiser refuses the edit."
+    const home = healthy('ccrc-doctor-models-allnull-');
+    seedClassedLane(home, { registry: {
+      probe: 'codex', classes: { haiku: null, sonnet: null, opus: null, fable: null },
+      subagent: 'sonnet', discovery: 'catalogue',
+    } });
+    expect(lineFor(runDoctor(home).stdout, 'models')).toMatch(/^FAIL models: .*no class/);
+  });
+
+  it('WARNS an orphaned registry file whose id is in no roster row, and names the remedy (spec §11, mail 284)', () => {
+    // No `seedClassedLane` at all — the roster stays `healthy()`'s single
+    // upstream account, and the ONLY thing on disk is a registry file
+    // `ccrc account remove` left behind. This is deliberately the box's ONLY
+    // finding: the orphan scan is NOT scoped to telemetry:"none" lanes (there
+    // isn't one here) and must not be folded into the "nothing to classify"
+    // SKIP — an orphan is disk debris, not a lane's fault, and it is a
+    // finding even when no lane needs classifying today.
+    const home = healthy('ccrc-doctor-models-orphan-');
+    mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'models', 'ghost.classes.json'), JSON.stringify({
+      probe: 'codex', classes: { haiku: 'gpt-5.6-luna', sonnet: null, opus: null, fable: null },
+      subagent: 'haiku', discovery: 'catalogue',
+    }));
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models')).toMatch(/^WARN models: .*ghost.*no roster row/);
+    expect(remedyAfter(out, 'models')).toContain('ccrc models <id> rm');
+  });
+});
+```
+
+Widen the fixture's roster entry type so a test can declare a lane's telemetry (`writeRoster` already spreads every field it is given):
+
+```ts
+interface RosterEntry {
+  id: string;
+  configDirSuffix?: string;
+  exec: { kind: 'upstream' | 'generated' | 'external'; secretsFile?: string };
+  /** Declared only by the tests that are ABOUT it — the `models` check's scope
+   *  is `telemetry: "none"` (spec §4.1: an Anthropic lane never has a registry
+   *  file), and every other fixture in this file leaves the field absent, which
+   *  that check skips. */
+  telemetry?: 'anthropic' | 'none';
+}
+```
+
+Add the one helper this describe needs, beside `lineFor`:
+
+```ts
+/** The remedy line that must immediately follow a non-PASS verdict — the
+ *  contract `ccrc-doctor-checks`' header states and `_dr_warn`/`_dr_fail`
+ *  enforce by printing both lines themselves. */
+const remedyAfter = (out: string, name: string): string => {
+  const lines = out.split('\n');
+  const i = lines.findIndex((l) => new RegExp(`^(WARN|FAIL) ${name}: `).test(l));
+  return i === -1 ? '' : (lines[i + 1] ?? '');
+};
+```
+
+and bump the skip count, whose comment now covers two cases:
+
+```ts
+/** How many checks a HEALTHY fixture skips. `models` is one on EVERY platform:
+ *  `healthy()` is a single upstream account, so there is no `telemetry: "none"`
+ *  lane to classify and the check answers SKIP — a PASS there would be a verdict
+ *  nobody measured, the forgery class this repo bans by name. On macOS `scopes`
+ *  skips too: cgroup throttling is a Linux mechanism, so a Darwin box has no
+ *  such fault to find. */
+const HEALTHY_SKIPS = process.platform === 'darwin' ? 2 : 1;
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t models`
+Expected: FAIL — every case gets `undefined` from `lineFor`/`anyVerdictFor` (no such check).
+
+- [ ] **Step 3: Add the table entry**
+
+In `ccd/ccrc-doctor-checks`, in `CCRC_DOCTOR_CHECKS`, directly after `pools`:
+
+```
+  models
+```
+
+- [ ] **Step 4: Run the table census and watch THAT fail**
+
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t "every name in the table"`
+Expected: FAIL — the census reports `MISSING _check_models`. This is the mechanism that stops a table entry shipping without an implementation, and seeing it red is the proof it works.
+
+- [ ] **Step 5: Write `_check_models`**
+
+In `ccd/ccrc-doctor-checks`, directly after `_check_wrappers`:
+
+```bash
+# ── models — the class registry on every non-Anthropic lane (design spec §8) ──
+#
+# FOUR FINDINGS, TWO CLASSES, and the split is the whole design of this check:
+#
+#   FAIL — the box cannot ROUTE what the registry says it can. A class id the
+#          provider no longer advertises (`--model opus` dies at the provider
+#          with an opaque 404); an `env` block that disagrees with the registry
+#          (someone hand-edited the lane's settings, and the settings WIN over
+#          the shell, measured spec §1); no settings file at all; a registry or
+#          catalogue file that exists and cannot be read; a lane whose every
+#          class is null, where `modelEnvBlock` cannot derive ANTHROPIC_MODEL at
+#          all.
+#   WARN — the box is merely UNTOLD, or carrying disk debris rather than a fault
+#          on a live lane: never probed; a stale catalogue (the last probe
+#          failed and this is the previous one, spec §11); a lane with no
+#          registry file yet, which spec §13.1 says is VALID and reads as "all
+#          classes unavailable" until seeded; and an ORPHANED registry file —
+#          a `<id>.classes.json` whose id is in NO roster row at all, left
+#          behind by `ccrc account remove` (spec §11, "Orphan registry", mail
+#          284) — reported here because nothing reaps it automatically.
+#
+# Collapsing them would either cry wolf on a fresh box — where "never probed" is
+# the ordinary first state — or report a healthy box while a class is dead.
+#
+# SCOPE IS `telemetry: "none"`, which the roster DECLARES — for every finding
+# EXCEPT the orphan scan, which walks the models directory itself and checks
+# each id against the WHOLE roster, not just its telemetry:"none" rows: an
+# orphan is disk debris regardless of what kind of lane the id used to be, and
+# it is a finding even on a box with zero classed lanes today, so it is never
+# folded into the "nothing to classify" SKIP below. An Anthropic lane
+# never has a registry file (spec §4.1) and its four aliases are Claude Code's
+# own, so it has nothing here to measure; a lane whose entry omits `telemetry`
+# altogether is a roster `parseRoster` would refuse, and the `wrappers` check
+# above owns that fault — reporting it twice sends an operator to fix two
+# things. The limit is stated rather than hidden: an Anthropic account whose
+# operator set `telemetry: "none"` would be asked to seed a registry it does not
+# need, and would answer WARN until they did.
+#
+# READ BY NODE, THROUGH THE SHIPPED SHARED MODULES. `shared/models.mjs` and
+# `shared/modelenv.mjs` are the SINGLE definitions of "what is retired" and
+# "what belongs in the env block"; a jq reimplementation here would be a third
+# reader of the same rule (the server and ccd are the other two) and would drift
+# from both the first time a rule moved. They are reached relative to this
+# file's own directory.
+_check_models() {
+  local roster="$HOME/.ccrc/accounts.json"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_skip models "there is no readable account roster at \$HOME/.ccrc/accounts.json, so the wrappers check above owns that fault and there is nothing here to measure"
+    return 3
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_fail models "node is not on PATH, so the class registry cannot be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+
+  local out rc
+  out="$(CCRC_DOCTOR_MODELS_ROSTER="$roster" CCRC_DOCTOR_MODELS_DIR="$HOME/.ccrc/models" \
+         CCRC_DOCTOR_MODELS_HOME="$HOME" CCRC_DOCTOR_MODELS_SHARED="${CCRC_HERE%/*}/shared" \
+         node --input-type=module -e '
+    import { readFileSync, readdirSync } from "node:fs";
+    import path from "node:path";
+    const shared = process.env.CCRC_DOCTOR_MODELS_SHARED;
+    const { parseRegistry, parseCatalogue, deriveModels } = await import(path.join(shared, "models.mjs"));
+    const { modelEnvBlock } = await import(path.join(shared, "modelenv.mjs"));
+    let text;
+    try { text = readFileSync(process.env.CCRC_DOCTOR_MODELS_ROSTER, "utf8"); }
+    catch { process.exit(5); }
+    let j; try { j = JSON.parse(text); } catch { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    if (j.accounts.length === 0) process.exit(6);
+    // Every control byte escaped, and the backslash escaped first so the
+    // rendering is INJECTIVE — `_check_wrappers` learned both the hard way, and
+    // for the same two reasons: this TSV would otherwise gain fields, and the
+    // verdict line is read by a human on a terminal that ACTS on control bytes.
+    const esc = (c) => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0");
+    const s = (v) => (typeof v === "string"
+      ? v.replace(/\\/g, "\\\\").replace(/\t/g, "\\t").replace(/\r/g, "\\r")
+         .replace(/\n/g, "\\n").replace(/[\x00-\x1f\x7f]/g, esc)
+      : "");
+    const dir = process.env.CCRC_DOCTOR_MODELS_DIR;
+    const rows = [];
+    for (const a of j.accounts) {
+      const o = (a && typeof a === "object") ? a : {};
+      const e = (o.exec && typeof o.exec === "object") ? o.exec : {};
+      if (e.kind === "upstream" || o.telemetry !== "none") continue;
+      const id = s(o.id);
+      // ── the registry ─────────────────────────────────────────────────────
+      let reg = null;
+      const rp = path.join(dir, o.id + ".classes.json");
+      let rawReg = null;
+      try { rawReg = readFileSync(rp, "utf8"); }
+      catch (err) {
+        if (err.code === "ENOENT") { rows.push([id, "no-registry", ""].join("\t")); continue; }
+        rows.push([id, "registry-unreadable", s(rp)].join("\t")); continue;
+      }
+      try { reg = parseRegistry(JSON.parse(rawReg)); }
+      catch { rows.push([id, "registry-unreadable", s(rp)].join("\t")); continue; }
+      // ── the catalogue ────────────────────────────────────────────────────
+      let cat = null, catState = "ok";
+      const cp = path.join(dir, o.id + ".json");
+      let rawCat = null;
+      try { rawCat = readFileSync(cp, "utf8"); }
+      catch (err) { catState = err.code === "ENOENT" ? "never-probed" : "unreadable"; }
+      if (rawCat !== null) {
+        try { cat = parseCatalogue(JSON.parse(rawCat)); } catch { catState = "unreadable"; }
+      }
+      if (catState !== "ok") rows.push([id, catState, s(cp)].join("\t"));
+      else if (cat.stale) rows.push([id, "stale", String(cat.fetchedAt)].join("\t"));
+      // ── retired class ids ────────────────────────────────────────────────
+      if (cat !== null && !cat.stale) {
+        const d = deriveModels(reg, cat);
+        for (const bad of d.retired) {
+          const cls = ["haiku", "sonnet", "opus", "fable"].find((c) => reg.classes[c] === bad);
+          if (cls !== undefined) rows.push([id, "retired", s(bad) + " " + cls].join("\t"));
+        }
+      }
+      // ── the env block against the registry ───────────────────────────────
+      let want;
+      try { want = modelEnvBlock(reg); }
+      catch { rows.push([id, "no-classes", ""].join("\t")); continue; }
+      const sp = path.join(process.env.CCRC_DOCTOR_MODELS_HOME, o.configDirSuffix ?? "", "settings.json");
+      let env = null;
+      try { env = (JSON.parse(readFileSync(sp, "utf8")) || {}).env ?? {}; }
+      catch { rows.push([id, "settings-unreadable", s(sp)].join("\t")); }
+      if (env !== null) {
+        for (const [k, v] of Object.entries(want)) {
+          if (env[k] !== v) rows.push([id, "env-drift", s(k)].join("\t"));
+        }
+      }
+      if (rows.filter((r) => r.startsWith(id + "\t")).length === 0) rows.push([id, "ok", ""].join("\t"));
+    }
+    // ── orphaned registry files (spec §11, "Orphan registry", mail 284) ──────
+    // A `<id>.classes.json` whose id is in NO roster row at all — independent
+    // of the loop above, and checked against every account, not just
+    // telemetry:"none" ones, because an id `ccrc account remove` dropped is
+    // gone from the roster entirely, not merely reclassified as upstream.
+    const rosterIds = new Set(j.accounts
+      .map((a) => (a && typeof a === "object" ? a.id : undefined))
+      .filter((v) => typeof v === "string"));
+    let entries = [];
+    try { entries = readdirSync(dir); } catch { entries = []; }
+    for (const entry of entries) {
+      if (!entry.endsWith(".classes.json")) continue;
+      const oid = entry.slice(0, -".classes.json".length);
+      if (!rosterIds.has(oid)) rows.push([s(oid), "orphan", ""].join("\t"));
+    }
+    process.stdout.write(rows.join("\n"));
+  ' 2>/dev/null)"; rc=$?
+
+  case "$rc" in
+    0) ;;
+    5) _dr_fail models "\$HOME/.ccrc/accounts.json cannot be read, so no lane's classes could be checked" \
+         "fix its mode/ownership — check with: ls -l \$HOME/.ccrc/accounts.json"; return 1 ;;
+    3) _dr_fail models "\$HOME/.ccrc/accounts.json does not parse as JSON" \
+         "the wrappers check above owns this fault too — fix the roster once"; return 1 ;;
+    4|6) _dr_fail models "\$HOME/.ccrc/accounts.json declares no accounts" \
+         "rebuild it from disk: ccrc adopt --out /tmp/accounts.json"; return 1 ;;
+    *) _dr_fail models "reading the class registry exited $rc — this check does not know what that means" \
+         "this is a bug in ccrc, not a fact about your box — see _check_models in $CCRC_HERE/ccrc-doctor-checks"; return 1 ;;
+  esac
+
+  local -a fails=() warns=() lanes=()
+  local line id code detail
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    id="${line%%$'\t'*}"; line="${line#*$'\t'}"
+    code="${line%%$'\t'*}"; detail="${line#*$'\t'}"
+    case " ${lanes[*]} " in *" $id "*) ;; *) lanes+=("$id") ;; esac
+    case "$code" in
+      ok) ;;
+      no-registry)         warns+=("$id has no model-class registry, so every class on it reads as unavailable") ;;
+      never-probed)        warns+=("$id has never been probed") ;;
+      stale)               warns+=("$id's catalogue is stale since epoch $detail — the last probe failed") ;;
+      orphan)              warns+=("$id has a model-class registry file but is in no roster row — probably left behind by ccrc account remove") ;;
+      registry-unreadable) fails+=("$id's registry at $detail exists and cannot be read") ;;
+      unreadable)          fails+=("$id's catalogue at $detail exists and cannot be read") ;;
+      settings-unreadable) fails+=("$id's settings at $detail cannot be read, so its env block could not be compared") ;;
+      retired)             fails+=("$id classes ${detail% *} as ${detail#* }-class and the provider no longer advertises it") ;;
+      env-drift)           fails+=("$id's settings env disagrees with the registry on $detail") ;;
+      no-classes)          fails+=("$id has no class the materialiser can build an env block from") ;;
+      *)                   fails+=("$id reported \"$code\", which this check does not understand") ;;
+    esac
+  done <<< "$out"
+
+  if [ "${#lanes[@]}" -eq 0 ]; then
+    _dr_skip models "this box declares no lane with telemetry \"none\", so there is nothing to classify — an Anthropic account's four classes are Claude Code's own defaults"
+    return 3
+  fi
+
+  # A FAIL and a WARN are printed as SEPARATE lines with their own remedies —
+  # the header's "one check may answer in two classes" rule — and the WORSE
+  # class is returned, because an operator who fixes the retired id still has a
+  # stale catalogue to refresh.
+  local worst=0
+  if [ "${#fails[@]}" -gt 0 ]; then
+    _dr_fail models "$(IFS='; '; echo "${fails[*]}")" \
+      "reassign the class and re-materialise: ccrc models <id> set-class <class> <modelId> (the registry file is yours — ccrc never clears a class for you)"
+    worst=1
+  fi
+  if [ "${#warns[@]}" -gt 0 ]; then
+    _dr_warn models "$(IFS='; '; echo "${warns[*]}")" \
+      "probe the lane: ccrc models refresh <id> — seed an unregistered lane first with ccrc models <id> init <codex|openrouter|compatible> — or remove an orphaned registry file with ccrc models <id> rm"
+    [ "$worst" -eq 0 ] && worst=2
+  fi
+  if [ "$worst" -eq 0 ]; then
+    _dr_pass models "$(IFS=', '; echo "${lanes[*]}") — catalogue fresh, every class advertised, env block matches the registry"
+  fi
+  return "$worst"
+}
+```
+
+- [ ] **Step 6: Run the doctor tests**
+
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts`
+Expected: PASS — the twelve new cases, the table census, and every pre-existing summary count (which `HEALTHY_SKIPS` now accounts for).
+
+- [ ] **Step 7: Measured mutation #1 — the FAIL/WARN split**
+
+Edit `ccd/ccrc-doctor-checks` and move `retired)` from the `fails+=` arm to the `warns+=` arm.
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t "no longer advertises"`
+Expected: FAIL — `expected 'WARN models: gpt classes gpt-5.6-sol…' to match /^FAIL models: /`.
+Restore. Re-run: PASS.
+
+- [ ] **Step 8: Measured mutation #2 — the env comparison**
+
+Edit `ccd/ccrc-doctor-checks` and change the env loop's condition to `if (false)`.
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t "disagrees with the registry"`
+Expected: FAIL — `expected 'PASS models: gpt — catalogue fresh…' to match /^FAIL models: .*ANTHROPIC_DEFAULT_OPUS_MODEL/`: a box whose settings were hand-edited would be reported healthy while every session on the lane ran the wrong model.
+Restore. Re-run: PASS.
+
+- [ ] **Step 9: Measured mutation #3 — SKIP is not PASS**
+
+Edit `ccd/ccrc-doctor-checks` and change the `${#lanes[@]} -eq 0` arm to `_dr_pass models "nothing to check"; return 0`.
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t "SKIPS a box with no lane"`
+Expected: FAIL — `expected 'PASS models: nothing to check' to match /^SKIP models: /`. The summary tests that count verdicts go red too, which is the point: a PASS over an empty set is a verdict nobody measured.
+Restore. Re-run: PASS.
+
+- [ ] **Step 10: Measured mutation #4 — a stale catalogue retires nothing**
+
+Edit `ccd/ccrc-doctor-checks` and change the retired guard from `if (cat !== null && !cat.stale)` to `if (cat !== null)`.
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t "WARNS a stale catalogue"`
+Expected: FAIL — the line becomes `FAIL models: gpt classes gpt-5.6-terra as sonnet-class…`, because the stale one-model catalogue is read as the world shrinking rather than as a probe that failed (spec §11).
+Restore. Re-run: PASS.
+
+- [ ] **Step 10b: Measured mutation #5 — the orphan scan**
+
+Edit `ccd/ccrc-doctor-checks` and change the orphan loop's condition from `if (!rosterIds.has(oid))` to `if (false)`.
+Run from `server/`: `npx vitest run test/ccrc-doctor.test.ts -t "orphaned registry file"`
+Expected: FAIL — `expected 'SKIP models: this box declares no lane with telemetry "none"…' to match /^WARN models: .*ghost.*no roster row/`: with the scan disabled, the box has no telemetry:"none" lane and no orphan finding either, so `lanes` stays empty and the check answers SKIP — a registry file `ccrc account remove` left behind would sit on disk forever with no operator ever told.
+Restore. Re-run: PASS.
+
+- [ ] **Step 11: Provenance and the scans**
+
+`ccd/ccrc-doctor-checks` carries no `# ccrc:generated` line, so nothing is re-stamped and `server/test/ownership.test.ts` needs no run for it. Confirm the premise:
+
+Run from `<repo>`: `sed -n 2p ccd/ccrc-doctor-checks`
+Expected: the file's own header comment, not a `# ccrc:generated` marker.
+
+- [ ] **Step 12: Widen the holder list Plan 1 wrote**
+
+`ccd/ccrc-doctor-checks` now spells `.ccrc/models` on one line of shell
+(`CCRC_DOCTOR_MODELS_DIR="$HOME/.ccrc/models"`), so Plan 1's exact-match assertion in
+`server/test/single-definition.test.ts` — the "the generated model files, and who reads
+each one" describe — is now RED. That is the guard working; add this plan's row in
+`holdersOf`'s own sort order, keeping whatever rows the plans that ran before this one
+already added:
+
+```ts
+    expect(holdersOf('.ccrc/models')).toEqual([
+      'ccd/ccd',                 // the class carry's reader (Plan 2, if it has landed)
+      'ccd/ccrc',                // cmd_models — the verbs
+      'ccd/ccrc-doctor-checks',  // the per-lane models check (this plan)
+      'ccd/ccrc-models-probe',   // the writer
+    ]);
+```
+
+Four rows, all bash, and **no `'server/src/models.ts'` row** — measured on `origin/main`
+at `server/test/single-definition.test.ts:1139-1145`: the module-scope `holdersOf` filters
+`BASH`, which is `bashRoots.flatMap(bashFiles)` plus `install.sh`, and `bashFiles` keeps
+only extensionless files whose first line is a `#!…sh` shebang (`:1118-1119` rejects
+anything with an extension outright). A `.ts` file can never appear in that list, so
+adding the row would red the case it is meant to satisfy. The TypeScript reader is
+single-defined a different way and by a different assertion: `server/src/models.ts`
+reaches the directory through `cfg.modelsDir` (Task 2 added it to `server/src/config.ts`
+beside `limitsDir`) and never spells `.ccrc/models` itself — pinned by Task 2 Step 13's
+`one producer of AccountModels` describe, whose third case asserts the path is spelled
+once under `server/src` and that once is `config.ts`.
+
+If Plan 2 has not landed yet, omit its `'ccd/ccd'` row — the list states what the tree
+holds, and Plan 2 puts its row in when it lands. Do **not** turn the list into a pattern:
+Plan 1's comment says it grows by name.
+
+- [ ] **Step 12b: Confirm the other two exact-match lists are already widened**
+
+Plan 1 Task 12's describe holds two more exact-match lists this plan's code reds, and each
+was widened in the task whose code red it, not here: `spell('classes.json')` gained
+`'server/src/models.ts'` in **Task 2 Step 13b**, and the class-enumeration list gained
+`'pwa/src/lib/models.ts'` in **Task 8 Step 6b**. Nothing to edit in this step — verify:
+
+Run from `server/`: `npx vitest run test/single-definition.test.ts -t "the REGISTRY file is named"`
+Run from `server/`: `npx vitest run test/single-definition.test.ts -t "the four class names are enumerated"`
+Expected: both PASS. A red here means the earlier task's widening was skipped; go back and
+do it there rather than patching it in this commit, so each list moves with the code that
+moved it.
+
+- [ ] **Step 13: Run the scans**
+
+Run from `server/`: `npx vitest run test/single-definition.test.ts test/deviation-refs.test.ts test/source-bytes.test.ts`
+Expected: PASS — after Step 12, and RED before it on exactly one case, the bash holder
+list. The other two lists Plan 1 Task 12 left for later plans were widened in Tasks 2 and
+8; Step 12b is the check that they were.
+
+- [ ] **Step 14: Commit**
+
+```bash
+git add ccd/ccrc-doctor-checks server/test/ccrc-doctor.test.ts server/test/single-definition.test.ts
+git commit -m "feat(doctor): one check per classed lane — a fresh catalogue, no retired class, and an env block that matches the registry
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
 ## Definition of done
 
 Run from the repository root unless a line says otherwise. Every one of these is a command whose output is the evidence; none of them is a judgement call.
 
-- [ ] Eleven commits, one per task (Task 1's is the empty gate commit), each naming only its own files (`git log --oneline -11`).
+- [ ] Twelve commits, one per task (Task 1's is the empty gate commit), each naming only its own files (`git log --oneline -12`).
 - [ ] `sed -n 2p ccd/ccd` prints a `# ccrc:generated 1 sha256=…` line, and from `server/`: `npx vitest run test/ownership.test.ts` PASSES — i.e. `ccd/ccd` was re-stamped after the last edit to it.
 - [ ] From `server/`: `npx vitest run` PASSES (the whole suite).
 - [ ] From `agent/`: `npx vitest run` PASSES.
@@ -5278,11 +5880,15 @@ Run from the repository root unless a line says otherwise. Every one of these is
 - [ ] `sed -n '/The dot-free claim/,/That is a WIDER/p' ccd/ccd | grep -c '`class`'` prints `1` — wave 2b's registry field inventory names the field this plan writes (its own Task 7's mechanism, extended by one field).
 - [ ] From `server/`: `npx vitest run test/ccd-class-rotation.test.ts -t 'every `_avail \"$cand\" || continue` in _swap_target is followed by the class guard'` PASSES — the class filter is the third predicate of `_swap_target`'s composed chain and covers both of #61's brackets (A-8).
 - [ ] The spec's §7 example line appears verbatim in a passing assertion: from `server/`, `npx vitest run test/ccd-ls-lane-classes.test.ts -t "exactly as §7 spells it"` PASSES.
+- [ ] `grep -A1 "^  pools\$" ccd/ccrc-doctor-checks | tail -1` prints `  models` — the doctor table lists `models` directly after `pools` (Task 12).
+- [ ] From `server/`: `npx vitest run test/ccrc-doctor.test.ts` PASSES, including the `ccrc doctor: models` describe's twelve cases (spec §8 last bullet, §11's orphan finding, mail 284).
+- [ ] `grep -c '^_check_models() {' ccd/ccrc-doctor-checks` prints `1`, and `sed -n 2p ccd/ccrc-doctor-checks` prints the file's own header comment, never a `# ccrc:generated` marker (Task 12 Step 11 — this file is not stamped).
+- [ ] `expect(holdersOf('.ccrc/models')).toEqual([...])` in `server/test/single-definition.test.ts` names `'ccd/ccrc-doctor-checks'` beside `'ccd/ccd'`: from `server/`, `npx vitest run test/single-definition.test.ts -t "the generated model files"` PASSES.
 
 ## What this plan deliberately leaves to Plans 1, 3a and 3b
 
 - **Plan 1** — the whole WRITE side: the registry file `~/.ccrc/models/<id>.classes.json` and its validator (`parseRegistry`, `RegistryInvalid`), the probes, `classesTsv(registry, catalogue)` (which is where §4.3's retirement rule is computed and tested, once), `modelEnvBlock(registry)` and its single-writer pin, the `.effort.json` the shim reads, the LiteLLM render, and the `ccrc models` verb group this plan's refusal sentences point the operator at.
-- **Plan 3a** — the disabled picker rows (spec §8), `ccrc doctor`'s per-lane checks (§8 last bullet), every server route and the `AccountModels` wire field (§9), and `pwa/src/lib/models.ts`'s deletion (§13.4).
+- **Plan 3a** — the disabled picker rows (spec §8), every server route and the `AccountModels` wire field (§9), and `pwa/src/lib/models.ts`'s deletion (§13.4). `ccrc doctor`'s per-lane `models` check (§8 last bullet) moved here, to this plan's Task 12 (mail 286, 2026-09-08): `ccd/ccrc-doctor-checks` is a `ccd/` file PR #62 edits, so it sits with the rest of this plan's ccd work rather than with Plan 3a's server/PWA surfaces.
 - **Plan 3b** — the SwapSheet's downgrade sentence. This plan makes `ccd swap --as-class` exist and refuse without it; the UI that offers the choice rewrites `SwapSheet.tsx` and is gated on account-pools wave 4.
 
 Nothing in those depends on a decision this plan defers — they depend on files this plan already reads.
