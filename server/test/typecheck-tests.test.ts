@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, '..');
 const agentRoot = path.resolve(here, '..', '..', 'agent');
+const pwaRoot = path.resolve(here, '..', '..', 'pwa');
 
 // `typescript/bin/tsc` is not an exported subpath, so resolve the package's
 // main entry and walk to the bin next to lib/ — a bare `tsc` would depend on
@@ -64,6 +65,36 @@ describe('every test file typechecks — the directory the gates could not see',
     // measured clean; the point of checking it is that it STAYS clean.
     const r = typecheck(agentRoot, 'test/tsconfig.tests.json');
     expect(r.out, `agent/test/ has type errors:\n${r.out}`).toBe('');
+    expect(r.code).toBe(0);
+  }, 120_000);
+});
+
+// pwa's gap is shaped differently from server's and agent's, so it gets its own
+// describe rather than a third row above. `pwa/tsconfig.json` ALREADY includes
+// `src`, `test`, `vite.config.ts` and `../shared` (measured: every .ts/.tsx file
+// on disk under pwa/ lives under one of those, so there is no excluded
+// directory to add a `test/tsconfig.tests.json` project for). The hole is not
+// "a directory outside every project" — it is that NOTHING inside `vitest run`
+// (pwa's `npm test`) ever asks tsc to check that project. `pwa/vite.config.ts`
+// sets `test.typecheck.enabled = true`, but Vitest's typecheck runner only
+// type-checks files matching its own default `typecheck.include`
+// (`**/*.{test,spec}-d.?(c|m)[jt]s?(x)`, `vitest/dist/chunks/defaults.*.js`) —
+// exactly `test/auth-wire.test-d.ts` and `test/sheet.test-d.tsx`, both
+// deliberate type-level assertions, not a whole-project check. So a broken
+// type anywhere else under `src/`, `test/` or `../shared` (which pwa bundles)
+// is invisible to `vitest run` and thus to this repo's own convention of
+// running each package by `cd pwa && npm run test` — pwa/vite.config.ts's own
+// comment on `typecheck.enabled` already says as much: "the only thing that
+// catches a revert is a separate `tsc --noEmit` nobody is obliged to run".
+// That separate check exists — CI's `Typecheck` step and `npm run build` both
+// run pwa's `tsconfig.json` — but both are plumbing outside any vitest suite,
+// exactly the kind of gate this file's own header explains a spawned tsc
+// closes: once the check is a vitest assertion, it is inside the same gate
+// list as everything else in this file and cannot be silently dropped.
+describe('pwa: the whole package typechecks — vitest\'s own typecheck mode does not reach it', () => {
+  it('pwa/ is clean under tsconfig.json', () => {
+    const r = typecheck(pwaRoot, 'tsconfig.json');
+    expect(r.out, `pwa has type errors that only 'npm run build' or CI's separate Typecheck step would catch:\n${r.out}`).toBe('');
     expect(r.code).toBe(0);
   }, 120_000);
 });
@@ -110,8 +141,15 @@ describe('the tests-inclusive projects really do cover the directory', () => {
   // move from a two-name file list to a directory scan.
   const IGNORED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.vite']);
 
-  /** Every `.ts` file in a package that some typecheck project must contain.
-   *  Discovered by walking the package root, not listed. */
+  /** Every `.ts`/`.tsx` file in a package that some typecheck project must
+   *  contain. Discovered by walking the package root, not listed.
+   *  `.tsx` matters here specifically for pwa: server and agent are pure
+   *  backend TypeScript with zero `.tsx` files, so a filter that only
+   *  matched `.ts` happened to be complete for both of them — and would
+   *  have silently dropped 104 of pwa's 170 source files (every component
+   *  and screen) from this census the moment pwa was added, the same "one
+   *  directory looked covered because the check couldn't see the rest"
+   *  shape this file's header already warns about, one file-extension over. */
   function typeSources(root: string): string[] {
     const out: string[] = [];
     const walk = (dir: string): void => {
@@ -137,7 +175,10 @@ describe('the tests-inclusive projects really do cover the directory', () => {
         // load flake" every full-suite run kept re-diagnosing (it was never
         // load: it was this race, and it finally fired on the quiet CI box).
         if (e.name.startsWith('__')) continue;
-        if (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) out.push(abs);
+        // `.d.ts` is a real, common exclusion (declaration files, not
+        // sources to typecheck); `.d.tsx` is not a TypeScript-recognized
+        // extension at all, so no analogous exclusion exists for it.
+        if (e.name.endsWith('.tsx') || (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts'))) out.push(abs);
       }
     };
     walk(root);
@@ -151,6 +192,15 @@ describe('the tests-inclusive projects really do cover the directory', () => {
   const PACKAGES: [pkg: string, root: string, projects: string[], floor: number][] = [
     ['server', serverRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 100],
     ['agent', agentRoot, ['tsconfig.json', 'test/tsconfig.tests.json'], 15],
+    // pwa gets ONE project, not two. Unlike server/agent, `pwa/tsconfig.json`
+    // never excluded `test/` in the first place (it already sets `noEmit:
+    // true` and lists `src`, `test`, `vite.config.ts` and `../shared` in one
+    // `include` — there was never a build-vs-tests split to bridge with a
+    // second `tsconfig.tests.json`), so a second project here would just be a
+    // duplicate of the first with nothing new to include. Measured 170 .ts/
+    // .tsx files on disk under pwa/ (88 src, 81 test, 1 vite.config.ts); 100
+    // is a floor with real slack under that, not a rounding of it.
+    ['pwa', pwaRoot, ['tsconfig.json'], 100],
   ];
 
   it.each(PACKAGES)('%s: EVERY .ts file in the package is in some typecheck project — directories discovered, not listed',
