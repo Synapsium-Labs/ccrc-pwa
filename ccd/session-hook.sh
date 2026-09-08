@@ -720,24 +720,44 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # graphify 593 + held 592 + co-tenant 176 + 2 joins = 1363, cleared by 32% —
 # and a live sample is the wrong quantity to size a bound with. What this bound
 # has to clear is the worst combination the code can PRODUCE with every GATED
-# field at its own cap. Re-measured from the shipped sentence templates:
-# graphify 718 (every optional clause present, a 12-digit node count, engine and
-# pin each at their 64-byte `head -c` cap, plus the armed-gate sentence) + §4.2
-# held case A 801 (a 127-character workdir in the subject, a 127-character hold,
-# a 40-character id) + co-tenant 247 (a 64-character project) + two one-space
-# joins = 1768. Under 1800 that is 32 characters of headroom, not 32%. And the
-# join order (graphify -> hold -> ccrc) means the clip eats the CO-TENANT
-# sentence first, mid-word, silently: the subject naming the route to the peer
-# rules is the one that vanishes, on exactly the sessions carrying a hold.
+# field at its own cap.
 #
-# 2400 clears 1768 by 36% and is still under 10% of the 24576 bytes the
-# neighbour hook on this same compact SessionStart (`~/.cc-handoff/restore.sh`)
-# already emits. It is a ceiling, never a budget the subjects may spend up to:
-# `GM_NODES` is ungated (see `_hook_graph_measure`, I4) and can exceed ANY
-# bound on its own, which is why the clip exists at all and why the number
-# above only has to cover the fields that ARE gated. Raising the bound is the
-# cheap answer; drop-whole-subject logic on the hot path is not, and was
-# refused.
+# RE-MEASURED END-TO-END, 2026-09-08, CORRECTING THE FIX WAVE'S OWN ARITHMETIC
+# (a reviewer's re-measurement of it, verified here against a fixture HOME run
+# through this file rather than hand-counted). graphify 719 (every optional
+# clause present, a 12-digit node count, engine and pin each at their 64-byte
+# `head -c` cap, the LONGEST freshness phrasing this file can produce — `fresh
+# — same content as HEAD`, D-1368 — and the armed-gate sentence) + §4.2 held
+# case A 860 (a 127-character workdir in the subject, a 127-character hold
+# whose reason NAMES A RUN — the longer of the two case-A sentences the code
+# can emit — and a 40-character id) + co-tenant 244 (a 64-character project) +
+# two one-space joins = 1825, not the fix wave's 1768: its own 801 for held
+# case A undercounted the true 860 by 59. THE ID LENGTH IS A MODEL, NOT A
+# BOUND — `$id` carries a shape gate but no length cap and appears more than
+# once across these sentences, so 1825 assumes a 40-character id rather than
+# proving a ceiling; the longest id live on this fleet today is 29
+# (`expoAI-assistant-keen-prairie`).
+#
+# AGAINST THE OLD 1800 THIS WAS NEVER HEADROOM. 1825 exceeds 1800 by 25
+# characters, so the shipped 1800 did not clear its own structural worst case
+# — it silently truncated it, mid-word, inside the CO-TENANT sentence
+# (`… returns the five peer rules.` cut to `… ret`), on exactly the join order
+# (graphify -> hold -> ccrc) already named as the risk: the subject naming the
+# route to the peer rules is the one that vanishes, on exactly the sessions
+# carrying a hold. The fix wave's "32 characters of headroom, not 32%" claim
+# had the right units and the wrong sign: the 1800 it describes carried
+# NEGATIVE headroom against its own structural worst case, so raising it to
+# 2400 closed a live silent-truncation risk rather than widening a comfortable
+# margin.
+#
+# 2400 clears 1825 by 575 characters (about 32%) and is still under 10% of the
+# 24576 bytes the neighbour hook on this same compact SessionStart
+# (`~/.cc-handoff/restore.sh`) already emits. It is a ceiling, never a budget
+# the subjects may spend up to: `GM_NODES` is ungated (see
+# `_hook_graph_measure`, I4) and can exceed ANY bound on its own, which is why
+# the clip exists at all and why the number above only has to cover the
+# fields that ARE gated. Raising the bound is the cheap answer;
+# drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
 # BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
 # in a prompt, so it is gated on a SHAPE rather than clipped to a length: a

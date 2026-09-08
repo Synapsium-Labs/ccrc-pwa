@@ -1786,14 +1786,24 @@ suite, which taints one repo-controlled field alone (the graph sweep's refusal r
 it is; `CARD_MAX_CHARS` is the ceiling on graphify + hold + co-tenant + their two one-space joins together.
 It is argued from the **structural** worst case, not the live one: the worst combination measured on this
 fleet is 593 + 592 + 176 + 2 = 1363, but the worst the code can produce with every gated field at its own
-cap is graphify 718 (a 12-digit node count, engine and pin each at their 64-byte `head -c` cap, the armed-
-gate sentence present) + held case A 801 (a 127-character workdir, a 127-character hold, a 40-character id)
-+ co-tenant 247 (a 64-character project) + two joins = **1768**. The shipped 1800 cleared that by 32
-characters, not by the 32% its own comment claimed of the live figure — and because the join order is
-graphify → hold → ccrc, the overflow ate the **co-tenant** sentence mid-word and silently, on exactly the
-sessions that carry a hold. 2400 clears 1768 by 36% and is still under 10% of the neighboring
-`~/.cc-handoff/restore.sh` hook's own 24576-byte `additionalContext` cap on this same compact event. It is
-a ceiling and never a budget to spend up to: the node count is ungated (`grep -oE '[0-9]+ nodes'` is
+cap, re-measured end-to-end against a fixture HOME rather than hand-counted (2026-09-08, correcting the fix
+wave's own arithmetic), is graphify 719 (a 12-digit node count, engine and pin each at their 64-byte
+`head -c` cap, the longest freshness phrasing the code can produce — `fresh — same content as HEAD` — and
+the armed-gate sentence present) + held case A **860** (a 127-character workdir, a 127-character hold whose
+reason names a run — the longer of the two case-A sentences the code can emit — and a 40-character id,
+**modelled**: `$id` carries a shape gate but no length bound and appears more than once across these
+sentences, so this is an assumption and not a ceiling; the longest id live on this fleet today is 29,
+`expoAI-assistant-keen-prairie`) + co-tenant 244 (a 64-character project) + two joins = **1825**, not the
+fix wave's 1768 — its own 801 for held case A undercounted the true 860 by 59. Against 1800 that is **not**
+headroom: 1825 exceeds it by **25 characters**, and re-running the same combination against a copy of this
+file with `CARD_MAX_CHARS=1800` clips the assembled card mid-word inside the co-tenant sentence
+(`… returns the five peer rules.` cut to `… ret`) — exactly the mid-word loss the join order
+(graphify → hold → ccrc) was already named as risking. The shipped 1800 did not comfortably clear its own
+structural worst case; it carried **negative** headroom against it, so the raise to 2400 closed a live
+silent-truncation risk rather than widening a comfortable margin. 2400 clears 1825 by **575 characters**
+(about 32%) and is still under 10% of the neighboring `~/.cc-handoff/restore.sh` hook's own 24576-byte
+`additionalContext` cap on this same compact event. It is a ceiling and never a budget to spend up to: the
+node count is ungated (`grep -oE '[0-9]+ nodes'` is
 unbounded repetition inside a 4096-byte head) and can exceed any bound on its own, which is why the clip
 exists at all and why the number above only has to cover the fields that **are** gated. It is also what stands between an operator-controlled field and `jq`'s own `MAX_ARG_STRLEN`
 (measured 131072 on the fleet host): past it the `jq -cn` exec fails, `|| return 0` swallows it, and the

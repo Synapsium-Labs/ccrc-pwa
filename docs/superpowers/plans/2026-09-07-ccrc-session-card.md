@@ -1676,13 +1676,24 @@ D-1897, D-1898, D-1899) record departures that happened during the build and wen
 - **D-1903** (fix wave, M5 — spec §4.4) — **`CARD_MAX_CHARS` raised 1800 -> 2400, re-argued from the
   STRUCTURAL worst case.** 1800 was sized against the worst combination measured *live on this fleet*
   (593 + 592 + 176 + 2 = 1363, "cleared by 32%"), which is the wrong quantity for a bound. The worst the
-  code can produce with every **gated** field at its own cap, re-measured from the shipped templates, is
-  graphify 718 (a 12-digit node count, engine and pin each at their 64-byte `head -c` cap, the armed-gate
-  sentence present) + held case A 801 (a 127-character workdir, a 127-character hold, a 40-character id)
-  + co-tenant 247 (a 64-character project) + two one-space joins = **1768** — 32 characters under 1800,
-  not 32%. And because the join order is graphify -> hold -> ccrc, the overflow ate the **co-tenant**
-  sentence mid-word and silently, on exactly the sessions that carry a hold. 2400 clears 1768 by 36% and
-  stays under 10% of the 24576 bytes the neighbour hook emits on the same event. Drop-whole-subject logic
-  on the hot path was considered and refused. The ceiling is not a budget the subjects may spend up to:
-  `GM_NODES` is ungated (D-1899) and can exceed any bound on its own, which is why the clip exists at all
-  and why the number only has to cover the fields that *are* gated.
+  code can produce with every **gated** field at its own cap, measured end-to-end against a fixture HOME
+  rather than hand-counted (2026-09-08, correcting the fix wave's own arithmetic), is graphify 719 (a
+  12-digit node count, engine and pin each at their 64-byte `head -c` cap, the longest freshness phrasing
+  the code can produce — `fresh — same content as HEAD` — and the armed-gate sentence present) + held case
+  A 860 (a 127-character workdir, a 127-character hold whose reason names a run — the longer of the two
+  case-A sentences — and a 40-character id, modelled: `$id` has a shape gate but no length bound and
+  appears more than once across these sentences, so this is an assumption, not a ceiling; the longest id
+  live on this fleet today is 29, `expoAI-assistant-keen-prairie`) + co-tenant 244 (a 64-character project)
+  + two one-space joins = **1825** — not the fix wave's 1768: its own 801 for held case A undercounted the
+  true 860 by 59. Against 1800 that is **not** headroom: 1825 exceeds it by 25 characters, and the old
+  bound truncates exactly this combination mid-word inside the co-tenant sentence
+  (`… returns the five peer rules.` cut to `… ret`). The fix wave's own "32 characters of headroom, not
+  32%" claim had the right units and the wrong sign — the shipped 1800 carried **negative** headroom
+  against its own structural worst case, so raising it to 2400 closed a live silent-truncation risk rather
+  than widening a comfortable margin. And because the join order is graphify -> hold -> ccrc, that overflow
+  ate the **co-tenant** sentence mid-word and silently, on exactly the sessions that carry a hold. 2400
+  clears 1825 by 575 characters (about 32%) and stays under 10% of the 24576 bytes the neighbour hook emits
+  on the same event. Drop-whole-subject logic on the hot path was considered and refused. The ceiling is
+  not a budget the subjects may spend up to: `GM_NODES` is ungated (D-1899) and can exceed any bound on its
+  own, which is why the clip exists at all and why the number only has to cover the fields that *are*
+  gated.

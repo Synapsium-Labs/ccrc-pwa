@@ -387,16 +387,29 @@ subject exists for.
 > **Amended by the fix wave (M5): `CARD_MAX_CHARS=2400`, and the argument is
 > re-made from the STRUCTURAL worst case.** 1363 is a *live sample*, and a live
 > sample is the wrong quantity to size a bound with. The worst combination the
-> code can produce with every **gated** field at its own cap, re-measured from
-> the shipped sentence templates, is graphify **718** (every optional clause
-> present, a 12-digit node count, engine and pin each at their 64-byte `head -c`
-> cap, the armed-gate sentence) + held case A **801** (a 127-character workdir
-> in the subject, a 127-character hold, a 40-character id) + co-tenant **247**
-> (a 64-character project) + two one-space joins = **1768**. Against 1800 that
-> is **32 characters** of headroom, not the 32% this section claimed of the live
-> figure — and since the join order is graphify → hold → ccrc, the overflow ate
-> the **co-tenant** sentence mid-word and silently, on exactly the sessions
-> carrying a hold. 2400 clears 1768 by 36% and stays under 10% of the 24576
+> code can produce with every **gated** field at its own cap, measured
+> end-to-end against a fixture HOME rather than hand-counted (2026-09-08,
+> correcting the fix wave's own arithmetic), is graphify **719** (every optional
+> clause present, a 12-digit node count, engine and pin each at their 64-byte
+> `head -c` cap, the longest freshness phrasing the code can produce — `fresh —
+> same content as HEAD` — and the armed-gate sentence) + held case A **860**
+> (a 127-character workdir in the subject, a 127-character hold whose reason
+> names a run — the longer of the two case-A sentences — and a 40-character
+> id, **modelled**: `$id` has a shape gate but no length bound and appears
+> more than once across these sentences, so this figure is an assumption and
+> not a ceiling; the longest id live on this fleet today is 29,
+> `expoAI-assistant-keen-prairie`) + co-tenant **244** (a 64-character
+> project) + two one-space joins = **1825** — not the fix wave's 1768; its own
+> 801 for held case A undercounted the true 860 by 59. Against 1800 that is
+> **not** headroom: 1825 exceeds it by **25 characters**, and the old bound
+> silently clips exactly this combination mid-word inside the CO-TENANT
+> sentence (`… returns the five peer rules.` truncated to `… ret`) — the same
+> mid-word loss the join order (graphify → hold → ccrc) was already named as
+> risking. The fix wave's own "32 characters of headroom" claim had the wrong
+> sign: the shipped 1800 carried **negative** headroom against its own
+> structural worst case, so raising it to 2400 closed a live silent-truncation
+> risk rather than widening a comfortable margin. 2400 clears 1825 by
+> **575 characters** (about 32%) and stays under 10% of the 24576
 > bytes the neighbour hook already emits on this event. Drop-whole-subject logic
 > on the hot path was considered and **refused**: the bound is the cheaper
 > answer. The ceiling is not a budget the subjects may spend up to — `GM_NODES`
