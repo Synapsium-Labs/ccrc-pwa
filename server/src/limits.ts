@@ -42,7 +42,7 @@ const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
-/** Mirrors ccd's `_authdead` (ccd:1070) marker-CONTENT gate exactly:
+/** Mirrors ccd's `_authdead` (ccd:1079) marker-CONTENT gate exactly:
  *  `"<epoch> <reason>"`, verdict iff the first whitespace-delimited field is
  *  all digits. FAIL-OPEN on anything else, same as bash — an empty or
  *  malformed marker is NOT a verdict.

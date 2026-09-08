@@ -2292,11 +2292,17 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
   // was measured, not theoretical: an edit to one `TREE_FILES` that missed the
   // other broke 34 tests in the file nobody touched.
   //
-  // Scans `server/test`, which `ROOTS` above deliberately does not cover, for
-  // the same reason the ccd-script-path finding does: these are TEST files,
-  // and the fixture they define is data no shipped source ring owns.
+  // Scans `server/test` AND `server/test-e2e`, which `ROOTS` above
+  // deliberately does not cover, for the same reason the ccd-script-path
+  // finding does: these are TEST files, and the fixture they define is data
+  // no shipped source ring owns. The sibling directory is in scope for the
+  // same reason the ccd-script-path finding put it there — an e2e run that
+  // needs the same `ccrc install` tree is exactly the shape that would reach
+  // for its own `TREE_FILES` copy rather than importing this one, and a scan
+  // that stopped at `server/test` would score that copy no hit at all.
   const testDir = path.join(ccrcRoot, 'server', 'test');
-  const testFiles = sources(testDir);
+  const testDirs = [testDir, path.join(ccrcRoot, 'server', 'test-e2e')];
+  const testFiles = testDirs.flatMap(sources);
 
   // Matches the shape of an ASSIGNMENT to an array literal, not a reference or
   // an import — an `import { … } from './installTreeFixture.js'` line has no
@@ -2309,10 +2315,17 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
   const DEFINES_INSTALL_FIXTURE_TREE = /(?:export\s+)?function\s+installFixtureTree\(/;
 
   it('found the test tree it is scanning', () => {
+    // A scan over an empty list passes everything. Each directory is checked
+    // separately so a moved or renamed sibling turns this red on its own,
+    // rather than the other directory's file count silently covering for it
+    // (the same reason the ccd-script-path finding's own version of this
+    // check does it directory-by-directory rather than on the flattened sum).
+    for (const d of testDirs) expect(sources(d).length, rel(d)).toBeGreaterThan(0);
     expect(testFiles.length).toBeGreaterThan(40);
     expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
     expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
     expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test-e2e/helpers.ts');
   });
 
   it('TREE_FILES is defined in exactly one file, installTreeFixture.ts', () => {

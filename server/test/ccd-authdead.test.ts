@@ -1,11 +1,11 @@
 // `$REG/<account>-authdead` is the account-health probe's durable verdict, in the
 // tree's one fault format — `"<epoch> <reason>"`, the shape `swapblocked` already
-// uses (`_swap_refuse`, ccd/ccd:13793). This file pins the READER and the NAMESPACE; the two
+// uses (`_swap_refuse`, ccd/ccd:13949). This file pins the READER and the NAMESPACE; the two
 // placement consumers are pinned in the describes Task 2 adds below.
 //
 // THE DIGITS GATE IS NOT COSMETIC. ccd runs under `set -u`, and every reader of a
 // stamped marker in this file validates the epoch as digits BEFORE any arithmetic
-// touches it (`_auto_swap_check`'s `bts`, ccd/ccd:12093-12094) — a hand-edited or
+// touches it (`_auto_swap_check`'s `bts`, ccd/ccd:12229-12230) — a hand-edited or
 // half-written field otherwise emits an unbound-variable line on every supervise
 // tick. `_authdead` is a predicate rather than an arithmetic reader, so the gate
 // buys something else here: it is what makes a TRUNCATED marker read as "no
@@ -236,7 +236,7 @@ describe('a successful spawn is evidence, and clears the marker', () => {
   // an operator has just fixed the credential and started a session on it.
   //
   // rc 0 ONLY, and that is the whole discipline. `cmd_start` clears
-  // `swapblocked` on the ATTEMPT (ccd/ccd:13102) because a swap refusal is a stale
+  // `swapblocked` on the ATTEMPT (ccd/ccd:13258) because a swap refusal is a stale
   // banner an operator supersedes by acting. An auth-dead marker is a
   // MEASUREMENT: clearing it on an attempt would erase a true fault with no
   // evidence. rc 2 is "waiting for login" and rc 5 is "hard-blocked at startup

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cdb2cfa5fcca1e3bb2926169d023b47ccd9d08d79aebae857239d2f283730e33
+# ccrc:generated 1 sha256=e76bb90408b97751fe1a7ffdd9f29f3939d2279575607fae501f1f4f4ede8c88
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1073,7 +1073,7 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # instead. A rescue must always have a destination.
 #
 # THE DIGITS GATE, exactly as `_auto_swap_check` validates `swapblocked`'s epoch
-# (ccd/ccd:12093-12094): the field is bytes off disk. Here it also decides the answer — an
+# (ccd/ccd:12229-12230): the field is bytes off disk. Here it also decides the answer — an
 # empty or half-written marker is NOT a verdict, and reading one as "dead" would
 # let a truncated write bar an account nothing ever measured.
 _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands for it

@@ -680,25 +680,39 @@ Expected red, and it matters WHICH cases:
 
 **Record the actual output.**
 
-- [ ] **Step 3: Skip the SCORING in `_ws_least_loaded`**
+- [ ] **Step 3: Skip the SCORING in `_ws_least_loaded`, and keep a condemned lane reachable**
 
-In `ccd/ccd`, inside the loop at `:3865-3872`, insert between `[[ -z "$first" ]] && first="$w"` and
-the `sc=` line:
+**Corrected by D-1954 — read that entry before writing this.** A single `first` fallback cannot say
+both "not preferred" and "still eligible" no matter which side of the skip it sits on: assigning it
+BEFORE the skip lets a condemned lane win when nothing is measured; assigning it AFTER (this step's
+original prescription) empties the fallback outright on an all-condemned fleet. The guard below is
+the shipped TWO-TIER form — `first` (the first candidate nobody condemned) and `condemned` (the
+first condemned one), widening `best → first → condemned` — not the single-`first` version this
+step used to give.
+
+In `ccd/ccd`, inside the loop (`:3939-3967`), between `_pool_ok "$w" "$pps" || continue` and the
+`sc=` line:
 
 ```bash
+    if _authdead "$w"; then
+      [[ -z "$condemned" ]] && condemned="$w"
+      continue
+    fi
     [[ -z "$first" ]] && first="$w"
-    # AFTER `first`, BEFORE the score — the mirror of the `_pool_ok` note above,
-    # and the placement is the whole guard. An auth-dead lane must not be
-    # PREFERRED (it is a measurement that a credential no longer authenticates),
-    # but it must stay reachable as the fallback: a skip written one line higher
-    # empties `first` on a fleet where every in-pool lane is condemned, this
-    # function answers "", and `cmd_ws_add` dies with no destination — for a
-    # reason no operator asked for. Same asymmetry, same reason, as the
-    # unmeasured skip below it: this function can skip a SCORE because it has a
-    # fallback; it can never skip a CANDIDATE.
-    _authdead "$w" && continue
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
 ```
+
+And after the loop (`:3985-3986`), widen the fallback to the condemned tier:
+
+```bash
+  [[ -z "$best" ]] && best="$first"
+  [[ -z "$best" ]] && best="$condemned"
+  echo "$best"
+```
+
+`condemned` is populated ONLY by the auth-dead branch and consulted ONLY when both `best` and
+`first` are empty — i.e. only when every in-pool lane is condemned — so a healthy or merely
+unmeasured lane always wins ahead of it.
 
 - [ ] **Step 4: Rank last in `_swap_target`**
 
@@ -738,14 +752,26 @@ cd server && ./node_modules/.bin/vitest run test/ccd-authdead.test.ts
 
 Expected: 15 passed.
 
-- [ ] **Step 6: Measure both mutations, separately**
+- [ ] **Step 6: Measure the mutations, separately**
 
-1. Delete `_authdead "$w" && continue` from `_ws_least_loaded`, re-run: the "does not place a new
-   workspace on the cheapest lane" case goes RED with `expected 'claude-a' to be 'claude-b'`. Restore.
-2. **MOVE** it one line UP, above `[[ -z "$first" ]] && first="$w"`, re-run: the "STILL ANSWERS when
-   every home-able lane is auth-dead" case goes RED with `expected '' to be 'claude'`. Restore. This
-   is the mutation that matters — it proves the guard's POSITION is load-bearing, not just its
-   presence.
+**Superseded by D-1954** for `_ws_least_loaded` — the "MOVE it one line up" mutation this step used
+to prescribe (proving a single-`first` guard's POSITION was load-bearing) no longer applies: there is
+no single-line guard left to move, only the two-tier `if`/`fi` block above. The two mutations that
+now measure it (re-verified against the shipped `:3939-3967` block, 2026-09-08):
+
+1. Delete the whole `if _authdead "$w"; then … fi` block, re-run: **5 of the 5** cases in the
+   `_ws_least_loaded` describe go RED, including "does not place a new workspace on the cheapest
+   lane" (`expected 'claude-a' to be 'claude-b'`) and "STILL ANSWERS when every home-able lane is
+   auth-dead" (`expected 'claude-a' to be 'claude'`). Restore.
+2. Delete only `[[ -z "$best" ]] && best="$condemned"` (the second-tier fallback line after the
+   loop), re-run: "STILL ANSWERS when every home-able lane is auth-dead — the condemned tier is
+   reachable" goes RED with `expected '' to be 'claude'` — the fallback empties instead of reaching
+   the condemned lane. Restore. **This is the mutation that matters**: it proves the SECOND TIER is
+   load-bearing, not just the skip's presence — the same thing "prove the guard's position matters"
+   was reaching for, now that position alone is no longer the mechanism.
+
+For `_swap_target`, unaffected by D-1954 and unchanged from this step's original form:
+
 3. Delete `_authdead "$cand" && sc=100` from `_swap_target`, re-run: "prefers a measured healthy lane"
    goes RED with `expected 'claude-a' to be 'claude-b'`. Restore.
 4. Change it to `_authdead "$cand" && continue`, re-run: "STILL RESCUES onto an auth-dead lane" goes
@@ -769,19 +795,30 @@ rather than editing an assertion.
 
 - [ ] **Step 8: Commit**
 
+**Historical note, not part of the instruction below:** this task landed in two passes on this
+branch. It first shipped the single-tier `_ws_least_loaded` guard the earlier revision of this step
+described (commit `edd6d35e`, `D-1930`) — which D-1954 then found insufficient, exactly as that
+entry now records — and `_swap_target`'s rank-100 guard, unaffected, shipped in the same commit.
+The two-tier correction landed separately as commit `a8264a38` (`D-1930`, `D-1931`). An implementer
+doing this task fresh should ship the two-tier form directly, in one commit:
+
 ```bash
 git add ccd/ccd server/test/ccd-authdead.test.ts
-git commit -m "feat(ccd): auth-dead ranks last and drops out of scoring, never out of eligibility (D-1930)
+git commit -m "feat(ccd): auth-dead ranks last, and never off a lane placement can still reach
 
 _swap_target forces the candidate to 100 — the block unmeasured already occupies —
 rather than skipping it: that loop is the rescue lane, and a rescue with no
 destination leaves a lost-auth session wedged with no swap.log line and no
-notification. _ws_least_loaded skips the SCORE, placed AFTER \`first\` so the
-fallback stays reachable when every in-pool lane is condemned.
+notification. _ws_least_loaded carries a TWO-TIER fallback (D-1954): \`first\`,
+the first candidate nobody condemned, and \`condemned\`, the first condemned one,
+widening best -> first -> condemned — a single fallback variable cannot say both
+'not preferred' and 'still eligible' from either side of the skip.
 
-Mutations measured, four: deleting either guard reds 1 each; MOVING the
-least-loaded guard above \`first\` reds the all-condemned case; turning the
-swap-target guard into a \`continue\` reds the only-destination-left case."
+Mutations measured, four: deleting the swap-target guard reds 1; turning it into
+a \`continue\` reds the only-destination-left case; deleting the least-loaded
+guard's whole if/fi block reds all 5 cases in its describe; deleting only the
+condemned-tier fallback line reds the all-condemned case with expected '' to be
+'claude' — the mutation that proves the SECOND TIER is load-bearing."
 ```
 
 ---
