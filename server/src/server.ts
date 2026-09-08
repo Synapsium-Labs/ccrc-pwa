@@ -66,7 +66,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow,
+  type FloorState, type ProjectRow, type ProjectPoolsWire,
 } from '../../shared/api.js';
 
 /**
@@ -1228,6 +1228,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
     const onCoord = (coord: CoordStatus) =>
       socket.send(JSON.stringify({ type: 'coord', coord } satisfies FleetMsg));
+    const onPools = (pools: ProjectPoolsWire) =>
+      socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1277,18 +1279,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "running" for a state nobody has looked at (Build 4, spec §4.2).
       const coordNow = watcher?.currentCoord();
       if (coordNow) onCoord(coordNow);
+      // Chained AFTER `coord`, so the wire order is hello, fleet, runs, coord,
+      // pools. A `null` current value sends NOTHING, `coord`'s rule verbatim:
+      // this process has never measured, and an invented empty map would tell
+      // the phone that nothing on the fleet is tagged.
+      const poolsNow = watcher?.currentPools();
+      if (poolsNow) onPools(poolsNow);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
     bus.on('runs', onRuns);
     bus.on('coord', onCoord);
     bus.on('divergence', onDivergence);
+    bus.on('pools', onPools);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
       bus.off('coord', onCoord);
       bus.off('divergence', onDivergence);
+      bus.off('pools', onPools);
     });
   });
 

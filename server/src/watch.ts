@@ -2,6 +2,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -14,8 +15,7 @@ import { sendPrompt } from './inject/send.js';
 import { askActions } from './askkey.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, FleetSession, LifecycleHealth, MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress,
-} from '../../shared/api.js';
+  CoordStatus, FleetSession, LifecycleHealth, MailGate, NotifyEvent, PrState, RunSummary, SessionStatus, TaskProgress, ProjectPoolsWire } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
@@ -546,6 +546,12 @@ export class FleetWatcher {
    *  tick measures — see `currentCoord()`. */
   private coord: CoordStatus | null = null;
   private lastCoordJson: string | null = null;
+  /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
+   *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
+   *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
+   *  would claim this process had looked at the fleet host's registry. */
+  private lastPoolsJson: string | null = null;
+  private pools: ProjectPoolsWire | null = null;
   /** Watermark: the highest `mail_deliveries.id` this lane has already
    *  raised a `mail` NotifyEvent for. Seeded to the CURRENT max id on the
    *  priming tick (`tick()`'s own `!this.primed` arm) rather than left at 0,
@@ -651,6 +657,12 @@ export class FleetWatcher {
     return this.coord;
   }
 
+  /** The last measured project-pool sweep, or null if none has been taken yet
+   *  — same reasoning as `currentCoord()`'s null. */
+  currentPools(): ProjectPoolsWire | null {
+    return this.pools;
+  }
+
   /** The last swept program-readiness (F3), for `GET /api/projects`.
    *  `undefined` means THIS PROCESS HAS NEVER SWEPT — the same shape, and the
    *  same reasoning, as `currentCoord()`'s `null` just above: inventing a
@@ -700,6 +712,11 @@ export class FleetWatcher {
       // every dispatch, which is the precise lie spec §4.2 mints
       // `unmeasurable` to prevent.
       this.emitCoord(registryRead.listed ? registryRead.names : null);
+      // BEFORE the fail-shut return and on BOTH arms, `emitCoord`'s reason one
+      // line up: an unlistable registry is exactly the state in which nobody
+      // may decide a pool, so it must reach the wire on the tick it happens
+      // rather than leave the chips frozen on their last value.
+      await this.emitPools(registryRead.listed ? registryRead.names : null);
       if (!registryRead.listed) {
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
@@ -1070,6 +1087,28 @@ export class FleetWatcher {
     this.lastCoordJson = json;
     this.coord = status;
     this.bus.emit('coord', status);
+  }
+
+  /** The `{type:'pools'}` frame (account pools, spec §5.4.5). Derived from the
+   *  SAME registry listing this tick already performed — carried out of
+   *  `readRegistryMeasured` on `RegistryRead.names` rather than taken again,
+   *  exactly as `emitCoord` above does, so the two cannot disagree on the ticks
+   *  that matter and the tick costs no extra root readdir.
+   *
+   *  `null` names is an UNLISTABLE registry, and rides the wire as
+   *  `listed: false` — every project `unreadable`, nobody decides.
+   *
+   *  Byte-equality guarded like `emitCoord`. It DOES touch io (one `pools/`
+   *  readdir and one read per tagged project), so it is async and awaited by
+   *  the caller before the fail-shut return, for `emitCoord`'s own reason. */
+  private async emitPools(names: readonly string[] | null): Promise<void> {
+    const read = await readProjectPools(this.deps.io, this.deps.cfg, names);
+    const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
+    const json = JSON.stringify(wire);
+    if (json === this.lastPoolsJson) return;
+    this.lastPoolsJson = json;
+    this.pools = wire;
+    this.bus.emit('pools', wire);
   }
 
   /**

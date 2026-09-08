@@ -2044,6 +2044,7 @@ git commit -m "feat(pools): first paint carries the tags, health carries whether
 
 ---
 
+### Task 7 — DONE 2026-09-08 (4/4 mutations red)
 ### Task 7: the `pools` frame — additive, change-only, off the tick's own listing
 
 **Files:**

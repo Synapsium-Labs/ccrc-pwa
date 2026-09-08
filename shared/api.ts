@@ -2865,7 +2865,15 @@ export type FleetMsg =
    *  disagreement BETWEEN sources, so it cannot ride on a `FleetSession` — and
    *  keeping it off `FleetSession` is what keeps `reviveFleetSession` from
    *  becoming a second producer. */
-  | { type: 'divergence'; divergences: Divergence[] };
+  | { type: 'divergence'; divergences: Divergence[] }
+  /** Account pools, spec §5.4.5. Additive on the same terms as
+   *  `runs`/`coord`/`divergence` above — an already-deployed PWA drops an
+   *  unknown frame type silently, so NO `FLEET_PROTO` bump. FLEET-LEVEL, not
+   *  row-level: a project's tag is a fact about a PROJECT, so it cannot ride on
+   *  a `FleetSession` — and keeping it off `FleetSession` is what keeps
+   *  `reviveFleetSession` from becoming a second producer of it. The PWA
+   *  derives a session's project pool from this frame by `s.project`. */
+  | { type: 'pools'; pools: ProjectPoolsWire };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
