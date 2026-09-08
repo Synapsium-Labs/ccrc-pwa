@@ -143,7 +143,8 @@ the check that caught mutation 4 of Task 3 landing on the wrong function earlier
 
 - The two the review knocked down (`rm -f` at `:14850` reachable through `pps`; the ABSENT/EMPTY
   carry) are NOT chased, per its instruction, and its reasoning was read at the cited lines.
-- **D-2000 / D-2009** — the `.project` fold. Now a wave-3 DEPLOY PREREQUISITE by the coordinator's
-  re-ruling, to be taken as its own small `ccd` PR.
+- The `.project` fold (defined in the C1 plan as D-2000, widened there as D-2009 — referenced here,
+  defined nowhere but there) is now a wave-3 DEPLOY PREREQUISITE by the coordinator's re-ruling, to be
+  taken as its own small `ccd` PR.
 - The `it.skipIf` suite still degrades silently under root. Taken as a mechanism in its own change,
   not folded here: it touches every skipped case in the file and this one must stay small.

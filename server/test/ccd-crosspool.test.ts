@@ -1324,3 +1324,34 @@ describe('R4 — the observability of standing still is itself pinned', () => {
       .toBe('rc=2');
   });
 });
+
+describe('the SECOND crossing read in `_swap_target` is guarded too', () => {
+  it('the SECOND crossing read is guarded too — a hiccup between the two is a moment, not a state', () => {
+    // THE ROW THAT CLAIMED A CENSUS AND MEASURED HALF OF IT (#67 review).
+    // `_swap_target` asks `_crosspool_valid` twice — once about `cur`, once
+    // about `home` — and C1's mutation table covered both `return` lines as
+    // one row. Deleting the SECOND alone leaves the suite green: all three
+    // reds came from the first. A permission hiccup between two reads a
+    // microsecond apart is a MOMENT, not a state, so the second arm is
+    // genuinely reachable and was genuinely unpinned.
+    //
+    // The `FLIP` shadow this file already uses for `_crosspool_tick` is the
+    // only way to build the flip deterministically — here inverted: the first
+    // read must SUCCEED and the second must fail.
+    seedRow('claude-b'); tagPool('demo', 'pool-a');
+    crossed('pool-a', 'claude-b');
+    const SECOND_FAILS = `
+      eval "_reg_read_orig() $(declare -f _reg_read | tail -n +2)";
+      _reg_read() {
+        if [[ "\${2:-}" == crosspool ]]; then
+          if [[ -e "$HOME/first-done" ]]; then return 2; fi
+          : > "$HOME/first-done"
+        fi
+        _reg_read_orig "$@"
+      };
+    `;
+    expect(h.sh(`${SECOND_FAILS} _swap_target ${ID} claude-b claude; echo "rc=$?"`),
+      'the second read failed, so nobody can say — and it must say so as rc 2')
+      .toBe('rc=2');
+  });
+});
