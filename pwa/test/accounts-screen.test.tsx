@@ -22,7 +22,7 @@ const nowSec = Math.floor(Date.now() / 1000);
 const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   wrapper: 'claude', five: 0, seven: 0, ts: nowSec - 3600,
   fiveResetAt: null, sevenResetAt: null,
-  fiveRolledOver: false, sevenRolledOver: false, disabled: false, ...over,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
