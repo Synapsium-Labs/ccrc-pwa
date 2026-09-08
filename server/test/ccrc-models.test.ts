@@ -35,8 +35,13 @@ const ROSTER = {
       exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
     { id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
       exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
+    // `secretsFile` is Task 8's: the model probe is a box-level executable
+    // with no lane context, so `_models_endpoints` sources this file in a
+    // subshell around the probe call, mirroring `shared/wrapper.mjs`'s own
+    // generated line. Relative to $HOME, per `shared/roster.ts`'s SECRETS_SAFE_RE.
     { id: 'router', label: 'router', configDirSuffix: '.claude-router',
-      exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none' },
+      exec: { kind: 'generated', secretsFile: '.secrets/router.env' }, homeAble: false, hue: 'blue',
+      telemetry: 'none' },
   ],
 };
 
@@ -165,7 +170,8 @@ describe('the models dispatcher', () => {
     const src = fs.readFileSync(CCRC_SRC, 'utf8');
     const m = /^MODELS_SUBS="([^"]*)"$/m.exec(src);
     expect(m, 'ccd/ccrc has no file-scope MODELS_SUBS').toBeTruthy();
-    expect(m![1]!.split(' ').filter(Boolean).sort()).toEqual(['init', 'show']);
+    expect(m![1]!.split(' ').filter(Boolean).sort())
+      .toEqual(['discovery', 'init', 'rm', 'set-class', 'set-effort', 'set-subagent', 'show']);
   });
 
   it('spells the reserved first-token words once, at file scope', () => {
@@ -439,5 +445,294 @@ describe('the _models_answer seam ("no-answer")', () => {
     const b = oneObject(r);
     expect(b['error']).toBe('roster-absent');
     expect(b['detail']).toBe('stub refusal');
+  });
+});
+
+describe('ccrc models <id> set-class', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+  });
+
+  it('assigns a class and rewrites the lane\'s settings.json and TSV', () => {
+    const r = run(['models', 'gpt', 'set-class', 'fable', 'gpt-6-astra']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['ok']).toBe(true);
+    const settings = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
+    expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('gpt-6-astra');
+    expect(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
+      .toContain('fable\tgpt-6-astra\tassigned\n');
+  });
+
+  it('`none` clears it', () => {
+    const r = run(['models', 'gpt', 'set-class', 'opus', 'none']);
+    expect(r.code).toBe(0);
+    expect((registryOf('gpt')['classes'] as Record<string, unknown>)['opus']).toBeNull();
+    expect(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
+      .toContain('opus\t\tunassigned\n');
+  });
+
+  it('refuses a class that is not one of the four, at exit 2, before node', () => {
+    const r = run(['models', 'gpt', 'set-class', 'subagent', 'gpt-5.5']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-class');
+    expect(String(oneObject(r)['detail'])).toMatch(/set-subagent/);
+  });
+
+  it('needs both a class and a model', () => {
+    expect(run(['models', 'gpt', 'set-class', 'fable']).code).toBe(2);
+    expect(run(['models', 'gpt', 'set-class']).code).toBe(2);
+  });
+
+  it('takes no third argument', () => {
+    const r = run(['models', 'gpt', 'set-class', 'fable', 'gpt-6-astra', 'extra']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-argument');
+  });
+});
+
+describe('ccrc models <id> set-subagent', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+  });
+
+  it('moves CLAUDE_CODE_SUBAGENT_MODEL, and nothing else in the block', () => {
+    const before = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
+    const r = run(['models', 'gpt', 'set-subagent', 'opus']);
+    expect(r.code).toBe(0);
+    const after = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
+    expect(after.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    expect(after.env.ANTHROPIC_MODEL).toBe(before.env.ANTHROPIC_MODEL);
+    expect(after.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(before.env.ANTHROPIC_DEFAULT_SONNET_MODEL);
+  });
+
+  it('refuses a class whose slot is null, naming set-class', () => {
+    const r = run(['models', 'gpt', 'set-subagent', 'fable']);
+    expect(r.code).toBe(1);
+    expect(String(oneObject(r)['detail'])).toMatch(/set-class fable/);
+  });
+
+  it('refuses a word that is not a class, at exit 2', () => {
+    const r = run(['models', 'gpt', 'set-subagent', 'sonnet-class']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-class');
+  });
+
+  it('needs a class', () => {
+    expect(run(['models', 'gpt', 'set-subagent']).code).toBe(2);
+  });
+});
+
+describe('ccrc models <id> set-effort', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+  });
+
+  it('sets a level and it reaches the effort file the shim reads', () => {
+    const r = run(['models', 'gpt', 'set-effort', 'sonnet', 'xhigh']);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8'))
+      .byModel['gpt-5.6-terra']).toBe('xhigh');
+  });
+
+  it('refuses a level the classed model does not offer', () => {
+    const r = run(['models', 'gpt', 'set-effort', 'haiku', 'ultra']);
+    expect(r.code).toBe(1);
+    expect(String(oneObject(r)['detail'])).toContain('gpt-5.6-luna');
+  });
+
+  it('refuses a class that is not one of the four, at exit 2', () => {
+    const r = run(['models', 'gpt', 'set-effort', 'subagent', 'high']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-class');
+  });
+});
+
+describe('ccrc models <id> discovery', () => {
+  const whitelist = (providers: string[]): void => {
+    fs.mkdirSync(join(home, '.handoff'), { recursive: true });
+    fs.writeFileSync(join(home, '.handoff', 'providers-whitelist.json'), JSON.stringify({ providers }));
+  };
+  const endpointsFixture = (names: string[]): string => {
+    const p = join(home, 'endpoints-fixture.json');
+    fs.writeFileSync(p, JSON.stringify({ data: { endpoints: names.map((n) => ({ provider_name: n })) } }));
+    return p;
+  };
+  // The probe is a box-level executable with no lane context (Task 8's
+  // controller ruling): `_models_endpoints` supplies the lane's key by
+  // sourcing this file in a SUBSHELL around the probe call, never in ccrc's
+  // own shell — the same line `shared/wrapper.mjs`'s generated wrapper emits.
+  const writeSecrets = (exportIt = true): void => {
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'router.env'),
+      `${exportIt ? 'export ' : ''}ANTHROPIC_AUTH_TOKEN=lane-token\n`);
+  };
+
+  it('add and rm on a codex lane, with no whitelist question asked', () => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+    const r = run(['models', 'gpt', 'discovery', 'add', 'gpt-5.5']);
+    expect(r.code).toBe(0);
+    // `deploy/models-op.mjs`'s scope conversion (Task 6, ruling 2026-09-08):
+    // every already-classed id, in CLASSES order, THEN the new one — not the
+    // brief's literal order, which predates that ruling.
+    expect(registryOf('gpt')['discovery']).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.5']
+      .filter((x) => (registryOf('gpt')['discovery'] as string[]).includes(x)));
+    expect(fs.existsSync(join(home, '.handoff', 'providers-whitelist.json'))).toBe(false);
+    expect(run(['models', 'gpt', 'discovery', 'catalogue']).code).toBe(0);
+    expect(registryOf('gpt')['discovery']).toBe('catalogue');
+  });
+
+  it('an unknown action is a usage error naming the three', () => {
+    run(['models', 'router', 'init', 'openrouter']);
+    const r = run(['models', 'router', 'discovery', 'purge']);
+    expect(r.code).toBe(2);
+    expect(String(oneObject(r)['detail'])).toContain('catalogue');
+  });
+
+  it('catalogue takes no model id', () => {
+    run(['models', 'router', 'init', 'openrouter']);
+    const r = run(['models', 'router', 'discovery', 'catalogue', 'gpt-5.5']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-argument');
+  });
+
+  describe('the ownership whitelist, on an openrouter lane only (§5)', () => {
+    beforeEach(() => {
+      run(['models', 'router', 'init', 'openrouter']);
+      writeSecrets();
+    });
+
+    it('admits a model a whitelisted provider serves, and says which', () => {
+      whitelist(['fireworks']);
+      const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'],
+        { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Fireworks', 'Z.AI']) });
+      expect(r.code).toBe(0);
+      expect(oneObject(r)['servedBy']).toEqual(['fireworks']);
+      expect(registryOf('router')['discovery']).toEqual(['z-ai/glm-5.2']);
+    });
+
+    it('refuses when no whitelisted provider serves it, and writes nothing', () => {
+      whitelist(['fireworks']);
+      const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'],
+        { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Z.AI']) });
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('no-allowed-provider');
+      expect(registryOf('router')['discovery']).toEqual([]);
+    });
+
+    it('refuses when the endpoints call itself fails, and writes nothing', () => {
+      whitelist(['fireworks']);
+      const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'],
+        { CCRC_MODELS_PROBE_FIXTURE: join(home, 'nope') });
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('endpoints-unreachable');
+      expect(registryOf('router')['discovery']).toEqual([]);
+    });
+
+    it('rm never asks the whitelist question — removing needs no permission', () => {
+      whitelist(['fireworks']);
+      run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'],
+        { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Fireworks']) });
+      const r = run(['models', 'router', 'discovery', 'rm', 'z-ai/glm-5.2']);
+      expect(r.code).toBe(0);
+      expect(registryOf('router')['discovery']).toEqual([]);
+    });
+
+    it('leaves no endpoints temp file behind', () => {
+      // Tightened per the brief's own Step 8 caveat: measured on this box,
+      // `_plat_mktemp`'s bare `mktemp` call (CCD_OS=linux, the non-darwin arm)
+      // DOES honour $TMPDIR, and its default name (`tmp.XXXXXXXXXX`) carries
+      // no "endpoints" substring — so a leak would land outside `home` AND
+      // fail the old filter's own name check. Pointing $TMPDIR at an empty
+      // directory this test owns, and asserting THAT directory ends up empty,
+      // is what actually observes the leak this case exists to catch.
+      whitelist(['fireworks']);
+      const tmpdir = join(home, 'tmpdir-for-endpoints');
+      fs.mkdirSync(tmpdir);
+      run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'],
+        { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Fireworks']), TMPDIR: tmpdir });
+      expect(fs.readdirSync(tmpdir)).toEqual([]);
+    });
+
+    // Controller ruling on `_models_endpoints` (Task 8, predates the brief):
+    // the probe has no lane context, so a lane with no `exec.secretsFile` and
+    // no ambient key gets the probe's OWN refusal, surfaced unchanged.
+    it('with no secrets file and no ambient token, refuses with the probe\'s own message', () => {
+      fs.rmSync(join(home, '.secrets', 'router.env'));
+      const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'], { ANTHROPIC_AUTH_TOKEN: '' });
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('endpoints-unreachable');
+      expect(String(oneObject(r)['detail'])).toContain('needs the lane\'s key: set ANTHROPIC_AUTH_TOKEN');
+    });
+
+    // No CCRC_MODELS_PROBE_FIXTURE here — the fixture seam bypasses the token
+    // check entirely, so it cannot prove the token flowed anywhere. Instead
+    // this drives the REAL openrouter fetch arm, whose `curl` the harness
+    // poisons: the poison log records curl's own argv (never ccrc's stdout
+    // or stderr), so a `Bearer lane-token` there proves the secrets file's
+    // token reached the probe's request — and never reached ccrc's own
+    // environment or output. Measured: dropping `export` from the secrets
+    // file (`writeSecrets(false)`) leaves the subshell's ANTHROPIC_AUTH_TOKEN
+    // unexported, so `exec`ing the probe does not inherit it, the probe's own
+    // token gate refuses BEFORE curl runs, and this case reds.
+    it('sources the lane\'s secrets file for the probe; the token never reaches ccrc\'s own output', () => {
+      const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2']);
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('endpoints-unreachable');
+      expect(poisonLog('curl').join('\n')).toContain('Bearer lane-token');
+      expect(r.stdout).not.toContain('lane-token');
+      expect(r.stderr).not.toContain('lane-token');
+    });
+  });
+});
+
+describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+  });
+
+  it('removes all four files and clears exactly the eight env keys, leaving another env key', () => {
+    const p = join(home, '.claude-gpt', 'settings.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.env.DISABLE_TELEMETRY = '1';
+    fs.writeFileSync(p, JSON.stringify(j, null, 2));
+    const r = run(['models', 'gpt', 'rm']);
+    expect(r.code).toBe(0);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(true);
+    expect((b['removed'] as string[]).length).toBe(4);
+    expect(b['settings']).toBe('cleared');
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.classes.json'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.effort.json'))).toBe(false);
+    const after = JSON.parse(fs.readFileSync(p, 'utf8'));
+    expect(after.env.DISABLE_TELEMETRY).toBe('1');
+    expect(Object.keys(after.env)).not.toContain('ANTHROPIC_MODEL');
+  });
+
+  it('a second run exits 0 with removed: []', () => {
+    run(['models', 'gpt', 'rm']);
+    const r = run(['models', 'gpt', 'rm']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['removed']).toEqual([]);
+  });
+
+  it('refuses an argument at exit 2', () => {
+    const r = run(['models', 'gpt', 'rm', 'extra']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-argument');
+  });
+
+  it('an orphan — a registry for an id the fixture roster has no row for — reports settings: orphan', () => {
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'ghost.classes.json'),
+      fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'), 'utf8'));
+    const r = run(['models', 'ghost', 'rm']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['settings']).toBe('orphan');
   });
 });

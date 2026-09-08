@@ -1112,7 +1112,7 @@ INST_DEGRADED=()
 # The per-lane subcommands this build implements, spelled ONCE at file scope:
 # the dispatcher and the refusal that lists what exists must read one string,
 # or a subcommand can dispatch while the refusal claims it does not exist.
-MODELS_SUBS="init show"
+MODELS_SUBS="discovery init rm set-class set-effort set-subagent show"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -3822,6 +3822,69 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
   ' --argjson reg "$(printf '%s' "$1" | jq -c '.registry // {classes:{}}')" >&2
 }
 
+# A class typo is a USAGE error and is answered here, at exit 2, before node is
+# asked to interpret it as a box condition — and "subagent" gets a sentence of
+# its own, because it is a real field of the registry (the class subagents run
+# as) and refusing it as merely "unknown" would be a lie about this file's
+# vocabulary.
+_models_class_ok() {   # <class>
+  local c
+  for c in $MODELS_CLASSES; do [ "$c" = "$1" ] && return 0; done
+  [ "$1" != "subagent" ] \
+    || _models_refuse unknown-class 2 "\"subagent\" is not a class: the four are ${MODELS_CLASSES// /, }. It is a FIELD naming which of those four subagents run as — run 'ccrc models <id> set-subagent <class>' to change it."
+  _models_refuse unknown-class 2 "\"$1\" is not a class: the four are ${MODELS_CLASSES// /, }."
+}
+
+# The OpenRouter ownership question (§5), asked ONCE per discovery-add and only
+# on a lane whose registry names `openrouter`: that is the only lane whose
+# traffic goes through `handoff-proxy`'s `provider.only` injection, so it is the
+# only lane on which "which providers serve this model" decides anything. The
+# probe does the network; node does the whitelist comparison. The answer lands
+# in a temp file that is removed on every path, because it is one question's
+# answer and not state.
+# It sets a GLOBAL rather than printing the path, and the caller invokes it
+# directly rather than in `$( )`. That is not style: `_models_refuse` ends in
+# `exit`, and an `exit` inside a command substitution kills only the SUBSHELL —
+# the caller would carry on with the refusal's own JSON as the "temp file
+# path". Every helper in this group that can refuse is called this way.
+#
+# THE PROBE IS A BOX-LEVEL EXECUTABLE WITH NO LANE CONTEXT: it reads
+# ANTHROPIC_AUTH_TOKEN out of its own environment, and only THIS helper knows
+# which lane is asking. The roster row for `<accountId>` is read for exactly
+# one fact, `exec.secretsFile`, and — when it has one — that file is sourced in
+# a SUBSHELL that runs the probe and nothing else, never the verb's own shell,
+# which must never carry the lane's key past this one call. The line is
+# `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
+# `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. A lane with no secrets
+# file runs the probe against the AMBIENT environment and its own refusal
+# ("needs the lane's key: set ANTHROPIC_AUTH_TOKEN") is what surfaces —
+# captured here, not reworded, and never containing the key's VALUE, only its
+# name.
+MODELS_ENDPOINTS_TMP=""
+_models_endpoints() {   # <accountId> <modelId> -> sets MODELS_ENDPOINTS_TMP
+  local probe="$CCRC_HERE/ccrc-models-probe"
+  [ -x "$probe" ] \
+    || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
+  local tmp
+  tmp="$(_plat_mktemp)" || _models_refuse unwritable 1 "could not create a temp file for the OpenRouter endpoints answer. Nothing was written."
+  local secrets
+  secrets="$(jq -r --arg id "$1" '(.accounts // [])[] | select(.id==$id) | .exec.secretsFile // empty' "$(_models_roster_path)" 2>/dev/null)"
+  local msg rc
+  if [ -n "$secrets" ]; then
+    msg="$( ( [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
+      exec "$probe" "$1" openrouter --endpoints "$2" --out "$tmp" ) 2>&1 1>/dev/null )"
+    rc=$?
+  else
+    msg="$("$probe" "$1" openrouter --endpoints "$2" --out "$tmp" 2>&1 1>/dev/null)"
+    rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$tmp"
+    _models_refuse endpoints-unreachable 1 "the OpenRouter endpoints call for \"$2\" failed, so this box cannot say which providers serve it — and the ownership whitelist is what decides whether it may be added at all.${msg:+ $msg} Nothing was written."
+  fi
+  MODELS_ENDPOINTS_TMP="$tmp"
+}
+
 _models_id_ok() {   # <token> — a usage-level gate, before node
   # `$WRAPPER_ID_RE`, NOT a hand-copied literal — round 1 review, Important 3.
   # `ccrc-wrapper-shape` is sourced once, at the top of `cmd_models` (below),
@@ -3883,6 +3946,88 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       else
         _models_answer init --file "$file" --id "$id" --probe "$probe" || exit $?
       fi
+      return 0
+      ;;
+    set-class)
+      local cls="${1:-}" model="${2:-}"
+      [ -n "$cls" ] && [ -n "$model" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-class needs a class and a model: ccrc models $id set-class <${MODELS_CLASSES// /|}> <modelId|none>"
+      shift 2
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-class takes a class and a model, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer set-class --file "$file" --id "$id" --class "$cls" --model "$model" || exit $?
+      return 0
+      ;;
+    set-subagent)
+      local cls="${1:-}"
+      [ -n "$cls" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-subagent needs a class: ccrc models $id set-subagent <${MODELS_CLASSES// /|}>"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-subagent takes one class, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer set-subagent --file "$file" --id "$id" --class "$cls" || exit $?
+      return 0
+      ;;
+    set-effort)
+      local cls="${1:-}" level="${2:-}"
+      [ -n "$cls" ] && [ -n "$level" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-effort needs a class and a level: ccrc models $id set-effort <${MODELS_CLASSES// /|}> <level|default>"
+      shift 2
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-effort takes a class and a level, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer set-effort --file "$file" --id "$id" --class "$cls" --level "$level" || exit $?
+      return 0
+      ;;
+    discovery)
+      local action="${1:-}"
+      [ -n "$action" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id discovery needs an action: add <modelId>, rm <modelId>, or catalogue"
+      shift
+      case "$action" in
+        catalogue)
+          [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id discovery catalogue takes no model id, and got \"$1\" — it means the WHOLE advertised set"
+          _models_answer discovery --file "$file" --id "$id" --action catalogue || exit $?
+          ;;
+        add|rm)
+          local model="${1:-}"
+          [ -n "$model" ] \
+            || _models_refuse missing-argument 2 "ccrc models $id discovery $action needs a model id"
+          shift
+          [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id discovery $action takes one model id, and got \"$1\""
+          # THE OWNERSHIP CHECK IS OPENROUTER'S, IS ADD'S ALONE, AND HAPPENS
+          # BEFORE THE WRITE. The lane's probe kind is read from its own
+          # registry rather than assumed, so a Codex or `compatible` lane never
+          # pays for a question that decides nothing about it — and `rm` never
+          # asks it, because removing a model needs no permission.
+          local probe showbody
+          # The show body is captured WHOLE and then read, rather than piped
+          # straight into jq: `_models_answer`'s own refusal exits with a
+          # non-zero status, and a pipe would hand jq that refusal's JSON and
+          # succeed on it, losing the failure.
+          showbody="$(_models_answer show --file "$file" --id "$id")" \
+            || _models_refuse no-answer 1 "could not read account \"$id\"'s probe kind before changing its discovery list. Nothing was written."
+          probe="$(printf '%s' "$showbody" | jq -r '.registry.probe // ""')"
+          if [ "$action" = "add" ] && [ "$probe" = "openrouter" ]; then
+            _models_endpoints "$id" "$model"
+            _models_answer discovery --file "$file" --id "$id" --action add --model "$model" --endpoints "$MODELS_ENDPOINTS_TMP"
+            local rc=$?
+            rm -f "$MODELS_ENDPOINTS_TMP"
+            [ "$rc" -eq 0 ] || exit "$rc"
+          else
+            _models_answer discovery --file "$file" --id "$id" --action "$action" --model "$model" || exit $?
+          fi
+          ;;
+        *) _models_refuse unknown-action 2 "ccrc models $id discovery has no action \"$action\": it takes add <modelId>, rm <modelId>, or catalogue" ;;
+      esac
+      return 0
+      ;;
+    rm)
+      # A REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): no arguments,
+      # and no class or endpoints gate above it — it delegates straight to the
+      # node op and answers with its own JSON, on an ORPHAN id exactly as much
+      # as on one the roster has a row for.
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id rm takes no arguments, and got \"$1\""
+      _models_answer rm --file "$file" --id "$id" || exit $?
       return 0
       ;;
     *) _models_refuse internal-no-arm 1 "ccrc models lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
