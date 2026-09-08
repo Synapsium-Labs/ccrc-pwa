@@ -1116,7 +1116,7 @@ MODELS_SUBS="discovery init rm set-class set-effort set-subagent show"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
-MODELS_BOX_SUBS=""
+MODELS_BOX_SUBS="refresh"
 
 # The words that are never read as an account id in `ccrc models <here>`.
 # It is the GRAMMAR and not the implementation, so it lists both box-wide
@@ -3860,6 +3860,25 @@ _models_class_ok() {   # <class>
 # ("needs the lane's key: set ANTHROPIC_AUTH_TOKEN") is what surfaces —
 # captured here, not reworded, and never containing the key's VALUE, only its
 # name.
+#
+# ONE SEAM, TWO CALLERS: `_models_endpoints` (the ownership-whitelist
+# question, on a single model) and `_models_refresh_one` (a lane's whole
+# catalogue fetch) both need the SAME lane key reaching the SAME probe — a
+# `compatible` lane's catalogue fetch sends `ANTHROPIC_AUTH_TOKEN` as a Bearer
+# header exactly like the endpoints call does (`ccrc-models-probe`'s
+# `compatible` fetch arm) — so the sourcing lives here once, not copied.
+_models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit code, run in the lane's secrets env
+  local id="$1"; shift
+  local secrets
+  secrets="$(jq -r --arg id "$id" '(.accounts // [])[] | select(.id==$id) | .exec.secretsFile // empty' "$(_models_roster_path)" 2>/dev/null)"
+  if [ -n "$secrets" ]; then
+    ( [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
+      exec "$@" )
+  else
+    "$@"
+  fi
+}
+
 MODELS_ENDPOINTS_TMP=""
 _models_endpoints() {   # <accountId> <modelId> -> sets MODELS_ENDPOINTS_TMP
   local probe="$CCRC_HERE/ccrc-models-probe"
@@ -3867,17 +3886,9 @@ _models_endpoints() {   # <accountId> <modelId> -> sets MODELS_ENDPOINTS_TMP
     || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
   local tmp
   tmp="$(_plat_mktemp)" || _models_refuse unwritable 1 "could not create a temp file for the OpenRouter endpoints answer. Nothing was written."
-  local secrets
-  secrets="$(jq -r --arg id "$1" '(.accounts // [])[] | select(.id==$id) | .exec.secretsFile // empty' "$(_models_roster_path)" 2>/dev/null)"
   local msg rc
-  if [ -n "$secrets" ]; then
-    msg="$( ( [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
-      exec "$probe" "$1" openrouter --endpoints "$2" --out "$tmp" ) 2>&1 1>/dev/null )"
-    rc=$?
-  else
-    msg="$("$probe" "$1" openrouter --endpoints "$2" --out "$tmp" 2>&1 1>/dev/null)"
-    rc=$?
-  fi
+  msg="$(_models_run_probe "$1" "$probe" "$1" openrouter --endpoints "$2" --out "$tmp" 2>&1 1>/dev/null)"
+  rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$tmp"
     _models_refuse endpoints-unreachable 1 "the OpenRouter endpoints call for \"$2\" failed, so this box cannot say which providers serve it — and the ownership whitelist is what decides whether it may be added at all.${msg:+ $msg} Nothing was written."
@@ -4043,6 +4054,87 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
   esac
 }
 
+_models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fresh catalogue
+  local probe="$CCRC_HERE/ccrc-models-probe" args=()
+  [ -x "$probe" ] \
+    || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
+  [ -z "$3" ] || args=(--base-url "$3")
+  # THE SAME SECRETS-SOURCING SUBSHELL `_models_endpoints` uses (above): a
+  # `compatible` lane's catalogue fetch sends `ANTHROPIC_AUTH_TOKEN` as a
+  # Bearer header exactly like the endpoints call does, so it needs the same
+  # lane key reaching the same probe.
+  _models_run_probe "$1" "$probe" "$1" "$2" ${args[@]+"${args[@]}"} >/dev/null
+}
+
+# The box-wide half of the verb group: the CATALOGUES the class registries are
+# classified against, which is a different question from a lane's own classes
+# and runs on a different cadence — a timer runs `--all` hourly
+# (`deploy/systemd/ccrc-models.timer`), and the PWA's refresh button runs one
+# lane. `ccgpt-usage.timer` is untouched: telemetry and catalogue are different
+# questions on different cadences (§5).
+_models_box_sub() {   # <subcommand> [args…]
+  local sub="$1"; shift
+  local file; file="$(_models_roster_path)"
+  case "$sub" in
+    refresh)
+      local target="${1:-}"
+      [ -n "$target" ] \
+        || _models_refuse missing-argument 2 "ccrc models refresh needs a lane id or --all: ccrc models refresh <id> | --all"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models refresh takes one lane id or --all, and got \"$1\""
+
+      # THE LANE LIST COMES FROM THE ONE OP THAT KNOWS WHICH LANES HAVE A
+      # REGISTRY AT ALL. An anthropic lane has none by design, and a lane
+      # nobody has run `init` on has no PROBE KIND — round-2 ruling 10 puts
+      # that on the registry file, so probing such a lane would be asking a
+      # question with no answer.
+      local lanes
+      lanes="$(_models_answer lanes --file "$file")" || exit $?
+      lanes="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.hasRegistry)]')"
+
+      local wanted="$lanes"
+      if [ "$target" != "--all" ]; then
+        wanted="$(printf '%s' "$lanes" | jq -c --arg id "$target" 'map(select(.id == $id))')"
+        [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] \
+          || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry on this box. Anthropic lanes have none — their four classes are Claude Code's own defaults, so there is nothing to probe. For any other lane run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
+      fi
+
+      local rows=() failed=0 n i id probe baseurl count ok
+      n="$(printf '%s' "$wanted" | jq 'length')"
+      i=0
+      while [ "$i" -lt "$n" ]; do
+        id="$(printf '%s' "$wanted" | jq -r ".[$i].id")"
+        probe="$(printf '%s' "$wanted" | jq -r ".[$i].probe")"
+        baseurl="$(printf '%s' "$wanted" | jq -r ".[$i].baseUrl // \"\"")"
+        if _models_refresh_one "$id" "$probe" "$baseurl"; then
+          ok=true
+          # Re-materialise: the effort map is validated against the catalogue
+          # (§4.1) and the TSV's third column is derived from it (§7), so a lane
+          # whose catalogue just changed can have a lane default that has
+          # stopped being offered and a class that has just been retired — and
+          # the files ccd and the shim read have to learn that in the same run.
+          _models_node materialise --file "$file" --id "$id" >/dev/null 2>&1 || true
+          count="$(jq '.models | length' "$HOME/.ccrc/models/$id.json" 2>/dev/null || echo 0)"
+        else
+          ok=false; failed=1; count=0
+        fi
+        rows+=("$(jq -cn --arg id "$id" --arg p "$probe" --argjson ok "$ok" --argjson c "$count" \
+          '{id:$id, probe:$p, ok:$ok, count:$c}')")
+        i=$((i + 1))
+      done
+
+      # ONE JSON OBJECT, on every path — including the mixed one. A run where
+      # three lanes refreshed and one did not is not a failure to report; it is
+      # four facts, and the exit code says whether any of them was bad.
+      printf '%s\n' "$(jq -cn --argjson rows "$(printf '%s\n' "${rows[@]+${rows[@]}}" | jq -cs 'map(select(. != null))')" \
+        '{ok: ($rows | all(.ok)), op: "refresh", refreshed: $rows}')"
+      [ "$failed" -eq 0 ] || return 1
+      return 0
+      ;;
+    *) _models_refuse internal-no-arm 1 "ccrc models lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
+  esac
+}
+
 cmd_models() {
   case "${1:-}" in
     -h|--help) usage; exit 0 ;;
@@ -4081,8 +4173,12 @@ cmd_models() {
       for s in $MODELS_BOX_SUBS; do [ "$s" = "$w" ] && known=1; done
       [ "$known" -eq 1 ] \
         || _models_refuse unknown-subcommand 2 "ccrc models has no subcommand \"$w\" in this build. It implements: ${MODELS_BOX_SUBS:-(none yet)}"
+      # NOT `return 0`: `_models_box_sub`'s `refresh` arm can return 1 on a
+      # mixed run (some lanes failed) without calling `_models_refuse`'s own
+      # `exit` — a bare `return 0` here would swallow that and report success
+      # on stdout while the JSON on stdout says otherwise.
       _models_box_sub "$w" "$@"
-      return 0
+      return $?
     fi
   done
 

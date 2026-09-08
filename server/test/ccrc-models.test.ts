@@ -24,6 +24,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
 const CODEX_RAW = join(here, 'fixtures', 'catalogues', 'codex-raw-2026-09-08.json');
+const COMPAT_RAW = join(here, 'fixtures', 'catalogues', 'compatible-raw.json');
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 const ROSTER = {
@@ -246,12 +247,11 @@ describe('the models dispatcher', () => {
     expect(String(b['detail'])).toContain('rename');
   });
 
-  it('a reserved word this build has no arm for yet says so, and does not read it as an id', () => {
-    // Tasks 9 and 10 replace this expectation with the real arms. Until then
-    // the grammar is already in force: `refresh` is never an account id here.
-    const r = run(['models', 'refresh', '--all']);
-    expect(r.code).toBe(2);
-    expect(oneObject(r)['error']).toBe('unknown-subcommand');
+  it('spells the implemented box-wide subcommands once, at file scope', () => {
+    const src = fs.readFileSync(CCRC_SRC, 'utf8');
+    const m = /^MODELS_BOX_SUBS="([^"]*)"$/m.exec(src);
+    expect(m, 'ccd/ccrc has no file-scope MODELS_BOX_SUBS').toBeTruthy();
+    expect(m![1]!.split(' ').filter(Boolean).sort()).toEqual(['refresh']);
   });
 });
 
@@ -783,5 +783,142 @@ describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a muta
     const r = run(['models', 'ghost', 'rm']);
     expect(r.code).toBe(0);
     expect(oneObject(r)['settings']).toBe('orphan');
+  });
+});
+
+describe('ccrc models refresh', () => {
+  it('with no argument is a usage error naming both forms', () => {
+    const r = run(['models', 'refresh']);
+    expect(r.code).toBe(2);
+    expect(String(oneObject(r)['detail'])).toContain('--all');
+  });
+
+  it('refreshes one lane and writes its catalogue', () => {
+    run(['models', 'gpt', 'init', 'codex']);
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(0);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(true);
+    expect(b['refreshed']).toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9 }]);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
+  });
+
+  it('re-materialises the lane it refreshed, so the effort file tracks the new catalogue', () => {
+    // Seeded with NO catalogue, so `effort.opus: max` was written unvalidated
+    // and `effort.fable: max` was dropped for having no model. The refresh is
+    // the run that first learns what the lane really offers.
+    run(['models', 'gpt', 'init', 'codex']);
+    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8')))
+      .toEqual({ byModel: { 'gpt-5.6-luna': 'high', 'gpt-5.6-terra': 'high', 'gpt-5.6-sol': 'max' } });
+  });
+
+  it('re-materialises the TSV too, so a RETIRED class is visible to ccd', () => {
+    run(['models', 'gpt', 'init', 'codex']);
+    run(['models', 'gpt', 'set-class', 'sonnet', 'gpt-5.5-mini']);
+    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
+      .toContain('sonnet\tgpt-5.5-mini\tretired\n');
+  });
+
+  it('--all probes every lane that HAS a registry, and no others', () => {
+    // The probe kind lives in the registry file (round-2 ruling 10), so a lane
+    // without one has no probe to run — asking would be a question with no
+    // answer. `router` is initialised too, so this run is a MIXED result:
+    // its normaliser refuses a Codex body.
+    run(['models', 'gpt', 'init', 'codex']);
+    run(['models', 'router', 'init', 'openrouter']);
+    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const refreshed = oneObject(r)['refreshed'] as { id: string }[];
+    expect(refreshed.map((x) => x.id)).toEqual(['gpt', 'router']);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude-a.json'))).toBe(false);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude.json'))).toBe(false);
+  });
+
+  it('--all with NO registries anywhere is an empty, successful run', () => {
+    const r = run(['models', 'refresh', '--all']);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([]);
+  });
+
+  it('--all exits 1 when any lane failed, and still reports the ones that worked', () => {
+    run(['models', 'gpt', 'init', 'codex']);
+    run(['models', 'router', 'init', 'openrouter']);
+    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(1);
+    const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean }[];
+    expect(rows.find((x) => x.id === 'gpt')!.ok).toBe(true);
+    expect(rows.find((x) => x.id === 'router')!.ok).toBe(false);
+  });
+
+  it('refuses an id the roster does not have', () => {
+    const r = run(['models', 'refresh', 'ghost']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-such-lane');
+  });
+
+  it('refuses a lane with no registry, naming init', () => {
+    const r = run(['models', 'refresh', 'gpt']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-such-lane');
+    expect(String(oneObject(r)['detail'])).toMatch(/init/);
+  });
+
+  it('refuses an anthropic lane by name — there is nothing to probe (§5)', () => {
+    const r = run(['models', 'refresh', 'claude-a']);
+    expect(r.code).toBe(1);
+    expect(String(oneObject(r)['detail'])).toMatch(/Claude Code's own defaults/);
+  });
+
+  it('passes a compatible lane\'s baseUrl to the probe', () => {
+    run(['models', 'router', 'init', 'compatible', '--base-url', 'https://api.cortecs.ai']);
+    const r = run(['models', 'refresh', 'router'], { CCRC_MODELS_PROBE_FIXTURE: COMPAT_RAW });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'router.json'), 'utf8')).probe)
+      .toBe('compatible');
+  });
+
+  // Controller ruling on this task (predates the brief): `_models_refresh_one`
+  // runs the probe through the SAME secrets-sourcing subshell
+  // `_models_endpoints` uses — factored into `_models_run_probe` — so a
+  // `compatible` lane's catalogue fetch (which sends `ANTHROPIC_AUTH_TOKEN` as
+  // a Bearer header, `ccrc-models-probe`'s `compatible` fetch arm) gets the
+  // lane's key too. No `CCRC_MODELS_PROBE_FIXTURE` here — that seam bypasses
+  // the fetch (and so the header) entirely, so it cannot prove the token
+  // flowed anywhere; this drives the REAL `compatible` fetch arm, whose
+  // `curl` the harness poisons, exactly as the discovery describe block's own
+  // served-by test does for `_models_endpoints`. The poison log records
+  // curl's own argv — never ccrc's stdout or stderr — so a `Bearer
+  // lane-token` there proves the secrets file's token reached the probe's
+  // request, and the failing curl (poison exits 97) is what "refresh" being
+  // wired straight through the real fetch arm looks like on this box: the
+  // catalogue fetch fails, the lane's previous (nonexistent) catalogue stays
+  // absent, and the run reports that one lane failed.
+  it('sources the lane\'s secrets file for the compatible probe too; the token never reaches ccrc\'s own output', () => {
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
+    run(['models', 'router', 'init', 'compatible', '--base-url', 'https://api.cortecs.ai']);
+    const r = run(['models', 'refresh', 'router']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: 'router', probe: 'compatible', ok: false, count: 0 }]);
+    expect(poisonLog('curl').join('\n')).toContain('Bearer lane-token');
+    expect(r.stdout).not.toContain('lane-token');
+    expect(r.stderr).not.toContain('lane-token');
+  });
+
+  it('a single-lane failure exits 1 and leaves the previous catalogue stale, not deleted', () => {
+    run(['models', 'gpt', 'init', 'codex']);
+    run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: join(home, 'nope') });
+    expect(r.code).toBe(1);
+    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.json'), 'utf8'));
+    expect(cat.stale).toBe(true);
+    expect(cat.models).toHaveLength(9);
+  });
+
+  it('takes one lane id or --all and nothing more', () => {
+    const r = run(['models', 'refresh', 'gpt', '--all']);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('unknown-argument');
   });
 });
