@@ -6055,9 +6055,24 @@ _models_refuse() {   # <error> <exit code> <detail…>
 }
 ```
 
-and, immediately after `_plat_mktemp_d` (`:306`), the bridge:
+Landed BELOW `# ── END PLATFORM LAYER`, not immediately after `_plat_mktemp_d`
+(0dce4667): `ccd/ccrc`'s platform block (`_plat_*`/`_svc_*`) must stay
+byte-identical to `ccd/ccd`'s copy — `macos-platform.test.ts` diffs the two
+sentinel-sliced regions and asserts every `_plat_`/`_svc_` definition sits
+inside them — so a helper carrying neither prefix cannot land inside the block
+even at `_plat_mktemp_d`'s own insertion point; it lands right after the
+closing sentinel instead, the bridge:
 
 ```bash
+# ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
+# Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
+# pin test (`macos-platform.test.ts`) cannot see it: the compared region is
+# sliced by the two sentinels, so a helper appended below them is two files
+# free to drift — the exact failure the duplication invites and the pin
+# exists to refuse. The test also asserts every `_plat_`/`_svc_` definition
+# sits inside the sentinels, so an appended-below helper is a red suite, not
+# a quiet gap.
+
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
@@ -6076,6 +6091,24 @@ _models_answer() {
   body="$(_models_node "$@")"; rc=$?
   [ -n "$body" ] \
     || _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  # THE SHAPE, not just the emptiness — round 1 review, Important 1. A
+  # half-updated box's node half can print something NON-EMPTY and still not
+  # be "the answer": measured with a stub that writes a two-line stack to
+  # stdout and exits 7, the emptiness check alone let both lines through as
+  # if they were the JSON object this verb promises, on exactly the
+  # half-updated-box path this seam's own comment invokes. jq is already
+  # proven present by `_models_deps`, so this costs nothing new.
+  printf '%s' "$body" | jq -e 'type=="object"' >/dev/null 2>&1 \
+    || _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc and printed something that is not one JSON object, so this run has nothing reliable to tell you — its first line was: $(printf '%s\n' "$body" | head -n1). ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  # THE EXIT CODE, clamped to this file's own 0/1/2 contract (the header's
+  # EXIT CODES table) — round 1 review, Important 1. A node half that prints a
+  # VALID object but exits some fourth code (a crash right after answering,
+  # say) must not leak that code past ccrc's own promise to whatever scripted
+  # on `ccrc models …; case $? in 0|1|2)`.
+  case "$rc" in
+    0|1|2) : ;;
+    *) _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc, outside this build's 0/1/2 contract, after printing a JSON object — its own exit code broke, not yours. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written." ;;
+  esac
   printf '%s\n' "$body"
   return "$rc"
 }
