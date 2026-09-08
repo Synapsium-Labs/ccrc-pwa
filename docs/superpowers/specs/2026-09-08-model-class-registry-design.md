@@ -464,6 +464,17 @@ ccrc models litellm <id>                              # render + (re)start; idem
 ccd swap <id> <wrapper> [--as-class <c>]              # existing verb, new flag (after PR #62, §14)
 ```
 
+Discovery-scope transitions (ruled 2026-09-08 during Plan 1): `discovery add
+<id>` on a `"catalogue"` scope converts it to an explicit list holding every
+currently classed id plus `<id>` (so §4.1's containment rule holds) and says
+so in its answer; `discovery rm` on a `"catalogue"` scope refuses, naming
+`discovery add` or `set-class … none` as the remedy; `discovery catalogue`
+restores the whole-catalogue scope. On an `openrouter` lane `discovery add`
+REQUIRES the probe's endpoints answer and refuses without it, and `set-class`
+never appends to the list implicitly — the whitelist check is a property of
+the lane, not of a flag; on other probes `set-class` may append and
+`--endpoints` is a usage error.
+
 A top-level `models` group, not a subverb of `ccrc account`: that verb is the
 account-connections branch's and is not on `main`. Every mutation
 re-materialises (env block, `.classes.tsv`, `.effort.json`) on success and
