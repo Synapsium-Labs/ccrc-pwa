@@ -257,6 +257,13 @@ Beside `_is_home_able` (`:1090`). Callers obtain the state **once** per decision
 
 #### 5.5.3 The auto-swap target — `_swap_target` (`:11142`)
 
+> **The pool filter constrains TAGGED accounts only.** `_pool_ok` is a hard `continue` ahead of all
+> bracketing, so no candidate of either class is ever picked out of pool — but an UNTAGGED account is
+> in every pool, so PR #61's last-resort bracket can select an untagged overflow lane while healthy
+> tagged accounts in another pool are refused. That is ruled behaviour, not a defect; §5.7.3 states it
+> in full and says why the move is not a crossing.
+
+
 Reads `project` and `pps` once. Then, unless the row carries a **valid** crossing marker (§5.7.2):
 
 - `_pool_ok "$cur" "$pps"` → 1 (wrong pool) sets `force=pool`, skipping both "stay" shortcuts — a wrong-pool current account is a must-leave (ruling 5); → 2 (undecidable) returns nothing and lets the caller mark a strand if hard-blocked.
@@ -321,6 +328,18 @@ Without it, the design's own mechanisms undo every crossing: the re-seed rewrite
 **Validity**, evaluated by `_auto_swap_check` each tick before the re-seed: the marker is valid while `_project_pool_state "$project"` still reads `named <stored-pool>` **and** the stored account equals the current `wrapper` (a `swap`/`start` crossing) **or** the current `home` (a `prefer` crossing). While valid: the re-seed does not rewrite `.home`; `_swap_target` does not set `force=pool` for the crossed `cur` and the home guard admits the crossed home; `cmd_swap`'s in-unit guard (§5.8.4) does not refuse a target equal to the stored account. The candidate loop **stays pool-filtered** in every case, so any automatic move lands in-pool and, by the account clause, ends the crossing. When validity fails — a retag, an untag, a move off the account — the tick removes the marker and writes one `swap.log` line `crosspool-ended <id>: <reason>`. Under the interpretation in §2, a `swap --cross-pool` session still returns home when home recovers, exactly as today; that return is a move off the account and ends the crossing.
 
 Every crossing writes one `swap.log` line `cross-pool <id>: <cur> -> <target> [project=<p> pool=<pp> target-pool=<ap>]`.
+
+#### 5.7.3 What is NOT a crossing: an untagged account is servable for every pool
+
+**Added 2026-09-08, operator ruling, at the PR #61 merge.** §1 says crossings are explicit and recorded. There is one class of move that looks like a crossing to a reader and is deliberately neither, and it must be stated here rather than discovered in a log.
+
+**A project pool constrains TAGGED accounts.** `_pool_ok`'s rule is `[[ -z "$ap" || "$ap" == "$pp" ]]`: an account with no pool tag declines to be constrained, so it is servable for **every** pool — by construction, not by exception. §5.5.2's rule already said "serve iff either side is untagged or the names are equal"; §5.7 simply never drew the consequence.
+
+**The consequence.** After PR #61 (operator decision 2026-09-07) an installed, non-kill-switched overflow lane is a member of `_pool_for`'s candidate set and of `_swap_target`'s last-resort bracket. Since it is untagged, it is in every pool. So when a project's tagged pool has no home-able member with headroom, the rotation can land on that lane **while healthy accounts sit refused in another pool** — an answer neither PR #61 nor wave 2b produces alone.
+
+**Such a move is NOT a crossing and is NOT recorded as one:** no `.crosspool` marker, no `cross-pool` log line, no `dec.crosspool`, no `--cross-pool` required. Nothing was overridden, because nothing constrained it. `_swap_target` and the wave-2b plan carry the same statement, and `ccd-auto-swap-pool.test.ts` pins it as a mechanism rather than a claim.
+
+**The design consequence to keep in view:** the operator's guarantee "a session on a pool-tagged project runs only on that pool's accounts" holds for tagged accounts and is silent about untagged ones. If a future wave wants the stronger guarantee, the change is a roster rule — every account carries a tag — and **not** a change to `_pool_ok`, which would take the overflow lane out of every pool and re-impose the 2026-07-26 rule the operator reversed.
 
 ### 5.8 The strand — ruling 6
 

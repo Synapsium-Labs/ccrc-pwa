@@ -25,6 +25,43 @@
 - **Deviation numbers come only from the ledger allocator.** This plan's plan-time numbers, D-1671–D-1678, were minted in ONE allocator call and defined in `## Deviations found` at plan commit; the `LEDGER:` lines in Tasks 1–6 REFERENCE them. A deviation found during execution is allocated in its own call at the moment it is found, never taken from a gap in that block.
 - **Run suites in the FOREGROUND with a timeout of at least 600000 ms**, from inside the package: `cd server && ./node_modules/.bin/vitest run test/<file>.test.ts`. Never bare `npx vitest`.
 
+## The composed rule: an untagged overflow lane is in every pool (ruled 2026-09-08)
+
+**Read this beside the crossing rules below, because it is the one case where a move that looks like a
+crossing is not one and is deliberately not recorded as one.** It arrived at the PR #61 merge, not at
+plan time, and the operator ruled on it rather than having it fixed.
+
+**The state.** Project tagged `pool-b`. Every home-able account that is servable for `pool-b` is at the
+ceiling. `claude`/`claude-a` are perfectly healthy but sit in `pool-a`. An untagged overflow lane is
+installed and not kill-switched.
+
+**What each parent does alone.** PR #61 alone picks a healthy Anthropic account — it has no notion of
+pools. Wave 2b alone strands and banners — it has no notion of an overflow lane in the rotation. **The
+merge picks the overflow lane**, and that is an answer neither branch produces on its own.
+
+**The mechanism, and it is ours, not #61's.** `_pool_ok` answers 0 for an UNTAGGED ACCOUNT against any
+pool (`[[ -z "$ap" || "$ap" == "$pp" ]]`): an account with no tag declines to be constrained, so it is
+a member of EVERY pool by construction. #61's last-resort bracket then makes it the winner once the
+in-pool home-able set has no headroom. `_pool_ok` is a hard `continue` ahead of all bracketing, so the
+healthy out-of-pool accounts are still refused — which is why the lane wins rather than `claude-a`.
+
+**The ruling: ship it, do not change the code.** The move carries **no crossing marker, no `cross-pool`
+log line and no `dec.crosspool`** — because under this design's own definition it crosses nothing. A
+project pool constrains TAGGED accounts; an untagged lane is exempt by construction rather than by
+exception, so spec §1's "crossings are explicit and recorded" is not violated by it. That rule simply
+never reached this case. What the ruling costs is a divergence between §1's plain reading and what
+ships, and that is why it carries a deviation number of its own rather than a code change.
+
+**Do not "repair" it.** Making `_pool_ok` refuse untagged accounts takes the overflow lane out of every
+pool and silently re-imposes the 2026-07-26 rule the operator reversed on 2026-09-07. That mutation is
+measured: it reds 7 of 39 cases in `ccd-auto-swap-pool.test.ts`, including the case named below.
+
+**Where it is pinned.** `ccd-auto-swap-pool.test.ts`, `OVERFLOWS to an untagged lane rather than
+stranding — the composed rule, ruled and shipped`, with its contrast case `STRANDS when the untagged
+lane is at its ceiling too`. The first asserts the dispatch AND all three absent records; the second
+proves the first measures the rule rather than "some destination existed". Prose was not enough here:
+"we decided not to record it" and "we forgot to record it" read identically in a log six months on.
+
 ## Wave map
 
 The spec's five waves (§15 "Plan shape"), with wave 2 split in two at plan time — six PRs, each merged before the next is cut, all under `docs/superpowers/plans/`.
@@ -84,7 +121,9 @@ Wave 2a's plan names this wave's surfaces in its own "explicitly NOT this wave" 
 - Delete the `[[ -e "$REG/$1.stranded" ]] || return 0` line in `_strand_clear` → **red**: "ten healthy ticks leave swap.log byte-identical" (Task 3) fails with ten `unstranded` lines, and this task's own `_strand_clear` unit case fails.
 - Delete the `[[ ! -e "$REG/$id.stranded" ]]` guard around the write in `_strand_mark` → **red**: "marks once over ten calls" fails with ten `stranded` lines.
 - Delete the `.strandnotify` `[[ … -lt "$SWAPBLOCK_COOLDOWN" ]]` line → **red**: "banners once over ten calls" fails with ten notify lines.
-- Change `for cand in $(_pool_for "$id")` to `for cand in "${CCRC_ACCOUNTS[@]}"` → **red**: the reason names `gpt`, which was never a candidate.
+- Change `for cand in $(_pool_for "$id")` to `for cand in "${CCRC_ACCOUNTS[@]}"` in `_strand_why` → **red**, 7 of 39 cases in `ccd-auto-swap-pool.test.ts` (32 green). *(Re-measured at the PR #61 merge, 2026-09-08. The row used to say the discriminator was "the reason names `gpt`, which was never a candidate" — that discriminator is GONE: since #61 an installed, non-kill-switched overflow lane IS a candidate, and one of the seven reds is now the case that requires it to be NAMED. What the mutant actually does is walk lanes `_default_pool` drops — an UNINSTALLED one and a KILL-SWITCHED one — so the kill survived the reversal on a different premise than the one written down. The seven: `annotates each _pool_for member…`, `NAMES an installed overflow lane…`, `never names an account _pool_for did not offer`, `marks once, logs once and banners once…`, `marks ONCE over ten ticks…`, `strands an UNTAGGED project too…`, `STRANDS when the untagged lane is at its ceiling too…`.)*
+- Insert `_is_home_able "$cand" || continue` after the skip-current line in `_strand_why`'s loop — the 2026-07-26 rule pulled back in after #61 removed it → **red**, 2 of 39 (`NAMES an installed overflow lane…` and `STRANDS when the untagged lane is at its ceiling too…`). This is the mutation that measures the operator's 2026-09-07 reversal.
+- Change `_pool_ok`'s `[[ -z "$ap" || "$ap" == "$pp" ]]` to `[[ "$ap" == "$pp" ]]`, refusing UNTAGGED accounts — the "repair" `_swap_target`'s composed-rule comment forbids → **red**, 7 of 39, including `OVERFLOWS to an untagged lane rather than stranding — the composed rule, ruled and shipped`. This is what stops the ruled behaviour being quietly undone by someone who reads it as a bug.
 
 `LEDGER: the tick discarded the one fact worth keeping — a hard-blocked session with no destination returned at ccd:11243 with no marker, no log line and no cooldown stamp, and retried every five seconds for ever; the strand helpers are what make it sayable (D-1671 — spec §12 P-3).`
 
@@ -193,8 +232,11 @@ describe('_strand_why names the candidates the decision was actually about', () 
   it('never names an account `_pool_for` did not offer', () => {
     seed(); tagPool('demo', 'pool-b'); disable('claude-b'); disable('claude-d');
     const why = h.sh(`_strand_why ${ID} demo`);
-    expect(why, 'gpt is not home-able: it was never a candidate').not.toContain('gpt');
+    expect(why, 'an overflow lane nobody installed was never a candidate').not.toContain('gpt');
     expect(why, 'the account it is already stuck on is not a destination').not.toContain('claude:');
+    install('gpt'); disable('gpt'); writeWeeklyOnly('gpt', 99);
+    expect(h.sh(`_strand_why ${ID} demo`),
+      'a kill-switched lane is not a candidate either').not.toContain('gpt');
   });
 
   it('answers ONE undecidable token rather than inventing a reason per candidate', () => {
@@ -271,9 +313,13 @@ _strand_clear() {   # id — the strand is over; say so exactly once per strand.
 
 _strand_why() {   # id project -> one line naming why no candidate could take this session
   # WALKS `_pool_for`, NOT `CCRC_ACCOUNTS`. The candidate set is the thing the
-  # decision was actually about: a reason naming a non-home-able lane, or one a
-  # hand-set registry `pool` list excluded, sends the operator to enable an
-  # account that would not have been used anyway.
+  # decision was actually about: a reason naming an account a hand-set registry
+  # `pool` list excluded sends the operator to enable something that would not
+  # have been used anyway.
+  #
+  # AN OVERFLOW LANE IS NOW PART OF THAT SET, AND NAMING IT IS THE POINT.
+  # (Reversed at the PR #61 merge — see the shipped header for the full text and
+  # for the cross-citation that makes this and #61's own sentence one claim.)
   #
   # PREDICATE ORDER MIRRORS `_swap_target`'s OWN LOOP — pool, then _account_ok,
   # then _avail — so the annotation is the FIRST thing that failed, which is
@@ -2316,3 +2362,104 @@ comment before review caught it.
   SEVEN commits sit at or after `dcdb1e4b`, not twenty-one, but rewriting even seven to reword one message is not
   worth the risk, and the coordinator hand-writes the eventual squash body, so it will not inherit it. A
   known-and-recorded falsehood is honest; a silent one is not.
+
+### Found at the PR #61 merge (2026-09-08) — awaiting allocation
+
+**Fourteen — D-1908–D-1921, allocated and defined in ONE act on 2026-09-08 (`ccrc-api ledger allocate`, `count: 14`, floor moved to 1922) — batched BEFORE the merge gate**, on the same ordering the wave already uses: `dtbd.test.ts`
+scans tracked file CONTENTS, so the branch cannot be green while a placeholder lives, and a gate green on a tree that
+still carries one proves nothing about the tree that gets pushed. Numbers are substituted here and at every reference,
+and the gates then re-run on the substituted tree.
+
+PR #61 (the overflow-lane reversal) merged to `main` first, so this wave rebased onto it. The merge is small in code —
+one file, two regions, both additive — and large in PROSE: #61 and wave 2b each described a candidate walk the other
+changed, and nothing in either suite pins a comment.
+
+- **D-1908** (`_swap_target` + `_pool_ok`, RULED not fixed) — the merge answers
+  differently from BOTH parents in one state, and the answer is not a defect. With the project tagged, every in-pool
+  home-able account at the ceiling, healthy home-able accounts in ANOTHER pool, and an untagged overflow lane installed:
+  PR #61 alone picks a healthy Anthropic account, wave 2b alone strands and banners, and the MERGE picks the overflow
+  lane. The mechanism is this wave's, not #61's: `_pool_ok` answers 0 for an UNTAGGED ACCOUNT against any pool
+  (`[[ -z "$ap" || "$ap" == "$pp" ]]`), so an untagged lane is a member of EVERY pool by construction, and #61's
+  last-resort bracket makes it the winner once the in-pool home-able set has no headroom. The move carries **no crossing
+  marker, no `cross-pool` log line and no `dec.crosspool`** — under this design's own definition it crosses nothing.
+  **Operator ruling 2026-09-08: ship as merged, do not change the code.** The divergence recorded here is against spec
+  §1's "crossings are explicit and recorded", which never reached this case: a pool constrains TAGGED accounts, and an
+  untagged lane is exempt by construction rather than by exception. Documented in three places (this plan's own section
+  above, spec §5.7.3 and §5.5.3's note, and `_swap_target`'s bracket paragraph) and PINNED as a mechanism, because "we
+  decided not to record it" and "we forgot to record it" read identically in a log six months on: `ccd-auto-swap-pool
+  .test.ts`'s `OVERFLOWS to an untagged lane rather than stranding` plus its contrast case. Mutation-measured: the
+  "repair" a future reader would reach for — `_pool_ok` refusing untagged accounts — reds 7 of 39 cases.
+- **D-1909** (Task 1's fixture, the class this wave already minted seven numbers for) — the shipped
+  case asserted `not.toContain('gpt')` under the label *"gpt is not home-able: it was never a candidate"*. The assertion
+  is true; the stated reason is not established by the fixture and, after #61, is false as a rule. gpt is absent because
+  `makeCcdHarness` stubs HOME-ABLE ids only, so `_account_ok gpt` fails — absent for NOT BEING INSTALLED. Green for a
+  reason its own text does not state, which is how the reversal could land without a single red. Relabelled, extended
+  with a kill-switch arm, and paired with a positive case that installs the lane and requires it to be NAMED.
+- **D-1910** (Task 1) — 2b's `_strand_why` header said a reason naming *"a non-home-able lane
+  … sends the operator to enable an account that would not have been used anyway"*. After #61 that is exactly backwards,
+  and `main` already carried the opposite claim in #61's own words (`065882ae:ccd/ccd:3846`, "mirrors `_swap_target`'s
+  walk, so it names an overflow lane too"). Two comments in one file asserting opposite things about the same walk, with
+  no test on either. Rewritten to state the ruling positively and to cite #61's sentence, so the two are ONE claim.
+- **D-1911** (four sites in `ccd/ccd`, no test pins any of them) — #61's own prose
+  describes a filter this wave widened. (1) The file header's *"chosen only when NO home-able account has headroom"*
+  names only `_avail`; the bracket now empties for three reasons, and the newest is not a limit at all — a RETAG empties
+  it with every account healthy. (2)+(3) Two sites read *"passed `_account_ok` and `_avail`"* and must read
+  *"passed `_pool_ok`, `_account_ok` and `_avail`"*. (4) `_default_pool`'s *"comes back the moment its home has headroom
+  again"* is now conditional: the merged home-recovered arm is pool-gated, so a wrong-pool uncrossed home never comes
+  back. All four amended; the general lesson is the one this wave already recorded — a review names an instance, and the
+  claim needs a grep.
+- **D-1912** (`ccd/ccd`, #61's block) — *"THE THREE CANDIDATE WALKS DO NOT AGREE"* counts three and
+  the file has four. Measured: `grep -nE 'for (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")' ccd/ccd` finds
+  `_ws_least_loaded`, `cmd_ws_add`'s refusal-reason builder, `_swap_target` and `_strand_why`. The builder is the one
+  the block never named. Corrected, with the grep written in so the number stops drifting.
+- **D-1913** (`ccd/ccd`, `_swap_target`) — a `ccd:11670` self-citation pointed at
+  `_pool_for` on the BASE only; on this branch it points at a uuid comment and in the merge at `GC_RECLAIMED=0`.
+  Converted to the grep form the file itself prescribes. Scope: only this one `ccd:NNNN` token falls inside the region
+  being edited; the five others are pre-existing and in unrelated functions, and were deliberately left alone.
+- **D-1914** (Task 1's mutation table) — the row read *"→ red: the reason names `gpt`,
+  which was never a candidate."* That discriminator is GONE: since #61 an installed lane IS a candidate, and one of the
+  reds is now the case requiring it to be NAMED. The kill survived the reversal on a DIFFERENT premise than the one
+  written down — the mutant walks lanes `_default_pool` drops (uninstalled, kill-switched). Re-measured at this tree,
+  not copied from the brief: M-D reds 7 of 39, M-A reds 2 of 39, and the new `_pool_ok` mutation reds 7 of 39.
+- **D-1915** (`cmd_project_pool`, self-found) — its census comment says
+  *"When it bites, it bites loudly: an empty pool STRANDS."* After #61 it does not, when an untagged overflow lane is
+  installed: the rotation lands there instead, silently and with no crossing record. Comment corrected to say the pool
+  strands an existing session only when no overflow lane is available, and refuses placement either way.
+- **D-1916** (`cmd_project_pool`, pre-existing, PROSE ONLY here) — the pre-tag
+  warning walks `CCRC_ACCOUNTS` while placement walks `CCRC_HOME_ABLE`, so tagging a project into a pool whose only
+  member is an overflow lane passes the warning silently and then refuses every `ws-add`. Making the warning honest is a
+  behaviour hunk with its own red-first test and was deliberately NOT folded into the merge that found it.
+- **D-1917** (`_strand_mark`, pre-existing looseness, noted not changed) — the banner
+  says *"no account in pool $pdesc can take it"* while `$why` is the `_pool_for` census, which is wider than the pool: an
+  untagged account is servable for every pool, so after #61 an installed lane appears as `gpt:limit` under a banner
+  naming one pool. Not a regression — `POOLED_TEST_ROSTER`'s `claude-d` is equally untagged and already appears — and
+  the banner text is asserted VERBATIM by a test, so rewording it is a test change in the same commit. Said out loud in
+  the code instead.
+- **D-1918** (documentation debt, waves 2a + 2b) — measured: the word "pool" appeared
+  **zero** times in `README.md` on all three refs, so the whole account-pools feature shipped with no entry in the
+  canonical overview that `CLAUDE.md` calls the system's canonical description. This merge corrects only the two
+  sentences it falsifies; writing the missing section is its own task and would balloon this diff. Also measured:
+  README's account-entry enumeration omits `pool` and `hidden`, both real `AccountDef` members.
+- **D-1919** (`cmd_swap`, read not executed, NOT a merge blocker) —
+  `cmd_swap` sets `sanitize=1` on a move OFF a non-home-able lane onto a home-able one, but the sanitizer is a
+  best-effort `python3` call whose failure is a WARNING, not a non-zero rc, and its result is not propagated into
+  `carry_rc`. Before #61 only an operator could put a session on that lane, so this path was never automatic; after #61
+  the rotation can, which makes a swap whose sanitize silently failed complete and the returned session then 400 on
+  every turn. Raised here rather than fixed: it is #61's exposure, not this wave's, and it needs its own red-first test.
+- **D-1920** (method, self-found) — the round was dispatched as a `git rebase`, and
+  every measurement backing it describes a two-parent MERGE: `git merge-tree --write-tree origin/main 396dea8f`, its
+  written blob, the stage triple, the marker counts 2/2/2, and the `ours[0] + theirs[1:]` resolution. Attempted as
+  instructed and measured: `git rebase origin/main` stops at commit 2 of 23, and 19 of the 23 commits touch `ccd/ccd`,
+  so it would have meant resolving up to nineteen intermediate trees nobody assessed. Aborted (tip recovered
+  byte-identical) and merged instead, which reproduced the assessed shape exactly — two regions, markers at 2 and 11982,
+  `ccd/ccd` the only `UU` — and my resolution came out byte-identical to the coordinator's independently-produced one.
+  The lesson is the wave's own FILE/TIME/PLATFORM rule in a new coat: an operation named in a brief and the operation
+  its evidence measures are two claims, and only one of them was measured.
+- **D-1921** (this round's fixture, self-found) — the first version of the
+  composed-rule case asserted the absence of `dec.crosspool` with
+  `expect(rows).toEqual(expect.not.arrayContaining([expect.objectContaining({ dec: { crosspool: '1' } })]))`. It passed,
+  and it could not have failed: `dec` is `{surface:'none'}`, so a matcher demanding deep equality with `{crosspool:'1'}`
+  misses for the wrong reason and would go on missing if the key really were emitted. Found by probing what the tick
+  actually journals rather than by assuming — the probe also established that the overflow tick DOES write a `rehome`
+  row, with `meas.reason=pool` and home re-seeded IN pool to `claude-b` while the move itself goes to the lane, which is
+  now asserted. Exactly the class this wave minted seven numbers for, committed by me while fixing it.

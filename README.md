@@ -605,6 +605,16 @@ never enable, and it dies with the row at reap. The PWA's ordinary
 workspace-add composes no flag and stays box-default, and the doctor's `rc`
 check keeps reporting the box flag alone.
 
+The LANE is the third suppressor (2026-09-07): a session that lands on an
+account the roster marks `homeAble: false` — an overflow lane such as the
+ChatGPT/Codex launcher, which holds no claude.ai OAuth and runs Claude Code in
+token mode against a local proxy — spawns without `--remote-control` whatever
+the box flag and the row say, because Remote Control needs a claude.ai token
+with the inference scope and that lane cannot present one. The flag returns on
+the next spawn back on a home-able account. So a session that is not driveable
+from the PWA while it sits on the overflow lane is behaving as designed, not
+misconfigured.
+
 `rc` is a check of its own, deliberately: it reads the flag file and nothing
 else — no `ccrc.env`, no unit files, no box role — so it answers on a **fleet
 host**, which has no `ccrc.env` at all and is the one box in the topology that
@@ -643,8 +653,27 @@ telemetry}` — validated by `shared/roster.ts` (`parseRoster`), whose errors al
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
-placement; `telemetry: 'none'` says the account will never report rate limits,
+placement and out of being any session's default home, while leaving it in the
+auto-swap rotation as an **overflow lane** — a LAST RESORT, chosen only when no
+home-able account survives the rotation's whole filter, never merely because it
+scored better — for as long as it is installed and not kill-switched.
+`touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
+overflowed onto it returns home when home has headroom again *and* home is still
+servable for the project's pool;
+`telemetry: 'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness.
+
+Both clauses above were unconditional until account pools shipped, and neither is
+any more (D-1911; the ruled behaviour named below is D-1908, and this file still
+owes account pools a section of its own — D-1918). The rotation's filter is the pool rule, then the kill-switch, then
+headroom — so the home-able bracket can empty with every account perfectly
+healthy, simply because they are in another pool; and the return home is
+pool-gated, so a session whose home is in the wrong pool is re-homed rather than
+returned. One consequence is worth stating plainly because it looks like a bug:
+an account with **no** pool tag is servable for every pool, so an untagged
+overflow lane can be chosen while healthy tagged accounts sit refused. That is
+ruled behaviour, and such a move is deliberately **not** recorded as a pool
+crossing — nothing was overridden, because nothing constrained it.
 
 **Getting the file onto a box.** The deploy seeds it, create-if-missing, on
 both targets:

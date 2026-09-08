@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
-import { eventsOf, measOf } from './lifecycleHelpers.js';
+import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => {
@@ -52,6 +52,32 @@ const disable = (w: string): void => { fs.writeFileSync(reg(`${w}-disabled`), ''
 const writeLimits = (w: string, five: number, seven: number): void => {
   fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
     JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
+};
+
+/** The Codex shape `ccgpt-usage` writes: weekly only, `five` null. Mirrors
+ *  `ccd-default-pool.test.ts`'s helper of the same name (PR #61) — `writeLimits`
+ *  above CANNOT say it, because its signature takes `five: number` and an
+ *  overflow lane has no 5h window at all. Both timestamps are load-bearing, not
+ *  decoration: `_limit_field` zeroes a score whose `ts` is over a week old and
+ *  zeroes one whose reset instant has passed, and either zero would make `_avail`
+ *  pass and drop this candidate out of the census the case is about. Copied from
+ *  #61's helper rather than imported: its version is a module-local `const`, not
+ *  an export. */
+const writeWeeklyOnly = (w: string, seven: number): void => {
+  const now = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+    JSON.stringify({ five: null, seven, ts: now, fiveResetAt: null, sevenResetAt: now + 400_000 }));
+};
+
+/** Installs an overflow lane. `makeCcdHarness` stubs the roster's HOME-ABLE ids
+ *  only ("A non-home-able account deliberately gets NO stub"), so a case about an
+ *  INSTALLED one has to say so itself — and a case that forgets to gets a green
+ *  `not.toContain` for the wrong reason, which is the defect the negative case
+ *  below was relabelled for. Deliberately NOT hoisted into `beforeEach`: five
+ *  hard-coded strand-reason strings elsewhere in this file, and the `_strand_mark`
+ *  banner assertion, all enumerate the census and would shift. */
+const install = (w: string): void => {
+  fs.writeFileSync(path.join(h.home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
 };
 
 /** A live-looking session on `claude`, written with `_reg_set` — the same
@@ -133,11 +159,58 @@ describe('_strand_why names the candidates the decision was actually about', () 
       .toBe('claude-a:pool=pool-a claude-b:disabled claude-d:limit');
   });
 
+  it('NAMES an installed overflow lane — after PR #61 it IS in `_pool_for`', () => {
+    // THE RULING, AS A MECHANISM. Operator decision 2026-09-07 (PR #61) put an
+    // installed, non-kill-switched overflow lane back into every pool, and wave
+    // 2b's `_strand_why` walks `_pool_for`, so the census must name it. Before
+    // this case the tree measured nothing of the kind: `_strand_why` is wholly
+    // new in 2b and every one of its fixtures leaves the lane uninstalled.
+    //
+    // WHY EVERY PIECE IS LOAD-BEARING, and none of it is decoration:
+    //  - `install('gpt')` — the harness stubs home-able ids only, so without it
+    //    `_account_ok gpt` fails and the lane is absent for the wrong reason.
+    //  - `seven: 99` — `SWAP_CEILING` is 98 (`grep -n 'SWAP_CEILING=' ccd/ccd`).
+    //    At 97 the lane passes `_avail`, `_strand_why` has no else branch, and
+    //    it vanishes from the census having proved nothing.
+    //  - `gpt:limit` LAST — `_default_pool` seeds the home-able ids and APPENDS
+    //    the overflow lane, so the order is a property of the code.
+    //  - `toBe`, not `toContain('gpt:limit')` — the exact string is what pins
+    //    the position AND pins that `install` took effect, since a missing
+    //    binary would read `gpt:missing` and still contain the substring 'gpt'.
+    //
+    // NOT pinned here, and deliberately not claimed: this case cannot pin the
+    // PREDICATE ORDER for gpt. Only one annotation is reachable for an untagged,
+    // installed lane — `:pool=` cannot fire (untagged is servable for every
+    // pool) and `:disabled`/`:missing` cannot (`_default_pool` already applied
+    // `_account_ok` before this walk sees the list) — so no reordering could
+    // change its token. The order is pinned for `claude-a` by the first case
+    // in this describe.
+    seed(); tagPool('demo', 'pool-b'); disable('claude-b'); disable('claude-d');
+    install('gpt'); writeWeeklyOnly('gpt', 99);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe('claude-a:pool=pool-a claude-b:disabled claude-d:disabled gpt:limit');
+  });
+
   it('never names an account `_pool_for` did not offer', () => {
+    // RELABELLED at the wave-2b merge (D-1909), and the label is the whole defect. This
+    // read 'gpt is not home-able: it was never a candidate' — a green assertion
+    // stating a reason its own fixture does not establish. gpt is absent here
+    // because `makeCcdHarness` installs stubs for home-able ids only, so
+    // `_account_ok gpt` fails: absent for NOT BEING INSTALLED, which is a
+    // different fact, and after PR #61 the stated one is simply false. The
+    // assertion was always true; only its reason was invented.
+    //
+    // KEPT rather than replaced, and extended with a kill-switch arm, because
+    // the negative direction is still worth measuring: `_default_pool` filters
+    // the overflow half on installation AND on the kill-switch, and the positive
+    // case above cannot see either filter.
     seed(); tagPool('demo', 'pool-b'); disable('claude-b'); disable('claude-d');
     const why = h.sh(`_strand_why ${ID} demo`);
-    expect(why, 'gpt is not home-able: it was never a candidate').not.toContain('gpt');
+    expect(why, 'an overflow lane nobody installed was never a candidate').not.toContain('gpt');
     expect(why, 'the account it is already stuck on is not a destination').not.toContain('claude:');
+    install('gpt'); disable('gpt'); writeWeeklyOnly('gpt', 99);
+    expect(h.sh(`_strand_why ${ID} demo`),
+      'a kill-switched lane is not a candidate either').not.toContain('gpt');
   });
 
   it('answers ONE undecidable token rather than inventing a reason per candidate', () => {
@@ -430,6 +503,72 @@ describe('the tick moves a retagged session (§5.5.4 step 5)', () => {
 });
 
 describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', () => {
+  it('OVERFLOWS to an untagged lane rather than stranding — the composed rule, ruled and shipped', () => {
+    // THE ONE STATE NEITHER PARENT PRODUCES ALONE, pinned as a mechanism rather
+    // than left to the prose. Operator ruling 2026-09-08 (D-1908): ship as merged.
+    //
+    // Project tagged `pool-b`. Its in-pool home-able members are pinned at the
+    // ceiling. `claude`/`claude-a` are HEALTHY and untouched — they have no
+    // limits file at all, so `_avail` treats them as available — but they sit in
+    // `pool-a`, so `_pool_ok` refuses them. `gpt` is untagged, which under
+    // `_pool_ok`'s own rule (`[[ -z "$ap" || "$ap" == "$pp" ]]`) makes it a
+    // member of EVERY pool, and PR #61 put an installed, non-kill-switched lane
+    // back into `_pool_for`. So the home-able bracket is empty while healthy
+    // home-able accounts exist, and the last-resort bracket wins.
+    //
+    // Pure #61 would pick a healthy Anthropic account here; pure wave 2b would
+    // strand and banner. The merge picks gpt. That divergence is RULED, not a
+    // defect, and it carries its own ledger number.
+    //
+    // THE SECOND HALF OF THE RULING IS THE RECORD, and it is the half a comment
+    // could not enforce: this move is NOT a crossing under this tree's own
+    // definition, so it must leave NO marker, NO `cross-pool` log line and NO
+    // `dec.crosspool`. Asserted below, because "we decided not to record it" and
+    // "we forgot to record it" look identical in a log six months from now.
+    seed(); plantNotify(); tagPool('demo', 'pool-b');
+    writeLimits('claude-b', 99, 99);          // the only tagged pool-b member, pinned
+    writeLimits('claude-d', 99, 99);          // untagged, so in pool-b too — pinned
+    install('gpt'); writeWeeklyOnly('gpt', 0);   // installed, untagged, wide open
+    tick(BLOCKED);
+    expect(h.calls().join('\n'), 'the last-resort bracket wins').toContain(`dispatch ${ID} -> gpt`);
+    expect(h.calls().join('\n'), 'a healthy account in the WRONG pool is still refused')
+      .not.toContain(`dispatch ${ID} -> claude-a`);
+    expect(h.reg(ID, 'stranded'), 'a destination exists, so this is not a strand').toBeNull();
+    expect(noticeLines(), 'nothing to announce').toHaveLength(0);
+    expect(h.reg(ID, 'crosspool'), 'an untagged lane crosses nothing — no marker').toBeNull();
+    expect(swapLog(), 'and no crossing is logged').not.toContain('cross-pool');
+    // The journal half, asserted on the ROW rather than on the row list. An
+    // `arrayContaining` over a whole `dec` object was the first shape here and it
+    // could not have failed (D-1921): `dec` is `{surface:'none'}`, so a matcher demanding
+    // `{crosspool:'1'}` misses for the wrong reason and would go on missing if
+    // `dec.crosspool` really were emitted. Read the key.
+    const rows = eventsOf(h.home, 'rehome');
+    expect(rows, 'the tick re-homes as well as dispatching').toHaveLength(1);
+    expect(decOf(rows[0]!)['crosspool'], 'no dec.crosspool — this is not a crossing').toBeUndefined();
+    expect(measOf(rows[0]!)['reason'], 'the re-home reason is the pool rule').toBe('pool');
+    expect(measOf(rows[0]!)['home'],
+      'and home is re-seeded IN pool, even though the move itself went to the overflow lane')
+      .toBe('claude-b');
+  });
+
+  it('STRANDS when the untagged lane is at its ceiling too, naming it in the reason', () => {
+    // The contrast that proves the case above measures the RULING and not merely
+    // "some destination existed". Identical fixture, one number changed: the
+    // overflow lane is at 99 against a `SWAP_CEILING` of 98, so `_avail` refuses
+    // it, the last-resort bracket is empty as well, and the tick strands — with
+    // `gpt:limit` in the census, which is the very annotation the relabelled
+    // `_strand_why` case above exists to license.
+    seed(); plantNotify(); tagPool('demo', 'pool-b');
+    writeLimits('claude-b', 99, 99);
+    writeLimits('claude-d', 99, 99);
+    install('gpt'); writeWeeklyOnly('gpt', 99);
+    tick(BLOCKED);
+    expect(h.calls().join('\n'), 'nothing is placeable').not.toContain('dispatch');
+    expect(h.reg(ID, 'stranded'))
+      .toMatch(/^\d{10} claude-a:pool=pool-a claude-b:limit claude-d:limit gpt:limit$/);
+    expect(logLines('stranded')).toHaveLength(1);
+  });
+
   it('marks ONCE over ten ticks, with one log line and one banner', () => {
     seed(); tagPool('demo', 'pool-b'); plantNotify();
     disable('claude-b'); disable('claude-d');   // nothing in pool-b, nothing untagged, is placeable

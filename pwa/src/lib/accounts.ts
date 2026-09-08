@@ -69,8 +69,9 @@ export function accountColorVar(roster: readonly RosterWire[], wrapper: string):
  *  human labels, joined for the one-line "nothing can take a new workspace"
  *  message (AccountsScreen's projection line, ProjectCard's addLabel).
  *
- *  A `homeAble: false` account (e.g. `gpt`, opt-in-only — never a landing
- *  spot ccd's `_ws_least_loaded` chooses on its own) is never consulted for
+ *  A `homeAble: false` account (e.g. `gpt` — an overflow lane the auto-swapper
+ *  may rotate a session onto as a last resort, but never a landing spot ccd's
+ *  `_ws_least_loaded` chooses on its own) is never consulted for
  *  this fact, even though it renders as an account row on the very same
  *  accounts screen. That is exactly why a "nothing is placeable" message
  *  must name these accounts individually rather than claim "all accounts":
