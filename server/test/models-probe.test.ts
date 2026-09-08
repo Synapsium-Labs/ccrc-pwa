@@ -145,13 +145,21 @@ describe('the Codex arm (§5)', () => {
     // fleet poll, ccd, the verbs) can observe mid-write. A temp DIRECTORY is
     // still fine for the RAW fetch's own scratch space — it is only ever
     // read, never renamed into place — so this checks the lines that actually
-    // get `mv`'d onto the destination, not every temp-file use in the file.
+    // get moved onto the destination, not every temp-file use in the file.
     const src = fs.readFileSync(PROBE, 'utf8');
     expect(src).toContain('"$OUT.tmp.$$"');
     expect(src).toMatch(/mktemp -d/); // the RAW fetch's scratch dir — still fine, see above
-    const movedLines = src.split('\n').filter((l) => l.includes('mv -fT'));
+    // The probe is a standalone executable and cannot source ccd's platform
+    // block, so the rename goes through the local `_probe_mv_notdir` helper,
+    // not a bare GNU `mv -fT` — `macos-platform.test.ts`'s GNU-only scan
+    // forbids that flag at any call site outside the block.
+    const movedLines = src.split('\n').filter((l) => l.includes('_probe_mv_notdir "$NORM" "$OUT"'));
     expect(movedLines.length).toBeGreaterThan(0);
     for (const l of movedLines) expect(l).not.toMatch(/\$TMPD\b/);
+    const codeLines = src.split('\n').filter((l) => !/^\s*#/.test(l));
+    expect(codeLines.some((l) => /(?<![-_a-zA-Z])mv\s+-[a-zA-Z]*T/.test(l)),
+      'a bare mv -T outside a comment means the write stopped routing through _probe_mv_notdir')
+      .toBe(false);
   });
 
   it('--out an existing directory refuses instead of writing inside it', () => {

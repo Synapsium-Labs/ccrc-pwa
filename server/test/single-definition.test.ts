@@ -1325,13 +1325,15 @@ describe('the model files, and who reads each one', () => {
     // wrong catalogue is a warning on every surface about models that answer
     // fine.
     //
-    // `mv -fT`, not `mv -f`: measured 2026-09-08 against the shipped probe —
-    // the final rename onto `$OUT` carries `-T` (refuse when `$OUT` names a
-    // directory rather than "succeeding" by dropping the file inside it,
-    // ccrc-models-probe:396-400's own reasoning), so a bare `mv -f "$NORM"
-    // "$OUT"` is no longer a substring of the file at all.
+    // `_probe_mv_notdir`, not a bare `mv -f`: the probe cannot source ccd's
+    // platform block (it ships as its own executable), so it cannot spell
+    // GNU's `mv -fT` either — `macos-platform.test.ts`'s GNU-only scan
+    // forbids that flag at any call site outside the block. The local helper
+    // carries the same refusal (`$OUT` a directory -> refuse, rather than
+    // "succeeding" by dropping the file inside it), so a bare
+    // `mv -f "$NORM" "$OUT"` is still no longer a substring of the file.
     const probe = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-models-probe'), 'utf8');
-    expect(probe).toContain('mv -fT "$NORM" "$OUT"');
+    expect(probe).toContain('_probe_mv_notdir "$NORM" "$OUT"');
     // A write is `mv`/`cp`/`tee` naming the CATALOGUE path (`<id>.json`, not
     // `<id>.classes.json` — that file is the REGISTRY, and has its own row
     // below), or a `>`/`>>` redirect whose TARGET is the catalogue path — not

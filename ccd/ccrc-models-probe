@@ -19,10 +19,11 @@
 #
 # ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
 # The catalogue is read by another process (the server's fleet poll, ccd, the
-# verbs), so it lands tmp + `mv -fT`, staged BESIDE the destination as
-# `$OUT.tmp.$$` (spec §4.2: tmp + mv in the SAME directory — a cross-
-# filesystem `mv` degrades to copy+unlink, which a reader can observe
-# mid-write). And a failed probe NEVER deletes a catalogue: it rewrites the previous one with
+# verbs), so it lands tmp + `_probe_mv_notdir` (rename, refusing a directory
+# destination), staged BESIDE the destination as `$OUT.tmp.$$` (spec §4.2: tmp
+# and mv in the SAME directory — a cross-filesystem `mv` degrades to
+# copy+unlink, which a reader can observe mid-write). And a failed probe NEVER
+# deletes a catalogue: it rewrites the previous one with
 # `stale: true` and the error text in `lastError` (§11), because "the network
 # was down for an hour" must not read on every surface as "every model this lane
 # had is retired".
@@ -55,6 +56,17 @@ usage() {
   echo "       <probe> is codex, openrouter or compatible — the registry file's own probe kind" >&2
 }
 usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
+
+# This probe is a standalone executable — it ships beside ccd, not sourced
+# into it (see the file header's "ONE EXECUTABLE" note) — so it cannot reach
+# `_plat_mv_notdir` inside ccd's platform block, and `macos-platform.test.ts`'s
+# GNU-only scan forbids a bare `mv -fT` at any call site outside that block.
+# GNU `-T`'s point was never "fail whenever $2 exists", it was "never move the
+# tmp INTO a directory sitting at $OUT" — a plain `mv -f` "succeeds" there by
+# dropping the file inside it instead of onto it. An explicit `-d` check on
+# $2 before the rename gives that same refusal with no GNU flag: the exact
+# trade `_plat_mv_notdir`'s darwin arm makes in ccd/ccd.
+_probe_mv_notdir() { [ -d "$2" ] && return 1; mv -f -- "$1" "$2"; }
 
 ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""
 [ $# -ge 1 ] || usage_die "an account id is required"
@@ -351,7 +363,7 @@ with open(dst, "w") as f:
 # lane's price list.
 os.chmod(dst, 0o600)
 PY
-  mv -fT "$NORM" "$OUT" || return 1
+  _probe_mv_notdir "$NORM" "$OUT" || return 1
   echo "$PROG: $why — keeping the previous catalogue, marked stale." >&2
   return 1
 }
@@ -374,15 +386,16 @@ if [ -n "$ENDPOINTS" ]; then
   # The RAW endpoints body IS the answer — no normaliser, no catalogue shape —
   # but it still lands the same way the catalogue does: staged through $NORM
   # (already `$OUT.tmp.$$`, already in the EXIT trap) beside the destination,
-  # then renamed onto it with `-T`. `$RAW`'s directory can be a different
-  # filesystem from $OUT's, so the first move below can be a copy+unlink —
-  # that is fine, nothing reads $NORM until the final rename. `-T` on that
-  # final rename REFUSES when --out names an existing directory, instead of
-  # "succeeding" by dropping the answer inside it under $RAW's own basename,
-  # which is what moving straight onto $OUT did before this fix.
+  # then renamed onto it through `_probe_mv_notdir`. `$RAW`'s directory can be
+  # a different filesystem from $OUT's, so the first move below can be a
+  # copy+unlink — that is fine, nothing reads $NORM until the final rename.
+  # `_probe_mv_notdir`'s `-d` check on that final rename REFUSES when --out
+  # names an existing directory, instead of "succeeding" by dropping the
+  # answer inside it under $RAW's own basename, which is what moving straight
+  # onto $OUT did before this fix.
   mv -f "$RAW" "$NORM" || die "could not stage the endpoints answer"
   chmod 600 "$NORM" || die "could not set the mode on the endpoints answer"
-  mv -fT "$NORM" "$OUT" || die "could not move the endpoints answer into place at $OUT"
+  _probe_mv_notdir "$NORM" "$OUT" || die "could not move the endpoints answer into place at $OUT"
   exit 0
 fi
 
@@ -394,9 +407,10 @@ fi
 # 0600 before the rename, not after: the file is world-readable for the width of
 # an fchmod otherwise, and an OpenRouter catalogue carries the lane's price list.
 chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
-# `-T`: rename, and REFUSE when $OUT is a directory, rather than moving $NORM
-# INSIDE it — a bare `mv -f` would "succeed" into the wrong place instead of
-# failing (the same reasoning `ccd`'s `_plat_mv_notdir` and `ccrc-adopt`'s
-# `$OUT.tmp.$$` staging record for this repo's other tmp+mv writers).
-mv -fT "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
+# `_probe_mv_notdir`: rename, and REFUSE when $OUT is a directory, rather than
+# moving $NORM INSIDE it — a bare `mv -f` would "succeed" into the wrong place
+# instead of failing (the same reasoning `ccd`'s `_plat_mv_notdir` and
+# `ccrc-adopt`'s `$OUT.tmp.$$` staging record for this repo's other tmp+mv
+# writers).
+_probe_mv_notdir "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
 exit 0
