@@ -9226,7 +9226,7 @@ Expected: no output from `git diff --stat`, then `ccgpt-usage: unchanged, and th
 
 - [ ] **Step 7: Write the install commands into the branch, where the runbook can cite them**
 
-Create `infra/handoff/INSTALL-model-class-registry.md` (landed content, a9a2416 — dispatch notes v2 item 3's corrections on top of the brief's template, grounded against Task 17's runbook R5/R7/R8/R17 and Task 16a's report):
+Create `infra/handoff/INSTALL-model-class-registry.md` (landed content, AMENDED at `2a17fe5d` — replaces the first landing `a9a2416` entirely, not a commit on top: a review found that commit's "eight-key" gate wording wrong (the eighth key is legitimately omissible; a seven-key block is a correct, not a failed, seed) and its commit message's "three copies match main byte for byte" false (`ccgpt` was diffed against the DRIFTED live box bytes, per Task 16, item 7). Grounded against Task 17's runbook R5/R7/R8/R17 and Task 16a's report):
 
 ```markdown
 # Installing the model-class-registry change to a box
@@ -9238,15 +9238,23 @@ These three files are copied by hand — there is no deploy lane for
 replace them with. Installing them early leaves the lane with no model at all.
 
 Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
-`feat/ccgpt-effort-shim`:
+`feat/ccgpt-effort-shim`. **`cd` into the checkout root first** — every
+`infra/handoff/<f>` path below is relative to it.
 
 1. **Seed and materialise the lane first** (ccrc side; see the plan's runbook):
    `ccrc models gpt init codex && ccrc models refresh gpt`
-   Then check the eight-key block landed:
-   `jq '.env' ~/.claude-gpt/settings.json`
-   Expect all eight variables the class registry writes. **This is the gate
-   for step 4 below — do not install the wrappers until this shows the
-   block.**
+   Then check the block landed — the SEVEN mandatory keys, every time:
+   `jq -r '.env | keys[]' ~/.claude-gpt/settings.json`
+   Expect exactly these seven: `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+   `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+   `ANTHROPIC_DEFAULT_FABLE_MODEL`, `ANTHROPIC_MODEL`,
+   `ANTHROPIC_SMALL_FAST_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`. An eighth key,
+   `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, is written ONLY when a fresh (non-stale)
+   catalogue names the primary model's measured context — capped at 200000,
+   never above it — and its ABSENCE is not a failed gate: most lanes show
+   seven keys, not eight, and that is correct. **The seven mandatory keys
+   landing is the gate for step 4 below — do not install the wrappers until
+   they show.**
 
 2. **The shim** — safe at any point, and safest first: with no effort file it
    sets no `reasoning` field at all.
@@ -9263,7 +9271,7 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
    `~/.handoff/litellm-config.yaml.prev` before writing the generated one —
    nothing hand-edited there is lost, only superseded.
 
-4. **The wrappers** — only after step 1 has shown the eight-key block in
+4. **The wrappers** — only after step 1 has shown the seven mandatory keys in
    `~/.claude-gpt/settings.json`, never before:
    ```
    diff -u ~/.local/bin/ccgpt infra/handoff/ccgpt
@@ -9273,10 +9281,11 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
    install -m 755 infra/handoff/claude-glm ~/.local/bin/claude-glm
    cmp ~/.local/bin/claude-glm infra/handoff/claude-glm && echo installed
    ```
-   `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` are not part of the eight-key
-   block the class registry materialises — they ride in `ccgpt` itself (the
-   wrapper), exported the same way before and after this install, and stay
-   there. Nothing in this migration moves them into `settings.json`.
+   `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` are not among the keys the
+   class registry materialises (the seven mandatory ones, plus the
+   conditional eighth) — they ride in `ccgpt` itself (the wrapper), exported
+   the same way before and after this install, and stay there. Nothing in
+   this migration moves them into `settings.json`.
 
 5. **Restart the proxies** so the running ones are the installed ones:
    `ccgpt stop` (the next gpt session starts both again).
@@ -9289,6 +9298,19 @@ Rollback for any of the three copied files: `git show main:infra/handoff/<f> >
 `~/.handoff/litellm-config.yaml`, restore the pre-migration bytes from
 `~/.handoff/litellm-config.yaml.prev` by hand — it is not one of the three
 files this task copies, and nothing here overwrites it a second time.
+
+**A wrapper-only rollback does not restore pre-migration model selection.**
+Once `~/.claude-gpt/settings.json` carries the materialised `env` block, that
+block beats a shell export for the same variable (probed 2026-09-08) —
+reverting `ccgpt`/`claude-glm` to their pre-migration bytes brings the old
+exports back, but the block still wins, so the lane keeps routing whatever
+the registry says. To actually change what the lane routes: either edit the
+registry (`ccrc models gpt set-class <class> <modelId|none>`, which
+re-materialises the block), or remove it entirely with `ccrc models gpt rm` —
+a REAP, not a mutation: it deletes the registry, the catalogue, the TSV and
+the effort file, and clears the block's keys out of
+`~/.claude-gpt/settings.json` (when the roster still has a row for the lane;
+an orphaned id skips that last step).
 ```
 
 - [ ] **Step 8: Commit (monorepo)**
@@ -9304,21 +9326,26 @@ settings.json carries ccrc's materialised env block there is nothing to replace
 them with — installing them early leaves the lane with no model at all. The shim
 is safe first: with no effort file it sets no reasoning field.
 
-Staged and diffed against the deployed copies; nothing installed. The three
-copies on this box match main byte for byte, so the recorded diff is the whole
-change.
+Staged and diffed against the deployed copies; nothing installed. The diff was
+taken against the LIVE bytes on this box: ccgpt-proxy and claude-glm match main
+byte for byte, but ccgpt carries the box's own 2026-09-08 timeout/catalogue edit,
+which the branch absorbed in Task 16a — so the recorded diff, against those live
+bytes, is still the whole change an install would make.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG
 )"
 ```
+This message replaces the first landing's ("the three copies on this box match
+main byte for byte" — false; `ccgpt` was DRIFTED, see Step 1) as an AMENDED
+commit, review-ruled: `git commit --amend`, not a second commit.
 
 - [ ] **Step 9: Report the branch state**
 
 ```bash
 cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && git log --oneline main..feat/ccgpt-effort-shim && git status --porcelain
 ```
-Expected (measured a9a2416, not the original four): SEVEN commits, not four — `65d402f` (Task 13), `b3034ff` (Task 14), `5f8815f` (Task 15), `5ece9b5`/`70f1cb4` (Task 13's and Tasks 14+15's fix rounds, review-driven), `e12db20` (Task 16a), `a9a2416` (this task) — and a clean status. The plan names four because Tasks 13–15 land clean in this telling; a real run's fix rounds and Task 16a's timeout port are additional commits on the same branch, ahead of this one. **Do not push and do not open a PR** — the monorepo branch lands with the ccrc-pwa one, in the order the runbook states.
+Expected (measured 2a17fe5d, not the original four): SEVEN commits, not four — `65d402f` (Task 13), `b3034ff` (Task 14), `5f8815f` (Task 15), `5ece9b5`/`70f1cb4` (Task 13's and Tasks 14+15's fix rounds, review-driven), `e12db20` (Task 16a), `2a17fe5` (this task, amended once after review) — and a clean status. The plan names four because Tasks 13–15 land clean in this telling; a real run's fix rounds and Task 16a's timeout port are additional commits on the same branch, ahead of this one. **Do not push and do not open a PR** — the monorepo branch lands with the ccrc-pwa one, in the order the runbook states.
 
 ---
 
