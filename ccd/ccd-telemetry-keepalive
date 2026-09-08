@@ -172,6 +172,60 @@ for tool in jq flock timeout date; do
     || { _ka_say "$tool is not on PATH — nothing was measured"; exit 1; }
 done
 
+# ── EXISTENCE IS NOT CAPABILITY ───────────────────────────────────────────
+# `command -v` above answers "is there something by that name". It does not
+# answer "does that thing do the non-portable trick I depend on", and for three
+# of the four tools those are different questions with the same silent failure.
+# MEASURED, and this is the finding these probes exist for: a `date` correct for
+# `-u +%FT%TZ` and `+%s` but with no GNU `%3N` PASSES the existence check, the
+# turn is TAKEN, `dur=$(( $(date +%s%3N) - t0 ))` then dies with `value too
+# great for base`, and the pass still reports `{"status":"ok","accounts":[]}`
+# with rc 0 — byte for byte the "spent, recorded nothing, exit 0" defect the
+# paragraph above promises to prevent. An existence check for a tool you use a
+# non-portable flag on is not a preflight; it is a spelling check.
+#
+# THE SWEEP, ALL FOUR, INCLUDING THE ONE THAT NEEDS NOTHING:
+#
+#   date    — `+%s%3N` is GNU-only. PROBED. `%F`/`%T`/`%s` are portable and are
+#             not what breaks. This is the one that was measured breaking.
+#   jq      — `--argjson` and `--slurpfile` both arrived in jq 1.5; `-r`, `-c`,
+#             `-n`, `-s` and `--arg` predate it. PROBED through `--argjson`,
+#             which pins the whole set with one call. A jq that lacks them fails
+#             INSIDE `_ka_row`, so every row is silently dropped from a census
+#             that still says `ok`.
+#   flock   — the `-n <fd>` form (as against `flock <file> <cmd>`) is what this
+#             script uses, and a flock that cannot do it fails EXACTLY as a held
+#             lock does, so the quiet `pass-locked` arm retires every pass for
+#             ever. PROBED against a private, never-contended file, where a
+#             working flock cannot fail.
+#   timeout — NOTHING TO PROBE, and this is the reason rather than an omission.
+#             The only spellings used are `timeout <whole seconds> <cmd>`, which
+#             GNU coreutils, busybox and macOS's gtimeout all accept, and the
+#             rc-124 convention. The 124 is used ONLY to choose between two
+#             reason strings ("timeout after Ns" and "exit N"), so an
+#             implementation that signals differently degrades a sentence and
+#             never spends, wedges or miscounts. A probe would have to burn a
+#             real wall-clock timeout on every pass to learn something the
+#             census already says honestly either way.
+probe="$(date +%s%3N 2>/dev/null)"
+[[ "$probe" =~ ^[0-9]{13,}$ ]] \
+  || { _ka_say "date does not support GNU %3N (answered '$probe') — nothing was measured"; exit 1; }
+
+[ "$(jq -cn --argjson n 1 '$n' 2>/dev/null)" = 1 ] \
+  || { _ka_say 'jq does not support --argjson (jq 1.5+ is required) — nothing was measured'; exit 1; }
+
+# A PRIVATE FILE NOTHING ELSE CAN HOLD, so the probe has exactly one meaning.
+# Probing the real lock would be circular: a healthy concurrent pass holds it,
+# and this would refuse loudly on the one condition that is fine.
+_ka_flock_works() {
+  local f="$HOME/.ccrc/keepalive.flock-probe.$$" rc
+  ( exec 7>"$f" || exit 1; flock -n 7 ); rc=$?
+  rm -f "$f"
+  return "$rc"
+}
+_ka_flock_works \
+  || { _ka_say 'flock cannot take -n on an open fd — nothing was measured'; exit 1; }
+
 # THE KNOBS THAT CONTROL THE MONEY ARE VALIDATED LIKE ANY OTHER INPUT. An
 # operator writing CCRC_KEEPALIVE_FRESH=30m in a drop-in — the obvious spelling,
 # and systemd's own for timers — used to FAIL OPEN: `[ 30m -lt … ]` is a syntax

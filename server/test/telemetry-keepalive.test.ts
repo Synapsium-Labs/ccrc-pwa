@@ -272,22 +272,36 @@ describe('the id grammar gate — an id becomes an exec path here', () => {
 });
 
 describe('the preflight and the lock — the two ways a pass can retire in silence', () => {
+  const realOf = (n: string): string => {
+    const real = (process.env['PATH'] ?? '').split(':')
+      .map((d) => path.join(d, n)).find((p) => fs.existsSync(p));
+    expect(real, `${n} is not on the harness PATH — this fixture cannot be built`).toBeTruthy();
+    return real!;
+  };
   /** A bin directory holding ONLY `needed`, so everything else is genuinely
    *  absent. The way to test a preflight is to take the tool away, not to mock
    *  the check (`account-health.test.ts`'s idiom). */
   const thinBin = (needed: string[]): string => {
     const dir = j('.thin-bin');
     fs.mkdirSync(dir, { recursive: true });
-    for (const n of needed) {
-      const real = (process.env['PATH'] ?? '').split(':')
-        .map((d) => path.join(d, n)).find((p) => fs.existsSync(p));
-      expect(real, `${n} is not on the harness PATH — this fixture cannot be built`).toBeTruthy();
-      fs.symlinkSync(real!, path.join(dir, n));
-    }
+    for (const n of needed) fs.symlinkSync(realOf(n), path.join(dir, n));
     return dir;
   };
   /** Everything the script needs before its preflight runs, and nothing after. */
   const BASE = ['bash', 'date', 'mkdir'];
+  /** Every external the script touches, so a shim is the ONLY difference. */
+  const FULL = ['bash', 'mkdir', 'jq', 'flock', 'timeout', 'date', 'mktemp', 'cat', 'head',
+    'rm', 'mv'];   // rm/mv too, so a shim is the ONLY difference and a mutation's
+                   // red is caused by the guard it reverted and nothing else
+  /** A PATH where every tool is the real one EXCEPT `name`, which is a stub.
+   *  PRESENT-BUT-INCOMPATIBLE is a different fixture from absent, and it is the
+   *  one an existence check cannot see: `command -v` answers yes for both a GNU
+   *  date and a BSD one. */
+  const shimBin = (name: string, body: string): string => {
+    const dir = thinBin(FULL.filter((n) => n !== name));
+    fs.writeFileSync(path.join(dir, name), `#!${realOf('bash')}\n${body}`, { mode: 0o755 });
+    return dir;
+  };
 
   it('a lock it cannot OPEN is loud — not the quiet exit that means "someone else holds it"', () => {
     // Two conditions that must not collapse. A held lock is the healthy overlap
@@ -348,6 +362,74 @@ describe('the preflight and the lock — the two ways a pass can retire in silen
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/date is not on PATH — nothing was measured/);
     expect(turns(), 'a turn was taken on a box the pass could not finish on').toEqual([]);
+  });
+
+  it('a date that EXISTS but has no GNU %3N refuses before the turn, not after the spend', () => {
+    // THE GAP THE EXISTENCE CHECK LEFT, and the whole reason these probes are
+    // capability probes. MEASURED against the shipped script before this fix: a
+    // `date` correct for `-u +%FT%TZ` and `+%s` but without `%3N` PASSED
+    // `command -v`, the turn was TAKEN, the duration arithmetic then died with
+    // `value too great for base`, and the pass still wrote
+    // `{"status":"ok","accounts":[]}` and exited 0. Money spent, nothing
+    // recorded, every remaining account skipped in silence.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({
+      PATH: shimBin('date', `
+# Correct for everything this script asks of it EXCEPT the GNU millisecond
+# conversion, which it passes through the way a BSD date does.
+for a in "$@"; do
+  case "$a" in
+    +%s%3N) printf '%s%%3N\n' "$(${realOf('date')} +%s)"; exit 0 ;;
+  esac
+done
+exec ${realOf('date')} "$@"
+`),
+    });
+    expect(turns(), 'THE SYMPTOM: the turn was taken before the pass discovered it could not finish')
+      .toEqual([]);
+    expect(r.status, 'a present-but-incompatible date was allowed to spend').toBe(1);
+    expect(r.stderr).toMatch(/keepalive: date does not support GNU %3N/);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.json')),
+      'a pass that measured nothing must not write a census saying ok').toBe(false);
+  });
+
+  it('a jq that EXISTS but predates --argjson refuses too', () => {
+    // `--argjson` and `--slurpfile` are jq 1.5; one probe pins both. Without it
+    // the failure is inside `_ka_row`, so every row is dropped from a census
+    // that still calls itself `ok` — the same shape as the date gap, one tool
+    // over.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({
+      PATH: shimBin('jq', `
+for a in "$@"; do
+  [ "$a" = --argjson ] && { echo "jq: Unknown option: --argjson" >&2; exit 2; }
+done
+exec ${realOf('jq')} "$@"
+`),
+    });
+    expect(turns(), 'THE SYMPTOM: the turn was taken, and only then did the census fail')
+      .toEqual([]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/keepalive: jq does not support --argjson/);
+  });
+
+  it('a flock that EXISTS but cannot take -n on an fd refuses instead of retiring quietly', () => {
+    // The nastiest of the three, because its failure is INDISTINGUISHABLE from
+    // the healthy case: `flock -n 9` failing is exactly what a held lock looks
+    // like, so without the probe every pass takes the quiet `pass-locked` arm
+    // and the fleet's telemetry stops refreshing with a census that says the
+    // box was merely busy.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ PATH: shimBin('flock', 'exit 1\n') });
+    expect(r.status, 'THE SYMPTOM: the pass retired quietly, rc 0, as if a peer held the lock')
+      .toBe(1);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.json')),
+      'the quiet pass-locked arm wrote a census blaming a peer that does not exist').toBe(false);
+    expect(r.stderr).toMatch(/keepalive: flock cannot take -n on an open fd/);
+    expect(turns()).toEqual([]);
   });
 });
 
