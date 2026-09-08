@@ -186,13 +186,16 @@ client's own defaults, shown read-only.
 `mv -f`, the repo's rule for any file another process reads):
 
 ```json
-{ "provider": "openai", "fetchedAt": 1789000000, "stale": false,
+{ "probe": "codex", "fetchedAt": 1789000000, "stale": false,
   "models": [ { "id": "gpt-6-astra", "label": "GPT-6-Astra", "context": 272000,
                 "maxContext": 872000, "efforts": ["low","medium","high","xhigh","max","ultra"],
                 "hidden": false, "priceIn": null, "priceOut": null } ] }
 ```
 
-Absent file = **never probed**, a distinct state from an empty catalogue.
+`probe` records which probe wrote it (the registry file's `probe`; the
+account-connections `provider` is not on `main` and is not this file's
+concern). Absent file = **never probed**, a distinct state from an empty
+catalogue.
 `stale: true` = the last probe failed and this is the previous catalogue
 (§11). Hidden models (Codex `visibility: hide`) are kept with `hidden: true`
 and excluded from `"catalogue"`-mode discovery lists.
@@ -210,8 +213,12 @@ Defined once in `shared/models.ts` (server and PWA) and once in `ccd/ccd`
   that exists and is not stale. A retired class id empties nothing in the roster
   (the roster is the operator's); it is a warning on every surface and the
   class counts as **unavailable** for routing (§7) until the operator reassigns.
-- **available classes** — for `anthropic`: all four; otherwise the slots that
-  are non-null and not retired.
+- **available classes** — for a lane that runs Claude Code's own aliases: all
+  four; otherwise the slots that are non-null and not retired. "Runs the
+  client's own aliases" is read from the roster's `telemetry === 'anthropic'`
+  (the server) and `homeAble` (the browser) until `exec.provider` exists on
+  `main` — the only fields that carry the distinction today, and both are
+  named as proxies in the code that reads them.
 
 ## 5. Discovery
 
@@ -539,7 +546,10 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
   predicate in the composed chain (§7) after reading that wave's crossing
   section.
 - **Plan 3a — routes, the Models section, the picker, doctor — starts after
-  Plan 1.** It adds a new `server/src/models.ts` reader and one field per
+  Plan 1, and BEFORE Plan 2** whenever #62 has not merged by then: both add
+  rows to `server/test/single-definition.test.ts`'s exact-match lists, so they
+  run in sequence on the one branch, never concurrently, and whichever lands
+  second adds its rows on top. It adds a new `server/src/models.ts` reader and one field per
   `/api/accounts` row (composes with wave 3, mail 279), touches `shared/api.ts`
   only by adding one interface and one optional field, and leaves
   `SwapSheet.tsx`, `NewSessionSheet.tsx`, `stores/fleet.ts` and `lib/pools.ts`
@@ -564,6 +574,8 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
 | 5 | OpenRouter discovery list | explicit only; whitelist check at add time |
 | 5b | Where the registry lives until account-connections merges | its own per-account file under `~/.ccrc/models/`; fold-in decided later, additively |
 | 5c | `subagent` | an explicit class name per lane, default `sonnet`; never derived |
+| 5d | An unseeded registry (`init openrouter`/`compatible`) | legal on disk with all four slots null and an empty discovery list; the materialiser refuses to project it until one class is set (Plan 1 deviation B-1) |
+| 5e | `refresh` and `litellm` as account ids | refused in `ccrc models`' first slot, since the verb group would read them as verbs (Plan 1 deviation B-4) |
 | 6 | Hidden Codex models | excluded from `"catalogue"` discovery lists; addable explicitly |
 | 7 | Where classification happens | the Accounts screen; the verb exists for scripts and doctor's remedies |
 
