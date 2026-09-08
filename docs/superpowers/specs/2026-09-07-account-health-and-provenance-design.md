@@ -9,8 +9,8 @@
 ## 1. The defect
 
 An account whose credential dies keeps an executable wrapper and an enabled lane, so `_account_ok`
-(`ccd/ccd:1238`) still says yes. Its last telemetry sample stays on disk. Its `fiveResetAt` passes
-within five hours and its `sevenResetAt` within a week — and `_limit_field` (`ccd/ccd:11728`) then
+(`ccd/ccd:1264`) still says yes. Its last telemetry sample stays on disk. Its `fiveResetAt` passes
+within five hours and its `sevenResetAt` within a week — and `_limit_field` (`ccd/ccd:11776`) then
 rewrites both halves to a hard `0`:
 
 ```bash
@@ -20,15 +20,15 @@ if [[ -n "$val" && -n "$reset" && "$now" -ge "$reset" ]]; then
 fi
 ```
 
-`_limit_score` returns `max(0,0) = 0`. `_ws_least_loaded` (`ccd/ccd:3788`) keeps the lowest score with
+`_limit_score` returns `max(0,0) = 0`. `_ws_least_loaded` (`ccd/ccd:3814`) keeps the lowest score with
 a strict `<`, so a `0` beats every honest account on the fleet. Nothing runs on the dead account, so
 nothing ever reports a real number, so it stays `0` forever. **The deadest lane becomes the most
 attractive destination, and stays that way.**
 
-The server mirrors the same arithmetic (`server/src/limits.ts:142-145`) and additionally *names* the
+The server mirrors the same arithmetic (`server/src/limits.ts:239-242`) and additionally *names* the
 distinction — `fiveRolledOver` / `sevenRolledOver`, docstring: *"the 0 above is inferred from the reset
 timestamp rather than observed. Distinct from a measured 0"* — then overwrites `five`/`seven` to `0`
-anyway, before `projectHome` (`:96`) ever sees the row. `measured()` (`:40`) names only `five` and
+anyway, before `projectHome` (`:167`) ever sees the row. `measured()` (`:105-106`) names only `five` and
 `seven`.
 
 **So the ranking does not ignore the rollover event. It ignores the PROVENANCE of the zero.** An
@@ -40,7 +40,7 @@ render identically.
 
 An earlier reading of this held that unmeasured accounts win placement. They do not, and the code is
 careful about it. `_ws_least_loaded` skips unmeasured; `_swap_target` ranks it last via
-`: "${sc:=100}"`; `_avail` (`ccd/ccd:11785`) keeps it eligible so a rescue always has a destination.
+`: "${sc:=100}"`; `_avail` (`ccd/ccd:11874`) keeps it eligible so a rescue always has a destination.
 The rule those three sites state and enforce:
 
 > unmeasured never OUTRANKS measured, and never becomes INELIGIBLE.
@@ -160,8 +160,15 @@ flag**, and make unknown **rank last**.
 
 So:
 
-- `_swap_target` ranks an auth-dead account **last**, joining the block unmeasured already uses. A
-  rescue always has a destination.
+- `_swap_target` ranks an auth-dead account in its **own tier, one worse than unmeasured**: measured
+  <= 97, unmeasured 100, auth-dead 101, `best_score`'s sentinel 999 (`ccd/ccd`, `_swap_target`). It does
+  NOT join the unmeasured block — fix round 1 measured that joining it was a no-op in the steady state:
+  an auth-dead lane cannot refresh its own telemetry (nothing runs there to write it), so its last
+  sample ages out and `_limit_score` answers `""` within hours regardless, which already lands it at
+  100. At that shared score a marked lane earlier in roster order beat a healthy quiet one under the
+  strict `<` below — a rescue landing on the account already measured as dead. The 101 tier keeps
+  silence ahead of a verdict while a rescue still always has a destination (101 stays far below the 999
+  sentinel).
 - `_ws_least_loaded` **skips** it — it has a fallback, so skipping costs nothing. Same asymmetry the
   tree already justifies for unmeasured. **Note this loop is now pool-filtered** (merged wave 2a added
   `_pool_ok` / `untagged`): a health skip composes with that filter, and the `first` fallback must
@@ -216,9 +223,17 @@ is its own identity, so the margin is ~7×.
 would be a new dependency class (E9); beside it is not — the repo already ships four curl-using
 scripts, each with an argued failure contract.
 
-**Secrets:** the `ccrc-ddns` pattern exactly — curl in `ExecStart`, credentials expanded by systemd
-from the 0600 `EnvironmentFile`, so the 0644 unit never carries them. The token is never echoed, never
-in argv, never in a log line. The response body is classified and discarded.
+**Secrets:** NOT the `ccrc-ddns` pattern — that pattern expands ONE credential, from ONE 0600
+`EnvironmentFile`, into the process environment for the unit's whole run. This probe reads N
+credentials, one `~/.cc-secrets/<id>-oauth.env` per account, chosen from the roster at runtime, so a
+single `EnvironmentFile` would need either flattening all N into one process environment for the whole
+pass (a larger blast radius, readable via `/proc/<pid>/environ` for the run's entire duration) or a
+generated file keyed by account id that some deploy step must regenerate on every roster change.
+Shipped instead: `ccd-account-health.service` carries **no `EnvironmentFile=`** at all, and the
+executable sources each account's token file in its own subshell (`_ah_token`, `ccd/ccd-account-health`)
+so no export survives past that one curl call. What still holds from the `ccrc-ddns` pattern: the 0644
+unit names no credential and no path into `~/.cc-secrets`, and the token is never echoed, never in
+argv, never in a log line. The response body is classified and discarded.
 
 ---
 
@@ -235,7 +250,7 @@ one-sided change reds on parity alone.
 - **`_avail` is deliberately unchanged.** Unknown stays *available*, so a hard-blocked session always
   has a destination. A rolled-over account is available today (scores 0) and available after (unknown)
   — same answer, honest reason.
-- **A third defect fixed on the way.** The age-fallback path (`server/src/limits.ts:151-152`) produces
+- **A third defect fixed on the way.** The age-fallback path (`server/src/limits.ts:253-254`) produces
   an inferred zero with `rolledOver` left **false**, pinned by fixture — so both UIs render it as a
   measured "0%", the exact collapse `AccountsScreen.tsx` says it never makes. The flag becomes honest.
 

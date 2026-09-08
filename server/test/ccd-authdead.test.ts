@@ -1,11 +1,11 @@
 // `$REG/<account>-authdead` is the account-health probe's durable verdict, in the
 // tree's one fault format — `"<epoch> <reason>"`, the shape `swapblocked` already
-// uses (ccd/ccd:13599). This file pins the READER and the NAMESPACE; the two
+// uses (`_swap_refuse`, ccd/ccd:13793). This file pins the READER and the NAMESPACE; the two
 // placement consumers are pinned in the describes Task 2 adds below.
 //
 // THE DIGITS GATE IS NOT COSMETIC. ccd runs under `set -u`, and every reader of a
 // stamped marker in this file validates the epoch as digits BEFORE any arithmetic
-// touches it (`_auto_swap_check`'s `bts`, ccd/ccd:11909) — a hand-edited or
+// touches it (`_auto_swap_check`'s `bts`, ccd/ccd:12093-12094) — a hand-edited or
 // half-written field otherwise emits an unbound-variable line on every supervise
 // tick. `_authdead` is a predicate rather than an arithmetic reader, so the gate
 // buys something else here: it is what makes a TRUNCATED marker read as "no
@@ -66,9 +66,9 @@ describe('_authdead', () => {
 
 describe('the marker is DOTLESS, so no registry glob can eat it', () => {
   // Every registry glob in ccd is suffix-shaped and runs the same one-dot rule
-  // (`[[ "$suffix" == *.* ]] && continue`) at THREE sites: `_reg_purge`
-  // (ccd/ccd:1656), `_ws_slug_free` (:3757) and `_ws_slug_residue` (:3768). All
-  // three glob `"$REG/$id".*`, which requires a literal dot AFTER the id — so a
+  // (`[[ "$suffix" == *.* ]] && continue`) at THREE sites: `_reg_purge`,
+  // `_ws_slug_free` and `_ws_slug_residue`. All three glob `"$REG/$id".*`,
+  // which requires a literal dot AFTER the id — so a
   // dotless `<account>-authdead` is invisible to them even when a session id
   // collides with it byte for byte. Asserted rather than assumed, because the
   // collision is what a per-account marker in the session namespace risks and it
@@ -214,13 +214,13 @@ describe('a successful spawn is evidence, and clears the marker', () => {
   // an operator has just fixed the credential and started a session on it.
   //
   // rc 0 ONLY, and that is the whole discipline. `cmd_start` clears
-  // `swapblocked` on the ATTEMPT (ccd:12908) because a swap refusal is a stale
+  // `swapblocked` on the ATTEMPT (ccd/ccd:13102) because a swap refusal is a stale
   // banner an operator supersedes by acting. An auth-dead marker is a
   // MEASUREMENT: clearing it on an attempt would erase a true fault with no
   // evidence. rc 2 is "waiting for login" and rc 5 is "hard-blocked at startup
   // (limit/spend banner, or lost auth)" — both are the OPPOSITE of evidence.
-  // `|| true` IS LOAD-BEARING. `_spawn_settle` ends in `return "$prompt_rc"`
-  // (ccd/ccd:12561), so the rc 2 and rc 5 cases make the `bash -c` exit 2 and 5
+  // `|| true` IS LOAD-BEARING. `_spawn_settle` ends in `return "$prompt_rc"`,
+  // so the rc 2 and rc 5 cases make the `bash -c` exit 2 and 5
   // — and `makeCcdHarness`'s `sh` is `execFileSync`, which THROWS on any
   // non-zero exit (ccd runs `set -uo pipefail`, no `-e`, so nothing else
   // rescues it). Swallowing the code here is what makes those two cases assert
