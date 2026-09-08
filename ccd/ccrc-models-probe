@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# ccrc-models-probe — fetch one lane's model catalogue and write it to
+# ~/.ccrc/models/<accountId>.json (spec §5).
+#
+# KEYED BY PROBE KIND, NOT BY PROVIDER. Round-2 ruling 10: `codex`,
+# `openrouter`, `compatible` — exactly the `probe` field of that lane's
+# ~/.ccrc/models/<accountId>.classes.json. `openai` is the account-connections
+# branch's ProviderId, that branch is not on main, and this tool refuses the
+# spelling by name so a stale caller fails loudly rather than writing a
+# catalogue nothing here can parse.
+#
+# ONE EXECUTABLE, ONE ARM PER KIND, because the three fetches have nothing in
+# common but their answer: Codex needs the lane's OAuth through LiteLLM's own
+# `Authenticator` (the token refresh lives there, and `ccgpt-usage` already
+# reaches it exactly this way — read that file, it is the model this arm
+# copies); OpenRouter's list needs no credential at all; a `compatible`
+# endpoint needs the lane's token and may not answer at all. What they share is
+# the NORMALISER and the WRITE, and those are single here.
+#
+# ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
+# The catalogue is read by another process (the server's fleet poll, ccd, the
+# verbs), so it lands tmp + `mv -f` — this repo's rule for any such file. And a
+# failed probe NEVER deletes a catalogue: it rewrites the previous one with
+# `stale: true` and the error text in `lastError` (§11), because "the network
+# was down for an hour" must not read on every surface as "every model this lane
+# had is retired".
+#
+# IT NEVER TOUCHES <accountId>.classes.json. That file is the operator's
+# registry, written only by the verbs (§4.1).
+#
+# ── THE ONE TEST SEAM ─────────────────────────────────────────────────────
+# `CCRC_MODELS_PROBE_FIXTURE`, when set, replaces the FETCH — and only the
+# fetch — with a read of the named file. It exists so the suite can drive every
+# arm, the normaliser and both failure paths without a packet leaving the box;
+# a missing file through it is exactly a failed fetch, which is how the stale
+# path is driven. It is read in ONE place, and `server/test/models-probe.test.ts`
+# asserts that: a seam in two branches would be a second implementation of
+# "fetch" and the network arm would stop being the thing under test.
+set -uo pipefail
+
+PROG="ccrc-models-probe"
+# The client version the Codex catalogue endpoint is asked for. A CONSTANT,
+# bumped deliberately (§5): OpenAI's backend keys what it advertises on it, so
+# tracking it automatically would change this box's model set without anybody
+# deciding to.
+CODEX_CLIENT_VERSION="0.160.0"
+# `shared/roster.ts`'s ID_RE, in bash. An account id becomes a filename here.
+ID_RE='^[a-z][a-z0-9-]{0,31}$'
+
+die() { echo "$PROG: $*" >&2; exit 1; }
+usage() {
+  echo "usage: $PROG <accountId> <probe> [--base-url <url>] [--out <path>]" >&2
+  echo "       <probe> is codex, openrouter or compatible — the registry file's own probe kind" >&2
+}
+usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
+
+ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""
+[ $# -ge 1 ] || usage_die "an account id is required"
+ACCOUNT="$1"; shift
+[ $# -ge 1 ] || usage_die "a probe kind is required"
+PROBE_KIND="$1"; shift
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base-url) [ $# -ge 2 ] || usage_die "--base-url needs a value"; BASE_URL="$2"; shift 2 ;;
+    --out)      [ $# -ge 2 ] || usage_die "--out needs a value";      OUT="$2";      shift 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *) usage_die "unknown argument: $1" ;;
+  esac
+done
+
+[[ "$ACCOUNT" =~ $ID_RE ]] \
+  || usage_die "\"$ACCOUNT\" is not an account id: a lowercase letter followed by up to 31 of letters, digits and \"-\". The id becomes a filename under ~/.ccrc/models, which is why the charset is narrow."
+
+case "$PROBE_KIND" in
+  codex|openrouter|compatible) : ;;
+  openai) usage_die "the Codex probe kind is spelled \"codex\", not \"openai\": this tool is keyed by the registry file's probe kind and not by an account's provider (spec §4.1). Nothing was written." ;;
+  anthropic) usage_die "anthropic lanes have no catalogue to probe — their four classes are Claude Code's own defaults and they carry no registry file (spec §5). Nothing was written." ;;
+  *) usage_die "unknown probe kind \"$PROBE_KIND\": it must be one of codex, openrouter, compatible" ;;
+esac
+
+MODELS_DIR="$HOME/.ccrc/models"
+[ -n "$OUT" ] || OUT="$MODELS_DIR/$ACCOUNT.json"
+
+TMPD="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-models-probe.XXXXXX")" || die "could not make a temp directory"
+trap 'rm -rf "$TMPD"' EXIT
+RAW="$TMPD/raw.json"
+NORM="$TMPD/catalogue.json"
+
+# ── the fetch ────────────────────────────────────────────────────────────
+# Each arm writes the provider's RAW body to $RAW and returns non-zero when it
+# could not. Nothing here interprets the body; that is the normaliser's job, in
+# one place, for all three.
+_fetch_codex() {
+  # `ccgpt-usage`'s own preamble, verbatim in intent: the venv python beside the
+  # litellm binary, falling back to the system one, and the token directory the
+  # wrapper exports. `Authenticator().get_access_token()` REFRESHES an expired
+  # token, which is the whole reason this arm goes through LiteLLM rather than
+  # reading auth.json itself.
+  local venv_py token_dir
+  venv_py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"
+  [ -x "$venv_py" ] || venv_py="python3"
+  token_dir="${CHATGPT_TOKEN_DIR:-$HOME/.handoff/chatgpt-auth}"
+  [ -f "$token_dir/auth.json" ] \
+    && CHATGPT_TOKEN_DIR="$token_dir" CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" \
+       "$venv_py" - > "$RAW" <<'PY'
+import json, os, sys, urllib.request
+from litellm.llms.chatgpt.authenticator import Authenticator
+
+token_dir = os.environ["CHATGPT_TOKEN_DIR"]
+account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
+token = Authenticator().get_access_token()
+headers = {"Authorization": f"Bearer {token}", "User-Agent": "codex-cli"}
+if account_id:
+    headers["ChatGPT-Account-Id"] = account_id
+url = ("https://chatgpt.com/backend-api/codex/models?client_version="
+       + os.environ["CODEX_CLIENT_VERSION"])
+req = urllib.request.Request(url, headers=headers)
+sys.stdout.write(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
+PY
+}
+
+_fetch() {
+  # THE ONE READ OF THE SEAM. Everything below it is the real network.
+  if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW"; return; fi
+  case "$PROBE_KIND" in
+    codex) _fetch_codex ;;
+    *) echo "$PROG: probe kind \"$PROBE_KIND\" has no fetch arm in this build" >&2; return 1 ;;
+  esac
+}
+
+# ── the normaliser ───────────────────────────────────────────────────────
+# ONE python program for every arm: it reads the raw body on stdin, the probe
+# kind on argv, and writes `Catalogue` JSON (shared/models.ts) on stdout. It
+# REFUSES THE WHOLE RESPONSE on a model with no id (§11) — writing the good
+# rows would retire the bad one on every surface, which is a warning about a
+# model that answers fine.
+_normalise() {
+  # `python3 /dev/fd/3 … 3<<'PY'`, not `python3 - … <<'PY'`: the latter reads
+  # the PROGRAM from stdin, so the heredoc and `< "$RAW"` both target fd 0 and
+  # the heredoc wins — `json.load(sys.stdin)` sees EOF on every input.
+  # Measured directly against this exact line; `ccd`'s `_pr_py` documents and
+  # fixes the identical conflict the same way (see its comment there).
+  python3 /dev/fd/3 "$PROBE_KIND" < "$RAW" > "$NORM" 3<<'PY'
+import json, sys, time
+
+probe = sys.argv[1]
+
+def fail(msg):
+    sys.stderr.write(msg + "\n")
+    raise SystemExit(3)
+
+try:
+    raw = json.load(sys.stdin)
+except ValueError as e:
+    fail("the provider's response is not JSON: %s" % e)
+
+def num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+def codex_models(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
+        fail("the Codex catalogue has no `models` array — the endpoint's shape has drifted")
+    out = []
+    for i, m in enumerate(raw["models"]):
+        if not isinstance(m, dict):
+            fail("Codex models[%d] is not an object" % i)
+        mid = m.get("slug") or m.get("id")
+        if not isinstance(mid, str) or not mid:
+            fail("Codex models[%d] has no slug" % i)
+        levels = m.get("supported_reasoning_levels") or m.get("reasoning_levels") or []
+        efforts = []
+        for e in levels if isinstance(levels, list) else []:
+            name = e.get("effort") if isinstance(e, dict) else e
+            if isinstance(name, str) and name:
+                efforts.append(name)
+        label = m.get("display_name") or m.get("name") or mid
+        out.append({
+            "id": mid, "label": label,
+            "context": num(m.get("context_window")),
+            "maxContext": num(m.get("max_context_window")),
+            "efforts": efforts,
+            "hidden": m.get("visibility") == "hide",
+            "priceIn": None, "priceOut": None,
+        })
+    return out
+
+ARMS = {"codex": codex_models}
+if probe not in ARMS:
+    fail("no normaliser arm for probe kind %r in this build" % probe)
+
+json.dump({
+    "probe": probe,
+    "fetchedAt": int(time.time()),
+    "stale": False,
+    "models": ARMS[probe](raw),
+}, sys.stdout)
+PY
+}
+
+# ── stale-on-failure ─────────────────────────────────────────────────────
+# Rewrites the EXISTING catalogue with `stale: true` and `lastError`, keeping
+# its models and its `fetchedAt` — the reader needs to know how old the data it
+# is looking at really is, so the timestamp must not be refreshed by a run that
+# fetched nothing.
+_mark_stale() {   # <reason>
+  [ -f "$OUT" ] || {
+    echo "$PROG: $1 — and this lane has no previous catalogue, so nothing was written." >&2
+    return 1
+  }
+  local why="$1"
+  CCRC_STALE_WHY="$why" python3 - "$OUT" "$TMPD/stale.json" <<'PY' || return 1
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+try:
+    cat = json.load(open(src))
+except ValueError:
+    raise SystemExit(1)
+cat["stale"] = True
+cat["lastError"] = os.environ["CCRC_STALE_WHY"]
+json.dump(cat, open(dst, "w"))
+PY
+  mv -f "$TMPD/stale.json" "$OUT" || return 1
+  echo "$PROG: $why — keeping the previous catalogue, marked stale." >&2
+  return 1
+}
+
+mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
+
+if ! _fetch 2>"$TMPD/fetch.err"; then
+  _mark_stale "the $PROBE_KIND catalogue fetch for \"$ACCOUNT\" failed: $(tr '\n' ' ' < "$TMPD/fetch.err" | cut -c1-300)"
+  exit 1
+fi
+if ! _normalise 2>"$TMPD/norm.err"; then
+  _mark_stale "the $PROBE_KIND response for \"$ACCOUNT\" was refused: $(tr '\n' ' ' < "$TMPD/norm.err" | cut -c1-300)"
+  exit 1
+fi
+
+# 0600 before the rename, not after: the file is world-readable for the width of
+# an fchmod otherwise, and an OpenRouter catalogue carries the lane's price list.
+chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
+mv -f "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
+exit 0
