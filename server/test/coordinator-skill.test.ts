@@ -862,7 +862,14 @@ describe('the graph-card paragraph describes the card ccd/session-hook.sh actual
     // The no-graph arm returns SILENTLY unless the sweep census carries a row
     // for the tree, and prints a DIFFERENT sentence when it does. A coordinator
     // told every session prints a card reads a missing one as a fault.
-    const m = /_hook_emit_context "graphify: ([^"$]+?) —/.exec(hook);
+    //
+    // Anchored on the BUILDER assignment (`CARD_GRAPH="graphify: ..."`), not on
+    // `_hook_emit_context` directly — Task 3's refactor moved this sentence from
+    // an inline emit into `CARD_GRAPH`, composed with the rest of `CARD` and
+    // emitted once, later, from a variable (`_hook_emit_context "$CARD"`, which
+    // this regex cannot match). The sentence itself is unchanged; only the
+    // statement holding it moved. If it moves again, move this anchor with it.
+    const m = /CARD_GRAPH="graphify: ([^"$]+?) —/.exec(hook);
     expect(m, 'ccd/session-hook.sh emits no no-graph sentence — this pin is looking at the ' +
       'wrong file, or the refused-tree arm lost its one quotable line').not.toBeNull();
     expect(para(), 'the paragraph never quotes the line a refused tree gets instead of a card')
