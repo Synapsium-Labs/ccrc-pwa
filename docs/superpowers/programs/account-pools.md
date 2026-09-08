@@ -1214,3 +1214,39 @@ written down was wrong. Caught only because `grep -n '^_reg_read'` came back emp
 just read in the deployed file. **Standing rule: a coordinator citing source in a report anchors to
 `origin/main` explicitly, never to its own checkout** — the branch a coordinator sits on is the one tree
 in the fleet with no reason to be current.
+
+### Why I "invented" that rule — measured, and it was structural
+
+The error I booked on 2026-09-08 as *"an exhaustive measurement with a wrong inference drawn from it"*
+has a better explanation than the one I gave it. I searched for a rule, found nothing across three
+searches, concluded I had invented it, and the worker refuted me by citing `account-pools-program.md:19`
+in project memory. I recorded the lesson as *"a negative search proves what it SEARCHED"* and moved on.
+
+Measured now, per-project memory under `projects/-mnt-HC-Volume-105751470-projects-ccrc-pwa/memory/`:
+
+    ~/.claude          29 files
+    ~/.claude-corp     15 files
+    ~/.claude-dev0      9 files
+    ~/.claude-expoai    0 files   <- this coordinator's root
+
+Fleet sessions run under at least **four `CLAUDE_CONFIG_DIR` roots, each with its own per-project
+memory, and those memories have diverged** — the three surviving copies of `account-pools-program.md`
+carry three different md5s, and 27 files exist under `~/.claude` that do not exist under
+`~/.claude-corp`, including every standing rule written for this program.
+
+So neither of us was wrong about what we could see. From this session's root the project memory is
+genuinely, entirely empty, and my search was exhaustive over the only root I have. The lesson I wrote
+was true but soft. **The hard version: the artifacts that steer sessions are not shared between
+sessions at all.** A rule written to memory by the coordinator reaches no worker; a rule a worker cites
+may be invisible to the coordinator; and a program that relies on either is relying on a coincidence of
+config roots.
+
+**Standing rule: the git-tracked ledger and ccrc mail are the only surfaces a fleet program may treat
+as shared.** This ledger has been "mine alone to write" as a matter of ownership hygiene; it is now
+load-bearing for a second reason — it is the one thing every session can actually read. Anything that
+must steer a peer goes here or in mail, never in memory.
+
+Not fixed unilaterally, deliberately: reconciling four divergent stores means writing into three roots
+this session does not own, and one of the memories under `~/.claude` is named
+`ccrc-never-writes-files-it-does-not-own.md` — which this coordinator cannot read from its own root,
+and whose filename alone settles the question. Flagged to the operator as an ops decision.
