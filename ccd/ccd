@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=44c2bf7f8cfba79c4ff5cbe357c6e077bbad2e24323e039d0fc9afd518dde0a0
+# ccrc:generated 1 sha256=d90a29110afee4b60f31f484dd635042370de980a7a73bceb8604cc64838d1c6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3821,7 +3821,9 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # UNKNOWN IS NOT UNPLACEABLE either. On a fresh box nothing has reported yet,
   # and refusing to place work there would break first run, so if NO account was
   # measured this falls back to the first _account_ok account in iteration order
-  # — same rule, same answer, as the server's projectHome (server/src/limits.ts).
+  # THAT THE HEALTH PROBE HAS NOT CONDEMNED — and only if every one of them is
+  # condemned, to the first condemned one. Same rule, same two tiers, same
+  # answer, as the server's projectHome (server/src/limits.ts).
   #
   # The server's copy (projectHome, server/src/limits.ts) is stricter about
   # "unknown" in exactly ONE way this is not, and it is stated here rather than
@@ -3864,18 +3866,19 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # THE RULE ACROSS ALL THREE UNKNOWN-HANDLING SITES, stated precisely because
   # the loose form of it ("unmeasured never wins") is contradicted two lines
   # below by this function's own fallback: PREFER MEASURED ACCOUNTS; IF NONE IS
-  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER. Skipping
-  # here and ranking-last in `_swap_target` are the two affordable spellings of
-  # the same preference — this function can skip because it HAS that fallback,
-  # and the rescue loop cannot because its "no candidate" answer strands a stuck
-  # session. `_avail` stays permissive because it answers eligibility, not rank.
+  # MEASURED, FALL BACK TO THE FIRST HOME-ABLE ACCOUNT IN ROSTER ORDER THAT THE
+  # HEALTH PROBE HAS NOT CONDEMNED. Skipping here and ranking-last in
+  # `_swap_target` are the two affordable spellings of the same preference —
+  # this function can skip because it HAS that fallback, and the rescue loop
+  # cannot because its "no candidate" answer strands a stuck session. `_avail`
+  # stays permissive because it answers eligibility, not rank.
   # Full reasoning on `_avail`.
   #
   # CCRC_HOME_ABLE is in roster declaration order (shared/generate.mjs emits
-  # roster.homeAble as-is), and that order is load-bearing twice over: the
-  # `first` fallback below takes the first placeable account, and the tie-break
-  # is a STRICT `<`, so the first home-able account also wins every tie. The
-  # server's `projectHome` ranks ties by the same declaration order.
+  # roster.homeAble as-is), and that order is load-bearing twice over: each
+  # fallback tier below takes the first placeable account IN ITS TIER, and the
+  # tie-break is a STRICT `<`, so the first home-able account also wins every
+  # tie. The server's `projectHome` ranks ties by the same declaration order.
   #
   # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
   # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
@@ -3897,28 +3900,64 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
   # is no second channel on this seam — stdout carries a wrapper name — so the
   # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  #
+  # WHAT "" NEVER MEANS IS "every in-pool lane is condemned", and that is why
+  # `cmd_ws_add`'s reason builder needs no auth-dead arm: this function answers
+  # a lane in that case (see the tiers at the end of the loop). Both meanings ""
+  # does carry are things a human declared or must repair; a health verdict is a
+  # measurement that can be wrong.
   local pps; pps=$(_project_pool_state "${1-}")
-  local best="" bs=1000 first="" w sc
+  local best="" bs=1000 first="" condemned="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
-    # AFTER `_account_ok`, BEFORE `first`: the fallback below must land on the
-    # first IN-POOL account, never on a cheaper-looking lane in another pool.
+    # AFTER `_account_ok`, BEFORE EITHER FALLBACK: both must land on an IN-POOL
+    # account, never on a cheaper-looking lane in another pool.
     _pool_ok "$w" "$pps" || continue
+    # TWO FALLBACK TIERS, AND THE SPLIT IS THE WHOLE GUARD. An auth-dead lane
+    # must not be PREFERRED — it is a measurement that a credential no longer
+    # authenticates — but it must stay ELIGIBLE, because that measurement can be
+    # wrong and no destination at all is worse than a bad one (`_authdead`'s
+    # header: it never joins `_account_ok`). Those two are compatible only with
+    # a SECOND fallback, which is what this branch builds: `first` collects the
+    # first candidate NOBODY CONDEMNED, `condemned` the first condemned one, and
+    # the condemned tier is reached below only when `first` is empty — i.e. only
+    # when every in-pool lane is condemned.
+    #
+    # BOTH ONE-VARIABLE SPELLINGS ARE WRONG, and this function shipped the first
+    # of them (D-1954). Assigning a single `first` ABOVE this skip takes the
+    # first candidate in roster order whether or not the probe has condemned it,
+    # so on a fleet where nothing is measured — a fresh box, or every window
+    # rolled over at once — placement lands on a lane measured DEAD while a
+    # healthy lane sits one position behind it. Assigning it BELOW the skip is
+    # the other wrong answer: it empties the fallback on an all-condemned fleet,
+    # this function answers "", and `cmd_ws_add` dies with no destination for a
+    # reason no operator asked for. The pair of variables is what satisfies both.
+    if _authdead "$w"; then
+      [[ -z "$condemned" ]] && condemned="$w"
+      continue
+    fi
     [[ -z "$first" ]] && first="$w"
-    # AFTER `first`, BEFORE the score — the mirror of the `_pool_ok` note above,
-    # and the placement is the whole guard. An auth-dead lane must not be
-    # PREFERRED (it is a measurement that a credential no longer authenticates),
-    # but it must stay reachable as the fallback: a skip written one line higher
-    # empties `first` on a fleet where every in-pool lane is condemned, this
-    # function answers "", and `cmd_ws_add` dies with no destination — for a
-    # reason no operator asked for. Same asymmetry, same reason, as the
-    # unmeasured skip below it: this function can skip a SCORE because it has a
-    # fallback; it can never skip a CANDIDATE.
-    _authdead "$w" && continue
     sc=$(_limit_score "$w"); [[ -z "$sc" ]] && continue
     (( sc < bs )) && { bs=$sc; best="$w"; }
   done
+  # THREE TIERS, WIDENING: the cheapest MEASURED lane nobody condemned; then the
+  # first UNMEASURED lane nobody condemned; then — only when every in-pool lane
+  # is condemned — the first CONDEMNED one, in the same roster declaration order
+  # every other answer here uses.
+  #
+  # THE LAST TIER IS A LANE, NOT "". That is the deliberate half of the decision
+  # and it is not the same call as the all-disabled one: `""` above means
+  # ELIGIBILITY IS EXHAUSTED — an operator switched every lane off, or a wrapper
+  # is missing, or the pool tag is undecidable — and every one of those is
+  # something a human did or must fix before work can land. A health verdict is
+  # neither: it is a MEASUREMENT, it can be wrong, and letting it empty this
+  # function would let one bad probe run wedge every `ws-add` on the box.
+  # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
+  # The server's `projectHome` (server/src/limits.ts) makes both calls the same
+  # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
+  # day either side changes its mind is the day the suite says so.
   [[ -z "$best" ]] && best="$first"
+  [[ -z "$best" ]] && best="$condemned"
   echo "$best"
 }
 

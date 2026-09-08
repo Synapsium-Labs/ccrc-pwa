@@ -136,17 +136,29 @@ const measured = (l: AccountLimits | undefined): number | null =>
  *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:252)
  *     gates `_ws_least_loaded` on exactly that marker.
  *   - `authDead` — the health probe measured this credential dead, so its
- *     telemetry describes a lane nothing can run on. It leaves SCORING only;
- *     unlike the two above it, it does not leave `live`, because ccd's own
- *     fallback does not exclude it either.
+ *     telemetry describes a lane nothing can run on. It leaves SCORING and it
+ *     is DEPRIORITISED in the fallback; unlike the two above it, it never
+ *     leaves `live`, because a measurement can be wrong and ccd's own placement
+ *     rule keeps a condemned lane eligible for the same reason.
  *
  * UNKNOWN IS ALSO NOT UNPLACEABLE. On a fresh install nothing has reported yet,
  * so if excluding unmeasured accounts could empty the field, this would return
  * `null` and the PWA would announce that no account can take a workspace — on
  * the exact first-run path this whole stage exists to make work. The fallback
  * is therefore explicit: when NOTHING is measured, the first home-able account
- * in roster order, at score 0 — which is what ccd does with an empty
- * `~/.cc-limits` too.
+ * in roster order THAT THE HEALTH PROBE HAS NOT CONDEMNED, at score 0 — which
+ * is what ccd does with an empty `~/.cc-limits` too.
+ *
+ * AND THE FALLBACK HAS TWO TIERS, for the reason the scored set has none: a
+ * condemned lane must not be PREFERRED, but it must stay ELIGIBLE, because the
+ * verdict is a measurement and a measurement can be wrong. One tier cannot say
+ * both — preferring the first candidate outright places work on a lane already
+ * measured dead while a healthy one sits behind it (the shipped defect, D-1954),
+ * and filtering condemned lanes out of the fallback altogether answers `null` on
+ * an all-condemned fleet, which would wedge every `ws-add` on one bad probe run.
+ * So: first the healthy unmeasured lanes, and only if EVERY home-able lane is
+ * condemned, the first condemned one. `null` stays reserved for the case a
+ * human declared — every home-able lane disabled — exactly as ccd's `""` does.
  *
  * Note what is deliberately NOT here: `_ws_least_loaded` applies no `_avail` /
  * SWAP_CEILING filter, so it returns the minimum even when every account is
@@ -168,21 +180,31 @@ export function projectHome(roster: Roster, limits: Record<string, AccountLimits
   const live = roster.homeAble.filter((a) => limits[a.id]?.disabled !== true);
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
-  // AN AUTH-DEAD ACCOUNT LEAVES THE SCORED SET AND NOTHING ELSE, and the
-  // asymmetry is a mirror, not a preference. `_ws_least_loaded` assigns its
-  // `first` fallback BEFORE its own `_authdead … && continue`, so a fleet whose
-  // every home-able lane is condemned still places work on the first one in
-  // roster order. Filtering `live` or `scorable` here instead would make this
-  // side answer a different account — or `null` — and `projected-home.test.ts`
-  // drives both languages over one seeded HOME precisely to catch that.
+  // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
+  // reads `_authdead` once per candidate and spends the answer twice: a
+  // condemned lane never enters the scored comparison, and it lands in the
+  // second fallback tier rather than the first. Both sides therefore drop a
+  // condemned lane from `scored` and from the PREFERRED fallback, and neither
+  // drops it from `live` — `projected-home.test.ts` drives the two over one
+  // seeded HOME precisely to catch a side that changes its mind about either.
+  //
+  // ABSENCE PERMITS: `!== true`, so an older `readLimits` (or an older agent
+  // payload) that omits the field reads as NOT condemned, never as condemned.
+  const notCondemned = (a: { id: string }): boolean => limits[a.id]?.authDead !== true;
   const scored = scorable
-    .filter((a) => limits[a.id]?.authDead !== true)
+    .filter(notCondemned)
     .map((a) => ({ wrapper: a.id, score: measured(limits[a.id]) }))
     .filter((s): s is { wrapper: string; score: number } => s.score !== null);
-  // `scorable[0] ?? live[0]!`: a roster whose every home-able account opts out
-  // of telemetry still has to place work somewhere, and `live` is provably
-  // non-empty two lines up.
-  if (scored.length === 0) return { wrapper: (scorable[0] ?? live[0]!).id, score: 0 };
+  // THE FALLBACK CHAIN IS THE TWO TIERS, WIDENING, and every link is load-bearing:
+  // the healthy lanes that can report, then the healthy lanes that never will
+  // (a roster whose every home-able account opts out of telemetry still has to
+  // place work somewhere), then the condemned ones on the same two terms. `live`
+  // is provably non-empty above, so the final `live[0]!` always exists.
+  if (scored.length === 0) {
+    const base = scorable.find(notCondemned) ?? live.find(notCondemned)
+              ?? scorable[0] ?? live[0]!;
+    return { wrapper: base.id, score: 0 };
+  }
   return scored.reduce((best, cand) => (cand.score < best.score ? cand : best));
 }
 

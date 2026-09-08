@@ -28,9 +28,12 @@ export interface LeastLoadedCase {
   disabled?: string[];
   /** Wrappers carrying a `<w>-authdead` marker — the account-health probe's
    *  verdict, in the same registry directory as `-disabled` and read on the same
-   *  `readdir`. It ranks an account out of SCORING on both sides, and out of
-   *  neither side's fallback: ccd assigns `first` BEFORE its skip, so the TS
-   *  must drop the account from `scored` and leave `live`/`scorable[0]` alone.
+   *  `readdir`. It ranks an account out of SCORING on both sides AND out of the
+   *  PREFERRED fallback tier on both sides, and out of ELIGIBILITY on neither:
+   *  when every home-able lane is condemned each side still names one, because
+   *  the verdict is a measurement and a measurement can be wrong. Three cases
+   *  below pin the three answers (`authdead-loses-scoring`,
+   *  `authdead-loses-the-fallback-too`, `all-condemned-unmeasured-still-places`).
    *  Omitted/empty means nothing is condemned. */
   authDead?: string[];
   /** Wrappers carrying a `<w>-authdead` marker whose CONTENT is present but
@@ -209,6 +212,53 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: { wrapper: 'claude-b', score: 40 },
       why: 'the cheapest lane is condemned, so the cheapest lane nobody condemned wins — '
         + 'a health verdict costs preference, never eligibility',
+    },
+    {
+      name: 'authdead-loses-the-fallback-too',
+      // NOTHING is measured — a fresh box, or the `all-rolled-over` shape above
+      // — so neither side can rank at all and both land on their fallback. The
+      // first lane in roster order is condemned, and the fallback must step over
+      // it: the shipped defect took the first candidate whether or not the probe
+      // had already measured it dead, so a healthy lane one position behind sat
+      // idle while placement landed on a credential that no longer authenticates.
+      files: {},
+      authDead: ['claude'],
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'with nothing measured the fallback decides, and a condemned lane is not '
+        + 'where it lands while a lane nobody condemned is available — a health verdict '
+        + 'costs preference in the FALLBACK too, not only in the scoring',
+    },
+    {
+      name: 'condemned-lane-is-the-only-measured-one',
+      // The same rule reached the other way round, and the shape a real fleet
+      // hits: the probe condemns the one lane that has telemetry, so the scored
+      // set empties and the fallback runs even though `.cc-limits` is not.
+      // `claude`'s 5 is on disk and must buy it nothing.
+      files: { claude: fresh(5, 3) },
+      authDead: ['claude'],
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'a condemned lane is dropped from scoring, so an empty scored set does not '
+        + 'mean an empty limits dir — the fallback still has to step over it, and its '
+        + 'real measured 5 must not rescue it',
+    },
+    {
+      name: 'all-condemned-unmeasured-still-places',
+      // THE OTHER HALF OF THE DECISION, and the one that is not symmetrical with
+      // `all-disabled` above. Every home-able lane is condemned and nothing is
+      // measured, and both sides still NAME a lane rather than answering
+      // null/"": `-disabled` is an operator's declaration and empties the field
+      // legitimately, while `-authdead` is a measurement that can be wrong, and
+      // letting one bad probe run wedge every ws-add on the box is the outcome
+      // neither language may produce. The measured variant of this case lives in
+      // the runner instead — the two sides agree on the ACCOUNT there and cannot
+      // agree on the score (D-1932) — so this one carries the rule into the
+      // shared fixture where both sides are driven over the same bytes.
+      files: {},
+      authDead: ['claude', 'claude-a', 'claude-b', 'claude-d'],
+      expect: { wrapper: 'claude', score: 0 },
+      why: 'every lane condemned is not every lane disabled: the fallback widens to the '
+        + 'condemned tier and answers the first lane in roster declaration order, because '
+        + 'a health verdict must never be the thing that leaves a box with no destination',
     },
     {
       name: 'malformed-authdead-marker-is-not-dead',

@@ -212,6 +212,37 @@ describe('projectHome ranks unmeasured below measured', () => {
     expect(projectHome(r, {})).toEqual({ wrapper: 'a', score: 0 });
   });
 
+  it('the fallback steps over a condemned lane when a healthy one is behind it', () => {
+    // NOTHING is measured, so the fallback alone decides — and `a`, first in
+    // declaration order, is condemned. The shipped defect answered `a` here:
+    // one fallback variable cannot say both "not preferred" and "still
+    // eligible", so it said neither and placement landed on a credential the
+    // probe had already measured dead.
+    expect(projectHome(r, { a: { ...L(null, null), authDead: true } })).toEqual({ wrapper: 'b', score: 0 });
+  });
+
+  it('…and falls back to a condemned lane only when EVERY home-able lane is condemned', () => {
+    // The second tier, and the deliberate half of the decision: `null` is
+    // reserved for what a human declared (every lane disabled, the case below).
+    // A probe verdict is a measurement, it can be wrong, and one bad run must
+    // not leave the box with no destination at all — so the answer here is the
+    // least-bad lane, in the same roster order every other answer uses. `g`
+    // being telemetry:'none' is deliberate too: the chain widens through
+    // `scorable` before `live`, and both are all-condemned here.
+    expect(projectHome(r, {
+      a: { ...L(null, null), authDead: true },
+      b: { ...L(null, null), authDead: true },
+      g: { ...L(null, null), authDead: true },
+    })).toEqual({ wrapper: 'a', score: 0 });
+  });
+
+  it('a condemned lane never re-enters the PREFERRED tier by being measured', () => {
+    // `a` is the only account anyone has measured, and it is condemned: the
+    // scored set empties, and the fallback must still step over it rather than
+    // read "the scored set is empty" as "nothing is measured, take the first".
+    expect(projectHome(r, { a: { ...L(5, 5), authDead: true } })).toEqual({ wrapper: 'b', score: 0 });
+  });
+
   it('still returns null when every home-able lane is disabled', () => {
     // Unplaceable is still a real answer, and it is this one — not "unmeasured".
     expect(projectHome(r, {
@@ -280,7 +311,7 @@ describe('projectHome ranks unmeasured below measured', () => {
 // score divergence is recorded as a deviation rather than smuggled through a
 // fixture field that would let any FUTURE case disagree quietly — which is the
 // one thing a parity harness may not allow.
-describe('every home-able lane condemned — both sides still place', () => {
+describe('every home-able lane condemned AND measured — both sides still place', () => {
   it('falls back to the first home-able account in roster declaration order', async () => {
     const n = now();
     const fresh = (five: number, seven: number): string => JSON.stringify(
@@ -290,9 +321,20 @@ describe('every home-able lane condemned — both sides still place', () => {
     seedAuthDead(['claude', 'claude-a', 'claude-b', 'claude-d']);
     const cfg = loadConfig({ CCRC_HOME: home });
     const projected = projectHome(cfg.roster, await readLimits(localIO, cfg));
-    // NOT null, and not the cheapest lane: ccd assigns `first` BEFORE its own
-    // skip, so a fleet whose every lane is merely UNVERIFIED still places work.
+    // NOT null, and not the cheapest lane: both sides widen to their CONDEMNED
+    // fallback tier here — reached only because no lane escaped it — so a fleet
+    // whose every lane is merely UNVERIFIED still places work, in roster
+    // declaration order. `all-condemned-unmeasured-still-places` in the shared
+    // fixtures pins the same rule over bytes whose score both sides agree on;
+    // this case exists for the measured shape those cannot express.
     expect(projected?.wrapper, 'the server refuses to place on an all-condemned fleet').toBe('claude');
     expect(sh('_ws_least_loaded'), 'ccd disagrees').toBe('claude');
+    // …and the condemned tier is the LAST resort, not a peer of the others:
+    // un-condemn one lane and that lane takes the placement back, even though it
+    // is not the cheapest one on the box (`claude-a` at 5 is, and stays dead).
+    seedAuthDead(['claude', 'claude-a', 'claude-d']);
+    const cfg2 = loadConfig({ CCRC_HOME: home });
+    expect((projectHome(cfg2.roster, await readLimits(localIO, cfg2)))?.wrapper).toBe('claude-b');
+    expect(sh('_ws_least_loaded'), 'ccd disagrees').toBe('claude-b');
   });
 });

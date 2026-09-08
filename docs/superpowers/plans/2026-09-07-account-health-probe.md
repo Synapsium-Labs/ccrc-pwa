@@ -3000,13 +3000,18 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   Those two are only compatible at one insertion point: **after** `[[ -z "$first" ]] && first="$w"`
   and **before** the score. Written one line higher, `_ws_least_loaded` answers `""` on an
   all-condemned fleet and `cmd_ws_add` dies. Task 2 fixes the placement and measures it by MOVING the
-  guard, not by deleting it.
+  guard, not by deleting it. **Necessary but not sufficient — see D-1954:** those two requirements are
+  not compatible at ANY single insertion point, because one fallback variable cannot say both "not
+  preferred" and "still eligible". The shipped ordering is the safe half of the pair and the two-tier
+  fallback is the whole of it.
 
 - **D-1931** — the same defect in the other language, and it would not
   have been caught by porting the bash line naively: `projectHome`'s fallback base is
   `scorable[0] ?? live[0]`, so filtering `authDead` out of `live` or `scorable` makes the server
   answer a different account — or `null` — than ccd does on the identical HOME. Task 8 filters
-  `scored` alone and measures the divergence with the shared parity fixture.
+  `scored` alone and measures the divergence with the shared parity fixture. **Amended by D-1954:**
+  mirroring ccd faithfully was right and what it mirrored was half a rule; both sides now carry the
+  same two-tier fallback and the same parity fixture still measures it.
 
 - **D-1932** — the all-condemned case cannot live in the shared parity
   fixture, and the reason is a real divergence rather than a harness detail. `projected-home.test.ts`
@@ -3078,8 +3083,42 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   run **before the first fleet deploy** — a wrong origin makes every account read "unmeasured" for
   ever, which is silent by construction.
 
+- **D-1954** — the fallback D-1930 and D-1931 defend is REACHED BY A
+  CONDEMNED LANE THAT NOTHING ELSE FORCED. Measured on this branch: `_ws_least_loaded` assigns
+  `first` before `_authdead … && continue`, and `projectHome` filters `authDead` out of `scored` while
+  its `scored.length === 0` fallback takes `scorable[0] ?? live[0]`. Both are the SAME defect and both
+  languages had it, so the parity harness saw nothing: when nothing is measured — a fresh box, or
+  every window rolled over at once, the live `all-rolled-over` shape — placement lands on the first
+  lane in roster order **whether or not the probe has already measured its credential dead**, while a
+  healthy lane sits one position behind it. D-1930 recorded the insertion point as the reconciliation
+  of "skip it" with "keep it eligible"; it is not one, and the ruling on this branch that called
+  `_ws_least_loaded` "already durably guarded" against auth-dead was wrong on the same point. The
+  DECISION that ruling justified — auth-dead gets its own rank tier rather than an exclusion — stands
+  and is what makes the fix small.
+
+  **The fix is a two-tier fallback in both languages, and the second tier is a lane, not an empty
+  answer.** ccd collects `first` (the first candidate nobody condemned) and `condemned` (the first
+  condemned one) and widens `best → first → condemned`; `projectHome` widens
+  `scorable.find(notCondemned) ?? live.find(notCondemned) ?? scorable[0] ?? live[0]`. Reaching the
+  condemned tier rather than answering `""`/`null` is the deliberate half, and it is NOT the
+  all-disabled precedent read backwards: `""`/`null` there means ELIGIBILITY IS EXHAUSTED — an
+  operator switched every lane off, a wrapper is missing, a pool tag is undecidable — and each of
+  those is something a human did or must repair. A health verdict is a MEASUREMENT that can be wrong
+  (`_authdead`'s own header: "so it never joins `_account_ok`… A rescue must always have a
+  destination"), and letting one bad probe run empty this function would wedge every `ws-add` on the
+  box. `_swap_target`'s rank-101 tier is the same ruling for the rescue lane, and `cmd_ws_add`'s
+  reason builder therefore still needs no auth-dead arm.
+
+  **D-1932 survives unchanged and was re-measured, not assumed.** The all-condemned case that cannot
+  join the shared fixture is the MEASURED one (`projectHome` reports the fallback's score 0 while
+  `_limit_score claude` reads the 80 on disk); the UNMEASURED all-condemned case has no such
+  divergence, so `all-condemned-unmeasured-still-places` now carries the eligibility rule into the
+  shared fixture where both sides are driven over the same bytes, and the measured case stays pinned
+  in `projected-home.test.ts`'s own idiom beside it.
+
 **Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
-1924 → 1954) covering all five plans on this branch, defined in the same act. The
+1924 → 1954) covering all five plans on this branch, defined in the same act — plus `D-1954`,
+minted on its own the same day (floor 1954 → 1955) and defined in the same act as its allocation. The
 "allocator unreachable" claim this paragraph used to carry was **wrong** — the fleet box reaches the
 server over `CCRC_SERVER_URL`, and `ccrc-api ledger allocate` is a row in that client's closed table.
 The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.

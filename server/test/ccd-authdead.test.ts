@@ -95,7 +95,7 @@ const writeLimits = (w: string, five: number, seven: number): void =>
   fs.writeFileSync(path.join(home, '.cc-limits', `${w}.json`),
     JSON.stringify({ five, seven, ts: Math.floor(Date.now() / 1000) }));
 
-describe('_ws_least_loaded drops an auth-dead lane from SCORING, never from the fallback', () => {
+describe('_ws_least_loaded drops an auth-dead lane from SCORING and from the PREFERRED fallback, never from ELIGIBILITY', () => {
   it('does not place a new workspace on the cheapest lane when that lane is auth-dead', () => {
     writeLimits('claude', 50, 50);
     writeLimits('claude-a', 5, 5);        // cheapest, but dead
@@ -105,12 +105,12 @@ describe('_ws_least_loaded drops an auth-dead lane from SCORING, never from the 
     expect(sh('_ws_least_loaded')).toBe('claude-b');
   });
 
-  it('STILL ANSWERS when every home-able lane is auth-dead — the `first` fallback is reachable', () => {
-    // THE CASE THE SKIP IS PLACED FOR. A health skip written ABOVE
-    // `[[ -z "$first" ]] && first="$w"` empties the fallback here, this
-    // function echoes "", and `cmd_ws_add` dies with no destination on a fleet
-    // whose accounts are all merely UNVERIFIED. Eligibility must survive; only
-    // preference changes.
+  it('STILL ANSWERS when every home-able lane is auth-dead — the condemned tier is reachable', () => {
+    // THE CASE THE SECOND FALLBACK TIER IS PLACED FOR. Collect condemned lanes
+    // nowhere — a bare `_authdead "$w" && continue` above the score — and this
+    // function echoes "" here, `cmd_ws_add` dies with no destination, and a
+    // fleet whose accounts are all merely UNVERIFIED cannot take a workspace at
+    // all. Eligibility must survive one bad probe run; only preference changes.
     writeLimits('claude', 50, 50);
     writeLimits('claude-a', 5, 5);
     writeLimits('claude-b', 40, 40);
@@ -119,13 +119,35 @@ describe('_ws_least_loaded drops an auth-dead lane from SCORING, never from the 
     expect(sh('_ws_least_loaded')).toBe('claude');   // roster declaration order
   });
 
-  it('an auth-dead lane can still BE the fallback when it is the first placeable one', () => {
-    // No telemetry anywhere: nothing is scorable at all, so both the skip and
-    // the score branch are moot and `first` decides. That `first` is allowed to
-    // be a condemned lane is the whole content of the previous case, stated
-    // where it is visible without four markers.
+  it('DOES NOT fall back to a condemned lane while a healthy one is behind it', () => {
+    // THE OTHER SIDE OF THE SAME TIER, and the defect this file used to assert
+    // as correct (D-1954). No telemetry anywhere, so nothing is scorable and the
+    // fallback alone decides — and the fallback used to be one variable assigned
+    // BEFORE the health skip, i.e. the first placeable lane whether or not the
+    // probe had already measured its credential dead. `claude` is first in
+    // roster declaration order and condemned; `claude-a` is neither.
     mark('claude', '1757203200 auth-401');
-    expect(sh('_ws_least_loaded')).toBe('claude');
+    expect(sh('_ws_least_loaded')).toBe('claude-a');
+  });
+
+  it('does not let a condemned lane back into the fallback by being the only MEASURED one', () => {
+    // The scored set can empty for two different reasons — nothing measured, or
+    // everything measured condemned — and reading the second as the first is
+    // how a "take the first candidate" fallback re-preferred the lane the skip
+    // had just rejected. `claude`'s honest 5 buys it nothing here.
+    writeLimits('claude', 5, 5);
+    mark('claude', '1757203200 auth-401');
+    expect(sh('_ws_least_loaded')).toBe('claude-a');
+  });
+
+  it('prefers a MEASURED healthy lane over an unmeasured one, condemned lanes aside', () => {
+    // The tiers do not reorder the ones that were already there: a condemned
+    // first lane drops to last, and the surviving lanes still rank measured
+    // before unmeasured. `claude-b` is the only lane with telemetry left.
+    writeLimits('claude', 5, 5);
+    writeLimits('claude-b', 90, 90);
+    mark('claude', '1757203200 auth-401');
+    expect(sh('_ws_least_loaded')).toBe('claude-b');
   });
 });
 
