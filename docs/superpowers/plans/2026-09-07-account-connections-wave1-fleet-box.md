@@ -15622,3 +15622,33 @@ task's insertion rather than by the author.
    `ccd/ccrc:3928` (`_inst_dirs` is at `:5566`, not `:5343-5350`), `ccd/ccrc:934-935`
    (rule `:2354-2358`, implementation `:2368`), `server/test/ccrc-account.test.ts:104-105` and `:370`,
    `deploy/account-op.mjs:201`, and `server/test/ccrc-cli.test.ts:590`'s stale `:394`.
+
+### D-2002 — a deliberately red suite is not a mechanism; defer with `it.skip` carrying its reason
+
+Task 23's Step 5 instructs the executor to commit with **eighteen failing tests** — the sixteen table
+rows and two `run`-driven cases — which stay red *"until Task 24 adds `add` to `ACCT_SUBS`"*, and argues
+that stating this in both tasks' Step 2 means *"neither commit can be mistaken for a green suite"*.
+
+The tests are right to be written here: they exercise `check-add`'s guards, and a mutation table for
+those guards belongs with the code it mutates. **The RED is the defect, not the placement.**
+
+**Why a documented red is worse than it looks.** This repository's whole doctrine is that a red suite is
+a mechanism and a comment is a request. An expected-red suite converts the mechanism back into a request:
+the next reader who sees 18 failures must diff them against a prose list in two documents to decide
+whether one of them is real. A genuine regression introduced at this commit hides among them perfectly.
+It also breaks `git bisect` and any CI gate across two commits of a 29-task branch.
+
+**RULING: `it.skip`, with the reason in the test's own title.** The tree already does exactly this —
+`server/test/ccd-session-lifecycle.test.ts:99` is
+``it.skip(`${row.name} — SERVER ONLY: ${row.serverOnly}`, …)`` — and `it.skipIf` is used throughout for
+root-dependent cases. So this is the repo's existing idiom, not a new convention.
+
+Three properties the red version does not have:
+1. **Every commit stays green**, so bisect and CI keep working and a real failure is visible instantly.
+2. **vitest REPORTS the deferral** in its own output (`N skipped`), so it is visible to someone running
+   the suite, not only to someone who read two plan documents.
+3. **The reason travels with the test**, in its title, where the next reader is already looking.
+
+**Task 24 must UN-SKIP them as a named step**, and its mutation table must include re-skipping one — a
+deferral nobody can forget is the half that makes a skip safe. `grep -n 'it\.skip' server/test/ccrc-account.test.ts`
+is the check, and it must return nothing once Task 24 lands.
