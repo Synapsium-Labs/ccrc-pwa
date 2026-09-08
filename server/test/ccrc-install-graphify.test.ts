@@ -66,6 +66,9 @@ const TREE_FILES = [
   'ccd/ccd-cap-scopes',
   // graphify Task 10 (O3/O6b): the fourth `_inst_bins` executable.
   'ccd/ccd-graph-sweep',
+  // The account-health probe (spec 2026-09-07 §A): `_inst_bins` ships it
+  // beside the sweep, on the same gate — not Darwin, every role.
+  'ccd/ccd-account-health',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
