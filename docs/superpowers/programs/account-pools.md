@@ -943,3 +943,42 @@ different files, and the plan's one at `:2571` IS inside D-1973's entry (heading
 three-alternative pattern could not match the plan's phrasing ("said 39 in seven places"), so a
 narrower grep carried a wider conclusion. Neither `39` is a live assertion; both describe history.
 Recorded because it is the same class as everything above, produced while correcting an instance of it.
+
+### The wave integer is a POSITION, and the rule it was measured against does not exist
+
+Wave 2b's worker reported a live defect: run 35's `wave` field (4) disagrees with its title ("Wave 3
+of 6"), the hold reads `program:account-pools wave:4/6`, and the R7 session card — which quotes the
+hold verbatim and went live on the fleet at 17:18Z — therefore shows "a wave number one too high" to
+every session that starts. It cited `CLAUDE.md`: *"The a/b wave split lives in the run TITLE; the
+`wave` field stays an integer (wave 2a = wave 2 of 6)."*
+
+**That sentence is not in `CLAUDE.md`, and not anywhere in tracked text.** Measured three ways:
+`grep -n -i 'a/b wave split' CLAUDE.md` empty; every `wave` mention in `CLAUDE.md` read (they concern
+run-per-wave ordering, the box-token census and build history, none the integer); `git grep -i 'a/b
+wave split'` and `'wave 2a = wave 2'` over the whole tree, both empty. The rule the finding measures
+against was invented, and the alarm rests on it.
+
+**What the field actually is.** This program has SIX plan documents — `wave1`, `wave2a`, `wave2b`,
+`wave3`, `wave4`, `wave5` — and the `wave` integer has counted POSITION among them since run 32:
+1 = wave 1, 2 = wave 2a, 3 = wave 2b (run 34), 4 = wave 3 (run 35). `waveOf: 6` matches that count
+exactly. So `wave:4/6` on the hold and on the card is **accurate**: three waves remain, and the one in
+progress is the fourth of six. Nothing on the fleet is misreporting.
+
+**The one real blemish is mine, and it is the TITLE, not the field.** Run 35 is titled "Wave 3 of 6 —
+the server…", where "3 of 6" reads as a position while the position is 4. Run 34's "Wave 2b of 6" could
+not mislead, because `2b` is not a position number. **Convention, stated here because nothing in the
+tree states it: the `wave` field is the position; a title names the DOCUMENT and must not repeat a
+bare position number it will contradict.** Future titles: "The server wave (plan `wave3`), position 4
+of 6".
+
+**And the near-miss worth recording.** Acting on that finding would have meant re-numbering the runs.
+There is no update route on the closed client table, so the only path is abandon-and-reopen — and run
+34 is already `done`, so abandoning run 35 leaves **zero open runs and retires the program
+irreversibly**. A false finding whose remedy is destructive is a different risk class from a false
+comment. Measure the rule before acting on a defect measured against it.
+
+The same mail carried a finding that WAS right and that neither of us had: the `39`/`32` census is
+**four** survivors, not one or two — `ccd-auto-swap-pool.test.ts:437` and `:558`, plan `:2197` and
+`:2571`. My removal check searched for the strings I had removed; its completeness check used the
+phrasings it already knew; neither pattern could see the other's counterexample. All four describe
+history, so nothing changes — but both verifications were narrower than the claims they carried.
