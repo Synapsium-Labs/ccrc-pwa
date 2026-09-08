@@ -35,8 +35,16 @@
 // gate), and `base-url.mjs` imports nothing at all. So the closure is three
 // files and stays three.
 
-import { readFileSync } from 'node:fs';
-import { RosterInvalid, rosterFromJson } from '../shared/roster-json.mjs';
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+// `HUES` and `LABEL_UNSAFE_RE` are IMPORTED, never re-spelled (D-2004). They are
+// the constants `rosterFromJson` itself decides with, so `check-add` refusing a
+// hue or a label the writer would then refuse is one rule with one home rather
+// than a pre-pass that has its own opinion. They cost this file no closure: it
+// already imports from this module, and `shared/roster-json.mjs` is where they
+// were already declared.
+import {
+  HUES, LABEL_UNSAFE_RE, RosterInvalid, rosterFromJson,
+} from '../shared/roster-json.mjs';
 import { BASE_URL_OK } from '../shared/base-url.mjs';
 
 const SELF = 'account-op';
@@ -199,7 +207,7 @@ function readRoster(file) {
     rosterFromJson(json);
   } catch (e) {
     // The validator's own `remedy` reaches the caller VERBATIM —
-    // `_inst_accounts_sh`'s rule (ccd/ccrc:4729-4733; D-2007 moved this cite).
+    // `_inst_accounts_sh`'s rule (ccd/ccrc:4911-4915; D-2007 moved this cite).
     const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
     refuse('roster-invalid', `${file}: ${e.message}${remedy}`);
     return null;
@@ -226,6 +234,12 @@ const OPS = {
     keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method'],
     repeat: [],
   },
+  // ONE key carries the whole request, because `check-add` already resolved it:
+  // `--plan` is that op's ANSWER, verbatim, and the arm below takes the `plan`
+  // object out of it. Re-flattening it into nine keys would put this arm in the
+  // business of re-deciding what the pre-pass decided, which is the seam Task 23
+  // exists to remove.
+  'add-entry': { keys: ['file', 'plan'], repeat: [] },
 };
 
 function out(o) {
@@ -330,6 +344,43 @@ function main(argv) {
     }
     const id = a['id'];
     const provider = a['provider'];
+
+    // ── THE TWO IDENTITY GATES THIS ARM USED TO ONLY CHECK FOR PRESENCE ─────
+    // D-2004. Until this commit the arm checked that `--hue` and `--label` were
+    // GIVEN and nothing about what they said, so an unknown hue or a
+    // control-character label was refused by `add-entry`'s `rosterFromJson` —
+    // one step AFTER the caller had written the 0600 secrets file. That
+    // contradicted this arm's own opening sentence. Both are decidable from
+    // argv alone, so they belong above the line that derives a path, beside the
+    // id and provider gates rather than downstream of them.
+    //
+    // BOTH CONSTANTS ARE IMPORTED FROM THE VALIDATOR, not re-spelled here. The
+    // writer's `rosterFromJson(next)` call still runs and is not redundant:
+    // `add-entry` is callable by hand with a hand-written `--plan`, and it is
+    // the writer's own last gate. Two gates, two callers, ONE validator.
+    if (!HUES.has(a['hue'])) {
+      refuse('unknown-hue',
+        `"${a['hue']}" is not a hue this build knows. It knows: ${[...HUES].join(', ')}.`);
+      return 2;
+    }
+    // A label is one line of display text and it reaches TWO renderers — the
+    // PWA's DOM, where a stray newline is invisible, and
+    // `ccd/statusline-command.sh`'s one-line terminal status bar, which
+    // `server/src/pane/statusline.ts` then parses back out of a tmux capture. A
+    // newline there splits the status line in two and the fleet view quietly
+    // disagrees with the session; an escape byte is worse, because the label
+    // recolours everything printed after it. `shared/roster.ts:610-627` carries
+    // the argument and REFUSES rather than stripping, for the reason this file
+    // refuses everywhere else: silently rewriting an operator's value is an
+    // adapter narrowing a distinction it received.
+    if (LABEL_UNSAFE_RE.test(a['label'])) {
+      refuse('bad-label',
+        `the label ${JSON.stringify(a['label'])} carries a control character. A label is one line `
+        + 'of display text: it reaches a one-line terminal status bar that a tab or a newline '
+        + 'splits, and an escape byte recolours everything printed after it. Give a label with no '
+        + 'control characters in it.');
+      return 2;
+    }
 
     // ── THE CONFIG DIRECTORY ────────────────────────────────────────────────
     // §4.4's default. `--suffix` is OPTIONAL here, unlike the five above, and
@@ -595,6 +646,109 @@ function main(argv) {
         models,
       },
     });
+    return 0;
+  }
+
+  if (op === 'add-entry') {
+    // THE WRITER. Everything it needs was DECIDED by `check-add` and travels in
+    // `--plan`; this arm re-derives nothing. `configDirSuffix` in particular is
+    // taken off the plan and never rebuilt from the id (D-2003): `.claude-<id>`
+    // is already spelled twice on purpose — `_acct_add_parse`, which must
+    // materialise it before its own two suffix gates can measure it, and
+    // `check-add`, which must resolve a complete plan for a hand caller — and a
+    // third spelling here would be one this repository forbids outright, with
+    // no test standing over it.
+    if (a['file'] === undefined || a['plan'] === undefined) {
+      refuse('bad-argv', 'add-entry needs --file and --plan'); return 2;
+    }
+    let answer;
+    try {
+      answer = JSON.parse(a['plan']);
+    } catch (e) {
+      refuse('bad-argv', `the value of --plan is not valid JSON: ${e.message}`); return 2;
+    }
+    // `--plan` IS `check-add`'s WHOLE ANSWER, not its `plan` field alone, and
+    // the seam is that way round on purpose: `_acct_add` captured that op's
+    // stdout and hands the same bytes back — the very bytes it re-emits
+    // verbatim when `check-add` REFUSED — so nothing in bash reshapes an answer
+    // node wrote. This arm takes the one field it needs out of it and REFUSES
+    // when that field is not there, because the alternative is what the first
+    // draft of this task actually did: write an entry whose every field is
+    // `undefined` and let `rosterFromJson` report it as `an invalid id
+    // undefined`, which names neither the caller's mistake nor its fix.
+    //
+    // THE OBJECT TEST IS SPELLED THE WAY THE `--models` BLOCK ABOVE SPELLS IT
+    // (`parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)`)
+    // rather than borrowed from `shared/roster-json.mjs`'s `isPlainObject`: that
+    // helper is not exported, and exporting a JS type test to save one line here
+    // would put a validator-internal name on this file's import list for no
+    // decision it makes.
+    const plan = answer !== null && typeof answer === 'object' && !Array.isArray(answer)
+      ? answer['plan'] : undefined;
+    if (plan === null || typeof plan !== 'object' || Array.isArray(plan)) {
+      refuse('bad-argv',
+        'the value of --plan is not a check-add answer: it carries no "plan" object. Pass that '
+        + "op's stdout through unchanged rather than unwrapping it.");
+      return 2;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+
+    // THE ENTRY. `exec` carries every provider field and NOTHING else — §4.1's
+    // shape, where the account-level keys (ACCOUNT_KEYS, shared/roster.ts:310)
+    // do not change and every new field lives on exec. Absent values are
+    // OMITTED rather than written null: `parseRoster` is absence-permitting and
+    // a null would be a value it must then have an opinion about. `plan.models`
+    // arrives PARSED — `check-add` validated it (Task 23) so that no JSON parse
+    // lands here, where a throw would exit with a stack trace and an empty
+    // stdout.
+    const exec = { kind: 'generated', provider: plan.provider };
+    if (plan.baseUrl !== null) exec.baseUrl = plan.baseUrl;
+    if (plan.secretsFile !== null) exec.secretsFile = plan.secretsFile;
+    if (plan.models !== null) exec.models = plan.models;
+    const entry = {
+      id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix, exec,
+      // A NEW LANE IS HOME-ABLE AND CARRIES ANTHROPIC-SHAPED TELEMETRY. Both are
+      // facts about a generated wrapper: it sets CLAUDE_CONFIG_DIR, so ccd can
+      // land a session on it, and the statusline writes ~/.cc-limits/<id>.json
+      // for it (statusline-command.sh:244-251). `homeAble` is what
+      // `_ws_least_loaded` reads and `$REG/<id>-disabled` is what holds it back
+      // until the lane has been measured (Task 26) — two different questions,
+      // and collapsing them into `homeAble: false` would make a working lane
+      // permanently unplaceable rather than merely switched off.
+      homeAble: true, hue: plan.hue, telemetry: 'anthropic',
+    };
+
+    const next = { ...json, accounts: [...json['accounts'], entry] };
+
+    // VALIDATED BEFORE IT IS WRITTEN, through the same validator every other
+    // reader uses. `_inst_roster`'s rule (ccd/ccrc:4882-4887): seeding a roster
+    // a box cannot parse poisons that box, because the rule that makes the file
+    // safe to own — never overwritten — is what stops the next run fixing it.
+    try {
+      rosterFromJson(next);
+    } catch (e) {
+      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+      refuse('roster-invalid',
+        `the entry for "${plan.id}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
+      return 1;
+    }
+
+    // tmp + rename in the same directory, `_inst_accounts_sh`'s discipline
+    // (:4926-4928). The file is USER-OWNED and this verb is its first writer in
+    // this CLI — a deliberate, argued exception to the seed-once class
+    // (`_inst_roster`), and the reason the write is atomic rather than an
+    // in-place edit: an operator's roster must never be observable half-written.
+    const tmp = `${a['file']}.tmp.${process.pid}`;
+    try {
+      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o644 });
+      renameSync(tmp, a['file']);
+    } catch (e) {
+      try { unlinkSync(tmp); } catch { /* the failure above is the one to report */ }
+      refuse('roster-write', `writing ${a['file']} failed: ${e.message} — nothing was changed`);
+      return 1;
+    }
+    out({ ok: true, roster: next });
     return 0;
   }
 

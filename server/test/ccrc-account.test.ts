@@ -101,8 +101,8 @@ function run(home: string, args: string[], stdin = ''): Result {
  *  printed a progress line before its answer would still parse at a call site
  *  that used `.split('\n')[0]`. It is also what catches the failure this
  *  cluster is most exposed to: `add` calls two of `ccrc install`'s own
- *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4741,
- *  :4747, :2891). Every `add` case below runs through here. */
+ *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4923,
+ *  :4929, :2904). Every `add` case below runs through here. */
 function oneObject(r: Result): Record<string, unknown> {
   const lines = r.stdout.split('\n');
   expect(lines[lines.length - 1], 'stdout is not newline-terminated').toBe('');
@@ -367,7 +367,7 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
     expect(String(j['detail'])).toContain('unknown hue');
     // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
-    // (ccd/ccrc:4731-4733): re-wording a fix into a shrug helps nobody.
+    // (ccd/ccrc:4913-4915): re-wording a fix into a shrug helps nobody.
     expect(String(j['detail'])).toContain('cyan, violet, blue, magenta, amber, green');
   });
 
@@ -803,7 +803,7 @@ function filesUnder(dir: string, out: string[] = []): string[] {
 }
 
 /** Sources `ccd/ccrc` and calls one function — the `BASH_SOURCE` guard at
- *  ccd/ccrc:7292 exists for exactly this, and `ccd-clip.test.ts:32` /
+ *  ccd/ccrc:7474 exists for exactly this, and `ccd-clip.test.ts:32` /
  *  `ccd-workspaces.test.ts:487` already do it to `ccd`. Task 24 gives these two
  *  helpers a caller; proving them before that caller exists is what stops a
  *  defect in either from hiding inside `add`'s longer transcript. */
@@ -871,7 +871,7 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
 
   it('refuses a TERMINAL — the one place in this file the tty gate inverts', async () => {
     // `cmd_passwd` (ccd/ccrc:3026), `cmd_expose` (:3221) and `_inst_agent_env`
-    // (:4812) all REQUIRE a terminal, because under `curl … | bash` stdin is
+    // (:4994) all REQUIRE a terminal, because under `curl … | bash` stdin is
     // the installer script. This flag is driven by the server and requires a
     // pipe, so it refuses the terminal instead — three conditions, three codes,
     // and this is the third.
@@ -1107,39 +1107,44 @@ function untouched(home: string): { roster: string; secrets: string[]; bins: str
   };
 }
 
-/** D-2002. Eighteen of the twenty-six cases below cannot pass until Task 24
- *  puts `add` into `ACCT_SUBS`; at THIS commit every one of them answers
- *  `unknown-subcommand`. They are DEFERRED rather than committed red — the
- *  tree's own idiom (`ccd-session-lifecycle.test.ts:99`) — so that every commit
- *  in this cluster stays green, vitest reports the deferral in its own output,
- *  and a REAL regression at this commit stays visible instead of hiding among
- *  eighteen expected reds.
- *
- *  THE COMPLETION CHECK IS `grep -n 'UNTIL_24' server/test/ccrc-account.test.ts`,
- *  and it must return NOTHING once Task 24 lands. D-2002 named a grep for the
- *  SKIP FORM instead, and that check could never come back clean while it was
- *  written: a docstring explaining a deferral has to name the form it defers
- *  with, so the grep matched this very comment and reported a site that was not
- *  a skip. The form is therefore spelled nowhere above — the paragraph says
- *  "deferred" and lets the constant carry the name. `UNTIL_24` is safe to grep
- *  for BECAUSE this docstring belongs to it: deleting the constant deletes the
- *  sentence that mentions it, which is the property the other check lacked.
- *
- *  IT IS SEVEN DELETIONS, NOT ONE, across four lines — this constant, the three
- *  places its suffix is interpolated into a title, and the three `.skip`s beside
- *  them (two of those titles are literal; the sixteen table rows share one). */
-const UNTIL_24 = ' — SKIPPED UNTIL TASK 24 puts `add` in ACCT_SUBS (D-2002)';
-
 describe('ccrc account add: every identity refusal, before the first byte', () => {
-  // "EVERY" IS THE SET THIS TASK SHIPS, NOT THE SET THAT EXISTS (D-2004). The
-  // pre-pass checks that `--hue` and `--label` were GIVEN and nothing about
-  // what they say, so an unknown hue or an unsafe label is still refused by
-  // Task 24's roster writer — after `_acct_write_secret` has run. Read the
-  // title as a claim about ordering, never about completeness; the arm's own
-  // "EVERY REFUSAL IN THIS ARM" (deploy/account-op.mjs:323) is the exact one.
+  // D-2004 IS CLOSED FOR THE TWO FIELDS IT NAMED, AND ONE CONDITION IS LEFT —
+  // named here rather than gestured at. Task 23 shipped a pre-pass that checked
+  // `--hue` and `--label` were GIVEN and nothing about what they SAID, so an
+  // unknown hue or a control-character label was refused only by `add-entry`'s
+  // `rosterFromJson(next)` — after `_acct_write_secret` had already written the
+  // 0600 file. That contradicted the arm's own contract, "EVERY REFUSAL IN THIS
+  // ARM FIRES BEFORE ANY CALLER HAS WRITTEN A BYTE"
+  // (deploy/account-op.mjs:323-326). Task 24 closes it: `unknown-hue` and
+  // `bad-label` are gates in `check-add`, beside the other identity gates and
+  // above the line that derives a path, and the two rows below drive them
+  // through the whole verb — so the file the old ordering would have left
+  // behind is measured absent by `untouched`.
+  //
+  // WHAT STILL ESCAPES, MEASURED RATHER THAN ASSUMED: `--models`. `check-add`
+  // refuses a map that is not an object and any key outside the four routing
+  // aliases, and nothing more — while `rosterFromJson` requires ALL FOUR
+  // aliases present (shared/roster-json.mjs:305-312), requires each value to
+  // match `MODEL_ID_RE` (:150), and refuses `exec.models` on any provider
+  // outside `API_KEY_PROVIDERS` (:296-300). So `--models '{"opus":"x"}'`, a
+  // model id carrying a space, and a model map on an `anthropic` lane are three
+  // requests that still reach `roster-invalid` at exit 1 with the secret
+  // already on disk. They are one field's worth of gate, they belong with the
+  // rest of the model-map validation rather than bolted on here, and no task in
+  // this wave writes them — so this comment names them instead of the title
+  // pretending they do not exist.
   const cases: [string, Record<string, string | null>, string, number][] = [
     ['bad-id', { '--id': 'Lab_Dev0' }, 'bad-id', 2],
     ['reserved-id', { '--id': 'auth' }, 'reserved-id', 2],
+    // THE TWO D-2004 CLOSES, and they sit here because they are identity gates:
+    // `check-add` decides them from argv alone, above the line that derives the
+    // config directory, so they fire in the same breath as the three above.
+    ['a hue nothing knows', { '--hue': 'puce' }, 'unknown-hue', 2],
+    // A TAB, which is `\u0009` and therefore inside `LABEL_UNSAFE_RE`'s
+    // `[\u0000-\u001f\u007f]`. It is the benign end of that class to print in a
+    // test report; the class that motivates the gate is the escape byte, which
+    // recolours everything the status bar prints after it (shared/roster.ts:610-627).
+    ['a label carrying a control character', { '--label': 'lab\tdev0' }, 'bad-label', 2],
     ['a suffix outside the read root', { '--suffix': '.lab-dev0' },
       'suffix-outside-read-root', 2],
     ['a suffix that is not a safe one-segment name', { '--suffix': '.claude/../x' },
@@ -1180,26 +1185,34 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
   ];
 
   for (const [name, over, code, exit] of cases) {
-    it.skip(`refuses ${name} with "${code}" at exit ${exit}, having written nothing${UNTIL_24}`,
-      () => {
-        const home = box(`ccrc-account-add-${code}-`);
-        seedBoxRoster(home, FIXTURE_ROSTER);
-        const before = untouched(home);
-        const r = run(home, addArgs(over), `${CANARY}\n`);
-        expect(r.code).toBe(exit);
-        const j = oneObject(r);
-        expect(j['ok']).toBe(false);
-        expect(j['error']).toBe(code);
-        expect(untouched(home)).toEqual(before);
-        // THE PROPERTY THE DIFFERENCE STANDS FOR, said directly. `untouched`
-        // compares a listing against a baseline; this compares against the thing
-        // that must not exist, and it holds no matter when the baseline was taken.
-        expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
-        // THE REFUSAL CAME BEFORE THE READ, TOO: nothing consumed the canary, so
-        // nothing could have written it.
-        expect(r.stdout + r.stderr).not.toContain(CANARY);
-        expect(existsSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env'))).toBe(false);
-      });
+    it(`refuses ${name} with "${code}" at exit ${exit}, having written nothing`, () => {
+      const home = box(`ccrc-account-add-${code}-`);
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const before = untouched(home);
+      // THE FIXTURE ON STDIN IS SHELL SYNTAX, NOT THE CANARY, and this commit is
+      // the first at which that is measurable: it is the first at which `add`
+      // reaches the secret write at all. A canary matching `[A-Za-z0-9-]` is
+      // exactly the input for which `printf %q` and `printf %s` agree, which is
+      // why a green suite carried D-1984 for a wave. Every row here refuses
+      // BEFORE `_acct_read_credential`, so what these three assertions measure
+      // is that nothing consumed it, nothing wrote it and nothing SOURCED it.
+      const r = run(home, addArgs(over), `${SHELL_SYNTAX}\n`);
+      expect(r.code).toBe(exit);
+      const j = oneObject(r);
+      expect(j['ok']).toBe(false);
+      expect(j['error']).toBe(code);
+      expect(untouched(home)).toEqual(before);
+      // THE PROPERTY THE DIFFERENCE STANDS FOR, said directly. `untouched`
+      // compares a listing against a baseline; this compares against the thing
+      // that must not exist, and it holds no matter when the baseline was taken.
+      expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
+      expect(r.stdout + r.stderr).not.toContain(SHELL_SYNTAX);
+      expect(existsSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env'))).toBe(false);
+      // AND NOT ONE BYTE OF IT RAN. The fixture's own command substitution
+      // writes this file, so "executed nothing" is an `existsSync` rather than
+      // an argument — the shape Task 22's unit case established.
+      expect(existsSync(join(home, 'EXECUTED')), 'the credential was sourced').toBe(false);
+    });
   }
 
   it('the loopback exception is real — an api-key lane on 127.0.0.1 is accepted', () => {
@@ -1364,16 +1377,16 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     expect(String(j['detail'])).toContain('base-url-from-a-newer-build');
   });
 
-  it.skip(`a method the provider does not have is exit 2, and names the ones it does${UNTIL_24}`,
-    () => {
-      const home = box('ccrc-account-add-method-');
-      seedBoxRoster(home, FIXTURE_ROSTER);
-      const r = run(home, addArgs({ '--method': 'login' }), `${CANARY}\n`);
-      expect(r.code).toBe(2);
-      const j = oneObject(r);
-      expect(j['error']).toBe('method-not-supported');
-      expect(String(j['detail'])).toContain('paste');
-    });
+  it('a method the provider does not have is exit 2, and names the ones it does', () => {
+    const home = box('ccrc-account-add-method-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = run(home, addArgs({ '--method': 'login' }), `${SHELL_SYNTAX}\n`);
+    expect(r.code).toBe(2);
+    const j = oneObject(r);
+    expect(j['error']).toBe('method-not-supported');
+    expect(String(j['detail'])).toContain('paste');
+    expect(existsSync(join(home, 'EXECUTED')), 'the credential was sourced').toBe(false);
+  });
 
   it('--suffix defaults to .claude-<id>, which is inside the read root by construction', () => {
     const home = box('ccrc-account-add-suffixdefault-');
@@ -1471,10 +1484,10 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     }
   });
 
-  it.skip(`both flag spellings work, and a flag with no value is exit 2${UNTIL_24}`, () => {
-    // `cmd_install`'s rule (:4475-4485): BOTH `--flag VALUE` and `--flag=VALUE`
+  it('both flag spellings work, and a flag with no value is exit 2', () => {
+    // `cmd_install`'s rule (:4657-4667): BOTH `--flag VALUE` and `--flag=VALUE`
     // for every value-taking flag, a missing value with its own message, and a
-    // wrong VALUE for a right flag getting its own sentence (:4486-4489).
+    // wrong VALUE for a right flag getting its own sentence (:4668-4671).
     //
     // THE SPACE FORM IS THE ONE THAT BREAKS SILENTLY. A loop that shifts inside
     // its first `case` and then switches on `$1` again is switching on the
@@ -1499,6 +1512,225 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     const unknown = run(home, ['account', 'add', '--nope', 'x']);
     expect(unknown.code).toBe(2);
     expect(oneObject(unknown)['error']).toBe('unknown-argument');
+  });
+});
+
+/** The upstream account's own executable — a BINARY, not a wrapper. Doctor says
+ *  so out loud about this exact id (ccrc-doctor-checks:2386: "it is a binary,
+ *  not a wrapper, and it is checked on its own below"), and `cmd_wrappers`'
+ *  witness index reads every id-shaped file in the directory — so planting a
+ *  CLAUDE_CONFIG_DIR-setting SCRIPT under the upstream id would plant a shape
+ *  this fixture does not mean. */
+function plantUpstream(home: string): void {
+  const bin = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'claude'), 'PKnot-a-script\n', { mode: 0o755 });
+}
+
+describe('ccrc account add: the ordered write', () => {
+  it('writes the secret, then the roster entry, then both projections', () => {
+    const home = box('ccrc-account-add-ok-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(j['ok']).toBe(true);
+
+    // 1. THE SECRET, 0600, holding exactly one line.
+    //
+    // THE CANARY AND NOT `SHELL_SYNTAX` HERE, deliberately: this is the one
+    // assertion in the cluster that is BYTE-EXACT about the file's contents, and
+    // `printf %q` is the identity on an ordinary token — so the equality below
+    // stays true and stays readable. The shell-syntax round trip is the case at
+    // the end of this describe, which measures a LENGTH and a file's absence
+    // rather than a literal.
+    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+    expect(readFileSync(secret, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
+    expect(lstatSync(secret).mode & 0o777).toBe(0o600);
+
+    // 2. THE ROSTER ENTRY, carrying the RESOLVED endpoint — §4.1's "the
+    //    endpoint is shown, never hidden", made true on disk.
+    const roster = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
+    const added = roster.accounts.find((x: { id: string }) => x.id === 'lab-dev0');
+    expect(added).toEqual({
+      id: 'lab-dev0', label: 'lab·dev0', configDirSuffix: '.claude-lab-dev0',
+      exec: {
+        kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/v1',
+        secretsFile: '.cc-secrets/lab-dev0-compatible.env',
+      },
+      homeAble: true, hue: 'amber', telemetry: 'anthropic',
+    });
+    // APPENDED, never re-ordered: every other account is byte-identical and in
+    // its original position, because the roster is USER-OWNED and this verb is
+    // its first writer.
+    expect(roster.accounts.slice(0, 3)).toEqual(FIXTURE_ROSTER.accounts);
+    expect(roster.version).toBe(1);
+
+    // 3. THE PROJECTION, regenerated from the file that was just written.
+    const sh = readFileSync(join(home, '.ccrc', 'accounts.sh'), 'utf8');
+    expect(sh).toContain('lab-dev0');
+
+    // 4. THE WRAPPER, written by the whole-roster converge (D-1862). Its two
+    //    lines are `shared/wrapper.mjs:146` and `:141-143`.
+    const wrapper = readFileSync(join(home, '.local', 'bin', 'lab-dev0'), 'utf8');
+    expect(wrapper).toContain('export CLAUDE_CONFIG_DIR="$HOME/.claude-lab-dev0"');
+    expect(wrapper).toContain(
+      '[ -r "$HOME/.cc-secrets/lab-dev0-compatible.env" ] && . "$HOME/.cc-secrets/lab-dev0-compatible.env"');
+
+    // AND THE CANARY IS STILL IN EXACTLY ONE PLACE — the end-to-end form of
+    // Task 22's unit case: this is the first run with anything after the secret
+    // write, so it measures the whole tail rather than one helper.
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+    const leaked = filesUnder(home).filter((p) => p !== secret)
+      .filter((p) => { try { return readFileSync(p, 'utf8').includes(CANARY); } catch { return false; } });
+    expect(leaked, 'the credential appears outside ~/.cc-secrets').toEqual([]);
+  });
+
+  it('the convergers\' transcript goes to stderr, so stdout stays one object', () => {
+    // The half `oneObject` alone cannot prove: that the two convergers' lines
+    // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:4929)
+    // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
+    // Only the second is pinned there (ccrc-install.test.ts:2818-2819, the
+    // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:6502, and
+    // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
+    // assertion is also the first one in the tree to measure the accounts.sh
+    // line, from the stream this verb moves it to. Here they are the remedy,
+    // so they must be present — on the other stream.
+    const home = box('ccrc-account-add-streams-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    oneObject(r);
+    expect(r.stderr).toMatch(/^install: accounts\.sh: generated from /m);
+    expect(r.stderr).toMatch(/^summary: \d+ account\(s\) in /m);
+  });
+
+  it('a failure at the roster write leaves the 0600 file and NO roster entry', () => {
+    // THE SPEC'S OWN PROPERTY (§5). Injected at the one seam that can fail
+    // between the two writes: `~/.ccrc` unwritable, so the atomic rename of
+    // accounts.json cannot land. The file itself stays readable at 0644, so
+    // `check-add` and `add-entry` both READ it fine — it is the write that goes.
+    const home = box('ccrc-account-add-rosterfail-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    chmodSync(join(home, '.ccrc'), 0o500);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    chmodSync(join(home, '.ccrc'), 0o700);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('roster-write');
+
+    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+    expect(existsSync(secret), 'the secret is gone, so a retry has nothing to overwrite').toBe(true);
+    expect(lstatSync(secret).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+    expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
+  });
+
+  it('and the retry overwrites that file and completes', () => {
+    const home = box('ccrc-account-add-retry-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    chmodSync(join(home, '.ccrc'), 0o500);
+    expect(run(home, addArgs(), 'first-token-value\n').code).toBe(1);
+    chmodSync(join(home, '.ccrc'), 0o700);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env'), 'utf8'))
+      .toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
+  });
+
+  it('an anthropic login lane writes no secrets file and names none in the roster', () => {
+    const home = box('ccrc-account-add-loginlane-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+      '--label', 'lab·dev0', '--hue', 'amber']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+    const roster = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
+    const added = roster.accounts.find((x: { id: string }) => x.id === 'lab-dev0');
+    expect(added.exec).toEqual({ kind: 'generated', provider: 'anthropic' });
+  });
+
+  it('the roster entry is written LAST of the two, measured by ordering the failures', () => {
+    // The ordering is a claim about which of the two survives a failure, and
+    // this is the other half of it: make the SECRET write fail and the roster
+    // must be untouched too — i.e. neither write happened, not "the roster went
+    // first and the secret failed". The directory is 0500 and `mkdir -p -m 0700`
+    // does NOT re-mode an existing one (POSIX), so the redirection is what
+    // fails — which is exactly why `_acct_write_secret` carries no chmod.
+    const home = box('ccrc-account-add-secretfail-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+    chmodSync(join(home, '.cc-secrets'), 0o500);
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    chmodSync(join(home, '.cc-secrets'), 0o700);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('secret-write');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+  });
+
+  it('a credential whose bytes are SHELL SYNTAX survives the WHOLE verb, and executes nothing', () => {
+    // D-1984, AT THE OTHER ALTITUDE. Task 22's case drives `_acct_read_credential`
+    // and `_acct_write_secret` directly through `sourceCall`; this one is the
+    // first that drives the whole `ccrc account add` chain, which is the level
+    // the defect actually shipped at — a unit-shaped test of the writer missed
+    // it because the fixture agreed with the bug. Everything between the read
+    // and the file now runs too: the plan reader's `node -e` fork, the roster
+    // write, the projection and the wrapper converge.
+    //
+    // NOTHING HERE PRINTS THE VALUE. `SOURCED_LEN` is what a generated wrapper
+    // would get back, compared against a length; `EXECUTED` is how "executed
+    // nothing" is measured rather than argued. The comparison is done on a
+    // LENGTH rather than on the bytes because a byte-exact assertion would have
+    // to carry the value into a failure message.
+    const home = box('ccrc-account-add-shell-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const r = run(home, addArgs(), `${SHELL_SYNTAX}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    oneObject(r);
+
+    // Sourced the way `shared/wrapper.mjs:141-143` generates it, byte for byte —
+    // and this is the act that would run an embedded command substitution, so
+    // the `EXECUTED` check below has to come after it, not after the add alone.
+    const back = sourceCall(home,
+      '[ -r "$HOME/.cc-secrets/lab-dev0-compatible.env" ] '
+      + '&& . "$HOME/.cc-secrets/lab-dev0-compatible.env"\n'
+      + 'printf "SOURCED_LEN=%s\\n" "${#ANTHROPIC_AUTH_TOKEN}"\n');
+    expect(back.code, back.stderr).toBe(0);
+    expect(back.stdout).toContain(`SOURCED_LEN=${SHELL_SYNTAX.length}`);
+
+    // ANYWHERE under the fixture home, not just at its root: the substitution
+    // targets `$HOME/EXECUTED`, but a run that executed it with a different cwd
+    // or a different HOME would still be a run that executed it.
+    expect(filesUnder(home).filter((f) => f.endsWith('/EXECUTED')),
+      'a byte of the credential ran as code').toEqual([]);
+    // AND IT DID NOT LEAK ON THE WAY THROUGH. The roster, the projection and the
+    // wrapper are all written after the secret, and all three are read here.
+    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+    expect(r.stdout + r.stderr).not.toContain(SHELL_SYNTAX);
+    expect(filesUnder(home).filter((f) => f !== secret)
+      .filter((f) => { try { return readFileSync(f, 'utf8').includes(SHELL_SYNTAX); } catch { return false; } }),
+    'the credential appears outside ~/.cc-secrets').toEqual([]);
+  });
+
+  it('the wrapper converge is the whole roster, with no flags (D-1862)', () => {
+    // The ruling, pinned in the source rather than asserted in prose: `add`
+    // reaches `cmd_wrappers` the way `_inst_wrappers` does — as a function, with
+    // no flags — so no `--force`/`--adopt` can destroy a hand-written launcher
+    // without an operator typing the flag that authorises it (ccd/ccrc:6484-6487).
+    // Comment lines are stripped first: this asserts about CODE, and the
+    // paragraph above the code names the flags it does not pass.
+    const src = readFileSync(CCRC_SRC, 'utf8');
+    const body = /_acct_converge\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no _acct_converge').toBeTruthy();
+    const code = body![1]!.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).toMatch(/^\s*\( cmd_wrappers \) >&2 \\$/m);
+    expect(code, 'add passes a flag to the converger').not.toMatch(/cmd_wrappers.*--/);
   });
 });
 

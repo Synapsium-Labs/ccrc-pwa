@@ -119,7 +119,7 @@ const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 /** Mirrors `shared/roster.ts`'s `LABEL_UNSAFE_RE` — C0 controls plus DEL.
  *  A label reaches a one-line terminal status bar and the tmux-capture
  *  parser that reads it back; a control byte breaks both. */
-const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
+export const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 
 /** Mirrors `shared/providers.ts`'s `PROVIDER_IDS`, which is `Object.keys(PROVIDERS)`.
  *  A LIST, never the table: the labels, credentials, env vars, connect methods,
@@ -154,7 +154,7 @@ const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
-const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
+export const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
 
 export class RosterInvalid extends Error {}
 
