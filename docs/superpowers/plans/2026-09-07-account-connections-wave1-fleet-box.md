@@ -15400,3 +15400,50 @@ measurement is main's changed-file list against the wave's REMAINING task list �
 corrected the claim that main does not touch `ccd/ccrc`: it does, in exactly one 1-for-1 comment line at `:1030`
 ("the five functions `shared/generate.mjs` emits" → "the six"), which shifts nothing and sits nowhere near Task
 20's five anchors, all of which were re-measured today and all of which hold.
+
+### D-1907 — correcting an approved spec's prose invalidates every downstream line citation, and the sweep is part of the correction
+
+`bef75e8a` corrected two premises the tree had falsified (D-1904, D-1905). Its two hunks are
+`@@ -91,2 +91,6 @@` and `@@ -748,2 +752,13 @@`, taking the spec from 1734 to 1749 lines — so **every line
+citation past line 92 moved**, and this plan cites that spec by line number 131 times. Correcting two
+sentences silently falsified 131 comments.
+
+That is the defect class this wave has been finding in other people's work all week, and it was authored by
+the orchestrator in the same hour it was being enforced. The mechanism that caught it was not review: it was
+Task 20's implementer reporting, unprompted, that six of the citations it had been told to copy verbatim
+were "uniform +4, caused by today's `bef75e8a` landing after the Step-0 table was built."
+
+**The shift rule**, derived from the two hunks and validated against seven samples BY CONTENT before any
+edit was made (old 272→276, 413→417, 417→421, 460→464, 506→510, 652→656, 744→748):
+
+| OLD spec line | NEW | note |
+|---|---|---|
+| 1 – 90 | unchanged | |
+| 91, 92 | *replaced* | hunk 1's body — reword, do not re-point |
+| 93 – 747 | **+4** | |
+| 748, 749 | *replaced* | hunk 2's body — reword, do not re-point |
+| 750 + | **+15** | |
+
+Swept at `65387312`: 131 citations re-pointed, **131 verified by content** — each checked against
+`git show f9b33e33:<spec>` for the old line and the working tree for the new, then re-checked by inverse
+mapping after editing. One straddled the boundary (`spec:747-748`, whose quoted fragment survived into new
+`:751-752`) and was resolved by content rather than arithmetic.
+
+**Two citations were reworded rather than re-pointed**, and the distinction is the useful part. Both sit in
+D-1904 and D-1905 above, and both QUOTE THE SPEC'S PRE-CORRECTION TEXT. Shifting them would have produced a
+citation that resolves perfectly to text which no longer says what the sentence claims — a lie that passes
+every mechanical check. A citation to superseded prose is a historical reference and must be framed as one.
+
+**The sweep also found a citation that was stale BEFORE `bef75e8a`:** D-1905's own `spec:749-750` for the
+phrase "no telemetry for this lane", which sat at old `:748-749`. A pre-existing off-by-one, written by the
+orchestrator that morning, caught only because the sweep verified by CONTENT instead of trusting the
+arithmetic. It is noted inline at that entry rather than silently fixed.
+
+**The rule this issues:** an edit to an approved spec is not done when the prose is right. It is done when
+every downstream citation has been re-pointed AND verified by content. Budget the sweep as part of the
+correction, not as follow-up — and verify by content, because arithmetic cannot tell a moved line from a
+replaced one, and it is the replaced ones that produce the citations nothing will ever catch.
+
+`shared/providers.ts:42-53` carries seven more of these and is deliberately NOT in `65387312`: a review was
+in flight over a commit that reads it, and editing a file underneath a reviewer manufactures exactly the
+false finding the review would then have to disprove. It rides with Task 20's fix round.
