@@ -102,14 +102,27 @@ describe('modelEnvBlock', () => {
     expect(() => modelEnvBlock(UNSEEDED, null)).toThrow(/a lane needs at least one class/);
   });
 
-  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is ANTHROPIC_MODEL\'s context, as a STRING (§6.1, amended 2026-09-08)', () => {
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is min(ANTHROPIC_MODEL\'s context, 200000), as a STRING '
+    + '(§6.1, amended 2026-09-08, Task 16c)', () => {
     // ANTHROPIC_MODEL resolves opus ?? sonnet ?? haiku — SEEDED's opus slot is
-    // gpt-5.6-sol, and CODEX lists it with context 272000. Env values are
-    // strings everywhere else in this block; a bare number here would be the
-    // one key that reads differently from the other seven.
+    // gpt-5.6-sol, and CODEX lists it with context 272000 — advertised, not
+    // usable: fleet-host measurement 2026-09-08 found the largest prompt EVER
+    // ACCEPTED on gpt-5.6-sol, over 2,339 transcripts, was 196,341 tokens, with
+    // 30 refusals past that wall. The key never raises the client's own 200k
+    // default on an advertised number alone. Env values are strings everywhere
+    // else in this block; a bare number here would be the one key that reads
+    // differently from the other seven.
     const b = modelEnvBlock(SEEDED, CODEX);
-    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     expect(Object.keys(b)).toHaveLength(8);
+  });
+
+  it('is the row\'s OWN context when it is below the client default — a 128k model must compact '
+    + 'at 128k, not 200k (§6.1, amended 2026-09-08, Task 16c)', () => {
+    const narrow = reg({ classes: { haiku: null, sonnet: null, opus: 'gpt-5.3-codex-spark', fable: null },
+      subagent: 'opus', discovery: ['gpt-5.3-codex-spark'], effort: {} });
+    const b = modelEnvBlock(narrow, CODEX);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
 
   it('is ABSENT when the catalogue is stale — a stale window is not a measured one', () => {
@@ -172,7 +185,7 @@ describe('mergeSettingsEnv', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, CODEX));
     expect(JSON.parse(fs.readFileSync(settings(), 'utf8')).env.CLAUDE_CODE_MAX_CONTEXT_TOKENS)
-      .toBe('272000');
+      .toBe('200000');
     mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(Object.keys(j.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');

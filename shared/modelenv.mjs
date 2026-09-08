@@ -87,19 +87,27 @@ const slot = (registry, cls) => {
  *
  * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists because Claude Code 2.1.263 assumes
  * a 200k window for any model id it does not know, and compacts proactively at
- * that window; the catalogue knows the real one. It is written ONLY when
- * `catalogue` is non-null, NOT stale (§11: a stale catalogue is the previous
- * one kept after a failed probe, and a stale window is not a measured one),
- * lists the model `ANTHROPIC_MODEL` resolved to above, and that row's
- * `context` is a number — every other case OMITS the key (never a sentinel:
- * there is no "unavailable" reading for a context window, only "unknown", and
- * the client's own 200k default already means "unknown"). The value is
- * written as a STRING: every other value in this block is one, env vars are
- * always strings on the wire, and a bare number here would be the one key
- * that differs. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is
- * never written by this function, or anywhere else in this design (§6.1): the
- * proactive compaction it would disable is what keeps a lane whose default
- * model has no measured window from hitting the provider's own 400 instead.
+ * that window. It is written as `min(row.context, 200000)`, NOT the row's own
+ * number (§6.1, amended 2026-09-08, Task 16c): a fleet-host measurement found
+ * the catalogue's advertised context (272000 for the GPT-5.6/6 tiers) is not
+ * the usable one — over 2,339 transcripts the largest prompt ever accepted on
+ * gpt-5.6-sol was 196,341 tokens, with 30 refusals past that wall — so the key
+ * may LOWER the client's default (a 128k model like gpt-5.3-codex-spark must
+ * compact at 128k) but never RAISES it above 200000 on an advertised number
+ * alone; raising above 200000 needs a MEASURED ceiling, a future registry
+ * field, not this one. It is written ONLY when `catalogue` is non-null, NOT
+ * stale (§11: a stale catalogue is the previous one kept after a failed
+ * probe, and a stale window is not a measured one), lists the model
+ * `ANTHROPIC_MODEL` resolved to above, and that row's `context` is a number —
+ * every other case OMITS the key (never a sentinel: there is no "unavailable"
+ * reading for a context window, only "unknown", and the client's own 200k
+ * default already means "unknown"). The value is written as a STRING: every
+ * other value in this block is one, env vars are always strings on the wire,
+ * and a bare number here would be the one key that differs.
+ * `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never written by
+ * this function, or anywhere else in this design (§6.1): the proactive
+ * compaction it would disable is what keeps a lane whose default model has no
+ * measured window from hitting the provider's own 400 instead.
  *
  * @throws {ModelEnvInvalid} when no class among opus/sonnet/haiku is set, or
  *   when the subagent class's slot is null.
@@ -140,7 +148,14 @@ export function modelEnvBlock(registry, catalogue) {
   if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {
     const row = catalogue.models.find((m) => m.id === primary);
     if (row !== undefined && typeof row.context === 'number') {
-      block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(row.context);
+      // min(), not the row's own number (§6.1, amended 2026-09-08, Task 16c):
+      // fleet-host measurement found the Codex catalogue's advertised
+      // context_window (272000 for the GPT-5.6/6 tiers) is not the usable
+      // one — over 2,339 transcripts the largest prompt ever ACCEPTED on
+      // gpt-5.6-sol was 196,341 tokens, with 30 refusals past that wall — so
+      // this key may LOWER the client's 200000 default (a 128k model still
+      // compacts at 128k) but never RAISES it on an advertised number alone.
+      block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.min(row.context, 200000));
     }
   }
   return block;

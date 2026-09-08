@@ -32,25 +32,29 @@ describe('the shipped template', () => {
 describe('renderLitellmConfig', () => {
   const rendered = (): string => renderLitellmConfig(TEMPLATE, CODEX);
 
-  it('emits one entry per VISIBLE model and its [1m] alias, and nothing for hidden ones', () => {
+  it('emits one entry per VISIBLE model and NO [1m] alias, for any model, and nothing for '
+    + 'hidden ones (§6.3, amended 2026-09-08, Task 16c)', () => {
+    // A `/model <id>[1m]` believes the client has a 1M window no measured wall
+    // supports (§6.1's amendment above); LiteLLM now refuses that name loudly
+    // instead of routing the request to a real entry with the wrong window.
     const out = rendered();
+    expect(out).not.toMatch(/\[1m\]/);
     for (const id of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
       'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']) {
       expect(out, id).toContain(`  - model_name: ${id}\n`);
-      expect(out, `${id}[1m]`).toContain(`  - model_name: ${id}[1m]\n`);
       expect(out, id).toContain(`litellm_params: {model: chatgpt/${id}}`);
     }
     expect(out).not.toContain('gpt-reserve');
     expect(out).not.toContain('codex-auto-review');
   });
 
-  it('is 14 entries for today\'s catalogue — seven visible, each twice', () => {
-    expect(rendered().split('\n').filter((l) => l.startsWith('  - model_name: '))).toHaveLength(14);
+  it('is 7 entries for today\'s catalogue — one per visible model, no [1m] alias', () => {
+    expect(rendered().split('\n').filter((l) => l.startsWith('  - model_name: '))).toHaveLength(7);
   });
 
   it('gives every entry mode: responses — the provider requires it', () => {
     expect(rendered().split('\n').filter((l) => l.includes('model_info: {mode: responses}')))
-      .toHaveLength(14);
+      .toHaveLength(7);
   });
 
   it('emits NO reasoning key, for any model', () => {

@@ -13,6 +13,14 @@
 // account's catalogue, and lacked four of the nine models the backend
 // advertises. A hand-kept list of somebody else's catalogue is a list that is
 // wrong the day after it is written.
+//
+// WHY THERE IS NO `[1m]` ALIAS (amended 2026-09-08, Task 16c). A fleet-host
+// measurement found the catalogue's advertised context is not the usable one:
+// the largest prompt ever accepted on gpt-5.6-sol, over 2,339 transcripts, was
+// 196,341 tokens, against an advertised 272000/872000, with 30 refusals past
+// that wall. A `[1m]` name would route a request Claude Code believes has 1M
+// of room to a backend with no such id; the generator stopped emitting it, so
+// `/model <id>[1m]` fails at LiteLLM with an invalid model name instead.
 
 /** The one line the template reserves for the generated entries. Its own line,
  *  exactly once: a marker that appeared twice would make the destination
@@ -36,11 +44,15 @@ const YAML_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
 /**
  * `(templateText: string, catalogue: Catalogue) => string`
  *
- * One `chatgpt/<id>` entry per VISIBLE model and one for its `[1m]` alias —
- * Claude Code appends that suffix to render a 1M context window and the backend
- * has no such name, so the suffixed name has to map back (`infra/handoff/
- * litellm-config.yaml`'s own note). Hidden models are excluded, matching what a
- * `"catalogue"` discovery list offers (§4.2, decision 6).
+ * One `chatgpt/<id>` entry per VISIBLE model, and NO `[1m]` alias (§6.3,
+ * amended 2026-09-08, Task 16c): a fleet-host measurement found the
+ * catalogue's advertised context is not the usable one (§6.1's amendment —
+ * 272000/872000 advertised, 196,341 the largest prompt ever accepted, 30
+ * refusals past that wall), so a `[1m]` name would route a request Claude
+ * Code believes has 1M of room to a backend with no such name; a `/model
+ * <id>[1m]` now fails at LiteLLM with an invalid model name, loudly, instead.
+ * Hidden models are excluded, matching what a `"catalogue"` discovery list
+ * offers (§4.2, decision 6).
  *
  * NO `reasoning` KEY, for any model. Effort has exactly one owner — the shim
  * (§6.4) — so config-versus-request precedence inside LiteLLM never decides
@@ -73,11 +85,9 @@ export function renderLitellmConfig(templateText, catalogue) {
         `model id ${JSON.stringify(m.id)} is not safe to write as an unquoted YAML scalar, so this `
         + 'catalogue cannot be rendered. Nothing was written.');
     }
-    for (const name of [m.id, `${m.id}[1m]`]) {
-      entries.push(`  - model_name: ${name}`);
-      entries.push('    model_info: {mode: responses}');
-      entries.push(`    litellm_params: {model: chatgpt/${m.id}}`);
-    }
+    entries.push(`  - model_name: ${m.id}`);
+    entries.push('    model_info: {mode: responses}');
+    entries.push(`    litellm_params: {model: chatgpt/${m.id}}`);
   }
   return [...lines.slice(0, at[0]), ...entries, ...lines.slice(at[0] + 1)].join('\n');
 }

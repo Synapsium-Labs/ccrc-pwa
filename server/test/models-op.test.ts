@@ -542,13 +542,18 @@ describe('set-class', () => {
     expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
   });
 
-  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS tracks the default model\'s catalogue context, and drops out when it cannot (§6.1, amended 2026-09-08)', () => {
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is min(the default model\'s catalogue context, 200000), and drops '
+    + 'out when it cannot (§6.1, amended 2026-09-08, Task 16c)', () => {
     const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-sol');
     expect(r.code).toBe(0);
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // gpt-5.6-sol's catalogue context is 272000 — advertised, not usable
+    // (fleet-host measurement: 196,341 the largest prompt ever accepted, 30
+    // refusals past that wall) — so the key never exceeds the client's own
+    // 200000 default.
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     // Switching the default to a model no catalogue can vouch for — the same
     // "accepts a model no catalogue can vouch for" situation as above — leaves
-    // nothing to measure a window from, and the STALE '272000' must not
+    // nothing to measure a window from, and the STALE '200000' must not
     // survive the re-materialise: the eighth key carries no sentinel, so a
     // left-behind number would misstate the window rather than merely miss.
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.json'));
@@ -819,8 +824,9 @@ describe('materialise', () => {
     // The catalogue this run just wrote (init ran before it existed, so init's
     // own materialise could not have) — proves `materialise` reads the SAME
     // freshly-parsed catalogue it used for `derived`, not a stale one (§6.1
-    // amendment).
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // amendment). gpt-5.6-sol's catalogue context is 272000; the key is
+    // min(context, 200000) (§6.1, amended 2026-09-08, Task 16c).
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
   });
 
   it('on a lane with NO registry writes nothing and says so', () => {
@@ -859,8 +865,10 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     fs.writeFileSync(p, JSON.stringify(j, null, 2));
     // The beforeEach's `init` ran against a written catalogue, so the eighth
     // key is live before `rm` runs — this is the case that shows `rm` reaps
-    // it too, not just the seven keys that predate the §6.1 amendment.
-    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // it too, not just the seven keys that predate the §6.1 amendment. The
+    // default model's catalogue context (272000) is capped at 200000 (§6.1,
+    // amended 2026-09-08, Task 16c).
+    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
     const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
     expect(r.code).toBe(0);
     expect(r.body['removed']).toEqual([

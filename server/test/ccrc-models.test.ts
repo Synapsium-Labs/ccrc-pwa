@@ -1114,7 +1114,11 @@ describe('ccrc models litellm', () => {
     // anywhere, including in a comment.
     expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toContain('reasoning');
     expect(yaml).toContain('  - model_name: gpt-6-astra');
-    expect(yaml).toContain('  - model_name: gpt-6-astra[1m]');
+    // No `[1m]` alias (§6.3, amended 2026-09-08, Task 16c): a fleet-host
+    // measurement found the catalogue's advertised context is not the usable
+    // one, so the generator stops emitting a name that would route a request
+    // Claude Code believes has 1M of room to a backend with no such id.
+    expect(yaml).not.toMatch(/\[1m\]/);
     expect(yaml).not.toContain('gpt-reserve');
   });
 
