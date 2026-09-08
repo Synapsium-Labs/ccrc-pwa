@@ -108,3 +108,52 @@ describe('the keepalive spends on the tree’s own definition of stale', () => {
       .toBe(Number(swap));
   });
 });
+
+/**
+ * A SECOND "how fresh is fresh" pair, same two files, different question:
+ * `_session_state` (ccd/ccd) inlines the literal `120` in its own freshness
+ * comparison — `now - sup < 120` — to decide whether a supervisor heartbeat
+ * is still live. `_ka_session_on` (the keepalive) reuses that exact window
+ * as `KA_SESSION_FRESH`, by value, to skip a turn on an account whose only
+ * session already has a running supervisor — its own header names
+ * `_session_state`'s 120s window as the thing it is copying, "for the reason
+ * CCRC_KEEPALIVE_FRESH above re-spells SWAP_FRESH by value". A drift here
+ * would let the keepalive believe a supervisor is running past the point
+ * `_session_state` itself gives up on it, or the reverse.
+ *
+ * `ccd/ccd` never binds this value to a name — the comparison is inlined —
+ * so unlike SWAP_FRESH above, the broad tier here matches the COMPARISON
+ * SHAPE itself (`sup` immediately followed by `<` and digits, tolerant of
+ * whitespace), not an assignment; the keepalive's `KA_SESSION_FRESH=120`
+ * IS a plain assignment, so its pair reuses CCD_BROAD/CCD_NARROW's exact
+ * shape from above, renamed to the variable it actually declares.
+ */
+const CCD_SESSION_BROAD = /\bsup\b[ \t]*<[ \t]*([0-9]+)/;
+const CCD_SESSION_NARROW = /now - sup < ([0-9]+)(?=[^0-9]|$)/;
+
+const KA_SESSION_BROAD =
+  /^[ \t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \t]+-[A-Za-z]+)*[ \t]+)?KA_SESSION_FRESH=.*$/;
+const KA_SESSION_NARROW = /^KA_SESSION_FRESH=([0-9]+)(?=[ \t]|$)/;
+
+describe('the keepalive borrows _session_state’s own notion of a live supervisor', () => {
+  it('ccd still compares sup against 120 as a bare integer, in exactly one spelling', () => {
+    expect(exactlyOne(CCD_CONTENT, CCD_SESSION_BROAD, CCD_SESSION_NARROW,
+      'ccd/ccd sup freshness comparison')).toMatch(/^[0-9]+$/);
+  });
+
+  it('the keepalive still declares KA_SESSION_FRESH as a bare integer, in exactly one spelling', () => {
+    expect(exactlyOne(KEEPALIVE, KA_SESSION_BROAD, KA_SESSION_NARROW,
+      'the keepalive KA_SESSION_FRESH')).toMatch(/^[0-9]+$/);
+  });
+
+  it('and the two are the same number', () => {
+    const ccdFresh = exactlyOne(CCD_CONTENT, CCD_SESSION_BROAD, CCD_SESSION_NARROW,
+      'ccd/ccd sup freshness comparison');
+    const kaFresh = exactlyOne(KEEPALIVE, KA_SESSION_BROAD, KA_SESSION_NARROW,
+      'the keepalive KA_SESSION_FRESH');
+    expect(Number(kaFresh),
+      'the keepalive would now call a supervisor fresh past the window _session_state itself gives up on it, '
+      + 'or give up on a supervisor _session_state still calls live')
+      .toBe(Number(ccdFresh));
+  });
+});
