@@ -8835,6 +8835,16 @@ MSG
 
 ---
 
+## Task 13b: Fix round — the shim's own cause, `thinking`, and the coverage gap the reviewer found
+
+**What.** Task 13's review (opus, measuring the installed LiteLLM's package source directly) found that Step 2/4's docstrings and Step 11's commit message stated the wrong cause for "`/effort` changed nothing": LiteLLM's `drop_params` never discarded `output_config.effort` — it LIFTS the field into its own `reasoning_effort`, and what actually decided was the deployment's static `reasoning` object in `litellm-config.yaml`, merged into the request AFTER that translation and overwriting it (spec §1/§6.4 carry the same correction, docs reconciliation item 7b). The review also found that `thinking: {"type": "adaptive"}` — sent alongside `output_config` under the same beta header — competes for that SAME `reasoning` key inside one LiteLLM key-iteration loop, order-dependently, so leaving it in place could silently out-race the shim's own value; that a top-level effort file that parses as JSON but isn't an object (`[1,2]`, `null`, a bare number) raised an uncaught `AttributeError` on every request against it, forever, because the crash happened before the cache key was ever set; that a non-string `model` in the request body raised `TypeError: unhashable type` out of the dict lookup; that the cache's two separately-assigned fields (`key`, `byModel`) let a reader landing between the two assignments observe a freshly-bumped key still paired with the old map; and that `_relay`'s body-rewrite stayed inline and untested as its own unit, so a mutant that reverted its one call to the rewrite logic (M5) passed the whole suite.
+
+**Why.** `_apply_effort` now also pops `thinking` on every arm, closing the same order-dependent race the docstring fix identifies; `_effort_map` guards a non-dict top-level JSON value the same way it already guarded a non-dict `byModel`; the lane lookup skips a non-string `model` before it reaches `dict.get`; the cache collapses to one dict key holding a `(key, byModel)` tuple, written and read as a single assignment; and the body-rewrite logic is extracted into a standalone `_rewrite_messages_body(body)` — JSON object in, folded-and-effort-applied bytes out, anything else passed through byte-identical — which `Handler._relay` now calls, and which `server/test/…`'s new `TestRewriteMessagesBody` and a socket-level `TestRelayEndToEnd` (a fake upstream HTTP server, asserting the recorded request body) test directly, closing M5. `TestThinkingIsPopped` covers the new pop on all three arms. Test count for this file rose from 19 (Task 13's own Step 5, 65d402f5) to 29 Task-13-owned cases (Tasks 14/15 add seven more of their own, `TestWrappersStoppedDecidingModels`, landing the shared file at 36 total by this point — the ledger's own count).
+
+**Sha.** `5ece9b56` (mono-shim, `feat/ccgpt-effort-shim`).
+
+---
+
 ## Task 14: `ccgpt` exports its account id and stops deciding models (MONOREPO)
 
 **Files:**

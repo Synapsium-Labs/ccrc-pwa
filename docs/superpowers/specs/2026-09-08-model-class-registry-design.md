@@ -86,10 +86,14 @@ Decided in the brainstorm (each was a question with options):
   a listener as the base URL: the body carries `output_config: {"effort":
   "high"}` and `thinking: {"type": "adaptive"}`, under the
   `effort-2025-11-24` beta header. The wrapper's premise ("Claude Code can't
-  express it") is stale: LiteLLM's `drop_params` discards the field and the
-  static `reasoning` in each `litellm_params` decides, so a `/effort` in a
-  gpt session — and the PWA's effort picker, which already offers the five
-  levels on gpt — changes nothing today.
+  express it") is stale — but not for the reason first assumed. Measured
+  against the installed LiteLLM (Task 13 review, from the package source):
+  neither field is discarded by `drop_params`. `output_config.effort` is
+  LIFTED into LiteLLM's own `reasoning_effort`, and what actually decides is
+  the static `reasoning` object in each `litellm_params`, merged into the
+  request AFTER that translation and OVERWRITING it — so a `/effort` in a gpt
+  session, and the PWA's effort picker, which already offers the five levels
+  on gpt, changes nothing today (5ece9b56).
 
 ## 2. Approaches considered
 
@@ -286,6 +290,14 @@ written as `min(catalogue.context, 200000)`: it may LOWER the client's window
 (a 128k model like gpt-5.3-codex-spark must compact at 128k) and never RAISES
 it above the client's own default on an advertised number alone — raising
 above 200k needs a MEASURED ceiling, a future registry field, not this one.
+The clamp applies to `ANTHROPIC_MODEL`'s catalogue row regardless of PROBE
+KIND — codex, openrouter or compatible alike — even though the measurement
+above is Codex-only: an OpenRouter catalogue entry advertising a genuine 1M
+`context` is clamped to 200k here too, because the rule this key encodes is
+"never raise on an advertised number alone," not "Codex specifically is
+untrustworthy" (Task 16c review, 2026-09-08). The chosen trade is loud safety
+over unproven headroom on every lane; the escape hatch is the measured-ceiling
+field above, not a probe-kind exception.
 `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never set: the
 proactive compaction is the behaviour that keeps an unexpectedly large lane
 from hitting the provider's 400 ("input exceeds the context window"). (amended
@@ -332,12 +344,16 @@ Codex catalogue: one `chatgpt/<slug>` entry per **visible** model, and **no
 `[1m]` alias** — a fleet-host measurement (§6.1: 196,341 tokens the largest
 prompt ever accepted on gpt-5.6-sol, against an advertised 272000, with 30
 refusals past that wall) found no measured window supports the 1M the suffix
-claims, so a `[1m]` name would route a request Claude Code believes has that
-room to a backend with no matching id; `/model <id>[1m]` now fails at LiteLLM
-with an invalid model name, loudly, instead — and **no `reasoning` key**:
-effort has exactly one owner, the shim (below), so config-versus-request
+claims. The alias itself was never the lie: `gpt-5.6-sol[1m]` mapped to
+`chatgpt/gpt-5.6-sol`, the real backend model, so a request under that name
+routed fine — the backend simply has no model NAMED `…[1m]`, and the suffix's
+only claim was the CLIENT's belief that the window behind it was 1M, which
+this measurement found false. So `/model <id>[1m]` now fails at LiteLLM with
+an invalid model name, loudly, instead of routing a request Claude Code
+believes has 1M of room to a backend that never had it — and **no `reasoning`
+key**: effort has exactly one owner, the shim (below), so config-versus-request
 precedence inside LiteLLM never matters. (amended 2026-09-08, fleet-host
-measurement; Task 16c)
+measurement; Task 16c review, 2026-09-08)
 `drop_params` and `general_settings` are carried verbatim from a template in
 `deploy/`. If LiteLLM is running with a different rendered config, the
 generator STOPS it first (the wrapper's own `stop`; the next lane launch
@@ -353,7 +369,20 @@ materialisation it already wrote stand.
 ### 6.4 Effort: lane default, per-request override
 
 `ccgpt-proxy` (the shim that already rewrites every `/v1/messages` body to
-fold `system`) sets Codex's `reasoning.effort` on every request:
+fold `system`) sets Codex's `reasoning.effort` on every request. The premise
+is the measured mechanism, not the original `drop_params` guess (Task 13
+review, from the installed LiteLLM's package source; 5ece9b56): Claude Code's
+own `output_config.effort` is LIFTED into LiteLLM's `reasoning_effort`, and
+`thinking: {"type": "adaptive"}` (sent alongside it under the same beta
+header) competes for that SAME key inside one LiteLLM key-iteration loop,
+order-dependently — neither field is discarded. What actually decided before
+this shim existed was a static `reasoning` object in `litellm-config.yaml`
+(now removed, §6.3), which LiteLLM's router merges into the outbound request
+AFTER that translation, overwriting whatever either client field had produced
+(the same merge-order chain §6.3's `[1m]` removal measurement runs against).
+So the shim pops BOTH `output_config` and `thinking` on every request — either
+one left in place would re-open the same order-dependent race with LiteLLM's
+own translation, not just leave inert data behind — and sets:
 
 - the client's `output_config.effort` when present and not `auto` —
   `low|medium|high|xhigh|max` are all Codex levels and pass through unchanged;
@@ -569,8 +598,9 @@ marker re-stamped after every `ccd/ccd` edit.
 - **PWA** (render tests, the repo's accessibility contract): the class radio
   moves a class between rows and announces it; badges; disabled picker rows
   with reason; SwapSheet downgrade sentence; Anthropic account read-only.
-- **LiteLLM render**: today's catalogue → config with nine visible entries,
-  their `[1m]` aliases and no `reasoning` key; hidden models absent.
+- **LiteLLM render**: today's catalogue (the fixture carries nine models) →
+  config with seven visible entries, no `[1m]` aliases (Task 16c aa1de80b) and
+  no `reasoning` key; hidden models absent.
 - **Shim effort** (recorded request bodies through `ccgpt-proxy`):
   `output_config.effort: xhigh` → `reasoning.effort: xhigh`; `auto` and absent
   → the lane default for that model; no default → no field; the validator
