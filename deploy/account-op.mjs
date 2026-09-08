@@ -37,6 +37,7 @@
 
 import { readFileSync } from 'node:fs';
 import { RosterInvalid, rosterFromJson } from '../shared/roster-json.mjs';
+import { BASE_URL_OK } from '../shared/base-url.mjs';
 
 const SELF = 'account-op';
 
@@ -198,7 +199,7 @@ function readRoster(file) {
     rosterFromJson(json);
   } catch (e) {
     // The validator's own `remedy` reaches the caller VERBATIM —
-    // `_inst_accounts_sh`'s rule (ccd/ccrc:4299-4302).
+    // `_inst_accounts_sh`'s rule (ccd/ccrc:4396-4399).
     const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
     refuse('roster-invalid', `${file}: ${e.message}${remedy}`);
     return null;
@@ -221,6 +222,10 @@ const OPS = {
   // built with `printf` back into the JSON-shaped position this file exists to
   // own.
   candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
+  'check-add': {
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method'],
+    repeat: [],
+  },
 };
 
 function out(o) {
@@ -311,6 +316,285 @@ function main(argv) {
     const json = readRoster(file);
     if (json === null) return 1;
     out({ ok: true, roster: json });
+    return 0;
+  }
+
+  if (op === 'check-add') {
+    // EVERY REFUSAL IN THIS ARM FIRES BEFORE ANY CALLER HAS WRITTEN A BYTE, and
+    // that is the whole reason `check-add` is a separate, side-effect-free op
+    // rather than a paragraph inside Task 24's `add-entry`. Nothing below opens
+    // a file for writing, and nothing may.
+    const need = ['file', 'id', 'provider', 'label', 'hue'];
+    for (const k of need) {
+      if (a[k] === undefined) { refuse('bad-argv', `check-add needs --${k}`); return 2; }
+    }
+    const id = a['id'];
+    const provider = a['provider'];
+
+    // ── THE CONFIG DIRECTORY ────────────────────────────────────────────────
+    // §4.4's default. `--suffix` is OPTIONAL here, unlike the five above, and
+    // that is a DEVIATION FROM THE PLAN's own Step 3, which listed `suffix`
+    // among the required keys while its Step 1 test asserted this arm defaults
+    // it (`--suffix defaults to .claude-<id>`, the `'--suffix': null` sentinel)
+    // — two halves of one plan that could not both be true. The test won,
+    // because a `check-add` that refused a request `add` accepts would be a
+    // pre-pass that does not pre-check the request actually made.
+    //
+    // IT IS SPELLED TWICE, AND THAT IS THE COST, said out loud rather than
+    // hidden: `_acct_add_parse` (ccd/ccrc) also materialises `.claude-$ACCT_ID`,
+    // because it must have a value before it can run its own two suffix gates
+    // (`suffix-outside-read-root`, `bad-suffix`) — a gate cannot measure a
+    // value that does not exist yet. So bash always passes `--suffix`, and this
+    // branch is reachable only by a hand call to this file. Two spellings of one
+    // rule is exactly what this repository forbids, so the agreement is a
+    // MECHANISM rather than this paragraph: `ccrc-account.test.ts`'s
+    // "`_acct_add_parse` and `check-add` default the config dir to the same
+    // string" drives both and compares them, and reds if either moves.
+    const suffix = a['suffix'] ?? `.claude-${id}`;
+
+    // ── THE PROVIDER, AND WHICH VERB OWNS IT ────────────────────────────────
+    if (!Object.hasOwn(PROVIDER_DEPLOY, provider)) {
+      refuse('unknown-provider',
+        `"${provider}" is not a provider this build knows. It knows: `
+        + `${Object.keys(PROVIDER_DEPLOY).join(', ')}.`);
+      return 2;
+    }
+    const P = PROVIDER_DEPLOY[provider];
+    if (!P.generatable) {
+      // §4.2: this lane is somebody else's launcher. `add` WRITES a wrapper;
+      // `declare` records one it must never touch. Two verbs, because the two
+      // acts differ in what ccrc is allowed to overwrite.
+      refuse('external-provider-use-declare',
+        `provider "${provider}" is an external launcher: ccrc records it and never writes it. `
+        + `Use 'ccrc account declare --id ${id} --provider ${provider} …' once its executable is `
+        + 'in ~/.local/bin.');
+      return 2;
+    }
+
+    // ── THE METHOD ──────────────────────────────────────────────────────────
+    const method = a['method'] ?? P.connect[0];
+    if (!P.connect.includes(method)) {
+      refuse('method-not-supported',
+        `provider "${provider}" has no connect method "${method}". It has: ${P.connect.join(', ')}.`);
+      return 2;
+    }
+
+    // ── THE MODEL MAP ───────────────────────────────────────────────────────
+    // VALIDATED HERE, so nothing downstream parses it under a `set -u` shell or
+    // inside a jq program. The four aliases are §4.3's, and an unknown one is a
+    // REFUSAL rather than a silent drop: a key the operator typed and this box
+    // discarded is a routing decision nobody made and nobody can see.
+    const ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
+    let models = null;
+    if (a['models'] !== undefined) {
+      let parsed;
+      try {
+        parsed = JSON.parse(a['models']);
+      } catch (e) {
+        refuse('models-invalid', `--models is not valid JSON: ${e.message}`);
+        return 2;
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        refuse('models-invalid',
+          '--models must be an object mapping the routing aliases to model ids, e.g. '
+          + '{"opus":"<id>","sonnet":"<id>","haiku":"<id>","subagent":"<id>"}.');
+        return 2;
+      }
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!ALIASES.includes(k)) {
+          refuse('models-invalid',
+            `--models names "${k}", which is not a routing alias. The aliases are: `
+            + `${ALIASES.join(', ')}.`);
+          return 2;
+        }
+        if (typeof v !== 'string' || v === '') {
+          refuse('models-invalid', `--models maps "${k}" to something that is not a model id.`);
+          return 2;
+        }
+      }
+      models = parsed;
+    }
+
+    // ── THE ENDPOINT ────────────────────────────────────────────────────────
+    // FIRST, WHICH LANES HAVE ONE AT ALL. `defaultBaseUrl: null` appears twice
+    // in the table and means two different things: `compatible` has no default
+    // because the operator must state the endpoint, `anthropic` has none
+    // because Claude Code's own default IS the endpoint (§4.2, spec:281-284).
+    // A gate written as "no default and no flag → refuse" collapses those two
+    // and refuses `ccrc account add --provider anthropic`, which spec:417
+    // documents as legal and which three cases in this file assert. Spec:417
+    // scopes the class in its own words: "`base-url-required` (provider
+    // `compatible` with no `--base-url`)".
+    //
+    // The table tells the two apart WITHOUT a provider-name literal, and this
+    // is the column that does it: an endpoint-bearing lane is one that exports
+    // `ANTHROPIC_AUTH_TOKEN`, because §4.3's env block for exactly those lanes
+    // is `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_API_KEY=""`
+    // — the three keys the spec MEASURED on the fleet box (spec:310-311) — and
+    // Task 25 writes that block from `plan.baseUrl`. A lane exporting
+    // `CLAUDE_CODE_OAUTH_TOKEN` writes no `ANTHROPIC_BASE_URL` at all, and one
+    // exporting nothing (`openai`) never got here — `!P.generatable` refused it
+    // above. Read the predicate as "this lane names its own endpoint", not as
+    // "this string equals that string": the day a fifth provider needs a
+    // different answer, the honest fix is a column in `PROVIDERS` and its
+    // mirror here, not a second clause bolted on below.
+    const endpointBearing = P.envVar === 'ANTHROPIC_AUTH_TOKEN';
+    const given = a['base-url'];
+    if (!endpointBearing) {
+      // NOT SILENTLY DROPPED. An earlier draft resolved the plan with
+      // `baseUrl: provider === 'anthropic' ? null : baseUrl`, which validated
+      // the operator's URL and then threw it away — a routing decision nobody
+      // made and nobody can see, the same class of quiet discard the `--models`
+      // block above refuses an unknown alias for. If the flag cannot mean
+      // anything for this provider, saying so is the answer.
+      if (given !== undefined) {
+        refuse('base-url-not-supported',
+          `provider "${provider}" has no endpoint of its own: its lane talks to Claude Code's own `
+          + 'default, so --base-url would be recorded in the roster and never used by anything. '
+          + 'Drop the flag, or use --provider compatible with that endpoint.');
+        return 2;
+      }
+    }
+    // MATERIALISED, not left absent, for the lanes that have one (§4.1 permits
+    // absence and `add` never leans on it — the argument is at Task 24). One
+    // gate, `BASE_URL_OK`, because a second spelling of it would be a second
+    // decider on the one check standing between a lane's key and a clear-text
+    // hop.
+    const baseUrl = endpointBearing ? (given ?? P.defaultBaseUrl) : null;
+    if (endpointBearing && baseUrl === null) {
+      refuse('base-url-required',
+        `provider "${provider}" has no default endpoint, so --base-url is required. Give the `
+        + 'Anthropic-compatible endpoint this lane talks to, e.g. https://<host>/v1 or '
+        + 'http://127.0.0.1:<port> for a loopback proxy.');
+      return 2;
+    }
+    // ONE SENTENCE PER REASON, AND NO CODE TABLE BETWEEN THEM. `BASE_URL_OK`
+    // answers `{ ok: false, reason }` where `reason` is ALREADY the refusal
+    // code — `base-url-insecure`, not `insecure` — so this map is keyed on the
+    // codes themselves and adds words, never names. A translation table here
+    // (`{ insecure: 'base-url-insecure', … }`) would make the gate and the verb
+    // two naming authorities for one decision, which is the seam the prefixed
+    // spelling in `shared/base-url.mjs` exists to remove (§12.5 renders these
+    // sentences; the codes travel on the wire in wave 2).
+    const BASE_URL_SAYS = {
+      'base-url-unparseable': 'it does not parse as a URL at all — give a full one, scheme included.',
+      'base-url-insecure': 'it is plain http: and the host is not a loopback literal, so the key '
+        + 'would cross the network in clear.',
+      'base-url-credentials': 'it carries user:pass@ — a URL is not a place to keep a key.',
+      'base-url-query': 'it carries a query string, which this box would send on every request '
+        + 'without ever showing it to you.',
+      'base-url-fragment': 'it carries a #fragment, which no HTTP client ever sends — so the '
+        + 'endpoint you meant is not the one this would use.',
+    };
+    // A lane with no endpoint has nothing for the gate to judge, and calling it
+    // on `null` would be asking a URL question about the absence of a URL. The
+    // only way to reach here with `null` is the not-endpoint-bearing arm above,
+    // which has already refused a flag if one was given. `null` is therefore
+    // "no question asked", distinct from a verdict, and it is what the plan
+    // stores for such a lane.
+    const verdict = baseUrl === null ? null : BASE_URL_OK(baseUrl);
+    if (verdict !== null && !verdict.ok) {
+      if (!Object.hasOwn(BASE_URL_SAYS, verdict.reason)) {
+        // A reason this build has no sentence for is a BUG, and it says so
+        // rather than inventing a class. `BASE_URL_OK` and this table ship
+        // together; the day they do not, this is the line that says which one
+        // moved.
+        refuse('base-url-unknown-verdict',
+          `BASE_URL_OK answered ${JSON.stringify(verdict.reason)}, which this build has no refusal `
+          + 'for — this is a bug in ccrc, not a fact about your endpoint, and nothing was written.');
+        return 1;
+      }
+      refuse(verdict.reason,
+        `--base-url ${JSON.stringify(baseUrl)} is not usable: ${BASE_URL_SAYS[verdict.reason]}`);
+      return 2;
+    }
+    // THE NORMALISED VALUE IS WHAT GETS STORED, never the operator's bytes.
+    // `URL` lower-cases the scheme and the host and leaves the path alone, and
+    // it supplies a root path where the input had none — so `http://127.0.0.1:8642`
+    // resolves as `http://127.0.0.1:8642/` and `HTTPS://Orchard-API/V1` as
+    // `https://orchard-api/V1`. §4.1 shows the endpoint on the card, doctor
+    // compares it against `settings.json` and Task 25 writes it there, so a
+    // stored value that differs from the resolved one is two answers to one
+    // question (`shared/base-url.ts`'s header makes the argument). It also
+    // ends the embedded-newline hazard on this field for free: `new URL()`
+    // strips a raw LF while parsing, so `https://orchard-api/v1<LF>x` is stored
+    // as `https://orchard-api/v1x` — measured 2026-09-07, node 22.
+    const resolvedBaseUrl = verdict === null ? null : verdict.url;
+
+    // ── THE ROSTER: THE TWO REFUSALS THAT PROTECT AN EXISTING LANE ──────────
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    const accounts = json['accounts'];
+    if (accounts.some((x) => x['id'] === id)) {
+      // THE ONE REFUSAL THAT MUST COME BEFORE THE SECRET WRITE, and the reason
+      // `check-add` is a separate op at all: `~/.cc-secrets/<id>-<tag>.env`
+      // for an id already in the roster is ANOTHER LANE'S credential file. A run
+      // that wrote first and refused second would have destroyed a working
+      // lane's token in order to say no.
+      refuse('duplicate-id',
+        `account "${id}" is already in ${a['file']}. Use 'ccrc account credential --id ${id} `
+        + "--credential -' to replace its key, or pick another id.");
+      return 1;
+    }
+    if (accounts.some((x) => x['configDirSuffix'] === suffix)) {
+      refuse('suffix-collision',
+        `config directory ${JSON.stringify(suffix)} already belongs to an account in `
+        + `${a['file']}. Two accounts sharing one CLAUDE_CONFIG_DIR share one set of transcripts, `
+        + 'one settings.json and one credential.');
+      return 1;
+    }
+
+    // ── WHAT TASKS 24 AND 25 WRITE FROM ─────────────────────────────────────
+    // The RESOLVED plan, computed once, here, so no later step re-derives a
+    // decision this one already made. `login` lanes carry no secrets file: the
+    // credential is the config dir's own .credentials.json.
+    //
+    // `baseUrl` is whatever the endpoint block above resolved — null for a lane
+    // with no endpoint of its own, the gate's NORMALISED `url` otherwise. It is
+    // NOT re-decided here: a second `provider === 'anthropic' ? null : …`
+    // ternary at this line (the shape an earlier draft had) would be a second
+    // decider on the same question, and the two disagreed — the block above
+    // refused the request the ternary was written to soften.
+    const isToken = method !== 'login';
+    // THE SECRETS FILE IS NAMED FOR WHAT IT CARRIES, not for who issued it, and
+    // the spec says both things in different sections: §5:417 writes the general
+    // shape `~/.cc-secrets/X-P.env`, §4.3:322 writes the api-key lane's real
+    // name `~/.cc-secrets/<id>-openrouter.env`, and §6:511, §7:476, §11 and
+    // §12.5 write the OAuth lane's real name `~/.cc-secrets/<id>-oauth.env`.
+    // Only the second and third are names of files that exist: every anthropic
+    // lane on this fleet carries the `-oauth` spelling today
+    // (`server/test/helpers.ts:69` is `.cc-secrets/claude-a-oauth.env`), and the
+    // two illustrative remedies in the tree — `shared/roster.ts:499` and
+    // `shared/wrapper.mjs:132-133` — spell it that way too.
+    //
+    // It has to be ONE rule, because three writers derive this path and a
+    // disagreement between them is a lane whose wrapper sources a file nothing
+    // wrote: this line, `_acct_write_secret` (Task 22/24), and
+    // `ccd-account-auth`'s `setup-token` capture (Task 54), which mints an OAuth
+    // token into `~/.cc-secrets/<id>-oauth.env` on a lane that already exists.
+    // The rule is the `envVar` column, the same derivation the endpoint block
+    // above uses: a lane exporting `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth
+    // token and its file is `<id>-oauth.env`; an api-key lane's file is
+    // `<id>-<provider>.env`, which is §4.3's own spelling.
+    const secretTag = P.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
+    out({
+      ok: true,
+      plan: {
+        id,
+        provider,
+        label: a['label'],
+        hue: a['hue'],
+        configDirSuffix: suffix,
+        method,
+        baseUrl: resolvedBaseUrl,
+        secretsFile: isToken && P.envVar !== null ? `.cc-secrets/${id}-${secretTag}.env` : null,
+        envVar: isToken ? P.envVar : null,
+        // The PARSED object, not the string bash handed over — `add-entry`
+        // writes it into the roster and Task 25 hands it to jq with
+        // `--argjson`, and neither should be the place a parse failure lands.
+        models,
+      },
+    });
     return 0;
   }
 

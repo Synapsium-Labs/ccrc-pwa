@@ -3706,7 +3706,7 @@ _exp_status() {
 #    refusal goes through `_acct_refuse` like any other box-said-no.
 #
 #    THE RULE BINDS WHAT THIS VERB CALLS, NOT ONLY WHAT IT PRINTS.
-#    `_inst_accounts_sh` (:4644, :4650) and `cmd_wrappers` (:2891) both write
+#    `_inst_accounts_sh` (:4741, :4747) and `cmd_wrappers` (:2891) both write
 #    their transcript to STDOUT, which is right for `install` and wrong here, so
 #    `_acct_converge` (Task 24) redirects them and contains their `_ccrc_die`.
 #
@@ -3717,13 +3717,13 @@ _exp_status() {
 #    hand-rolled envelope into a body nobody can parse. So bash owns argv,
 #    refusal classes, tty rules and side effects; `deploy/account-op.mjs` owns
 #    every byte of stdout. That is the split `deploy/gen-accounts.mjs:4-11` and
-#    `_inst_accounts_sh` (:4623-4651) already draw, applied to an answer instead
+#    `_inst_accounts_sh` (:4720-4748) already draw, applied to an answer instead
 #    of a generated file.
 #
 #  - ONE EXIT-CODE TABLE, TWO DECIDERS. Whoever decides owns the code, on this
 #    file's own table (:24-33): 2 when the request was not legal on its face —
 #    decidable from argv alone, which is `cmd_install`'s "the operator typed the
-#    right flag and the wrong value" class (:4372-4376, refused at :4391) —
+#    right flag and the wrong value" class (:4469-4473, refused at :4488) —
 #    and 1 when the request was legal and the BOX said no (an id already in the
 #    roster, a suffix another account holds). Nothing translates at the seam,
 #    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2908-2922).
@@ -3785,7 +3785,7 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # PARAGRAPH DID NOT (corrected at review round 1). Task 21 added NINE call
   # sites, not four: `_acct_answer` x1, `_acct_shape` x3, `_acct_candidates`
   # x3, and `cmd_account` x2 — the two `unknown-argument` refusals at the
-  # `roster` and `candidates` arms (:4297, :4302 — this pair read :4040, :4045
+  # `roster` and `candidates` arms (:4394, :4399 — this pair read :4040, :4045
   # until review round 1, which is the citation Task 22's own insertion broke;
   # :4040 had by then landed inside the comment block that insertion added).
   # Those last two are the ones
@@ -3980,7 +3980,7 @@ _acct_candidates() {
   local sh="$HOME/.ccrc/accounts.sh"
   [ -f "$sh" ] \
     || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
-  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5690-5701): the projection
+  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5787-5798): the projection
   # declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` in the SAME `_ccrc_*`
   # namespace as `_ccrc_die`, and sourcing it here would let a generator change
   # redefine a refusal helper mid-verb. Only the id list crosses back.
@@ -4072,7 +4072,7 @@ _acct_candidates() {
 #
 #  2. THE TTY GATE INVERTS HERE, and nowhere else in this file. All three of
 #     this file's other `[ -t 0 ]` gates — `cmd_passwd` (:3026), `cmd_expose`
-#     (:3221) and `_inst_agent_env` (:4715) — refuse a PIPE, because
+#     (:3221) and `_inst_agent_env` (:4812) — refuse a PIPE, because
 #     under `curl … | bash` stdin is the installer script and a `read` would
 #     take a line of shell as the operator's answer. This flag exists for the
 #     machine caller and requires a pipe, so it refuses a TERMINAL — a human
@@ -4190,7 +4190,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   #
   # The temp name carries a leading dot, `cmd_wrappers`' spelling for a
   # roster-derived destination (the rule is stated in the negative at
-  # :4942-4947). Nothing below distinguishes it from `<dest>.tmp.$$`, because
+  # :5039-5044). Nothing below distinguishes it from `<dest>.tmp.$$`, because
   # `.env` already puts both outside `WRAPPER_ID_RE`; it is the consistent
   # spelling, not a measured guard.
   # The same shell-option bound `_acct_read_credential` states above, for the
@@ -4261,6 +4261,103 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   ACCT_CREDENTIAL=""
 }
 
+# ── THE `add` FLAG LOOP ────────────────────────────────────────────────────
+# `cmd_install`'s loop (:4475-4485) widened: BOTH spellings for every
+# value-taking flag, a missing value with its own message at exit 2, and a WRONG
+# VALUE for a right flag getting its own sentence rather than "unknown argument"
+# (:4486-4489) — the operator typed the right flag and the wrong value, which
+# are two different mistakes to fix.
+#
+# THE FLAG NAME IS CAPTURED BEFORE THE SHIFT, and that is the whole reason
+# `cmd_install` folds its assignment INTO the first `case` rather than running a
+# second one. After `v="$2"; shift`, `$1` is the VALUE — so a second
+# `case "${1%%=*}"` would be switching on the operator's data, no arm would
+# match, and every `--flag VALUE` spelling would be read as a flag with no
+# effect. Measured on the shape this loop replaced: `--id lab-dev0 --provider
+# compatible` yielded `id=[] provider=[]` while `--id=lab-dev0
+# --provider=compatible` yielded both. `flag` is taken at the TOP of the body,
+# from the un-shifted `$1`, and both spellings then land in one place.
+#
+# THE FOUR REFUSALS THIS FUNCTION OWNS are the ones decidable from argv and the
+# shape library alone. Everything that needs the roster or the provider table is
+# `check-add`'s, in node, on the same exit-code table.
+ACCT_ID=""; ACCT_PROVIDER=""; ACCT_LABEL=""; ACCT_HUE=""; ACCT_SUFFIX=""
+ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""
+_acct_add_parse() {
+  _acct_shape
+  local flag v
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id|--provider|--label|--hue|--suffix|--base-url|--models|--method|--credential)
+        [ $# -ge 2 ] \
+          || _acct_refuse 2 missing-value "$1 needs a value"
+        v="$2"; shift ;;
+      --id=*|--provider=*|--label=*|--hue=*|--suffix=*|--base-url=*|--models=*|--method=*|--credential=*)
+        v="${1#*=}" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account add has no argument \"$1\"" ;;
+    esac
+    case "$flag" in
+      --id)         ACCT_ID="$v" ;;
+      --provider)   ACCT_PROVIDER="$v" ;;
+      --label)      ACCT_LABEL="$v" ;;
+      --hue)        ACCT_HUE="$v" ;;
+      --suffix)     ACCT_SUFFIX="$v" ;;
+      --base-url)   ACCT_BASE_URL="$v" ;;
+      --models)     ACCT_MODELS="$v" ;;
+      --method)     ACCT_METHOD="$v" ;;
+      --credential) ACCT_CRED_SPELLING="$v" ;;
+    esac
+    shift
+  done
+
+  # THE ID IS ABOUT TO BECOME A FILENAME under $HOME/.local/bin, a path segment
+  # under $HOME/.cc-secrets and a bash `case` pattern. The gate is on the ID,
+  # before any path is built from it — `cmd_wrappers`' rule (:2504-2510), which
+  # is what makes it hold for a traversing id as well as a merely illegal one.
+  [ -n "$ACCT_ID" ] \
+    || _acct_refuse 2 missing-value "--id is required"
+  [[ "$ACCT_ID" =~ $WRAPPER_ID_RE ]] \
+    || _acct_refuse 2 bad-id "\"$ACCT_ID\" is not a legal account id: lowercase letters, digits and hyphens, starting with a letter, at most 32 characters. It becomes a filename under \$HOME/.local/bin. Nothing was written."
+  # §4.4. `cc-auth-<id>` is the auth pane's tmux session name, and for the id
+  # "auth" that is `cc-auth-auth` — indistinguishable from the pane of a session
+  # running on a wrapper called `auth`.
+  [ "$ACCT_ID" != auth ] \
+    || _acct_refuse 2 reserved-id "\"auth\" is reserved: the auth pane's tmux session is named cc-auth-<id>, which for this id would collide with the pane of a session running on it. Pick another id. Nothing was written."
+
+  [ -n "$ACCT_LABEL" ] || _acct_refuse 2 missing-value "--label is required"
+  [ -n "$ACCT_HUE" ]   || _acct_refuse 2 missing-value "--hue is required"
+  [ -n "$ACCT_PROVIDER" ] || _acct_refuse 2 missing-value "--provider is required"
+
+  # §4.4's default, and it is inside the read root BY CONSTRUCTION.
+  #
+  # THE SECOND SPELLING OF ONE RULE, and the reason it is here as well as in
+  # `check-add`: a gate cannot measure a value that does not exist yet, and the
+  # two gates below are this function's. `check-add` defaults it too, because it
+  # is callable by hand and must resolve a complete plan (see that arm's own
+  # note); the agreement between the two is measured, not asserted, by
+  # `ccrc-account.test.ts`'s "`_acct_add_parse` and `check-add` default the
+  # config dir to the same string".
+  [ -n "$ACCT_SUFFIX" ] || ACCT_SUFFIX=".claude-$ACCT_ID"
+  # THE READ ROOT, NOT A STYLE RULE. `underClaudeGlob`
+  # (agent/src/whitelist.ts:48-53) admits only $HOME/.claude*, and every server
+  # read of a lane's transcripts and statusline goes through `configDirFor`. A
+  # suffix outside the glob is a lane the server can never read — so the flow
+  # REFUSES rather than widening the glob.
+  case "$ACCT_SUFFIX" in
+    .claude*) ;;
+    *) _acct_refuse 2 suffix-outside-read-root "config directory \"$ACCT_SUFFIX\" is outside \$HOME/.claude*, which is the only place the ccrc agent may read (agent/src/whitelist.ts). A lane there is one this box could roster and never show you. Use a suffix starting with \".claude\". Nothing was written." ;;
+  esac
+  # The second, independent gate — the same one `shared/roster.ts` and
+  # `shared/wrapper.mjs` keep their own copies of, sourced here rather than
+  # re-spelled (`ccrc-wrapper-shape:73`, `^\.[A-Za-z0-9._-]+$`). "." and ".."
+  # pass a character-class test and resolve to $HOME and its parent.
+  { [ "$ACCT_SUFFIX" != "." ] && [ "$ACCT_SUFFIX" != ".." ] \
+    && [[ "$ACCT_SUFFIX" =~ $WRAPPER_SUFFIX_SAFE_RE ]]; } \
+    || _acct_refuse 2 bad-suffix "config directory \"$ACCT_SUFFIX\" is not a safe single directory name under \$HOME: letters, digits, \".\", \"-\" and \"_\" only, dot-prefixed, and never exactly \".\" or \"..\". Nothing was written."
+}
+
 cmd_account() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
@@ -4270,7 +4367,7 @@ cmd_account() {
   esac
 
   # BY NAME, ONCE, AND BEFORE THE FIRST REFUSAL IS PRINTED — `cmd_install`'s
-  # guard (stated :4398-4410, probed :4412) in its own shape. Without it a box
+  # guard (stated :4495-4507, probed :4509) in its own shape. Without it a box
   # with no node cannot
   # even hear "that id is taken": the refusal would arrive as `_acct_node`
   # failing, i.e. as a missing dependency wearing a bad request's clothes. THIS

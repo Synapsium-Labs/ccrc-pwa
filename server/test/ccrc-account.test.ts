@@ -20,8 +20,8 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync,
-  writeFileSync,
+  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync,
+  symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,8 +101,8 @@ function run(home: string, args: string[], stdin = ''): Result {
  *  printed a progress line before its answer would still parse at a call site
  *  that used `.split('\n')[0]`. It is also what catches the failure this
  *  cluster is most exposed to: `add` calls two of `ccrc install`'s own
- *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4644,
- *  :4650, :2891). Every `add` case below runs through here. */
+ *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4741,
+ *  :4747, :2891). Every `add` case below runs through here. */
 function oneObject(r: Result): Record<string, unknown> {
   const lines = r.stdout.split('\n');
   expect(lines[lines.length - 1], 'stdout is not newline-terminated').toBe('');
@@ -367,7 +367,7 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
     expect(String(j['detail'])).toContain('unknown hue');
     // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
-    // (ccd/ccrc:4634-4636): re-wording a fix into a shrug helps nobody.
+    // (ccd/ccrc:4731-4733): re-wording a fix into a shrug helps nobody.
     expect(String(j['detail'])).toContain('cyan, violet, blue, magenta, amber, green');
   });
 
@@ -803,7 +803,7 @@ function filesUnder(dir: string, out: string[] = []): string[] {
 }
 
 /** Sources `ccd/ccrc` and calls one function — the `BASH_SOURCE` guard at
- *  ccd/ccrc:7195 exists for exactly this, and `ccd-clip.test.ts:32` /
+ *  ccd/ccrc:7292 exists for exactly this, and `ccd-clip.test.ts:32` /
  *  `ccd-workspaces.test.ts:487` already do it to `ccd`. Task 24 gives these two
  *  helpers a caller; proving them before that caller exists is what stops a
  *  defect in either from hiding inside `add`'s longer transcript. */
@@ -871,7 +871,7 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
 
   it('refuses a TERMINAL — the one place in this file the tty gate inverts', async () => {
     // `cmd_passwd` (ccd/ccrc:3026), `cmd_expose` (:3221) and `_inst_agent_env`
-    // (:4715) all REQUIRE a terminal, because under `curl … | bash` stdin is
+    // (:4812) all REQUIRE a terminal, because under `curl … | bash` stdin is
     // the installer script. This flag is driven by the server and requires a
     // pipe, so it refuses the terminal instead — three conditions, three codes,
     // and this is the third.
@@ -1049,5 +1049,384 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
     const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
     expect(readFileSync(secret, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
     expect(lstatSync(secret).mode & 0o777).toBe(0o600);
+  });
+});
+
+/** `ccrc account add` with the given overrides folded onto a legal request. A
+ *  table of refusals is only readable if every row differs in exactly the thing
+ *  it is about. */
+function addArgs(over: Record<string, string | null> = {}): string[] {
+  const base: Record<string, string | null> = {
+    '--id': 'lab-dev0', '--provider': 'compatible', '--label': 'lab·dev0', '--hue': 'amber',
+    '--base-url': 'https://orchard-api/v1', '--credential': '-',
+  };
+  const merged = { ...base, ...over };
+  const out: string[] = ['account', 'add'];
+  for (const [k, v] of Object.entries(merged)) {
+    if (v === null) continue;
+    out.push(k, v);          // THE SPACE-SEPARATED SPELLING, deliberately: it is
+  }                          // the one a caller building argv from typed fields
+  return out;                // produces, and the one a naive flag loop drops.
+}
+
+/** `node deploy/account-op.mjs check-add …` against a fixture roster — the
+ *  half of this task that has no bash caller yet. */
+function checkAdd(home: string, over: Record<string, string | null> = {}): Result {
+  const base: Record<string, string | null> = {
+    '--file': join(home, '.ccrc', 'accounts.json'),
+    '--id': 'lab-dev0', '--provider': 'compatible', '--label': 'lab·dev0', '--hue': 'amber',
+    '--suffix': '.claude-lab-dev0', '--base-url': 'https://orchard-api/v1',
+  };
+  const args = ['check-add'];
+  for (const [k, v] of Object.entries({ ...base, ...over })) {
+    if (v === null) continue;
+    args.push(k, v);
+  }
+  const r = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
+    { encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** Everything a refusal must not have touched.
+ *
+ *  `bins` is a DIFFERENCE, not an absolute: the four containment poisons
+ *  (`gh` from `ghContainedEnv`, plus curl/systemctl/launchctl from `env()`)
+ *  live in that directory too, and `box()` plants them before any baseline is
+ *  taken precisely so this comparison measures the verb. The property each row
+ *  actually means — "no wrapper was written for the id it refused" — is
+ *  asserted by name beside this, because a difference over a directory listing
+ *  is only as good as the moment the baseline was taken, and this cluster has
+ *  already been bitten once by that. */
+function untouched(home: string): { roster: string; secrets: string[]; bins: string[] } {
+  return {
+    roster: readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'),
+    secrets: existsSync(join(home, '.cc-secrets'))
+      ? readdirSync(join(home, '.cc-secrets')).sort() : [],
+    bins: existsSync(join(home, '.local', 'bin'))
+      ? readdirSync(join(home, '.local', 'bin')).sort() : [],
+  };
+}
+
+/** D-2002. Eighteen of the twenty-three cases below cannot pass until Task 24
+ *  puts `add` into `ACCT_SUBS`; at THIS commit every one of them answers
+ *  `unknown-subcommand`. They are DEFERRED with `it.skip` rather than committed
+ *  red — the tree's own idiom (`ccd-session-lifecycle.test.ts:99`) — so that
+ *  every commit in this cluster stays green, vitest reports the deferral in its
+ *  own output, and a REAL regression at this commit stays visible instead of
+ *  hiding among eighteen expected reds. This suffix is the un-skip checklist:
+ *  Task 24 deletes it and the `.skip` beside it in one edit. */
+const UNTIL_24 = ' — SKIPPED UNTIL TASK 24 puts `add` in ACCT_SUBS (D-2002)';
+
+describe('ccrc account add: every identity refusal, before the first byte', () => {
+  const cases: [string, Record<string, string | null>, string, number][] = [
+    ['bad-id', { '--id': 'Lab_Dev0' }, 'bad-id', 2],
+    ['reserved-id', { '--id': 'auth' }, 'reserved-id', 2],
+    ['a suffix outside the read root', { '--suffix': '.lab-dev0' },
+      'suffix-outside-read-root', 2],
+    ['a suffix that is not a safe one-segment name', { '--suffix': '.claude/../x' },
+      'bad-suffix', 2],
+    ['an id already in the roster', { '--id': 'claude-a' }, 'duplicate-id', 1],
+    ['a suffix another account already holds', { '--suffix': '.claude-a' },
+      'suffix-collision', 1],
+    ['a provider nothing knows', { '--provider': 'orchard' }, 'unknown-provider', 2],
+    ['a provider whose lane is somebody else\'s launcher',
+      { '--provider': 'openai', '--base-url': null }, 'external-provider-use-declare', 2],
+    ['a compatible lane with no endpoint', { '--base-url': null }, 'base-url-required', 2],
+    // THE OTHER SIDE OF THE SAME GATE, and the row that keeps `base-url-required`
+    // from being read as "every provider without a default". An `anthropic` lane
+    // has no endpoint of its own — Claude Code's own default IS the endpoint
+    // (§4.2, spec:281-284) — so the flag is not merely optional there, it is
+    // meaningless, and a value silently dropped would be a routing decision
+    // nobody made. See the acceptance case below, which proves the same provider
+    // with NO --base-url is a legal request.
+    ['an endpoint on a lane that has none',
+      { '--provider': 'anthropic', '--base-url': 'https://orchard-api/v1' },
+      'base-url-not-supported', 2],
+    ['an endpoint that would carry the key in clear',
+      { '--base-url': 'http://orchard-api/v1' }, 'base-url-insecure', 2],
+    ['an endpoint with the key in it',
+      { '--base-url': 'https://u:p@orchard-api/v1' }, 'base-url-credentials', 2],
+    // The three verdicts the first draft of this task folded together. Each
+    // `BASE_URL_OK` verdict is its own code, one to one, because each is its own
+    // sentence on the sheet (§12.5) and a caller that rendered "unusable" for
+    // all three would be the overloaded seam the gate exists to avoid.
+    ['an endpoint carrying a query string',
+      { '--base-url': 'https://orchard-api/v1?key=x' }, 'base-url-query', 2],
+    ['an endpoint carrying a fragment',
+      { '--base-url': 'https://orchard-api/v1#frag' }, 'base-url-fragment', 2],
+    ['an endpoint that is not a URL at all',
+      { '--base-url': 'orchard-api/v1' }, 'base-url-unparseable', 2],
+    ['a model map that is not an alias map',
+      { '--models': '["orchard/opus-1"]' }, 'models-invalid', 2],
+  ];
+
+  for (const [name, over, code, exit] of cases) {
+    it.skip(`refuses ${name} with "${code}" at exit ${exit}, having written nothing${UNTIL_24}`,
+      () => {
+        const home = box(`ccrc-account-add-${code}-`);
+        seedBoxRoster(home, FIXTURE_ROSTER);
+        const before = untouched(home);
+        const r = run(home, addArgs(over), `${CANARY}\n`);
+        expect(r.code).toBe(exit);
+        const j = oneObject(r);
+        expect(j['ok']).toBe(false);
+        expect(j['error']).toBe(code);
+        expect(untouched(home)).toEqual(before);
+        // THE PROPERTY THE DIFFERENCE STANDS FOR, said directly. `untouched`
+        // compares a listing against a baseline; this compares against the thing
+        // that must not exist, and it holds no matter when the baseline was taken.
+        expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
+        // THE REFUSAL CAME BEFORE THE READ, TOO: nothing consumed the canary, so
+        // nothing could have written it.
+        expect(r.stdout + r.stderr).not.toContain(CANARY);
+        expect(existsSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env'))).toBe(false);
+      });
+  }
+
+  it('the loopback exception is real — an api-key lane on 127.0.0.1 is accepted', () => {
+    // §4.3: this fleet's existing api-key lanes already run against a loopback
+    // proxy, and `http:` there carries nothing across a network. The gate's
+    // whole shape depends on this arm existing, so it is pinned beside the
+    // refusals rather than left to the base-url suite.
+    const home = box('ccrc-account-add-loopback-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = checkAdd(home, { '--base-url': 'http://127.0.0.1:8642' });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)['plan']).toMatchObject({
+      // THE NORMALISED VALUE, with the root path `URL` supplies — the plan
+      // stores `BASE_URL_OK`'s `url`, not the operator's bytes, so that the
+      // roster, the card and `settings.json` all carry the endpoint the lane
+      // actually resolves (measured: `new URL('http://127.0.0.1:8642').href` is
+      // `'http://127.0.0.1:8642/'`). `baseUrlCases` carries the same row.
+      baseUrl: 'http://127.0.0.1:8642/',
+      secretsFile: '.cc-secrets/lab-dev0-compatible.env',
+      envVar: 'ANTHROPIC_AUTH_TOKEN',
+    });
+  });
+
+  it('an openrouter lane with no --base-url is given the provider default, not left silent', () => {
+    // §4.1 lets the field be absent and READERS default it. `add` materialises
+    // it instead (Task 24's argument): the endpoint is roster data, the card
+    // shows its host, and doctor's `settings-env-drift` compares the lane's
+    // settings.json against the ROSTER — which cannot be done against a field
+    // that is not there.
+    const home = box('ccrc-account-add-orDefault-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = checkAdd(home, { '--provider': 'openrouter', '--base-url': null });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)['plan']['baseUrl']).toBe('https://openrouter.ai/api/v1');
+  });
+
+  it('an anthropic login lane gets no secretsFile and no baseUrl at all', () => {
+    // §5: `--method login` writes NO secrets file and NO secretsFile roster
+    // field — the credential is the config dir's own `.credentials.json`.
+    //
+    // THIS CASE IS ALSO THE ONE THAT PROVES `base-url-required` IS SCOPED.
+    // `anthropic`'s `defaultBaseUrl` is null and this request names none, so a
+    // gate keyed on "no default and no flag" would refuse a request spec:417
+    // spells out as legal. It resolves to a plan, and `baseUrl` is null in it.
+    const home = box('ccrc-account-add-login-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null });
+    expect(r.code, r.stderr).toBe(0);
+    const plan = JSON.parse(r.stdout)['plan'] as Record<string, unknown>;
+    expect(plan['method']).toBe('login');
+    expect(plan['secretsFile']).toBe(null);
+    expect(plan['baseUrl']).toBe(null);
+    expect(plan['envVar']).toBe(null);
+
+    // AND THE DOCUMENTED FLAG VALUE THE TABLE MUST ACCEPT. spec:417 says
+    // `--method login|paste|setup-token`; §4.2's cell spells the third one
+    // `pane:setup-token`, which is prose about where it runs (§6:511, :547).
+    // The vocabulary is the bare one, and this is the assertion that keeps the
+    // CLI from refusing a value the spec documents — measured here rather than
+    // left to Task 54, because it is `check-add` that decides it.
+    const st = checkAdd(home,
+      { '--provider': 'anthropic', '--base-url': null, '--method': 'setup-token' });
+    expect(st.code, st.stderr).toBe(0);
+    const stPlan = JSON.parse(st.stdout)['plan'] as Record<string, unknown>;
+    expect(stPlan['method']).toBe('setup-token');
+    expect(stPlan['baseUrl']).toBe(null);
+    // A setup-token lane IS a token lane: it mints a long-lived OAuth token and
+    // the wrapper sources it. THIS ROW IS THE THREE-WRITER AGREEMENT, and it is
+    // the one an executor should read twice: the roster's `secretsFile`, the
+    // generated wrapper's `source` line, Task 28's `credential` rewrite and
+    // `ccd-account-auth`'s `setup-token` capture (Task 54) must all name ONE
+    // file. The name is `<id>-oauth.env` because the credential is an OAuth
+    // token — §6:511, §7:476, §11 and §12.5 spell it that way, every anthropic
+    // lane on this fleet already carries it (`server/test/helpers.ts:69`), and
+    // §5:417's `X-P.env` is the general shape rather than a fifth spelling. An
+    // api-key lane keeps `<id>-<provider>.env`, which is §4.3:322's own name
+    // for it, and the `compatible` cases above assert that half.
+    expect(stPlan['secretsFile']).toBe('.cc-secrets/lab-dev0-oauth.env');
+    expect(stPlan['envVar']).toBe('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('check-add reaches its own refusals with no caller — the three this task can mutate today', () => {
+    // The sixteen table rows above go green in Task 24, when `add` joins
+    // ACCT_SUBS. These three drive node DIRECTLY, so this task ships with
+    // executable mutation evidence of its own rather than borrowing the next
+    // commit's.
+    const home = box('ccrc-account-checkadd-refuse-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+
+    const dup = checkAdd(home, { '--id': 'claude-a' });
+    expect(dup.code).toBe(1);
+    expect(JSON.parse(dup.stdout)['error']).toBe('duplicate-id');
+
+    const insecure = checkAdd(home, { '--base-url': 'http://orchard-api/v1' });
+    expect(insecure.code).toBe(2);
+    expect(JSON.parse(insecure.stdout)['error']).toBe('base-url-insecure');
+
+    // The endpoint gate's OTHER direction, runnable at this commit: a provider
+    // whose lane carries no endpoint refuses the flag rather than dropping it.
+    const notSupported = checkAdd(home,
+      { '--provider': 'anthropic', '--base-url': 'https://orchard-api/v1' });
+    expect(notSupported.code).toBe(2);
+    expect(JSON.parse(notSupported.stdout)['error']).toBe('base-url-not-supported');
+  });
+
+  it('a BASE_URL_OK verdict this build has no sentence for is refused, not fallen through', () => {
+    // THE FAIL-CLOSED DEFENCE, MEASURED. `BASE_URL_OK` lives in
+    // `shared/base-url.mjs` and its five reasons ARE this arm's refusal codes;
+    // the day that file grows a sixth, `check-add` has no sentence for it. It
+    // must then SAY SO — `base-url-unknown-verdict`, exit 1, "a bug in ccrc,
+    // not a fact about your endpoint" — rather than fall through and admit an
+    // endpoint no gate approved. That is "an adapter may not narrow a
+    // distinction it received", applied to a value that can drift underneath
+    // this file: the two ship together, and this is the line that says which
+    // one moved.
+    //
+    // WHY THE FIXTURE TREE. Deleting that guard is GREEN against every other
+    // case in this suite (measured), because the shipped gate never answers a
+    // sixth reason — so the only way to reach the branch is to hand this file a
+    // DIFFERENT gate. `account-op.mjs`'s own header counts its closure at
+    // exactly three files — itself, `shared/roster-json.mjs` and
+    // `shared/base-url.mjs`, the last of which the second imports too — so a
+    // tree carrying copies of the first two beside a STUB third is both the
+    // only way to reach this branch and a pin on that count: a fourth import
+    // would die here with ERR_MODULE_NOT_FOUND rather than answer.
+    const home = box('ccrc-account-add-unknownverdict-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const tree = mkTmp('ccrc-account-futuregate-');
+    mkdirSync(join(tree, 'deploy'), { recursive: true });
+    mkdirSync(join(tree, 'shared'), { recursive: true });
+    copyFileSync(join(REPO, 'deploy', 'account-op.mjs'), join(tree, 'deploy', 'account-op.mjs'));
+    copyFileSync(join(REPO, 'shared', 'roster-json.mjs'), join(tree, 'shared', 'roster-json.mjs'));
+    // A gate from a build newer than this one: a reason spelled in the family's
+    // own vocabulary that this build has never heard of. `roster-json.mjs`
+    // imports this too and is unbothered — it consults the gate only for an
+    // account that CARRIES a baseUrl, and no fixture account does.
+    writeFileSync(join(tree, 'shared', 'base-url.mjs'),
+      'export const LOOPBACK_HOSTS = [];\n'
+      + "export const BASE_URL_OK = () => ({ ok: false, reason: 'base-url-from-a-newer-build' });\n");
+    const r = spawnSync('node', [join(tree, 'deploy', 'account-op.mjs'), 'check-add',
+      '--file', join(home, '.ccrc', 'accounts.json'), '--id', 'lab-dev0',
+      '--provider', 'compatible', '--label', 'lab·dev0', '--hue', 'amber',
+      '--base-url', 'https://orchard-api/v1'], { encoding: 'utf8' });
+    // EXIT 1, NOT 2: the five per-verdict codes are exit 2 because each is
+    // decidable from the operator's own flag value — `cmd_install`'s "the
+    // operator typed the right flag and the wrong value". This one is not about
+    // the flag at all, and there is nothing the operator can do with it, so it
+    // takes the house table's 1: the tool ran and the answer was bad.
+    expect(r.status, r.stderr).toBe(1);
+    const j = JSON.parse(r.stdout ?? '') as Record<string, unknown>;
+    expect(j['error']).toBe('base-url-unknown-verdict');
+    // IT NAMES WHAT IT HEARD, so the next reader learns WHICH of the two files
+    // moved rather than only that they disagree.
+    expect(String(j['detail'])).toContain('base-url-from-a-newer-build');
+  });
+
+  it.skip(`a method the provider does not have is exit 2, and names the ones it does${UNTIL_24}`,
+    () => {
+      const home = box('ccrc-account-add-method-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const r = run(home, addArgs({ '--method': 'login' }), `${CANARY}\n`);
+      expect(r.code).toBe(2);
+      const j = oneObject(r);
+      expect(j['error']).toBe('method-not-supported');
+      expect(String(j['detail'])).toContain('paste');
+    });
+
+  it('--suffix defaults to .claude-<id>, which is inside the read root by construction', () => {
+    const home = box('ccrc-account-add-suffixdefault-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    // `'--suffix': null` OMITS the flag — `checkAdd`'s own base supplies
+    // `.claude-lab-dev0`, so calling it bare would assert only that node echoes
+    // back what it was handed, which is not a statement about the default at
+    // all. The `null` sentinel is `checkAdd`'s documented "drop this flag"
+    // spelling (the `if (v === null) continue;` at its loop), and it is what
+    // makes this the only test in the file that reaches the default branch.
+    const r = checkAdd(home, { '--suffix': null });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)['plan']['configDirSuffix']).toBe('.claude-lab-dev0');
+
+    // And the default is derived from the id, not a constant: a different id
+    // must move it, or a hard-coded `.claude-lab-dev0` would pass the line above.
+    const r2 = checkAdd(home, { '--suffix': null, '--id': 'orchard-api' });
+    expect(JSON.parse(r2.stdout)['plan']['configDirSuffix']).toBe('.claude-orchard-api');
+  });
+
+  it('`_acct_add_parse` and `check-add` default the config dir to the same string', () => {
+    // THE MECHANISM FOR A RULE THIS TASK ENDED UP SPELLING TWICE, and the
+    // reason it is a test rather than a paragraph in either file. §4.4's
+    // default lives in both halves because each needs it for something the
+    // other cannot do: `_acct_add_parse` must MATERIALISE it before its own two
+    // suffix gates can measure it (a gate cannot judge a value that does not
+    // exist yet), and `check-add` must RESOLVE a complete plan for a caller
+    // that reached it by hand — the plan's own Step 3 required `--suffix` while
+    // its Step 1 test asserted the arm defaults it, and only one of those could
+    // be true. Two spellings of one rule is what this repository forbids, so
+    // the agreement is measured; a change to either default reds here.
+    //
+    // IT IS MEASURABLE AT THIS COMMIT, before `add` joins ACCT_SUBS, the same
+    // way the credential cases above reach `_acct_read_credential` with no
+    // caller — which is the whole argument for `sourceCall` existing.
+    const home = box('ccrc-account-add-suffixagree-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    // TWO IDS, NOT ONE: a pair of hard-coded `.claude-lab-dev0` constants would
+    // agree with each other perfectly and mean nothing.
+    for (const id of ['lab-dev0', 'orchard-api']) {
+      const bash = sourceCall(home,
+        `_acct_add_parse --id ${id} --provider compatible --label 'lab·dev0' --hue amber\n`
+        + 'printf "SUFFIX=[%s]\\n" "$ACCT_SUFFIX"');
+      expect(bash.code, bash.stderr).toBe(0);
+      const node = checkAdd(home, { '--suffix': null, '--id': id });
+      expect(node.code, node.stderr).toBe(0);
+      const resolved = JSON.parse(node.stdout)['plan']['configDirSuffix'] as string;
+      expect(resolved).toBe(`.claude-${id}`);
+      expect(bash.stdout, `_acct_add_parse and check-add disagree about the default for "${id}"`)
+        .toContain(`SUFFIX=[${resolved}]`);
+    }
+  });
+
+  it.skip(`both flag spellings work, and a flag with no value is exit 2${UNTIL_24}`, () => {
+    // `cmd_install`'s rule (:4475-4485): BOTH `--flag VALUE` and `--flag=VALUE`
+    // for every value-taking flag, a missing value with its own message, and a
+    // wrong VALUE for a right flag getting its own sentence (:4486-4489).
+    //
+    // THE SPACE FORM IS THE ONE THAT BREAKS SILENTLY. A loop that shifts inside
+    // its first `case` and then switches on `$1` again is switching on the
+    // VALUE, so every `--flag VALUE` assignment is dropped and every refusal
+    // below arrives as `missing-value`. Both spellings are asserted here, and
+    // every row of the table above drives the space form.
+    const home = box('ccrc-account-add-flags-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const eq = run(home, ['account', 'add', '--id=auth', '--provider=compatible',
+      '--label=lab·dev0', '--hue=amber', '--base-url=https://orchard-api/v1']);
+    expect(oneObject(eq)['error']).toBe('reserved-id');
+    const spaced = run(home, ['account', 'add', '--id', 'auth', '--provider', 'compatible',
+      '--label', 'lab·dev0', '--hue', 'amber', '--base-url', 'https://orchard-api/v1']);
+    expect(oneObject(spaced)['error'], 'the space-separated spelling dropped its values')
+      .toBe('reserved-id');
+    const mixed = run(home, ['account', 'add', '--id', 'auth', '--provider=compatible',
+      '--label', 'lab·dev0', '--hue=amber', '--base-url', 'https://orchard-api/v1']);
+    expect(oneObject(mixed)['error']).toBe('reserved-id');
+    const missing = run(home, ['account', 'add', '--id']);
+    expect(missing.code).toBe(2);
+    expect(oneObject(missing)['error']).toBe('missing-value');
+    const unknown = run(home, ['account', 'add', '--nope', 'x']);
+    expect(unknown.code).toBe(2);
+    expect(oneObject(unknown)['error']).toBe('unknown-argument');
   });
 });
