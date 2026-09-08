@@ -435,7 +435,16 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
     // the seam unset drives the refusal off the real openrouter arm's own
     // token gate, which sits before its `curl` call — so the poisoned curl in
     // this suite must still see nothing, proving the token is never sent.
-    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', path.join(home, 'e.json')]);
+    //
+    // `ANTHROPIC_AUTH_TOKEN: ''` is required, not optional: `env()` spreads
+    // `process.env` before `extra`, so an ambient token in the vitest
+    // process's own environment would otherwise leak through and satisfy the
+    // probe's `[ -n … ]` check, making this refusal test pass or fail on the
+    // operator's shell rather than on the code (fix round 2 — reviewer
+    // reproduced with `ANTHROPIC_AUTH_TOKEN=sk-ambient-leak-test`). An empty
+    // string overrides the spread and still fails `[ -n … ]`.
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', path.join(home, 'e.json')],
+      { ANTHROPIC_AUTH_TOKEN: '' });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN/);
     expect(fs.existsSync(path.join(home, 'e.json'))).toBe(false);
