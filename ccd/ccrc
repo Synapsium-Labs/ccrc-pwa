@@ -4004,8 +4004,17 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
           # straight into jq: `_models_answer`'s own refusal exits with a
           # non-zero status, and a pipe would hand jq that refusal's JSON and
           # succeed on it, losing the failure.
+          #
+          # ON A REFUSAL, THAT BODY IS NODE'S OWN — passed through UNCHANGED,
+          # never re-labelled `no-answer`: `no-answer` is the empty-body seam's
+          # reserved code for "the build is broken, redeploy" (`_models_answer`
+          # itself), and `$showbody` here is guaranteed a valid JSON object
+          # with rc in {1,2} — `_models_answer` already exits on anything else.
+          # The most common refusal reachable here is `no-such-account` on a
+          # typo'd or already-removed id, and re-labelling it would tell an
+          # operator to redeploy for their own typo.
           showbody="$(_models_answer show --file "$file" --id "$id")" \
-            || _models_refuse no-answer 1 "could not read account \"$id\"'s probe kind before changing its discovery list. Nothing was written."
+            || { local srr=$?; printf '%s\n' "$showbody"; exit "$srr"; }
           probe="$(printf '%s' "$showbody" | jq -r '.registry.probe // ""')"
           if [ "$action" = "add" ] && [ "$probe" = "openrouter" ]; then
             _models_endpoints "$id" "$model"

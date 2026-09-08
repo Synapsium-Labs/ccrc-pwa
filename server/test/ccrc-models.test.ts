@@ -42,6 +42,14 @@ const ROSTER = {
     { id: 'router', label: 'router', configDirSuffix: '.claude-router',
       exec: { kind: 'generated', secretsFile: '.secrets/router.env' }, homeAble: false, hue: 'blue',
       telemetry: 'none' },
+    // Fix round 1, Finding 2: a SECOND openrouter-shaped lane, deliberately
+    // with no `exec.secretsFile` at all — `router`'s own "no secrets file"
+    // case only ever deleted the FILE while the roster row still declared
+    // one, which stops at `_models_endpoints`'s `[ -r ]` guard inside the
+    // secretsFile branch and never reaches the `else` (ambient-environment)
+    // branch. This lane is what actually reaches it.
+    { id: 'router2', label: 'router2', configDirSuffix: '.claude-router2',
+      exec: { kind: 'external' }, homeAble: false, hue: 'green', telemetry: 'none' },
   ],
 };
 
@@ -599,6 +607,19 @@ describe('ccrc models <id> discovery', () => {
     expect(oneObject(r)['error']).toBe('unknown-argument');
   });
 
+  // Fix round 1, Finding 1: the pre-check `show` call used to re-label EVERY
+  // node refusal as `no-answer` — the empty-body seam's reserved "the build
+  // is broken, redeploy" code — discarding node's own diagnosis. `ghost` is
+  // never created in this describe block, so its `id` passes `_models_id_ok`
+  // (a legal shape, not a reserved word) and reaches node, which refuses
+  // `no-such-account` — the most common operator mistake this pre-check can
+  // hit: a typo'd or already-removed id.
+  it('a typo\'d or removed id gets node\'s own no-such-account, not a masked no-answer', () => {
+    const r = run(['models', 'ghost', 'discovery', 'add', 'gpt-5.5']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-such-account');
+  });
+
   describe('the ownership whitelist, on an openrouter lane only (§5)', () => {
     beforeEach(() => {
       run(['models', 'router', 'init', 'openrouter']);
@@ -685,6 +706,34 @@ describe('ccrc models <id> discovery', () => {
       expect(poisonLog('curl').join('\n')).toContain('Bearer lane-token');
       expect(r.stdout).not.toContain('lane-token');
       expect(r.stderr).not.toContain('lane-token');
+    });
+  });
+
+  // Fix round 1, Finding 2: `_models_endpoints`'s `else` (ambient-environment)
+  // branch — taken when the roster row has NO `exec.secretsFile` at all — was
+  // executed by zero tests. `router`'s "no secrets file" case only deletes the
+  // FILE while the row still declares one, which stops at the `[ -r ]` guard
+  // inside the `if` branch. `router2` carries no `secretsFile` in the roster
+  // at all, so `secrets` is empty and this describe's cases are the ones that
+  // actually reach the `else`.
+  describe('the ambient-environment branch, on a lane with no exec.secretsFile (§5)', () => {
+    beforeEach(() => { run(['models', 'router2', 'init', 'openrouter']); });
+
+    it('with no ambient token, refuses with the probe\'s own message', () => {
+      const r = run(['models', 'router2', 'discovery', 'add', 'z-ai/glm-5.2'], { ANTHROPIC_AUTH_TOKEN: '' });
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('endpoints-unreachable');
+      expect(String(oneObject(r)['detail'])).toContain('needs the lane\'s key: set ANTHROPIC_AUTH_TOKEN');
+    });
+
+    it('with an ambient token, the probe runs and the token reaches curl — never ccrc\'s own output', () => {
+      const r = run(['models', 'router2', 'discovery', 'add', 'z-ai/glm-5.2'],
+        { ANTHROPIC_AUTH_TOKEN: 'ambient-token' });
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('endpoints-unreachable');
+      expect(poisonLog('curl').join('\n')).toContain('Bearer ambient-token');
+      expect(r.stdout).not.toContain('ambient-token');
+      expect(r.stderr).not.toContain('ambient-token');
     });
   });
 });
