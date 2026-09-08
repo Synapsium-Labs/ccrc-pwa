@@ -1195,17 +1195,45 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     expect(code.filter((l) => l.includes('$HOME/.ccrc/build.json'))).toEqual([
       'BOX_STAMP_FILE="$HOME/.ccrc/build.json"',
     ]);
+    // The same idiom as the assertion just above, over the VARIABLE rather
+    // than the literal: every non-comment line naming `BOX_STAMP_FILE`,
+    // trimmed (several sit inside indented function bodies), as one exact
+    // list. This is what turns "a jq parse of the stamp planted anywhere" red
+    // — a new parse of the stamp has to name the file somehow, whether through
+    // `BOX_STAMP_FILE` itself or through the one local it defaults from
+    // (`local stamp="${1:-$BOX_STAMP_FILE}"`, already row 2 below), and either
+    // shape adds a line — single- or multi-line — to this set. Re-derived from
+    // the file at HEAD, not copied from a plan: a rename of the variable would
+    // have to turn this red too, which is the point.
+    expect(code.filter((l) => l.includes('BOX_STAMP_FILE')).map((l) => l.trim())).toEqual([
+      'BOX_STAMP_FILE="$HOME/.ccrc/build.json"',
+      'local stamp="${1:-$BOX_STAMP_FILE}"',
+      '3) echo "$PROG unstamped (no $BOX_STAMP_FILE — this box has no build stamp yet)"',
+      '4) _ccrc_die "build stamp unreadable: $BOX_STAMP_FILE (not a regular file)" ;;',
+      '*) _ccrc_die "build stamp unreadable: $BOX_STAMP_FILE" ;;',
+      '3) printf \'build:     unstamped (no %s — no deploy has ever stamped this box)\\n\' "$BOX_STAMP_FILE" ;;',
+      '4) printf \'build:     unreadable (%s is not a regular file)\\n\' "$BOX_STAMP_FILE" ;;',
+      '5) printf \'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\\n\' "$BOX_STAMP_FILE" ;;',
+      '*) printf \'build:     unreadable (%s does not parse as a build stamp)\\n\' "$BOX_STAMP_FILE" ;;',
+      'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
+      '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
+      'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
+    ]);
     // Scoped to `_box_build_fields`'s OWN body, not the whole file: the
     // `ccrc models` verbs carry their own `jq -r` parses of catalogues and
-    // registries (twelve, measured 2026-09-08), none of them the stamp, and a
-    // file-wide count conflates "a second parse of THIS stamp" with "this file
-    // now parses other JSON too". The needle inside the function cannot be
-    // "a jq -r line that also names $BOX_STAMP_FILE" — the function reads a
-    // local `stamp` (defaulting from `$BOX_STAMP_FILE`, so a shipped stamp
-    // handed to it by `_inst_stamp`'s validate arm can be checked with the
-    // same parser), so the literal `$BOX_STAMP_FILE` never appears on the
-    // parse line itself; the function body is what the file's own structure
-    // makes exact.
+    // registries — eleven, measured 2026-09-08 (twelve non-comment `jq -r`
+    // lines file-wide, one of them this function's own) — none of them the
+    // stamp, and a file-wide count conflates "a second parse of THIS stamp"
+    // with "this file now parses other JSON too". The needle inside the
+    // function cannot be "a jq -r line that also names $BOX_STAMP_FILE" — the
+    // function reads a local `stamp` (defaulting from `$BOX_STAMP_FILE`, so a
+    // shipped stamp handed to it by `_inst_stamp`'s validate arm can be
+    // checked with the same parser), so the literal `$BOX_STAMP_FILE` never
+    // appears on the parse line itself; the function body is what the file's
+    // own structure makes exact. (The assertion above catches a parse planted
+    // OUTSIDE this function that names `$BOX_STAMP_FILE` directly — this one
+    // catches a second parse planted INSIDE it, which the outside one cannot
+    // see if it is written against the local `stamp` variable instead.)
     const body = /_box_build_fields\(\) \{([\s\S]*?)\n\}/.exec(src);
     expect(body, 'ccd/ccrc has no _box_build_fields').toBeTruthy();
     const bodyCode = body![1]!.split('\n').filter((l) => !l.trim().startsWith('#'));
@@ -1252,12 +1280,15 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
 
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
-  // FOUR paths, each with a writer and a set of readers, and the whole reason
-  // to register them here is that they cross LANGUAGES: the catalogue is
-  // written by bash-and-python and read by TypeScript; the TSV is written by
-  // node and read (from Plan 2) by bash; the effort map is written by node and
-  // read by python in another repository. None of those pairs can share a
-  // constant, so agreement has to be a red suite instead.
+  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // writer/reader rows below (the models directory, the catalogue, the
+  // registry, the LiteLLM config, the ownership whitelist) — each with a
+  // writer and a set of readers, and the whole reason to register them here
+  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
+  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
+  // by bash; the effort map is written by node and read by python in another
+  // repository. None of those pairs can share a constant, so agreement has to
+  // be a red suite instead.
   //
   // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
   // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
@@ -1333,25 +1364,37 @@ describe('the model files, and who reads each one', () => {
     // "succeeding" by dropping the file inside it), so a bare
     // `mv -f "$NORM" "$OUT"` is still no longer a substring of the file.
     const probe = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-models-probe'), 'utf8');
-    expect(probe).toContain('_probe_mv_notdir "$NORM" "$OUT"');
-    // A write is `mv`/`cp`/`tee` naming the CATALOGUE path (`<id>.json`, not
-    // `<id>.classes.json` — that file is the REGISTRY, and has its own row
-    // below), or a `>`/`>>` redirect whose TARGET is the catalogue path — not
-    // merely a line that contains both a `>` and the path anywhere in it.
-    // Without the target anchor this false-positives on Task 9's own read,
-    // already in `ccd/ccrc` today: `jq '.models | length'
+    // An exact COUNT of the call sites, not `toContain`: a `toContain` is
+    // satisfied by any one of the three (the catalogue rename, the
+    // stale-mark rewrite, the `--endpoints` answer) and stays green if a
+    // fourth staged write is added without going through the helper, or if
+    // one of the three loses it back to a bare `mv`. Measured 2026-09-08
+    // against HEAD (`grep -Fc '_probe_mv_notdir "$NORM" "$OUT"'
+    // ccd/ccrc-models-probe`): 3.
+    expect((probe.match(/_probe_mv_notdir "\$NORM" "\$OUT"/g) ?? []).length).toBe(3);
+    // A write is `mv`/`cp`/`tee` — or this repo's other two spellings of an
+    // atomic install, `install_atomic` (deploy.sh's helper) and
+    // `_inst_atomic` (ccrc's own, `_` is a word character so `\b` still
+    // anchors it) — naming the CATALOGUE path (`<id>.json`, not
+    // `<id>.classes.json`, the REGISTRY's own row below, and not
+    // `<id>.effort.json`, the materialiser's file, §6.4 — neither is a second
+    // catalogue writer), or a `>`/`>>` redirect whose TARGET is the catalogue
+    // path — not merely a line that contains both a `>` and the path
+    // anywhere in it. Without the target anchor this false-positives on
+    // Task 9's own read, already in `ccd/ccrc` today: `jq '.models | length'
     // "$HOME/.ccrc/models/$id.json" 2>/dev/null` — a stderr redirect that
-    // shares the line with the path it is reading, not writing. Without the
-    // `.classes.json` exclusion this false-positives on a registry write,
-    // which is a real, separate, deliberate writer (the verbs) and not a
-    // second catalogue writer at all.
-    const CATALOGUE_PATH = /\.ccrc\/models\/[^ ]*(?<!\.classes)\.json/;
+    // shares the line with the path it is reading, not writing.
+    const CATALOGUE_PATH = /\.ccrc\/models\/[^ ]*(?<!\.classes)(?<!\.effort)\.json/;
     const writesDirectly = (l: string): boolean => {
       if (!CATALOGUE_PATH.test(l)) return false;
-      if (/\b(?:mv|cp|tee)\b/.test(l)) return true;
+      if (/\b(?:mv|cp|tee|install|install_atomic|_inst_atomic)\b/.test(l)) return true;
       if (/\b(?:writeFileSync|renameSync)\b/.test(l)) return true;
-      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)\.json/.test(l);
+      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)(?<!\.effort)\.json/.test(l);
     };
+    // Plan 2 adds `ccd/ccd` as a reader of the catalogue (spec §7) — when it
+    // lands, extend BOTH this write-scan's file list AND the readers' list in
+    // the `it()` just above, not just one; a reader that never writes belongs
+    // only in the second.
     for (const f of ['ccd/ccrc', 'deploy/deploy.sh']) {
       const code = codeLines(path.join(ccrcRoot, f));
       expect(code.filter(writesDirectly),
@@ -1393,24 +1436,33 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the four class names are enumerated only where a walk needs the sequence', () => {
-    // A file may list all four ONLY if it walks them in order. Five do — the
-    // TypeScript source, its bare-`node` twin, the materialiser, the verbs'
-    // node half, and `ccd/ccrc` (whose bash walk is what answers a class typo
-    // at exit 2).
+    // A file may list all four ONLY if it walks them in order. SIX print,
+    // and FIVE of them walk it: the TypeScript source, its bare-`node` twin,
+    // the materialiser, the verbs' node half, and `ccd/ccrc` (whose bash walk
+    // is what answers a class typo at exit 2).
     //
-    // Measured 2026-09-08: a sixth holder prints, and it is not a copy of
-    // THIS design's sequence — `pwa/src/lib/models.ts` (commit fe3ba926,
-    // untouched by this branch, predates the model-class registry entirely)
-    // is the session model/effort PICKER, whose `/model <alias>` rows quote
-    // the same four words as Claude Code CLI slash-command aliases, not as a
-    // classification walk. Its match is through the QUOTED-literal arm
-    // (`row('Opus 5', 'opus', 'opus')` literally contains `'opus'`), so
-    // tightening the bare-word arm — the fix for a match found in PROSE —
-    // cannot exclude it without also excluding the five real holders, which
-    // reach the quoted arm the same way. Named here rather than carved out of
-    // the corpus, per the same rule this file's header states for every other
-    // scan: the list is what the scan actually finds, honestly reconciled,
-    // not narrowed to fit a prediction written before the code existed.
+    // The sixth, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
+    // file — the spec names it three times as the CURRENT hardcoded picker
+    // this design will eventually replace: §2 calls it out by path and line
+    // range ("The PWA picker is a hardcoded table keyed on the wrapper
+    // string"), §11 describes what it becomes ("Session picker … becomes
+    // data: rows are the four classes …", Plan 3a), and §13.4's migration
+    // step 4 is "`pwa/src/lib/models.ts`'s table is deleted, not kept as a
+    // fallback." So it is a real, spec-acknowledged sixth holder TODAY, and
+    // Plan 3a is the task that removes it — when that lands, this row comes
+    // OUT of the list below rather than staying as a permanent exception, and
+    // the list shrinks back to five.
+    //
+    // Until then it matches through the QUOTED-literal arm — its `/model
+    // <alias>` rows quote the same four words as Claude Code CLI
+    // slash-command aliases (`row('Opus 5', 'opus', 'opus')` literally
+    // contains `'opus'`), not as a classification walk — so tightening the
+    // bare-word arm (the fix for a match found in PROSE) cannot exclude it
+    // without also excluding the five real holders, which reach the quoted
+    // arm the same way. Named here rather than carved out of the corpus, per
+    // the same rule this file's header states for every other scan: the list
+    // is what the scan actually finds, honestly reconciled, not narrowed to
+    // fit a prediction written before the code existed.
     const enumerates = (src: string): boolean =>
       ['haiku', 'sonnet', 'opus', 'fable'].every((c) =>
         new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(src));
@@ -1418,7 +1470,7 @@ describe('the model files, and who reads each one', () => {
     expect(holders).toEqual([
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
-      'pwa/src/lib/models.ts',  // modelOptions' aliases — unrelated feature, see above
+      'pwa/src/lib/models.ts',  // the picker's aliases — spec §2/§11/§13.4, deleted by Plan 3a
       'shared/modelenv.mjs',    // the env block's key order and the TSV's
       'shared/models.mjs',      // the twin's mirrored list
       'shared/models.ts',       // CLASSES — the definition, and FAMILY_TOKENS
