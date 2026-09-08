@@ -2319,3 +2319,87 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(JSON.stringify(s['statusLine'])).toContain('/statusline-command.sh');
   });
 });
+
+// ── REVIEW ROUND 1: the two clauses the copied installer does not have ────
+// Task 25's warrant is `install-session-hooks.sh:104-132` "clause for clause",
+// and a clause-for-clause copy inherits that installer's own gaps. Two were
+// measured here, and both are about the same fact: a lane's `settings.json` is
+// the OPERATOR's file, not a ccrc-OWNED or REGENERATE-class one.
+describe('ccrc account: _acct_settings_env keeps what it did not come to change', () => {
+  const modeOf = (p: string): string => (lstatSync(p).mode & 0o777).toString(8);
+
+  it('the operator\'s file keeps its own mode across the swap', () => {
+    // D-1244's ruling (ccd/ccrc:6530-6536, "forcing 644 would widen a CLAUDE.md
+    // an operator had restricted") and D-2052's, one commit earlier, at the
+    // roster. `mv -f` replaces the INODE, so without `_plat_mode` + `chmod` the
+    // new file carries this process's umask and the operator's decision is
+    // gone: measured at 664 from a 0600 file before the fix.
+    //
+    // TWO MODES, NOT ONE, and that is what makes this an assertion rather than
+    // a coincidence: a fixture that only ever restricts cannot tell "preserved"
+    // from "hardcoded 600", and one that only widens cannot tell it from the
+    // umask. 0640 is neither this box's umask default nor a plausible constant.
+    const home = box('ccrc-account-prov-mode-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    for (const m of [0o600, 0o640]) {
+      writeFileSync(join(dir, 'settings.json'), JSON.stringify({ env: { MY_OWN_KEY: 'kept' } }));
+      chmodSync(join(dir, 'settings.json'), m);
+      const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+      expect(r.code, r.stderr).toBe(0);
+      // It really did rewrite — otherwise the mode survived by not being touched.
+      expect(settingsAt(home, '.claude-lab-dev0')['env'])
+        .toEqual({ MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://orchard-api/v1',
+          ANTHROPIC_API_KEY: '' });
+      expect(modeOf(join(dir, 'settings.json')), `mode lost for 0${m.toString(8)}`)
+        .toBe(m.toString(8));
+    }
+  });
+
+  it('a settings.json this merge cannot use is settings-INVALID, not settings-merge', () => {
+    // D-2123 face 2 says the pre-validation buys the distinction "your file is
+    // bad, here it is" (`settings-invalid`) versus "this is a bug in ccrc"
+    // (`settings-merge`). Measured under `jq empty`, that distinction was false
+    // in both directions:
+    //
+    //  - `{"env":["a"]}` PARSES, so it went to the merge, jq died on it, and the
+    //    operator's own bad file came back wearing `settings-merge` — the class
+    //    whose sentence reads "this is a bug in ccrc, not a fact about your box".
+    //  - an EMPTY settings.json passed `jq empty` too; `next` was then empty as
+    //    well, the byte-level converge check compared the two empties EQUAL, and
+    //    the verb answered exit 0 having written no env block at all. A lane
+    //    silently pointed at the wrong endpoint is the worst of the three.
+    //
+    // The probe is now the SHAPE the merge needs, so both are one refusal with
+    // one remedy, and the file is untouched in every row.
+    const home = box('ccrc-account-prov-shape-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    for (const body of ['{ this is not json', '', '{"env":["a"]}', '{"env":"x"}', '[1,2]', 'null']) {
+      writeFileSync(join(dir, 'settings.json'), body);
+      const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+      expect(r.code, `body ${JSON.stringify(body)}: ${r.stderr}`).toBe(1);
+      expect(oneObject(r)['error'], `body ${JSON.stringify(body)}`).toBe('settings-invalid');
+      expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(body);
+    }
+  });
+
+  it('and settings-merge is still its own class, reachable and separate', () => {
+    // The other half of the same guard, and the one nothing measured: with only
+    // the row above, every `settings-merge` label in the function could be
+    // rewritten to `settings-invalid` and the suite stayed 96/96 green
+    // (measured). A distinction one test can only lose in ONE direction is half
+    // a mechanism. This row reaches the merge arm — the caller handed it a
+    // `--argjson` value that is not JSON, which is ccrc's bug and not the
+    // operator's file — and pins that it answers by a different door.
+    const home = box('ccrc-account-prov-mergeclass-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    const before = '{"env":{"MY_OWN_KEY":"kept"}}';
+    writeFileSync(join(dir, 'settings.json'), before);
+    const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" 'not-json'`);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('settings-merge');
+    expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(before);
+  });
+});

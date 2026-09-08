@@ -4445,16 +4445,18 @@ JQ_ACCT_CLEAR="$JQ_ACCT_MANAGED"'
 
 _acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
   # `install-session-hooks.sh:104-132`, clause for clause: jq validates BEFORE
-  # (:109) and AFTER (:128), the converge is byte-level under `jq -S` key-sorted
-  # normalisation (:126) so a converged file is never touched, every rewritten
-  # file is backed up first (:129), and the write is tmp + `mv -f` (:130-131).
-  # Values enter the program through --arg/--argjson (:120), never shell
-  # interpolation.
-  local dir="$1" mode="$2" burl="${3:-}" models="${4:-{\}}" f cur next prog tmp
+  # (:109) and AFTER (:128), the converge is byte-level under `jq -S` (:126) so a
+  # converged file is never touched, every rewritten file is backed up first
+  # (:129), and the write is tmp + `mv -f` (:130-131). Values enter through
+  # --arg/--argjson (:120), never shell interpolation. THE BEFORE PROBE IS
+  # STRUCTURAL, not `jq empty` (review round 1): an EMPTY settings.json passed
+  # `jq empty` and then compared CONVERGED, so the lane got no env block at exit
+  # 0; and an `env` that is not an object parses, then dies wearing ccrc's class.
+  local dir="$1" mode="$2" burl="${3:-}" models="${4:-{\}}" f cur next prog tmp fmode=""
   f="$dir/settings.json"
   if [ -f "$f" ]; then
-    jq empty "$f" 2>/dev/null \
-      || _acct_refuse 1 settings-invalid "$f is not valid JSON. This verb never rewrites a settings.json it could not validate, so that file is exactly as it was."
+    jq -e 'type == "object" and ((.env? // {}) | type == "object")' "$f" >/dev/null 2>&1 \
+      || _acct_refuse 1 settings-invalid "$f is not a JSON object whose \"env\" is an object (or absent), which is the shape this merge needs. This verb never rewrites a settings.json it could not validate, so that file is exactly as it was: fix it, or move it aside, and re-run."
     cur="$(cat "$f")" \
       || _acct_refuse 1 settings-invalid "$f could not be read"
   else
@@ -4470,34 +4472,32 @@ _acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
     || _acct_refuse 1 settings-merge "merging the account env block into $f failed — that file is exactly as it was"
 
   # AND NOTHING TO SET, EITHER. A `login` lane has no endpoint and no model map,
-  # so `next` is `{}` — measured against real jq. Creating a settings.json to
-  # hold `{}` in a home that never had one is a key that decides nothing, the
-  # same empty distinction `_exp_env_write` refuses at :3501-3505, and the
-  # mirror of the `clear` rule two blocks up.
+  # so `next` is `{}` — measured against real jq. A settings.json created to hold
+  # `{}` in a home that never had one is a key that decides nothing: the empty
+  # distinction `_exp_env_write` refuses at :3501-3505, mirroring `clear` above.
   if [ ! -f "$f" ] && [ "$(jq -S -c . <<<"$next")" = '{}' ]; then
     return 0
   fi
 
-  # CONVERGED? Do not touch it. The next run re-derives the same JSON and
-  # compares equal under key-sorted normalisation, so the file's bytes stay
-  # exactly what they were and idempotence is measurable on mtime.
+  # CONVERGED? Do not touch it: the re-derived JSON compares equal under key-sorted
+  # normalisation, the bytes stay exactly as they were, idempotence measurable on mtime.
   if [ -f "$f" ] && [ "$(jq -S . <<<"$next")" = "$(jq -S . "$f")" ]; then
     return 0
   fi
   jq empty <<<"$next" >/dev/null 2>&1 \
     || _acct_refuse 1 settings-merge "the merged settings for $f are not valid JSON — this is a bug in ccrc, not a fact about your box, and that file is exactly as it was"
   if [ -f "$f" ]; then
-    local stamp bdir
-    # `date +%Y%m%d-%H%M%S`, AND NOT THE PLAN SNIPPET'S `date -u
-    # +%Y%m%dT%H%M%SZ`: `BOX_BACKUP_ROOT`'s own note (:1034-1042) makes the
-    # timestamp shape part of the contract — "the timestamp shape below it is
-    # `prune_backups`' glob (deploy.sh:68-72) — a backup named outside that
-    # shape is a backup the pruner can never reclaim" — and that glob is
-    # `[0-9]{8}-[0-9]{6}` (:7179's loop). The UTC `T…Z` spelling matches it
-    # nowhere, so every backup this function took would accumulate forever. The
-    # three writers already under this root — `_exp_caddyfile` (:3591),
-    # `_upd_backup` (:6878) and `install-session-hooks.sh:38` — all spell it
-    # this way, and the last one is the file this whole function is copied from.
+    # THE FILE'S OWN MODE RIDES THE SWAP, which that installer does NOT do: `mv`
+    # replaces the inode, so an operator's 0600 came back at the umask — 664,
+    # measured. D-1244's remedy, fallback and macOS reason verbatim, :6530-6536.
+    local stamp bdir; fmode="$(_plat_mode "$f" 2>/dev/null || true)"
+    # `date +%Y%m%d-%H%M%S`, NOT THE PLAN SNIPPET'S `date -u +%Y%m%dT%H%M%SZ`:
+    # `BOX_BACKUP_ROOT`'s own note (:1034-1042) makes the shape contractual — "a
+    # backup named outside that shape is a backup the pruner can never reclaim" —
+    # and the glob (deploy.sh:224-228, :7179's loop) is `[0-9]{8}-[0-9]{6}`, which
+    # `T…Z` matches nowhere: every backup here accumulates. EIGHT writers share
+    # this root and all spell it so — :3591, :6481, :6623, :6878, and `TS=` in
+    # all four installers, install-session-hooks.sh:38 among them.
     stamp="$(date +%Y%m%d-%H%M%S)" \
       || _acct_refuse 1 settings-merge "cannot read the clock (date failed), and a backup needs a name — $f is exactly as it was"
     bdir="$BOX_BACKUP_ROOT/$stamp"
@@ -4507,8 +4507,8 @@ _acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
     mkdir -p "$bdir" && cp -a "$f" "$bdir/${dir##*/}.settings.json" \
       || _acct_refuse 1 settings-merge "could not back up $f to $bdir — refusing to rewrite it"
   fi
-  tmp="$f.tmp.$$"
-  jq . <<<"$next" > "$tmp" && mv -f "$tmp" "$f" \
+  tmp="$f.tmp.$$"; [ -n "$fmode" ] || fmode=644
+  jq . <<<"$next" > "$tmp" && chmod "$fmode" "$tmp" && mv -f "$tmp" "$f" \
     || { rm -f "$tmp"; _acct_refuse 1 settings-merge "writing $f failed"; }
 }
 
