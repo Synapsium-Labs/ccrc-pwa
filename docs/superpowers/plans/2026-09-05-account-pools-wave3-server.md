@@ -10,7 +10,29 @@
 
 **Spec:** docs/superpowers/specs/2026-09-04-account-pools-design.md
 
-**Base:** origin/main 2b15144e; branch ws/amber-summit
+**Base:** origin/main `db580771` (#67, the C1 carry); branch `ws/clear-meadow`.
+Written against `2b15144e` on `ws/amber-summit` — both were re-pointed at execution, and the branch
+matters as much as the sha: `ws/amber-summit` is the COORDINATOR's workspace, and a worker committing
+there would leave its own branch tip unmoved and wedge every close with `stale-tip`.
+
+> **EVERY `:NNN` IN THIS PLAN IS A SNAPSHOT OF A 2026-09-04 TREE. NAVIGATE BY SYMBOL.**
+> Re-measured file by file at execution, against `db580771`:
+>
+> | file | drift | verdict |
+> |---|---|---|
+> | `shared/api.ts` | **+13 to +134**, growing with position in the file | every citation stale; grep the symbol |
+> | `server/src/ccdargv.ts` | 0 early, **+35** at `POOLS_CAP` (its own docstring grew) | mixed; grep |
+> | `server/src/fleet.ts` | **+8** (its one citation) | stale |
+> | `server/src/server.ts` | **+1**, and **+2** at the roster emission | near-exact; still verify |
+> | `registry.ts`, `io.ts`, `remote/io.ts`, `limits.ts`, `lifecycle.ts`, `fleetstate.ts`, `coord/mirrorplan.ts`, `pwa/src/lib/api.ts`, `watch.ts`, `auth/gate.ts`, `auth-gate.test.ts` | **0** | EXACT — do not "correct" these |
+>
+> No cited symbol is missing on `db580771`, and no anchor is ambiguous once the surrounding prose is
+> read — the numbers are wrong, the names are not. Two anchors whose bare form recurs tree-wide and
+> must be taken WITH their file: `const read = async (io = localIO) =>` (twice in `registry.test.ts`,
+> :1007 and :1142) and `const collect = (ws: WebSocket` (`fleetws.test.ts:53` and `sessionws.test.ts:62`).
+> Per the coordinator's ruling 3 the forty numbers are NOT patched — a patched number goes stale
+> again on the next merge, and correcting one implies the other hundred were audited. Locate by
+> symbol; where a step below cites a line this pass actually touched, it is corrected in place.
 
 ## Global Constraints
 
@@ -516,9 +538,18 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
 
   it('reads a tag, strips a trailing newline, and refuses a leading space', async () => {
     // `printf '%s'` is the verb's writer, `echo` is the 2am writer (ruling 2),
-    // so trailing whitespace is stripped — TRAILING ONLY, byte for byte with
-    // `_project_pool_state`'s `v=${v%"${v##*[![:space:]]}"}`. A leading space
-    // is malformed on both sides or the two readers disagree.
+    // so trailing whitespace is stripped — TRAILING ONLY. A leading space is
+    // malformed on both sides or the two readers disagree.
+    //
+    // AGREEMENT IS DECIDED ONE LINE EARLIER THAN THIS COMMENT USED TO SAY.
+    // It read "byte for byte with `_project_pool_state`'s
+    // `v=${v%"${v##*[![:space:]]}"}`", and that quote is still VERBATIM
+    // correct — what stopped being true is its SUFFICIENCY. Wave 2a inserted a
+    // 64-byte read cap ABOVE the strip (`grep -n "read -r -d '' -n 64" ccd/ccd`,
+    // D-1850), and the strip cannot see it: a valid name padded with 58+ bytes
+    // of trailing whitespace is `malformed` to `ccd` and would strip back to a
+    // clean tag here. The cap is mirrored below, and the padded case is one of
+    // the cases in this describe.
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b\n');
     tag('acct-a-demo', ' pool-a');
@@ -701,9 +732,21 @@ export async function readProjectPools(
       tags.set(name, { state: 'unreadable' });
       continue;
     }
-    // TRAILING whitespace only, byte for byte with `_project_pool_state`'s
-    // `v=${v%"${v##*[![:space:]]}"}`: `echo pool-a > …` is a legal writer
-    // (ruling 2), a leading space is not, and the two readers must agree.
+    // THE CAP COMES FIRST, exactly as it does on the other side. `ccd` reads
+    // the tag with `IFS= read -r -d '' -n 64` (`grep -n "read -r -d '' -n 64"
+    // ccd/ccd`) and answers `malformed` when that read succeeds — i.e. when 64
+    // bytes arrive without hitting EOF, or when a NUL is embedded. Both cut at
+    // the same byte here, BEFORE the strip, or the two readers disagree on a
+    // hand-constructible input: a valid name plus 58+ bytes of trailing
+    // whitespace is `malformed` there and would be `tagged` here.
+    if (read.content.length > 64 || read.content.includes('\0')) {
+      tags.set(name, { state: 'malformed' });
+      continue;
+    }
+    // TRAILING whitespace only: `echo pool-a > …` is a legal writer (ruling 2),
+    // a leading space is not. The quote this comment used to carry —
+    // `v=${v%"${v##*[![:space:]]}"}` — is still verbatim at `ccd`'s strip, but
+    // it is no longer the whole rule (D-1850); the cap above is the rest of it.
     const value = read.content.replace(/\s+$/, '');
     tags.set(name, POOL_NAME_RE.test(value)
       ? { state: 'tagged', name: value }
@@ -3336,3 +3379,25 @@ is never a ledger number.
   unlistable registry no longer lies with 404. `crossPool: true` skips the verdict AND the 503, as the
   spec's own else-structure reads; an undecidable tag is then refused by `cmd_swap`'s guard one box over
   and reaches the caller as a 502 carrying `ccd`'s sentence.
+
+### Found during execution
+
+Allocated in their own calls at the moment they were found, never taken from a gap in the plan-time
+block above.
+
+- **D-2008 (2026-09-08)** (Task 2, Task 7) — DISCLOSED, NOT CLOSED: capping the VERDICT does not
+  bound the TRANSFER. Task 2 now mirrors `ccd`'s 64-byte read cap so the two readers cut at the same
+  byte (coordinator ruling 1), but the cap is applied to `read.content` — i.e. AFTER the whole file
+  has been read. On `CCRC_FLEET=remote` that read is the agent's `readWhole` (`agent/src/fileops.ts`,
+  `grep -n 'readWhole' agent/src/fileops.ts`), which is uncapped, so the bytes still cross the fleet
+  WebSocket in full; on `local` it is `localIO.readFileMeasured`, a bare `readFile(p,'utf8')`, equally
+  uncapped. Task 7 then puts that read on the WATCHER TICK — one whole-file read per tagged project
+  per tick. This is D-1850's own hazard restated in TypeScript on a faster loop, and D-1850's argument
+  names a non-adversarial constructor: `ln -s ~/.cc-sessions/swap.log pools/<p>` is a tag that grows
+  on every swap append. A 100 MB tag is then read whole, per tick, per project.
+  **Why it is not closed here:** a bounded read is a NEW agent op — a new frame, a new whitelist
+  entry, a new failure contract on both sides — and this wave's Global Constraint is that the server
+  adds no agent surface. It is stated in the source at the read, not only here.
+  **Spec drift this does NOT fix, flagged for wave 5:** §5.4.4's algorithm block, its step 4, and the
+  "every reader strips trailing whitespace" sentence all predate the cap and describe a reader that no
+  longer exists on either side. Wave 5 corrects the spec; this wave does not edit it.
