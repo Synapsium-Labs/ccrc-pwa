@@ -392,7 +392,16 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     const home = box('ccrc-account-roster-inert-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     const before = readdirSync(join(home, '.ccrc')).sort();
-    run(home, ['account', 'roster']);
+    const r = run(home, ['account', 'roster']);
+    // THE READ HAS TO HAVE SUCCEEDED, or this case measures nothing. A verb
+    // that refused before it opened anything also writes nothing, so without
+    // these two lines the assertion below is green for the wrong reason —
+    // measured at review round 1 by setting `ACCT_SUBS=""`, which disables the
+    // subcommand entirely and makes every call refuse at exit 2: the case still
+    // passed. The claim is "a SUCCESSFUL read writes nothing", and success is
+    // half of it.
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['ok']).toBe(true);
     expect(readdirSync(join(home, '.ccrc')).sort()).toEqual(before);
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
   });
@@ -465,7 +474,7 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     // are about to be read — an oversize target reached through a 30-byte link
     // would sail past `WRAPPER_OVERSIZE_BYTES` and be read to its last line,
     // which is the obligation this verb exists to honour. Both sizing callers
-    // already in the tree pass `-L` (ccd/ccrc:2595, ccrc-doctor-checks:2542).
+    // already in the tree pass `-L` (ccd/ccrc:2601, ccrc-doctor-checks:2542).
     //
     // The pick list's own number is the second half: an operator choosing from
     // a list would be shown the link's length rather than the launcher's size.
@@ -483,6 +492,50 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     expect(oneObject(run(home, ['account', 'candidates']))['candidates']).toEqual([]);
   });
 
+  it('refuses when it cannot size an id-shaped file, instead of listing one without a size', () => {
+    // THE GUARD AT ccd/ccrc:3972-3973, WHICH NOTHING PINNED UNTIL REVIEW
+    // ROUND 1 (deleting both lines left this file at 25 passed). The verb's own
+    // comment states the direction and it is not the obvious one: an id-shaped,
+    // undeclared file this run cannot SIZE is a REFUSAL and not a skip, because
+    // it might be a candidate and this run cannot tell — `ccrc-adopt`'s
+    // direction for the same unmeasurable (ccrc-wrapper-shape:153-154 names
+    // both directions and why they differ). A pick list is a list of things to
+    // CHOOSE, so "here is one, no idea how big" invites a choice on no evidence.
+    //
+    // POISONING `stat` IS THE WAY IN. `_plat_size` shells out to it
+    // (ccd/ccrc:150), and `ghContainedEnv` puts `<home>/.local/bin` FIRST on
+    // PATH (ccdWsHelpers.ts:185), so a shim there outranks the real one — the
+    // same mechanism as this file's `env()` poisons for curl/systemctl/launchctl.
+    // It is planted per-CASE rather than in `env()` because a box with no
+    // working `stat` is this one case's subject and every other case's broken
+    // fixture.
+    //
+    // `stat` IS ITSELF ID-SHAPED — it matches WRAPPER_ID_RE, so the scan sees
+    // the poison — and it is dropped by `_wrap_declares_config_dir` exactly as
+    // the four harness poisons are (the empty-list case below names that
+    // mechanism). Measured separately at review round 1 with a FUNCTIONAL
+    // `#!/bin/sh` shim of the same name and the same shape: candidates came
+    // back `['lab-dev0']`, so the poison contributes nothing to the very list
+    // it is here to prevent.
+    //
+    // WITHOUT THE GUARD this is not a refusal at all: `sz` stays empty, the
+    // size comparison one line down errors on a non-integer and `continue`s, and
+    // every file — including the launcher planted here — is silently skipped.
+    // The verb answers `{"candidates":[]}` at exit 0: "nothing to connect" and
+    // "I cannot see" arriving as one value.
+    const home = box('ccrc-account-cands-unmeasurable-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantLauncher(home, 'lab-dev0', wrapperBody('.claude-lab-dev0'));
+    writeFileSync(join(home, '.local', 'bin', 'stat'),
+      '#!/bin/sh\necho "ccrc tests must never size with this box\'s stat" >&2\nexit 97\n',
+      { mode: 0o755 });
+    const r = run(home, ['account', 'candidates']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['ok']).toBe(false);
+    expect(j['error']).toBe('unmeasurable');
+  });
+
   it('prints no byte of any candidate\'s contents', () => {
     // `_check_wrappers`' PATHS-ONLY rule. A launcher on a real box can carry an
     // API key on its `export` line; a pick list that echoed it would be the
@@ -496,6 +549,16 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
       + 'export ANTHROPIC_AUTH_TOKEN=CANARY-8b41d2-not-a-real-token\nexec claude "$@"\n',
       { mode: 0o755 });
     const r = run(home, ['account', 'candidates']);
+    // THE PICK LIST HAS TO EXIST FIRST, and `lab-dev0` has to be IN it. A
+    // refusal prints no candidate's bytes either, so on its own the canary
+    // assertion is green with the subcommand disabled — measured at review
+    // round 1 with `ACCT_SUBS=""`. Naming the candidate is the stronger half:
+    // `_wrap_declares_config_dir` only lists a file it OPENED and read to the
+    // last line, so a launcher that appears here is a launcher whose canary
+    // line was genuinely read and genuinely not echoed.
+    expect(r.code).toBe(0);
+    const cands = oneObject(r)['candidates'] as { name: string }[];
+    expect(cands.map((c) => c.name)).toContain('lab-dev0');
     expect(r.stdout + r.stderr).not.toContain('CANARY-8b41d2');
   });
 
@@ -523,13 +586,14 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
  *  it has `refuse` — the op this file was born with, and the one every refusal
  *  on either side goes through — and answers an op it does not know the way
  *  `main` does today, with a usage line on STDERR, NOTHING on stdout and
- *  exit 2.
+ *  exit 2 — or, for a case that needs a shape that is NOT skew, whatever
+ *  `unknownOpExit` says instead.
  *
  *  That is not a hypothetical shape: it is the shape of the box this very
  *  commit creates while it is half-deployed. `ccd/ccrc` lands by
  *  `install_atomic` and `deploy/` by rsync, so a run can find a ccrc that
  *  knows `roster` beside an `account-op.mjs` that does not. */
-function skewedBox(prefix: string): string {
+function skewedBox(prefix: string, unknownOpExit = 2): string {
   const home = box(prefix);
   rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
   mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
@@ -542,7 +606,7 @@ function skewedBox(prefix: string): string {
     + '  process.exitCode = 0;\n'
     + '} else {\n'
     + '  process.stderr.write("usage: node deploy/account-op.mjs <refuse> [--<key> <value>]…\\n");\n'
-    + '  process.exitCode = 2;\n'
+    + `  process.exitCode = ${unknownOpExit};\n`
     + '}\n');
   return home;
 }
@@ -582,6 +646,28 @@ describe('ccrc account: the seam with deploy/account-op.mjs', () => {
     // The measured fact, not a guess about the cause: the exit code it gave.
     expect(String(j['detail'])).toContain('exited 2');
     expect(String(j['detail'])).toMatch(/re-run the install|redeploy/);
+  });
+
+  it('names the cause from the exit code, and does not blame a stale build for a kill', () => {
+    // REVIEW ROUND 1. `_acct_answer` measures ONE thing — "stdout was empty" —
+    // and its own comment says it does not guess WHY; the remedy sentence then
+    // guessed anyway, naming version skew as "the known cause" for all four
+    // conditions. Two of them provably are not skew, and `skewedBox` above is
+    // the proof: an OLD build answers an op it does not have with exit **2**,
+    // so an exit of 137 is a process that was KILLED and nothing about the
+    // build will change it. Handing that operator "re-run the install" is a
+    // remedy for a fault they do not have.
+    const home = skewedBox('ccrc-account-skew-killed-', 137);
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = run(home, ['account', 'roster']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('no-answer');
+    // The measured fact is still carried verbatim, exactly as the rc=2 case
+    // above asserts it — what changes is only the sentence that follows.
+    expect(String(j['detail'])).toContain('exited 137');
+    expect(String(j['detail'])).toContain('signal 9');
+    expect(String(j['detail'])).not.toContain('half-updated box');
   });
 
   it('closes the same seam for candidates, not just for roster', () => {

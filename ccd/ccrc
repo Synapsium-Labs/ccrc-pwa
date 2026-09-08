@@ -2584,8 +2584,14 @@ cmd_wrappers() {
   # cost was the ~75 forks rather than the reads. `-L`, because a symlink's own
   # size is the length of its target string — `gpt -> ccgpt` stats as 33 bytes
   # while the file behind it is 7.8 KB, and a scan that measured the link would
-  # then read the target whole. (`ccrc-doctor-checks`'s own size gate omits
-  # `-L`; that is a separate defect, recorded, not fixed here.)
+  # then read the target whole. (`ccrc-doctor-checks:2542` passes `-L` for the
+  # same reason, and so does `_acct_candidates` at :3971 — every sizing caller
+  # in this tree spells it the same way. This parenthetical used to say doctor's
+  # gate OMITTED `-L` and call that "a separate defect, recorded"; it names no
+  # deviation because there is none, and it was false when written. Corrected at
+  # Task 21's review round 1, which is when a third `-L` caller landed 1300
+  # lines below and cited doctor's gate AS a `-L` caller, leaving the tree
+  # asserting both things about one line.)
   #
   # `stat` prints one line per operand IN OPERAND ORDER and simply omits one it
   # could not answer for, so a count mismatch is the ONLY way a size could be
@@ -3775,20 +3781,53 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # future task (Task 21+) makes $2 or $3 something other than a fixed
   # literal.
   #
-  # RE-EXAMINED AT TASK 21, AND IT STILL HOLDS. That task added four call
-  # sites (`_acct_answer`, `_acct_shape` x3, `_acct_candidates` x3) and every
-  # one of them passes a literal class, a literal code and a double-quoted
-  # sentence — interpolated (`$rc`, `$1`, `$sh`, `$shape`, `$name`) but still
-  # exactly one word per argument after expansion, which is the property this
-  # paragraph rests on. Nothing yet passes an operator's own bytes here.
+  # RE-EXAMINED AT TASK 21. THE CONCLUSION HOLDS; THE FIRST WORDING OF THIS
+  # PARAGRAPH DID NOT (corrected at review round 1). Task 21 added NINE call
+  # sites, not four: `_acct_answer` x1, `_acct_shape` x3, `_acct_candidates`
+  # x3, and `cmd_account` x2 — the two `unknown-argument` refusals at the
+  # `roster` and `candidates` arms (:4040, :4045). Those last two are the ones
+  # the first wording both under-counted and mis-described: it said "nothing yet
+  # passes an operator's own bytes here", and they pass `"$1"`, which is exactly
+  # the operator's own argument after `shift`. So this IS the day the paragraph
+  # above asked to be re-examined on, and it must not be read as saying that day
+  # has not come.
+  #
+  # WHY IT STILL HOLDS — AND THE REASON IS POSITIONAL, NOT STRUCTURAL, WHICH IS
+  # THE HALF A FUTURE TASK MUST CARRY AWAY. Two facts, both about `$3`:
+  #   - it is a DOUBLE-QUOTED expansion, so whatever the operator typed —
+  #     spaces, a `"`, a `\`, an embedded newline — arrives as exactly ONE argv
+  #     word and can never be read as a third `--key`;
+  #   - every sentence puts those bytes MID-SENTENCE, after prose, so `$3` can
+  #     never BEGIN with `--` and can never be swallowed as a key by a
+  #     value-taking flag (M6's shape).
+  # Measured at review round 1 with `--code`, `--detail`, `x" --code y` and an
+  # embedded newline: one argv word each, never leading with `--`, and the
+  # newline emerges JSON-escaped so the one-line stdout contract survives.
+  #
+  # The second fact is a property of how each sentence is WRITTEN, not of the
+  # mechanism. A future site spelled `_acct_refuse 2 bad-value "$sub"` — the
+  # operator's bytes FIRST — would lose it, and is the shape to refuse.
   _acct_node refuse --code "$2" --detail "$3" \
     || _ccrc_die "could not print a refusal envelope for \"$2\": $3 — and the caller of this verb parses stdout, so it must hear about that rather than read an empty body"
   exit "$1"
 }
 
 _acct_answer() {   # <op> [--<key> <value>]… — the answer, or a refusal that HAS a body
-  # THE EMPTY-BODY SEAM, CLOSED HERE (Task 21; Task 20's review named it and
-  # left it open because nothing could reach it yet).
+  # THE EMPTY-BODY SEAM, CLOSED FOR THE SKEW SHAPE AND NOT FOR ALL OF IT
+  # (Task 21; Task 20's review named it and left it open because nothing could
+  # reach it yet — narrowed at review round 1, which measured what stays open).
+  #
+  # WHAT CLOSES HERE: `deploy/account-op.mjs` is PRESENT and merely OLDER. It
+  # still has `refuse`, so the envelope this function asks for can actually be
+  # printed, and the caller hears a refusal instead of two bytes of exit code.
+  #
+  # WHAT DOES NOT, AND CANNOT CLOSE HERE: that file MISSING or broken. Measured
+  # at review round 1 on a box with no `ccrc/deploy/account-op.mjs` — exit 1,
+  # stdout EMPTY, `_ccrc_die` on stderr — because the writer of the refusal is
+  # the file that is gone, so `_acct_refuse` below falls through its own `||`.
+  # That is the trap `_acct_refuse` documents one function up (:3810-3811), reached
+  # from the other side, and closing it is the same seam change that paragraph
+  # declines: it needs a refusal path that does not go through node at all.
   #
   # `deploy/account-op.mjs`'s `main` answers an op it does not have with exit 2,
   # a `usage:` line on STDERR and NOTHING on stdout. That is right for a human
@@ -3821,18 +3860,42 @@ _acct_answer() {   # <op> [--<key> <value>]… — the answer, or a refusal that
   # still reaches the operator verbatim while it is being written. `$( )` strips
   # trailing newlines and the `printf` puts exactly one back, which is the shape
   # every op writes and the shape `oneObject` pins.
-  local body rc
+  #
+  # THE CAUSE SENTENCE IS CONDITIONED ON THE ONE THING THIS FUNCTION MEASURED
+  # (review round 1). Version skew has a SIGNATURE — `main` answers an op it
+  # does not have with exit 2 — and this refusal used to name skew as "the
+  # known cause" unconditionally, which handed "re-run the install" to an
+  # operator whose node was OOM-killed at 137 and whose build is fine. Two
+  # conditions, one remedy, is the same collapse the code above refuses to make;
+  # the code did not guess WHY, and then the prose did.
+  local body rc cause
   body="$(_acct_node "$@")"; rc=$?
-  [ -n "$body" ] \
-    || _acct_refuse 1 no-answer "deploy/account-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. The known cause is a half-updated box: ccrc and deploy/account-op.mjs ship together and must be one build, and an older copy of that file answers an op it does not have with an exit code and no body at all. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  if [ -z "$body" ]; then
+    if [ "$rc" -eq 2 ]; then
+      cause="The known cause is a half-updated box: ccrc and deploy/account-op.mjs ship together and must be one build, and an older copy of that file answers an op it does not have with exactly this — exit 2, a usage line on stderr and no body at all. Re-run the install (or redeploy), then re-run this."
+    elif [ "$rc" -gt 128 ]; then
+      cause="An exit above 128 is a process that was KILLED rather than one that answered: $rc is signal $((rc - 128)). Look for an OOM kill or a timeout on this box, not for a stale build — re-installing will not change it."
+    else
+      cause="Nothing in this tree is known to exit $rc with an empty body, so this run cannot name a cause. deploy/account-op.mjs's own message on stderr above, if it wrote one, is the only evidence there is."
+    fi
+    _acct_refuse 1 no-answer "deploy/account-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. $cause Nothing was written."
+  fi
   printf '%s\n' "$body"
   return "$rc"
 }
 
 _acct_roster_path() { printf '%s' "$HOME/.ccrc/accounts.json"; }
 
-# The shape contract, sourced rather than restated — `cmd_wrappers`' reasoning
-# (:2306-2316) applies unchanged, and this verb needs it for three things:
+# The shape contract, sourced rather than restated — `ccrc-adopt:105-112`'s
+# reasoning, and NOT `cmd_wrappers:2307-2310`'s, which this comment cited until
+# review round 1. That one is writer-specific by its own words ("this verb is
+# the one that most needs it: it is the WRITER, and the writer judging 'is this
+# file mine' by a second, looser copy of the reader's rules is how a generator
+# comes to disown its own output") and `_acct_candidates` writes nothing at all.
+# The reason that DOES bind a pure reader is adopt's: a second copy of the
+# wrapper shape "is exactly how a checker and a generator drift into agreeing
+# with each other about a shape neither tool writes" — and this verb is the
+# checker in that sentence. It needs three things from the contract:
 # `WRAPPER_ID_RE`, which every `--id` is measured against before a path is built
 # from it, the two predicates that define a candidate, and the size bound those
 # predicates oblige their caller to apply first.
@@ -3851,9 +3914,17 @@ _acct_shape() {
 
 _acct_candidates() {
   _acct_shape
+  # `projection-*`, NOT `roster-*` (D-1923). Two files, two remedies: this one
+  # is `ccrc install`'s GENERATED projection of `~/.ccrc/accounts.json`, and its
+  # fix is to regenerate it, while `readRoster`'s three `roster-*` codes are
+  # about the JSON an operator wrote by hand and their fix is to edit it. The
+  # pair (subcommand, code) does not rescue the overload, which is what makes it
+  # a defect rather than a wrinkle: `declare` (Task 27) and `add` (Task 24) read
+  # BOTH files from ONE subcommand, so a caller hearing `roster-absent` could
+  # not tell which file to go and fix.
   local sh="$HOME/.ccrc/accounts.sh"
   [ -f "$sh" ] \
-    || _acct_refuse 1 roster-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
+    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
   # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5343-5350): the projection
   # declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` in the SAME `_ccrc_*`
   # namespace as `_ccrc_die`, and sourcing it here would let a generator change
@@ -3863,7 +3934,7 @@ _acct_candidates() {
     # shellcheck source=/dev/null
     . "$sh" || exit 1
     printf '%s' "${CCRC_ACCOUNTS[*]+${CCRC_ACCOUNTS[*]}}"
-  )" || _acct_refuse 1 roster-invalid "$sh could not be sourced, so this box cannot say which launchers are already declared. Nothing was written."
+  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced, so this box cannot say which launchers are already declared. Nothing was written."
 
   # `_check_wrappers`' `wr_cands` block (ccrc-doctor-checks:2388-2401) run
   # through the same predicates, with the size hoisted ahead of the two that
@@ -3895,7 +3966,7 @@ _acct_candidates() {
     # would sail past the cap and be read to its last line: the exact obligation
     # this hoist exists to honour, defeated by the hoist. It would also print
     # the link's length as the launcher's size in a pick list. Both sizing
-    # callers already in this tree pass `-L` for the same reason (:2595,
+    # callers already in this tree pass `-L` for the same reason (:2601,
     # ccrc-doctor-checks:2542).
     sz="$(_plat_size -L -- "$f" 2>/dev/null)" || sz=""
     [[ "$sz" =~ ^[0-9]+$ ]] \
@@ -3972,7 +4043,13 @@ cmd_account() {
       ;;
     candidates)
       [ $# -eq 0 ] || _acct_refuse 2 unknown-argument "ccrc account candidates takes no arguments, and got \"$1\""
-      _acct_candidates
+      # `|| exit $?`, THE SAME AS `roster` ABOVE (review round 1). It
+      # propagates nothing today — every failure path inside `_acct_candidates`
+      # `exit`s — and that is exactly the point: two arms of one dispatcher must
+      # not differ in a way that is only correct by accident. The first future
+      # path that RETURNS non-zero instead of exiting would otherwise be
+      # swallowed here and answered as exit 0 over whatever stdout carried.
+      _acct_candidates || exit $?
       return 0
       ;;
     *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
@@ -4297,9 +4374,12 @@ _inst_accounts_sh() {   # ccrc-OWNED: regenerated every run FROM THE INSTALLED r
   # plain read of the file the previous step just guaranteed exists — and the
   # generator's refusal is the whole error path for a roster an operator broke
   # by hand: its `gen-accounts: remedy: …` line reaches stderr verbatim,
-  # because stderr is deliberately NOT captured (`cmd_wrappers:1125-1133` makes
+  # because stderr is deliberately NOT captured (`cmd_wrappers:2401-2409` makes
   # the same choice for the same reason — re-wording a fix into a shrug helps
-  # nobody).
+  # nobody: :2401-2405 is the reasoning, :2406-2409 the code. This cited
+  # :1125-1133 until Task 21's review round 1; that range is inside `usage()`,
+  # which starts at :1109, and is the help text for the `wrappers` and `account`
+  # verbs — `cmd_wrappers` itself does not begin until :2289).
   local dest="$HOME/.ccrc/accounts.sh" out tmp
   out="$(node "$CCRC_HERE/../deploy/gen-accounts.mjs" "$HOME/.ccrc/accounts.json")" \
     || _ccrc_die "\$HOME/.ccrc/accounts.json does not validate — fix it (or move it aside to reseed) and re-run"
