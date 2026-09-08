@@ -15339,3 +15339,64 @@ Wave 3 must either enable CSS in the PWA vitest config or carry those measuremen
 and must say which. Two shipped facts confirm the defects are real and not canvas-only: `primitives.css:234-247`
 really does set `.btn-primary { display: flex }`, and `fleet.css:747` really does read `var(--limit-crit,
 #f85149)` against a token spelled `--limit-critical` (`tokens.css:167`, `:365`).
+
+### D-1904 — §1's "gpt is kill-switched since 2026-07-28" is false as of 2026-09-08, and the verb it shapes changes meaning
+
+Spec §1 item 7 (`:91-92`) states *"gpt is kill-switched by `~/.cc-sessions/gpt-disabled` since 2026-07-28."*
+Measured 2026-09-08 on this box: `ls ~/.cc-sessions/gpt-disabled` → **No such file or directory**. `origin/main`'s
+`065882ae` ("an enabled non-home-able lane rejoins the auto-swap rotation", PR #61) removed it and, in the same
+commit, changed what a non-home-able lane *is*: `_default_pool` (`origin/main:ccd/ccd:11714-11716`) now appends
+every non-home-able account that passes `_account_ok`, and `_swap_target` (`:11887`) scores home-able and
+non-home-able candidates in two separate brackets (`best`/`obest`, branch at `:11960`), emitting `obest` only
+when `best` is empty (`:11969-11970`) — a LAST RESORT, never peer-ranked.
+
+**Why this reaches wave 1 and not only the prose.** `ccrc account enable|disable` drives *that exact file*. Under
+the old world the verb meant "bring a dead lane to life / kill it"; under `065882ae` the lane is already in every
+session's swap pool while the file is absent, so the verb now means **raise or lower a per-lane brake on a lane
+that is otherwise in the rotation.** The refusal text, the `ccd ls` line and the PWA's eventual copy must say the
+second thing. `065882ae:ccd/ccd:14151` already prints
+`"gpt overflow lane: $(_gpt_status)  —  $gpt_here session(s) currently on it"`, and `_gpt_status`'s disabled arm
+(`:1262`) prints `DISABLED (kill-switch; rm $GPT_DISABLE_FILE to re-enable)` — so main has ALREADY shipped the
+user-facing vocabulary this wave's verbs must not contradict. Tasks 20-33 are unaffected in their anchors; the
+constraint is on wording and on the enable/disable semantics, and it lands when those subcommands are briefed.
+
+Correcting the spec sentence is deferred with the rest of the §1/§11 pass (D-1905), because the spec file is
+touched by this branch and by nothing on main, so the edit is safe at any point in the wave.
+
+### D-1905 — §11's "no telemetry for this lane" is false for gpt, and `telemetry: 'none'` is a roster claim, not a fact about a lane
+
+Spec §11 (`:749-750`) says the external-account row renders usage as *"no telemetry for this lane"* instead of
+bars. Measured 2026-09-08: `systemctl --user is-enabled ccgpt-usage.timer` → **enabled**, `active (waiting)`,
+last fired 08:09:26 and next at 08:29:26 — the 20-minute cadence its own unit description states — and
+`~/.cc-limits/gpt.json` (mtime 2026-09-08 08:09:32) reads
+`{"five": null, "seven": 0, "ts": 1788854972, "fiveResetAt": null, "sevenResetAt": 1789459772}`: the
+**weekly-only shape**, five null and seven a number.
+
+The defect the spec sentence hides is a category error this repo already has a rule against — *no overloaded
+null at a seam*. `telemetry: 'none'` is a **declaration in the roster** meaning "this account will never report
+rate limits, so its permanent unknown is not permanent emptiness" (README `:646-647`). It is NOT a measurement of
+whether a lane happens to have a usage file today. §11 collapses the two, so a lane whose roster says `'none'`
+while `~/.cc-limits/<id>.json` is being written every 20 minutes renders as untelemetered — and, worse, the
+five/seven asymmetry is a THIRD state (five genuinely absent, seven present) that "no telemetry for this lane"
+erases entirely. The wave-3 accounts screen must render from the roster declaration AND the measured file, and
+must not fold the weekly-only shape into either "no telemetry" or "0%".
+
+### D-1906 — Task 8's README paragraph must be composed against `origin/main`, not against the merge-base
+
+Task 8 replaces `README.md:641-647` (the account-entry paragraph). `origin/main` rewrites the same lines:
+`065882ae`'s hunk is `@@ -646 +656,7 @@`, and it replaces the clause *"`homeAble: false` holds an account out of
+automatic placement;"* with seven lines explaining the overflow lane and naming
+**`touch ~/.cc-sessions/<id>-disabled` as "the per-lane brake"** — the file this wave's `enable`/`disable` verbs
+operate (D-1904).
+
+Task 8 as briefed would therefore, on merge, delete main's paragraph and leave the README describing the brake
+nowhere while this wave's verbs drive it. **Task 8 is DEFERRED** until the operator's merge decision, and its
+replacement paragraph must be composed against main's text.
+
+This also corrects the METHOD behind the 2026-09-07 divergence ruling, which is the more useful finding:
+`git merge-tree` names only files BOTH sides have ALREADY changed, so it is structurally blind to a file main has
+changed that the wave has not yet reached. A conflict probe run before the edit cannot see the edit. The right
+measurement is main's changed-file list against the wave's REMAINING task list — done 2026-09-08, and it also
+corrected the claim that main does not touch `ccd/ccrc`: it does, in exactly one 1-for-1 comment line at `:1030`
+("the five functions `shared/generate.mjs` emits" → "the six"), which shifts nothing and sits nowhere near Task
+20's five anchors, all of which were re-measured today and all of which hold.
