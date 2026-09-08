@@ -19,7 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,20 +38,22 @@ const ccrcIn = (home: string): string => join(home, 'ccrc', 'ccd', 'ccrc');
 
 /** A box carrying the tree `ccrc account` resolves against. `deploy` and
  *  `shared` are symlinked WHOLE because `deploy/account-op.mjs` imports
- *  `../shared/roster-json.mjs` and `../shared/base-url.mjs`, and node resolves
- *  both through the link's realpath — the fixture never needs a copy of either
- *  directory, which is also why a new sibling import costs this fixture
- *  nothing. (`ccrc-doctor.test.ts` COPIES instead, and there the closure has to
- *  be listed file by file — Task 33.)
+ *  `../shared/roster-json.mjs` (and, from Task 23's `check-add` on,
+ *  `../shared/base-url.mjs` too — `account-op.mjs`'s own header states the
+ *  same fact), and node resolves both through the link's realpath — the
+ *  fixture never needs a copy of either directory, which is also why a new
+ *  sibling import costs this fixture nothing. (`ccrc-doctor.test.ts` COPIES
+ *  instead, and there the closure has to be listed file by file — Task 33.)
  *
  *  IT ALSO MATERIALISES THE CONTAINMENT BINS, and that last line is not
  *  housekeeping. `ghContainedEnv` → `harnessBin` (ccdWsHelpers.ts:123-127) does
  *  `mkdirSync(<home>/.local/bin)` and then writes the `gh` poison
- *  (:177-180), and `env()` below writes three more beside it — so
+ *  (:177-179), and `env()` below writes three more beside it — so
  *  `~/.local/bin` goes from ABSENT to four entries the first time anything
- *  calls `run()`. Any test that brackets a run with a directory snapshot
- *  (`untouched()`, below) would be measuring the HARNESS arriving rather than
- *  the verb writing, and would red on every refusal row for a reason that has
+ *  calls `run()`. A test that brackets a run with a directory snapshot — the
+ *  shape "leaves the box alone" (below) checks with `existsSync`, not a
+ *  listing — would be measuring the HARNESS arriving rather than the verb
+ *  writing, and would red on every refusal row for a reason that has
  *  nothing to do with the refusal under test. Building the env once here, at
  *  box-construction time, moves that arrival before the baseline. `env()` is
  *  idempotent — it rewrites the same four files with the same bytes — so the
@@ -156,8 +158,13 @@ describe('ccrc account: the dispatcher', () => {
     const home = box('ccrc-account-subs-');
     for (const sub of shippedSubs()) {
       const j = oneObject(run(home, ['account', sub]));
-      expect(j['error'], `${sub} is in ACCT_SUBS but the dispatcher refuses it`)
-        .not.toBe('unknown-subcommand');
+      // Both refusal codes a listed-but-undispatched name can hide behind:
+      // `unknown-subcommand` (the loop didn't match it — can't happen if it's
+      // really in ACCT_SUBS) and `internal-no-arm` (the loop matched it but the
+      // `case` below has no arm for it — the half this assertion used to miss).
+      expect(['unknown-subcommand', 'internal-no-arm'],
+        `${sub} is in ACCT_SUBS but the dispatcher refuses it`)
+        .not.toContain(j['error']);
     }
     const j = oneObject(run(home, ['account', 'definitely-not-a-sub']));
     expect(j['error']).toBe('unknown-subcommand');
@@ -210,6 +217,20 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
     const r = node(['refuse', '--code', 'x', '--detail', 'y', '--nope', 'z']);
     expect(r.code).toBe(2);
     expect(JSON.parse(r.stdout)['error']).toBe('bad-argv');
+  });
+
+  it('a value beginning with -- is refused, not silently consumed', () => {
+    // Reproduces the review-round-1 finding (M6): without the guard,
+    // `--detail` here (meant as `--code`'s VALUE) is swallowed as that value,
+    // and `z` is misread as `--detail`'s own key — `{"ok":false,"error":"--detail","detail":"z"}`
+    // at exit 0. Task 21's `repeat`-keyed `candidates` is the first place an
+    // operator-controlled value could ever shadow a flag this way.
+    const r = node(['refuse', '--code', '--detail', '--detail', 'z']);
+    expect(r.code).toBe(2);
+    const j = JSON.parse(r.stdout);
+    expect(j['ok']).toBe(false);
+    expect(j['error']).toBe('bad-argv');
+    expect(String(j['detail'])).toMatch(/starts with "--"/);
   });
 
   it('the deploy mirror agrees with shared/providers.ts, column by column', () => {

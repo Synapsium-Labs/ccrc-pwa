@@ -236,8 +236,9 @@ describe('the provider table has ONE home, in a scan that can see a .mjs', () =>
     // scanner people work around. `deploy/account-op.mjs` needs four of this
     // table's columns and cannot import TypeScript either, so it carries them
     // as four PER-COLUMN projections — `PROVIDER_ENV_VAR`, `PROVIDER_BASE_URL`,
-    // `PROVIDER_CONNECT`, and two id sets — and composes the per-provider view
-    // it hands callers at load time from those. Each column is compared to this
+    // `PROVIDER_CONNECT`, and one id set (`PROVIDER_GENERATABLE`) — and
+    // composes the per-provider view it hands callers at load time from
+    // those. Each column is compared to this
     // table's own projection of it by `ccrc-account.test.ts`'s `providers`
     // agreement test, element for element, in both directions. That is derived
     // data with a named source and a red suite behind it; a hand-written ROW

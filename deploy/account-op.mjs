@@ -123,12 +123,23 @@ const PROVIDER_CONNECT = {
 const PROVIDER_GENERATABLE = new Set(['anthropic', 'openrouter', 'compatible']);
 
 /** The per-provider view every caller in this file reads, composed at load time
- *  from the four columns above. Its keys are the ids, in the columns' own
- *  order, so `Object.keys` here is the deploy side's `PROVIDER_IDS` and no
- *  second id list exists. `providers` prints this object; the agreement test
- *  rebuilds it from `shared/providers.ts` and compares. */
+ *  from the four columns above. The keys are the UNION of all four columns'
+ *  own keys, not `PROVIDER_ENV_VAR`'s alone — a stray id in any one column
+ *  (a typo, a copy-paste leftover) has to surface in this composed view for
+ *  the agreement test to catch it, rather than being silently dropped by
+ *  whichever column iteration happened to pick. In the shipped table the four
+ *  key sets agree, so the union is exactly `PROVIDER_IDS` today; a provider
+ *  named in only three of the four columns would print `undefined` for the
+ *  missing one here instead of vanishing, which is the visible failure this
+ *  view exists to guarantee. `providers` prints this object; the agreement
+ *  test rebuilds it from `shared/providers.ts` and compares. */
 const PROVIDER_DEPLOY = Object.fromEntries(
-  Object.keys(PROVIDER_ENV_VAR).map((p) => [p, {
+  [...new Set([
+    ...Object.keys(PROVIDER_ENV_VAR),
+    ...Object.keys(PROVIDER_BASE_URL),
+    ...Object.keys(PROVIDER_CONNECT),
+    ...PROVIDER_GENERATABLE,
+  ])].map((p) => [p, {
     generatable: PROVIDER_GENERATABLE.has(p),
     envVar: PROVIDER_ENV_VAR[p],
     defaultBaseUrl: PROVIDER_BASE_URL[p],
@@ -136,7 +147,7 @@ const PROVIDER_DEPLOY = Object.fromEntries(
   }]),
 );
 
-/** DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccd/ccrc-doctor-checks:165) and
+/** DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccd/ccrc-doctor-checks:166) and
  *  `ccd/ccrc-api`'s `ROUTES` shape: one row per op, naming the keys it takes.
  *  `repeat` lists the keys that may appear more than once and arrive as an
  *  array — `candidates` (Task 21) is the first, and declaring the shape now is
@@ -160,7 +171,21 @@ function refuse(code, detail) {
 
 /** `--key value` pairs, refused rather than ignored. An unknown key is a
  *  refusal because this file's whole caller is another program: a silently
- *  dropped `--base-url` would be an endpoint nobody notices missing. */
+ *  dropped `--base-url` would be an endpoint nobody notices missing.
+ *
+ *  THE WALK IS STRICT `i += 2` — every even slot from argv[3] on is read as a
+ *  key, every odd slot as that key's value, no exceptions. A value that
+ *  itself starts with `--` is refused rather than accepted: were it accepted,
+ *  it would be consumed here as the PRECEDING key's value, and the token
+ *  after it would then be read as the NEXT key instead of the value it
+ *  actually is — silently shifting every pair that follows by one slot rather
+ *  than failing loudly. `refuse --code --detail --detail z` is the
+ *  reproduction: without this guard `--detail` (meant as the VALUE of
+ *  `--code`) is swallowed as that value, and `z` is misread as `--detail`'s
+ *  own key. No caller needs a literal value beginning with `--` today (every
+ *  `--code`/`--detail` this file receives is an id, a class name or human
+ *  prose), so refusing the shape is strictly safer than guessing which token
+ *  was meant. */
 function readPairs(argv, spec) {
   const got = {};
   for (let i = 3; i < argv.length; i += 2) {
@@ -177,6 +202,13 @@ function readPairs(argv, spec) {
     const v = argv[i + 1];
     if (v === undefined) {
       refuse('bad-argv', `--${name} has no value`);
+      return null;
+    }
+    if (v.startsWith('--')) {
+      refuse('bad-argv',
+        `--${name}'s value ${JSON.stringify(v)} starts with "--" — that looks `
+        + 'like the next --key, not a value, so it is refused rather than '
+        + 'silently consumed and shifting every pair that follows');
       return null;
     }
     if (spec.repeat.includes(name)) {
@@ -207,7 +239,20 @@ function main(argv) {
     return 0;
   }
 
-  // `refuse`
+  // `refuse` — SEAM HAZARD, DOCUMENTED RATHER THAN CLOSED (review round 1,
+  // M7). Every bad-argv exit from this file (a `readPairs` refusal above, or
+  // the one below) ALREADY wrote a JSON envelope to stdout via `refuse()` —
+  // this op's own contract is "exit 0, envelope printed" only for a
+  // WELL-FORMED call, and exit 2 here still means an envelope reached
+  // stdout, just the "bad-argv" one rather than the caller's intended
+  // "$2"/"$3". `ccd/ccrc`'s `_acct_refuse` (its own header carries the other
+  // half of this note) treats ANY non-zero exit from `_acct_node refuse …`
+  // as "no envelope was printed", which is only true when node itself never
+  // ran main() to completion — not when main() ran and refused the CALL.
+  // Unreachable via `_acct_refuse` today (its argv shape is fixed), but a
+  // future caller of `refuse` with variable argv would hit it. Left as a
+  // trap rather than fixed here: the fix is a seam change (the caller would
+  // need to tell "no envelope" from "wrong envelope" apart), not a comment.
   if (a['code'] === undefined || a['detail'] === undefined) {
     refuse('bad-argv', 'refuse needs --code and --detail');
     return 2;

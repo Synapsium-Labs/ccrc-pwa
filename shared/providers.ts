@@ -39,18 +39,18 @@
  *  the elements the deploy mirror's own `connect` column carries.
  *
  *  BARE, WITH NO `pane:` PREFIX, and the spec is read rather than contradicted.
- *  §4.2's table cell writes `pane:setup-token` and `pane:login` (spec:272,
- *  :275); every other mention writes the bare name — §5's `add` row takes
- *  `--method login|paste|setup-token` (:413), its `auth-start` row takes
- *  `--method login|setup-token|openai-login` (:419), and §6's own method table
- *  rows are `setup-token` and `openai-login` (:507-508). §6:543 then says in
+ *  §4.2's table cell writes `pane:setup-token` and `pane:login` (spec:276,
+ *  :279); every other mention writes the bare name — §5's `add` row takes
+ *  `--method login|paste|setup-token` (:417), its `auth-start` row takes
+ *  `--method login|setup-token|openai-login` (:423), and §6's own method table
+ *  rows are `setup-token` and `openai-login` (:511-512). §6:547 then says in
  *  words what the prefix was standing for: "Only `setup-token` and
  *  `openai-login` need a terminal". So the prefix is PROSE ABOUT WHERE a method
  *  runs, not a spelling of its name — and the `openai` row proves it, because
  *  §4.2's `pane:login` and §6's `openai-login` are two different names rather
  *  than one name with a prefix: stripping `pane:` gives `login`, which is the
  *  ANTHROPIC method. A table carrying the prefixed spelling would make
- *  `--method setup-token` — a value spec:413 documents — refuse, and would need
+ *  `--method setup-token` — a value spec:417 documents — refuse, and would need
  *  a translation table between this column and the helper's `case`, which is
  *  the seam this file exists to remove.
  *
@@ -153,7 +153,7 @@ export const PROVIDERS = {
     label: 'ChatGPT subscription (external launcher)',
     credential: 'held by the launcher, never by ccrc',
     envVar: null,
-    // §5:419 and §6:508's name for this method. §4.2's cell spells it
+    // §5:423 and §6:512's name for this method. §4.2's cell spells it
     // `pane:login`, which is not this name with a prefix — see `ConnectMethod`.
     connect: ['openai-login'],
     probe: 'inference',

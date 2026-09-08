@@ -914,29 +914,36 @@ CCRC_CADDY_ROOT_CA="${CCRC_CADDY_ROOT_CA:-/var/lib/caddy/.local/share/caddy/pki/
 # CCRC_CADDYFILE (single-definition.test.ts, "one ccrc-ddns unit name").
 CCRC_DDNS_UNIT="ccrc-ddns"
 
-# ── THE ACCOUNT SECRETS DIRECTORY, WHICH `account` WRITES AND NEVER READS ──
+# ── THE ACCOUNT SECRETS DIRECTORY, WHICH `account` WILL WRITE AND NEVER READ ──
 # `~/.cc-secrets/<id>-oauth.env` for an OAuth lane, `<id>-<provider>.env` for an
 # api-key one (the rule is `_acct_write_secret`'s, Task 22) — one 0600 file per token lane, holding
 # exactly one `export` line, sourced by that lane's generated wrapper at exec
 # time (`shared/wrapper.mjs:141-143`). Spelled once for BOX_AUTH_FILE's reason:
-# `cmd_account` WRITES these files and doctor's `accounts` check MEASURES them
-# BY EXISTENCE ONLY, and a writer and a reader that spelled the directory
-# separately is the drift D-166's comment names.
+# Task 22 is what makes `cmd_account` WRITE these files, and Task 33 is what
+# adds a doctor check that MEASURES them by existence — NEITHER EXISTS YET.
+# This build has no `accounts` entry in `CCRC_DOCTOR_CHECKS`
+# (ccrc-doctor-checks:166-195), and nothing anywhere in this repository reads
+# the variable defined below — it is spelled here, ahead of its first use, so
+# the writer Task 22 adds and the reader Task 33 adds spell the same directory
+# from day one rather than drifting the way D-166's comment describes.
 #
-# THE MODE IS THE FILE'S OWN. `mkdir -p -m 0700` sets a mode on a directory it
-# CREATES and on nothing else (POSIX), so a `~/.cc-secrets` that already exists
-# keeps whatever mode the operator gave it — `cmd_wrappers`' rule for
-# `~/.local/bin`, stated at :2347-2351 ("an EXISTING directory is left exactly
-# as the operator has it") and implemented at :2361. This verb does not chmod an
-# existing directory in either direction: widening one silently would be worse
-# than the state it found, and narrowing one is a decision about a directory
-# `deploy/deploy.sh`'s `ship_secret` also writes into. The 0600 on the FILE is
-# what protects the secret, exactly as CLAUDE.md argues for `~/.ccrc` being 0775
-# on the reference fleet.
+# THE MODE WILL BE THE FILE'S OWN, once Task 22 lands. `mkdir -p -m 0700` sets
+# a mode on a directory it CREATES and on nothing else (POSIX), so a
+# `~/.cc-secrets` that already exists will keep whatever mode the operator gave
+# it — `cmd_wrappers`' rule for `~/.local/bin`, stated at :2347-2351 ("an
+# EXISTING directory is left exactly as the operator has it") and implemented
+# at :2361, is the shape Task 22 is expected to follow. No `mkdir` for this
+# directory exists anywhere in `ccd/` or `deploy/` today (measured by grep);
+# when Task 22 adds one it should not chmod an existing directory in either
+# direction: widening one silently would be worse than the state it found, and
+# narrowing one is a decision about a directory `deploy/deploy.sh`'s
+# `ship_secret` also writes into. The 0600 on the FILE is what will protect the
+# secret, exactly as CLAUDE.md argues for `~/.ccrc` being 0775 on the reference
+# fleet.
 ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 
 # ── THE SUBCOMMANDS THIS BUILD IMPLEMENTS, SPELLED ONCE ───────────────────
-# DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccrc-doctor-checks:165) and for its
+# DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccrc-doctor-checks:166) and for its
 # reason. `cmd_account` matches the operator's word against THIS list, and BOTH
 # refusals print it — so a subcommand that dispatches without being named, or a
 # name printed that nothing dispatches, cannot happen. Adding one is one word
@@ -3683,9 +3690,14 @@ _exp_status() {
 #    refusal. `_ccrc_die` prints NOTHING on stdout (:1191), so a refusal under it
 #    hands the caller an empty body and a bare exit code — "the id you gave is
 #    taken" and "node is not installed" arriving identically, which is the
-#    overloaded seam this repository forbids. The one exception is `-h`, which
-#    prints usage exactly as every other verb does; the agent builds flags from
-#    typed fields and never builds that one.
+#    overloaded seam this repository forbids for every refusal this file CAN
+#    phrase as JSON. TWO exceptions, not one: `-h`, which prints usage exactly
+#    as every other verb does (the agent builds flags from typed fields and
+#    never builds that one), and node-missing (below) — the one refusal that
+#    genuinely cannot be JSON, because with no node on the box there is nothing
+#    left to run the file that would write it. jq-missing is NOT a third
+#    exception: jq is probed second, with node already proven present, so that
+#    refusal goes through `_acct_refuse` like any other box-said-no.
 #
 #    THE RULE BINDS WHAT THIS VERB CALLS, NOT ONLY WHAT IT PRINTS.
 #    `_inst_accounts_sh` (:4093, :4099) and `cmd_wrappers` (:2891) both write
@@ -3729,6 +3741,33 @@ _acct_node() {   # <op> [--<key> <value>]… — the ONE writer of this verb's s
 _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <class>
   # THE CLASS IS THIS FILE'S, THE ENVELOPE IS NODE'S. The `refuse` op exits 0
   # ("the envelope printed") precisely so that one refusal never has two owners.
+  #
+  # A DOCUMENTED SEAM HAZARD, LEFT AS A TRAP RATHER THAN CLOSED (review round 1,
+  # M7). `_acct_node refuse --code "$2" --detail "$3"` is treated below as
+  # binary: exit 0 means the envelope printed, ANY non-zero means it did not.
+  # That second half is not quite true. `deploy/account-op.mjs`'s `refuse` op
+  # can ALSO exit non-zero (2, bad-argv) while having already written a JSON
+  # envelope to stdout — for the WRONG error, not for "$2"/"$3" — if the call
+  # to it is itself malformed (an unknown --key, a missing value, a value
+  # starting with "--", M6). If that ever happens here, this line's `||`
+  # fires `_ccrc_die` on top of an envelope already sitting in the pipe: the
+  # caller sees a stray `{"ok":false,"error":"bad-argv",…}` on stdout AND a
+  # "could not print a refusal envelope" sentence on stderr, at exit 1 — two
+  # disagreeing signals instead of one clean refusal.
+  #
+  # UNREACHABLE TODAY: every call site below passes fixed argv shape
+  # (`--code "$2" --detail "$3"`, two literal keys, two positionally-consumed
+  # values), and a bash "$2"/"$3" expansion is always exactly one word — even
+  # empty — so it can never be interpreted as a THIRD `--key` and can never
+  # make this call's own argv malformed. Deliberately left as a documented
+  # trap rather than rewritten here: closing it would mean either validating
+  # $2/$3 twice (once here, once inside account-op.mjs) or teaching this
+  # function to distinguish "account-op.mjs could not run at all" (no
+  # envelope) from "account-op.mjs ran and refused ITS OWN call" (an
+  # envelope, just the wrong one) — a real seam change, not a comment fix,
+  # and one this review round did not TDD. Re-examine this comment the day a
+  # future task (Task 21+) makes $2 or $3 something other than a fixed
+  # literal.
   _acct_node refuse --code "$2" --detail "$3" \
     || _ccrc_die "could not print a refusal envelope for \"$2\": $3 — and the caller of this verb parses stdout, so it must hear about that rather than read an empty body"
   exit "$1"
@@ -3745,12 +3784,16 @@ cmd_account() {
   # BY NAME, ONCE, AND BEFORE THE FIRST REFUSAL IS PRINTED — `cmd_install`'s
   # guard (:3864-3865) in its own shape. Without it a box with no node cannot
   # even hear "that id is taken": the refusal would arrive as `_acct_node`
-  # failing, i.e. as a missing dependency wearing a bad request's clothes. This
-  # refusal is the ONE path with no JSON on stdout, and it says so.
+  # failing, i.e. as a missing dependency wearing a bad request's clothes. THIS
+  # refusal is the ONLY path with no JSON on stdout, and it says so — node
+  # itself is what would have to run the JSON emitter, so its own absence is
+  # the one condition this verb cannot phrase as JSON. jq is checked SECOND,
+  # with node already proven present two lines up, so a missing jq is an
+  # ordinary box-said-no and goes through `_acct_refuse` like any other.
   command -v node >/dev/null 2>&1 \
-    || _ccrc_die "node is required by 'ccrc account' — it runs ${CCRC_HERE%/*}/deploy/account-op.mjs, the only thing on this box that writes this verb's JSON — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed, and this is the one refusal this verb cannot phrase as JSON."
+    || _ccrc_die "node is required by 'ccrc account' — it runs ${CCRC_HERE%/*}/deploy/account-op.mjs, the only thing on this box that writes this verb's JSON — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed, and this is the one refusal this verb cannot phrase as JSON — there is no node left to run the file that would write it."
   command -v jq >/dev/null 2>&1 \
-    || _ccrc_die "jq is required by 'ccrc account' — it merges each account's settings.json the way $HOME/.cc-sessions/install-session-hooks.sh merges hooks, validating before and after every swap — but is not on PATH. Install jq, then re-run. Nothing on this box was written or changed."
+    || _acct_refuse 1 jq-missing "jq is required by 'ccrc account' — it merges each account's settings.json the way $HOME/.cc-sessions/install-session-hooks.sh merges hooks, validating before and after every swap — but is not on PATH. Install jq, then re-run. Nothing on this box was written or changed."
 
   if [ -z "$sub" ]; then
     _acct_refuse 2 missing-subcommand "ccrc account needs a subcommand. This build implements: ${ACCT_SUBS:-nothing yet — this commit is the dispatch skeleton}"
