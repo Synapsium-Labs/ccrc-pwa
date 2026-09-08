@@ -2603,6 +2603,13 @@ Named so they are not rediscovered as defects. Each was measured, ruled out of s
   **Until the distinguishing read lands, no `--cross-pool` verb runs on the live fleet** — so no marker
   exists to lose. The fix pattern is `server/src/io.ts`'s measured reads, not another predicate over the
   same collapsed value.
+
+  **FIXED 2026-09-08. The embargo lifts on the AGENT DEPLOY, not on the merge** — `_crosspool_tick`
+  runs inside the long-lived `ccd supervise` processes, which hold the pre-deploy inode until the
+  deploy's supervisor sweep restarts them. Not restated here — one normative home:
+  `docs/superpowers/plans/2026-09-08-c1-crosspool-distinguishing-read.md` (D-1986–D-2001), which also
+  records that the fix had to reach `_crosspool_valid` and the tick's own reads, not just the expirer
+  this bullet names.
 - **D-1916 — `cmd_project_pool`'s pre-tag census is wider than placement.** It walks `CCRC_ACCOUNTS`
   while placement walks `CCRC_HOME_ABLE`. Making the warning honest means counting home-able members
   separately: a behaviour hunk with its own red-first test.
