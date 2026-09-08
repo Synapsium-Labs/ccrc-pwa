@@ -2486,6 +2486,22 @@ export interface FleetHealth {
    */
   build?: BuildAgreement;
   /**
+   * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
+   * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).
+   * One `ccd` inode ships the verb and every reader, so the verb's presence IS
+   * the evidence that placement, the auto-swapper and the manual verbs apply
+   * the rule.
+   *
+   * Same three-state rule as `roster` and `build`, with its own remedy:
+   * `'unavailable'` means tags will DISPLAY and nothing on the fleet will
+   * enforce them — redeploy the agent lane; `'unknown'` means nobody could
+   * tell, and a reader must stay SILENT on it (the banner arms on
+   * `'unavailable'` only).
+   *
+   * Optional for the same absence-permits reason the two above are.
+   */
+  projectPools?: PoolsEnforcement;
+  /**
    * The lifecycle journal mirror (build 9). Optional for the same
    * absence-permits reason `roster` and `build` are — an older server's
    * response omits it, and a reader must treat an absent block as

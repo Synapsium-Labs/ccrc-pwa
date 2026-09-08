@@ -11,7 +11,7 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
-import { poolFor, readProjectPools } from './pools.js';
+import { poolFor, poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -1017,9 +1017,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/fleet', async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
       const snap = await loadSnapshot(stateCachePath);
+      // NO `pools` KEY on this arm, deliberately: nothing about pools is
+      // persisted (spec §5.4.1), so there is nothing measured to serve, and a
+      // cached tag rendered as live policy would lie. Absence reads as
+      // "unknown" on the PWA, which is the truth here.
       if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
     }
-    return { sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()) };
+    // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
+    // the watcher tick, so a client connecting into a quiet fleet would
+    // otherwise see no tags until one moved; this is where it gets the
+    // measured answer, off its own root listing.
+    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
+    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    return {
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()),
+      pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
+    };
   });
 
   // The digest of the projection THIS box's roster produces, computed once:
@@ -1060,6 +1073,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // scripts) — an absent stamp and a null one are the same condition,
         // exactly as `/health` treats them.
         build: buildAgreement(deps.fleetState.build, deps.build ?? null),
+        projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
       };
     }
@@ -1073,6 +1087,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return {
       mode: deps.cfg.fleetMode, connected: true, downSince: null,
       roster: 'unknown', build: 'unknown',
+      // Local mode measures its OWN ccd at boot (`readLocalCcdCaps`), so
+      // `unknown` here is "not measured yet", never "local mode cannot tell".
+      projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
       // BOTH ARMS. Local mode drives ccd on this same box and mirrors the same
       // journal — there is no second box to disagree with, but there is still a
       // journal, and a block that appeared only in remote mode would make the

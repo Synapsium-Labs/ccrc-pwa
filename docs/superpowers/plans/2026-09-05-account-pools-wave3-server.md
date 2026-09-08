@@ -1865,6 +1865,7 @@ git commit -m "feat(pools): every project row carries its tag and the forecast i
 
 ---
 
+### Task 6 — DONE 2026-09-08 (3/3 mutations red)
 ### Task 6: `GET /api/fleet` carries `pools` for first paint; `/api/fleet/health` carries `projectPools`
 
 **Files:**
