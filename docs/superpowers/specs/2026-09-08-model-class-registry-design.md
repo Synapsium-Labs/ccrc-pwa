@@ -325,8 +325,15 @@ shim (below), so config-versus-request precedence inside LiteLLM never
 matters.
 `drop_params` and `general_settings` are carried verbatim from a template in
 `deploy/`. If LiteLLM is running with a different rendered config, the
-generator restarts it (the wrapper's own `stop` then lazy start); in-flight
-gpt turns fail once and retry. It logs that it did.
+generator STOPS it first (the wrapper's own `stop`; the next lane launch
+starts it lazily) and only then writes the new config beside a `.prev` copy —
+stop-then-write, so a stop that fails writes nothing, answers `restart-failed`
+and leaves the difference in place for the next run to retry (ruled during
+Plan 1, Task 10's review: write-then-stop had answered success while the proxy
+kept serving the old list, and never retried). In-flight gpt turns fail once
+and retry. Inside `ccrc models refresh`, a lane whose restart failed is a
+failed row with that reason and the run exits 1; the catalogue and the
+materialisation it already wrote stand.
 
 ### 6.4 Effort: lane default, per-request override
 
