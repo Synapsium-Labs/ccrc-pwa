@@ -266,7 +266,7 @@ describe('gen-wrappers.mjs', () => {
     // CCRC MARKER. The marker is deliberate provenance (41bdf60, gated by
     // ownership.test.ts:139-153, so that ccrc's own shipped `ccd` reads
     // `ccrc-unmodified` and the installer may replace it on a box), so the fix
-    // cannot be to remove it: the scan has to know these four are ccrc's own
+    // cannot be to remove it: the scan has to know these six are ccrc's own
     // toolchain rather than candidate account wrappers.
     //
     // What the operator saw without this: `ORPHAN ccd: … remedy: … or remove
@@ -277,13 +277,13 @@ describe('gen-wrappers.mjs', () => {
     // Marked the way the real ones are. `ccd`'s marker is over its own bytes;
     // any marked script is the same five-for-five shape as far as this scan is
     // concerned, and using the real 570 KB `ccd` here would test file size.
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health']) {
+    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']) {
       writeFileSync(path.join(binDir, name),
         markGenerated(`#!/usr/bin/env bash\n# ccrc's own ${name}, installed by ccrc install\nexit 0\n`));
     }
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health']) {
+    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']) {
       expect(r.stdout, `${name} was reported as an account wrapper nobody claims`)
         .not.toMatch(new RegExp(`^orphan\\t${name}$`, 'm'));
     }

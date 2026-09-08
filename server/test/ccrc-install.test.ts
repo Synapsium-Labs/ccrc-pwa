@@ -148,6 +148,11 @@ const TREE_FILES = [
   // The account-health probe (spec 2026-09-07 §A): `_inst_bins` ships it beside
   // the sweep, on the same gate — not Darwin, every role.
   'ccd/ccd-account-health',
+  // spec 2026-09-07 §C: the telemetry keepalive `_inst_bins` ships beside
+  // the other two on the non-Darwin arm. Only its UNIT and its ENABLE are
+  // role-gated, per `_inst_units`/`_inst_enable`. NB fixture INPUT only — the
+  // assertions that make this land are the cases below.
+  'ccd/ccd-telemetry-keepalive',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -1780,6 +1785,18 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-telemetry-keepalive lands beside it too (spec 2026-09-07 §C) — every role, but not Darwin', () => {
+    // Mirrors the `ccd-graph-sweep` case above, byte for byte: `_inst_bins`
+    // ships this one on every role the same way, and rides the same darwin
+    // carve-out (its systemd timer never installs there; the script needs GNU
+    // date/stat, flock(1) and jq). Its UNIT and ENABLE are additionally
+    // role-gated (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-telemetry-keepalive');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-telemetry-keepalive')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -2298,6 +2315,10 @@ const UNIT_FILES: Array<[string, string]> = [
   // and no ~/.cc-secrets, so it has no credential to probe.
   ['ccd-account-health.service', 'deploy/systemd/ccd-account-health.service'],
   ['ccd-account-health.timer', 'deploy/systemd/ccd-account-health.timer'],
+  // spec 2026-09-07 §C: ROLE-GATED the same way — `_inst_units` skips both on
+  // a `--role server` box. The default fixture install is role `both`.
+  ['ccd-telemetry-keepalive.service', 'deploy/systemd/ccd-telemetry-keepalive.service'],
+  ['ccd-telemetry-keepalive.timer', 'deploy/systemd/ccd-telemetry-keepalive.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2335,7 +2356,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs six unit files and two drop-ins, byte for byte, at 644', () => {
+  it('installs ten unit files and two drop-ins, byte for byte, at 644', () => {
     // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
@@ -2423,6 +2444,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // loop above it.
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-account-health.timer',
+      // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
+      // and degrading rather than dying for the same reason.
+      '--user enable --now ccd-telemetry-keepalive.timer',
       // THE RESTART, in deploy's own position (deploy.sh:719-721): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -2821,7 +2845,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     expect(r.stdout).toMatch(
       /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
-    // Nothing but the four executables `_inst_bins` installs (graphify Task 10
+    // Nothing but the five executables `_inst_bins` installs (graphify Task 10
     // adds `ccd-graph-sweep`) and R3's one SYMLINK — no wrapper, no temp file,
     // no staged leftover — beside what the fixture itself planted.
     //
@@ -2835,7 +2859,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
         ? ['ccd', 'ccrc', 'graphify']   // no cap-scopes (cgroup-bound) and no graph-sweep (systemd-timer-bound)
-        : ['ccd', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccrc', 'graphify']);
+        : ['ccd', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-telemetry-keepalive', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3530,6 +3554,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-cap-scopes.timer',
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-account-health.timer',
+      '--user enable --now ccd-telemetry-keepalive.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -3547,15 +3572,19 @@ describe('ccrc install --role: the refusals and the default', () => {
     // it runs no per-tree AST sweep — while every unit this verb shipped
     // before this task still lands unchanged.
     for (const [dest] of UNIT_FILES) {
-      if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')) continue;
+      if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
+        || dest.startsWith('ccd-telemetry-keepalive.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-account-health.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-account-health.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

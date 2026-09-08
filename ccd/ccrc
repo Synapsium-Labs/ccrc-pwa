@@ -4461,6 +4461,13 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
     # orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-account-health" "$bin/ccd-account-health" 755
+    # spec 2026-09-07 §C: the telemetry keepalive, on this same non-Darwin arm
+    # and for the same two reasons — its timer installs only on the systemd arm,
+    # and the script leans on GNU date/stat, flock(1) and jq. It is placed on
+    # EVERY role, exactly as the sweep is: only the UNIT and the ENABLE below
+    # are role-gated. `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows
+    # the name too, so the orphan scan in `_inst_wrappers` cannot report it.
+    _inst_atomic "$tree/ccd/ccd-telemetry-keepalive" "$bin/ccd-telemetry-keepalive" 755
   fi
   # The generated launcher is staged under a name `_inst_atomic`'s own sweep
   # matches (`<dest>.tmp.*`), so a run killed between these two lines leaves
@@ -4470,9 +4477,9 @@ _inst_bins() {   # what has to be ON PATH: the two executables, and the launcher
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep and no ccd-account-health — their timers are systemd-only)"
+    echo "install: bins: ccd and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health and no ccd-telemetry-keepalive — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive and the ccrc launcher in \$HOME/.local/bin"
   fi
 }
 
@@ -4852,6 +4859,10 @@ _inst_units() {
     # there is no credential on it to measure.
     _inst_atomic "$tree/deploy/systemd/ccd-account-health.service" "$dir/ccd-account-health.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-account-health.timer" "$dir/ccd-account-health.timer" 644
+    # spec 2026-09-07 §C: the keepalive's pair, role-gated exactly as the
+    # sweep above it — a server box holds no account wrappers to keep alive.
+    _inst_atomic "$tree/deploy/systemd/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-telemetry-keepalive.timer" "$dir/ccd-telemetry-keepalive.timer" 644
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
@@ -4925,6 +4936,12 @@ _inst_enable() {
   # converged install into a failed one.
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-account-health.timer \
     || echo "install: account-health: could not enable ccd-account-health.timer — run: systemctl --user enable --now ccd-account-health.timer" >&2
+  # spec 2026-09-07 §C: gated exactly as the sweep above — a server box takes no
+  # keepalive, because it holds no account wrappers to take a turn on. And it
+  # DEGRADES rather than dies for the same reason: the keepalive keeps placement
+  # well-informed, it is not the guardrail `ccd-cap-scopes.timer` is.
+  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-telemetry-keepalive.timer \
+    || echo "install: keepalive: could not enable ccd-telemetry-keepalive.timer — run: systemctl --user enable --now ccd-telemetry-keepalive.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
   # `deploy.sh:719-721` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
@@ -6247,7 +6264,8 @@ _uninst_units() {
     : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
     for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
       ccd-graph-sweep.timer ccd-graph-sweep.service \
-      ccd-account-health.timer ccd-account-health.service; do
+      ccd-account-health.timer ccd-account-health.service \
+      ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -6259,6 +6277,7 @@ _uninst_units() {
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
+    "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
@@ -6333,8 +6352,9 @@ _uninst_wrappers() {
     # The four executables are `_uninst_tree_bins`' subject, not wrappers
     # (graphify Task 10/fix-round F2 adds `ccd-graph-sweep` to this case,
     # or the wrapper arm would misclassify it instead of the bin arm below
-    # ever getting a say).
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep) continue ;; esac
+    # ever getting a say). spec 2026-09-07 §C adds `ccd-telemetry-keepalive`
+    # on the same terms.
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-telemetry-keepalive) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -6444,8 +6464,9 @@ _uninst_tree_bins() {
   # census and the only one that is not ccrc's own binary.)
   rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
     "$HOME/.local/bin/ccd-graph-sweep" "$HOME/.local/bin/ccd-account-health" \
+    "$HOME/.local/bin/ccd-telemetry-keepalive" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health and the ccrc launcher removed from \$HOME/.local/bin"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive and the ccrc launcher removed from \$HOME/.local/bin"
   # ── the SIXTH entry, and the only one that is not ccrc's own binary ──────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an

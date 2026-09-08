@@ -69,6 +69,8 @@ const TREE_FILES = [
   // The account-health probe (spec 2026-09-07 §A): `_inst_bins` ships it
   // beside the sweep, on the same gate — not Darwin, every role.
   'ccd/ccd-account-health',
+  // spec 2026-09-07 §C: fixture input only, same as the two above it.
+  'ccd/ccd-telemetry-keepalive',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
