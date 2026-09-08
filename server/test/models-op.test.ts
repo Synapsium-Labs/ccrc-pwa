@@ -1,0 +1,778 @@
+// `deploy/models-op.mjs` — the node half of the `ccrc models` verb group (§10).
+// It owns the REGISTRY FILE's read, the mutation, the re-validation, the atomic
+// write and the re-materialisation, so the bash verb above it is a dispatcher
+// and nothing else.
+//
+// IT NEVER WRITES THE ROSTER. Ruling 280: the registry is its own per-account
+// file, `~/.ccrc/models/<id>.classes.json`, and `exec.models` belongs to the
+// account-connections spec. The roster is read for three facts and nothing more
+// — does this id exist, what is its configDirSuffix, and is it an Anthropic
+// lane (`telemetry === 'anthropic'`, deviation B-3).
+//
+// EVERY CASE RUNS AGAINST A `mkTmp` HOME. This program writes ~/.ccrc/models
+// and a lane's settings.json; the live ones on the box this suite runs on are
+// the operator's.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
+import { CODEX } from './fixtures/modelCases.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(here, '..', '..');
+const OP = path.join(REPO, 'deploy', 'models-op.mjs');
+
+let home: string;
+const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
+
+/** A roster with the three shapes this file has to tell apart: the upstream
+ *  account, an Anthropic lane (`telemetry: 'anthropic'`), and the two
+ *  non-Anthropic lanes the design exists for. `exec` carries no provider —
+ *  `origin/main`'s ExecSpec has none. */
+const ROSTER = {
+  version: 1,
+  accounts: [
+    { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
+      exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    { id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
+      exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
+    { id: 'router', label: 'router', configDirSuffix: '.claude-router',
+      exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none' },
+  ],
+};
+
+function seed(roster: unknown = ROSTER): void {
+  fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  fs.writeFileSync(rosterPath(), `${JSON.stringify(roster, null, 2)}\n`);
+}
+
+interface Result { code: number; body: Record<string, unknown>; stderr: string; stdout: string }
+function op(...args: string[]): Result {
+  const r = spawnSync(process.execPath, [OP, ...args],
+    { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  const stdout = r.stdout ?? '';
+  // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
+  // helper rather than a `JSON.parse` per call site, because a progress line
+  // before the answer would still parse at a call site that took
+  // `.split('\n')[0]`.
+  const lines = stdout.split('\n');
+  expect(lines[lines.length - 1], `stdout is not newline-terminated: ${JSON.stringify(stdout)}`).toBe('');
+  expect(lines.length, `stdout carried ${lines.length - 1} lines, not one`).toBe(2);
+  return { code: r.status ?? -1, body: JSON.parse(lines[0]!), stderr: r.stderr ?? '', stdout };
+}
+
+const regPath = (id: string): string => path.join(home, '.ccrc', 'models', `${id}.classes.json`);
+const registryOf = (id: string): Record<string, unknown> =>
+  JSON.parse(fs.readFileSync(regPath(id), 'utf8'));
+const classesOf = (id: string): Record<string, unknown> =>
+  registryOf(id)['classes'] as Record<string, unknown>;
+const settingsOf = (suffix: string): { env: Record<string, string> } =>
+  JSON.parse(fs.readFileSync(path.join(home, suffix, 'settings.json'), 'utf8'));
+
+const writeCatalogue = (id: string, cat: unknown = CODEX): void => {
+  fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.ccrc', 'models', `${id}.json`), JSON.stringify(cat));
+};
+
+beforeEach(() => { home = mkTmp('ccrc-models-op-'); seed(); });
+afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
+
+describe('argv', () => {
+  it('an unknown op refuses at exit 2 with a body, never an empty stdout', () => {
+    const r = op('frobnicate', '--file', rosterPath());
+    expect(r.code).toBe(2);
+    expect(r.body['ok']).toBe(false);
+    expect(r.body['error']).toBe('bad-argv');
+  });
+
+  it('an unknown --key is a refusal, not a silently dropped flag', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt', '--wat', 'x');
+    expect(r.code).toBe(2);
+    expect(r.body['error']).toBe('bad-argv');
+  });
+
+  it('a value that itself starts with -- is refused rather than shifting every pair', () => {
+    const r = op('show', '--file', '--id', 'gpt');
+    expect(r.code).toBe(2);
+    expect(r.body['error']).toBe('bad-argv');
+  });
+
+  it('a missing required key is named', () => {
+    const r = op('show', '--file', rosterPath());
+    expect(r.code).toBe(2);
+    expect(String(r.body['detail'])).toContain('--id');
+  });
+});
+
+describe('the roster read', () => {
+  it('an absent roster refuses with the install remedy', () => {
+    fs.rmSync(rosterPath());
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('roster-absent');
+  });
+
+  it('an invalid roster carries the validator\'s own remedy VERBATIM', () => {
+    seed({ version: 1, accounts: [{ id: 'x' }] });
+    const r = op('show', '--file', rosterPath(), '--id', 'x');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('roster-invalid');
+    expect(String(r.body['detail']).length).toBeGreaterThan(40);
+  });
+
+  it('an id the roster does not have refuses by name', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('no-such-account');
+  });
+
+  it('NOTHING here ever rewrites the roster', () => {
+    // Ruling 280, as a mechanism: every mutation below runs, and the roster's
+    // bytes AND mtime are compared at the end. `exec.models` is the
+    // account-connections spec's and does not exist on this branch.
+    //
+    // mtime, not just content, because it is a WEAKER assertion — measured: a
+    // `writeFileSync(a.file, JSON.stringify(json, null, 2) + '\n')` inserted
+    // at the tail of the mutation path (`json` being the exact object
+    // `JSON.parse`d from this fixture) round-trips BYTE-IDENTICAL to what
+    // `seed()` originally wrote, since `ROSTER` above is already 2-space
+    // indented with the same key order `JSON.stringify` would produce. The
+    // content comparison alone stayed green with that write live; mtime
+    // moves on every `writeFileSync` regardless of content and is what
+    // actually catches it.
+    const before = fs.readFileSync(rosterPath(), 'utf8');
+    const mtimeBefore = fs.statSync(rosterPath()).mtimeMs;
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-6-astra');
+    op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--level', 'xhigh');
+    op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'catalogue');
+    expect(fs.readFileSync(rosterPath(), 'utf8')).toBe(before);
+    expect(fs.statSync(rosterPath()).mtimeMs).toBe(mtimeBefore);
+  });
+});
+
+describe('lanes', () => {
+  it('lists every account that can carry a registry, and flags the anthropic ones', () => {
+    const r = op('lanes', '--file', rosterPath());
+    expect(r.code).toBe(0);
+    expect(r.body['lanes']).toEqual([
+      { id: 'gpt', configDirSuffix: '.claude-gpt', anthropic: false, hasRegistry: false, probe: null, baseUrl: null },
+      { id: 'router', configDirSuffix: '.claude-router', anthropic: false, hasRegistry: false, probe: null, baseUrl: null },
+    ]);
+  });
+
+  it('reports probe and baseUrl once a registry exists', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+      '--base-url', 'https://api.cortecs.ai');
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    expect(lanes.find((l) => l['id'] === 'router')).toEqual({
+      id: 'router', configDirSuffix: '.claude-router', anthropic: false,
+      hasRegistry: true, probe: 'compatible', baseUrl: 'https://api.cortecs.ai',
+    });
+  });
+
+  it('an upstream account is never a lane a registry can sit on', () => {
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as { id: string }[];
+    expect(lanes.map((l) => l.id)).not.toContain('claude');
+  });
+});
+
+describe('show', () => {
+  it('a lane with no registry reads as every class unavailable (§13.1)', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['registry']).toBeNull();
+    expect(r.body['anthropic']).toBe(false);
+    expect(r.body['derived']).toEqual({ classified: [], unclassified: [], retired: [], available: [] });
+    expect(r.body['catalogue']).toBeNull();
+  });
+
+  it('an anthropic lane answers registry:null and all four classes available', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'claude-a');
+    expect(r.code).toBe(0);
+    expect(r.body['registry']).toBeNull();
+    expect(r.body['anthropic']).toBe(true);
+    expect((r.body['derived'] as { available: string[] }).available)
+      .toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+  });
+
+  it('summarises the catalogue rather than shipping it', () => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.body['catalogue']).toEqual({ fetchedAt: CODEX.fetchedAt, stale: false, count: 9 });
+    expect((r.body['derived'] as { unclassified: string[] }).unclassified)
+      .toEqual(['gpt-6-astra', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']);
+  });
+
+  it('a catalogue file that is not a catalogue refuses rather than reading as never-probed', () => {
+    fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('catalogue-invalid');
+  });
+
+  it('a registry file that is not a registry refuses, naming the field', () => {
+    fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+    // `classes` must name all four keys explicitly (a model id or null) —
+    // measured against `shared/models.mjs`'s current `parseRegistry`: an
+    // OMITTED class key (`classes: {}`) is refused at `classes.haiku` before
+    // the validator ever reaches `subagent`, since `classesRaw[cls]` is
+    // `undefined`, not `null`. All four explicit `null`s is a legal
+    // (unseeded) `classes`, so the missing `subagent` key is what this case
+    // actually exercises.
+    fs.writeFileSync(regPath('gpt'),
+      JSON.stringify({ probe: 'codex', classes: { haiku: null, sonnet: null, opus: null, fable: null } }));
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('registry-invalid');
+    expect(r.body['field']).toBe('subagent');
+  });
+
+  it('names the settings keys that have drifted from the registry (§11)', () => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const p = path.join(home, '.claude-gpt', 'settings.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'gpt-5.5';
+    delete j.env.ANTHROPIC_SMALL_FAST_MODEL;
+    fs.writeFileSync(p, JSON.stringify(j, null, 2));
+    const r = op('show', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['settingsDrift'])
+      .toEqual(['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']);
+  });
+
+  it('reports NO drift right after a materialise, and none on a lane with no registry', () => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    expect(op('show', '--file', rosterPath(), '--id', 'gpt').body['settingsDrift']).toEqual([]);
+    expect(op('show', '--file', rosterPath(), '--id', 'router').body['settingsDrift']).toEqual([]);
+  });
+
+  it('an ORPHAN registry — no roster row for this id — answers orphan:true, no class available (§11)', () => {
+    // §11: `ccrc account remove` deliberately never deletes under
+    // ~/.ccrc/models/, so a registry can outlive the roster row it was
+    // classified for. There is no account to route a session through, so
+    // every class reads as unavailable regardless of what the registry itself
+    // assigns, and there is no settings.json to compare it against.
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath('gpt'), 'utf8'));
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code).toBe(0);
+    expect(r.body['orphan']).toBe(true);
+    expect((r.body['derived'] as { available: string[] }).available).toEqual([]);
+    expect(r.body['settingsDrift']).toEqual([]);
+  });
+});
+
+describe('init (§10, §13.1)', () => {
+  it('seeds today\'s gpt registry for probe codex', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    expect(r.code).toBe(0);
+    expect(r.body['created']).toBe(true);
+    expect(registryOf('gpt')).toEqual({
+      probe: 'codex',
+      classes: { haiku: 'gpt-5.6-luna', sonnet: 'gpt-5.6-terra', opus: 'gpt-5.6-sol', fable: null },
+      subagent: 'sonnet',
+      discovery: 'catalogue',
+      effort: { haiku: 'high', sonnet: 'high', opus: 'max', fable: 'max' },
+    });
+  });
+
+  it('materialises on success: the env block, the three-column TSV and the effort file', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const s = settingsOf('.claude-gpt');
+    expect(s.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+    expect(s.env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
+    expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-terra');
+    expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
+      .toBe('haiku\tgpt-5.6-luna\tassigned\nsonnet\tgpt-5.6-terra\tassigned\n'
+        + 'opus\tgpt-5.6-sol\tassigned\nfable\t\tunassigned\n');
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8')))
+      .toEqual({ byModel: { 'gpt-5.6-luna': 'high', 'gpt-5.6-terra': 'high', 'gpt-5.6-sol': 'max' } });
+  });
+
+  it('is idempotent — a second init changes nothing and says so', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const before = fs.readFileSync(regPath('gpt'), 'utf8');
+    const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    expect(r.code).toBe(0);
+    expect(r.body['created']).toBe(false);
+    expect(fs.readFileSync(regPath('gpt'), 'utf8')).toBe(before);
+  });
+
+  it('refuses to CHANGE the probe kind of a registry that exists', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'openrouter');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('probe-declared');
+    expect(registryOf('gpt')['probe']).toBe('codex');
+  });
+
+  it('writes an UNSEEDED registry for openrouter, and materialises nothing (deviation B-1)', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    expect(r.code).toBe(0);
+    expect(r.body['created']).toBe(true);
+    expect(registryOf('router')).toEqual({
+      probe: 'openrouter',
+      classes: { haiku: null, sonnet: null, opus: null, fable: null },
+      subagent: 'sonnet',
+      discovery: [],
+    });
+    expect(String(r.body['remedy'])).toMatch(/discovery add/);
+    expect(fs.existsSync(path.join(home, '.claude-router', 'settings.json'))).toBe(false);
+    // …and the TSV still exists, four lines, all unassigned: ccd reads it on
+    // every spawn and an absent file is a different question from an empty lane.
+    expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'router.classes.tsv'), 'utf8'))
+      .toBe('haiku\t\tunassigned\nsonnet\t\tunassigned\nopus\t\tunassigned\nfable\t\tunassigned\n');
+  });
+
+  it('an unseeded compatible registry keeps the baseUrl it was given', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+      '--base-url', 'https://api.cortecs.ai');
+    expect(registryOf('router')['baseUrl']).toBe('https://api.cortecs.ai');
+    expect(registryOf('router')['discovery']).toBe('catalogue');
+  });
+
+  it('refuses compatible with no --base-url, and writes nothing', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('baseUrl');
+    expect(fs.existsSync(regPath('router'))).toBe(false);
+  });
+
+  it('refuses an anthropic lane by name', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'claude-a', '--probe', 'codex');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('anthropic-lane');
+    expect(fs.existsSync(regPath('claude-a'))).toBe(false);
+  });
+
+  it('refuses an unknown probe kind', () => {
+    const r = op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'openai');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('probe');
+  });
+});
+
+describe('set-class', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  });
+
+  it('assigns a class and re-materialises', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-6-astra');
+    expect(r.code).toBe(0);
+    expect(classesOf('gpt')['fable']).toBe('gpt-6-astra');
+    expect(settingsOf('.claude-gpt').env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('gpt-6-astra');
+  });
+
+  it('`none` clears a class and puts the sentinel back', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'none');
+    expect(r.code).toBe(0);
+    expect(classesOf('gpt')['opus']).toBeNull();
+    const env = settingsOf('.claude-gpt').env;
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('ccrc-unavailable-opus');
+    // …and ANTHROPIC_MODEL falls to sonnet rather than going missing.
+    expect(env.ANTHROPIC_MODEL).toBe('gpt-5.6-terra');
+  });
+
+  it('ASSIGNING A CLASS CLEARS IT FROM THE MODEL THAT HAD IT — one model, one class', () => {
+    // §8's radio-across-the-row rule, enforced here rather than only in the UI:
+    // the verb exists for scripts and for doctor's remedies, and a script that
+    // left one model in two classes would produce a lane where `/model opus`
+    // and `/model sonnet` are the same thing with nothing saying so.
+    //
+    // The seeded registry's subagent is `sonnet` (SEEDS.codex), and this
+    // assignment is about to clear sonnet's slot — moved off `sonnet` first,
+    // to isolate the radio rule from the SEPARATE "subagent's slot went null"
+    // refusal (measured: without this, `set-class opus gpt-5.6-terra` refuses
+    // `registry-invalid`/`subagent`, not because of anything this test means
+    // to exercise).
+    op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-terra');
+    expect(r.code).toBe(0);
+    expect(classesOf('gpt')['opus']).toBe('gpt-5.6-terra');
+    expect(classesOf('gpt')['sonnet']).toBeNull();
+    expect((r.body['moved'] as string[]).join(' ')).toContain('sonnet');
+  });
+
+  it('refuses a class that is not one of the four', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'subagent', '--model', 'gpt-5.5');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unknown-class');
+  });
+
+  it('refuses a model the CATALOGUE does not list, naming it', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-9-nope');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('not-in-catalogue');
+    expect(String(r.body['detail'])).toContain('gpt-9-nope');
+  });
+
+  it('accepts a model no catalogue can vouch for when there is NO catalogue at all', () => {
+    fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.json'));
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-9-future');
+    expect(r.code).toBe(0);
+  });
+
+  it('refuses an id that is not a model id', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', '/nope');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-model-id');
+  });
+
+  it('adds the model to an EXPLICIT discovery list rather than refusing the assignment', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'a/b');
+    const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'a/c');
+    expect(r.code).toBe(0);
+    expect(registryOf('router')['discovery']).toEqual(['a/b', 'a/c']);
+  });
+
+  it('refuses clearing the LAST class rather than writing a lane that routes nowhere (§11)', () => {
+    op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'none');
+    op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku', '--model', 'none');
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--model', 'none');
+    expect(r.code).toBe(1);
+    expect(String(r.body['detail'])).toMatch(/a lane needs at least one class/);
+    // …and the registry is UNCHANGED: a refusal never half-writes.
+    expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
+  });
+
+  it('refuses clearing the class the SUBAGENT points at, naming set-subagent', () => {
+    // The seeded registry's subagent is `sonnet`. Clearing that slot would make
+    // CLAUDE_CODE_SUBAGENT_MODEL a sentinel (§6.1) — refused at the validator
+    // and again at the materialiser, with nothing written.
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--model', 'none');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('subagent');
+    expect(String(r.body['detail'])).toMatch(/set-subagent/);
+    expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
+  });
+
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS tracks the default model\'s catalogue context, and drops out when it cannot (§6.1, amended 2026-09-08)', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-sol');
+    expect(r.code).toBe(0);
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // Switching the default to a model no catalogue can vouch for — the same
+    // "accepts a model no catalogue can vouch for" situation as above — leaves
+    // nothing to measure a window from, and the STALE '272000' must not
+    // survive the re-materialise: the eighth key carries no sentinel, so a
+    // left-behind number would misstate the window rather than merely miss.
+    fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.json'));
+    const r2 = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-9-future');
+    expect(r2.code).toBe(0);
+    expect(classesOf('gpt')['opus']).toBe('gpt-9-future');
+    expect(Object.keys(settingsOf('.claude-gpt').env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
+  });
+});
+
+describe('set-subagent (§10, ruling 5c)', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  });
+
+  it('moves CLAUDE_CODE_SUBAGENT_MODEL to the named class\'s model', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus');
+    expect(r.code).toBe(0);
+    expect(registryOf('gpt')['subagent']).toBe('opus');
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+  });
+
+  it('refuses a class whose slot is null, naming set-class as the remedy', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('subagent');
+    expect(String(r.body['detail'])).toMatch(/set-class fable/);
+    expect(registryOf('gpt')['subagent']).toBe('sonnet');
+  });
+
+  it('refuses a word that is not a class', () => {
+    const r = op('set-subagent', '--file', rosterPath(), '--id', 'gpt', '--class', 'subagent');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unknown-class');
+  });
+});
+
+describe('set-effort', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  });
+
+  it('sets a level the catalogue offers, and it reaches the effort file', () => {
+    const r = op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--level', 'xhigh');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8')))
+      .toEqual({ byModel: { 'gpt-5.6-luna': 'high', 'gpt-5.6-terra': 'xhigh', 'gpt-5.6-sol': 'max' } });
+  });
+
+  it('refuses a level the classed model does not offer, naming both', () => {
+    // Luna has no `ultra`; Astra does (§4.1).
+    const r = op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'haiku', '--level', 'ultra');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('effort.haiku');
+    expect(String(r.body['detail'])).toContain('gpt-5.6-luna');
+    expect(String(r.body['detail'])).toContain('ultra');
+  });
+
+  it('`default` removes the entry', () => {
+    op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--level', 'default');
+    expect((registryOf('gpt')['effort'] as Record<string, unknown>)['opus']).toBeUndefined();
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8'))
+      .byModel['gpt-5.6-sol']).toBeUndefined();
+  });
+
+  it('refuses an effort on a class whose slot is null — there is no model to set it on', () => {
+    const r = op('set-effort', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--level', 'max');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('class-unassigned');
+  });
+});
+
+describe('discovery (§10) — the set discovery and classification operate on', () => {
+  beforeEach(() => {
+    writeCatalogue('router', { ...CODEX, probe: 'openrouter' });
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+  });
+
+  it('add builds the explicit list an openrouter lane requires', () => {
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    expect(r.code).toBe(0);
+    expect(registryOf('router')['discovery']).toEqual(['gpt-5.5']);
+  });
+
+  it('add is idempotent and never duplicates', () => {
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    expect(registryOf('router')['discovery']).toEqual(['gpt-5.5']);
+  });
+
+  it('rm removes, and refuses to remove one a class still routes to', () => {
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'gpt-5.5');
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'rm', '--model', 'gpt-5.5');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('discovery');
+    expect(registryOf('router')['discovery']).toEqual(['gpt-5.5']);
+  });
+
+  it('catalogue is refused on an openrouter lane', () => {
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'catalogue');
+    expect(r.code).toBe(1);
+    expect(String(r.body['detail'])).toMatch(/openrouter requires an explicit discovery list/);
+  });
+
+  it('catalogue is accepted on a codex lane', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5');
+    const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'catalogue');
+    expect(r.code).toBe(0);
+    expect(registryOf('gpt')['discovery']).toBe('catalogue');
+  });
+
+  it('an unknown action is a usage error', () => {
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'purge');
+    expect(r.code).toBe(2);
+  });
+});
+
+describe('the ownership whitelist at discovery-add (§5, §11)', () => {
+  const whitelist = (providers: string[]): void => {
+    fs.mkdirSync(path.join(home, '.handoff'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.handoff', 'providers-whitelist.json'),
+      JSON.stringify({ providers }));
+  };
+  const endpoints = (names: string[]): string => {
+    const p = path.join(home, 'endpoints.json');
+    fs.writeFileSync(p, JSON.stringify({ data: { endpoints: names.map((n) => ({ provider_name: n })) } }));
+    return p;
+  };
+  beforeEach(() => { op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter'); });
+
+  it('admits a model a whitelisted provider serves, and reports which', () => {
+    whitelist(['fireworks', 'together']);
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add',
+      '--model', 'z-ai/glm-5.2', '--endpoints', endpoints(['Fireworks', 'Z.AI']));
+    expect(r.code).toBe(0);
+    expect(r.body['servedBy']).toEqual(['fireworks']);
+  });
+
+  it('refuses when NO allowed provider serves it, naming the ones that do', () => {
+    whitelist(['fireworks']);
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add',
+      '--model', 'z-ai/glm-5.2', '--endpoints', endpoints(['Z.AI', 'Cortecs']));
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('no-allowed-provider');
+    expect(String(r.body['detail'])).toContain('Z.AI');
+    expect(registryOf('router')['discovery']).toEqual([]);
+  });
+
+  it('refuses when the whitelist file is absent — the proxy would refuse every request anyway', () => {
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add',
+      '--model', 'z-ai/glm-5.2', '--endpoints', endpoints(['Fireworks']));
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('whitelist-absent');
+  });
+
+  it('normalises a provider name to the whitelist\'s slug form', () => {
+    // The whitelist holds slugs (`google-ai-studio`); the endpoints body holds
+    // display names (`Google AI Studio`). A check that compared them raw would
+    // refuse every model on the list.
+    whitelist(['google-ai-studio']);
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add',
+      '--model', 'x/y', '--endpoints', endpoints(['Google AI Studio']));
+    expect(r.code).toBe(0);
+    expect(r.body['servedBy']).toEqual(['google-ai-studio']);
+  });
+});
+
+describe('the registry write', () => {
+  it('is atomic — no temp file survives a success', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    expect(fs.readdirSync(path.join(home, '.ccrc', 'models')).sort())
+      .toEqual(['gpt.classes.json', 'gpt.classes.tsv', 'gpt.effort.json']);
+  });
+
+  it('keeps 2-space indent and a trailing newline', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const text = fs.readFileSync(regPath('gpt'), 'utf8');
+    expect(text.endsWith('}\n')).toBe(true);
+    expect(text).toContain('\n  "classes": {');
+  });
+
+  it('is 0600 — a compatible lane\'s registry names its endpoint', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    expect(fs.statSync(regPath('gpt')).mode & 0o777).toBe(0o600);
+  });
+
+  it('re-VALIDATES before writing: a mutation that would break the registry writes nothing', () => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const before = fs.readFileSync(regPath('gpt'), 'utf8');
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'has space');
+    expect(r.code).toBe(1);
+    expect(fs.readFileSync(regPath('gpt'), 'utf8')).toBe(before);
+  });
+});
+
+describe('materialise', () => {
+  it('rewrites the three generated files from the registry and the catalogue', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'));
+    writeCatalogue('gpt');
+    const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['wrote']).toEqual({
+      settings: `${home}/.claude-gpt/settings.json`,
+      classes: `${home}/.ccrc/models/gpt.classes.tsv`,
+      effort: `${home}/.ccrc/models/gpt.effort.json`,
+    });
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(true);
+    // The catalogue this run just wrote (init ran before it existed, so init's
+    // own materialise could not have) — proves `materialise` reads the SAME
+    // freshly-parsed catalogue it used for `derived`, not a stale one (§6.1
+    // amendment).
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+  });
+
+  it('on a lane with NO registry writes nothing and says so', () => {
+    const r = op('materialise', '--file', rosterPath(), '--id', 'router');
+    expect(r.code).toBe(0);
+    expect(r.body['wrote']).toBeNull();
+    expect(fs.existsSync(path.join(home, '.claude-router', 'settings.json'))).toBe(false);
+  });
+
+  it('on an UNSEEDED registry writes the TSV and no env block', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    const r = op('materialise', '--file', rosterPath(), '--id', 'router');
+    expect(r.code).toBe(0);
+    expect((r.body['wrote'] as Record<string, unknown>)['settings']).toBeNull();
+    expect(fs.existsSync(path.join(home, '.claude-router', 'settings.json'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'router.classes.tsv'))).toBe(true);
+  });
+
+  it('on an anthropic lane refuses — its classes are the client\'s own', () => {
+    const r = op('materialise', '--file', rosterPath(), '--id', 'claude-a');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('anthropic-lane');
+  });
+});
+
+describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
+  beforeEach(() => {
+    writeCatalogue('gpt');
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+  });
+
+  it('removes all four generated files, in order, and clears exactly the eight env keys', () => {
+    const p = path.join(home, '.claude-gpt', 'settings.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.env.DISABLE_TELEMETRY = '1';
+    fs.writeFileSync(p, JSON.stringify(j, null, 2));
+    // The beforeEach's `init` ran against a written catalogue, so the eighth
+    // key is live before `rm` runs — this is the case that shows `rm` reaps
+    // it too, not just the seven keys that predate the §6.1 amendment.
+    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['removed']).toEqual([
+      regPath('gpt'),
+      path.join(home, '.ccrc', 'models', 'gpt.json'),
+      path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'),
+      path.join(home, '.ccrc', 'models', 'gpt.effort.json'),
+    ]);
+    expect(r.body['settings']).toBe('cleared');
+    expect(fs.existsSync(regPath('gpt'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.json'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.effort.json'))).toBe(false);
+    const after = settingsOf('.claude-gpt');
+    expect(after.env['DISABLE_TELEMETRY']).toBe('1');
+    expect(Object.keys(after.env)).not.toContain('ANTHROPIC_MODEL');
+    expect(Object.keys(after.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
+  });
+
+  it('is idempotent: a second call removes nothing and reports settings:unchanged', () => {
+    op('rm', '--file', rosterPath(), '--id', 'gpt');
+    const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(r.body['removed']).toEqual([]);
+    expect(r.body['settings']).toBe('unchanged');
+  });
+
+  it('on an id the roster has no row for — an ORPHAN — skips the settings step and says so', () => {
+    fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath('gpt'), 'utf8'));
+    const r = op('rm', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code).toBe(0);
+    expect(r.body['removed']).toEqual([regPath('ghost')]);
+    expect(r.body['settings']).toBe('orphan');
+    // …and the still-live gpt lane, whose id the roster DOES have, is untouched.
+    expect(fs.existsSync(regPath('gpt'))).toBe(true);
+  });
+
+  it('reaps a registry that does not even parse — rm -f semantics, not a validated read', () => {
+    fs.writeFileSync(regPath('gpt'), '{ this is not json');
+    const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect(fs.existsSync(regPath('gpt'))).toBe(false);
+  });
+
+  it('never touches the roster', () => {
+    const before = fs.readFileSync(rosterPath(), 'utf8');
+    op('rm', '--file', rosterPath(), '--id', 'gpt');
+    expect(fs.readFileSync(rosterPath(), 'utf8')).toBe(before);
+  });
+});
