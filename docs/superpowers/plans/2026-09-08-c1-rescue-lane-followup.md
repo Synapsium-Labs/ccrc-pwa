@@ -2,8 +2,36 @@
 
 **Base:** `origin/main` `db580771` (#67, C1). Branch `ws/clear-meadow`.
 **Why this exists:** the coordinator's review of #67 finished AFTER the merge and found six survivors,
-one of which is a REGRESSION now on `main`. The operator ruled to HOLD the agent deploy until this
-lands, so the fleet is still on the pre-C1 inode and nothing has shipped either defect.
+one of which is a REGRESSION now on `main`.
+
+**CORRECTED IN PLACE, because this paragraph will be read later as history.** It first said "the
+operator ruled to HOLD the agent deploy until this lands, so the fleet is still on the pre-C1 inode and
+nothing has shipped either defect." That was already false when it was written. Measured:
+
+| what | value |
+|---|---|
+| `sha256 ~/.local/bin/ccd` | `501ab2b997034da1…` |
+| `sha256 $(git show db580771:ccd/ccd)` | `501ab2b997034da1…` — MATCH |
+| installed at | 2026-09-08 **21:10:30Z** |
+| `ccd supervise` processes | **20**; 19 started **21:11:02–21:11:05Z**, one 21:17:22Z |
+
+The operator's hold was ruled at ~21:32Z, twenty-two minutes after the install — a sound ruling on a
+premise that was already false, and the premise was mine to check before I put the question. **And the
+sweep ran**: every supervisor start time is AFTER the install, so the running processes hold the NEW
+inode and C1 is EXECUTING on the box, not merely installed. That distinction is the one `:14876` was
+rewritten to make (D-2034), and it is the criterion D-1999 states — so the embargo is genuinely lifted,
+by the refined criterion rather than the loose one.
+
+**What that changes about this fix, and what it does not.** It is not a change landing before the risk
+goes live; it lands on a box already carrying it. The fix itself is right for reasons that do not
+depend on the premise. Exposure measured across all 26 registry rows, independently of the
+coordinator's own count and agreeing with it: 0 missing / empty / unreadable `.wrapper`, 0 unreadable
+`.home`, `$REG` searchable, 0 non-regular field files (so D-2030's hang is unreachable too). The one
+absent `.home` answers rc **1**, not rc 2, so `_home_measured` falls through to `_id_wrapper` and
+DECIDES. **Nothing trips either guard right now** — no rollback is warranted. But that is a
+measurement of the STEADY state across one instant, and every trip condition is a state a row passes
+THROUGH rather than rests in: a row mid-creation before `.wrapper` lands, a `.wrapper` removed out of
+band, one tick of permission trouble. A five-second tick lives in the transient.
 
 **Deviations DEFINED here:** D-2026–D-2035 (floor to 2036). Every number below is defined here and
 nowhere else.
