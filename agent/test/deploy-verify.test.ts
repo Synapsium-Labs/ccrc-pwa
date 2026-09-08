@@ -536,6 +536,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // spec 2026-09-07 §C: the telemetry keepalive pair, shipped the same way.
       'systemd/ccd-telemetry-keepalive.service',
       'systemd/ccd-telemetry-keepalive.timer',
+      // The model-class registry's catalogue timer (spec §5, §13.5), shipped
+      // the same way and for the same reason: a repo that cannot reproduce its
+      // own box is the defect the whole stage exists to close.
+      'systemd/ccrc-models.service',
+      'systemd/ccrc-models.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -547,6 +552,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the account-health probe is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-telemetry-keepalive')),
       'the telemetry keepalive executable is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccrc-models-probe')),
+      'the model catalogue probe is not in the repo').toBe(true);
 
     // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
     // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
@@ -579,6 +586,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // spec 2026-09-07 §C: the keepalive pair, installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -607,6 +616,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // already picked up the unit AGENT_BUILD_CMD installed.
     const keepaliveTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-telemetry-keepalive.timer'));
     expect(keepaliveTimerAt, 'the keepalive timer is never enabled').toBeGreaterThan(reloadAt);
+    const modelsTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccrc-models.timer'));
+    expect(modelsTimerAt, 'the models timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -625,6 +636,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755');
+    expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });

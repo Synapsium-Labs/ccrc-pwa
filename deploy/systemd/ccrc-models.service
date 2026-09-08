@@ -1,0 +1,5 @@
+[Unit]
+Description=Refresh every lane's model catalogue (model-class registry, added 2026-09-08)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccrc models refresh --all
