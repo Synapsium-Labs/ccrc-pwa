@@ -1659,7 +1659,10 @@ prose. The floor is now 1923.
 - **D-1901** (fix wave, C1 — spec §4.2 Case F) — **the workdir interpolated into the card got a shape gate
   and a length gate the spec never specified.** Case F said to name the workspace by path on a cwd/workdir
   disagreement and stopped there, so `$wd` shipped as the **only** string reaching a session's context
-  with neither gate, while the hold bytes, the project and the id each carry both. Two measured
+  with neither gate, while the hold bytes and the project each carry both. (`$id` carries a shape gate
+  and no length bound — corrected at PR time; the sentence here originally listed it among the
+  doubly-gated fields, contradicting D-1903 in this same section, and the code sides with D-1903:
+  `session-hook.sh`'s `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0` is the only gate on it.) Two measured
   consequences: **(a)** with a cwd exactly EQUAL to a workdir longer than `_ct_read`'s 128-character cap,
   the truncated reading compared unequal and the card asserted a directory disagreement that does not
   exist beside a path that does not exist — the precise truncation hazard D-1896 was invented for, applied

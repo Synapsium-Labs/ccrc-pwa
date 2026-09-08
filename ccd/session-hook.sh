@@ -621,9 +621,11 @@ _hook_hold_card() {
   _ct_read "$REG/$id.workdir" && wd="$CT_V"
   # THE WORKDIR IS A BYTE CHANNEL INTO A MODEL'S CONTEXT, AND THESE TWO GATES
   # ARE WHAT CLOSE IT (C1, D-1901). Do not relax either as noise. Every other value
-  # card quotes is gated twice — `$h` by the anchored shape match AND
-  # `CCRC_HOLD_MAX`, `$CT_PROJ` by `CCRC_PROJ_CLASS` AND `CCRC_PROJ_MAX`, `$id`
-  # by its own class at the top of this file. This one had neither gate, and it
+  # card quotes is gated — `$h` by the anchored shape match AND
+  # `CCRC_HOLD_MAX`, `$CT_PROJ` by `CCRC_PROJ_CLASS` AND `CCRC_PROJ_MAX`; `$id`
+  # by its own class at the top of this file, a shape gate with no length bound
+  # (which is why D-1903's sum treats its length as MODELLED). This one had
+  # neither kind of gate, and it
   # is the same kind of string: registry text that lands VERBATIM in a session's
   # `additionalContext`, re-injected on every compaction, for as long as the
   # hold stands. `$REG/<id>.workdir` is a file ANY session on this box can
