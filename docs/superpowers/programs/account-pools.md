@@ -843,3 +843,66 @@ which are kept as the record of what that worker read at the time.
 > YOUR PR: keep `D-TBD-` slugs out of commit SUBJECTS — twice now a wave's default squash body would have landed superseded placeholders on `main`, invisibly to CI. I write the squash body by hand.
 >
 > Do not update the program ledger — it is mine. Do not deploy. Do not merge.
+
+## Wave 2b SHIPPED — 2026-09-08
+
+Merged `4dc87366` (squash, PR #62: 27 commits, 19 files, +3449 −250). Both lanes deployed the same
+hour, **SERVER FIRST** at 17:17Z (`/health` → 4dc87366), agent lane at 17:18Z (`ccd` → 4dc87366, all
+17 `claude-session@*` units verified active with stable MainPIDs). Run 34 closed `done`; **run 35
+(wave 3) was opened BEFORE that close** — zero open runs retires the program irreversibly.
+The wave is on `main`, so D-1671–D-1678 (plan-time), D-1868–D-1895 (execution), D-1908–D-1921 (merge
+round), D-1955–D-1967 (fix round) and D-1972–D-1976 (round 3) are now full refs, not prefix-less.
+
+### The three-round arc, and the one lesson that generalises
+
+Round 1 fixed D-1915 and introduced D-1962. Round 2 fixed D-1962 and introduced its mirror —
+EXISTENCE substituted for AVAILABILITY, when `_swap_target` requires `_pool_ok` AND `_account_ok` AND
+`_avail`. Round 3 introduced nothing. The difference was not effort or care; it was **the shape of the
+instruction**. Rounds 1–2 said "correct these sentences". Round 3 said **DELETE OR POINT**: every edit
+must be a deletion, a pointer to the one normative home, or a verbatim quotation of the three
+predicates, and **no new fact may be asserted anywhere**. The output space became "fewer claims"
+instead of "different claims", and the regress stopped in one round.
+
+**Carry to every future fix round on prose:** when a correction round produces a new false claim, do
+NOT send a longer list. Forbid new assertions. The root was never carelessness — it was one rule
+paraphrased in ten hand-written homes, which is the same defect this repo already forbids for values
+("enumerated once and derived") and had never applied to prose.
+
+### A coordinator defect of mine, recorded because it cost a cycle
+
+My round-3 brief told the worker to write "the thirteen unrefuted findings" into the carry list. **I
+never transmitted them.** Twenty-one findings were reported to me; I passed eight. The worker did not
+invent the rest — it wrote in the plan that the coordinator had not sent them, and asked. That is
+exactly right, and the defect is mine. **A brief must not ask for a list the brief does not carry.**
+
+### The thirteen, triaged against the shipped tip — not relayed
+
+Round 3 had already closed most of them before I sent any: the pin now extracts and executes the
+command the prose cites (not a transcribed copy); `of 39` and `(32 green)` are gone; `REFUSES
+placement either way` is gone; the doctor warning is availability-worded; the heading numeral is
+pinned. **Two remain open and belong to wave 3:**
+
+- **CARRY W3-1 — the `ccd:NNNN` figure still carries the very defect D-1956 exists to fix.** The prose
+  says "143 lines of `ccd:NNNN` citations". Measured on `4dc87366`: the natural
+  `grep -cE 'ccd:[0-9]+'` answers **146 lines / 157 occurrences**. 143/154 is reachable only with an
+  unstated `ccd:[0-9]{2,}`, which silently drops three real single-digit citations — `ccd:9` at
+  `:5603`, `ccd:4` at `:10645` and `:11019`. A count with no named command, and the obvious command
+  disagrees with it.
+- **CARRY W3-2 — D-1955 closed ONE of the three absence assertions, not three.**
+  `BLOCKED_REAL_DISPATCH` stubs `_svc_run_detached` with `return 0`, so the argv IS captured — which
+  is what makes the `--cross-pool` mutation detectable, and that arm is genuinely fixed — but
+  `cmd_swap` never EXECUTES. The `.crosspool` marker and the `cross-pool` log line are written by
+  `_crosspool_mark` and the echo in `cmd_swap`'s success tail, neither of which runs. Those two
+  assertions still cannot fail against their real writers. The wave-done mail's "all three … FIXED"
+  overstates it.
+
+### The deploy handshake that stopped a silent regression
+
+PR #65 — the trust-dialog incident fix, `af8e75f3` — deployed to the fleet host at 15:59Z, hours
+before this wave's own agent lane. **Both lanes install `ccd`.** Deploying wave 2b from the BRANCH
+rather than from merged `main` would have shipped a `ccd` without `_answer_two_option_dialog`,
+re-breaking the dialog that orphaned five fleet sessions that afternoon — with no test anywhere that
+would have noticed. Rule, now standing: **the agent lane installs from MERGED MAIN, never a branch,
+and the deploy first asserts `git merge-base --is-ancestor <the other lane's sha> <the sha being
+deployed>`.** Asserted here before either lane ran; it passed, and `_answer_two_option_dialog` was
+measured byte-identical to main's in the merged file with the trust branch calling it.
