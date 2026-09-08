@@ -325,6 +325,24 @@ _models_answer() {
   body="$(_models_node "$@")"; rc=$?
   [ -n "$body" ] \
     || _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  # THE SHAPE, not just the emptiness — round 1 review, Important 1. A
+  # half-updated box's node half can print something NON-EMPTY and still not
+  # be "the answer": measured with a stub that writes a two-line stack to
+  # stdout and exits 7, the emptiness check alone let both lines through as
+  # if they were the JSON object this verb promises, on exactly the
+  # half-updated-box path this seam's own comment invokes. jq is already
+  # proven present by `_models_deps`, so this costs nothing new.
+  printf '%s' "$body" | jq -e 'type=="object"' >/dev/null 2>&1 \
+    || _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc and printed something that is not one JSON object, so this run has nothing reliable to tell you — its first line was: $(printf '%s\n' "$body" | head -n1). ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  # THE EXIT CODE, clamped to this file's own 0/1/2 contract (the header's
+  # EXIT CODES table) — round 1 review, Important 1. A node half that prints a
+  # VALID object but exits some fourth code (a crash right after answering,
+  # say) must not leak that code past ccrc's own promise to whatever scripted
+  # on `ccrc models …; case $? in 0|1|2)`.
+  case "$rc" in
+    0|1|2) : ;;
+    *) _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc, outside this build's 0/1/2 contract, after printing a JSON object — its own exit code broke, not yours. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written." ;;
+  esac
   printf '%s\n' "$body"
   return "$rc"
 }
@@ -3805,11 +3823,18 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
 }
 
 _models_id_ok() {   # <token> — a usage-level gate, before node
+  # `$WRAPPER_ID_RE`, NOT a hand-copied literal — round 1 review, Important 3.
+  # `ccrc-wrapper-shape` is sourced once, at the top of `cmd_models` (below),
+  # the same idiom `cmd_wrappers` uses; a fourth typed-out copy of
+  # `shared/roster.ts`'s ID_RE is exactly the drift that file's own header
+  # exists to prevent, and this one was the ONLY guard standing between
+  # `ccrc models <id> init` and a write outside ~/.ccrc/models/ —
+  # `deploy/models-op.mjs` has no traversal guard of its own.
   local id="$1" w
   for w in $MODELS_RESERVED; do
     [ "$w" = "$id" ] && return 1
   done
-  [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || return 2
+  [[ "$id" =~ $WRAPPER_ID_RE ]] || return 2
   return 0
 }
 
@@ -3869,6 +3894,20 @@ cmd_models() {
     -h|--help) usage; exit 0 ;;
   esac
   _models_deps
+  # The shape contract, sourced rather than restated — `cmd_wrappers`' own
+  # idiom (:2331-2336), for the same reason: `_models_id_ok` needs
+  # `WRAPPER_ID_RE`, and a second, hand-typed copy of `shared/roster.ts`'s
+  # ID_RE is how a validator drifts from the rule it is supposed to enforce.
+  # Sourced ONCE, here, rather than inside `_models_id_ok` itself: the file
+  # defines `_wrap_*`/`WRAPPER_*` names (its own header — no path lookups, no
+  # namespace collision with `_models_*`/`MODELS_*`), and re-sourcing it on
+  # every id check would just re-run the same assignments for nothing.
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  [[ -f "$shape" ]] \
+    || _ccrc_die "the wrapper shape contract is missing: $shape — is this a complete ccrc install?"
+  # shellcheck source=ccrc-wrapper-shape
+  . "$shape" \
+    || _ccrc_die "the wrapper shape contract failed to load: $shape"
   local first="${1:-}"
   [ -n "$first" ] \
     || _models_refuse missing-argument 2 "ccrc models needs a lane id or a subcommand: ccrc models <id> {${MODELS_SUBS// /|}}, or ccrc models {${MODELS_RESERVED// /|}}"

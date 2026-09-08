@@ -63,6 +63,48 @@ function box(roster: unknown = ROSTER): string {
   return h;
 }
 
+/** Round 1 review, Important 2: the `no-answer` seam (`_models_answer`) had
+ *  no test. Same box as `box()`, except `deploy/` is a REAL directory holding
+ *  one symlink per file the repo's `deploy/` has, rather than one symlink to
+ *  the whole directory — so a test can drop its OWN `models-op.mjs` in
+ *  without touching the real one. `shared/` stays symlinked whole: a stub
+ *  script never imports it, and the box still needs to look like a complete
+ *  install for `ccrc-wrapper-shape` and the other symlinked `ccd/` files. */
+function boxWithStubOp(stubSource: string, roster: unknown = ROSTER): string {
+  const h = mkTmp('ccrc-models-verb-stubop-');
+  const ccd = join(h, 'ccrc', 'ccd');
+  fs.mkdirSync(ccd, { recursive: true });
+  for (const f of ['ccrc', 'ccrc-wrapper-shape', 'ccrc-doctor-checks', 'ccrc-models-probe']) {
+    fs.symlinkSync(join(REPO, 'ccd', f), join(ccd, f));
+  }
+  const deploy = join(h, 'ccrc', 'deploy');
+  fs.mkdirSync(deploy, { recursive: true });
+  for (const f of fs.readdirSync(join(REPO, 'deploy'))) {
+    if (f === 'models-op.mjs') continue;
+    fs.symlinkSync(join(REPO, 'deploy', f), join(deploy, f));
+  }
+  fs.writeFileSync(join(deploy, 'models-op.mjs'), stubSource, { mode: 0o755 });
+  fs.symlinkSync(join(REPO, 'shared'), join(h, 'ccrc', 'shared'));
+  fs.mkdirSync(join(h, '.ccrc'), { recursive: true });
+  fs.writeFileSync(join(h, '.ccrc', 'accounts.json'), `${JSON.stringify(roster, null, 2)}\n`);
+  env(h);
+  return h;
+}
+
+/** Prints nothing and exits 0 — the pre-existing emptiness case. */
+const STUB_SILENT_OK = '#!/usr/bin/env node\nprocess.exit(0);\n';
+/** Prints a two-line, non-JSON stack to STDOUT and exits 7 — the exact shape
+ *  the round 1 reviewer measured breaking both "exactly one JSON object on
+ *  stdout" and the 0/1/2 exit-code contract at once. */
+const STUB_STACK = "#!/usr/bin/env node\n"
+  + "process.stdout.write('Error: kaboom\\n    at somewhere.js:12:34\\n');\n"
+  + 'process.exit(7);\n';
+/** Prints one valid refusal object and exits 1 — the shape check and the
+ *  rc-clamp must both let this through UNCHANGED. */
+const STUB_VALID_REFUSAL = '#!/usr/bin/env node\n'
+  + "process.stdout.write(JSON.stringify({ok:false,error:'roster-absent',detail:'stub refusal'}) + '\\n');\n"
+  + 'process.exit(1);\n';
+
 function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const e = ghContainedEnv(h, { ...process.env, HOME: h, ...extra });
   const poison = (name: string, says: string): void =>
@@ -125,6 +167,19 @@ describe('the models dispatcher', () => {
     const m = /^MODELS_RESERVED="([^"]*)"$/m.exec(src);
     expect(m, 'ccd/ccrc has no file-scope MODELS_RESERVED').toBeTruthy();
     expect(m![1]!.split(' ').filter(Boolean).sort()).toEqual(['litellm', 'refresh']);
+  });
+
+  it('`_models_id_ok` reads the shared WRAPPER_ID_RE, not a hand-copied literal', () => {
+    // Round 1 review, Important 3: a fourth typed-out `^[a-z][a-z0-9-]{0,31}$`
+    // was the ONLY guard between `ccrc models <id> init` and a write outside
+    // ~/.ccrc/models/ (`deploy/models-op.mjs` has no traversal guard of its
+    // own), and it had drifted out of sync with `shared/roster.ts`'s ID_RE
+    // three times already (`ccrc-wrapper-shape`'s own header). A static pin
+    // so a fifth copy cannot creep back into this one function.
+    const src = fs.readFileSync(CCRC_SRC, 'utf8');
+    const m = /^_models_id_ok\(\) \{[\s\S]*?^\}$/m.exec(src);
+    expect(m, 'ccd/ccrc has no _models_id_ok function').toBeTruthy();
+    expect(m![0]).not.toContain('[a-z0-9-]{0,31}');
   });
 
   it('with nothing after it refuses at exit 2 with a body', () => {
@@ -315,5 +370,49 @@ describe('ccrc models <id> init', () => {
     const r = run(['models', 'gpt', 'init', 'codex', 'extra']);
     expect(r.code).toBe(2);
     expect(oneObject(r)['error']).toBe('unknown-argument');
+  });
+});
+
+// Round 1 review, Important 2: `_models_answer`'s seam had no test at all —
+// `grep -n no-answer server/test/ccrc-models.test.ts` found nothing. These
+// three drop a STUB `deploy/models-op.mjs` into the fixture box, through
+// `boxWithStubOp`, and drive it through `ccrc models <id> show` — the seam
+// itself does not care which subcommand called it.
+describe('the _models_answer seam ("no-answer")', () => {
+  it('the node half prints nothing and exits 0: refused, not a silent drop', () => {
+    fs.rmSync(home, { recursive: true, force: true });
+    home = boxWithStubOp(STUB_SILENT_OK);
+    const r = run(['models', 'gpt', 'show']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('no-answer');
+    expect(r.stderr).not.toBe('');
+  });
+
+  it('the node half prints a bare stack and exits 7: refused, not two stray lines on stdout', () => {
+    // This is the case the round 1 review measured: emptiness alone let both
+    // lines of the stack through as if they were the promised JSON object,
+    // and the caller's exit code was the node half's raw 7, not this file's
+    // own 0/1/2.
+    fs.rmSync(home, { recursive: true, force: true });
+    home = boxWithStubOp(STUB_STACK);
+    const r = run(['models', 'gpt', 'show']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('no-answer');
+    expect(r.stderr).not.toBe('');
+  });
+
+  it('the node half prints one valid refusal object and exits 1: passed through unchanged', () => {
+    // The shape check and the rc clamp must not turn a REAL refusal from
+    // deploy/models-op.mjs into a manufactured "no-answer" — that would hide
+    // the node half's own diagnosis behind this seam's.
+    fs.rmSync(home, { recursive: true, force: true });
+    home = boxWithStubOp(STUB_VALID_REFUSAL);
+    const r = run(['models', 'gpt', 'show']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('roster-absent');
+    expect(b['detail']).toBe('stub refusal');
   });
 });
