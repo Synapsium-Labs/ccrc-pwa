@@ -4,7 +4,7 @@
 
 **Goal:** Put every model any lane can run into one of four classes — haiku, sonnet, opus, fable — as a per-account registry file this design owns; discover each provider's catalogue on a timer; project the registry into the lane's own `settings.json` env block, into a three-column bash projection, into LiteLLM's model list and into a per-lane effort map the gpt shim reads per request.
 
-**Architecture:** Five units, four of them in the `ccrc-pwa` repo and one in the monorepo. **Registry** — `~/.ccrc/models/<accountId>.classes.json`, its own user-owned file (ruling 280: the account-connections branch's `exec.models` is not on `main` and this plan does not stack on it), with the `Registry` type, `parseRegistry` and the derived states in `shared/models.ts` plus a bare-`node` twin `shared/models.mjs`. **Probes** — one bash executable, `ccd/ccrc-models-probe`, with one arm per PROBE KIND (`codex | openrouter | compatible`, keyed by `registry.probe`, never by a roster provider), writing `~/.ccrc/models/<id>.json` atomically and keeping the previous catalogue marked `stale` on any failure. **Materialiser** — `shared/modelenv.mjs` turns a registry into the seven env variables, a three-column `.classes.tsv` and a `.effort.json`, and ships with a single-writer pin; `deploy/models-op.mjs` is the node half of the verbs and `ccd/ccrc`'s new top-level `cmd_models` is the bash half. **Shim** — the monorepo's `ccgpt-proxy` maps the client's `output_config.effort` (or the lane default from `~/.ccrc/models/gpt.effort.json`) onto Codex's `reasoning.effort`, and `ccgpt`/`claude-glm` stop exporting model ids the settings block already decides.
+**Architecture:** Five units, four of them in the `ccrc-pwa` repo and one in the monorepo. **Registry** — `~/.ccrc/models/<accountId>.classes.json`, its own user-owned file (ruling 280: the account-connections branch's `exec.models` is not on `main` and this plan does not stack on it), with the `Registry` type, `parseRegistry` and the derived states in `shared/models.ts` plus a bare-`node` twin `shared/models.mjs`. **Probes** — one bash executable, `ccd/ccrc-models-probe`, with one arm per PROBE KIND (`codex | openrouter | compatible`, keyed by `registry.probe`, never by a roster provider), writing `~/.ccrc/models/<id>.json` atomically and keeping the previous catalogue marked `stale` on any failure. **Materialiser** — `shared/modelenv.mjs` turns a registry into the eight env variables (the eighth, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, written only when a non-stale catalogue measures the resolved default model's context — spec §6.1, amended 2026-09-08), a three-column `.classes.tsv` and a `.effort.json`, and ships with a single-writer pin; `deploy/models-op.mjs` is the node half of the verbs and `ccd/ccrc`'s new top-level `cmd_models` is the bash half. **Shim** — the monorepo's `ccgpt-proxy` maps the client's `output_config.effort` (or the lane default from `~/.ccrc/models/gpt.effort.json`) onto Codex's `reasoning.effort`, and `ccgpt`/`claude-glm` stop exporting model ids the settings block already decides.
 
 **Tech Stack:** TypeScript (`shared/*.ts`, bundled by the PWA — import-free or `shared/*.ts`-only), bare-`node` ESM (`shared/*.mjs` + hand-written `.d.mts`), bash 5 (`ccd/ccrc`, `ccd/ccrc-models-probe`), python 3 (embedded in the probe; `infra/handoff/ccgpt-proxy`), vitest (`server/test`, `agent/test`), systemd --user timers, LiteLLM.
 
@@ -1772,14 +1772,14 @@ MSG
 - Produces:
   ```js
   export class ModelEnvInvalid extends Error {}
-  export const MODEL_ENV_KEYS                             // → the seven key names, frozen
-  export function modelEnvBlock(registry)                // → the seven env keys
-  export function mergeSettingsEnv(settingsPath, block)  // → { changed: boolean }
-  export function clearSettingsEnv(settingsPath, keys)   // → { changed: boolean }
-  export function effortFile(registry, catalogue)        // → { byModel: { [modelId]: level } }
-  export function classesTsv(registry, catalogue)        // → 'haiku\t<id>\tassigned\n' × 4
+  export const MODEL_ENV_KEYS                                       // → the eight key names, frozen
+  export function modelEnvBlock(registry, catalogue)                // → up to eight env keys
+  export function mergeSettingsEnv(settingsPath, block)              // → { changed: boolean }
+  export function clearSettingsEnv(settingsPath, keys)               // → { changed: boolean }
+  export function effortFile(registry, catalogue)                    // → { byModel: { [modelId]: level } }
+  export function classesTsv(registry, catalogue)                    // → 'haiku\t<id>\tassigned\n' × 4
   ```
-  Tasks 6–10 call `modelEnvBlock`, `effortFile` and `classesTsv`; Plan 2 reads `classesTsv`'s output from bash and branches on its THIRD column; the monorepo shim (Task 13) reads `effortFile`'s output. `clearSettingsEnv` is `ccrc models <id> rm`'s whole settings step (Task 6): called with `MODEL_ENV_KEYS` so the seven names are spelled once, at their point of origin, rather than a second time at every call site (spec §4.1 Lifecycle, §10, §11).
+  Tasks 6–10 call `modelEnvBlock`, `effortFile` and `classesTsv`; Plan 2 reads `classesTsv`'s output from bash and branches on its THIRD column; the monorepo shim (Task 13) reads `effortFile`'s output. `clearSettingsEnv` is `ccrc models <id> rm`'s whole settings step (Task 6): called with `MODEL_ENV_KEYS` so the eight names are spelled once, at their point of origin, rather than a second time at every call site (spec §4.1 Lifecycle, §10, §11). `modelEnvBlock`'s eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended 2026-09-08), is written only when `catalogue` is non-null, not stale, and lists the model `ANTHROPIC_MODEL` resolves to with a numeric `context`; every other case OMITS the key — there is no "unavailable" reading for a context window, only "unknown", and Claude Code's own 200k default already means "unknown" to the client. Because the key can disappear on a re-materialise (a catalogue going stale, or the default model changing to one with no measured context), Task 6's `materialise` step also clears it when absent from the freshly computed block — see Task 6's Interfaces for which function does that.
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -1808,7 +1808,7 @@ const reg = (over: Record<string, unknown>): Record<string, unknown> =>
 
 describe('modelEnvBlock', () => {
   it('is the seven variables, byte for byte, for the seeded gpt registry (§6.1)', () => {
-    expect(modelEnvBlock(SEEDED)).toEqual({
+    expect(modelEnvBlock(SEEDED, null)).toEqual({
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-5.6-luna',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-5.6-terra',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-5.6-sol',
@@ -1825,7 +1825,7 @@ describe('modelEnvBlock', () => {
     // sentinel makes `/model fable` fail with a name that says what is missing.
     const only = reg({ classes: { haiku: null, sonnet: null, opus: 'x', fable: null },
       subagent: 'opus', discovery: ['x'], effort: {} });
-    const b = modelEnvBlock(only);
+    const b = modelEnvBlock(only, null);
     expect(b.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ccrc-unavailable-haiku');
     expect(b.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ccrc-unavailable-sonnet');
     expect(b.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
@@ -1837,10 +1837,10 @@ describe('modelEnvBlock', () => {
     // derivation. Pointing it at opus must move the variable, with no other
     // key changing.
     const onOpus = reg({ subagent: 'opus' });
-    expect(modelEnvBlock(onOpus).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    expect(modelEnvBlock(onOpus, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
     const onHaiku = reg({ subagent: 'haiku' });
-    expect(modelEnvBlock(onHaiku).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-luna');
-    expect(modelEnvBlock(onHaiku).ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
+    expect(modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-luna');
+    expect(modelEnvBlock(onHaiku, null).ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
   });
 
   it('REFUSES when subagent names a null slot, rather than writing a sentinel there', () => {
@@ -1848,23 +1848,23 @@ describe('modelEnvBlock', () => {
     // would make every subagent on the lane fail at the provider, one turn at a
     // time, with nothing having said so at materialise time.
     const bad = reg({ subagent: 'fable' });
-    expect(() => modelEnvBlock(bad)).toThrow(ModelEnvInvalid);
-    expect(() => modelEnvBlock(bad)).toThrow(/subagent/);
+    expect(() => modelEnvBlock(bad, null)).toThrow(ModelEnvInvalid);
+    expect(() => modelEnvBlock(bad, null)).toThrow(/subagent/);
   });
 
   it('ANTHROPIC_MODEL falls opus → sonnet → haiku', () => {
     const noOpus = reg({ classes: { haiku: 'h', sonnet: 's', opus: null, fable: null },
       subagent: 'sonnet', discovery: ['h', 's'], effort: {} });
-    expect(modelEnvBlock(noOpus).ANTHROPIC_MODEL).toBe('s');
+    expect(modelEnvBlock(noOpus, null).ANTHROPIC_MODEL).toBe('s');
     const haikuOnly = reg({ classes: { haiku: 'h', sonnet: null, opus: null, fable: null },
       subagent: 'haiku', discovery: ['h'], effort: {} });
-    expect(modelEnvBlock(haikuOnly).ANTHROPIC_MODEL).toBe('h');
+    expect(modelEnvBlock(haikuOnly, null).ANTHROPIC_MODEL).toBe('h');
   });
 
   it('ANTHROPIC_SMALL_FAST_MODEL falls haiku → sonnet', () => {
     const noHaiku = reg({ classes: { haiku: null, sonnet: 's', opus: 'o', fable: null },
       subagent: 'sonnet', discovery: ['s', 'o'], effort: {} });
-    expect(modelEnvBlock(noHaiku).ANTHROPIC_SMALL_FAST_MODEL).toBe('s');
+    expect(modelEnvBlock(noHaiku, null).ANTHROPIC_SMALL_FAST_MODEL).toBe('s');
   });
 
   it('neither fallback chain ever reaches `fable`, and a fable-only lane is refused', () => {
@@ -1874,12 +1874,42 @@ describe('modelEnvBlock', () => {
     // expensive model it has.
     const fableOnly = reg({ classes: { haiku: null, sonnet: null, opus: null, fable: 'f' },
       subagent: 'fable', discovery: ['f'], effort: {} });
-    expect(() => modelEnvBlock(fableOnly)).toThrow(ModelEnvInvalid);
-    expect(() => modelEnvBlock(fableOnly)).toThrow(/a lane needs at least one class/);
+    expect(() => modelEnvBlock(fableOnly, null)).toThrow(ModelEnvInvalid);
+    expect(() => modelEnvBlock(fableOnly, null)).toThrow(/a lane needs at least one class/);
   });
 
   it('refuses an UNSEEDED registry (§11) — it is legal on disk and materialises to nothing', () => {
-    expect(() => modelEnvBlock(UNSEEDED)).toThrow(/a lane needs at least one class/);
+    expect(() => modelEnvBlock(UNSEEDED, null)).toThrow(/a lane needs at least one class/);
+  });
+
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS is ANTHROPIC_MODEL\'s context, as a STRING (§6.1, amended 2026-09-08)', () => {
+    // ANTHROPIC_MODEL resolves opus ?? sonnet ?? haiku — SEEDED's opus slot is
+    // gpt-5.6-sol, and CODEX lists it with context 272000. Env values are
+    // strings everywhere else in this block; a bare number here would be the
+    // one key that reads differently from the other seven.
+    const b = modelEnvBlock(SEEDED, CODEX);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    expect(Object.keys(b)).toHaveLength(8);
+  });
+
+  it('is ABSENT when the catalogue is stale — a stale window is not a measured one', () => {
+    const b = modelEnvBlock(SEEDED, { ...CODEX, stale: true });
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(Object.keys(b)).toHaveLength(7);
+  });
+
+  it('is ABSENT with no catalogue at all — never probed is not "assume 200k is fine"', () => {
+    const b = modelEnvBlock(SEEDED, null);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(Object.keys(b)).toHaveLength(7);
+  });
+
+  it('is ABSENT when the catalogue lists the resolved model with context: null', () => {
+    const noContext = { ...CODEX,
+      models: CODEX.models.map((m) => (m.id === 'gpt-5.6-sol' ? { ...m, context: null } : m)) };
+    const b = modelEnvBlock(SEEDED, noContext);
+    expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+    expect(Object.keys(b)).toHaveLength(7);
   });
 });
 
@@ -1888,7 +1918,7 @@ describe('mergeSettingsEnv', () => {
 
   it('creates the file when it is absent, with the env block and nothing else', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    const r = mergeSettingsEnv(settings(), modelEnvBlock(SEEDED));
+    const r = mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     expect(r).toEqual({ changed: true });
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(Object.keys(j)).toEqual(['env']);
@@ -1904,25 +1934,43 @@ describe('mergeSettingsEnv', () => {
       alwaysThinkingEnabled: true,
       env: { DISABLE_TELEMETRY: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'stale-id' },
     }, null, 2));
-    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED));
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(j.alwaysThinkingEnabled).toBe(true);
     expect(j.env.DISABLE_TELEMETRY).toBe('1');
     expect(j.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('gpt-5.6-sol');
   });
 
+  it('PRUNES CLAUDE_CODE_MAX_CONTEXT_TOKENS when a re-materialise\'s block stops emitting it', () => {
+    // The eighth key can go from present to absent — a catalogue going stale,
+    // or the lane's default model changing to one with no measured context —
+    // and unlike every other key here it carries no sentinel: leaving the
+    // STALE number on disk would misstate the window rather than merely miss
+    // one. This is the one member of MODEL_ENV_KEYS this function ever
+    // deletes on its own; the case above shows a key OUTSIDE that set is
+    // still never touched.
+    fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, CODEX));
+    expect(JSON.parse(fs.readFileSync(settings(), 'utf8')).env.CLAUDE_CODE_MAX_CONTEXT_TOKENS)
+      .toBe('272000');
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
+    const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
+    expect(Object.keys(j.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
+    expect(j.env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
+  });
+
   it('reports changed:false on a second identical call, and rewrites nothing', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED));
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     const before = fs.statSync(settings()).mtimeMs;
-    const r = mergeSettingsEnv(settings(), modelEnvBlock(SEEDED));
+    const r = mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     expect(r).toEqual({ changed: false });
     expect(fs.statSync(settings()).mtimeMs).toBe(before);
   });
 
   it('writes 2-space indent and a trailing newline', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED));
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     const text = fs.readFileSync(settings(), 'utf8');
     expect(text.endsWith('}\n')).toBe(true);
     expect(text).toContain('\n  "env": {');
@@ -1930,27 +1978,29 @@ describe('mergeSettingsEnv', () => {
 
   it('leaves no temp file behind — the write is atomic', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED));
+    mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null));
     expect(fs.readdirSync(path.join(home, '.claude-gpt'))).toEqual(['settings.json']);
   });
 
   it('refuses a settings file that is not JSON, rather than overwriting it', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     fs.writeFileSync(settings(), '{ this is not json');
-    expect(() => mergeSettingsEnv(settings(), modelEnvBlock(SEEDED))).toThrow(ModelEnvInvalid);
+    expect(() => mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null))).toThrow(ModelEnvInvalid);
     expect(fs.readFileSync(settings(), 'utf8')).toBe('{ this is not json');
   });
 
   it('refuses a settings file whose top level is not an object', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     fs.writeFileSync(settings(), '[]');
-    expect(() => mergeSettingsEnv(settings(), modelEnvBlock(SEEDED))).toThrow(ModelEnvInvalid);
+    expect(() => mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null))).toThrow(ModelEnvInvalid);
   });
 });
 
 describe('MODEL_ENV_KEYS', () => {
-  it('is the seven keys modelEnvBlock writes, frozen, so a caller never spells them twice', () => {
-    expect([...MODEL_ENV_KEYS].sort()).toEqual(Object.keys(modelEnvBlock(SEEDED)).sort());
+  it('is the eight keys modelEnvBlock can write, frozen, so a caller never spells them twice', () => {
+    // Against a catalogue that names ANTHROPIC_MODEL's context (§6.1,
+    // amended 2026-09-08), all eight keys are live at once.
+    expect([...MODEL_ENV_KEYS].sort()).toEqual(Object.keys(modelEnvBlock(SEEDED, CODEX)).sort());
     expect(Object.isFrozen(MODEL_ENV_KEYS)).toBe(true);
   });
 });
@@ -1958,11 +2008,11 @@ describe('MODEL_ENV_KEYS', () => {
 describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1 Lifecycle, §10)', () => {
   const settings = (): string => path.join(home, '.claude-gpt', 'settings.json');
 
-  it('clears exactly the seven keys, leaving every other env key untouched', () => {
+  it('clears exactly the eight keys, leaving every other env key untouched', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     fs.writeFileSync(settings(), JSON.stringify({
       alwaysThinkingEnabled: true,
-      env: { ...modelEnvBlock(SEEDED), DISABLE_TELEMETRY: '1' },
+      env: { ...modelEnvBlock(SEEDED, CODEX), DISABLE_TELEMETRY: '1' },
     }, null, 2));
     const r = clearSettingsEnv(settings(), MODEL_ENV_KEYS);
     expect(r).toEqual({ changed: true });
@@ -1973,7 +2023,7 @@ describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1
 
   it('removes env entirely once emptied by the deletion, rather than writing {}', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    fs.writeFileSync(settings(), JSON.stringify({ env: modelEnvBlock(SEEDED) }, null, 2));
+    fs.writeFileSync(settings(), JSON.stringify({ env: modelEnvBlock(SEEDED, null) }, null, 2));
     clearSettingsEnv(settings(), MODEL_ENV_KEYS);
     const j = JSON.parse(fs.readFileSync(settings(), 'utf8'));
     expect(Object.keys(j)).toEqual([]);
@@ -1987,7 +2037,7 @@ describe('clearSettingsEnv — ccrc models <id> rm\'s whole settings step (§4.1
 
   it('a second call is idempotent — changed:false, and rewrites nothing', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
-    fs.writeFileSync(settings(), JSON.stringify({ env: modelEnvBlock(SEEDED) }, null, 2));
+    fs.writeFileSync(settings(), JSON.stringify({ env: modelEnvBlock(SEEDED, null) }, null, 2));
     clearSettingsEnv(settings(), MODEL_ENV_KEYS);
     const before = fs.statSync(settings()).mtimeMs;
     const r = clearSettingsEnv(settings(), MODEL_ENV_KEYS);
@@ -2109,7 +2159,7 @@ Expected: FAIL with `Failed to resolve import "../../shared/modelenv.mjs"`.
 
 ```js
 // shared/modelenv.mjs — the materialiser's pure half (§6.1, §6.4, §7): a lane's
-// class registry turned into the seven environment variables Claude Code reads,
+// class registry turned into the eight environment variables Claude Code reads,
 // the THREE-column TSV ccd reads (Plan 2), and the effort map `ccgpt-proxy`
 // reads per request.
 //
@@ -2131,6 +2181,14 @@ Expected: FAIL with `Failed to resolve import "../../shared/modelenv.mjs"`.
 //
 // AND THE SENTINEL GOES NOWHERE ELSE. `classesTsv` never emits it; its third
 // column is the positive availability marker every bash reader branches on.
+// The EIGHTH key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended
+// 2026-09-08), gets neither treatment: it is OMITTED, never sentinelled, when
+// no measured window exists — there is no "unavailable" reading for a context
+// size, only "unknown", and Claude Code's own 200k default already means
+// "unknown" to the client. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_
+// ENFORCEMENT` is never set by this file or by anything this design writes:
+// that proactive compaction is what keeps an unexpectedly large lane from
+// hitting the provider's 400 ("input exceeds the context window").
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
@@ -2144,12 +2202,17 @@ export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
 }
 
-/** The seven keys `modelEnvBlock` writes, frozen so a caller iterates them
+/** The eight keys `modelEnvBlock` can write, frozen so a caller iterates them
  *  rather than spelling them a second time. `clearSettingsEnv(path,
  *  MODEL_ENV_KEYS)` is `ccrc models <id> rm`'s whole settings step (spec §4.1
  *  Lifecycle, §10, §11) — the single-writer pin below counts this export as
- *  the one place these seven names originate, so a caller that respelled them
- *  would be a second definition and not merely a second writer. */
+ *  the one place these eight names originate, so a caller that respelled them
+ *  would be a second definition and not merely a second writer. The eighth,
+ *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, is the one entry `modelEnvBlock` may
+ *  OMIT from a given answer (§6.1 amendment) — `mergeSettingsEnv` below is
+ *  what deletes it off a lane's settings when a re-materialise stops emitting
+ *  it, which is why this list, and not just `modelEnvBlock`'s return value,
+ *  is the set that function treats as its own. */
 export const MODEL_ENV_KEYS = Object.freeze([
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -2158,6 +2221,7 @@ export const MODEL_ENV_KEYS = Object.freeze([
   'ANTHROPIC_MODEL',
   'ANTHROPIC_SMALL_FAST_MODEL',
   'CLAUDE_CODE_SUBAGENT_MODEL',
+  'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
 ]);
 
 const slot = (registry, cls) => {
@@ -2166,8 +2230,10 @@ const slot = (registry, cls) => {
 };
 
 /**
- * `(registry: Registry) => Record<string, string>` — the seven variables of
- * §6.1, always all seven keys.
+ * `(registry: Registry, catalogue: Catalogue | null) => Record<string, string>`
+ * — the seven MANDATORY variables of §6.1, plus an eighth,
+ * `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, written only when `catalogue` can measure
+ * it (§6.1, amended 2026-09-08).
  *
  * The two fallback chains STOP where §6.1 stops them, and that is deliberate:
  * `ANTHROPIC_MODEL` is opus ?? sonnet ?? haiku and `ANTHROPIC_SMALL_FAST_MODEL`
@@ -2184,10 +2250,26 @@ const slot = (registry, cls) => {
  * the same shape; this is the second gate, for a caller that built a registry
  * object in memory rather than reading one off disk.
  *
+ * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists because Claude Code 2.1.263 assumes
+ * a 200k window for any model id it does not know, and compacts proactively at
+ * that window; the catalogue knows the real one. It is written ONLY when
+ * `catalogue` is non-null, NOT stale (§11: a stale catalogue is the previous
+ * one kept after a failed probe, and a stale window is not a measured one),
+ * lists the model `ANTHROPIC_MODEL` resolved to above, and that row's
+ * `context` is a number — every other case OMITS the key (never a sentinel:
+ * there is no "unavailable" reading for a context window, only "unknown", and
+ * the client's own 200k default already means "unknown"). The value is
+ * written as a STRING: every other value in this block is one, env vars are
+ * always strings on the wire, and a bare number here would be the one key
+ * that differs. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is
+ * never written by this function, or anywhere else in this design (§6.1): the
+ * proactive compaction it would disable is what keeps a lane whose default
+ * model has no measured window from hitting the provider's own 400 instead.
+ *
  * @throws {ModelEnvInvalid} when no class among opus/sonnet/haiku is set, or
  *   when the subagent class's slot is null.
  */
-export function modelEnvBlock(registry) {
+export function modelEnvBlock(registry, catalogue) {
   const haiku = slot(registry, 'haiku');
   const sonnet = slot(registry, 'sonnet');
   const opus = slot(registry, 'opus');
@@ -2211,7 +2293,7 @@ export function modelEnvBlock(registry) {
       + `Assign ${subagentClass} a model, or point subagent at a class that has one.`);
   }
   const sentinel = (cls) => `${UNAVAILABLE_PREFIX}${cls}`;
-  return {
+  const block = {
     ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku ?? sentinel('haiku'),
     ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet ?? sentinel('sonnet'),
     ANTHROPIC_DEFAULT_OPUS_MODEL: opus ?? sentinel('opus'),
@@ -2220,15 +2302,30 @@ export function modelEnvBlock(registry) {
     ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),
     CLAUDE_CODE_SUBAGENT_MODEL: subagentId,
   };
+  if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {
+    const row = catalogue.models.find((m) => m.id === primary);
+    if (row !== undefined && typeof row.context === 'number') {
+      block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(row.context);
+    }
+  }
+  return block;
 }
 
 /**
  * `(settingsPath: string, block: Record<string,string>) => { changed: boolean }`
  *
- * ADD AND UPDATE ONLY. It never removes a key from `env` and never touches any
- * other top-level key: `ccgpt`'s own `_sync_gpt_config` mirrors an allow-list
- * into this same file and is equally careful in the other direction (measured,
- * §1), and a lane's `settings.json` carries the operator's own edits.
+ * ADD AND UPDATE for every key `block` carries; for the REST of `MODEL_ENV_KEYS`
+ * — today, only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` can be absent from a given
+ * `block` — DELETE it if present. Every other key, owned by nobody this
+ * function knows about, is never touched: `ccgpt`'s own `_sync_gpt_config`
+ * mirrors an allow-list into this same file and is equally careful in the
+ * other direction (measured, §1), and a lane's `settings.json` carries the
+ * operator's own edits. The eighth key is the one exception because it alone
+ * has no sentinel (§6.1 amendment): a catalogue going stale, or the lane's
+ * default model changing to one with no measured context, must not leave a
+ * STALE number on disk — omission from `block` has to reach the file as a
+ * deletion, or a re-materialise could only ever add this key, never retract
+ * it.
  *
  * A file that is not JSON, or whose top level is not an object, is a REFUSAL
  * and not an overwrite: the alternative is destroying a hand-edited settings
@@ -2269,6 +2366,18 @@ export function mergeSettingsEnv(settingsPath, block) {
   for (const [k, v] of Object.entries(block)) {
     if (env[k] !== v) { env[k] = v; changed = true; }
   }
+  // The eighth key can drop OUT of `block` between two materialisations (a
+  // catalogue going stale, or the default model changing to one with no
+  // measured context). It carries no sentinel, so a STALE value left on disk
+  // would misstate the window rather than merely go missing — this is the
+  // one member of MODEL_ENV_KEYS this function ever deletes on its own, and
+  // it never deletes a key `block` did not have the chance to name.
+  for (const k of MODEL_ENV_KEYS) {
+    if (!(k in block) && Object.prototype.hasOwnProperty.call(env, k)) {
+      delete env[k];
+      changed = true;
+    }
+  }
   if (json.env === undefined) { json.env = env; changed = true; }
   else json.env = env;
   if (!changed && existed) return { changed: false };
@@ -2303,7 +2412,7 @@ export function mergeSettingsEnv(settingsPath, block) {
  * @throws {ModelEnvInvalid} on a settings file that is not JSON, or whose top
  *   level is not an object — the same refusal `mergeSettingsEnv` makes, for
  *   the same reason: the alternative is destroying a hand-edited file to
- *   reap seven keys from it.
+ *   reap eight keys from it.
  */
 export function clearSettingsEnv(settingsPath, keys) {
   let json;
@@ -2419,10 +2528,13 @@ export interface ModelEnv {
   ANTHROPIC_MODEL: string;
   ANTHROPIC_SMALL_FAST_MODEL: string;
   CLAUDE_CODE_SUBAGENT_MODEL: string;
+  // §6.1, amended 2026-09-08: present only when `catalogue` is non-null, not
+  // stale, and names ANTHROPIC_MODEL's resolved model with a numeric context.
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
 }
 export declare class ModelEnvInvalid extends Error {}
 export declare const MODEL_ENV_KEYS: readonly string[];
-export declare function modelEnvBlock(registry: Registry): ModelEnv;
+export declare function modelEnvBlock(registry: Registry, catalogue: Catalogue | null): ModelEnv;
 export declare function mergeSettingsEnv(
   settingsPath: string, block: Record<string, string>,
 ): { changed: boolean };
@@ -2446,13 +2558,15 @@ Create `server/test/modelenv-single-writer.test.ts`:
 
 ```ts
 // §6.1 and §12: `shared/modelenv.mjs` is the ONLY file in this tree that writes
-// `ANTHROPIC_DEFAULT_*_MODEL` keys into a settings file.
+// `ANTHROPIC_DEFAULT_*_MODEL` keys, or the eighth key
+// `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (§6.1, amended 2026-09-08), into a settings
+// file.
 //
 // It needs its own test because `server/test/single-definition.test.ts`'s scan
 // filters `.tsx?` and would never see a second `.mjs` writer — and a second
 // writer is exactly what the account-connections wave's settings-block writer
 // would be if it grew its own copy instead of calling this one, which its plan's
-// Task 25 says it will. Two writers of these seven variables is two opinions
+// Task 25 says it will. Two writers of these eight variables is two opinions
 // about what a lane routes to, resolved by whichever ran last.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -2473,13 +2587,16 @@ function tracked(): string[] {
     .filter((p) => !p.startsWith('docs/') && !p.endsWith('.md'));
 }
 
-/** A file WRITES the block if it spells one of the four alias variables AND
- *  reaches a settings file in the same breath. Spelling one in a comment, an
+/** A file WRITES the block if it spells one of the four alias variables OR the
+ *  eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (§6.1 amendment), AND reaches
+ *  a settings file in the same breath. Spelling one in a comment, an
  *  assertion or an expected value is not writing it, which is why the second
  *  half of the conjunction is here — the test corpus names these variables
  *  constantly. */
 export function writesTheBlock(src: string): boolean {
-  if (!/ANTHROPIC_DEFAULT_(HAIKU|SONNET|OPUS|FABLE)_MODEL/.test(src)) return false;
+  if (!/(ANTHROPIC_DEFAULT_(HAIKU|SONNET|OPUS|FABLE)_MODEL|CLAUDE_CODE_MAX_CONTEXT_TOKENS)/.test(src)) {
+    return false;
+  }
   return /(writeFileSync|renameSync|mergeSettingsEnv\s*\()/.test(src)
     && /settings\.json/.test(src);
 }
@@ -2503,6 +2620,9 @@ describe('§6.1 — one writer of the model env block', () => {
     expect(writesTheBlock(
       'writeFileSync(p, JSON.stringify({env:{ANTHROPIC_DEFAULT_OPUS_MODEL:x}}));\n'
       + '// p is a settings.json')).toBe(true);
+    expect(writesTheBlock(
+      'writeFileSync(p, JSON.stringify({env:{CLAUDE_CODE_MAX_CONTEXT_TOKENS:"1"}}));\n'
+      + '// p is a settings.json')).toBe(true);
     expect(writesTheBlock('// ANTHROPIC_DEFAULT_OPUS_MODEL is written by the materialiser'))
       .toBe(false);
     expect(writesTheBlock('writeFileSync(p, "hello"); // settings.json')).toBe(false);
@@ -2513,7 +2633,7 @@ describe('§6.1 — one writer of the model env block', () => {
   });
 });
 
-// §4.1 Lifecycle and §10: `ccrc models <id> rm` deletes the same seven keys
+// §4.1 Lifecycle and §10: `ccrc models <id> rm` deletes the same eight keys
 // `clearSettingsEnv` owns — a SECOND function that deleted them (rather than
 // calling `clearSettingsEnv`) would be a second opinion about what "reaped"
 // means, resolved by whichever ran last, exactly like a second writer. This
@@ -2521,7 +2641,7 @@ describe('§6.1 — one writer of the model env block', () => {
 // predicates ask different questions of the same corpus and a single holders
 // list conflating "writes" and "deletes" would stop naming which one broke.
 /** A file DELETES the block if it spells `MODEL_ENV_KEYS` — the frozen export
- *  that is the one place these seven names originate — AND reaches a settings
+ *  that is the one place these eight names originate — AND reaches a settings
  *  file in the same breath, either by deleting a key off an `env` object or by
  *  rewriting the file outright. Importing or logging the export is not
  *  deleting it, which is why the second half of the conjunction is here too. */
@@ -2701,6 +2821,11 @@ Expected: one case red — `every tracked settings file is alias-only`, reportin
 In `shared/modelenv.mjs`, change `ANTHROPIC_DEFAULT_FABLE_MODEL: fable ?? sentinel('fable')` to `...(fable !== null ? { ANTHROPIC_DEFAULT_FABLE_MODEL: fable } : {})`. Run `cd server && npx vitest run test/modelenv.test.ts`.
 Expected: three cases red — `is the seven variables, byte for byte …`, `writes a SENTINEL for every null slot …` (on the `Object.keys(b)).toHaveLength(7)` assertion) and `creates the file when it is absent …`. Restore and re-run; expected PASS.
 
+- [ ] **Step 12b: Measured mutation check — the eighth key respects staleness (§6.1 amendment)**
+
+In `modelEnvBlock`'s eighth-key block, change `if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {` to `if (catalogue !== null && catalogue !== undefined) {` (dropping the staleness check). Run `cd server && npx vitest run test/modelenv.test.ts`.
+Expected: one case red — `is ABSENT when the catalogue is stale — a stale window is not a measured one`, now returning `CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000'` instead of `undefined`. Restore and re-run; expected PASS.
+
 - [ ] **Step 13: Measured mutation check — the subagent is read from the registry, not derived**
 
 Change `CLAUDE_CODE_SUBAGENT_MODEL: subagentId` to `CLAUDE_CODE_SUBAGENT_MODEL: sonnet ?? sentinel('sonnet')` and delete the two guards above it. Run `cd server && npx vitest run test/modelenv.test.ts`.
@@ -2716,6 +2841,11 @@ Expected: one case red — `a RETIRED class keeps its id in column 2 and says so
 Change `const env = (…) ? json.env : {};` to `const env = {};`. Run `cd server && npx vitest run test/modelenv.test.ts`.
 Expected: one case red — `ADDS and UPDATES, and never removes another key …`, failing on `expect(j.env.DISABLE_TELEMETRY).toBe('1')`. Restore and re-run; expected PASS.
 
+- [ ] **Step 15b: Measured mutation check — mergeSettingsEnv prunes the eighth key when block omits it**
+
+In `mergeSettingsEnv`, change `if (!(k in block) && Object.prototype.hasOwnProperty.call(env, k)) {` to `if (false) {` (disabling the new prune loop). Run `cd server && npx vitest run test/modelenv.test.ts`.
+Expected: one case red — `PRUNES CLAUDE_CODE_MAX_CONTEXT_TOKENS when a re-materialise's block stops emitting it`, on `expect(Object.keys(j.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS')` (the stale value survives the second call). Restore and re-run; expected PASS.
+
 - [ ] **Step 16: Measured mutation check — the catalogue-contradicted effort level is dropped**
 
 Change `if (row !== undefined && row.efforts.length > 0 && !row.efforts.includes(level)) continue;` to `if (false) continue;`. Run `cd server && npx vitest run test/modelenv.test.ts`.
@@ -2724,7 +2854,7 @@ Expected: one case red — `drops a level the catalogue says that model does not
 - [ ] **Step 16b: Measured mutation check — clearSettingsEnv deletes ONLY the given keys**
 
 In `clearSettingsEnv`, change `for (const k of keys) {` to `for (const k of Object.keys(env)) {` (deleting every env key rather than the ones named). Run `cd server && npx vitest run test/modelenv.test.ts`.
-Expected: one case red — `clears exactly the seven keys, leaving every other env key untouched`, on `expect(j.env).toEqual({ DISABLE_TELEMETRY: '1' })` (now `{}`). Restore and re-run; expected PASS.
+Expected: one case red — `clears exactly the eight keys, leaving every other env key untouched`, on `expect(j.env).toEqual({ DISABLE_TELEMETRY: '1' })` (now `{}`). Restore and re-run; expected PASS.
 
 - [ ] **Step 16c: Measured mutation check — an emptied env is removed, not left as `{}`**
 
@@ -2760,11 +2890,19 @@ env block gains a single-writer pin the .tsx?-filtered single-definition scan
 could never have caught.
 
 `clearSettingsEnv` and its frozen `MODEL_ENV_KEYS` are `ccrc models <id> rm`'s
-whole settings step (Task 6): deletes exactly the seven keys the materialiser
+whole settings step (Task 6): deletes exactly the eight keys the materialiser
 owns, off ANY lane's env, and removes an env left empty by the deletion — nothing
 else in that file moves. The single-writer pin now also pins the single DELETER
 of those keys, for the same reason a second writer would be two opinions about
 what a lane routes to.
+
+An eighth key, CLAUDE_CODE_MAX_CONTEXT_TOKENS (spec §6.1, amended 2026-09-08),
+is written only when a non-stale catalogue measures ANTHROPIC_MODEL's resolved
+model — every other case omits it, never sentinels it, because there is no
+"unavailable" reading for a context window. Because omission has to survive a
+re-materialise, mergeSettingsEnv now also PRUNES this one key off a lane's env
+when a fresh block stops naming it; every other key it still only adds or
+updates, which the mutation checks pin in both directions.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG
@@ -3904,7 +4042,7 @@ MSG
   | `materialise` | `--file --id` | `{ok, op, id, wrote: {settings, classes, effort} \| null}` |
   | `rm` | `--file --id` | `{ok, op, id, removed: string[], settings: 'cleared'\|'unchanged'\|'orphan'}` |
 
-  Exit 0 on an answer, 1 on a refusal with a body, 2 on bad argv. Every mutation re-materialises before it answers. Tasks 7–10 call it through `ccd/ccrc`. `rm` is a REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): it deletes, in order, the registry, the catalogue, the TSV and the effort file — each `rm -f`, absent is fine — then `clearSettingsEnv`s the lane's settings when the roster has a row for `<id>`; an ORPHAN id (no roster row) skips that step and reports `settings: 'orphan'`. `rm` is idempotent (a second run answers `removed: []`) and runs before the `no-such-account` gate below, on files alone, never through the registry or catalogue validators — a file that does not even parse is still reaped. `show` on an orphan id (a registry file whose id the roster has no row for) answers rather than refusing: `orphan: true`, every class unavailable, no `settingsDrift` to report.
+  Exit 0 on an answer, 1 on a refusal with a body, 2 on bad argv. Every mutation re-materialises before it answers. Tasks 7–10 call it through `ccd/ccrc`. `rm` is a REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): it deletes, in order, the registry, the catalogue, the TSV and the effort file — each `rm -f`, absent is fine — then `clearSettingsEnv`s the lane's settings when the roster has a row for `<id>`; an ORPHAN id (no roster row) skips that step and reports `settings: 'orphan'`. `rm` is idempotent (a second run answers `removed: []`) and runs before the `no-such-account` gate below, on files alone, never through the registry or catalogue validators — a file that does not even parse is still reaped. `show` on an orphan id (a registry file whose id the roster has no row for) answers rather than refusing: `orphan: true`, every class unavailable, no `settingsDrift` to report. Every op that answers `show`'s shape already loads the catalogue file once (to compute `derived` and `settingsDrift`); `materialise` — and every mutation, which re-materialises on success — passes that SAME parsed `Catalogue | null` into `modelEnvBlock` (Task 3) rather than reading `<id>.json` a second time, so the eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended 2026-09-08), is written when that catalogue is fresh and measures `ANTHROPIC_MODEL`'s resolved model, and `mergeSettingsEnv` prunes it off the lane's settings the moment a re-materialise's block stops carrying it.
 
 - [ ] **Step 1: Write the failing test file**
 
@@ -4345,6 +4483,22 @@ describe('set-class', () => {
     expect(String(r.body['detail'])).toMatch(/set-subagent/);
     expect(classesOf('gpt')['sonnet']).toBe('gpt-5.6-terra');
   });
+
+  it('CLAUDE_CODE_MAX_CONTEXT_TOKENS tracks the default model\'s catalogue context, and drops out when it cannot (§6.1, amended 2026-09-08)', () => {
+    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-5.6-sol');
+    expect(r.code).toBe(0);
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
+    // Switching the default to a model no catalogue can vouch for — the same
+    // "accepts a model no catalogue can vouch for" situation as above — leaves
+    // nothing to measure a window from, and the STALE '272000' must not
+    // survive the re-materialise: the eighth key carries no sentinel, so a
+    // left-behind number would misstate the window rather than merely miss.
+    fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.json'));
+    const r2 = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'opus', '--model', 'gpt-9-future');
+    expect(r2.code).toBe(0);
+    expect(classesOf('gpt')['opus']).toBe('gpt-9-future');
+    expect(Object.keys(settingsOf('.claude-gpt').env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
+  });
 });
 
 describe('set-subagent (§10, ruling 5c)', () => {
@@ -4550,6 +4704,11 @@ describe('materialise', () => {
       effort: `${home}/.ccrc/models/gpt.effort.json`,
     });
     expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(true);
+    // The catalogue this run just wrote (init ran before it existed, so init's
+    // own materialise could not have) — proves `materialise` reads the SAME
+    // freshly-parsed catalogue it used for `derived`, not a stale one (§6.1
+    // amendment).
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
   });
 
   it('on a lane with NO registry writes nothing and says so', () => {
@@ -4581,11 +4740,15 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
   });
 
-  it('removes all four generated files, in order, and clears exactly the seven env keys', () => {
+  it('removes all four generated files, in order, and clears exactly the eight env keys', () => {
     const p = path.join(home, '.claude-gpt', 'settings.json');
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     j.env.DISABLE_TELEMETRY = '1';
     fs.writeFileSync(p, JSON.stringify(j, null, 2));
+    // The beforeEach's `init` ran against a written catalogue, so the eighth
+    // key is live before `rm` runs — this is the case that shows `rm` reaps
+    // it too, not just the seven keys that predate the §6.1 amendment.
+    expect(j.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('272000');
     const r = op('rm', '--file', rosterPath(), '--id', 'gpt');
     expect(r.code).toBe(0);
     expect(r.body['removed']).toEqual([
@@ -4602,6 +4765,7 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     const after = settingsOf('.claude-gpt');
     expect(after.env['DISABLE_TELEMETRY']).toBe('1');
     expect(Object.keys(after.env)).not.toContain('ANTHROPIC_MODEL');
+    expect(Object.keys(after.env)).not.toContain('CLAUDE_CODE_MAX_CONTEXT_TOKENS');
   });
 
   it('is idempotent: a second call removes nothing and reports settings:unchanged', () => {
@@ -4893,7 +5057,11 @@ function materialise(account, registry, catalogue) {
   const effort = path.join(modelsDir(), `${account.id}.effort.json`);
   let block = null;
   try {
-    block = modelEnvBlock(registry);
+    // `catalogue` is the SAME parsed value the caller already loaded to
+    // compute `derived`/`settingsDrift` (spec §6.1 amendment) — never a
+    // second read of `<id>.json`, so a materialise never disagrees with the
+    // `show` answer it is bundled with about whether the catalogue is stale.
+    block = modelEnvBlock(registry, catalogue);
   } catch (e) {
     if (!(e instanceof ModelEnvInvalid)) throw e;
     // An UNSEEDED lane routes nowhere and gets no env block. A lane that is
@@ -4926,22 +5094,31 @@ function materialise(account, registry, catalogue) {
   return { wrote: { settings: block === null ? null : settings, classes, effort } };
 }
 
-/** §11's last bullet: which of the materialiser's seven keys the lane's own
- *  settings.json no longer agrees with. A MISSING key counts as drifted — an
- *  unset alias falls through to Anthropic's own id and the backend 404s
- *  opaquely, which is the exact failure the sentinel exists to prevent, so
- *  "absent" and "wrong" are the same finding here.
+/** §11's last bullet: which of the materialiser's (up to) eight keys the
+ *  lane's own settings.json no longer agrees with. A MISSING key counts as
+ *  drifted — for the first seven, an unset alias falls through to Anthropic's
+ *  own id and the backend 404s opaquely, which is the exact failure the
+ *  sentinel exists to prevent, so "absent" and "wrong" are the same finding
+ *  here. The eighth key is the one where "absent from `want`" is the CORRECT
+ *  answer whenever the catalogue cannot measure it (§6.1 amendment) — `want`
+ *  simply does not carry the key then, so the `Object.keys(want)` filter below
+ *  never asks about it, and a settings file that also lacks it drifts on
+ *  nothing.
  *
  *  Returned in `modelEnvBlock`'s own key order rather than sorted, so two boxes
  *  reporting the same drift print the same list. Read-only: `show` NAMES the
  *  drift and never repairs it, because a read verb that silently rewrote a
  *  hand-edited settings file would destroy the edit before its author saw the
- *  report. Every mutation re-materialises, so the remedy is any of them. */
-function settingsDrift(account, registry) {
+ *  report. Every mutation re-materialises, so the remedy is any of them.
+ *
+ *  Takes the SAME `catalogue` the caller already parsed for `derived` — never
+ *  a second read — because `modelEnvBlock` needs it to know whether the
+ *  eighth key belongs in `want` at all. */
+function settingsDrift(account, registry, catalogue) {
   if (registry === null) return [];
   let want;
   try {
-    want = modelEnvBlock(registry);
+    want = modelEnvBlock(registry, catalogue);
   } catch {
     // An unseeded (or unroutable) lane has no expected block to compare against.
     return [];
@@ -4971,7 +5148,7 @@ function describe(account, registry, catalogue) {
     catalogue: catalogue === null
       ? null
       : { fetchedAt: catalogue.fetchedAt, stale: catalogue.stale, count: catalogue.models.length },
-    settingsDrift: settingsDrift(account, registry),
+    settingsDrift: settingsDrift(account, registry, catalogue),
   };
 }
 
@@ -5109,8 +5286,8 @@ function main(argv) {
 
   if (opName === 'rm') {
     // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the four
-    // generated files this design owns and clears exactly the seven settings
-    // keys `modelEnvBlock` writes — nothing else in that file. It runs BEFORE
+    // generated files this design owns and clears exactly the eight settings
+    // keys `modelEnvBlock` can write — nothing else in that file. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the
     // registry or catalogue through their validators: `rm -f` semantics apply
     // to each of the four files on its own, so a broken (unparseable)
@@ -5354,7 +5531,10 @@ function main(argv) {
   }
   if (CLASSES.some((c) => validated.classes[c] !== null)) {
     try {
-      modelEnvBlock(validated);
+      // The eighth key can never throw (it is written or omitted, never
+      // refused), so `catalogue` only matters here for consistency with every
+      // other call — this check is purely "does the lane route anywhere".
+      modelEnvBlock(validated, catalogue);
     } catch (e) {
       if (e instanceof ModelEnvInvalid) return refuse(1, 'unroutable-lane', e.message);
       throw e;
@@ -5390,7 +5570,7 @@ Expected: three cases red — `rm removes, and refuses to remove one a class sti
 
 - [ ] **Step 6: Measured mutation check — the unroutable-lane gate**
 
-Comment out the whole `if (CLASSES.some(...)) { try { modelEnvBlock(validated); } … } else if (…)` block. Run `cd server && npx vitest run test/models-op.test.ts`.
+Comment out the whole `if (CLASSES.some(...)) { try { modelEnvBlock(validated, catalogue); } … } else if (…)` block. Run `cd server && npx vitest run test/models-op.test.ts`.
 Expected: one case red — `refuses clearing the LAST class rather than writing a lane that routes nowhere (§11)`. Restore and re-run; expected PASS.
 
 - [ ] **Step 7: Measured mutation check — one model, one class**
@@ -5421,12 +5601,12 @@ Expected: one case red — `NOTHING here ever rewrites the roster`. Remove the l
 - [ ] **Step 11b: Measured mutation check — `rm` actually deletes**
 
 In the `rm` op's loop, comment out `unlinkSync(p);` (keep `removed.push(p);`). Run `cd server && npx vitest run test/models-op.test.ts`.
-Expected: one case red — `removes all four generated files, in order, and clears exactly the seven env keys`, on the `fs.existsSync(...)` assertions (the body still reports every path as `removed`). Restore and re-run; expected PASS.
+Expected: one case red — `removes all four generated files, in order, and clears exactly the eight env keys`, on the `fs.existsSync(...)` assertions (the body still reports every path as `removed`). Restore and re-run; expected PASS.
 
 - [ ] **Step 11c: Measured mutation check — the settings step is skipped ONLY for a true orphan**
 
 Change `if (account !== null) {` (in the `rm` op) to `if (false) {`. Run `cd server && npx vitest run test/models-op.test.ts`.
-Expected: one case red — `removes all four generated files, in order, and clears exactly the seven env keys`, now reporting `settings: 'orphan'` for a lane the roster DOES have a row for. Restore and re-run; expected PASS.
+Expected: one case red — `removes all four generated files, in order, and clears exactly the eight env keys`, now reporting `settings: 'orphan'` for a lane the roster DOES have a row for. Restore and re-run; expected PASS.
 
 - [ ] **Step 11d: Measured mutation check — an orphan `show` answers rather than refusing**
 
@@ -5461,9 +5641,16 @@ the verb, because the verb is what scripts and doctor's remedies use.
 `rm` reaps rather than mutates (spec §4.1 Lifecycle, §11): it runs before the
 no-such-account and anthropic-lane gates, deletes the four generated files by
 `rm -f` semantics alone — never through the registry or catalogue validators —
-and clears exactly the seven settings keys `clearSettingsEnv` owns, skipping that
+and clears exactly the eight settings keys `clearSettingsEnv` owns, skipping that
 step for an ORPHAN id the roster has no row for. `show` on such an id answers
 rather than refusing, with every class read as unavailable.
+
+`materialise` now passes the SAME parsed catalogue `show` already loaded into
+`modelEnvBlock`, rather than reading `<id>.json` a second time, so the eighth
+key — `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended 2026-09-08) — is
+written exactly when that catalogue can measure the default model's context,
+and `settingsDrift` takes the same catalogue so it never treats a correctly
+omitted eighth key as drift.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 MSG
@@ -6176,7 +6363,7 @@ MSG
   ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
   ccrc models <id> rm
   ```
-  Each of the first four re-materialises on success (the node half does it) and refuses with the field named on any validation failure. `discovery add` on a lane whose registry names `openrouter` runs the endpoints call first and refuses when no ownership-whitelisted provider serves the model (§5). `ccrc models <id> rm` (spec §4.1 Lifecycle, §10, §11) takes no arguments and is a REAP, not a mutation: it delegates straight to the node op and answers with its JSON — the registry, catalogue, TSV and effort file are deleted and the seven settings keys are cleared, idempotently, and it skips the settings step (and says so) on an ORPHAN id the roster has no row for.
+  Each of the first four re-materialises on success (the node half does it) and refuses with the field named on any validation failure. `discovery add` on a lane whose registry names `openrouter` runs the endpoints call first and refuses when no ownership-whitelisted provider serves the model (§5). `ccrc models <id> rm` (spec §4.1 Lifecycle, §10, §11) takes no arguments and is a REAP, not a mutation: it delegates straight to the node op and answers with its JSON — the registry, catalogue, TSV and effort file are deleted and the eight settings keys are cleared, idempotently, and it skips the settings step (and says so) on an ORPHAN id the roster has no row for.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6377,7 +6564,7 @@ describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a muta
     run(['models', 'gpt', 'init', 'codex']);
   });
 
-  it('removes all four files and clears exactly the seven env keys, leaving another env key', () => {
+  it('removes all four files and clears exactly the eight env keys, leaving another env key', () => {
     const p = join(home, '.claude-gpt', 'settings.json');
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     j.env.DISABLE_TELEMETRY = '1';
@@ -8929,7 +9116,7 @@ Run it on the FLEET HOST first, then the server box (§13.5, deploy agent-first)
 - [ ] **R2. Prove the verb is there.** `ccrc models refresh --all` — expect one JSON object. On a box where no lane has a registry yet this is an EMPTY, successful run: refresh walks the lanes that have a registry, and the registry is what carries the probe kind.
 - [ ] **R3. Seed the gpt lane's registry.** `ccrc models gpt init codex`. This writes `~/.ccrc/models/gpt.classes.json` with today's mapping — luna/terra/sol, `fable: null`, `subagent: sonnet`, `discovery: "catalogue"` — so behaviour is unchanged, and materialises it. §13.1.
 - [ ] **R4. Probe, and check the catalogue landed.** `ccrc models refresh gpt`, then `jq '.probe, .stale, (.models|length)' ~/.ccrc/models/gpt.json` — expect `"codex"`, `false`, and the count the backend advertises (nine on 2026-09-08). A `true` for stale means the probe failed; read `.lastError` before going further, and do not continue until it is `false`.
-- [ ] **R5. Verify the block landed in the lane's own settings.** `jq '.env' ~/.claude-gpt/settings.json` — expect the seven variables, with `ANTHROPIC_DEFAULT_FABLE_MODEL` reading `ccrc-unavailable-fable`, `ANTHROPIC_MODEL` reading `gpt-5.6-sol` and `CLAUDE_CODE_SUBAGENT_MODEL` reading `gpt-5.6-terra`. **This is the gate for R8. Do not install the wrappers until this shows the block.**
+- [ ] **R5. Verify the block landed in the lane's own settings.** `jq '.env' ~/.claude-gpt/settings.json` — expect the eight variables, with `ANTHROPIC_DEFAULT_FABLE_MODEL` reading `ccrc-unavailable-fable`, `ANTHROPIC_MODEL` reading `gpt-5.6-sol` and `CLAUDE_CODE_SUBAGENT_MODEL` reading `gpt-5.6-terra`. **This is the gate for R8. Do not install the wrappers until this shows the block.**
 - [ ] **R6. Verify the two generated side files.** `cat ~/.ccrc/models/gpt.classes.tsv` — four lines, three columns; `fable` reads `fable<TAB><TAB>unassigned`. `jq . ~/.ccrc/models/gpt.effort.json` — `byModel` with three entries.
 - [ ] **R7. Install the shim and regenerate LiteLLM's config.** From a checkout of `feat/ccgpt-effort-shim`, follow `infra/handoff/INSTALL-model-class-registry.md` steps 2 and 3: install `ccgpt-proxy`, then `ccrc models litellm gpt`. Check with `grep -c reasoning ~/.handoff/litellm-config.yaml` — expect `0`.
 - [ ] **R8. Install the two wrappers.** `INSTALL-model-class-registry.md` step 4. Only after R5 showed the block.
