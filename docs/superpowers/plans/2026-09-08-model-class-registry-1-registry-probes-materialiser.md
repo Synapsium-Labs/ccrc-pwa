@@ -2924,7 +2924,7 @@ MSG
 - Produces:
   - the executable `ccd/ccrc-models-probe`, invoked as
     `ccrc-models-probe <accountId> <probe> [--base-url <url>] [--out <path>]`, where `<probe>` is a **PROBE KIND** — `codex | openrouter | compatible` — and never a roster provider (round-2 ruling 10);
-  - the file `~/.ccrc/models/<accountId>.json`, written tmp + `mv -f`;
+  - the file `~/.ccrc/models/<accountId>.json`, written tmp + `_probe_mv_notdir` (a local `os.rename`-through-python3 helper, staged beside the destination as `$OUT.tmp.$$`, not a bare `mv -f` — 0dce4667);
   - exit codes: 0 wrote a fresh catalogue; 1 the fetch or the response failed and the PREVIOUS catalogue was kept and marked `stale` (or, when there was none, nothing was written); 2 usage.
   - the test seam `CCRC_MODELS_PROBE_FIXTURE`, documented below.
 
@@ -3192,6 +3192,82 @@ describe('the Codex arm (§5)', () => {
     expect(mode).toBe(0o600);
   });
 
+  it('stages the catalogue write beside its destination, not in a shared temp dir (§4.2)', () => {
+    // spec §4.2 is tmp + mv in the SAME directory as the destination: a
+    // cross-filesystem `mv` (staging under `$TMPDIR`/`mktemp -d`, then moving
+    // into `~/.ccrc/models`) degrades to copy+unlink, which a reader (the
+    // fleet poll, ccd, the verbs) can observe mid-write. A temp DIRECTORY is
+    // still fine for the RAW fetch's own scratch space — it is only ever
+    // read, never renamed into place — so this checks the lines that actually
+    // get moved onto the destination, not every temp-file use in the file.
+    const src = fs.readFileSync(PROBE, 'utf8');
+    expect(src).toContain('"$OUT.tmp.$$"');
+    expect(src).toMatch(/mktemp -d/); // the RAW fetch's scratch dir — still fine, see above
+    // The probe is a standalone executable and cannot source ccd's platform
+    // block, so the rename goes through the local `_probe_mv_notdir` helper,
+    // not a bare GNU `mv -fT` — `macos-platform.test.ts`'s GNU-only scan
+    // forbids that flag at any call site outside the block.
+    const movedLines = src.split('\n').filter((l) => l.includes('_probe_mv_notdir "$NORM" "$OUT"'));
+    expect(movedLines.length).toBeGreaterThan(0);
+    for (const l of movedLines) expect(l).not.toMatch(/\$TMPD\b/);
+    const codeLines = src.split('\n').filter((l) => !/^\s*#/.test(l));
+    expect(codeLines.some((l) => /(?<![-_a-zA-Z])mv\s+-[a-zA-Z]*T/.test(l)),
+      'a bare mv -T outside a comment means the write stopped routing through _probe_mv_notdir')
+      .toBe(false);
+  });
+
+  it('--out an existing directory refuses instead of writing inside it', () => {
+    // `_probe_mv_notdir`, not a bare `mv -f`: it REFUSES when the destination
+    // is a directory rather than moving the staged file inside it, which
+    // would "succeed" into the wrong place. Exit 1 — the same family as every
+    // other write failure past usage validation (`die`), not exit 2 (usage):
+    // the arguments themselves were fine, the destination was not.
+    const dir = path.join(home, 'existing-dir');
+    fs.mkdirSync(dir);
+    const r = run(['gpt', 'codex', '--out', dir], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(1);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    // The explicit `[ ! -L "$2" ] && [ -d "$2" ]` guard is what keeps this
+    // refusal clean: measured, `os.rename(2)` on its own already refuses a
+    // real directory (`IsADirectoryError`, rc 1 — the same exit code), but it
+    // does so by raising, and an unhandled python exception prints its
+    // Traceback to stderr. The bash guard short-circuits before python ever
+    // runs, so this stays a one-line message, not a leaked stack.
+    expect(r.stderr, 'a python Traceback on stderr means the -d guard was skipped, not just that the write happened to be refused')
+      .not.toContain('Traceback');
+  });
+
+  it('--out a symlink to a directory replaces the link, like GNU mv -fT does', () => {
+    // `[ -d "$2" ]` alone follows symlinks, so a naive fix would just exclude
+    // a symlink from the refusal above and leave the actual write as a plain
+    // `mv -f` — and measured, `mv -f "$1" symlink-to-dir` (no `-T` available
+    // to this file) FOLLOWS the link and drops the file INSIDE the target
+    // directory, which is the exact wrong-place write the refusal exists for,
+    // now silent instead of refused. `_probe_mv_notdir` uses `os.rename(2)`
+    // through python3 instead: measured to replace the link entry in one
+    // syscall, whatever it points at — the link itself ends up holding the
+    // catalogue, and the directory it pointed at stays untouched.
+    const target = path.join(home, 'symlink-target-dir');
+    fs.mkdirSync(target);
+    const link = path.join(home, 'out-link');
+    fs.symlinkSync(target, link);
+    const r = run(['gpt', 'codex', '--out', link], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(0);
+    expect(fs.lstatSync(link).isSymbolicLink(), 'the link must be REPLACED, not left pointing at a now-populated directory').toBe(false);
+    const cat = parseCatalogue(JSON.parse(fs.readFileSync(link, 'utf8')));
+    expect(cat.probe).toBe('codex');
+    expect(fs.readdirSync(target), 'the directory the link pointed at must stay untouched').toEqual([]);
+    // The header's ATOMIC claim, checked on this branch specifically: one
+    // `rename(2)` call means there is no window in which $OUT names nothing
+    // (a remove-then-rename pair would open exactly that window). What that
+    // leaves to measure post-hoc is the END state — no `$OUT.tmp.$$` staging
+    // file surviving beside the destination, and exactly one entry at the
+    // destination's own name.
+    expect(fs.readdirSync(home).filter((n) => n.startsWith('out-link')),
+      'no .tmp staging file may survive beside the destination, and nothing but the destination itself may be there')
+      .toEqual(['out-link']);
+  });
+
   it('--out redirects the write and leaves the default path alone', () => {
     const out = path.join(home, 'elsewhere.json');
     const r = run(['gpt', 'codex', '--out', out], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
@@ -3323,8 +3399,11 @@ Expected: FAIL — every case, because `ccd/ccrc-models-probe` does not exist (`
 #
 # ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
 # The catalogue is read by another process (the server's fleet poll, ccd, the
-# verbs), so it lands tmp + `mv -f` — this repo's rule for any such file. And a
-# failed probe NEVER deletes a catalogue: it rewrites the previous one with
+# verbs), so it lands tmp + `_probe_mv_notdir` (rename, refusing a directory
+# destination), staged BESIDE the destination as `$OUT.tmp.$$` (spec §4.2: tmp
+# and mv in the SAME directory — a cross-filesystem `mv` degrades to
+# copy+unlink, which a reader can observe mid-write). And a failed probe NEVER
+# deletes a catalogue: it rewrites the previous one with
 # `stale: true` and the error text in `lastError` (§11), because "the network
 # was down for an hour" must not read on every surface as "every model this lane
 # had is retired".
@@ -3358,6 +3437,35 @@ usage() {
 }
 usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
 
+# This probe is a standalone executable — it ships beside ccd, not sourced
+# into it (see the file header's "ONE EXECUTABLE" note) — so it cannot reach
+# `_plat_mv_notdir` inside ccd's platform block, and `macos-platform.test.ts`'s
+# GNU-only scan forbids a bare `mv -fT` at any call site outside that block.
+# GNU `-T`'s point was never "fail whenever $2 exists", it was "never move the
+# tmp INTO a directory sitting at $OUT" — a plain `mv -f` "succeeds" there by
+# dropping the file inside it instead of onto it. `[ -d "$2" ]` alone follows
+# symlinks, so it refused a SYMLINK to a directory too. Measured: a plain
+# `mv -f "$1" symlink-to-dir` (no `-T` available here) FOLLOWS the link and
+# drops the file INSIDE the target directory — the exact wrong-place write
+# this helper exists to refuse, silent instead of refused; `mv -fT` replaces
+# the link instead, in one step. `os.rename(2)`, called through python3 (this
+# file already requires it — see the normaliser and `_mark_stale` below),
+# gives that same one-step replacement for ANY non-directory destination,
+# symlink or not: measured `os.rename(src, symlink-to-dir)` -> rc 0, the link
+# becomes the staged file, the target directory untouched; measured
+# `os.rename(src, real-directory)` -> `IsADirectoryError`, rc 1 — which the
+# explicit `-d` guard below refuses before python ever runs, so that path
+# stays a clean exit 1 rather than a traceback. One syscall for the actual
+# write keeps the header's ATOMIC claim true on the symlink branch too: unlike
+# a remove-then-rename pair, there is no instant at which $2 names nothing.
+# ccd/ccd's darwin arm guards the same `! -L "$2"`/`-d "$2"` shape before its
+# own bare `mv -f`; whether THAT `mv -f` also follows a symlink-to-dir on BSD
+# the way GNU's does is not measured here.
+_probe_mv_notdir() {
+  [ ! -L "$2" ] && [ -d "$2" ] && return 1
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2"
+}
+
 ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""
 [ $# -ge 1 ] || usage_die "an account id is required"
 ACCOUNT="$1"; shift
@@ -3386,9 +3494,17 @@ MODELS_DIR="$HOME/.ccrc/models"
 [ -n "$OUT" ] || OUT="$MODELS_DIR/$ACCOUNT.json"
 
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-models-probe.XXXXXX")" || die "could not make a temp directory"
-trap 'rm -rf "$TMPD"' EXIT
+# NORM stages the CATALOGUE write beside its destination, `$OUT.tmp.$$`, not
+# inside $TMPD — spec §4.2 is tmp + mv in the SAME directory, and $TMPD can be
+# a different filesystem from $HOME/.ccrc/models: a cross-filesystem `mv`
+# degrades to copy+unlink, which is exactly the torn-file window the readers
+# named above (the fleet poll, ccd, the verbs) cannot tolerate. $TMPD is still
+# fine for RAW: that file is only ever read by the normaliser, never renamed
+# into place, so it carries none of that risk. `_mark_stale` reuses this same
+# $NORM path for its own rewrite, for the same reason.
 RAW="$TMPD/raw.json"
-NORM="$TMPD/catalogue.json"
+NORM="$OUT.tmp.$$"
+trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 
 # ── the fetch ────────────────────────────────────────────────────────────
 # Each arm writes the provider's RAW body to $RAW and returns non-zero when it
@@ -3507,7 +3623,7 @@ _mark_stale() {   # <reason>
     return 1
   }
   local why="$1"
-  CCRC_STALE_WHY="$why" python3 - "$OUT" "$TMPD/stale.json" <<'PY' || return 1
+  CCRC_STALE_WHY="$why" python3 - "$OUT" "$NORM" <<'PY' || return 1
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
 try:
@@ -3516,9 +3632,15 @@ except ValueError:
     raise SystemExit(1)
 cat["stale"] = True
 cat["lastError"] = os.environ["CCRC_STALE_WHY"]
-json.dump(cat, open(dst, "w"))
+with open(dst, "w") as f:
+    json.dump(cat, f)
+# The mode must survive a failure too: without this, the rewritten file comes
+# out at whatever `open(dst, "w")`'s umask gives it — measured 0644/0664, not
+# the 0600 a successful probe writes, and an OpenRouter catalogue carries the
+# lane's price list.
+os.chmod(dst, 0o600)
 PY
-  mv -f "$TMPD/stale.json" "$OUT" || return 1
+  _probe_mv_notdir "$NORM" "$OUT" || return 1
   echo "$PROG: $why — keeping the previous catalogue, marked stale." >&2
   return 1
 }
@@ -3537,7 +3659,12 @@ fi
 # 0600 before the rename, not after: the file is world-readable for the width of
 # an fchmod otherwise, and an OpenRouter catalogue carries the lane's price list.
 chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
-mv -f "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
+# `_probe_mv_notdir`: rename, and REFUSE when $OUT is a directory, rather than
+# moving $NORM INSIDE it — a bare `mv -f` would "succeed" into the wrong place
+# instead of failing (the same reasoning `ccd`'s `_plat_mv_notdir` and
+# `ccrc-adopt`'s `$OUT.tmp.$$` staging record for this repo's other tmp+mv
+# writers).
+_probe_mv_notdir "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
 exit 0
 ```
 
@@ -3551,7 +3678,7 @@ Expected: PASS. Note the `a failed fetch with NO previous catalogue writes nothi
 
 - [ ] **Step 6: Measured mutation check — the write is atomic**
 
-Replace `mv -f "$NORM" "$OUT"` with `cp "$NORM" "$OUT"` and add `: > "$OUT.ccrc.tmp"` before it. Run `cd server && npx vitest run test/models-probe.test.ts`.
+Replace the final `_probe_mv_notdir "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"` with `cp "$NORM" "$OUT"` and add `: > "$OUT.ccrc.tmp"` before it (0dce4667: the site's a `_probe_mv_notdir` call, not a bare `mv -f`, but the mutation still plants an independent, fixed-name leftover so the assertion does not depend on the real staging path). Run `cd server && npx vitest run test/models-probe.test.ts`.
 Expected: one case red — `writes atomically — no temp file survives, and the mode is 0600`, failing with `expected [ 'gpt.json', 'gpt.json.ccrc.tmp' ] to deeply equal [ 'gpt.json' ]`. Restore both lines and re-run; expected PASS.
 
 - [ ] **Step 7: Measured mutation check — stale never refreshes `fetchedAt`**
@@ -3864,7 +3991,7 @@ Replace `_fetch`'s `case` with:
 
 - [ ] **Step 7: Short-circuit the endpoints mode past the normaliser**
 
-Replace the tail of the file (from the `if ! _fetch …` line down) with:
+Replace the tail of the file (from the `if ! _fetch …` line down) with (0dce4667: the two catalogue-side renames route through `_probe_mv_notdir`, not a bare `mv -f` — see Task 4's amended atomic-write code block):
 
 ```bash
 mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
@@ -3882,8 +4009,19 @@ if ! _fetch 2>"$TMPD/fetch.err"; then
 fi
 
 if [ -n "$ENDPOINTS" ]; then
-  chmod 600 "$RAW" || die "could not set the mode on the endpoints answer"
-  mv -f "$RAW" "$OUT" || die "could not move the endpoints answer into place at $OUT"
+  # The RAW endpoints body IS the answer — no normaliser, no catalogue shape —
+  # but it still lands the same way the catalogue does: staged through $NORM
+  # (already `$OUT.tmp.$$`, already in the EXIT trap) beside the destination,
+  # then renamed onto it through `_probe_mv_notdir`. `$RAW`'s directory can be
+  # a different filesystem from $OUT's, so the first move below can be a
+  # copy+unlink — that is fine, nothing reads $NORM until the final rename.
+  # `_probe_mv_notdir`'s `-d` check on that final rename REFUSES when --out
+  # names an existing directory, instead of "succeeding" by dropping the
+  # answer inside it under $RAW's own basename, which is what moving straight
+  # onto $OUT did before this fix.
+  mv -f "$RAW" "$NORM" || die "could not stage the endpoints answer"
+  chmod 600 "$NORM" || die "could not set the mode on the endpoints answer"
+  _probe_mv_notdir "$NORM" "$OUT" || die "could not move the endpoints answer into place at $OUT"
   exit 0
 fi
 
@@ -3892,8 +4030,15 @@ if ! _normalise 2>"$TMPD/norm.err"; then
   exit 1
 fi
 
+# 0600 before the rename, not after: the file is world-readable for the width of
+# an fchmod otherwise, and an OpenRouter catalogue carries the lane's price list.
 chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
-mv -f "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
+# `_probe_mv_notdir`: rename, and REFUSE when $OUT is a directory, rather than
+# moving $NORM INSIDE it — a bare `mv -f` would "succeed" into the wrong place
+# instead of failing (the same reasoning `ccd`'s `_plat_mv_notdir` and
+# `ccrc-adopt`'s `$OUT.tmp.$$` staging record for this repo's other tmp+mv
+# writers).
+_probe_mv_notdir "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
 exit 0
 ```
 
