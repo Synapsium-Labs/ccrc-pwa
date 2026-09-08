@@ -638,6 +638,18 @@ if [ "$TARGET" = "agent" ]; then
   # fleet host, so there is no server-role branch to gate it against the way
   # `ccd/ccrc`'s own `_inst_bins` has to.
   install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755
+  # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
+  # every corpus. Shipped on this lane and not only by `ccrc install`, because a
+  # fleet host is DEPLOYED day to day and installed rarely; without it the box
+  # keeps refusing builds over `.remember/` and `.superpowers/` files that ccrc
+  # itself wrote there. 644, not 755: it is data the sweep reads, never run.
+  # Kept ADJACENT to the sweep install above (D-1160/D-1161's own guard,
+  # `graph-noise-ship.test.ts`, allows at most 3 executable lines of drift) —
+  # the two later installs below (account-health, telemetry-keepalive) sit
+  # AFTER this pair rather than between them for exactly that reason
+  # (D-TBD-graph-noise-adjacency).
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
+  install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
   # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on
   # the same terms — a sibling executable, so `ccd` itself stays network-free.
   install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755
@@ -646,13 +658,6 @@ if [ "$TARGET" = "agent" ]; then
   # there is no server-role branch to gate it against the way `ccd/ccrc`'s own
   # `_inst_bins` has to.
   install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755
-  # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
-  # every corpus. Shipped on this lane and not only by `ccrc install`, because a
-  # fleet host is DEPLOYED day to day and installed rarely; without it the box
-  # keeps refusing builds over `.remember/` and `.superpowers/` files that ccrc
-  # itself wrote there. 644, not 755: it is data the sweep reads, never run.
-  "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
-  install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it

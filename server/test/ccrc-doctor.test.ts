@@ -1879,6 +1879,45 @@ describe('ccrc doctor: services knows about the account-health timer', () => {
   });
 });
 
+describe('ccrc doctor: services knows about the telemetry keepalive timer', () => {
+  // F4 (fix-wave 2026-09-07): `ccd-account-health.timer` joined `known` with
+  // its own consequence sentence and a `*)` arm that already reasons about
+  // "the day a fifth unit joins it" — `ccd-telemetry-keepalive.timer` is that
+  // fifth unit, and a stopped keepalive is silent (no error, just telemetry
+  // going stale) unless doctor names it.
+  itLinux('warns — with its OWN consequence — when the keepalive timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-keepalive-timer-');
+    writeUnitFile(home, 'ccd-telemetry-keepalive.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-telemetry-keepalive.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-telemetry-keepalive.timer is installed but inactive');
+    expect(lines[i]).toContain('goes stale');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i]).not.toContain('credential is being probed');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-telemetry-keepalive\.timer$/);
+    // A stopped reading is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-keepalive-timer-ok-');
+    writeUnitFile(home, 'ccd-telemetry-keepalive.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-telemetry-keepalive.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-telemetry-keepalive.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-keepalive-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-telemetry-keepalive');
+  });
+});
+
 // ── the box's own config file ─────────────────────────────────────────────
 // Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
 // `CCRC_FLEET=remote` with no agent URL or token makes the server print one

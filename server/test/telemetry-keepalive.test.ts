@@ -145,14 +145,48 @@ describe('the three skips — a keepalive is for the idle case only', () => {
     expect(row('claude-a').outcome).toBe('refreshed');
   });
 
-  it('skips an account a registered session is sitting on', () => {
+  it('skips an account a RUNNING session is sitting on (fresh supervisor heartbeat)', () => {
+    // F1: liveness is the supervisor heartbeat (`ccd/ccd`'s `_session_state`
+    // freshness notion, 120s), not mere presence of a `.wrapper` row — a
+    // registry row survives `ccd stop` untouched, so content-match alone
+    // would also match a stopped session (see the sibling case below).
     plantWrapper('claude-a', renders('claude-a'));
     plantLimits('claude-a', 41, 9999);
     fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.wrapper'), 'claude-a\n');
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.supervised'),
+      `${Math.floor(Date.now() / 1000)}\n`);
     run();
     expect(row('claude-a').outcome).toBe('skipped');
     expect(row('claude-a').reason).toContain('claude-a-demo');
+    expect(row('claude-a').reason).not.toContain('is live');
     expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(false);
+  });
+
+  it('does NOT skip on a STOPPED session\'s registry row — a `.wrapper` row outlives `ccd stop`', () => {
+    // The exact fixture the finding measured: a bare `.wrapper` row with no
+    // process, no tmux and no unit (no `.supervised` heartbeat at all).
+    // Before the fix this produced `{"outcome":"skipped","reason":"session
+    // some-stopped-session is live on this account"}` — the census reporting
+    // a claim the code never measured.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'some-stopped-session.wrapper'), 'claude-a\n');
+    run();
+    const r = row('claude-a');
+    expect(r.reason).not.toContain('some-stopped-session');
+    expect(r.outcome).toBe('refreshed');
+  });
+
+  it('does NOT skip on a STALE supervisor heartbeat — a dead supervisor stops ticking', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.wrapper'), 'claude-a\n');
+    const stale = Math.floor(Date.now() / 1000) - 999;
+    fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.supervised'), `${stale}\n`);
+    run();
+    const r = row('claude-a');
+    expect(r.reason).not.toContain('claude-a-demo');
+    expect(r.outcome).toBe('refreshed');
   });
 
   it('skips an account with no wrapper on this box, and says which path', () => {

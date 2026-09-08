@@ -806,7 +806,7 @@ _check_services() {
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -867,6 +867,7 @@ _check_services() {
         case "$u" in
           ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
           ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
+          ccd-telemetry-keepalive.timer) why="an idle account's ~/.cc-limits reading goes stale, so placement acts on a number nobody is refreshing" ;;
           *) why="the job it fires is not running" ;;
         esac
         # Unreachable on macOS today (`_inst_units` installs neither timer's

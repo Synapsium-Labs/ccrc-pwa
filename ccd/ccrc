@@ -6349,12 +6349,16 @@ _uninst_wrappers() {
   for f in "$WRAPPER_BIN_DIR"/*; do
     [ -f "$f" ] || continue
     name="${f##*/}"
-    # The four executables are `_uninst_tree_bins`' subject, not wrappers
+    # The executables are `_uninst_tree_bins`' subject, not wrappers
     # (graphify Task 10/fix-round F2 adds `ccd-graph-sweep` to this case,
     # or the wrapper arm would misclassify it instead of the bin arm below
-    # ever getting a say). spec 2026-09-07 §C adds `ccd-telemetry-keepalive`
-    # on the same terms.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-telemetry-keepalive) continue ;; esac
+    # ever getting a say). spec 2026-09-07 §A adds `ccd-account-health` and
+    # §C adds `ccd-telemetry-keepalive` on the same terms (fix-wave F6: the
+    # two siblings are both id-shaped and both match WRAPPER_ID_RE, and the
+    # first shipped without joining this case — inert, since a plain `cp`
+    # install embeds no marker and `verifyMarker` already returns `foreign`
+    # for it, but undocumented and worth treating alike).
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";

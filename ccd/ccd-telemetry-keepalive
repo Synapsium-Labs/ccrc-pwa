@@ -378,17 +378,45 @@ _authdead() {   # <wrapper> -> rc 0 iff a valid marker is there; prints the epoc
 }
 
 # `_gs_session_on`'s shape (ccd-graph-sweep), asked of `wrapper` instead of
-# `workdir`: the registry is $REG/<id>.<field>, so this reads the account each
-# registered session is currently sitting on. An unreadable row is SKIPPED,
-# never matched — two unmeasurable values comparing equal is what would hand
-# an account the wrong answer.
-_ka_session_on() {   # <account> -> the first session id on it, or nothing
-  local acct="$1" w txt b
+# `workdir` — WITH ONE DELIBERATE DIFFERENCE, found by measurement (F1,
+# fix-wave 2026-09-07): a `.wrapper` row is ERASED only by `_reg_purge`
+# (ws-rm / reap / forget) — `ccd stop` never touches it — so a STOPPED,
+# ARCHIVED or merely IDLE workspace still carries a row whose content
+# matches, and content-matching alone reads that as "live". Measured in a
+# fixture HOME: a bare `.cc-sessions/some-stopped-session.wrapper` with no
+# process, no tmux and no unit produced a false "live" skip on every pass.
+#
+# THE FIX REUSES `_session_state`'s OWN NOTION OF FRESH (`ccd/ccd:1797`),
+# rather than inventing a second one: a session counts here only while its
+# supervisor heartbeat (`$REG/<id>.supervised`, re-stamped on a tick this
+# file's own header measures at ~30s) is younger than KA_SESSION_FRESH — the
+# SAME 120s window `_session_state` uses to call a heartbeat "fresh", by
+# value, for the reason `CCRC_KEEPALIVE_FRESH` above re-spells `SWAP_FRESH`
+# by value: this file sources nothing, so the number is copied, not shared.
+# This is the FALLBACK scope the finding allows when the full notion
+# (`_session_state`'s pane-alive check too, via `_alive`/tmux) cannot be
+# reused from a sibling script: a session with a RUNNING supervisor. A
+# session whose pane just died inside the same 120s window is not
+# distinguished from one still running — the identical ambiguity
+# `_session_state` itself accepts inside its own freshness window, not a
+# new one introduced here. An unreadable or non-numeric heartbeat is
+# SKIPPED, never matched — two unmeasurable values comparing equal is what
+# would hand an account the wrong answer.
+KA_SESSION_FRESH=120
+
+_ka_session_on() {   # <account> -> the first session id on it with a RUNNING
+                      # supervisor, or nothing
+  local acct="$1" w txt b sid sup now
+  now="$(date +%s)"
   for w in "$REG"/*.wrapper; do
     [ -f "$w" ] || continue
     txt="$(cat "$w" 2>/dev/null)" || continue
     [ "$txt" = "$acct" ] || continue
-    b="${w##*/}"; printf '%s' "${b%.wrapper}"
+    b="${w##*/}"; sid="${b%.wrapper}"
+    sup="$(cat "$REG/$sid.supervised" 2>/dev/null)" || continue
+    [[ "$sup" =~ ^[0-9]+$ ]] || continue
+    (( now - sup >= 0 && now - sup < KA_SESSION_FRESH )) || continue
+    printf '%s' "$sid"
     return 0
   done
   return 1
@@ -514,7 +542,9 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
     continue
   fi
   if sid="$(_ka_session_on "$acct")"; then
-    _ka_row "$acct" skipped "session $sid is live on this account" "$fb" "" "" 0
+    _ka_row "$acct" skipped \
+      "session $sid has a supervisor heartbeat under ${KA_SESSION_FRESH}s old on this account" \
+      "$fb" "" "" 0
     continue
   fi
   ts=""; [ -f "$lim" ] && { ts="$(_ka_num "$lim" ts)" || ts=""; }
