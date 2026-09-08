@@ -282,8 +282,8 @@ Task 23's `check-add` reads as `P.connect`. (2) Its members are the BARE method 
 `ccrc account add` (spec:417), in `ccd account-pane` (Task 50) and in `ccd-account-auth` (Task 51), so
 the string in this table, the string an operator types and the string the helper's `case` matches are one
 string with no translation anywhere between them. The argument against §4.2's `pane:`-prefixed cell is in
-`ConnectMethod`'s docstring in Step 3a and is a READING of the spec (§5:413, §5:419, §6:507-508, §6:543
-against §4.2:272,:275), not an amendment to it, so it carries no deviation number — and this wave's
+`ConnectMethod`'s docstring in Step 3a and is a READING of the spec (§5:417, §5:423, §6:511-512, §6:547
+against §4.2:276,:275), not an amendment to it, so it carries no deviation number — and this wave's
 allocated block (D-1854..D-1867) has none spare.
 
   Tasks 3, 4, 8 and every task in work items 2 and 3 consume `PROVIDERS`, `PROVIDER_IDS`, `isProviderId` and `ProviderId`. `ACCOUNT_FINDINGS` is consumed by Task 33 (`ccrc doctor`'s `accounts` check) and by wave 3's PWA; it is minted here rather than there because §14's last-but-two bullet says the vocabulary is "defined once in `shared/providers.ts` and rendered by doctor and the PWA alike", and a vocabulary minted at its first consumer acquires a second copy at its second.
@@ -433,8 +433,8 @@ describe('the provider table is derived, never re-listed', () => {
     // `ccrc-account.test.ts` (Task 20) and `ccd-account-auth`'s `case` matches
     // these same strings (Tasks 51-55), so a `pane:` prefix landing here would
     // refuse `--method setup-token` — a value spec:417 documents — everywhere at
-    // once. §4.2's cell (spec:276, :275) writes the prefixed spelling; §5:413,
-    // §5:419 and §6:507-508 write these, and §6:543 says what the prefix meant.
+    // once. §4.2's cell (spec:276, :275) writes the prefixed spelling; §5:417,
+    // §5:423 and §6:511-512 write these, and §6:547 says what the prefix meant.
     expect(PROVIDERS.anthropic.connect).toEqual(['login', 'paste', 'setup-token']);
     expect(PROVIDERS.openrouter.connect).toEqual(['pkce', 'paste']);
     expect(PROVIDERS.compatible.connect).toEqual(['paste']);
@@ -639,7 +639,7 @@ Expected: FAIL at collection — `Failed to resolve import "../../shared/provide
  *  :275); every other mention writes the bare name — §5's `add` row takes
  *  `--method login|paste|setup-token` (:413), its `auth-start` row takes
  *  `--method login|setup-token|openai-login` (:419), and §6's own method table
- *  rows are `setup-token` and `openai-login` (:507-508). §6:543 then says in
+ *  rows are `setup-token` and `openai-login` (:511-512). §6:547 then says in
  *  words what the prefix was standing for: "Only `setup-token` and
  *  `openai-login` need a terminal". So the prefix is PROSE ABOUT WHERE a method
  *  runs, not a spelling of its name — and the `openai` row proves it, because
@@ -749,7 +749,7 @@ export const PROVIDERS = {
     label: 'ChatGPT subscription (external launcher)',
     credential: 'held by the launcher, never by ccrc',
     envVar: null,
-    // §5:419 and §6:508's name for this method. §4.2's cell spells it
+    // §5:423 and §6:512's name for this method. §4.2's cell spells it
     // `pane:login`, which is not this name with a prefix — see `ConnectMethod`.
     connect: ['openai-login'],
     probe: 'inference',
@@ -4194,7 +4194,7 @@ carries the argument. Restated here only as far as this file needs it: the membe
 `login`, `paste`, `setup-token`, `pkce`, `openai-login` — no `pane:` prefix — because they are the
 values `--method` takes (spec `:417`, `:423`), the rows of §6's own method table (`:511-512`) and the
 `case` arms of `ccd-account-auth` (Task 51), and because §4.2's prefixed cell (`:276`, `:279`) is
-prose about WHERE a method runs, which §6:543 then says in words. The `openai` row is what makes that
+prose about WHERE a method runs, which §6:547 then says in words. The `openai` row is what makes that
 reading unavoidable rather than merely convenient: §4.2 writes `pane:login` and §6 writes
 `openai-login`, which are two different NAMES and not one name with a prefix — stripping the prefix
 gives `login`, the ANTHROPIC method — so a prefixed table could not be mapped onto the flag values by
@@ -4554,8 +4554,8 @@ const SELF = 'account-op';
  *  Bare, no `pane:` prefix, and the column is called `connect` on both sides.
  *  `shared/providers.ts`'s `ConnectMethod` docstring carries the argument; the
  *  short form is that the spec spells these names three times as flag values
- *  and method-table rows (§5:413, §5:419, §6:507-508) and once, in §4.2's cell
- *  (:272, :275), as prose about where a method runs — which §6:543 then says in
+ *  and method-table rows (§5:417, §5:423, §6:511-512) and once, in §4.2's cell
+ *  (:272, :275), as prose about where a method runs — which §6:547 then says in
  *  words. `check-add` validates the operator's `--method` against this list, so
  *  a prefixed spelling here would refuse `--method setup-token`, a value the
  *  spec documents.
@@ -5847,10 +5847,10 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # argument rather than from the second, for the reason `check-add` derives it
   # the same way (Task 23's plan literal, `secretTag`): a lane exporting
   # `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth token and its file is
-  # `<id>-oauth.env` — §6:507, §7:472, §11 and §12.5's spelling, and the one
+  # `<id>-oauth.env` — §6:511, §7:476, §11 and §12.5's spelling, and the one
   # every anthropic lane on this fleet already has
   # (`server/test/helpers.ts:69`) — while an api-key lane's file is
-  # `<id>-<provider>.env`, §4.3:318's spelling. §5:413's `X-P.env` is the
+  # `<id>-<provider>.env`, §4.3:322's spelling. §5:417's `X-P.env` is the
   # general shape both obey. THE TWO DERIVATIONS MUST STAY ONE RULE: `add`
   # writes this path into `exec.secretsFile`, the generated wrapper sources
   # whatever that field says (`shared/wrapper.mjs:141-143`),
@@ -6237,7 +6237,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
 
     // AND THE DOCUMENTED FLAG VALUE THE TABLE MUST ACCEPT. spec:417 says
     // `--method login|paste|setup-token`; §4.2's cell spells the third one
-    // `pane:setup-token`, which is prose about where it runs (§6:507, :543).
+    // `pane:setup-token`, which is prose about where it runs (§6:511, :543).
     // The vocabulary is the bare one, and this is the assertion that keeps the
     // CLI from refusing a value the spec documents — measured here rather than
     // left to Task 54, because it is `check-add` that decides it.
@@ -6253,10 +6253,10 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // generated wrapper's `source` line, Task 28's `credential` rewrite and
     // `ccd-account-auth`'s `setup-token` capture (Task 54) must all name ONE
     // file. The name is `<id>-oauth.env` because the credential is an OAuth
-    // token — §6:507, §7:472, §11 and §12.5 spell it that way, every anthropic
+    // token — §6:511, §7:476, §11 and §12.5 spell it that way, every anthropic
     // lane on this fleet already carries it (`server/test/helpers.ts:69`), and
-    // §5:413's `X-P.env` is the general shape rather than a fifth spelling. An
-    // api-key lane keeps `<id>-<provider>.env`, which is §4.3:318's own name
+    // §5:417's `X-P.env` is the general shape rather than a fifth spelling. An
+    // api-key lane keeps `<id>-<provider>.env`, which is §4.3:322's own name
     // for it, and the `compatible` cases above assert that half.
     expect(stPlan['secretsFile']).toBe('.cc-secrets/lab-dev0-oauth.env');
     expect(stPlan['envVar']).toBe('CLAUDE_CODE_OAUTH_TOKEN');
@@ -6598,9 +6598,9 @@ and the arm, placed after `roster`'s:
     // refused the request the ternary was written to soften.
     const isToken = method !== 'login';
     // THE SECRETS FILE IS NAMED FOR WHAT IT CARRIES, not for who issued it, and
-    // the spec says both things in different sections: §5:413 writes the general
-    // shape `~/.cc-secrets/X-P.env`, §4.3:318 writes the api-key lane's real
-    // name `~/.cc-secrets/<id>-openrouter.env`, and §6:507, §7:472, §11 and
+    // the spec says both things in different sections: §5:417 writes the general
+    // shape `~/.cc-secrets/X-P.env`, §4.3:322 writes the api-key lane's real
+    // name `~/.cc-secrets/<id>-openrouter.env`, and §6:511, §7:476, §11 and
     // §12.5 write the OAuth lane's real name `~/.cc-secrets/<id>-oauth.env`.
     // Only the second and third are names of files that exist: every anthropic
     // lane on this fleet carries the `-oauth` spelling today
@@ -6940,7 +6940,7 @@ their constructed name IS this rule's answer for the lanes they run on. Task 28'
 `secrets-path-unmanaged` is what stands behind it for a roster written by hand: `credential` compares
 the roster's declared path against this derivation and REFUSES rather than filling a file the wrapper
 does not source. The spec's §5 template is read as a shape rather than a literal, which is a reading
-and not an amendment; §5:413 is left as it stands and no deviation number is spent on it.
+and not an amendment; §5:417 is left as it stands and no deviation number is spent on it.
 
 **One property this chain leaves open for two commits**, said here rather than left to be noticed: at
 this commit `add` is reachable and does not yet write `$REG/<id>-disabled` (Task 26), so between
@@ -15652,3 +15652,60 @@ Three properties the red version does not have:
 **Task 24 must UN-SKIP them as a named step**, and its mutation table must include re-skipping one — a
 deferral nobody can forget is the half that makes a skip safe. `grep -n 'it\.skip' server/test/ccrc-account.test.ts`
 is the check, and it must return nothing once Task 24 lands.
+
+### D-2003 — the plan contradicts itself on `--suffix`, and the default is now spelled in both halves
+
+Found by Task 23's implementer while executing. Step 3 lists `suffix` among `check-add`'s REQUIRED keys;
+Step 1's own test asserts that the arm DEFAULTS it; Step 5 requires that test to pass. Three statements,
+two of which cannot both be true.
+
+**The test won**, which is the right resolution — a plan is amended by what the tree can be made to do,
+and §4.4 does specify a default. But it has a cost the plan did not price: **the default is now spelled
+in BOTH halves**, because bash must materialise it before its own two suffix gates (`bad-suffix`,
+`suffix-outside-read-root`) have anything to measure, and node must apply it for `check-add` to answer
+with a resolved plan.
+
+Two spellings of one rule is the second-copy defect this repository refuses everywhere else. The
+implementer did not leave it as a comment: **their agreement is a test that drives both halves and reds
+in both directions.** That is the correct treatment for a duplication that cannot be removed — make the
+copy's divergence a red suite rather than a promise.
+
+Task 24 inherits this: when it orders the write, the suffix it writes must come from the SAME resolution,
+not a third one.
+
+### D-2004 — the pre-pass checks neither `--hue` nor `--label`, so `ok: true` can precede a refusal
+
+`check-add` validates the id, the suffix, the provider, the method, the base URL, the models and the two
+collisions — and does not look at `--hue` or `--label` at all. A request the roster writer will later
+refuse therefore gets `{"ok":true}` from the pre-pass.
+
+That is not yet a live defect: nothing writes from the plan until Task 24. It becomes one the moment Task
+24 orders the write, because the whole argument for the pre-pass (Task 23's own Why, quoting
+`cmd_wrappers`' banner at `ccd/ccrc:2483-2497`) is that *every refusal must fire before the first byte* —
+and the file this verb writes first is the SECRET, whose path is derived from the id. A run that passed
+the pre-pass on a bad hue would write the credential and then refuse.
+
+**Task 24 must either extend the pre-pass to `hue` and `label`, or state in its own source why those two
+are safe to leave to the writer.** Not a comment in the plan — a decision in the file, with a test.
+
+### D-2005 — a sweep is only as complete as its pattern census, and D-1907's was not
+
+**My own defect, found by Task 23's implementer**, one task after I issued the rule it violates.
+
+D-1907's sweep re-pointed 131 spec citations and verified every one by content. Its inventory used two
+patterns: `spec:NNN` and a backticked `` `:NNN` `` next to a section mark. **It never looked for the form
+`§N:NNN`** — no `spec:` prefix, no backticks — and there were **thirty-one** of them, every one stale.
+`§5:413` still named the `add` row at its pre-correction line; the row is at `:417`.
+
+So the sweep that exists to stop citations lying left a third of a citation family lying, and the entry
+recording it claimed the job was done. **Verifying every citation you found by content does not help with
+the ones your pattern never found**, and a clean 131/131 reads exactly like completeness.
+
+Corrected now, all nine distinct values verified by content before editing (`:272→276`, `:318→322`,
+`:413→417`, `:419→423`, `:472→476`, `:507→511`, `:508→512`, `:543→547`), all in the +4 band.
+
+**The rule D-1907 should have carried:** before sweeping, enumerate the FORMS a citation takes in this
+corpus — `grep -oE` for each candidate shape and count them — and state the census in the entry. A sweep
+that names its patterns can be checked; one that reports only a hit count cannot be distinguished from a
+complete one. The three forms known in this corpus today are `spec:NNN`, `` `:NNN` `` beside a `§`, and
+`§N:NNN`. There may be a fourth; the point of this entry is that nobody has looked.
