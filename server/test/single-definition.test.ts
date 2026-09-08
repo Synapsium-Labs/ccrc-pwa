@@ -1445,26 +1445,36 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
 });
 
 // — the account-health probe's token convention —
-describe('one .cc-secrets/<id>-oauth.env convention, in exactly two bash files', () => {
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files', () => {
   // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
   // so the mandatory upstream account cannot declare where its credential
   // lives — and a roster-driven probe would silently skip the primary account.
-  // The convention closes that, and the two files that spell it CANNOT share a
-  // constant: `ccd-account-health` is installed alone into $HOME/.local/bin
-  // with no library beside it, and `ccrc-doctor-checks` is loaded by `ccrc`
-  // through ${BASH_SOURCE[0]} on a box that may not have the probe at all.
+  // The convention closes that, and the files that spell it CANNOT share a
+  // constant: `ccd-account-health` and `ccd-telemetry-keepalive` are each
+  // installed alone into $HOME/.local/bin with no library beside them, and
+  // `ccrc-doctor-checks` is loaded by `ccrc` through ${BASH_SOURCE[0]} on a box
+  // that may not have either of them at all.
   // So the agreement is MEASURED, the way `.ccrc/remote-control`'s four
   // spellings are: an exact holder list, and a value comparison.
+  //
+  // THE THIRD HOLDER IS A WIDENING, and it is written down rather than waved
+  // through. `ccd-telemetry-keepalive` sources the file it names — it does not
+  // merely test for it — because the account it is about to spend a turn on
+  // must carry its own credential and the roster structurally cannot say where
+  // that lives for the upstream account. It is therefore the same convention,
+  // used by a third consumer, and the value comparison below covers it exactly
+  // as it covers the other two. A FOURTH holder should have to argue again.
   const NEEDLE = '-oauth.env';
 
-  it('is spelled by exactly those two files, each named here BY NAME', () => {
+  it('is spelled by exactly those three files, each named here BY NAME', () => {
     expect(holdersOf(NEEDLE)).toEqual([
-      'ccd/ccd-account-health',   // _ah_token_file — the probe's own reader
-      'ccd/ccrc-doctor-checks',   // _check_credentials — the operator-facing re-measurement
+      'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
+      'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
+      'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
     ]);
   });
 
-  it('and both build the same path from an id', () => {
+  it('and all three build the same path from an id', () => {
     // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
     // lines whose trimmed start is `#`, and each file names the file TWICE in
     // shell — once building the path and once in an operator-facing message
@@ -1477,8 +1487,16 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly two bash files',
       .filter((l) => l.includes(NEEDLE) && l.includes('printf'));
     const doctor = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'))
       .filter((l) => l.includes(NEEDLE) && l.includes('[ -s '));
+    // The keepalive's constructing line is its readability TEST — `[ -r "…" ]
+    // && . "…"` — which names the path twice on ONE line. That is deliberate
+    // there (the guard and the source must not be able to disagree about which
+    // file they mean), so the filter counts LINES and `shape` reads the first
+    // quoted path on the line, which is the one the guard tests.
+    const keepalive = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-telemetry-keepalive'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('[ -r '));
     expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
     expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
+    expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
     // A REAL comparison, not a tautology. Each line is reduced to the path it
     // BUILDS, with the two files' different spellings of "the secrets dir" and
     // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
@@ -1489,10 +1507,13 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly two bash files',
     const shape = (l: string): string => {
       const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
       expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
-      return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>');
+      return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
+        .replace('$SECRETS_DIR/$acct', '<dir>/<id>');
     };
     expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
+    expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
+      .toBe('<dir>/<id>-oauth.env');
   });
 });
 
