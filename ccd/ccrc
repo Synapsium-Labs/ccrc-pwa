@@ -914,6 +914,37 @@ CCRC_CADDY_ROOT_CA="${CCRC_CADDY_ROOT_CA:-/var/lib/caddy/.local/share/caddy/pki/
 # CCRC_CADDYFILE (single-definition.test.ts, "one ccrc-ddns unit name").
 CCRC_DDNS_UNIT="ccrc-ddns"
 
+# ── THE ACCOUNT SECRETS DIRECTORY, WHICH `account` WRITES AND NEVER READS ──
+# `~/.cc-secrets/<id>-oauth.env` for an OAuth lane, `<id>-<provider>.env` for an
+# api-key one (the rule is `_acct_write_secret`'s, Task 22) — one 0600 file per token lane, holding
+# exactly one `export` line, sourced by that lane's generated wrapper at exec
+# time (`shared/wrapper.mjs:141-143`). Spelled once for BOX_AUTH_FILE's reason:
+# `cmd_account` WRITES these files and doctor's `accounts` check MEASURES them
+# BY EXISTENCE ONLY, and a writer and a reader that spelled the directory
+# separately is the drift D-166's comment names.
+#
+# THE MODE IS THE FILE'S OWN. `mkdir -p -m 0700` sets a mode on a directory it
+# CREATES and on nothing else (POSIX), so a `~/.cc-secrets` that already exists
+# keeps whatever mode the operator gave it — `cmd_wrappers`' rule for
+# `~/.local/bin`, stated at :2347-2351 ("an EXISTING directory is left exactly
+# as the operator has it") and implemented at :2361. This verb does not chmod an
+# existing directory in either direction: widening one silently would be worse
+# than the state it found, and narrowing one is a decision about a directory
+# `deploy/deploy.sh`'s `ship_secret` also writes into. The 0600 on the FILE is
+# what protects the secret, exactly as CLAUDE.md argues for `~/.ccrc` being 0775
+# on the reference fleet.
+ACCT_SECRETS_DIR="$HOME/.cc-secrets"
+
+# ── THE SUBCOMMANDS THIS BUILD IMPLEMENTS, SPELLED ONCE ───────────────────
+# DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccrc-doctor-checks:165) and for its
+# reason. `cmd_account` matches the operator's word against THIS list, and BOTH
+# refusals print it — so a subcommand that dispatches without being named, or a
+# name printed that nothing dispatches, cannot happen. Adding one is one word
+# here plus one arm in the case below, and `ccrc-account.test.ts`'s
+# "both directions" case reads this line out of the source and fails on either
+# half alone.
+ACCT_SUBS=""
+
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
 # login against (`server/src/auth/secret.ts` owns the format). Spelled here for
@@ -1070,7 +1101,7 @@ INST_DEGRADED=()
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|update|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|account|install|update|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1088,6 +1119,13 @@ already running).
             "generated", and REFUSE every file ccrc did not write itself.
             Backs up before any overwrite; never touches an upstream or
             external account. [--dry-run] [--adopt] [--force]
+  account   connect, check and remove the accounts this box runs sessions
+            on — one JSON object on stdout per subcommand, remedies on
+            stderr, and the credential only ever on stdin (--credential -).
+            Writes ~/.ccrc/accounts.json, a 0600 file under ~/.cc-secrets
+            and each account's own settings.json; every lane it connects is
+            left DISABLED until you enable it. Run it with no subcommand to
+            see which subcommands this build has
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -3633,6 +3671,98 @@ _exp_status() {
     echo "expose: duckdns token: NOT SET (a byo or ip box, or an incomplete duckdns run)"
   fi
   return 0
+}
+
+# ── cmd_account — the account-connection verb (spec §5) ───────────────────
+# The one verb in this CLI whose CALLER is a program. `expose` and `passwd`
+# prompt a human on a terminal; `account` is driven from a phone, through the
+# server, through the agent, and every answer it gives is parsed. That single
+# difference is what shapes everything below:
+#
+#  - EXACTLY ONE JSON OBJECT ON STDOUT, on every reachable path including every
+#    refusal. `_ccrc_die` prints NOTHING on stdout (:1191), so a refusal under it
+#    hands the caller an empty body and a bare exit code — "the id you gave is
+#    taken" and "node is not installed" arriving identically, which is the
+#    overloaded seam this repository forbids. The one exception is `-h`, which
+#    prints usage exactly as every other verb does; the agent builds flags from
+#    typed fields and never builds that one.
+#
+#    THE RULE BINDS WHAT THIS VERB CALLS, NOT ONLY WHAT IT PRINTS.
+#    `_inst_accounts_sh` (:4093, :4099) and `cmd_wrappers` (:2891) both write
+#    their transcript to STDOUT, which is right for `install` and wrong here, so
+#    `_acct_converge` (Task 24) redirects them and contains their `_ccrc_die`.
+#
+#  - THE ENVELOPE IS `ccd/ccrc-api:122-126`'s, WRITTEN BY NODE. That file's
+#    `refuse()` is a bash `printf` of two `%s`, and it is safe THERE because both
+#    values are literals it controls. Here `detail` carries the operator's own
+#    bytes — an id, a suffix, a URL — and a `"` or a `\` in one of them turns a
+#    hand-rolled envelope into a body nobody can parse. So bash owns argv,
+#    refusal classes, tty rules and side effects; `deploy/account-op.mjs` owns
+#    every byte of stdout. That is the split `deploy/gen-accounts.mjs:4-11` and
+#    `_inst_accounts_sh` (:4075-4100) already draw, applied to an answer instead
+#    of a generated file.
+#
+#  - ONE EXIT-CODE TABLE, TWO DECIDERS. Whoever decides owns the code, on this
+#    file's own table (:24-33): 2 when the request was not legal on its face —
+#    decidable from argv alone, which is `cmd_install`'s "the operator typed the
+#    right flag and the wrong value" class (:3824-3828, refused at :3841-3844) —
+#    and 1 when the request was legal and the BOX said no (an id already in the
+#    roster, a suffix another account holds). Nothing translates at the seam,
+#    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2908-2922).
+#
+#  - THE SECRET NEVER LEAVES BASH. `--credential -` is the only spelling that
+#    reads one (Task 22), it arrives on stdin through a builtin, and it is
+#    written by this file in `_exp_env_write`'s umask-077 subshell (:3479-3531).
+#    `deploy/account-op.mjs` is handed the roster PATH and never the value, which
+#    is why that CLI can be run by hand and logged without a containment
+#    argument.
+
+_acct_node() {   # <op> [--<key> <value>]… — the ONE writer of this verb's stdout
+  # `$CCRC_HERE/../deploy/…`, `cmd_wrappers`' idiom (:2311-2316): true in a
+  # checkout and at ~/ccrc/deploy on a deployed box, because both deploy lanes
+  # rsync `deploy/` into `~/ccrc/`. NOT `bash` — this is node — and NOT
+  # captured: stdout is the caller's answer and stderr is the caller's remedy,
+  # and re-wording either here would replace a fix with a shrug.
+  node "$CCRC_HERE/../deploy/account-op.mjs" "$@"
+}
+
+_acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <class>
+  # THE CLASS IS THIS FILE'S, THE ENVELOPE IS NODE'S. The `refuse` op exits 0
+  # ("the envelope printed") precisely so that one refusal never has two owners.
+  _acct_node refuse --code "$2" --detail "$3" \
+    || _ccrc_die "could not print a refusal envelope for \"$2\": $3 — and the caller of this verb parses stdout, so it must hear about that rather than read an empty body"
+  exit "$1"
+}
+
+cmd_account() {
+  local sub="${1:-}"
+  [ $# -gt 0 ] && shift
+  # BEFORE the dependency probes, so `-h` answers on a box that has neither.
+  case "$sub" in
+    -h|--help) usage; exit 0 ;;
+  esac
+
+  # BY NAME, ONCE, AND BEFORE THE FIRST REFUSAL IS PRINTED — `cmd_install`'s
+  # guard (:3864-3865) in its own shape. Without it a box with no node cannot
+  # even hear "that id is taken": the refusal would arrive as `_acct_node`
+  # failing, i.e. as a missing dependency wearing a bad request's clothes. This
+  # refusal is the ONE path with no JSON on stdout, and it says so.
+  command -v node >/dev/null 2>&1 \
+    || _ccrc_die "node is required by 'ccrc account' — it runs ${CCRC_HERE%/*}/deploy/account-op.mjs, the only thing on this box that writes this verb's JSON — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed, and this is the one refusal this verb cannot phrase as JSON."
+  command -v jq >/dev/null 2>&1 \
+    || _ccrc_die "jq is required by 'ccrc account' — it merges each account's settings.json the way $HOME/.cc-sessions/install-session-hooks.sh merges hooks, validating before and after every swap — but is not on PATH. Install jq, then re-run. Nothing on this box was written or changed."
+
+  if [ -z "$sub" ]; then
+    _acct_refuse 2 missing-subcommand "ccrc account needs a subcommand. This build implements: ${ACCT_SUBS:-nothing yet — this commit is the dispatch skeleton}"
+  fi
+  local known=0 s
+  for s in $ACCT_SUBS; do [ "$s" = "$sub" ] && known=1; done
+  [ "$known" -eq 1 ] \
+    || _acct_refuse 2 unknown-subcommand "ccrc account has no subcommand \"$sub\". This build implements: ${ACCT_SUBS:-nothing yet — this commit is the dispatch skeleton}"
+
+  case "$sub" in
+    *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
+  esac
 }
 
 # ── cmd_install — the verb this CLI is named for ──────────────────────────
@@ -6532,6 +6662,7 @@ case "$VERB" in
   status)  cmd_status "$@" ;;
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
+  account) cmd_account "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
