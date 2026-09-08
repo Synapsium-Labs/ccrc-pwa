@@ -9165,7 +9165,7 @@ done
 diff -q ~/.handoff/litellm-config.yaml <(git show main:infra/handoff/litellm-config.yaml) >/dev/null \
   && echo "litellm-config.yaml: matches main" || echo "litellm-config.yaml: DRIFTED"
 ```
-Expected (measured 2026-09-08, all five identical): five `matches main` lines. A `DRIFTED` line means somebody hand-edited a deployed copy; STOP and report which, with the diff — the runbook's install would silently destroy that edit.
+Expected (re-measured 2026-09-08, dispatch notes v2, a9a2416): `ccgpt-proxy`, `claude-glm` and `ccgpt-usage` print `matches main`; `ccgpt` and `litellm-config.yaml` print `DRIFTED` — a peer session hand-edited both, same day, with a dated rationale (a `gpt-6-astra`/`fable` fourth tier, a measured ~196k usable-context wall against an advertised 872k, and a compaction-timeout fix). This is EXPECTED, not a STOP: `ccgpt`'s drift is exactly the peer's edit (confirmed by diff, Appendix of task-16-report.md) and the branch has already absorbed the part that matters — Task 16a ported the TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`) into `infra/handoff/ccgpt`, byte-identical to the box's copy. `litellm-config.yaml` stays drifted on the box until R7 of the runbook regenerates it (backing the hand-edited bytes up to `.prev` first) — this task does not touch it. A `DRIFTED` line on any of the other THREE files (`ccgpt-proxy`, `claude-glm`, `ccgpt-usage`) is still a STOP: report which, with the diff — the runbook's install would silently destroy an edit nothing here expects.
 
 - [ ] **Step 2: Stage the three files this branch changes**
 
@@ -9196,14 +9196,14 @@ cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
   done; } | tee "$STAGE/pending-install.diff" | tail -40
 wc -l "$STAGE/pending-install.diff"
 ```
-Expected: a unified diff showing exactly three changes — `ccgpt-proxy` gains `EFFORT_LEVELS`/`_effort_path`/`_effort_cache`/`_effort_map`/`_base_model`/`_apply_effort` and the rewritten `_relay` block; `ccgpt` loses the six model exports and gains `CCGPT_ACCOUNT_ID`; `claude-glm` loses six exports. Nothing else. Read the whole diff before continuing.
+Expected (dispatch notes v2, re-measured a9a2416; diffed against the DRIFTED box copy of `ccgpt`, so its diff also carries the peer's edit going the other way): a unified diff showing exactly three changes — `ccgpt-proxy` gains `EFFORT_LEVELS`/`_effort_path`/`_effort_cache`/`_effort_map`/`_base_model`/`_apply_effort`/`_rewrite_messages_body` (folds `system`, applies effort, pops `thinking` alongside `output_config`) and the relay's inline body-rewrite is replaced by a call to it; `ccgpt` loses the six model exports AND the box's `ANTHROPIC_DEFAULT_FABLE_MODEL`/`fable=` addition and paragraph (present on the box, absent from the branch's staged file — Task 16a ported only the TIMEOUTS block, not the fourth-tier wiring), gains `CCGPT_ACCOUNT_ID` with a comment on why it is exported before the file's `nohup` calls (a nohup'd child only inherits what is exported by fork time), and carries the catalogue/`[1m]` paragraph reworded to the same substance in different words; `claude-glm` loses six exports. The TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`, 23 lines) is IDENTICAL on both sides of the diff — Task 16a already ported it — and must not appear as a change. Nothing else. Read the whole diff before continuing.
 
 - [ ] **Step 5: Assert the diff touches no credential, endpoint or lifecycle line**
 
 ```bash
 grep -E '^[-+]' "$STAGE/pending-install.diff" | grep -E 'AUTH_TOKEN|BASE_URL|API_KEY|LITELLM_MASTER_KEY|CHATGPT_TOKEN_DIR|_wait_port|nohup' || echo "no credential, endpoint or lifecycle line changes"
 ```
-Expected: `no credential, endpoint or lifecycle line changes`. If anything prints, one of Tasks 13–15 went further than it was asked to; revert that hunk before continuing.
+Expected (re-measured a9a2416): ONE line prints, a false positive — the new `CCGPT_ACCOUNT_ID` comment explaining why it is exported before the file's `nohup` calls contains the prose word "nohup" and the grep cannot tell prose from an invocation. Verify it directly: both real `nohup` lines (the LiteLLM proxy, `ccgpt-proxy`) appear only as unchanged CONTEXT in the diff, at shifted line numbers, never as a `-`/`+` hunk. If a `nohup`/credential/endpoint line DOES appear as an actual `-`/`+` hunk (not shifted context), one of Tasks 13–15 went further than it was asked to; revert that hunk before continuing.
 
 - [ ] **Step 6: Confirm `ccgpt-usage` is untouched, on the branch and on the box**
 
@@ -9216,7 +9216,7 @@ Expected: no output from `git diff --stat`, then `ccgpt-usage: unchanged, and th
 
 - [ ] **Step 7: Write the install commands into the branch, where the runbook can cite them**
 
-Create `infra/handoff/INSTALL-model-class-registry.md`:
+Create `infra/handoff/INSTALL-model-class-registry.md` (landed content, a9a2416 — dispatch notes v2 item 3's corrections on top of the brief's template, grounded against Task 17's runbook R5/R7/R8/R17 and Task 16a's report):
 
 ```markdown
 # Installing the model-class-registry change to a box
@@ -9232,8 +9232,11 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
 
 1. **Seed and materialise the lane first** (ccrc side; see the plan's runbook):
    `ccrc models gpt init codex && ccrc models refresh gpt`
-   Then check the block landed:
-   `jq '.env | {ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_FABLE_MODEL}' ~/.claude-gpt/settings.json`
+   Then check the eight-key block landed:
+   `jq '.env' ~/.claude-gpt/settings.json`
+   Expect all eight variables the class registry writes. **This is the gate
+   for step 4 below — do not install the wrappers until this shows the
+   block.**
 
 2. **The shim** — safe at any point, and safest first: with no effort file it
    sets no `reasoning` field at all.
@@ -9246,8 +9249,12 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
 3. **The LiteLLM config** — regenerate it so no `reasoning` key is left to
    compete with the shim:
    `ccrc models litellm gpt`
+   This keeps the operator's current hand-maintained config at
+   `~/.handoff/litellm-config.yaml.prev` before writing the generated one —
+   nothing hand-edited there is lost, only superseded.
 
-4. **The wrappers** — only after step 1 is verified:
+4. **The wrappers** — only after step 1 has shown the eight-key block in
+   `~/.claude-gpt/settings.json`, never before:
    ```
    diff -u ~/.local/bin/ccgpt infra/handoff/ccgpt
    install -m 755 infra/handoff/ccgpt ~/.local/bin/ccgpt
@@ -9256,6 +9263,10 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
    install -m 755 infra/handoff/claude-glm ~/.local/bin/claude-glm
    cmp ~/.local/bin/claude-glm infra/handoff/claude-glm && echo installed
    ```
+   `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` are not part of the eight-key
+   block the class registry materialises — they ride in `ccgpt` itself (the
+   wrapper), exported the same way before and after this install, and stay
+   there. Nothing in this migration moves them into `settings.json`.
 
 5. **Restart the proxies** so the running ones are the installed ones:
    `ccgpt stop` (the next gpt session starts both again).
@@ -9263,8 +9274,11 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
 `ccgpt-usage` is untouched by this change. `~/.local/bin/gpt` is a symlink to
 `ccgpt` and needs nothing.
 
-Rollback for any of the three: `git show main:infra/handoff/<f> > /tmp/<f> &&
-install -m 755 /tmp/<f> ~/.local/bin/<f>`, then `ccgpt stop`.
+Rollback for any of the three copied files: `git show main:infra/handoff/<f> >
+/tmp/<f> && install -m 755 /tmp/<f> ~/.local/bin/<f>`, then `ccgpt stop`. For
+`~/.handoff/litellm-config.yaml`, restore the pre-migration bytes from
+`~/.handoff/litellm-config.yaml.prev` by hand — it is not one of the three
+files this task copies, and nothing here overwrites it a second time.
 ```
 
 - [ ] **Step 8: Commit (monorepo)**
@@ -9294,7 +9308,7 @@ MSG
 ```bash
 cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && git log --oneline main..feat/ccgpt-effort-shim && git status --porcelain
 ```
-Expected: four commits (Tasks 13, 14, 15, 16) and a clean status. **Do not push and do not open a PR** — the monorepo branch lands with the ccrc-pwa one, in the order the runbook states.
+Expected (measured a9a2416, not the original four): SEVEN commits, not four — `65d402f` (Task 13), `b3034ff` (Task 14), `5f8815f` (Task 15), `5ece9b5`/`70f1cb4` (Task 13's and Tasks 14+15's fix rounds, review-driven), `e12db20` (Task 16a), `a9a2416` (this task) — and a clean status. The plan names four because Tasks 13–15 land clean in this telling; a real run's fix rounds and Task 16a's timeout port are additional commits on the same branch, ahead of this one. **Do not push and do not open a PR** — the monorepo branch lands with the ccrc-pwa one, in the order the runbook states.
 
 ---
 
