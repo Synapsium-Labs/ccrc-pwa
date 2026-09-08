@@ -178,6 +178,102 @@ describe('_accept_first_run_prompts (wiring, not just the classifier)', () => {
   });
 });
 
+// The incident (measured 2026-09-08): Claude Code 2.1.263 changed the
+// trust-folder dialog's option order, putting "No, exit" first — cursor on
+// it. `_accept_first_run_prompts` used to answer that gate with a bare
+// Enter keyed to a hardcoded "the default is Yes" assumption, which now
+// selects "No, exit" and exits the session (five fleet sessions orphaned
+// that day). The fix is a MECHANISM — `_answer_two_option_dialog` reads
+// which line carries the cursor glyph `❯` rather than assuming either
+// ordinal default — used for both the trust gate and the Bypass-Permissions
+// gate (same class of dialog, same failure mode: `_accept_first_run_prompts`
+// header comment above `_answer_two_option_dialog` in ccd/ccd calls the
+// pre-fix Bypass keystroke "the highest-stakes gate", since a bare Enter
+// there already hit "1. No, exit"). These fixtures pin BOTH option-order
+// layouts for BOTH gates, so a regression to either hardcoded ordinal shows
+// up here regardless of which dialog changed order next.
+describe('_accept_first_run_prompts / _answer_two_option_dialog: cursor-line reading, not an assumed default', () => {
+  // Like `acceptRc` above, but capture-pane hands back the fixture pane
+  // exactly once and a healthy ready marker on every call after — the same
+  // "prove which branch fired without looping the full window" idiom the
+  // Bypass-gate test above uses, pulled into a helper because the four cases
+  // below all need it.
+  const acceptGateOnce = (paneText: string): { rc: number; calls: string[] } => {
+    const out = h.sh(
+      `sleep() { :; };
+       tmux() { case "$1" in
+         capture-pane)
+           n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0)
+           echo $((n+1)) > "$HOME/pane-calls"
+           if [[ "$n" -lt 1 ]]; then printf '%s' "$PANE_TEXT"; else printf '%s' '? for shortcuts'; fi
+           ;;
+         *) echo "tmux $*" >> "$HOME/ccd-calls" ;;
+       esac; };
+       _accept_first_run_prompts cc-test 0; echo "rc=$?"`,
+      { PANE_TEXT: paneText },
+    );
+    return { rc: Number(/rc=(\d+)/.exec(out)![1]), calls: h.calls() };
+  };
+
+  // The pane pasted verbatim in the incident report: cursor (❯) on "No, exit".
+  const TRUST_NO_EXIT_FIRST =
+    ' Accessing workspace:\n' +
+    ' /srv/projects/example/worktrees/brisk-cove\n' +
+    ' Quick safety check: Is this a project you created or one you trust? (…)\n' +
+    " Claude Code'll be able to read, edit, and execute files here.\n" +
+    ' Security guide\n' +
+    ' ❯ No, exit\n' +
+    '   Yes, I trust this folder\n' +
+    ' Enter to confirm · Esc to cancel';
+
+  // The older layout this codebase's now-corrected comment used to assume
+  // was the ONLY one: cursor on "Yes, I trust this folder".
+  const TRUST_YES_FIRST =
+    ' Accessing workspace:\n' +
+    ' /srv/projects/example/worktrees/brisk-cove\n' +
+    ' Quick safety check: Is this a project you created or one you trust? (…)\n' +
+    " Claude Code'll be able to read, edit, and execute files here.\n" +
+    ' Security guide\n' +
+    ' ❯ Yes, I trust this folder\n' +
+    '   No, exit\n' +
+    ' Enter to confirm · Esc to cancel';
+
+  const BYPASS_NO_EXIT_FIRST =
+    'Bypass Permissions mode\n ❯ No, exit\n   Yes, I accept\nEnter to confirm';
+  const BYPASS_YES_FIRST =
+    'Bypass Permissions mode\n ❯ Yes, I accept\n   No, exit\nEnter to confirm';
+
+  it('trust dialog, cursor on "No, exit" (2.1.263 layout): moves Down before Enter', () => {
+    const { rc, calls } = acceptGateOnce(TRUST_NO_EXIT_FIRST);
+    expect(rc).toBe(0);
+    const downIdx = calls.findIndex((c) => c.includes('Down'));
+    expect(downIdx).toBeGreaterThanOrEqual(0);
+    expect(calls[downIdx + 1]).toContain('Enter');
+  });
+
+  it('trust dialog, cursor already on "Yes, I trust this folder": sends a bare Enter, no Down', () => {
+    const { rc, calls } = acceptGateOnce(TRUST_YES_FIRST);
+    expect(rc).toBe(0);
+    expect(calls.some((c) => c.includes('Down'))).toBe(false);
+    expect(calls.some((c) => c.includes('Enter'))).toBe(true);
+  });
+
+  it('Bypass-Permissions dialog, cursor on "No, exit": moves Down before Enter', () => {
+    const { rc, calls } = acceptGateOnce(BYPASS_NO_EXIT_FIRST);
+    expect(rc).toBe(0);
+    const downIdx = calls.findIndex((c) => c.includes('Down'));
+    expect(downIdx).toBeGreaterThanOrEqual(0);
+    expect(calls[downIdx + 1]).toContain('Enter');
+  });
+
+  it('Bypass-Permissions dialog, cursor already on "Yes, I accept": sends a bare Enter, no Down', () => {
+    const { rc, calls } = acceptGateOnce(BYPASS_YES_FIRST);
+    expect(rc).toBe(0);
+    expect(calls.some((c) => c.includes('Down'))).toBe(false);
+    expect(calls.some((c) => c.includes('Enter'))).toBe(true);
+  });
+});
+
 describe('_spawn (wiring): skips /effort injection exactly when login-gated', () => {
   const spawnAgainstPane = (paneText: string): string[] => {
     h.sh(

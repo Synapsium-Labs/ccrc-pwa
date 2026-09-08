@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0c96a89c40eb2726c1729d89316fcc726d967eebf361f553f8ed8fa26bc9fd4a
+# ccrc:generated 1 sha256=fcd4339e38196e6af420aa40a865362bb7b1b4fcdc34ef4dbf1e9b0e9664ba2b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12198,12 +12198,42 @@ _pane_login_screen() {
   grep -Eq 'Select login method|Invalid API key|Please run /login' <<<"$1"
 }
 
+# Reads which line of a two-option TUI dialog CARRIES THE CURSOR and answers
+# accordingly — the mechanism the trust-folder and Bypass-Permissions gates
+# both need, because neither dialog's ordinal default is stable: Claude Code
+# 2.1.263 (measured 2026-09-08) renders the trust prompt with "No, exit"
+# FIRST, cursor on it, where an older build put "Yes, I trust this folder"
+# first instead. A bare Enter keyed to either ordinal is a coin flip; reading
+# the cursor line is not. $3 is the substring that identifies the dialog's
+# AFFIRMATIVE option's own line (e.g. "trust this folder", "Yes, I accept") —
+# matched against whichever line carries the cursor glyph `❯` (the LAST such
+# line, if capture-pane's scrollback holds more than one — same "freshest
+# wins" rule `_pane_box_draft` uses above), or a bare `>` at line start as a
+# fallback for a terminal that renders the glyph differently. Cursor-on-
+# affirmative → Enter; anything else (cursor on the other option, or no
+# cursor line found at all) → Down, THEN Enter — the safe read of "can't
+# tell" is "assume the negative default", exactly the failure this replaces.
+_answer_two_option_dialog() {   # pane tmuxname affirmative-substring
+  local pane="$1" t="$2" affirmative="$3" cursor_line
+  cursor_line=$(printf '%s\n' "$pane" | LC_ALL=C grep -F $'\xe2\x9d\xaf' | tail -1)
+  [[ -z "$cursor_line" ]] && cursor_line=$(printf '%s\n' "$pane" | grep -E '^[[:space:]]*>' | tail -1)
+  if [[ -n "$cursor_line" && "$cursor_line" == *"$affirmative"* ]]; then
+    tmux send-keys -t "$t" Enter
+  else
+    tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter
+  fi
+}
+
 _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, then CONFIRM the main TUI is up.
   # Returns as soon as "/rc active" (or another live marker) appears. Gates, order-agnostic,
   # each needing a DIFFERENT keystroke:
-  #   • trust-folder prompt  — default is "1. Yes, I trust this folder"  → just Enter
-  #   • Bypass-Permissions warning — default is "1. No, exit" (!), accept is "2. Yes, I accept"
-  #       → must move Down to option 2, THEN Enter. (Sending a bare Enter here would EXIT.)
+  #   • trust-folder prompt — layout order is NOT stable across Claude Code
+  #       versions (2.1.263 flipped it, putting "No, exit" first); answered by
+  #       `_answer_two_option_dialog`, which reads which line CARRIES THE
+  #       CURSOR rather than trusting either ordinal default.
+  #   • Bypass-Permissions warning — same mechanism, same helper: the cursor
+  #       line decides Enter vs Down-then-Enter. (A bare Enter on the wrong
+  #       line here would EXIT.)
   #   • (2.1.198+) big-transcript resume gate "Resume from summary (recommended)" → pick
   #       "2. Resume full session as-is" (Down, Enter) so nothing gets silently compacted.
   #   • (2.1.198+) per-session "Try the new fullscreen renderer?" opt-in → pick "2. Not now"
@@ -12282,10 +12312,10 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
       tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
     fi
     if echo "$pane" | grep -q "Bypass Permissions mode"; then
-      tmux send-keys -t "$t" Down; sleep 1; tmux send-keys -t "$t" Enter; sleep 2; continue
+      _answer_two_option_dialog "$pane" "$t" "Yes, I accept"; sleep 2; continue
     fi
     if echo "$pane" | grep -q "trust this folder"; then
-      tmux send-keys -t "$t" Enter; sleep 2; continue
+      _answer_two_option_dialog "$pane" "$t" "trust this folder"; sleep 2; continue
     fi
     # An auth screen (expired key, logged out, or the login-method menu) means this spawn is
     # stuck on a human step. No keystroke here could be right, so stop polling and report —
