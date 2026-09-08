@@ -16,7 +16,7 @@ const session = (id: string): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
+  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
   started: true, spawnState: null,
 });
 
@@ -519,6 +519,46 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       { stoppedBy: { at: 'soon', surface: 'pwa' } },
       { swapBlocked: { at: 1785299000000 } },               // no `reason`
       { swapBlocked: { at: 1785299000000, reason: 7 } },
+    ]) {
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+      expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('revives `stranded` — absent degrades to null, and the CACHE STILL REVIVES', async () => {
+    // Every state-cache.json on disk the day this ships lacks the key, and a
+    // rejection here would empty degraded mode at exactly the moment it is the
+    // only data there is.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const snap = await loadSnapshot(cachePath);
+    expect(snap, 'an older cache must still revive').not.toBeNull();
+    const s = snap?.sessions[0];
+    expect(s?.stranded).toBeNull();
+    // Present as a KEY, not merely undefined — `undefined !== null`.
+    expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(['stranded']));
+  });
+
+  it('round-trips a populated stranded axis', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    const populated: FleetSession = {
+      ...session('claude-quiet-basin'),
+      stranded: { at: 1785299000000, reason: 'claude:pool=pool-b claude-a:limit' },
+    };
+    await saveSnapshot([populated], cachePath);
+    expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+  });
+
+  it('rejects a malformed stranded rather than laundering it into null', async () => {
+    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote
+    // and it IS the display, so there is no vocabulary to degrade onto — and
+    // null would read "no strand recorded" over a row a supervisor flagged.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    for (const bad of [
+      { stranded: 'nowhere' },
+      { stranded: { at: 1785299000000 } },                  // no `reason`
+      { stranded: { at: 1785299000000, reason: 7 } },
+      { stranded: { reason: 'nowhere' } },                  // no `at`
     ]) {
       writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
       expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();

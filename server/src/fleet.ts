@@ -481,6 +481,12 @@ export async function assembleFleet(
       swapBlocked: r.swapBlocked === null
         ? null
         : { at: r.swapBlocked.at * 1000, reason: r.swapBlocked.reason },
+      // Same seconds→MS conversion, at THIS seam only, like `stoppedBy`,
+      // `swapBlocked` and `substrate`. An unreadable marker's fail-shut
+      // `{at: 0}` rides through as 0 — not a real 1970 stamp.
+      stranded: r.stranded === null
+        ? null
+        : { at: r.stranded.at * 1000, reason: r.stranded.reason },
       // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
       // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
       // through as 0 (not a real 1970 stamp — the PWA renders text-only when

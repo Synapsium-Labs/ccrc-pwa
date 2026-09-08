@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { SUBSTRATE_UNREADABLE } from '../src/registry.js';
+import { STRANDED_UNREADABLE, SUBSTRATE_UNREADABLE } from '../src/registry.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
@@ -127,6 +127,33 @@ describe('assembleFleet ships the lifecycle', () => {
     const s = await one({ stopped: '', started: '1' }, false);
     expect(s.lifecycle).toBe('unmeasurable');
     expect(s.stoppedBy).toBeNull();
+  });
+
+  it('carries the strand marker onto the wire in epoch MS, with its reason verbatim', async () => {
+    // Seconds on disk (registry-native, the `swapblocked` shape), MS on the
+    // wire — the conversion happens at THIS seam only, like `stoppedBy` and
+    // `swapBlocked` beside it. The reason is `_strand_why`'s sentence and it IS
+    // the display, so it rides untouched.
+    const s = await one({ stranded: `${NOW_SEC - 300} claude:pool=pool-b claude-a:limit` }, false);
+    expect(s.stranded).toEqual({
+      at: (NOW_SEC - 300) * 1000, reason: 'claude:pool=pool-b claude-a:limit',
+    });
+  });
+
+  it('leaves stranded null for a row with no marker, and never undefined', async () => {
+    const s = await one({ started: '1' }, true);
+    expect(s.stranded).toBeNull();
+    expect(Object.keys(s)).toEqual(expect.arrayContaining(['stranded']));
+  });
+
+  it('a LISTED but unreadable strand marker reaches the wire at 0 with the sentence, never as null', async () => {
+    // The fail-shut arm, end to end: `at: 0` is the "listed but unreadable"
+    // degrade and renderers show the text without fabricating a 1970 stamp.
+    const { cfg, tmux } = fixture({ stranded: `${NOW_SEC - 300} nowhere` }, false);
+    const blind = degradedReadIO((p) => p.endsWith(`${ID}.stranded`));
+    const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
+    expect(fleet.find((s) => s.id === ID)!.stranded)
+      .toEqual({ at: 0, reason: STRANDED_UNREADABLE });
   });
 });
 

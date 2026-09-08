@@ -192,6 +192,25 @@ export interface FleetSession {
    *  leaves the refusal banner standing on the row it just revived teaches the
    *  operator to ignore banners. */
   readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
+
+  /** The supervisor's standing "nowhere to move this" record —
+   *  `$REG/<id>.stranded`, written by `_strand_mark` when the pane is
+   *  hard-blocked and no account in the project's pool can take it (spec §5.8,
+   *  ruling 6). Epoch MS (converted from the registry's seconds in `fleet.ts`,
+   *  like `swapBlocked`) and the reason VERBATIM — the reason is the display on
+   *  every surface, never parsed. Null when no strand stands.
+   *
+   *  AN AXIS, NOT A STATE, on `substrate`'s terms: a new FIELD beside
+   *  `status`/`bucket`/`lifecycle`, never a member of any of them. `at: 0` is
+   *  the "marker listed but unreadable" degrade from the registry read;
+   *  renderers show the text without fabricating a 1970 timestamp.
+   *
+   *  `reviveFleetSession` below: absent → null (an older snapshot predates the
+   *  axis), present-but-malformed → reject the WHOLE session — the
+   *  `swapBlocked` contract, because free text has no vocabulary to degrade
+   *  onto and "no strand recorded" over a flagged row is the direction that
+   *  makes the loud cell silent. */
+  readonly stranded: { readonly at: number; readonly reason: string } | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -1996,6 +2015,17 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
   return { at: reqNum(s, 'at'), text: reqStr(s, 'text') };
 };
 
+/** `reviveSwapBlocked`'s contract exactly, for the same reason: the reason is
+ *  free prose the supervisor wrote and it IS the display, so a malformed value
+ *  has no vocabulary to degrade onto. Absent → null (an older snapshot
+ *  predates the axis); present-but-malformed rejects the session. */
+const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
+};
+
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
 
@@ -2199,6 +2229,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       lifecycle: lifecycleRaw,
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
+      stranded: reviveStranded(o, 'stranded'),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light

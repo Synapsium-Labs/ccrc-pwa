@@ -860,6 +860,7 @@ git commit -m "feat(pools): the server reads the project tags off the listing it
 
 ---
 
+### Task 3 — DONE 2026-09-08 (5/5 mutations red)
 ### Task 3: `stranded` — fail-shut on the registry, additive on the wire
 
 **Files:**

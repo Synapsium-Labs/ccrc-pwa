@@ -186,6 +186,24 @@ export interface SessionRecord {
   /** `$REG/<id>.swapblocked` — `<epoch> <reason>`, the durable half of §2.4's
    *  refusal (M9: a notify banner with no socket open is gone). */
   swapBlocked: { at: number; reason: string } | null;
+
+  /**
+   * `$REG/<id>.stranded` — the supervisor's record that this session is
+   * hard-blocked and NO account in its pool can take it (spec §5.8, ruling 6).
+   * `<epoch-seconds> <reason>`, the `swapblocked` shape, written by
+   * `_strand_mark` and removed by `_strand_clear`.
+   *
+   * AN AXIS, NOT A STATE: the row keeps whatever `status`/`bucket` said; this
+   * says the swapper has nowhere to move it to. Distinct from `swapBlocked`,
+   * which records a REFUSAL of a swap that was attempted — a strand is the
+   * absence of any candidate to attempt.
+   *
+   * FAIL-SHUT, and read through `fieldMeasured` for it: `at: 0` with
+   * {@link STRANDED_UNREADABLE} when the marker is LISTED and its bytes did
+   * not come back. "Not stranded" over a flagged row is the destructive
+   * direction — this cell is the loud one ruling 6 exists to produce.
+   */
+  stranded: { at: number; reason: string } | null;
   /** `$REG/<id>.spawn` — `<epoch> <rc>`, written by `_spawn` ALWAYS, before
    *  returning (§3.1). Read here so the verdict a supervisor raised in its own
    *  process is a fact this side of the seam can see; no wire field carries it
@@ -306,6 +324,25 @@ export const HOLD_NO_REASON = '<hold file is empty — no program named>';
  * ignore.
  */
 export const SWAP_BLOCKED_NO_REASON = '<swap refusal recorded no reason>';
+
+/**
+ * The reason a strand carries when `$REG/<id>.stranded` records an epoch and
+ * nothing after it. Same ruling as `SWAP_BLOCKED_NO_REASON`: `_strand_mark`
+ * always writes a reason (`_strand_why` synthesizes one), so the only ways in
+ * are the residual empty-field routes `BranchEvidence`'s `'empty'` rung sets
+ * out — and a strand cell with nothing in its tooltip is visible enough to
+ * alarm and empty enough to ignore.
+ */
+export const STRANDED_NO_REASON = '<strand recorded no reason>';
+
+/**
+ * The reason a strand carries when the marker is LISTED in the registry
+ * directory but its bytes could not be read. `SUBSTRATE_UNREADABLE`'s ruling
+ * applied to ruling 6's marker: presence comes from the LISTING, never from a
+ * non-null read, because "no strand recorded" is what every surface renders as
+ * a healthy fleet.
+ */
+export const STRANDED_UNREADABLE = '<strand marker unreadable>';
 
 /**
  * The reason a substrate fault carries when `$REG/<id>.substrate` is listed in
@@ -509,7 +546,7 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -522,6 +559,7 @@ async function buildRecord(
     fieldMeasured(io, cfg.registryDir, id, 'stopped'), fieldMeasured(io, cfg.registryDir, id, 'supervised'),
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
+    fieldMeasured(io, cfg.registryDir, id, 'stranded'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -588,6 +626,7 @@ async function buildRecord(
 
   const holdListed = names.includes(`${id}.hold`);
   const substrateListed = names.includes(`${id}.substrate`);
+  const strandedListed = names.includes(`${id}.stranded`);
 
   // §4.3's three-valued read, over the three fields the lifecycle classifier
   // consumes. Same evidence as the identity ladder above: `names` is the
@@ -753,6 +792,25 @@ async function buildRecord(
     swapBlocked: swapStamp === null
       ? null
       : { at: swapStamp.at, reason: swapStamp.rest === '' ? SWAP_BLOCKED_NO_REASON : swapStamp.rest },
+    // `.substrate`'s ladder, with `swapBlocked`'s empty-reason ruling: presence
+    // from the LISTING (a strand blanked by a dropped read re-enables nothing,
+    // but it does hide the one cell ruling 6 exists to show), a measured
+    // `absent` reads null DIRECTLY — `_strand_clear` removes this marker on
+    // every healthy tick, so a marker listed at the top of a read and cleared
+    // before its own field read is the ORDINARY recovery, not a fault (D-113's
+    // argument, applied to a marker that moves far more often than
+    // `.substrate`) — and a stampless file keeps its whole text at `at: 0`
+    // rather than losing the one sentence a maintainer could act on.
+    stranded: strandedRead.ok
+      ? (strandedRead.content === ''
+          ? { at: 0, reason: STRANDED_NO_REASON }
+          : (() => {
+              const p = packedStamp(strandedRead.content);
+              return p === null
+                ? { at: 0, reason: strandedRead.content }
+                : { at: p.at, reason: p.rest === '' ? STRANDED_NO_REASON : p.rest };
+            })())
+      : (strandedRead.reason === 'absent' ? null : (strandedListed ? { at: 0, reason: STRANDED_UNREADABLE } : null)),
     // An rc that does not parse is not a verdict. `_spawn` writes the stamp
     // ALWAYS, before returning, so an unparseable one means the stamp never
     // landed whole, not an ambiguous outcome — and `rc: NaN` on the wire

@@ -7,6 +7,7 @@ import {
   readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
   SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
+  STRANDED_NO_REASON, STRANDED_UNREADABLE,
 } from '../src/registry.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -615,10 +616,10 @@ describe('readSessionRecord', () => {
 
     expect(readdirCalls).toBe(1);
     // 17 + D3's four stamps (stopped, supervised, swapblocked, spawn) + the
-    // substrate marker (D-310 (was D-B8-14)) — the substrate file joined the sweep. The
-    // number is pinned rather than derived because it IS the remote-mode cost:
-    // one round trip each, per session, per 2-second tick.
-    expect(fieldReads).toHaveLength(22);
+    // substrate marker (D-310 (was D-B8-14)) + the strand marker (account
+    // pools, wave 3) — the number is pinned rather than derived because it IS
+    // the remote-mode cost: one round trip each, per session, per 2-second tick.
+    expect(fieldReads).toHaveLength(23);
     expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });
 
@@ -1115,6 +1116,57 @@ describe('the lifecycle stamps (D3)', () => {
       expect(r.stopped, JSON.stringify(bad)).toBeNull();
       expect(r.lifecycleUnmeasured, JSON.stringify(bad)).toEqual(['stopped']);
     }
+  });
+
+  it('reads a strand marker, splitting epoch from reason', () => {
+    seed(reg, 'demo-quiet-basin', {
+      stranded: '1785299000 claude:pool=pool-b claude-a:limit',
+    });
+    return read().then((r) => {
+      expect(r.stranded).toEqual({
+        at: 1785299000, reason: 'claude:pool=pool-b claude-a:limit',
+      });
+    });
+  });
+
+  it('gives a strand with no reason a sentence, never an empty display string', async () => {
+    // The same ruling as SWAP_BLOCKED_NO_REASON and for the same reason: the
+    // reason string IS the display on the fleet card, and `reason: ''` renders
+    // as a cell visible enough to alarm and empty enough to ignore.
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000' });
+    expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000    ' });
+    expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
+  });
+
+  it('a LISTED but unreadable strand marker fails SHUT — never null', async () => {
+    // "Not stranded" over a flagged row is the destructive direction (spec
+    // §5.8.3): the cell is the loud one, and a misread that blanks it teaches
+    // the operator that the fleet is fine while a session waits on nobody.
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
+    const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
+    expect(r.stranded).toEqual({ at: 0, reason: STRANDED_UNREADABLE });
+  });
+
+  it('an unreadable read for a marker that is NOT in the listing is null, not a fabricated strand', async () => {
+    // The other half of the same ladder, and the reason presence comes from the
+    // LISTING: a dropped agent-WS round trip on a session that has no
+    // `.stranded` at all must not mint one.
+    const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
+    expect(r.stranded).toBeNull();
+  });
+
+  it('a marker cleared between the listing and its own read is null — a proven ENOENT is a proven clear', async () => {
+    // `_strand_clear` runs on EVERY healthy tick (spec §5.5.4 step 3), so this
+    // race is routine, not exotic — D-113's argument for `.substrate`, applied
+    // to a marker that is removed far more often.
+    seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
+    const r = await read(absentField('demo-quiet-basin', 'stranded'));
+    expect(r.stranded).toBeNull();
+  });
+
+  it('a session with no strand marker reads null', async () => {
+    expect((await read()).stranded).toBeNull();
   });
 });
 
