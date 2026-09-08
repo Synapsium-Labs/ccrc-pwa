@@ -437,6 +437,7 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 
 ---
 
+### Task 2 — DONE 2026-09-08 (6/6 plan mutations red; row 20a 4 red + 1 documented no-op, D-2017)
 ### Task 2: `server/src/pools.ts` — the measured reader, four states in, four states out
 
 **Files:**
@@ -462,7 +463,7 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 
 **Mutation table:**
 - Row 20 — `project-pools-read.test.ts`. Goes RED when the `rootNames.includes(POOLS_DIR_NAME)` gate is deleted (absent directory would answer `unreadable` instead of `untagged`), when the null-`readdir` arm returns an empty map instead of `{listed:false}` (unlistable would answer `untagged` — the tag silently lifted), when the dot-leading skip is removed, or when a mid-read `absent` is treated as anything but a skip.
-- Row 20a (coordinator ruling 1) — `project-pools-read.test.ts`'s `a tag padded to 64 bytes is malformed, and 63 still strips to a name`. Goes RED three separate ways, which is why it is one case and not three: DELETE the cap entirely and the 64-byte tag strips back to `pool-a` (`tagged`, disagreeing with `ccd`); WEAKEN it to `> 64` and the same case answers `tagged` while the 65-byte input a looser test would have used still passes (D-2010 — the mutant a `> 64`-shaped test cannot see); MOVE it below the strip and the padding is gone before it is measured, so the length check reads 6. The 63-byte half is the anti-mutant: a cap written `>= 63`, or one applied to the STRIPPED value, takes that arm to `malformed` and reds too. The `\0` assertion pins the second arm on its own — delete `.includes('\0')` and only that expectation moves.
+- Row 20a (coordinator ruling 1) — `project-pools-read.test.ts`'s `a tag padded to 64 bytes is malformed, and 63 still strips to a name`. Goes RED three separate ways, which is why it is one case and not three: DELETE the cap entirely and the 64-byte tag strips back to `pool-a` (`tagged`, disagreeing with `ccd`); WEAKEN it to `> 64` and the same case answers `tagged` while the 65-byte input a looser test would have used still passes (D-2010 — the mutant a `> 64`-shaped test cannot see); MOVE it below the strip and the padding is gone before it is measured, so the length check reads 6. The 63-byte half is the anti-mutant: a cap written `>= 63`, or one applied to the STRIPPED value, takes that arm to `malformed` and reds too. **The `\0` arm is NOT pinned and cannot be** — measured, and recorded as D-2017 rather than dressed up: delete `.includes('\0')` and all 14 cases stay green, because `POOL_NAME_RE` is anchored and its class excludes `\0`, so every NUL-bearing content is already `malformed` by the grammar. Four mutations measured red for this row (delete the cap, `> 64`, `>= 63`, cap below the strip); the fifth is a documented no-op with a void condition, not a row.
 
 **LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:96`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
 
@@ -570,13 +571,28 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // `ccd` on 65 and disagreeing on exactly the boundary (D-2010).
     tag('demo', 'pool-a' + ' '.repeat(58));        // 6 + 58 = 64
     tag('quiet-basin', 'pool-b' + ' '.repeat(57)); // 6 + 57 = 63
-    // And a NUL inside the first 64 bytes, which is the cap's other arm: the
-    // shell read meets its delimiter and returns 0, so `malformed` there too.
+    // THE NUL, AND WHAT THIS ASSERTION DOES NOT MEASURE — said here because a
+    // green expectation that cannot fail is worse than no expectation at all,
+    // and this one cannot. `ccd` needs the NUL arm: `read -d ''` STOPS at the
+    // delimiter, so `pool-a\0junk` would otherwise yield the valid prefix
+    // `pool-a` and place on a pool the file does not name. The SERVER cannot
+    // reach that state — it holds the whole string — and `POOL_NAME_RE`
+    // (`/^[a-z][a-z0-9-]{0,31}$/`, anchored, and its class excludes `\0`) already
+    // answers `malformed` for every NUL-bearing content. `\s` does not include
+    // `\0` either, so the strip cannot remove one. MEASURED: delete
+    // `.includes('\0')` from the mirror and this whole file stays green.
+    // The arm is kept because ruling 1 requires it and because it states the
+    // parity at the site, but it is a DOCUMENTED NO-OP, not a pinned guard —
+    // the same treatment C1's M19 got rather than a case written to look red.
+    // VOID (i.e. it becomes load-bearing, and this comment becomes wrong) if
+    // `POOL_NAME_RE` ever admits a NUL, or if the cap is ever applied to the
+    // STRIPPED value, or if this reader ever stops holding the whole string.
     tag('acct-a-demo', 'pool-a\0pool-b');
     const read = await readProjectPools(localIO, cfg(), await rootNames());
     expect(poolFor(read, 'demo')).toEqual({ state: 'malformed' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
-    expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'malformed' });
+    expect(poolFor(read, 'acct-a-demo'),
+      'malformed — but by the name grammar, not by the cap: see above').toEqual({ state: 'malformed' });
   });
 
   it('two tokens, uppercase and an empty file are all malformed — never untagged', async () => {
@@ -3498,3 +3514,24 @@ block above.
   a mirror is only as good as the SIDE-BY-SIDE, and I had quoted `ccd`'s expression without running
   it. Row 20a's 63/64 pair is one byte apart on purpose — a case built on a 65-byte input passes
   under both spellings and cannot see this mutant at all.
+- **D-2017 (2026-09-08)** (Task 2) — **ruling 1's NUL half is a no-op on the server side, and the
+  first version of its test case hid that.** The ruling said "treat an embedded NUL the same", and
+  the mirror does: `read.content.includes('\0')` answers `malformed`. But `POOL_NAME_RE` is
+  `/^[a-z][a-z0-9-]{0,31}$/` — anchored, no `m` flag, and its character class excludes `\0` — and
+  JS `\s` does not include `\0` either, so the strip cannot remove one. No NUL-bearing content can
+  reach `tagged` by any path. **Measured: delete `.includes('\0')` and all 14 cases stay green.**
+  The case I first wrote asserted `malformed` for `pool-a\0pool-b` and read as if it pinned the arm;
+  it was passing on the grammar. That is the ornamental-assertion class again, and the three prior
+  instances I OPENED rather than recalled are `ccd-auto-swap-pool.test.ts`'s own D-1921 ("could not
+  have failed") and D-1955 ("left all 39 cases GREEN. Measured."), plus W3-2's `:570`/`:571` in that
+  same file. Written, again, by the session doing the triage of the previous one — which is the part
+  worth recording: knowing the class by name did not stop me writing one.
+  **Why the arm stays anyway.** It is not dead weight on the OTHER side of the mirror: `ccd`'s
+  `read -r -d '' -n 64` STOPS at the delimiter, so without its NUL handling `pool-a\0junk` yields the
+  valid prefix `pool-a` and places on a pool the file does not name — the "partial read leaving a
+  valid prefix" hazard `ccd`'s own comment parks. The server holds the whole string and cannot reach
+  that state, so the arm here states the parity at the site rather than enforcing anything. Kept,
+  labelled at the assertion, with the VOID condition written out: it becomes load-bearing if
+  `POOL_NAME_RE` ever admits a NUL, if the cap is ever applied to the STRIPPED value, or if this
+  reader ever stops holding the whole string. Same treatment as C1's M19 — document the no-op, never
+  write a case that cannot fail.
