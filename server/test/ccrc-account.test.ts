@@ -19,7 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -262,5 +262,334 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
     // takes `P.connect[0]` when `--method` is absent), so it is compared as a
     // sequence and never as a set.
     expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('login');
+  });
+});
+
+/** A roster on the fixture box, plus the accounts.sh projection ccd and the
+ *  four installers read. Written through the real generator so the fixture can
+ *  never disagree with what a deployed box would have. */
+function seedBoxRoster(home: string, roster: unknown): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify(roster, null, 2)}\n`);
+  const g = spawnSync('node',
+    [join(REPO, 'deploy', 'gen-accounts.mjs'), join(home, '.ccrc', 'accounts.json')],
+    { encoding: 'utf8' });
+  expect(g.status, `gen-accounts refused the fixture roster: ${g.stderr}`).toBe(0);
+  writeFileSync(join(home, '.ccrc', 'accounts.sh'), g.stdout);
+}
+
+/** The roster this cluster's fixtures use: one upstream, one generated token
+ *  lane, one external launcher. Labels are the blessed fixture vocabulary. */
+const FIXTURE_ROSTER = {
+  version: 1,
+  accounts: [
+    {
+      id: 'claude', label: 'team·max', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+    },
+    {
+      id: 'claude-a', label: 'alt·max', configDirSuffix: '.claude-a',
+      // `-oauth`, not `-anthropic`: this is the name `add` derives for an OAuth
+      // lane and the one every anthropic lane on the fleet carries
+      // (`server/test/helpers.ts:69` is the same string for the same id).
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' },
+      homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    },
+    {
+      id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
+      exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none',
+    },
+  ],
+};
+
+/** An id-shaped executable in `~/.local/bin`, with whatever body the case is
+ *  about. THE ONE LAUNCHER-PLANTER IN THIS FILE, and it takes a BODY rather than
+ *  a config-dir suffix on purpose: the cases divide on what the file CONTAINS —
+ *  a ccrc-shaped wrapper here, a compiled blob with no shebang for `declare`
+ *  (Task 27), somebody else's `#!/bin/sh` for `remove` (Task 32) — and a helper
+ *  that could only write one of those shapes would be re-declared under the same
+ *  name by the first task that needed another, which is a `SyntaxError` in a
+ *  single-file suite rather than a difference of opinion.
+ *
+ *  Returns the path, so a case can `chmod`, `symlink` or stat it without
+ *  rebuilding the join. Tasks 27-32 all call this one. */
+function plantLauncher(home: string, name: string, body = 'exit 0\n'): string {
+  const p = join(home, '.local', 'bin', name);
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, body, { mode: 0o755 });
+  return p;
+}
+
+/** The body of a ccrc-SHAPED launcher: a script (`#!`) that exports
+ *  CLAUDE_CONFIG_DIR, which is what doctor's candidate rule
+ *  (`_wrap_is_script` + `_wrap_declares_config_dir`) recognises and what
+ *  `candidates` must therefore offer. */
+const wrapperBody = (suffix: string): string =>
+  `#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/${suffix}"\n`
+  + 'exec "$HOME/.local/bin/claude" "$@"\n';
+
+describe('ccrc account roster: the file, gated by the validator', () => {
+  it('answers the roster verbatim in content — including fields the validator drops', () => {
+    // `rosterFromJson`'s return literal (shared/roster-json.mjs:387-390) carries
+    // eight fields and drops the rest. An answer built from IT would lose
+    // `hidden`, `provider`, `baseUrl` and `models` — all four VALIDATED by
+    // Task 4 and none of them returned — the adapter-narrowing rule's exact
+    // shape. This case is the pin: `hidden` is a field the validator does not
+    // return, so it can only be in the answer if the answer came from the FILE.
+    const home = box('ccrc-account-roster-');
+    const roster = {
+      version: 1,
+      accounts: [
+        { ...FIXTURE_ROSTER.accounts[0]!, hidden: true },
+        FIXTURE_ROSTER.accounts[1]!,
+        FIXTURE_ROSTER.accounts[2]!,
+      ],
+    };
+    seedBoxRoster(home, roster);
+    const r = run(home, ['account', 'roster']);
+    expect(r.code).toBe(0);
+    const j = oneObject(r);
+    expect(j['ok']).toBe(true);
+    expect(j['roster']).toEqual(roster);
+  });
+
+  it('a roster that does not validate is exit 1, and carries the validator\'s own remedy', () => {
+    const home = box('ccrc-account-roster-bad-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.json'),
+      JSON.stringify({ version: 1, accounts: [{ ...FIXTURE_ROSTER.accounts[0]!, hue: 'puce' }] }));
+    const r = run(home, ['account', 'roster']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('roster-invalid');
+    // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
+    expect(String(j['detail'])).toContain('unknown hue');
+    // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
+    // (ccd/ccrc:4299-4302): re-wording a fix into a shrug helps nobody.
+    expect(String(j['detail'])).toContain('cyan, violet, blue, magenta, amber, green');
+  });
+
+  it('an absent roster and an unreadable one are two codes, not one', () => {
+    // CLAUDE.md's D-114 rule, and `ccd/ccd:958-965`'s own two refusals over this
+    // very file's projection: "the remedy for the other is chmod/chown, and
+    // nothing else". A caller that gets one code for both cannot tell an
+    // uninstalled box from a broken permission.
+    const absent = box('ccrc-account-roster-absent-');
+    const a = run(absent, ['account', 'roster']);
+    expect(a.code).toBe(1);
+    expect(oneObject(a)['error']).toBe('roster-absent');
+
+    const unreadable = box('ccrc-account-roster-unreadable-');
+    seedBoxRoster(unreadable, FIXTURE_ROSTER);
+    chmodSync(join(unreadable, '.ccrc', 'accounts.json'), 0o000);
+    const u = run(unreadable, ['account', 'roster']);
+    chmodSync(join(unreadable, '.ccrc', 'accounts.json'), 0o644);
+    expect(u.code).toBe(1);
+    expect(oneObject(u)['error']).toBe('roster-unreadable');
+  });
+
+  it('writes nothing — this is a read', () => {
+    const home = box('ccrc-account-roster-inert-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const before = readdirSync(join(home, '.ccrc')).sort();
+    run(home, ['account', 'roster']);
+    expect(readdirSync(join(home, '.ccrc')).sort()).toEqual(before);
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+});
+
+describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
+  it('lists an undeclared id-shaped launcher with its size', () => {
+    const home = box('ccrc-account-cands-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantLauncher(home, 'lab-dev0', wrapperBody('.claude-lab-dev0'));
+    const r = run(home, ['account', 'candidates']);
+    expect(r.code).toBe(0);
+    const cands = oneObject(r)['candidates'] as { name: string; bytes: number }[];
+    expect(cands.map((c) => c.name)).toEqual(['lab-dev0']);
+    expect(cands[0]!.bytes).toBeGreaterThan(0);
+  });
+
+  it('never lists a declared account, and never lists a declared account\'s alias', () => {
+    // The measured `gpt -> ccgpt` case, generalised: one file, two names,
+    // `-ef` comparing device+inode THROUGH the symlink
+    // (ccrc-doctor-checks:2404-2408, the test itself at :2416). An un-collapsed
+    // alias would offer the operator a "new account" that is a rostered one
+    // under a second name.
+    const home = box('ccrc-account-cands-alias-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantLauncher(home, 'gpt', wrapperBody('.claude-gpt'));
+    symlinkSync(join(home, '.local', 'bin', 'gpt'), join(home, '.local', 'bin', 'ccgpt'));
+    plantLauncher(home, 'lab-dev0', wrapperBody('.claude-lab-dev0'));
+    const cands = oneObject(run(home, ['account', 'candidates']))['candidates'] as
+      { name: string }[];
+    expect(cands.map((c) => c.name)).toEqual(['lab-dev0']);
+  });
+
+  it('never lists a file that is not a script or does not set CLAUDE_CONFIG_DIR', () => {
+    const home = box('ccrc-account-cands-shape-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'notascript'), 'PKbinary', { mode: 0o755 });
+    writeFileSync(join(bin, 'noconfigdir'), '#!/bin/sh\nexec claude "$@"\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'claude-a.bak-20260101'),
+      '#!/bin/sh\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-a"\n', { mode: 0o755 });
+    const cands = oneObject(run(home, ['account', 'candidates']))['candidates'] as unknown[];
+    expect(cands).toEqual([]);
+  });
+
+  it('skips an id-shaped file too big to judge, rather than reading it whole', () => {
+    // `_wrap_declares_config_dir` reads to the LAST LINE, and
+    // `ccrc-wrapper-shape:146-154` states the caller's second obligation: size
+    // it first, against WRAPPER_OVERSIZE_BYTES (`:94`, 1048576). Doctor's
+    // candidate loop (ccrc-doctor-checks:2388-2401) does not, and this verb
+    // deliberately does not copy that.
+    const home = box('ccrc-account-cands-big-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'lab-dev0'),
+      '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-lab-dev0"\n'
+      + `# ${'x'.repeat(1024 * 1024)}\n`, { mode: 0o755 });
+    expect(oneObject(run(home, ['account', 'candidates']))['candidates']).toEqual([]);
+  });
+
+  it('sizes THROUGH a symlink, so the gate measures the file it is about to read', () => {
+    // NOT in the plan, and it is the one place this loop diverges from the
+    // snippet it was written from. `ccrc-wrapper-shape:128-132` states the fact
+    // that decides it: `_wrap_is_script` (and `_wrap_declares_config_dir` after
+    // it) OPEN the file, so a symlink is followed transparently, while a bare
+    // `stat` of the link answers "the length of that path string". A size taken
+    // without `-L` therefore gates on a number that is not about the bytes that
+    // are about to be read — an oversize target reached through a 30-byte link
+    // would sail past `WRAPPER_OVERSIZE_BYTES` and be read to its last line,
+    // which is the obligation this verb exists to honour. Both sizing callers
+    // already in the tree pass `-L` (ccd/ccrc:2595, ccrc-doctor-checks:2542).
+    //
+    // The pick list's own number is the second half: an operator choosing from
+    // a list would be shown the link's length rather than the launcher's size.
+    const home = box('ccrc-account-cands-symlink-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const target = join(home, 'lab-dev0-real');
+    writeFileSync(target,
+      '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-lab-dev0"\n'
+      + `# ${'x'.repeat(1024 * 1024)}\n`, { mode: 0o755 });
+    symlinkSync(target, join(home, '.local', 'bin', 'lab-dev0'));
+    // The link's own `stat` size is `target.length` — comfortably under the
+    // cap — while the file it names is over it. Sized through the link, this
+    // is an oversize skip; sized on the link, it is a megabyte read.
+    expect(target.length).toBeLessThan(1024 * 1024);
+    expect(oneObject(run(home, ['account', 'candidates']))['candidates']).toEqual([]);
+  });
+
+  it('prints no byte of any candidate\'s contents', () => {
+    // `_check_wrappers`' PATHS-ONLY rule. A launcher on a real box can carry an
+    // API key on its `export` line; a pick list that echoed it would be the
+    // disclosure this whole verb is shaped to avoid.
+    const home = box('ccrc-account-cands-quiet-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'lab-dev0'),
+      '#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.claude-lab-dev0"\n'
+      + 'export ANTHROPIC_AUTH_TOKEN=CANARY-8b41d2-not-a-real-token\nexec claude "$@"\n',
+      { mode: 0o755 });
+    const r = run(home, ['account', 'candidates']);
+    expect(r.stdout + r.stderr).not.toContain('CANARY-8b41d2');
+  });
+
+  it('a bin directory with nothing account-shaped in it answers an empty list, not a refusal', () => {
+    // NOT an empty directory, and the name says so: `ghContainedEnv` +
+    // `harnessBin` (ccdWsHelpers.ts:123-127) create `<home>/.local/bin` and
+    // plant `gh`, and this file's own `env()` plants curl/systemctl/launchctl
+    // beside it. All four are id-shaped `#!` scripts, so they pass two of the
+    // predicates and are dropped by `_wrap_declares_config_dir` — which is
+    // exactly the "anything looser would report every tool in ~/.local/bin as
+    // an account" case doctor's comment names (ccrc-doctor-checks:2382-2386),
+    // arriving here for free.
+    const home = box('ccrc-account-cands-empty-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = run(home, ['account', 'candidates']);
+    expect(r.code).toBe(0);
+    expect(readdirSync(join(home, '.local', 'bin')).sort())
+      .toEqual(['curl', 'gh', 'launchctl', 'systemctl']);
+    expect(oneObject(r)['candidates']).toEqual([]);
+  });
+});
+
+/** A box whose `ccrc/deploy` is a REAL directory holding a stand-in
+ *  `account-op.mjs` that behaves exactly as an OLDER build of that file does:
+ *  it has `refuse` — the op this file was born with, and the one every refusal
+ *  on either side goes through — and answers an op it does not know the way
+ *  `main` does today, with a usage line on STDERR, NOTHING on stdout and
+ *  exit 2.
+ *
+ *  That is not a hypothetical shape: it is the shape of the box this very
+ *  commit creates while it is half-deployed. `ccd/ccrc` lands by
+ *  `install_atomic` and `deploy/` by rsync, so a run can find a ccrc that
+ *  knows `roster` beside an `account-op.mjs` that does not. */
+function skewedBox(prefix: string): string {
+  const home = box(prefix);
+  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'),
+    'const a = process.argv;\n'
+    + 'if (a[2] === "refuse") {\n'
+    + '  const g = (k) => a[a.indexOf(`--${k}`) + 1];\n'
+    + '  process.stdout.write(`${JSON.stringify(\n'
+    + '    { ok: false, error: g("code"), detail: g("detail") })}\\n`);\n'
+    + '  process.exitCode = 0;\n'
+    + '} else {\n'
+    + '  process.stderr.write("usage: node deploy/account-op.mjs <refuse> [--<key> <value>]…\\n");\n'
+    + '  process.exitCode = 2;\n'
+    + '}\n');
+  return home;
+}
+
+describe('ccrc account: the seam with deploy/account-op.mjs', () => {
+  it('propagates the node side\'s own exit code when there IS an answer', () => {
+    // The first measurement of this in the tree: until this task nothing in
+    // bash called a non-`refuse` op, so "node exits with its own class and
+    // cmd_account propagates it" was asserted by `_acct_node`'s header and
+    // executed by nothing. Both classes, one box each — 0 for an answer and 1
+    // for a box-said-no — through the same `|| exit $?`.
+    const ok = box('ccrc-account-seam-ok-');
+    seedBoxRoster(ok, FIXTURE_ROSTER);
+    expect(run(ok, ['account', 'roster']).code).toBe(0);
+    expect(run(box('ccrc-account-seam-one-'), ['account', 'roster']).code).toBe(1);
+  });
+
+  it('an op the deploy side does not have is a refusal WITH a body, never a bare exit 2', () => {
+    // THE EMPTY-BODY SEAM. `deploy/account-op.mjs`'s `main` answers an unknown
+    // op with exit 2 and an EMPTY stdout — right for a human who mistyped an
+    // op (the usage line is on stderr where a human is looking) and wrong for
+    // this verb, whose entire contract is one JSON object on stdout. Propagated
+    // blindly it hands the PWA an exit code with no body: two conditions, one
+    // value, which is the overloaded seam CLAUDE.md forbids.
+    //
+    // Bash closes it rather than node, and the direction is the reason: the
+    // skew that exists TODAY is a NEW ccrc beside an OLD account-op.mjs, and no
+    // change to the file shipping today can teach yesterday's copy to print an
+    // envelope. Only the caller can.
+    const home = skewedBox('ccrc-account-skew-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = run(home, ['account', 'roster']);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['ok']).toBe(false);
+    expect(j['error']).toBe('no-answer');
+    // The measured fact, not a guess about the cause: the exit code it gave.
+    expect(String(j['detail'])).toContain('exited 2');
+    expect(String(j['detail'])).toMatch(/re-run the install|redeploy/);
+  });
+
+  it('closes the same seam for candidates, not just for roster', () => {
+    const home = skewedBox('ccrc-account-skew-cands-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantLauncher(home, 'lab-dev0', wrapperBody('.claude-lab-dev0'));
+    const r = run(home, ['account', 'candidates']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-answer');
   });
 });

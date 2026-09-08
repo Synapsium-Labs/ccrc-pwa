@@ -950,7 +950,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS=""
+ACCT_SUBS="candidates roster"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -3730,11 +3730,17 @@ _exp_status() {
 #    argument.
 
 _acct_node() {   # <op> [--<key> <value>]… — the ONE writer of this verb's stdout
-  # `$CCRC_HERE/../deploy/…`, `cmd_wrappers`' idiom (:2311-2316): true in a
+  # `$CCRC_HERE/../deploy/…`, `cmd_wrappers`' idiom (:2318-2323): true in a
   # checkout and at ~/ccrc/deploy on a deployed box, because both deploy lanes
-  # rsync `deploy/` into `~/ccrc/`. NOT `bash` — this is node — and NOT
-  # captured: stdout is the caller's answer and stderr is the caller's remedy,
-  # and re-wording either here would replace a fix with a shrug.
+  # rsync `deploy/` into `~/ccrc/`. NOT `bash` — this is node.
+  #
+  # NOTHING IS RE-WORDED HERE: stdout is the caller's answer and stderr is the
+  # caller's remedy, and re-writing either would replace a fix with a shrug.
+  # `_acct_answer` below does CAPTURE stdout — that is a different claim, and
+  # its own header argues it: it re-emits the body byte for byte and never
+  # touches stderr, so the remedy still reaches the operator verbatim; what it
+  # buys is the one thing this function cannot tell its caller, namely whether
+  # an answer was written at all.
   node "$CCRC_HERE/../deploy/account-op.mjs" "$@"
 }
 
@@ -3768,9 +3774,164 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # and one this review round did not TDD. Re-examine this comment the day a
   # future task (Task 21+) makes $2 or $3 something other than a fixed
   # literal.
+  #
+  # RE-EXAMINED AT TASK 21, AND IT STILL HOLDS. That task added four call
+  # sites (`_acct_answer`, `_acct_shape` x3, `_acct_candidates` x3) and every
+  # one of them passes a literal class, a literal code and a double-quoted
+  # sentence — interpolated (`$rc`, `$1`, `$sh`, `$shape`, `$name`) but still
+  # exactly one word per argument after expansion, which is the property this
+  # paragraph rests on. Nothing yet passes an operator's own bytes here.
   _acct_node refuse --code "$2" --detail "$3" \
     || _ccrc_die "could not print a refusal envelope for \"$2\": $3 — and the caller of this verb parses stdout, so it must hear about that rather than read an empty body"
   exit "$1"
+}
+
+_acct_answer() {   # <op> [--<key> <value>]… — the answer, or a refusal that HAS a body
+  # THE EMPTY-BODY SEAM, CLOSED HERE (Task 21; Task 20's review named it and
+  # left it open because nothing could reach it yet).
+  #
+  # `deploy/account-op.mjs`'s `main` answers an op it does not have with exit 2,
+  # a `usage:` line on STDERR and NOTHING on stdout. That is right for a human
+  # who mistyped an op at a shell — the usage line is where a human is looking —
+  # and wrong for this verb, whose whole contract is exactly one JSON object on
+  # stdout. Propagated blindly it hands the caller an exit code and an empty
+  # body: "the box said no, here is why" and "this build cannot answer you at
+  # all" arriving as the same two bytes, which is the overloaded seam CLAUDE.md
+  # forbids.
+  #
+  # THE CONDITION IS REAL AND IT IS THIS COMMIT'S OWN. `ccd/ccrc` lands by
+  # `install_atomic` and `deploy/` by rsync, so a run can find a ccrc that knows
+  # `roster` beside an `account-op.mjs` that does not — a half-updated box.
+  #
+  # WHY BASH AND NOT NODE. Teaching `account-op.mjs` to print an envelope for an
+  # unknown op would fix every skew EXCEPT the one that exists, because the
+  # copy that has to do the printing is the OLD one, already on the box. Only
+  # the caller can cover for a callee that is older than itself.
+  #
+  # WHAT IT MEASURES, AND WHAT IT DOES NOT. "stdout was empty" — nothing else.
+  # It does not guess WHY, so the code is `no-answer` and the exit code node
+  # gave is carried in the detail rather than translated away; the version skew
+  # is named as the known cause, in `cmd_wrappers`' staleness wording, because
+  # it is the only one anybody has seen. A future op that legitimately answers
+  # with nothing would have to say so here.
+  #
+  # CAPTURING IS NOT RE-WORDING. `_acct_node`'s "stdout is the caller's answer,
+  # stderr is the caller's remedy" rule survives intact: the body is re-emitted
+  # byte for byte and stderr is never captured at all, so node's own remedy
+  # still reaches the operator verbatim while it is being written. `$( )` strips
+  # trailing newlines and the `printf` puts exactly one back, which is the shape
+  # every op writes and the shape `oneObject` pins.
+  local body rc
+  body="$(_acct_node "$@")"; rc=$?
+  [ -n "$body" ] \
+    || _acct_refuse 1 no-answer "deploy/account-op.mjs exited $rc without writing an answer to '$1', so this run has nothing to tell you. The known cause is a half-updated box: ccrc and deploy/account-op.mjs ship together and must be one build, and an older copy of that file answers an op it does not have with an exit code and no body at all. Re-run the install (or redeploy), then re-run this. Nothing was written."
+  printf '%s\n' "$body"
+  return "$rc"
+}
+
+_acct_roster_path() { printf '%s' "$HOME/.ccrc/accounts.json"; }
+
+# The shape contract, sourced rather than restated — `cmd_wrappers`' reasoning
+# (:2306-2316) applies unchanged, and this verb needs it for three things:
+# `WRAPPER_ID_RE`, which every `--id` is measured against before a path is built
+# from it, the two predicates that define a candidate, and the size bound those
+# predicates oblige their caller to apply first.
+_acct_shape() {
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  [ -f "$shape" ] \
+    || _acct_refuse 1 install-incomplete "the wrapper shape contract is missing: $shape — is this a complete ccrc install?"
+  # shellcheck source=ccrc-wrapper-shape
+  . "$shape" \
+    || _acct_refuse 1 install-incomplete "the wrapper shape contract failed to load: $shape"
+  # `cmd_wrappers:2351-2352`'s guard, for this verb's names: a shape library
+  # older than this ccrc loads cleanly and then decides nothing.
+  [ -n "${WRAPPER_ID_RE:-}" ] && [ -n "${WRAPPER_OVERSIZE_BYTES:-}" ] \
+    || _acct_refuse 1 install-incomplete "$shape loaded but is older than this ccrc — it declares no WRAPPER_ID_RE/WRAPPER_OVERSIZE_BYTES, which this verb needs before it names a file after an id or reads one to its last line. The files ship together and must be one build: re-run the install (or redeploy). Nothing was written."
+}
+
+_acct_candidates() {
+  _acct_shape
+  local sh="$HOME/.ccrc/accounts.sh"
+  [ -f "$sh" ] \
+    || _acct_refuse 1 roster-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
+  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5343-5350): the projection
+  # declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` in the SAME `_ccrc_*`
+  # namespace as `_ccrc_die`, and sourcing it here would let a generator change
+  # redefine a refusal helper mid-verb. Only the id list crosses back.
+  local declared
+  declared="$(
+    # shellcheck source=/dev/null
+    . "$sh" || exit 1
+    printf '%s' "${CCRC_ACCOUNTS[*]+${CCRC_ACCOUNTS[*]}}"
+  )" || _acct_refuse 1 roster-invalid "$sh could not be sourced, so this box cannot say which launchers are already declared. Nothing was written."
+
+  # `_check_wrappers`' `wr_cands` block (ccrc-doctor-checks:2388-2401) run
+  # through the same predicates, with the size hoisted ahead of the two that
+  # read the file (`ccrc-wrapper-shape:146-154`, obligation 2). Anything looser
+  # reports every tool in ~/.local/bin as an account; anything narrower misses
+  # the launcher somebody added and never wrote down.
+  local -a args=()
+  local f name other alias_of sz had_nullglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for f in "$WRAPPER_BIN_DIR"/*; do
+    [ -f "$f" ] || continue
+    [ -x "$f" ] || continue
+    name="${f##*/}"
+    [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
+    case " $declared " in *" $name "*) continue ;; esac
+    # SIZED BEFORE ANYTHING READS IT. An id-shaped, undeclared file this verb
+    # cannot size is a REFUSAL, not a skip: it might be a candidate and this run
+    # cannot tell, which is `ccrc-adopt`'s direction for the same unmeasurable
+    # (ccrc-wrapper-shape:153-154 names both directions and why they differ).
+    #
+    # `-L`, AND THAT IS THE ONE PLACE THIS LOOP DIVERGES FROM ITS PLAN. The
+    # shape library states the fact that decides it (`ccrc-wrapper-shape`
+    # :128-132): its predicates OPEN the file, so a symlink is followed
+    # transparently, while a bare `stat` of a link answers "the length of that
+    # path string" — the measured `claude` -> versions/<ver> case. A size taken
+    # without `-L` would therefore gate on a number that is not about the bytes
+    # about to be read, and an oversize launcher reached through a short link
+    # would sail past the cap and be read to its last line: the exact obligation
+    # this hoist exists to honour, defeated by the hoist. It would also print
+    # the link's length as the launcher's size in a pick list. Both sizing
+    # callers already in this tree pass `-L` for the same reason (:2595,
+    # ccrc-doctor-checks:2542).
+    sz="$(_plat_size -L -- "$f" 2>/dev/null)" || sz=""
+    [[ "$sz" =~ ^[0-9]+$ ]] \
+      || _acct_refuse 1 unmeasurable "stat could not size $WRAPPER_BIN_DIR/$name, and a pick list that reported a launcher without its size would be inviting a choice on no evidence. Nothing was written."
+    [ "$sz" -le "$WRAPPER_OVERSIZE_BYTES" ] || continue
+    _wrap_is_script "$f" || continue
+    _wrap_declares_config_dir "$f" || continue
+    # THE ALIAS COLLAPSE (ccrc-doctor-checks:2403-2419). `-ef` is a bash builtin
+    # comparing device+inode THROUGH the symlink, so this needs no `readlink` —
+    # and it catches a hard link, which `readlink` would not (:2404-2408). The
+    # measured case is one file under two names; offering it as a NEW account
+    # would propose two accounts fighting over one CLAUDE_CONFIG_DIR.
+    #
+    # THE SELF-SKIP IS NOT COSMETIC, and it is the one line where this loop must
+    # differ from doctor's. Doctor `continue`s a DECLARED name at :2412 — before
+    # its `-ef` loop at :2414-2417 ever runs — so no name of its can reach the
+    # comparison and be compared to ITSELF. Here the declared-skip is a separate
+    # guard several lines above, and without this line a declared account's own
+    # launcher would satisfy `$f -ef $WRAPPER_BIN_DIR/$name` and be dropped as an
+    # "alias" of itself. That is the right ANSWER by the wrong MECHANISM: the two
+    # guards would then cover for each other, and deleting the declared-skip
+    # would change nothing that any test could see — a guard with no mutation
+    # that reds it, which is the discipline CLAUDE.md states. Mutation 5 in
+    # Step 6 is that mutation, and this line is what makes it red.
+    alias_of=""
+    for other in $declared; do
+      [ "$other" != "$name" ] || continue
+      [ -e "$WRAPPER_BIN_DIR/$other" ] || continue
+      if [ "$f" -ef "$WRAPPER_BIN_DIR/$other" ]; then alias_of="$other"; break; fi
+    done
+    [ -z "$alias_of" ] || continue
+    args+=(--name "$name" --bytes "$sz")
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+
+  _acct_answer candidates ${args[@]+"${args[@]}"} || exit $?
 }
 
 cmd_account() {
@@ -3804,6 +3965,16 @@ cmd_account() {
     || _acct_refuse 2 unknown-subcommand "ccrc account has no subcommand \"$sub\". This build implements: ${ACCT_SUBS:-nothing yet — this commit is the dispatch skeleton}"
 
   case "$sub" in
+    roster)
+      [ $# -eq 0 ] || _acct_refuse 2 unknown-argument "ccrc account roster takes no arguments, and got \"$1\""
+      _acct_answer roster --file "$(_acct_roster_path)" || exit $?
+      return 0
+      ;;
+    candidates)
+      [ $# -eq 0 ] || _acct_refuse 2 unknown-argument "ccrc account candidates takes no arguments, and got \"$1\""
+      _acct_candidates
+      return 0
+      ;;
     *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
   esac
 }

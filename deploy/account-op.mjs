@@ -147,6 +147,65 @@ const PROVIDER_DEPLOY = Object.fromEntries(
   }]),
 );
 
+/** THE ONE ROSTER READ IN THIS FILE. Every op that needs the roster calls this
+ *  and returns 1 on `null`, so no op grows its own try/catch and no two ops can
+ *  come to disagree about which failure is which. `check-add` (23),
+ *  `add-entry` (24), `declare-entry` and `declared` (27), `lane` (28), `drop`
+ *  and `removed` (32) all come through here. The ONE deliberate exception is
+ *  Task 33's `doctor` op, which reads the same file LAXLY and argues why in its
+ *  own task — `ccd/ccrc-doctor-checks:2253` already has a lax reader for that
+ *  file, for that reason.
+ *
+ *  ABSENT AND UNREADABLE ARE TWO CODES. CLAUDE.md's D-114 rule: this
+ *  repository's measured reads each tell those apart, and the convenience reads
+ *  that fold them say so out loud. The remedies differ — `ccrc install` seeds a
+ *  roster this box has never had; a permissions problem wants chmod and nothing
+ *  else — and `ccd/ccd:958-965` already draws exactly this line over the same
+ *  file's projection, with `-e` and `-r` as two separate refusals.
+ *
+ *  THE VALIDATOR IS THE GATE, NOT THE ANSWER: this returns the PARSED FILE, not
+ *  `rosterFromJson`'s return literal (shared/roster-json.mjs:387-390), which
+ *  carries eight fields — `id, label, configDirSuffix, homeAble, telemetry,
+ *  hue, execKind, secretsFile` — and drops every other one. Measured today,
+ *  that is four dropped fields the validator CHECKS: `hidden`, and
+ *  `provider`/`baseUrl`/`models` from Task 3-4 on. An answer built from the
+ *  return value would be a roster with four validated fields silently removed,
+ *  which is the adapter-narrowing rule's exact shape. */
+function readRoster(file) {
+  let raw;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      refuse('roster-absent',
+        `${file} does not exist, so this box has no account roster yet. Run 'ccrc install' — it `
+        + 'seeds one and never overwrites an existing one.');
+    } else {
+      refuse('roster-unreadable',
+        `${file} exists and could not be read: ${e.message}. Regenerating it will not help; fix `
+        + 'its permissions (it must be readable by the user this box runs as).');
+    }
+    return null;
+  }
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch (e) {
+    refuse('roster-invalid', `${file} is not valid JSON: ${e.message}`);
+    return null;
+  }
+  try {
+    rosterFromJson(json);
+  } catch (e) {
+    // The validator's own `remedy` reaches the caller VERBATIM —
+    // `_inst_accounts_sh`'s rule (ccd/ccrc:4299-4302).
+    const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+    refuse('roster-invalid', `${file}: ${e.message}${remedy}`);
+    return null;
+  }
+  return json;
+}
+
 /** DATA, in `CCRC_DOCTOR_CHECKS`'s shape (ccd/ccrc-doctor-checks:166) and
  *  `ccd/ccrc-api`'s `ROUTES` shape: one row per op, naming the keys it takes.
  *  `repeat` lists the keys that may appear more than once and arrive as an
@@ -155,6 +214,13 @@ const PROVIDER_DEPLOY = Object.fromEntries(
 const OPS = {
   refuse: { keys: ['code', 'detail'], repeat: [] },
   providers: { keys: [], repeat: [] },
+  roster: { keys: ['file'], repeat: [] },
+  // `name` and `bytes` arrive as PARALLEL ARRAYS, one pair per candidate, from
+  // a bash loop that already ran doctor's candidate rule. They are repeatable
+  // because the alternative — one JSON blob on argv — would put a value bash
+  // built with `printf` back into the JSON-shaped position this file exists to
+  // own.
+  candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
 };
 
 function out(o) {
@@ -239,6 +305,37 @@ function main(argv) {
     return 0;
   }
 
+  if (op === 'roster') {
+    const file = a['file'];
+    if (file === undefined) { refuse('bad-argv', 'roster needs --file'); return 2; }
+    const json = readRoster(file);
+    if (json === null) return 1;
+    out({ ok: true, roster: json });
+    return 0;
+  }
+
+  if (op === 'candidates') {
+    const names = a['name'] ?? [];
+    const bytes = a['bytes'] ?? [];
+    if (names.length !== bytes.length) {
+      // A count mismatch is the ONLY way a size could be attached to the wrong
+      // name, and a misaligned index cannot be trusted about any of them —
+      // `cmd_wrappers`' witness-index rule (ccd/ccrc:2590-2593), verbatim.
+      refuse('bad-argv', `candidates got ${names.length} --name and ${bytes.length} --bytes`);
+      return 2;
+    }
+    const list = [];
+    for (let i = 0; i < names.length; i++) {
+      if (!/^[0-9]+$/.test(bytes[i])) {
+        refuse('bad-argv', `--bytes for "${names[i]}" is not a number`);
+        return 2;
+      }
+      list.push({ name: names[i], bytes: Number(bytes[i]) });
+    }
+    out({ ok: true, candidates: list });
+    return 0;
+  }
+
   // `refuse` — SEAM HAZARD, DOCUMENTED RATHER THAN CLOSED (review round 1,
   // M7). Every bad-argv exit from this file (a `readPairs` refusal above, or
   // the one below) ALREADY wrote a JSON envelope to stdout via `refuse()` —
@@ -262,10 +359,3 @@ function main(argv) {
 }
 
 process.exitCode = main(process.argv);
-
-// `rosterFromJson`, `RosterInvalid` and `readFileSync` are imported by Task 21,
-// which is the first op to read the roster. They are named in the import above
-// from this commit so the CLI's dependency on the validator is real — and
-// visible to a reviewer — from its first line rather than arriving later as a
-// surprise about which files must ship together.
-void rosterFromJson; void RosterInvalid; void readFileSync;
