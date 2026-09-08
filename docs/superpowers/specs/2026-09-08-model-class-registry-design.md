@@ -29,7 +29,7 @@ Decided in the brainstorm (each was a question with options):
 |---|---|
 | Which switcher | **Both**: the in-session `/model` picker on any lane, AND a ccd swap carries the class across lanes |
 | A newly advertised model | **Surfaced, never auto-classed**: reachable by its concrete name, flagged, joins a class only when the operator assigns one |
-| Approach | **A with a shortlist layer** (§2) |
+| Approach | **A with a discovery-scope layer** (§2) |
 | Stopgap on the gpt lane meanwhile | **No** — ship the real thing |
 | Effort on non-Anthropic lanes (asked after spec review) | **Both levels**: a lane default per class, editable in the Models section; and the session's own `/effort` honoured per request |
 
@@ -93,8 +93,8 @@ Decided in the brainstorm (each was a question with options):
 
 ## 2. Approaches considered
 
-- **A — grow the account-connections map into a class registry on the roster,
-  with a shortlist layer.** One source of truth, PWA-editable, covers every
+- **A — a class registry beside the account-connections map, with a
+  discovery-scope layer.** One source of truth, PWA-editable, covers every
   lane kind through the one client mechanism, fixes swaps. Chosen.
 - **B — a standalone `~/.ccrc/models.json` plus CLI, PWA read-only.** Cheapest,
   no collision with the in-flight wave; but two files describe one account and
@@ -104,18 +104,20 @@ Decided in the brainstorm (each was a question with options):
   or swaps; classification means editing YAML; OpenRouter is not behind
   LiteLLM here. Rejected.
 
-Why a shortlist: Codex advertises nine models, OpenRouter several hundred. An
-"unclassified" badge over an unfiltered OpenRouter catalogue is noise; a
-per-account shortlist is what discovery and classification operate on, and the
-account-connections spec already has it as `selectable`.
+Why a discovery scope: Codex advertises nine models, OpenRouter several
+hundred. An "unclassified" badge over an unfiltered OpenRouter catalogue is
+noise; a per-account `discovery` list is what discovery and classification
+operate on. It is NOT the account-connections `selectable`, which is a picker
+permission (ruling 280): narrowing what an operator may pick must never narrow
+what the prober classifies.
 
 ## 3. Architecture — five units
 
 | Unit | Does | Depends on |
 |---|---|---|
-| **Registry** (`shared/roster.ts`) | the `models` block on an account; validation; derived states | roster schema (§4) |
+| **Registry** (`shared/models.ts`, `~/.ccrc/models/<id>.classes.json`) | the per-account registry file; validation; derived states | §4 |
 | **Probes** (`ccd/ccrc-models-probe`, per provider) | fetch a provider's catalogue into a generated per-account file | provider credentials the lane already holds |
-| **Materialiser** (`ccrc account models`, `shared/modelenv.mjs`) | project `classes` into the lane's settings `env` block; generate LiteLLM's model list for the Codex lane | registry, catalogue |
+| **Materialiser** (`ccrc models`, `shared/modelenv.mjs`) | project `classes` into the lane's settings `env` block; generate LiteLLM's model list for the Codex lane | registry, catalogue |
 | **Class carry** (`ccd/ccd`, `ccd/statusline-command.sh`) | record each session's class; spawn with `--model <class>`; keep rotation class-aware | registry, materialiser |
 | **Surfaces** (`pwa/`, `server/`, `ccd ls`, `ccrc doctor`) | Models section on the account; the class-driven session picker; badges; refresh button | server routes (§9) |
 
@@ -125,50 +127,58 @@ states.
 
 ## 4. Data model
 
-### 4.1 The `models` block (roster, user-owned)
+### 4.1 The registry file (user-owned, per account)
 
-Present on every account whose `exec.provider` is not `anthropic`. Absent on
-Anthropic accounts: their four classes are the client's own defaults and are
-shown read-only.
+`~/.ccrc/models/<accountId>.classes.json`, created by `ccrc models <id> init
+<probe>` and changed only through the verbs (§10; the PWA drives them). It is
+**not in the roster today, by ruling**: `exec.models`' shape belongs to the
+account-connections spec (its `ApiKeyModels` — `opus`/`sonnet`/`haiku`/`subagent`
+plus `selectable` — is landed on that branch, not on `main`), and its owner
+ruled (mail 280, 2026-09-08) that any change there is additive and lands after
+that branch merges. Once it is on `main`, `classes` may fold into `exec.models`
+as an OPTIONAL sibling of the four aliases, this file becoming a generated
+mirror; that fold-in is a separate decision (§14). Nothing here restates that
+spec's shape; this document references it.
 
 ```json
-"exec": {
-  "kind": "external", "provider": "openai",
-  "models": {
-    "classes": { "haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra", "opus": "gpt-5.6-sol", "fable": null },
-    "shortlist": "catalogue",
-    "effort": { "haiku": "high", "sonnet": "high", "opus": "max", "fable": "max" }
-  }
-}
+{ "probe": "codex",
+  "classes": { "haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra", "opus": "gpt-5.6-sol", "fable": null },
+  "subagent": "sonnet",
+  "discovery": "catalogue",
+  "effort": { "haiku": "high", "sonnet": "high", "opus": "max", "fable": "max" } }
 ```
 
-It sits on `exec`, where the account-connections spec already places its map
-(§4.1 there: `provider` and `models` on the `generated` and `external` kinds),
-so the two designs describe one field.
-
-- `classes` — four slots, always all four keys, each a concrete id or `null`.
-  `null` means *this class is unavailable on this lane*, never "use a
-  default". Ids satisfy the account-connections `MODEL_ID_RE`.
-- `shortlist` — the literal `"catalogue"` (the whole advertised set; the
-  default for `openai`/Codex and `compatible`) or an explicit non-empty array
-  of ids (required for `openrouter`). Every non-null class id must be in the
-  shortlist; the validator refuses otherwise, naming the id and the slot.
-- `subagent` is **derived** — always the `sonnet` slot. Operator policy fixes
-  subagents at Sonnet-class; a project or user settings file may only name the
-  alias `sonnet`. If the ruling keeps the key on the wire, it is optional and
-  defaults to the derivation; a value that differs from the sonnet slot is
+- `probe` — which catalogue probe runs: `codex | openrouter | compatible`. It
+  names the DISCOVERY mechanism, not the account-connections `provider` (auth
+  and connection); once `exec.provider` exists on `main`, `probe` defaults from
+  it and a mismatch is a doctor finding. A `compatible` probe also needs
+  `baseUrl` in this file until `exec.baseUrl` exists on `main`.
+- `classes` — four slots, always all four keys, each a concrete model id or
+  `null`. `null` means *this class is unavailable on this lane by nature*,
+  never "use a default" and never "retired" (§4.3 carries retirement as its
+  own marker). Ids satisfy the account-connections `MODEL_ID_RE`.
+- `subagent` — a CLASS NAME, default `sonnet`, settable to `haiku` or `opus`:
+  what `CLAUDE_CODE_SUBAGENT_MODEL` resolves to on this lane. It is a routing
+  destination the operator sets — a class-to-slot map — not a derivation
+  (ruling: `subagent` is not a class). Naming a class whose slot is `null` is
   refused.
+- `discovery` — the literal `"catalogue"` (the whole advertised set; the
+  default for `codex` and `compatible`) or an explicit non-empty list of ids
+  (required for `openrouter`): the set discovery and classification operate
+  on. Every non-null class id must be in it. It is distinct, by name and
+  meaning, from the account-connections `selectable` (a picker PERMISSION);
+  the two never alias, and that spec's containment rule is untouched.
 - `effort` — optional; the lane's **default reasoning effort per class**, used
   when a request names none. Each value must be one of the classed model's
   `efforts` from the catalogue (Luna has no `ultra`; Astra does) — validated
   when a catalogue exists, accepted unvalidated otherwise and flagged by
   doctor once one appears. Absent key or class → the provider's
-  `default_effort` for that model. Meaningless on `anthropic` (the client's
-  effort reaches Anthropic directly) and refused there.
+  `default_effort` for that model. Meaningless on Anthropic lanes, which have
+  no registry file.
 
-This replaces `ApiKeyModels`'s `{opus, sonnet, haiku, subagent, selectable?}`
-with `{classes, shortlist}`. The account-connections §4.1 wire body's `models?`
-field carries the new shape.
+Absent file on a non-Anthropic lane = "no registry" — every class unavailable,
+and doctor says so. Anthropic lanes never have one: their four classes are the
+client's own defaults, shown read-only.
 
 ### 4.2 The catalogue (generated, per account)
 
@@ -185,7 +195,7 @@ field carries the new shape.
 Absent file = **never probed**, a distinct state from an empty catalogue.
 `stale: true` = the last probe failed and this is the previous catalogue
 (§11). Hidden models (Codex `visibility: hide`) are kept with `hidden: true`
-and excluded from `"catalogue"`-mode shortlists.
+and excluded from `"catalogue"`-mode discovery lists.
 
 ### 4.3 Derived states
 
@@ -193,11 +203,11 @@ Defined once in `shared/models.ts` (server and PWA) and once in `ccd/ccd`
 (bash), with an agreement test feeding both the same fixtures:
 
 - **classified** — the non-null ids in `classes`.
-- **unclassified** — shortlist (resolved: the catalogue's visible ids when
-  `"catalogue"`) minus classified. Codex today: `gpt-6-astra`, `gpt-5.5`,
+- **unclassified** — the discovery list (resolved: the catalogue's visible ids
+  when `"catalogue"`) minus classified. Codex today: `gpt-6-astra`, `gpt-5.5`,
   `gpt-5.4-mini`, `gpt-5.3-codex-spark`.
-- **retired** — any shortlisted or classified id absent from a catalogue that
-  exists and is not stale. A retired class id empties nothing in the roster
+- **retired** — any discovery-listed or classified id absent from a catalogue
+  that exists and is not stale. A retired class id empties nothing in the roster
   (the roster is the operator's); it is a warning on every surface and the
   class counts as **unavailable** for routing (§7) until the operator reassigns.
 - **available classes** — for `anthropic`: all four; otherwise the slots that
@@ -205,18 +215,18 @@ Defined once in `shared/models.ts` (server and PWA) and once in `ccd/ccd`
 
 ## 5. Discovery
 
-One probe per provider, selected by the account's `provider`:
+One probe per lane, selected by the registry file's `probe`:
 
 | provider | probe | credential | notes |
 |---|---|---|---|
-| `openai` (ChatGPT/Codex) | `GET https://chatgpt.com/backend-api/codex/models?client_version=0.160.0` | the lane's OAuth (`$CHATGPT_TOKEN_DIR/auth.json`, refreshed by LiteLLM's `Authenticator`) + `ChatGPT-Account-Id` | the same call `ccgpt` documents; `client_version` is a constant in the probe, bumped deliberately |
-| `openrouter` | `GET https://openrouter.ai/api/v1/models` | none for the list; the lane's key for `/models/{author}/{slug}/endpoints` | catalogue is NOT filtered by the ownership whitelist (that needs one endpoints call per model); the check happens at **shortlist-add** (§8): the endpoints call runs once and the UI shows which whitelisted providers serve the model, refusing the add if none do |
-| `compatible` | `GET <baseUrl>/v1/models` | the lane's token | best effort; a 404 leaves "never probed" and the shortlist must be explicit |
-| `anthropic` | none | — | classes are client defaults; there is nothing to classify |
+| `codex` (ChatGPT/Codex) | `GET https://chatgpt.com/backend-api/codex/models?client_version=0.160.0` | the lane's OAuth (`$CHATGPT_TOKEN_DIR/auth.json`, refreshed by LiteLLM's `Authenticator`) + `ChatGPT-Account-Id` | the same call `ccgpt` documents; `client_version` is a constant in the probe, bumped deliberately |
+| `openrouter` | `GET https://openrouter.ai/api/v1/models` | none for the list; the lane's key for `/models/{author}/{slug}/endpoints` | catalogue is NOT filtered by the ownership whitelist (that needs one endpoints call per model); the check happens at **discovery-add** (§8): the endpoints call runs once and the UI shows which whitelisted providers serve the model, refusing the add if none do |
+| `compatible` | `GET <baseUrl>/v1/models` | the lane's token | best effort; a 404 leaves "never probed" and the discovery list must be explicit |
+| (Anthropic lanes) | none | — | no registry file; classes are client defaults |
 
 `ccrc models refresh [<id>|--all]` runs the probe(s), writes the catalogue,
-then runs the materialiser's LiteLLM step for Codex lanes if the visible model
-set changed. `ccrc-models.timer` (systemd --user, `OnUnitActiveSec=60min`,
+then runs the materialiser's LiteLLM step for `codex` lanes if the visible
+model set changed. `ccrc-models.timer` (systemd --user, `OnUnitActiveSec=60min`,
 `OnBootSec=3min`) runs `--all`; the PWA's refresh button (§8) runs one lane.
 `ccgpt-usage.timer` is untouched — telemetry and catalogue are different
 questions on different cadences.
@@ -225,9 +235,10 @@ questions on different cadences.
 
 ### 6.1 The env block
 
-The account-connections §4.3 writer gains the fourth variable and the
-sentinel rule. For a non-Anthropic account it writes into
-`~/<configDirSuffix>/settings.json` `env`:
+`shared/modelenv.mjs` (this design's; the account-connections writer, its
+Task 25, calls it when it lands — one writer of these bytes, pinned by a test
+because the single-definition scan is blind to `.mjs`) projects the registry
+file into the lane's `~/<configDirSuffix>/settings.json` `env`:
 
 ```
 ANTHROPIC_DEFAULT_HAIKU_MODEL  = classes.haiku  ?? "ccrc-unavailable-haiku"
@@ -236,20 +247,24 @@ ANTHROPIC_DEFAULT_OPUS_MODEL   = classes.opus   ?? "ccrc-unavailable-opus"
 ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
-CLAUDE_CODE_SUBAGENT_MODEL     = classes.sonnet ?? "ccrc-unavailable-sonnet"
+CLAUDE_CODE_SUBAGENT_MODEL     = classes[subagent]                  (the registry's explicit class-to-slot choice; refused if that slot is null)
 ```
 
 A `null` slot is written as a **sentinel**, never left unset: unset, the alias
 falls through to Anthropic's own id and the proxied backend answers with an
 opaque 404 (today's Fable-on-gpt failure). The sentinel makes an in-session
 `/model fable` on such a lane fail with a name that says what is missing.
-`ccd` refuses earlier still (§7). A **retired** id (§4.3) stays in the block as
-written — the roster is the operator's — so an in-session `/model` to that
+`ccd` refuses earlier still (§7). The sentinel lives in a SINK, not at a seam:
+Claude Code forwards the string and branches on nothing; every reader that
+does branch — ccd, the API, the UI — takes availability from its own positive
+marker (`available`, §4.3; the third column of the classes file's bash
+projection, §7), never from an env value. A **retired** id (§4.3) stays in the
+block as written — the roster is the operator's — so an in-session `/model` to that
 class fails at the provider; ccd never routes to it, and doctor names it.
 
-The writer is the single definition (`shared/modelenv.mjs`); `ccrc account
-models …`, `ccrc account add`, and the roster's seed path all call it. It
-re-materialises on every roster edit that touches `models`.
+The writer is the single definition (`shared/modelenv.mjs`); every `ccrc
+models` mutation calls it, and the account-connections writer will. It
+re-materialises on every registry edit.
 
 **Rule, enforced by a test over every `.claude/settings.json` and
 `~/.claude*/settings.json` fixture in the repo**: settings files may name
@@ -264,9 +279,10 @@ the per-lane env block the materialiser owns. Concrete ids live in the roster.
 `CLAUDE_CODE_SUBAGENT_MODEL` exports once the lane's settings carry the block
 (the block wins anyway, §1; the exports become dead code that misleads).
 `ccgpt` keeps `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
-`CLAUDE_CONFIG_DIR` and the LiteLLM lifecycle. The gpt account's first
-`models` block is seeded from today's mapping — luna/terra/sol, `fable: null`
-— so behaviour is unchanged until the operator classifies Astra.
+`CLAUDE_CONFIG_DIR` and the LiteLLM lifecycle, and exports `CCGPT_ACCOUNT_ID=gpt`
+for the shim. The gpt lane's registry file is seeded by `ccrc models gpt init
+codex` from today's mapping — luna/terra/sol, `fable: null`, `subagent:
+sonnet` — so behaviour is unchanged until the operator classifies Astra.
 
 ### 6.3 LiteLLM's model list is generated
 
@@ -323,9 +339,14 @@ reasoning field; otherwise the shim leaves the request alone (§15).
 - **Spawning.** `_spawn_start` appends `--model <class>` when the registry's
   `class` is non-empty **and** the class is available on the destination lane
   (§4.3). Aliases only — the destination's env block resolves them.
-- **Rotation is class-aware.** `_swap_target` for a session of class C skips
-  any lane where C is unavailable, in both the home-able bracket and the
-  overflow bracket. Today's gpt lane (`fable: null`) therefore never receives
+- **Rotation is class-aware, as the THIRD predicate in a composed chain.**
+  `_swap_target` already composes #61's overflow bracket (an enabled
+  non-home-able lane is last resort) with account-pools wave 2b's pool
+  predicate (PR #62; an untagged account is a member of every pool by
+  construction, so the two can select a lane neither would alone — ruled to
+  ship and be documented). The class filter is written into that chain, not
+  as a standalone skip: a lane where the session's class C is unavailable is
+  excluded in both brackets, after the pool predicate. Today's gpt lane (`fable: null`) therefore never receives
   a Fable-class session until Astra is classified — the "comes back as Opus"
   defect becomes impossible rather than merely rarer.
 - **Manual swap may downgrade, explicitly.** `ccd swap <id> <wrapper>
@@ -333,6 +354,10 @@ reasoning field; otherwise the shim leaves the request alone (§15).
   it when C is unavailable on the chosen lane, naming the substitute ("no
   Fable-class model on gpt — run as Opus-class (GPT-5.6 Sol)?"). Without the
   flag the swap refuses with the same sentence.
+- **ccd reads classes from a bash projection**, `~/.ccrc/models/<id>.classes.tsv`
+  (written by the materialiser beside the env block): four lines
+  `class<TAB>modelId<TAB>state` with `state ∈ assigned | unassigned | retired`
+  — availability as its own column, never inferred from an empty field.
 - **`ccd ls`'s lane line** grows the available classes:
   `gpt overflow lane: enabled, available (classes: haiku sonnet opus; fable
   unassigned; 4 unclassified) — 0 session(s) currently on it`.
@@ -340,7 +365,7 @@ reasoning field; otherwise the shim leaves the request alone (§15).
 ## 8. Surfaces
 
 - **Accounts screen, per account — "Models" section** (in the
-  account-connections §12.4 card, below health). One row per shortlisted
+  account-connections §12.4 card, below health). One row per discovery-listed
   model: label, context window, price when known, and a class control
   (`Haiku · Sonnet · Opus · Fable · —`) that is a radio across the row's
   classes — assigning a class to a model clears it from the model that had it,
@@ -358,7 +383,10 @@ reasoning field; otherwise the shim leaves the request alone (§15).
   concrete Anthropic display name remains hardcoded (`Opus 5`, `Sonnet 5`,
   `Fable 5`, `Haiku 4.5`), and the file's header says so.
 - **SwapSheet**: lanes where the session's class is unavailable are listed
-  with the downgrade sentence and require the explicit choice (§7).
+  with the downgrade sentence and require the explicit choice (§7). This one
+  surface is sequenced behind account-pools wave 4, which rewrites
+  `SwapSheet.tsx`, `NewSessionSheet.tsx`, `stores/fleet.ts` and `lib/api.ts`
+  (mail 279); the rest of §8 is not.
 - **Effort**: in the Models section, one control per classed model offering
   that model's `efforts` from the catalogue, writing `effort[class]`. The
   session picker's existing effort rows are unchanged and now take effect on
@@ -370,14 +398,18 @@ reasoning field; otherwise the shim leaves the request alone (§15).
 ## 9. Server routes and wire shape
 
 - `GET /api/accounts` — each account gains
-  `models: { classes, shortlist, catalogue: {fetchedAt, stale, count} | null,
-  unclassified: string[], retired: string[], available: Class[] }` computed by
-  `shared/models.ts` from the roster and the catalogue file (read on the same
-  fleet poll that reads limits and the registry — one readdir, `limits.ts`'s
-  own rule). Anthropic accounts: `models: null`.
-- `PATCH /api/accounts/{id}/models` — body `{ classes?, shortlist? }`; the
-  server validates with the shared validator, then execs `ccrc account models
-  <id> set …` through the agent (whitelisted verb). Errors come back as the
+  `models: { probe, classes, subagent, discovery, effort,
+  catalogue: {fetchedAt, stale, count} | null,
+  unclassified: string[], retired: string[], available: Class[],
+  labels: Record<id, label> }` computed by `shared/models.ts` from the registry
+  file and the catalogue (read by a NEW `server/src/models.ts` on the same fleet
+  poll — one readdir of `~/.ccrc/models/`; `limits.ts` is account-pools wave 3's
+  and is not touched). The assembly adds one field per row and moves no
+  existing line, so it composes with wave 3's untagged-forecast change.
+  Accounts without a registry file: `models: null`.
+- `PATCH /api/accounts/{id}/models` — body `{ classes?, subagent?, discovery?,
+  effort? }`; the server validates with the shared validator, then execs `ccrc
+  models <id> …` through the agent (whitelisted verbs). Errors come back as the
   verb's own sentence.
 - `POST /api/accounts/{id}/models/refresh` — execs `ccrc models refresh <id>`;
   returns the new catalogue summary.
@@ -388,18 +420,22 @@ reasoning field; otherwise the shim leaves the request alone (§15).
 ## 10. Verbs
 
 ```
-ccrc account models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
-ccrc account models <id> set-effort <haiku|sonnet|opus|fable> <level|default>
-ccrc account models <id> shortlist add <modelId> | rm <modelId> | catalogue
-ccrc account models <id> show                # classes, shortlist, derived states, JSON with --json
-ccrc models refresh [<id> | --all]           # probe(s) + LiteLLM step; the timer's entry point
-ccrc models litellm <id>                     # render + (re)start; idempotent
-ccd swap <id> <wrapper> [--as-class <c>]     # existing verb, new flag
+ccrc models <id> init <codex|openrouter|compatible>   # creates the registry file; codex seeds luna/terra/sol, fable null, subagent sonnet, effort defaults
+ccrc models <id> show [--json]                        # file + derived states + catalogue summary
+ccrc models <id> set-class <class> <modelId|none>
+ccrc models <id> set-subagent <class>
+ccrc models <id> set-effort <class> <level|default>
+ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
+ccrc models refresh [<id> | --all]                    # probe(s) + LiteLLM step; the timer's entry point
+ccrc models litellm <id>                              # render + (re)start; idempotent
+ccd swap <id> <wrapper> [--as-class <c>]              # existing verb, new flag (after PR #62, §14)
 ```
 
-`set-class` and `shortlist` re-materialise the env block on success and refuse,
-with the field named, on any validation failure. Exit 2 = usage, the contract
-`ccrc` states for its verbs.
+A top-level `models` group, not a subverb of `ccrc account`: that verb is the
+account-connections branch's and is not on `main`. Every mutation
+re-materialises (env block, `.classes.tsv`, `.effort.json`) on success and
+refuses, with the field named, on any validation failure. Exit 2 = usage, the
+contract `ccrc` states for its verbs.
 
 ## 11. Error handling
 
@@ -414,13 +450,14 @@ with the field named, on any validation failure. Exit 2 = usage, the contract
 - **Retired class id**: warning everywhere; class unavailable for routing;
   roster untouched.
 - **All four slots null**: `ANTHROPIC_MODEL` cannot be derived — the
-  materialiser refuses the edit ("a lane needs at least one class").
-- **OpenRouter whitelist file absent**: shortlist-add refuses (the proxy would
+  materialiser refuses the edit ("a lane needs at least one class"). A
+  `subagent` naming a null slot is refused the same way.
+- **OpenRouter whitelist file absent**: discovery-add refuses (the proxy would
   refuse every request anyway).
 - **LiteLLM restart fails**: the generator reports it, keeps the previous
   config file in place (`.prev`), and `ccrc doctor` flags the mismatch.
 - **Settings block drift** (someone edited the lane's settings by hand): doctor
-  detects sentinel/value mismatch against the roster; `ccrc account models
+  detects sentinel/value mismatch against the registry file; `ccrc models
   <id> show` names the differing keys; re-materialise fixes.
 
 ## 12. Testing and mutation discipline
@@ -431,9 +468,13 @@ guard; `deviation-refs` and `single-definition` scans; the ccd provenance
 marker re-stamped after every `ccd/ccd` edit.
 
 - **Registry**: validator cases — four keys present, `MODEL_ID_RE`, class id
-  not in explicit shortlist, `shortlist: []`, `subagent` divergent, Anthropic
-  account with a `models` block (refused).
-- **Derived-state agreement**: one fixture set (catalogue × classes × shortlist,
+  not in an explicit discovery list, `discovery: []`, `subagent` naming a null
+  slot, unknown `probe`, `openrouter` with `discovery: "catalogue"` (refused).
+- **Materialiser pin**: a test asserts `shared/modelenv.mjs` is the only file
+  in the tree that writes `ANTHROPIC_DEFAULT_*_MODEL` keys into a settings
+  file (the single-definition scan filters `.tsx?` only and would never see a
+  second `.mjs` writer).
+- **Derived-state agreement**: one fixture set (catalogue × classes × discovery,
   incl. stale, hidden, retired) run through `shared/models.ts` and through
   `ccd`'s bash reader; assert identical `unclassified`, `retired`, `available`.
 - **Probes**: recorded provider responses (today's Codex nine; an OpenRouter
@@ -447,7 +488,8 @@ marker re-stamped after every `ccd/ccd` edit.
   Anthropic id and a gpt id; `--model <class>` present in the spawn line iff
   the class is available on the destination; `_swap_target` skips a lane
   lacking the class in both brackets (extends `ccd-default-pool.test.ts`);
-  `--as-class` downgrade; `ccd ls` lane line.
+  `--as-class` downgrade; `ccd ls` lane line; `_reg_read_class` on absent,
+  readable and unreadable files.
 - **Server**: `/api/accounts` shape; PATCH validation; refresh route execs the
   verb through the whitelist; catalogue search paging.
 - **PWA** (render tests, the repo's accessibility contract): the class radio
@@ -462,10 +504,10 @@ marker re-stamped after every `ccd/ccd` edit.
 
 ## 13. Migration and rollout
 
-1. Roster: the seed path and `ccrc account` add the gpt account's `models`
-   block (luna/terra/sol, `fable: null`, `shortlist: "catalogue"`) when absent.
-   A roster without the block on a non-Anthropic account is valid and reads as
-   "all classes unavailable" until seeded — doctor says so.
+1. `ccrc models gpt init codex` writes the gpt lane's registry file
+   (luna/terra/sol, `fable: null`, `subagent: sonnet`, `discovery:
+   "catalogue"`). A non-Anthropic lane without a file reads as "all classes
+   unavailable" until then — doctor says so.
 2. First refresh writes the catalogue; the Accounts screen shows Astra and
    three others unclassified. The operator assigns Fable-class to Astra there.
 3. Materialise; `ccgpt` and `claude-glm` lose their exports in the same
@@ -476,28 +518,39 @@ marker re-stamped after every `ccd/ccd` edit.
    (routes, PWA). `ccrc-models.timer` is enabled by the agent lane like
    `ccd-cap-scopes.timer`.
 
-## 14. Dependencies, ordering and the pending rulings
+## 14. Dependencies, ordering and the rulings
 
-- **Account-pools PR #62 (wave 2b) gates the ccd part (§7).** Ruling from that
-  program's coordinator (mail 275, 2026-09-08): no per-session registry field
-  and no edit to `_swap_target`, `cmd_swap`, `cmd_start`, `cmd_enable`,
-  `cmd_prefer` or `cmd_ensure` until #62 is merged AND deployed; rebase after
-  it; declare `class` through wave 2b's registry field inventory. Plans 1 and
-  3 do not touch that path and are not gated.
-- Depends on account-connections wave 1 (`ccrc account`, `PROVIDERS`, the
-  settings-block writer, the Accounts screen card). Its branch is at task 20
-  of its plan (`842f3c5d`, 2026-09-08). This design's plan orders the work so
-  the units that do not touch that wave's files go first: probes, catalogue
-  file, `shared/models.ts`, LiteLLM render, class carry in ccd, the picker.
-  Roster block, verbs, routes and the Models section follow the merge.
-- The account-connections spec is owned by session `ccrc-pwa-plain-hollow`
-  (not the pools coordinator); no PR is open for its branch yet. Ruling
-  requested from it (mail 277, after 272/274 were forwarded): (1) amendment to
-  their spec vs. this separate spec; (2) `fable` slot and derived `subagent`;
-  (3) `selectable` → shortlist; (4) merge window. Outcomes: **amendment** —
-  §4.1 of this spec moves into theirs verbatim and this document keeps §5–§13;
-  **separate** — as written. Either way §4.1 is the contract and is not
-  re-litigated in the plan.
+Three programs touch the same tree; the rulings below (all 2026-09-08) fix the
+order. The account-connections spec's owner is session `ccrc-pwa-plain-hollow`;
+the account-pools coordinator is `ccrc-pwa-amber-summit`.
+
+- **Plan 1 — registry, probes, materialiser, effort shim — starts now, from
+  `origin/main`.** Ruling 280: do not stack on the account-connections branch
+  (no PR open, 9 of 29 tasks, three-file conflict with `main` awaiting an
+  operator decision, tip moving under review). Plan 1 therefore touches neither
+  `shared/roster.ts` nor `ccrc account`; the registry is its own file (§4.1),
+  the verbs are a top-level `ccrc models` group (§10), and `shared/modelenv.mjs`
+  ships with its single-writer pin.
+- **Plan 2 — class carried in ccd — starts after account-pools PR #62 is merged
+  AND deployed.** Ruling 275: no per-session registry field and no edit to
+  `_swap_target`, `cmd_swap`, `cmd_start`, `cmd_enable`, `cmd_prefer` or
+  `cmd_ensure` before that; rebase onto its merge sha; declare `class` through
+  wave 2b's registry field inventory; write the class filter as the third
+  predicate in the composed chain (§7) after reading that wave's crossing
+  section.
+- **Plan 3a — routes, the Models section, the picker, doctor — starts after
+  Plan 1.** It adds a new `server/src/models.ts` reader and one field per
+  `/api/accounts` row (composes with wave 3, mail 279), touches `shared/api.ts`
+  only by adding one interface and one optional field, and leaves
+  `SwapSheet.tsx`, `NewSessionSheet.tsx`, `stores/fleet.ts` and `lib/pools.ts`
+  alone.
+- **Plan 3b — the SwapSheet downgrade choice — starts after account-pools wave 4
+  merges** (it rewrites `SwapSheet.tsx`).
+- **Fold-in — `classes` into `exec.models` as an optional sibling — is decided
+  after the account-connections branch merges**, with its owner (they will
+  amend their §4.1 for the additive part). Until then this spec references that
+  spec for `exec.models`' shape and restates nothing; `probe` is this design's
+  field and defaults from `exec.provider` once that exists on `main`.
 
 ## 15. Decisions recorded for the operator (each has a default)
 
@@ -507,9 +560,11 @@ marker re-stamped after every `ccd/ccd` edit.
 | 1b | Effort on `claude-glm` | shim-mapped only if the backend accepts a reasoning field; else untouched |
 | 2 | Auto-swap for a session whose class is unavailable on a lane | skip the lane (never silently downgrade) |
 | 3 | Refresh cadence | 60 min timer + on-demand button |
-| 4 | Anthropic catalogue probe | none; classes are client defaults |
-| 5 | OpenRouter shortlist | explicit only; whitelist check at add time |
-| 6 | Hidden Codex models | excluded from `"catalogue"` shortlists; addable explicitly |
+| 4 | Anthropic catalogue probe | none; no registry file; classes are client defaults |
+| 5 | OpenRouter discovery list | explicit only; whitelist check at add time |
+| 5b | Where the registry lives until account-connections merges | its own per-account file under `~/.ccrc/models/`; fold-in decided later, additively |
+| 5c | `subagent` | an explicit class name per lane, default `sonnet`; never derived |
+| 6 | Hidden Codex models | excluded from `"catalogue"` discovery lists; addable explicitly |
 | 7 | Where classification happens | the Accounts screen; the verb exists for scripts and doctor's remedies |
 
 ## 16. Out of scope
