@@ -163,12 +163,19 @@ _fetch() {
   case "$PROBE_KIND" in
     codex) _fetch_codex ;;
     openrouter)
-      # The LIST needs no credential (§5). `--fail` so a 4xx/5xx is a non-zero
-      # exit rather than an error page written into $RAW as if it were a
-      # catalogue; `-sS` so the transcript carries the reason and not a
-      # progress bar.
+      # The whole-catalogue LIST needs no credential (§5) — it is public. The
+      # ENDPOINTS route is different: "which providers serve this model" is
+      # account-scoped (§5), so it sends the same lane token the `compatible`
+      # arm below reads, not a second variable, and refuses outright when that
+      # token is unset rather than sending an unauthenticated request that
+      # OpenRouter would answer with less than the ownership check needs.
+      # `--fail` so a 4xx/5xx is a non-zero exit rather than an error page
+      # written into $RAW as if it were a catalogue; `-sS` so the transcript
+      # carries the reason and not a progress bar.
       if [ -n "$ENDPOINTS" ]; then
-        curl -sS --fail --max-time 30 \
+        [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] \
+          || { echo "$PROG: the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN" >&2; return 1; }
+        curl -sS --fail --max-time 30 -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
           "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
       else
         curl -sS --fail --max-time 30 'https://openrouter.ai/api/v1/models' > "$RAW"
@@ -364,10 +371,18 @@ if ! _fetch 2>"$TMPD/fetch.err"; then
 fi
 
 if [ -n "$ENDPOINTS" ]; then
-  # The RAW endpoints body IS the answer — no normaliser, no catalogue shape.
-  # Same mode discipline as the catalogue write: 0600 before the rename.
-  chmod 600 "$RAW" || die "could not set the mode on the endpoints answer"
-  mv -f "$RAW" "$OUT" || die "could not move the endpoints answer into place at $OUT"
+  # The RAW endpoints body IS the answer — no normaliser, no catalogue shape —
+  # but it still lands the same way the catalogue does: staged through $NORM
+  # (already `$OUT.tmp.$$`, already in the EXIT trap) beside the destination,
+  # then renamed onto it with `-T`. `$RAW`'s directory can be a different
+  # filesystem from $OUT's, so the first move below can be a copy+unlink —
+  # that is fine, nothing reads $NORM until the final rename. `-T` on that
+  # final rename REFUSES when --out names an existing directory, instead of
+  # "succeeding" by dropping the answer inside it under $RAW's own basename,
+  # which is what moving straight onto $OUT did before this fix.
+  mv -f "$RAW" "$NORM" || die "could not stage the endpoints answer"
+  chmod 600 "$NORM" || die "could not set the mode on the endpoints answer"
+  mv -fT "$NORM" "$OUT" || die "could not move the endpoints answer into place at $OUT"
   exit 0
 fi
 

@@ -369,7 +369,7 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
   it('writes the RAW endpoints body to --out and no catalogue at all', () => {
     const out = path.join(home, 'endpoints.json');
     const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', out],
-      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW });
+      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW, ANTHROPIC_AUTH_TOKEN: 'lane-token' });
     expect(r.code).toBe(0);
     const body = JSON.parse(fs.readFileSync(out, 'utf8')) as { data: { endpoints: unknown[] } };
     expect(body.data.endpoints).toHaveLength(2);
@@ -378,7 +378,7 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
 
   it('requires --out — the body is an ANSWER to one question, not a lane\'s catalogue', () => {
     const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2'],
-      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW });
+      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW, ANTHROPIC_AUTH_TOKEN: 'lane-token' });
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--endpoints needs --out/);
   });
@@ -396,5 +396,49 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
       { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'nope') });
     expect(r.code).toBe(1);
     expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'router.json'), 'utf8')).toBe(before);
+  });
+
+  it('a failed fetch under --endpoints never rewrites a PRE-EXISTING --out file either (fix round 1, finding 1)', () => {
+    // The previous test proves `router.json` is untouched, but that is true
+    // even without the short-circuit, because `--out` for `--endpoints` is
+    // never `router.json` (it is mandatory and always names a different
+    // path). The guard's real job is protecting whatever already sits AT
+    // `--out` — a previous, valid endpoints answer — from `_mark_stale`
+    // finding it, treating it as a catalogue, and rewriting it with
+    // `stale`/`lastError` keys.
+    const out = path.join(home, 'e.json');
+    const previousAnswer = JSON.stringify({ data: { endpoints: [] } });
+    fs.writeFileSync(out, previousAnswer);
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', out],
+      { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'nope') });
+    expect(r.code).toBe(1);
+    expect(fs.readFileSync(out, 'utf8')).toBe(previousAnswer);
+  });
+
+  it('--out an existing directory refuses instead of writing inside it (fix round 1, finding 2)', () => {
+    // Mirrors the Codex catalogue arm's own directory-refusal test: `-T` on
+    // the final rename must REFUSE when --out names an existing directory,
+    // not "succeed" by dropping the answer inside it under $RAW's basename.
+    const dir = path.join(home, 'endpoints-existing-dir');
+    fs.mkdirSync(dir);
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', dir],
+      { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW, ANTHROPIC_AUTH_TOKEN: 'lane-token' });
+    expect(r.code).toBe(1);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it('the endpoints call needs the lane\'s key — the LIST stays credential-free (fix round 1, finding 3)', () => {
+    // NO fixture here, deliberately: the fixture seam short-circuits `_fetch`
+    // before the credential check ever runs (it answers for the whole
+    // function, real network or not), so routing this case through the seam
+    // would make it pass trivially without ever exercising the check. Leaving
+    // the seam unset drives the refusal off the real openrouter arm's own
+    // token gate, which sits before its `curl` call — so the poisoned curl in
+    // this suite must still see nothing, proving the token is never sent.
+    const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', path.join(home, 'e.json')]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN/);
+    expect(fs.existsSync(path.join(home, 'e.json'))).toBe(false);
+    expect(curlCalls()).toEqual([]);
   });
 });
