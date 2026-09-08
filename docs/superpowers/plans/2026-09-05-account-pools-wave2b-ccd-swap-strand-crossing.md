@@ -2558,7 +2558,8 @@ two-angle refutation, zero refuted. No behavioural defect has been found in any 
 - **D-1972** (four homes, ROOT DEFECT of this round) — round 2's
   corrections replaced one false claim with another of the same shape: they said a session strands
   "only when neither an untagged home-able account nor an overflow lane EXISTS". Measured against
-  `_swap_target`'s loop (`ccd/ccd:12164-12166`), which applies THREE predicates —
+  `_swap_target`'s loop (`grep -n '_pool_ok "$cand" "$pps" || continue' ccd/ccd` and the two lines under
+  it — the line-number form this entry first used went stale the next day), which applies THREE predicates —
   `_pool_ok`, `_account_ok`, `_avail` — being untagged buys a candidate the first and nothing else.
   An untagged account that exists and is kill-switched, uninstalled, or over `SWAP_CEILING` strands
   the session exactly as before, and this branch's own contrast case demonstrates it: marker

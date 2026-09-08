@@ -668,6 +668,31 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.health.briefQueued).toBe(true);
   });
 
+  // R7 (Task 8): `Tmux` and `runCcd` share ONE guarded runner in this fixture
+  // (`makeRunner`'s own docstring), so `calls` is a single ordered log of
+  // every fleet act this dispatch made — the seam that lets this test prove
+  // ORDER, not merely presence. A `/clear` fires a SessionStart, and the card
+  // that event emits quotes `$REG/<id>.hold` — so the hold this dispatch
+  // places must land in the pane's registry BEFORE the `/clear` that triggers
+  // that read, or the card quotes the previous wave's bytes (or nothing, on
+  // wave 1). Written to red against the pre-fix order (clear then hold) and
+  // green against the fix.
+  it('places the hold BEFORE it clears the pane, in call order, on a wave N>=2 resume (R7)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
+      .json() as { id: number };
+    const res = await postDispatch(app, opened.id);
+    expect(res.statusCode).toBe(200);
+    const holdIdx = calls.findIndex((c) => c[0] === 'ws-hold');
+    const clearIdx = calls.findIndex((c) => c[0] === 'send-keys' && c.includes('-l') && c.includes('/clear'));
+    expect(holdIdx, 'no ws-hold call recorded').toBeGreaterThan(-1);
+    expect(clearIdx, 'no /clear send-keys call recorded').toBeGreaterThan(-1);
+    expect(holdIdx, 'the hold must be placed before the pane is cleared').toBeLessThan(clearIdx);
+  });
+
   it('a RESUMED dispatch leaves dispatchStartedAt null — the column measures the SPAWN, and a resume ' +
      'mints no workspace (the scope is deliberate, not an oversight)', async () => {
     // THE SCOPE OF `dispatchStartedAt`, PINNED SO IT IS DELIBERATE RATHER THAN

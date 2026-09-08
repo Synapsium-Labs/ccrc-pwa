@@ -342,7 +342,9 @@ Every crossing writes one `swap.log` line `cross-pool <id>: <cur> -> <target> [p
 > POINTS here and none restates it.**
 >
 > A candidate is taken only if it passes **all three** predicates of `_swap_target`'s loop, in this
-> order (`ccd/ccd:12164-12166`, quoted verbatim):
+> order (`grep -n '_pool_ok "$cand" "$pps" || continue' ccd/ccd` and the two lines under it, quoted
+> verbatim — a GREP and not a line number, because this citation was written as `ccd/ccd:12164-12166`
+> and went stale within one day, on an unrelated merge, inside the normative statement itself):
 >
 > ```bash
 > _pool_ok "$cand" "$pps" || continue
