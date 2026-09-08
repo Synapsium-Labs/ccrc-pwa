@@ -411,7 +411,11 @@ const OPS = {
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
   materialise: { keys: ['file', 'id'], required: ['file', 'id'] },
   rm: { keys: ['file', 'id'], required: ['file', 'id'] },
-  litellm: { keys: ['file', 'id', 'template', 'out'], required: ['file', 'id', 'template', 'out'] },
+  // `commit` is OPTIONAL and defaults to check-only (fix round 1): omitted or
+  // any value other than the literal string "true" renders and reports
+  // `changed` without writing; `--commit true` performs the write. See the
+  // `litellm` arm's own comment for why the write is a second, explicit call.
+  litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'] },
 };
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
@@ -609,8 +613,24 @@ function main(argv) {
     }
     let previous = null;
     try { previous = readFileSync(a.out, 'utf8'); } catch { previous = null; }
-    if (previous === text) {
+    const changed = previous !== text;
+    if (!changed) {
       out({ ok: true, op: 'litellm', id: a.id, path: a.out, changed: false });
+      return 0;
+    }
+    // TWO-PHASE (fix round 1, this task's controller ruling): STOP-THEN-WRITE.
+    // `ccd/ccrc`'s `_models_litellm` owns the decision of whether a running
+    // proxy needs stopping — this op cannot make that call itself, since
+    // `pgrep`/`ccgpt` are box-level concerns kept out of node deliberately, so
+    // this op can be measured against a fixture HOME with no real process.
+    // Without `--commit true`, this call is CHECK-ONLY: it never writes, so a
+    // caller that decides a restart is owed and then fails to stop the proxy
+    // can walk away having changed nothing on disk, and the NEXT run sees the
+    // same difference and retries the whole decision — rather than the config
+    // already being on disk, reporting "unchanged" forever after, while the
+    // proxy no one could stop keeps serving the stale rendering.
+    if (a.commit !== 'true') {
+      out({ ok: true, op: 'litellm', id: a.id, path: a.out, changed: true });
       return 0;
     }
     try {

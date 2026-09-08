@@ -1154,6 +1154,52 @@ describe('ccrc models litellm', () => {
     expect(calls('ccgpt')).toEqual([]);
   });
 
+  // Fix round 1 (this task, controller ruling): STOP-THEN-WRITE. A running
+  // proxy that will not stop must refuse BEFORE the op ever writes, so the
+  // next run sees the same difference and retries — writing first and only
+  // then discovering the stop failed would leave the new config already on
+  // disk, reporting "unchanged" forever after, while the box keeps serving
+  // the stale rendering with no operator signal.
+  it('refuses when a running proxy will not stop, and writes nothing', () => {
+    pgrep(true);
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 1\n', { mode: 0o755 });
+    const r = run(['models', 'litellm', 'gpt']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(false);
+    expect(b['error']).toBe('restart-failed');
+    expect(fs.existsSync(configPath())).toBe(false);
+    expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
+  });
+
+  it('restarts (a successful stop) and writes, reporting restarted:true', () => {
+    fs.mkdirSync(join(home, '.handoff'), { recursive: true });
+    fs.writeFileSync(configPath(), 'model_list: []\n');
+    pgrep(true);
+    const r = run(['models', 'litellm', 'gpt']);
+    expect(r.code).toBe(0);
+    const b = oneObject(r);
+    expect(b['changed']).toBe(true);
+    expect(b['restarted']).toBe(true);
+    expect(calls('ccgpt')).toEqual(['stop']);
+    expect(fs.readFileSync(`${configPath()}.prev`, 'utf8')).toBe('model_list: []\n');
+  });
+
+  it('a second run after a failed stop retries once the proxy can be stopped', () => {
+    pgrep(true);
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 1\n', { mode: 0o755 });
+    const r1 = run(['models', 'litellm', 'gpt']);
+    expect(r1.code).toBe(1);
+    expect(fs.existsSync(configPath())).toBe(false);
+    ccgpt();
+    const r2 = run(['models', 'litellm', 'gpt']);
+    expect(r2.code).toBe(0);
+    expect(oneObject(r2)['changed']).toBe(true);
+    expect(fs.existsSync(configPath())).toBe(true);
+  });
+
   it('refuses a never-probed lane rather than rendering an empty list', () => {
     fs.rmSync(join(home, '.ccrc', 'models', 'gpt.json'));
     const r = run(['models', 'litellm', 'gpt']);
@@ -1201,6 +1247,29 @@ describe('refresh runs the litellm step for a codex lane (§5)', () => {
     run(['models', 'router', 'init', 'openrouter']);
     const orRaw = join(here, 'fixtures', 'catalogues', 'openrouter-raw-page.json');
     run(['models', 'refresh', 'router'], { CCRC_MODELS_PROBE_FIXTURE: orRaw });
+    expect(fs.existsSync(configPath())).toBe(false);
+  });
+
+  // Fix round 1 (this task, controller ruling): a lane whose litellm step
+  // refuses (a running proxy that will not stop) is a FAILED row, and the
+  // whole run's exit code follows it — an `ok:true` row that quietly named a
+  // failure was exactly the bug (the hourly `refresh --all` exiting 0 while
+  // the box served the previous model list). The catalogue probe itself still
+  // succeeded and its effects stand — the lane's catalogue is on disk — but
+  // the LiteLLM config, having refused to write, is not.
+  it('a lane whose restart fails is a FAILED row, and the run exits 1', () => {
+    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/pgrep-calls"\necho 4242\nexit 0\n`, { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-calls"\nexit 1\n', { mode: 0o755 });
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(false);
+    const rows = b['refreshed'] as { id: string; ok: boolean; reason?: string }[];
+    expect(rows).toEqual([{ id: 'gpt', ok: false, reason: expect.any(String) }]);
+    expect(rows[0]!.reason).toMatch(/could not be stopped/);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
     expect(fs.existsSync(configPath())).toBe(false);
   });
 });

@@ -4093,26 +4093,51 @@ _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.te
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
 
-# Render, and restart only if BOTH halves are true: the bytes changed AND a
-# proxy is holding the old ones. In-flight gpt turns fail once and retry (§6.3),
-# which is a cost worth paying for a config that has changed and not one for a
-# config that has not.
-_models_litellm() {   # <accountId> -> prints the op's JSON body
-  local file body rc
+# STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is
+# owed only when BOTH halves are true: the bytes changed AND a proxy is
+# holding the old ones — but deciding that and acting on it has to happen
+# BEFORE the new bytes land on disk, or a stop that fails leaves the config
+# already rewritten: the next run compares equal bytes, reports "unchanged",
+# and never retries the restart, while the box keeps serving the stale
+# rendering with no operator signal. So this is TWO calls into the op, not
+# one: PHASE 1 asks it to render and compare only (never write); if a restart
+# is owed and cannot be had, this function REFUSES here, before PHASE 2 —
+# the write — is ever asked for, so the next run sees the same difference and
+# retries. In-flight gpt turns fail once and retry (§6.3), which is a cost
+# worth paying for a config that has changed and not one for a config that
+# has not.
+_models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
+  local file check crc
   file="$(_models_roster_path)"
-  body="$(_models_answer litellm --file "$file" --id "$1" \
-            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; rc=$?
-  printf '%s\n' "$body"
-  [ "$rc" -eq 0 ] || return "$rc"
-  if [ "$(printf '%s' "$body" | jq -r '.changed')" = "true" ] && _models_litellm_running; then
+  check="$(_models_answer litellm --file "$file" --id "$1" \
+             --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; crc=$?
+  [ "$crc" -eq 0 ] || { printf '%s\n' "$check"; return "$crc"; }
+  if [ "$(printf '%s' "$check" | jq -r '.changed')" != "true" ]; then
+    printf '%s\n' "$check"
+    return 0
+  fi
+  local restarted=false
+  if _models_litellm_running; then
     if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
+      restarted=true
       echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
     else
-      echo "$PROG: the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand; until then this box serves the old model list. The previous config is at $(_models_litellm_path).prev." >&2
-      return 1
+      # Refuse HERE, before PHASE 2: nothing is written, so the bytes on disk
+      # stay exactly what they were, and the NEXT run sees the same
+      # difference and retries the whole decision rather than silently
+      # reporting "unchanged" forever after.
+      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand, then re-run this command — until then this box serves the old model list. Nothing was written."
     fi
   fi
-  return 0
+  local body
+  body="$(_models_answer litellm --file "$file" --id "$1" \
+            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)" --commit true)"; crc=$?
+  if [ "$crc" -eq 0 ]; then
+    printf '%s\n' "$(printf '%s' "$body" | jq -c --argjson r "$restarted" '. + {restarted: $r}')"
+  else
+    printf '%s\n' "$body"
+  fi
+  return "$crc"
 }
 
 # The box-wide half of the verb group: the CATALOGUES the class registries are
@@ -4201,17 +4226,34 @@ _models_box_sub() {   # <subcommand> [args…]
           # "did the visible set change", and it is the same question,
           # because the visible set is the only input the rendering has.
           lit="skipped"
+          local lreason=""
           if [ "$probe" = "codex" ]; then
             local lbody
             if lbody="$(_models_litellm "$id" 2>/dev/null)"; then
               [ "$(printf '%s' "$lbody" | tail -n1 | jq -r '.changed')" = "true" ] \
                 && lit="rendered" || lit="unchanged"
             else
-              lit="failed"
+              # STOP-THEN-WRITE (fix round 1, this task's controller ruling):
+              # `_models_litellm` REFUSED — a proxy was running the previous
+              # config and could not be stopped, so nothing was written and
+              # this box still serves the STALE model list with no operator
+              # signal unless this row says so. That is a FAILURE of this
+              # lane's refresh as a whole, not a skipped optional step — the
+              # catalogue probe and the materialise above already succeeded
+              # and their effects stand, but `litellm: "failed"` is retired
+              # from this row's vocabulary (rendered|unchanged|skipped only):
+              # an `ok:true` row that quietly named a failure was exactly the
+              # bug this ruling fixes.
+              lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail')"
             fi
           fi
-          row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
-            '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
+          if [ -n "$lreason" ]; then
+            row="$(jq -cn --arg id "$id" --arg reason "$lreason" '{id:$id, ok:false, reason:$reason}')"
+            failed=1
+          else
+            row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
+              '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
+          fi
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
           # probe's own first stderr line, captured by `_models_refresh_one`.
