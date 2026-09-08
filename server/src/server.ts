@@ -10,7 +10,8 @@ import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
-import { readLimits, projectHome } from './limits.js';
+import { readLimits, projectHome, projectPlacement } from './limits.js';
+import { poolFor, readProjectPools } from './pools.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -65,7 +66,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState,
+  type FloorState, type ProjectRow,
 } from '../../shared/api.js';
 
 /**
@@ -1672,9 +1673,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // never report the day it becomes reachable.
   app.get('/api/projects', async () => {
     const listed = await listProjects(deps.io, deps.cfg);
+    // The pool half, composed HERE and never inside `listProjects`: that is the
+    // fleet read (a readdir of the projects root unioned with registry
+    // workdirs) and this is policy off the registry, exactly the split
+    // `readiness` already draws. One root readdir feeds `readProjectPools`,
+    // which needs the PARENT listing to tell an absent `pools/` from an
+    // unlistable one (`pools.ts`, spec §5.4.4).
+    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
+    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const limits = await readLimits(deps.io, deps.cfg);
+    const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
+      const pool = poolFor(poolsRead, p.name);
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
+    };
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
-      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null })) };
+      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p) })) };
     }
     const coord = deps.coord;
     return {
@@ -1692,7 +1706,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         } catch {
           floor = 'unmeasurable';
         }
-        return { ...p, readiness: projectReadiness(fleet, floor) };
+        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p) };
       }),
     };
   });

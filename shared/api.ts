@@ -1432,11 +1432,21 @@ export interface ProjectReadiness extends ReadinessFacts {
  *   - an object: measured.
  * A reader that folds the first two together has thrown away the difference
  * between "upgrade the server" and "wait two seconds".
+ *
+ * `pool` and `placement` follow the same absence rule with one fewer rung: the
+ * key ABSENT means an older server that does not read project pools, and a
+ * reader must render NOTHING for it — never `{state:'untagged'}`, which would
+ * flag every project on the box as un-tagged worklist the day before the
+ * feature ships (account pools, spec §5.4.5, §5.9). There is no `null` rung:
+ * this build measures on every request, and its four states already contain
+ * "we could not read it".
  */
 export interface ProjectRow {
   name: string;
   workdir: string;
   readiness?: ProjectReadiness | null;
+  pool?: ProjectPoolWire;
+  placement?: ProjectPlacement;
 }
 
 /**

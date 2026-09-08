@@ -481,13 +481,27 @@ describe('listProjects', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
-    // The route serves `listProjects`'s rows plus F3's readiness join. This
-    // app has no watcher, so every row carries `readiness: null` — "this build
-    // measures readiness and has not swept", which is deliberately NOT the
-    // same as the key being absent (a build too old to carry it at all).
+    // The route serves `listProjects`'s rows plus F3's readiness join AND the
+    // pool join (account pools, wave 3). This app has no watcher, so every row
+    // carries `readiness: null` — "this build measures readiness and has not
+    // swept", which is deliberately NOT the same as the key being absent (a
+    // build too old to carry it at all).
+    //
+    // `pool` and `placement` are asserted here rather than loosened away,
+    // because the ROUTE gaining them while `listProjects` does not is the
+    // split this case exists to hold: the `direct` half above still compares
+    // BARE rows, and it would go on passing if the composition slid down into
+    // the fleet read. No project is tagged in this fixture, so every row is
+    // `{state:'untagged'}` and the forecast is the unconstrained one — which is
+    // exactly what a box on the day this ships looks like.
     expect(res.json().roots).toEqual(direct.roots);
     expect(res.json().projects).toEqual(
-      direct.projects.map((p) => ({ ...p, readiness: null })));
+      direct.projects.map((p) => ({
+        ...p,
+        readiness: null,
+        pool: { state: 'untagged' },
+        placement: { kind: 'projected', wrapper: 'claude', score: 0 },
+      })));
     await app.close();
   });
 
@@ -833,6 +847,38 @@ describe('GET /api/projects — the program-ready readiness', () => {
     const out = await listProjects(localIO, cfg);
     expect(out.projects.length).toBeGreaterThan(0);
     expect(out.projects.every((p) => !('readiness' in p))).toBe(true);
+    await app.close();
+  });
+
+  it('composes pool and placement on the UNSWEPT arm too — both arms, or the chip flickers', async () => {
+    // The route has two returns (`fleet === undefined` and the composed one)
+    // and they are the same row. A composition on one arm only would make the
+    // chip appear the moment the first readiness sweep landed and not before.
+    const { app } = await makeApp({ unswept: true });
+    const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
+    expect(row.readiness).toBeNull();
+    expect(row.pool).toEqual({ state: 'untagged' });
+    expect(row.placement.kind).toBe('projected');
+    await app.close();
+  });
+
+  it('listProjects itself still returns rows with NO pool and NO placement key — the route composes them', async () => {
+    // Same split as `readiness` above it: `listProjects` is the fleet read and
+    // the pool is policy. Keeping them apart is what lets the fleet read stay
+    // testable with no registry policy on disk at all.
+    // BOTH ROW SOURCES, because `listProjects` builds rows in two places — the
+    // projects-root walk and the registry-workdir union — and a bare
+    // `makeApp()` points at a root that does not exist, so only the second one
+    // runs. Measured: with just that arm, a `pool` key added to the FIRST
+    // `byWorkdir.set` leaves this case green and only the merge case above
+    // catches it. A case that names the whole function has to reach both.
+    const root = mkTmp('ccrc-projects-nopool-');
+    mkdirSync(path.join(root, 'alpha'));
+    const { cfg, app } = await makeApp({ projectsRoot: root });
+    const out = await listProjects(localIO, cfg);
+    expect(out.projects.map((p) => p.name), 'both row sources are represented')
+      .toEqual(expect.arrayContaining(['alpha', 'MekWarLive']));
+    expect(out.projects.every((p) => !('pool' in p) && !('placement' in p))).toBe(true);
     await app.close();
   });
 });

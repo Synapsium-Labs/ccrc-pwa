@@ -1545,6 +1545,7 @@ git commit -m "feat(pools): the forecast takes the project's pool, and one fixtu
 
 ---
 
+### Task 5 — DONE 2026-09-08 (3/3 mutations red)
 ### Task 5: `GET /api/projects` composes `pool` and `placement`; `listProjects` stays pool-free
 
 **Files:**
