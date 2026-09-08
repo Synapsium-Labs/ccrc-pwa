@@ -46,10 +46,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CCD } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
-const CCD = readFileSync(path.join(ROOT, 'ccd', 'ccd'), 'utf8');
+const CCD_CONTENT = readFileSync(CCD, 'utf8');
 const KEEPALIVE = readFileSync(path.join(ROOT, 'ccd', 'ccd-telemetry-keepalive'), 'utf8');
 
 /**
@@ -89,7 +90,7 @@ const KEEPALIVE_NARROW = /^: "\$\{CCRC_KEEPALIVE_FRESH:=([0-9]+)\}"/;
 
 describe('the keepalive spends on the tree’s own definition of stale', () => {
   it('ccd still declares SWAP_FRESH as a bare integer, in exactly one spelling', () => {
-    expect(exactlyOne(CCD, CCD_BROAD, CCD_NARROW, 'ccd/ccd SWAP_FRESH')).toMatch(/^[0-9]+$/);
+    expect(exactlyOne(CCD_CONTENT, CCD_BROAD, CCD_NARROW, 'ccd/ccd SWAP_FRESH')).toMatch(/^[0-9]+$/);
   });
 
   it('the keepalive still declares CCRC_KEEPALIVE_FRESH as a bare default, in exactly one spelling', () => {
@@ -98,7 +99,7 @@ describe('the keepalive spends on the tree’s own definition of stale', () => {
   });
 
   it('and the two are the same number', () => {
-    const swap = exactlyOne(CCD, CCD_BROAD, CCD_NARROW, 'ccd/ccd SWAP_FRESH');
+    const swap = exactlyOne(CCD_CONTENT, CCD_BROAD, CCD_NARROW, 'ccd/ccd SWAP_FRESH');
     const keep = exactlyOne(KEEPALIVE, KEEPALIVE_BROAD, KEEPALIVE_NARROW,
       'the keepalive CCRC_KEEPALIVE_FRESH default');
     expect(Number(keep),
