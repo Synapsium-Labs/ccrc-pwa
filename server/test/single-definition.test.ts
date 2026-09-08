@@ -2279,3 +2279,73 @@ describe('graphify — one pin, one census path', () => {
       ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
   });
 });
+
+describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
+  // The same shape as "extraction finding — one path to the ccd script"
+  // above, applied to a copy that was made for a stated reason and copied
+  // anyway: `ccrc-install.test.ts` and `ccrc-install-graphify.test.ts` each
+  // carried their own `TREE_FILES` / `TREE_STUBS` / `installFixtureTree`,
+  // both headers citing the same excuse (importing a sibling `.test.ts` module
+  // for its helpers double-registers that file's `describe` blocks). The
+  // excuse argued for a THIRD file with no `describe()` in it, not for two
+  // copies — `installTreeFixture.ts` is that file. The cost of the old shape
+  // was measured, not theoretical: an edit to one `TREE_FILES` that missed the
+  // other broke 34 tests in the file nobody touched.
+  //
+  // Scans `server/test`, which `ROOTS` above deliberately does not cover, for
+  // the same reason the ccd-script-path finding does: these are TEST files,
+  // and the fixture they define is data no shipped source ring owns.
+  const testDir = path.join(ccrcRoot, 'server', 'test');
+  const testFiles = sources(testDir);
+
+  // Matches the shape of an ASSIGNMENT to an array literal, not a reference or
+  // an import — an `import { … } from './installTreeFixture.js'` line has no
+  // assignment-to-a-bracket in it, so a consumer importing the shared list is
+  // not mistaken for a second holder of it. (This comment deliberately never
+  // spells the three characters the pattern hunts for adjacently, the same
+  // reason the ccd-script-path finding above avoids writing its own literal.)
+  const DEFINES_TREE_FILES = /\bTREE_FILES\s*=\s*\[/;
+  const DEFINES_TREE_STUBS = /\bTREE_STUBS\s*:\s*Record<string,\s*string>\s*=\s*\{/;
+  const DEFINES_INSTALL_FIXTURE_TREE = /(?:export\s+)?function\s+installFixtureTree\(/;
+
+  it('found the test tree it is scanning', () => {
+    expect(testFiles.length).toBeGreaterThan(40);
+    expect(testFiles.map(rel)).toContain('server/test/installTreeFixture.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-install.test.ts');
+    expect(testFiles.map(rel)).toContain('server/test/ccrc-install-graphify.test.ts');
+  });
+
+  it('TREE_FILES is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_TREE_FILES.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('TREE_STUBS is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_TREE_STUBS.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('installFixtureTree is defined in exactly one file, installTreeFixture.ts', () => {
+    const holders = testFiles
+      .filter((f) => DEFINES_INSTALL_FIXTURE_TREE.test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/installTreeFixture.ts']);
+  });
+
+  it('is what the two former copy sites now import', () => {
+    // Not just "the copies are gone" — that is satisfied by deleting the
+    // fixture. Each former copy site must still reach the shared module.
+    for (const f of ['ccrc-install.test.ts', 'ccrc-install-graphify.test.ts']) {
+      const src = readFileSync(path.join(testDir, f), 'utf8');
+      expect(src, f).toMatch(
+        /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
+    }
+  });
+});
