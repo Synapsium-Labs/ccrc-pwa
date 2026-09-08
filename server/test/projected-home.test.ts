@@ -84,6 +84,19 @@ const seedAuthDead = (wrappers: string[]): void => {
   }
 };
 
+/** A present-but-malformed `<w>-authdead` — arbitrary raw content, not the
+ *  well-formed `"<epoch> <reason>"` `seedAuthDead` writes. Called AFTER
+ *  `seedAuthDead` in the runner below, deliberately: `seedAuthDead` sweeps
+ *  every `-authdead` file before writing its own, so a malformed marker
+ *  written first would be wiped by a later `seedAuthDead([])` call. */
+const seedAuthDeadMalformed = (byWrapper: Record<string, string>): void => {
+  const dir = path.join(home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [w, content] of Object.entries(byWrapper)) {
+    fs.writeFileSync(path.join(dir, `${w}-authdead`), content);
+  }
+};
+
 /** `_limit_score` says "wholly unknown" with an empty string, and `|| '0'` IS
  *  reached — by `all-rolled-over`, whose expected winner is unmeasured on both
  *  sides the moment the provenance fix lands (until then it is an inferred 0 on
@@ -103,6 +116,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       seed(c.files);
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
+      seedAuthDeadMalformed(c.authDeadMalformed ?? {});
       const cfg = loadConfig({ CCRC_HOME: home });
       const projected = projectHome(cfg.roster, await readLimits(localIO, cfg));
 

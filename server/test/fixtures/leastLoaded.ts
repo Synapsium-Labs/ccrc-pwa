@@ -33,6 +33,15 @@ export interface LeastLoadedCase {
    *  must drop the account from `scored` and leave `live`/`scorable[0]` alone.
    *  Omitted/empty means nothing is condemned. */
   authDead?: string[];
+  /** Wrappers carrying a `<w>-authdead` marker whose CONTENT is present but
+   *  malformed — an empty file, or a first whitespace-delimited field that is
+   *  not all digits. ccd's `_authdead` is FAIL-OPEN on exactly this shape
+   *  (absent, unreadable, empty or malformed all mean "not dead"), and the
+   *  server's `readLimits` must be too: trusting the FILENAME alone would
+   *  condemn an account ccd still happily places on. Keyed by wrapper so each
+   *  can carry its own malformed content; omitted/empty means no lane gets a
+   *  malformed marker. */
+  authDeadMalformed?: Record<string, string>;
   /** `null` iff every home-able lane is disabled — nothing is placeable, and
    *  both sides must say so in their own idiom (see the runner). */
   expect: { wrapper: string; score: number } | null;
@@ -200,6 +209,19 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: { wrapper: 'claude-b', score: 40 },
       why: 'the cheapest lane is condemned, so the cheapest lane nobody condemned wins — '
         + 'a health verdict costs preference, never eligibility',
+    },
+    {
+      name: 'malformed-authdead-marker-is-not-dead',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      // Empty file AND a first field that is not digits — the two shapes a
+      // hand-edited or half-restored marker actually takes. ccd's `_authdead`
+      // is FAIL-OPEN on both; a filename-only reader would wrongly condemn
+      // claude-a here and hand the placement to claude-b instead.
+      authDeadMalformed: { 'claude-a': '', 'claude-b': 'not-a-number auth-401' },
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'a present-but-malformed marker is not a verdict — ccd requires the first '
+        + 'field to be all digits and is fail-open otherwise, and the server must agree '
+        + 'or a hand-edited file condemns an account ccd still places on',
     },
   ];
 }

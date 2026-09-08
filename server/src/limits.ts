@@ -42,6 +42,27 @@ const SEVEN_WINDOW = 604800;
 
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
 
+/** Mirrors ccd's `_authdead` (ccd:1070) marker-CONTENT gate exactly:
+ *  `"<epoch> <reason>"`, verdict iff the first whitespace-delimited field is
+ *  all digits. FAIL-OPEN on anything else, same as bash — an empty or
+ *  malformed marker is NOT a verdict.
+ *
+ *  `_ah_mark`'s atomic mktemp+rename means the PROBE itself can only ever
+ *  leave this file absent or complete, but the probe is not the only actor
+ *  near this file family: the operator is one of its three clearing owners
+ *  and touches it by hand, and a partial restore, a backup tool, or a person
+ *  testing the UI can all leave a present-but-malformed marker. Trusting the
+ *  FILENAME alone here would make the server MORE CREDULOUS than bash —
+ *  `touch $REG/<w>-authdead` would condemn the account here while
+ *  `_account_ok`'s own reader still calls it healthy — and an adapter may not
+ *  narrow OR WIDEN a distinction it received. */
+const authDeadMarkerOk = (raw: string): boolean => {
+  const trimmed = raw.replace(/\n+$/, '');
+  const sp = trimmed.indexOf(' ');
+  const first = sp === -1 ? trimmed : trimmed.slice(0, sp);
+  return /^[0-9]+$/.test(first);
+};
+
 /** An account's pressure, or `null` when NOTHING has measured it — the
  *  distinction the whole placement rule turns on (see `projectHome`). Absent
  *  row, `five === null` and `seven === null` are one answer: unknown. A
@@ -177,11 +198,17 @@ export async function readLimits(
   const disabledLanes = new Set(
     regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)),
   );
-  // The same `readdir`, a second suffix. Both markers are dotless per-account
-  // files in one directory, so this costs nothing beyond a second pass over a
-  // list already in memory.
+  // The same `readdir`, a second suffix — but the FILENAME is only a
+  // candidate list, never the verdict: `authDeadMarkerOk` re-reads exactly the
+  // names that already matched (normally zero on a healthy fleet), never one
+  // read per account on the box.
+  const authDeadCandidates = regNames.filter((n) => n.endsWith('-authdead'))
+    .map((n) => n.slice(0, -'-authdead'.length));
   const authDeadLanes = new Set(
-    regNames.filter((n) => n.endsWith('-authdead')).map((n) => n.slice(0, -'-authdead'.length)),
+    (await Promise.all(authDeadCandidates.map(async (wrapper) => {
+      const content = await io.readFile(path.join(cfg.registryDir, `${wrapper}-authdead`));
+      return content !== null && authDeadMarkerOk(content) ? wrapper : null;
+    }))).filter((w): w is string => w !== null),
   );
   const out: Record<string, AccountLimits> = {};
   for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
