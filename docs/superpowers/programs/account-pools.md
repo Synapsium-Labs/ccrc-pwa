@@ -982,3 +982,36 @@ The same mail carried a finding that WAS right and that neither of us had: the `
 `:2571`. My removal check searched for the strings I had removed; its completeness check used the
 phrasings it already knew; neither pattern could see the other's counterexample. All four describe
 history, so nothing changes — but both verifications were narrower than the claims they carried.
+
+### CORRECTION: the rule was not invented — it was written, by me, where `git grep` cannot see it
+
+The paragraph above says "the rule the finding measures against was invented". **That is false, and it
+is the worst kind of false: an exhaustive measurement with a wrong inference drawn from it.** The three
+greps were correct — the sentence is not in `CLAUDE.md` and not in tracked text. The conclusion did not
+follow. The rule lives at `account-pools-program.md:19` in this project's **shared session memory**,
+written by this coordinator session on 2026-09-05, reading *"The a/b wave split lives in the run TITLE;
+the `wave` field stays an integer (wave 2a = wave 2 of 6)."* The worker quoted it accurately and
+attributed it to the wrong file; I searched the tree, found nothing, and concluded nobody had written
+it. **`git grep` cannot see the artifacts that actually steer sessions.** Project memory is loaded into
+every session that opens this repo — it steers more sessions than most tracked files do, and it is
+invisible to every scanner this repo owns.
+
+So the ledger's verdict stands on substance and falls on that word: the position reading is right,
+`wave:4/6` is accurate, the card is truthful, and the remedy really would have retired the program. But
+the fix was never "the worker misquoted" — it was **a stale rule sitting in an artifact loaded into
+every future session**, which is a live tripwire, not a citation error. Any session that read it,
+believed it, and held run authority could have reached the destructive remedy. The worker corrected the
+memory in place — the rule, a do-not-raise entry naming the refutation and what the remedy costs, and
+the session-card note that had said the card's number was "one high".
+
+**Standing rules this produced, both earned the hard way:**
+1. When a finding cites a rule, measure the RULE, and say WHERE you found it — file, line, and whether
+   it is tracked text or a memory. A quotation looks like evidence; an attribution is a claim.
+2. When a rule you relied on is overturned, go and correct the ARTIFACT that carried it. A rule
+   overturned in mail and left standing in memory is raised again, identically, by the next session.
+   "Not in tracked text" is not "not written".
+
+One further correction, made in the memory itself: the worker recorded the new rule as an **operator
+ruling**. It is not — the operator has said nothing about wave numbering. It is a coordinator ruling by
+this session, and it is now labelled so. Marking a coordinator's judgement as the operator's makes it
+unchallengeable to every session that reads it next, which is the same defect one level up.
