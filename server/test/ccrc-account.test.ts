@@ -536,6 +536,56 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     expect(j['error']).toBe('unmeasurable');
   });
 
+  it('tells a missing projection from an unsourceable one, in the projection\'s own vocabulary', () => {
+    // THE OTHER TWO GUARDS IN THIS FUNCTION, WHICH NOTHING PINNED EITHER
+    // (ccd/ccrc:3926-3927 and :3933-3937). Review round 1 pinned the
+    // `unmeasurable` guard above and left its two siblings in the same function
+    // unpinned — which is the "correcting the instance is not correcting the
+    // claim" failure, so they are closed here in the same breath.
+    //
+    // THE FIXTURE IS WHY THEY WERE INVISIBLE: `seedBoxRoster` always writes
+    // accounts.sh (it runs the real generator, which is the point of it), so no
+    // case had ever reached `_acct_candidates` without a readable projection.
+    // A fixture that is always correct cannot exercise a guard about being
+    // wrong.
+    //
+    // THE TWO CODES ARE THE SUBJECT, NOT INCIDENTAL (D-1923). They were
+    // `roster-absent`/`roster-invalid` until review round 1, borrowed from
+    // `readRoster`, which reads a DIFFERENT FILE with a different remedy —
+    // regenerate the projection with `ccrc install`, versus edit the JSON you
+    // wrote by hand. Tasks 24 and 27 read both files from one subcommand, so
+    // the pair (subcommand, code) cannot disambiguate them. This case is the
+    // mechanism behind that ruling: rename either code back and it reds.
+    const gone = box('ccrc-account-projection-absent-');
+    seedBoxRoster(gone, FIXTURE_ROSTER);
+    rmSync(join(gone, '.ccrc', 'accounts.sh'));
+    const a = run(gone, ['account', 'candidates']);
+    expect(a.code).toBe(1);
+    const aj = oneObject(a);
+    expect(aj['ok']).toBe(false);
+    expect(aj['error']).toBe('projection-absent');
+    // The remedy names the verb that fixes it, not merely the fault.
+    expect(String(aj['detail'])).toContain('ccrc install');
+
+    // PRESENT AND UNSOURCEABLE IS A SECOND CONDITION, NOT THE SAME ONE: the
+    // file is there, so `[ -f ]` passes and the operator's fix is different.
+    // An unterminated array is a PARSE error, so `.` fails before any line of
+    // it runs — which is also why the subshell (`_inst_dirs`' rule, cited at
+    // :3928-3931) matters: a projection that redefined `_ccrc_die` on its way
+    // to failing must not be able to take the refusal helper with it.
+    const bad = box('ccrc-account-projection-invalid-');
+    seedBoxRoster(bad, FIXTURE_ROSTER);
+    writeFileSync(join(bad, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(\n');
+    const b = run(bad, ['account', 'candidates']);
+    expect(b.code).toBe(1);
+    const bj = oneObject(b);
+    expect(bj['ok']).toBe(false);
+    expect(bj['error']).toBe('projection-invalid');
+    // Two files, two vocabularies: neither answer may borrow `roster-*`, which
+    // belongs to accounts.json.
+    expect(String(aj['error']) + String(bj['error'])).not.toContain('roster-');
+  });
+
   it('prints no byte of any candidate\'s contents', () => {
     // `_check_wrappers`' PATHS-ONLY rule. A launcher on a real box can carry an
     // API key on its `export` line; a pick list that echoed it would be the
