@@ -1015,3 +1015,34 @@ One further correction, made in the memory itself: the worker recorded the new r
 ruling**. It is not — the operator has said nothing about wave numbering. It is a coordinator ruling by
 this session, and it is now labelled so. Marking a coordinator's judgement as the operator's makes it
 unchallengeable to every session that reads it next, which is the same defect one level up.
+
+### What the misattribution thread actually proved, and the gap it exposed
+
+Closed 2026-09-08 at four booked misattributions, **two each** — mine: "not in the plan" (the Global
+Constraint sentence that was in the plan's Architecture paragraph) and "invented" (a rule I had written
+myself). The worker's: the `CLAUDE.md` attribution, and labelling this coordinator's ruling an
+**operator** ruling. It named why that last one is the worst form, and it is right: *a citation error
+sends a reader to the wrong file; an authority error stops them reading.* A session opening that memory
+next would have seen the operator's name on a wave-numbering rule and had no reason to question it —
+including a session with run authority, whose only remedy retires the program. The rule therefore has a
+third clause: quote the file and line, say whether it is TRACKED TEXT or a MEMORY, and **NAME THE
+RULER** — coordinator, operator and worker are three authorities and only one of them ends an argument.
+
+**The finding about our own method, which is the durable one.** All four were found by someone
+re-measuring a quotation, and THREE of them were found in the act of correcting the previous one. None
+was found by a suite. None was found by the review apparatus either: two multi-agent passes over this
+wave — 54 agents, 47 findings, 18 verified survivors — caught false counts, ornamental pins, stale
+citations and a mirror-image false claim, **and not one misattribution.** Reviewers check whether a
+claim is true of the code. They do not open the document a claim says it came from. *The class is not
+caught by review; it is caught by re-reading the source.* Wave 3's review brief must say so explicitly:
+for every quotation, open the cited file at the cited line.
+
+**And the structural gap, stated honestly rather than fixed today.** This tree enforces
+single-source-of-truth on code (`single-definition.test.ts`), on deviation numbers
+(`deviation-refs.test.ts`, `dtbd`) and, since round 3, on prose counts. It enforces **nothing** on
+project memory — which is loaded into every session that opens this repo, outranks most tracked files
+in practical influence, and is invisible to every scanner the tree owns. This wave's two most expensive
+claims were both living there: the wave-numbering rule that produced a destructive-remedy alarm, and
+the sentence whose absence from tracked text I read as proof it had never been written. No mechanism is
+proposed here — wave 3 is the server and C1's embargo still stands — but the gap is the widest-blast-
+radius one this program has found, and it belongs in the record before it is forgotten.
