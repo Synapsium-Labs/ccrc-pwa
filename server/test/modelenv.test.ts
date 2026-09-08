@@ -144,6 +144,22 @@ describe('modelEnvBlock', () => {
     expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
     expect(Object.keys(b)).toHaveLength(7);
   });
+
+  it.each([0, -1, 131072.5])(
+    'is ABSENT when the resolved model\'s context is %s — never "unknown" as a sentinel '
+    + '(§6.1, amended 2026-09-08, Task 16c fix round 1)', (bad) => {
+      // Zero, a negative, and a non-integer are none of them a measured
+      // window: writing them verbatim ("0", "-1", "131072.5") would put a
+      // number on disk with no window it describes. The omit rule's existing
+      // reason applies unchanged — there is no "unavailable" reading for a
+      // context window, only "unknown", and the client's own default already
+      // means "unknown".
+      const badContext = { ...CODEX,
+        models: CODEX.models.map((m) => (m.id === 'gpt-5.6-sol' ? { ...m, context: bad } : m)) };
+      const b = modelEnvBlock(SEEDED, badContext);
+      expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
+      expect(Object.keys(b)).toHaveLength(7);
+    });
 });
 
 describe('mergeSettingsEnv', () => {

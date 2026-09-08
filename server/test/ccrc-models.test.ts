@@ -1114,11 +1114,16 @@ describe('ccrc models litellm', () => {
     // anywhere, including in a comment.
     expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toContain('reasoning');
     expect(yaml).toContain('  - model_name: gpt-6-astra');
-    // No `[1m]` alias (§6.3, amended 2026-09-08, Task 16c): a fleet-host
-    // measurement found the catalogue's advertised context is not the usable
-    // one, so the generator stops emitting a name that would route a request
-    // Claude Code believes has 1M of room to a backend with no such id.
-    expect(yaml).not.toMatch(/\[1m\]/);
+    // No `[1m]` alias in the GENERATED block (§6.3, amended 2026-09-08, Task
+    // 16c; scoped in fix round 1 — the template's own header comment, carried
+    // verbatim, now legitimately says `[1m]` explaining why there is none, so
+    // a whole-file ban would fail on that prose, same as the `reasoning` ban
+    // above). A fleet-host measurement found the catalogue's advertised
+    // context is not the usable one, so the generator stops emitting a name
+    // that would tell Claude Code it has 1M of room — the backend has no such
+    // NAME (the removed alias mapped to the real id all along); the client's
+    // window BELIEF was the lie (2026-07-26).
+    expect(yaml.slice(yaml.indexOf('model_list:'), yaml.indexOf('litellm_settings:'))).not.toMatch(/\[1m\]/);
     expect(yaml).not.toContain('gpt-reserve');
   });
 

@@ -18,9 +18,10 @@
 // measurement found the catalogue's advertised context is not the usable one:
 // the largest prompt ever accepted on gpt-5.6-sol, over 2,339 transcripts, was
 // 196,341 tokens, against an advertised 272000/872000, with 30 refusals past
-// that wall. A `[1m]` name would route a request Claude Code believes has 1M
-// of room to a backend with no such id; the generator stopped emitting it, so
-// `/model <id>[1m]` fails at LiteLLM with an invalid model name instead.
+// that wall. The backend has no such NAME — the removed alias mapped to the
+// real id all along; the client's 1M window BELIEF was the lie (2026-07-26).
+// The generator stopped emitting it, so `/model <id>[1m]` fails at LiteLLM
+// with an invalid model name instead.
 
 /** The one line the template reserves for the generated entries. Its own line,
  *  exactly once: a marker that appeared twice would make the destination

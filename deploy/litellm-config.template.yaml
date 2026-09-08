@@ -16,6 +16,13 @@
 #
 # `mode: responses` is required by this provider, and it only parses STREAMED
 # responses — a non-streaming probe fails with "Unknown items".
+#
+# THERE ARE NO `[1m]` ALIASES IN THIS FILE, on purpose (amended 2026-09-08,
+# Task 16c): the suffix names a 1M belief that measured false on this surface
+# — the largest prompt ever accepted on gpt-5.6-sol was 196,341 tokens over
+# 2,339 transcripts, with 30 refusals past that wall. A `/model <id>[1m]`
+# must fail loudly at LiteLLM instead of routing a request Claude Code
+# believes has room it does not.
 model_list:
 # ccrc:model-list
 litellm_settings:

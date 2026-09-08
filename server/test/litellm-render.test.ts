@@ -27,6 +27,11 @@ describe('the shipped template', () => {
     expect(TEMPLATE).toContain('drop_params: true');
     expect(TEMPLATE).toContain('master_key: os.environ/LITELLM_MASTER_KEY');
   });
+
+  it('carries the note explaining why there is no [1m] alias (§6.3, amended 2026-09-08, '
+    + 'Task 16c fix round 1)', () => {
+    expect(TEMPLATE).toContain('THERE ARE NO `[1m]` ALIASES IN THIS FILE');
+  });
 });
 
 describe('renderLitellmConfig', () => {
@@ -34,11 +39,17 @@ describe('renderLitellmConfig', () => {
 
   it('emits one entry per VISIBLE model and NO [1m] alias, for any model, and nothing for '
     + 'hidden ones (§6.3, amended 2026-09-08, Task 16c)', () => {
-    // A `/model <id>[1m]` believes the client has a 1M window no measured wall
-    // supports (§6.1's amendment above); LiteLLM now refuses that name loudly
-    // instead of routing the request to a real entry with the wrong window.
+    // Scoped to the GENERATED block, not the whole file — same reason as the
+    // `reasoning` ban below: the template's own header comment (carried
+    // verbatim) now legitimately says `[1m]` several times explaining why
+    // there is none (fix round 1), so a whole-file ban would fail on that
+    // prose. A `/model <id>[1m]` believes the client has a 1M window no
+    // measured wall supports (§6.1's amendment above); LiteLLM now refuses
+    // that name loudly instead of routing the request to a real entry with
+    // the wrong window.
     const out = rendered();
-    expect(out).not.toMatch(/\[1m\]/);
+    const modelListBlock = out.slice(out.indexOf('model_list:'), out.indexOf('litellm_settings:'));
+    expect(modelListBlock).not.toMatch(/\[1m\]/);
     for (const id of ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
       'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark']) {
       expect(out, id).toContain(`  - model_name: ${id}\n`);

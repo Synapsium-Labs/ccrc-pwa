@@ -812,6 +812,17 @@ describe('materialise', () => {
   it('rewrites the three generated files from the registry and the catalogue', () => {
     op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
     fs.rmSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'));
+    // Fix round 1 (review): the seeded opus, gpt-5.6-sol, has catalogue
+    // context 272000 — clamped TO the 200000 ceiling — so a mutant that
+    // hardcoded the key to the literal '200000' (ignoring the catalogue
+    // entirely) could not be told apart from a real clamp on that subject.
+    // Point opus BELOW the ceiling instead, directly on disk (same pattern as
+    // `writeCatalogue` below): only a model whose OWN context survives
+    // unclamped proves the number came from the catalogue this run just
+    // wrote, not a literal.
+    const reg = registryOf('gpt');
+    (reg['classes'] as Record<string, unknown>)['opus'] = 'gpt-5.3-codex-spark';
+    fs.writeFileSync(regPath('gpt'), JSON.stringify(reg));
     writeCatalogue('gpt');
     const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
     expect(r.code).toBe(0);
@@ -824,9 +835,11 @@ describe('materialise', () => {
     // The catalogue this run just wrote (init ran before it existed, so init's
     // own materialise could not have) — proves `materialise` reads the SAME
     // freshly-parsed catalogue it used for `derived`, not a stale one (§6.1
-    // amendment). gpt-5.6-sol's catalogue context is 272000; the key is
-    // min(context, 200000) (§6.1, amended 2026-09-08, Task 16c).
-    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+    // amendment). gpt-5.3-codex-spark's catalogue context is 128000, BELOW
+    // the 200000 ceiling, so this value can only have come from the fresh
+    // catalogue — a mutant that hardcoded '200000' reds here (§6.1, amended
+    // 2026-09-08, Task 16c fix round 1).
+    expect(settingsOf('.claude-gpt').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });
 
   it('on a lane with NO registry writes nothing and says so', () => {
