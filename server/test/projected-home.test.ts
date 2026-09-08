@@ -236,6 +236,45 @@ describe('projectHome ranks unmeasured below measured', () => {
     })).toEqual({ wrapper: 'a', score: 0 });
   });
 
+  it('the fallback widens into `live` before dropping to a condemned `scorable` lane — the tier no fixture here could reach before', () => {
+    // The ONLY input in this file that can tell `scorable.find(notCondemned) ??
+    // live.find(notCondemned)` apart from `scorable.find(notCondemned) ??
+    // scorable[0]`: every OTHER case in this describe (and every case in the
+    // shared `leastLoaded.ts` fixtures, via `DEFAULT_TEST_ROSTER`) has
+    // `scorable === live`, because the one `telemetry:'none'` account either
+    // side's roster carries (`g` here, `gpt` there) is either absent from this
+    // assertion or, in production, `homeAble:false` and so never enters `live`
+    // at all (helpers.ts). Here `g` is home-able, telemetry:'none', and
+    // untouched — not condemned, not measured, not disabled — while `a` and
+    // `b`, the only `scorable` members, are BOTH condemned. `scorable.find
+    // (notCondemned)` is therefore `undefined` for BOTH of them, and the
+    // SECOND link is the only thing standing between `g` (healthy, merely
+    // unmeasured) and `a` (measured dead, first in roster declaration order):
+    // delete it and this answers `a`, which is exactly the shipped defect
+    // (D-1954) the whole two-tier chain exists to fix, on a lane it never
+    // should have reached.
+    //
+    // NOT added to the shared `leastLoaded.ts` fixtures that drive ccd's bash
+    // in parity, for two independent reasons. First, `DEFAULT_TEST_ROSTER`'s
+    // only `telemetry:'none'` account (`gpt`) is deliberately `homeAble:
+    // false` — `gpt-is-cheapest` in that same fixture file pins exactly the
+    // opposite shape, that a cheap-looking non-home-able lane must NEVER be
+    // picked — so this case cannot be expressed there without a roster
+    // redesign well past a coverage fix. Second, and more fundamentally,
+    // `_ws_least_loaded` (ccd/ccd) has no isolable second link to pin against:
+    // its single loop walks every CCRC_HOME_ABLE candidate without a
+    // scorable/live split at all (bash has no telemetry field to split on —
+    // this function's own header names that gap), so its `first`/`condemned`
+    // fallback already behaves like this TS chain's WIDENED tier for every
+    // candidate, with no narrower statement to delete the way `best=
+    // "$condemned"` isolates the condemned tier. There is nothing on the bash
+    // side this case could catch going missing.
+    expect(projectHome(r, {
+      a: { ...L(null, null), authDead: true },
+      b: { ...L(null, null), authDead: true },
+    })).toEqual({ wrapper: 'g', score: 0 });
+  });
+
   it('a condemned lane never re-enters the PREFERRED tier by being measured', () => {
     // `a` is the only account anyone has measured, and it is condemned: the
     // scored set empties, and the fallback must still step over it rather than
@@ -329,9 +368,20 @@ describe('every home-able lane condemned AND measured — both sides still place
     // this case exists for the measured shape those cannot express.
     expect(projected?.wrapper, 'the server refuses to place on an all-condemned fleet').toBe('claude');
     expect(sh('_ws_least_loaded'), 'ccd disagrees').toBe('claude');
-    // …and the condemned tier is the LAST resort, not a peer of the others:
-    // un-condemn one lane and that lane takes the placement back, even though it
-    // is not the cheapest one on the box (`claude-a` at 5 is, and stays dead).
+    // …and un-condemning `claude-b` puts it back into ORDINARY SCORING, not
+    // into some rival fallback tier: `scored` now holds exactly one candidate
+    // (`claude-a`, cheapest at 5, and `claude-d` both stay condemned and stay
+    // dead), so `scored.length` is 1 here, never 0 — the very branch this
+    // describe's first half exists for is not entered again. What this
+    // reconfirms is the same fact `authdead-loses-scoring` already pins in the
+    // shared fixtures (a condemned lane loses SCORING even when it would have
+    // won on price), just over a fleet where three of four lanes are condemned
+    // rather than one. It is NOT a second demonstration of tier-priority — the
+    // fallback chain (`scorable.find(notCondemned) ?? …`) and ccd's own
+    // `first`/`condemned` bookkeeping are never read for this half of the test;
+    // `authdead-loses-the-fallback-too` and `condemned-lane-is-the-only-
+    // measured-one` are what actually pin the fallback WIDENING this comment
+    // used to claim.
     seedAuthDead(['claude', 'claude-a', 'claude-d']);
     const cfg2 = loadConfig({ CCRC_HOME: home });
     expect((projectHome(cfg2.roster, await readLimits(localIO, cfg2)))?.wrapper).toBe('claude-b');
