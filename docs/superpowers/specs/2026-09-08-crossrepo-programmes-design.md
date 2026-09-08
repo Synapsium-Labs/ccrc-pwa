@@ -171,6 +171,11 @@ as its pin.
   only to read its context. Paths, not payloads; 8 KB stands.
 - Q1's discipline sentence: before dispatching a consumer wave, `GET /api/runs` and read the producer
   run's state; anything but `done` → do not dispatch, report.
+- The refusal-list sentence in the skill names `project-mismatch` and `home-mismatch`, and
+  `references/wave-lifecycle.md` explains both — in WAVE 1, not here, because the skill test requires
+  every `RunRefuseCode` to be named in the skill corpus the moment it exists
+  (`server/test/coordinator-skill.test.ts:336-345`); which is why wave 1's deploy is agent-first
+  too (§8, §9).
 - Deviations found during a foreign-repo wave are minted against the HOME project
   (`ccrc-api ledger allocate` with the home project name) and defined in the home plan, because that
   is where the plan lives. The allocate route takes `project` from the caller
@@ -263,14 +268,20 @@ mail screen renders the feed and nothing filters either by programme.
   path or the verbatim-replay guarantee.
 - **The programme filter.** `GET /api/mail?program=<slug>` (with `to` optional when `program` is
   given; `all` as today) answers every mail whose `runId` joins to a run of that programme, through
-  the join `resolveCoordinator` already uses. `GET /api/feed?program=<slug>` answers the events that
-  carry a `runId` in that programme; events without one are programless and appear only unfiltered.
+  the join `resolveCoordinator` already uses. `GET /api/feed?program=<slug>` answers the events of
+  that programme — which needs a `runId` the feed row does not carry today (`NotifyEvent` is
+  `seq, at, kind, sessionId, title, body` on the wire, and the ring-capped `feed_events` table
+  likewise), so the ONE migration of this build (§8) also adds a nullable `feed_events.runId`, the
+  recorders that know a run (mail and run events) populate it, and `NotifyEvent.runId: number | null`
+  rides the wire additively with one tolerant reader (the offline snapshot revive included). Events
+  without one are programless and appear only unfiltered.
   `ccrc-api`'s closed table gains `--program` on `mail list` and a `feed list GET /api/feed
   [--program]` row — the table is the client's own contract and grows by a row, never by a URL
   argument — and its prose row count (`ccd/ccrc-api:24`, pinned by `ccrc-api.test.ts:240`) moves
   with it.
-- **The mail screen** groups by programme (header = programme title, from the runs it already fetches)
-  with a filter chip; programless mail sits under its own header. `MailCard` is unchanged.
+- **The mail screen** groups by programme (header = programme title, from `GET /api/runs`, the read
+  the runs screen already makes; the event's new `runId` is the key) with a filter chip; programless
+  mail sits under its own header. `MailCard` is unchanged.
 - **Pinned by:** the send-route refusal test extended for the `worker` role in both directions; a
   store test that binds a run to a second session through `bindSession` and asserts the heir's fresh row, the
   predecessor's park, and the envelope naming the heir; the filter tests on both routes with a
@@ -340,12 +351,14 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
 
 ## 8. Migration, deploy and rollback
 
-- One schema migration (F2), forward-only, additive nullable column, `user_version` N → N+1. A higher
-  `user_version` on rollback is not fatal (`db.ts:105`), and every reader tolerates the null.
+- One schema migration, forward-only, two additive nullable columns (`programs.homeProject`, F2;
+  `feed_events.runId`, §4), `user_version` N → N+1. A higher `user_version` on rollback is not fatal
+  (`db.ts:105`), and every reader tolerates the null.
 - `FLEET_PROTO` is not bumped: every wire change here is an additive field with a single reader.
-- Ordering, two rules at two scopes: ACROSS waves, wave 1 (server) deploys and is live before wave 2
-  ships, so the guard exists before the skill tells coordinators to cross; WITHIN wave 2, which
-  carries a `ccd/` change, the agent lane goes first as every `ccd/` change does.
+- Ordering, two rules at two scopes: ACROSS waves, wave 1 deploys and is live before wave 2 ships,
+  so the guard exists before the skill tells coordinators to cross; WITHIN each wave that carries a
+  `ccd/` change — wave 1's refusal-list sentence, wave 2's behavioural clauses — the agent lane goes
+  first as every `ccd/` change does.
 - Rollback of the server lane leaves the column in place and the legacy constant's behaviour
   intact; rollback of the skill lane leaves a coordinator that never crosses, which is today.
 
@@ -354,9 +367,11 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
 ## 9. Execution — a ccrc programme homed in ccrc-pwa, three waves
 
 - **Wave 1 — server and shared:** F1 (both sites, both codes), F2 (migration, route, response,
-  `RunSummary.homeProject`), §4 (worker role, heir re-issue, the two filters), `ccrc-api` table rows,
-  every test in §7 that lives in `server/test`. Rebases over account-pools wave 3, which touches the
-  same server files now.
+  `RunSummary.homeProject`), §4 (worker role, heir re-issue, the two filters, `feed_events.runId`),
+  `ccrc-api` table rows, the two codes named in the coordinator skill's refusal list and explained in
+  its `wave-lifecycle.md` (the skill test demands it the moment the codes exist), every test in §7
+  that lives in `server/test`. Agent-first for that skill edit. Rebases over account-pools wave 3,
+  which touches the same server files now.
 - **Wave 2 — skills and PWA:** F3 (both skills, both pins, the installers unchanged), F4 (runs screen,
   both card changes), the mail screen's grouping and chip. Deploys agent-first.
 - **Wave 3 — docs and the flip:** README "Programs, runs and mail — the operator's view" and "Fleet
