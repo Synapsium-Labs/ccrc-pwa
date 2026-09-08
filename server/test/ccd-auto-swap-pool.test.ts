@@ -114,6 +114,21 @@ const BLOCKED = `
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
+/** BLOCKED, but with `_dispatch_swap` left REAL and the seam BELOW it stubbed
+ *  instead. `_dispatch_swap` takes only `id target` and BUILDS the `ccd swap`
+ *  command itself, so a fixture that stubs `_dispatch_swap` cannot see any flag
+ *  the real one would have added — it drops everything past `$2`. Stubbing
+ *  `_svc_run_detached` records the whole argv, which is the only place the
+ *  presence or absence of `--cross-pool` on an automatic move is decidable.
+ *  Same technique as `ccd-crosspool.test.ts`'s self-swap fixture. */
+const BLOCKED_REAL_DISPATCH = `
+  tmux() { case "\${1:-}" in
+             capture-pane) echo "API Error: 429 Too Many Requests" ;;
+             list-panes)   echo ${PANE_PID} ;;
+           esac; return 0; };
+  _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };
+`;
+
 /** The status file the affinity arm's idle gate reads, under the CURRENT
  *  account's config dir (`_cfg_dir claude` -> `$HOME/.claude`). */
 const idleStatus = (cfg = '.claude'): void => {
@@ -175,8 +190,15 @@ describe('_strand_why names the candidates the decision was actually about', () 
     //  - `gpt:limit` LAST — `_default_pool` seeds the home-able ids and APPENDS
     //    the overflow lane, so the order is a property of the code.
     //  - `toBe`, not `toContain('gpt:limit')` — the exact string is what pins
-    //    the position AND pins that `install` took effect, since a missing
-    //    binary would read `gpt:missing` and still contain the substring 'gpt'.
+    //    the POSITION, which `toContain` cannot see. CORRECTED in the fix round
+    //    after the merge review (D-1960): this used to add "since a missing binary
+    //    would read `gpt:missing` and still contain the substring 'gpt'", and
+    //    that reason is invented. `_default_pool` applies `_account_ok` before
+    //    appending an overflow lane, so an uninstalled one never reaches this
+    //    walk at all — it is ABSENT from the census, never `:missing`, and the
+    //    weaker matcher would have caught a failed `install` too. The same
+    //    harness confusion D-1909 is about, resurfacing one case earlier and in
+    //    my own text this time.
     //
     // NOT pinned here, and deliberately not claimed: this case cannot pin the
     // PREDICATE ORDER for gpt. Only one annotation is reachable for an untagged,
@@ -529,10 +551,22 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
     writeLimits('claude-b', 99, 99);          // the only tagged pool-b member, pinned
     writeLimits('claude-d', 99, 99);          // untagged, so in pool-b too — pinned
     install('gpt'); writeWeeklyOnly('gpt', 0);   // installed, untagged, wide open
-    tick(BLOCKED);
-    expect(h.calls().join('\n'), 'the last-resort bracket wins').toContain(`dispatch ${ID} -> gpt`);
-    expect(h.calls().join('\n'), 'a healthy account in the WRONG pool is still refused')
-      .not.toContain(`dispatch ${ID} -> claude-a`);
+    tick(BLOCKED_REAL_DISPATCH);
+    // ON THE REAL CONSTRUCTION SITE, and this is the whole point of the fixture
+    // choice. CORRECTED after the merge review (D-1955): the first version of this
+    // case stubbed `_dispatch_swap`, whose stub records only `$1 -> $2` — so the
+    // mutation that undoes the ruling the NATURAL way (dispatch the overflow move
+    // with `--cross-pool`, letting `cmd_swap` take its crossing arm and record it)
+    // left all 39 cases GREEN. Measured. The absence half was not pinned at all,
+    // in the case written to pin it. `_dispatch_swap` is real here and
+    // `_svc_run_detached` records the whole argv, so the flag is decidable.
+    const argv = h.calls().join('\n');
+    expect(argv, 'the last-resort bracket wins').toMatch(
+      new RegExp(`exec '[^']*/ccd' swap '${ID}' 'gpt'`));
+    expect(argv, 'a healthy account in the WRONG pool is still refused').not.toContain(`'claude-a'`);
+    expect(argv, 'NO --cross-pool: an untagged lane crosses nothing, so the move claims nothing')
+      .not.toContain('--cross-pool');
+    expect(swapLog(), 'and the tick logged the dispatch it made').toContain(`dispatch ${ID} -> gpt`);
     expect(h.reg(ID, 'stranded'), 'a destination exists, so this is not a strand').toBeNull();
     expect(noticeLines(), 'nothing to announce').toHaveLength(0);
     expect(h.reg(ID, 'crosspool'), 'an untagged lane crosses nothing — no marker').toBeNull();
@@ -591,7 +625,7 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
     expect(logLines('unstranded')).toHaveLength(1);
   });
 
-  it('CLEARS the strand on a RESCUE too, even while the pane still shows the SAME banner — ccd:12018\'s `_strand_clear` after the target check is load-bearing', () => {
+  it('CLEARS the strand on a RESCUE too, even while the pane still shows the SAME banner — the `_strand_clear` after the target check is load-bearing', () => {
     // Review round 1, Important 2. Every case above clears the strand only
     // via the AFFINITY fixture (a clean pane), which never exercises this
     // SPECIFIC `_strand_clear` — the one AFTER a destination is found,
@@ -617,8 +651,12 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
   });
 
   it('strands an UNTAGGED project too — the pre-existing SILENT strand, made loud', () => {
-    // ccd:11243 reached this state today with every account at the ceiling and
-    // returned with no marker, no line and no stamp, retrying every 5 s for ever.
+    // Before wave 2b, `_auto_swap_check`'s bare `|| return 0` after
+    // `_swap_target` reached this state with every account at the ceiling and
+    // returned with no marker, no line and no stamp, retrying every 5 s for
+    // ever. (Cited as `ccd:11243` until the fix round after the merge review,
+    // D-1966: that line number now lands on an unrelated comment about git's
+    // trailing newline — the grep form is what survives an edit above it.)
     seed(); plantNotify();                       // deliberately no tag at all
     for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
     tick(BLOCKED, 10);
@@ -671,5 +709,49 @@ describe('_reg_purge`s dot-free inventory', () => {
     for (const f of ['`crosspool`', '`stranded`', '`strandnotify`']) {
       expect(block, `${f} is written by this build and missing from the inventory`).toContain(f);
     }
+  });
+});
+
+describe('the candidate-walk count in `ccd/ccd` stays honest (A1)', () => {
+  it('both numbers #61\'s block claims match its own cited grep', () => {
+    // A MECHANISM, NOT A COMMENT. #61's "THE FOUR CANDIDATE WALKS DO NOT AGREE"
+    // block states a count and cites the grep that produces it. Until the fix
+    // round after the wave-2b merge review (D-1956) it said "finds four" while the cited
+    // command answers FIVE — four walks plus one PROSE line inside
+    // `_default_pool` quoting the pattern — so the sentence written to stop the
+    // number drifting could not be re-measured, and nothing anywhere pinned it:
+    // `git grep -n 'CANDIDATE WALKS' -- server/test` was empty, so changing the
+    // digit to seven kept every suite green.
+    //
+    // Same shape as `ccd-pool-ok.test.ts`'s `_pool_ok` header pin, deliberately:
+    // that one had this exact defect (one number, labelled as the thing it was
+    // not counting) and was corrected once already. Two quantities are stated,
+    // so both are checked, and each message names which one is wrong.
+    //
+    // The walk/prose split is "the line, trimmed, does not start with `#`" —
+    // exact for `ccd/ccd` today (measured: the one prose match is a whole-line
+    // comment). A code line with the pattern inside a trailing comment would be
+    // miscounted as a walk, and this pin would then need a real tokenizer.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('CANDIDATE WALKS DO NOT AGREE');
+    expect(from, "#61's candidate-walk block could not be found").toBeGreaterThan(-1);
+    // FLATTENED before matching: the claim wraps across comment lines, so a
+    // line-oriented regex misses it and the pin would fail for the wrong
+    // reason. (It did, on the first run of this very test.)
+    const block = src.slice(from, from + 900).replace(/\n\s*#\s?/g, ' ');
+    const claimed = block.match(/finds (\d+) matching LINES, (\d+) of them walks/);
+    expect(claimed, 'the block no longer states its two counts in the expected shape').not.toBeNull();
+    const statedLines = Number(claimed![1]);
+    const statedWalks = Number(claimed![2]);
+    // The block's own cited pattern, re-run here rather than paraphrased.
+    const re = /for (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")/;
+    const matching = src.split('\n').filter((line) => re.test(line));
+    const walks = matching.filter((line) => !line.trim().startsWith('#'));
+    expect(matching.length,
+      `the block's own grep now finds ${matching.length} matching LINES, `
+      + `but it still claims ${statedLines}`).toBe(statedLines);
+    expect(walks.length,
+      `${walks.length} of those ${matching.length} lines are WALKS (the rest are prose), `
+      + `but the block still claims ${statedWalks}`).toBe(statedWalks);
   });
 });

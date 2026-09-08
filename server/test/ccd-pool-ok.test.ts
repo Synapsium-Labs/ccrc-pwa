@@ -352,9 +352,13 @@ describe('the `_pool_ok` header states counts that stay honest', () => {
     // it is labelled as.
     //
     // The call-site classifier is "the line, trimmed, does not start with
-    // `#`". That is exact for `ccd/ccd` today (measured: the five comment
-    // matches are all whole-line comments, and no code line carries a
-    // trailing comment mentioning the pattern). A future code line with
+    // `#`". That is exact for `ccd/ccd` today (re-measured in the fix round
+    // after the merge review (D-1966): SIX comment matches of seventeen lines, all
+    // of them whole-line comments, and no code line carries a trailing comment
+    // mentioning the pattern — this said "five" and was left in the present
+    // tense while the header above it was corrected to 17/11, so the pin's own
+    // prose went stale in the commit that corrected the prose it pins). A
+    // future code line with
     // `_pool_ok ` inside a trailing comment would be counted as a call site
     // — this pin would then need a real tokenizer, not a looser regex.
     const src = fs.readFileSync(CCD, 'utf8');
@@ -368,9 +372,10 @@ describe('the `_pool_ok` header states counts that stay honest', () => {
     // CORRECTED (final whole-branch review, M-1): the header's own cited
     // command is `grep -c`, which counts LINES containing a match, not
     // occurrences — `.match(/g)` counted occurrences instead, silently
-    // measuring something else. Both are 16 today only because no line in
-    // `ccd/ccd` holds two `_pool_ok ` calls; count lines here so this test
-    // measures the same thing the header's cited command measures.
+    // measuring something else. Line count and occurrence count agreed at 16
+    // WHEN THAT WAS WRITTEN, and only because no line in `ccd/ccd` holds two
+    // `_pool_ok ` calls — which is still true at 17. Count lines here, so this
+    // test measures the same thing the header's cited command measures.
     const matching = src.split('\n').filter((line) => line.includes('_pool_ok '));
     const calls = matching.filter((line) => !line.trim().startsWith('#'));
     expect(matching.length,

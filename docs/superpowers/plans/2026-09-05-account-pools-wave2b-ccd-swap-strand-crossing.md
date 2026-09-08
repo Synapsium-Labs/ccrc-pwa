@@ -4,7 +4,7 @@
 
 **Goal:** Make `ccd`'s automatic account machinery pool-aware — the 5-second auto-swap tick re-seeds a wrong-pool home and moves the session, an empty pool strands loudly instead of crossing, and a deliberate `--cross-pool` crossing leaves a marker that the tick honours until a retag or a move ends it.
 
-**Architecture:** The wave's centre of gravity is `ccd/ccd` bash. It consumes wave 2a's reader (`_project_pool_state`), predicate (`_pool_ok`), placement (`_ws_least_loaded [project]`) and lifecycle act (`rehome`), and adds: three strand helpers beside `_swap_refuse`; three crossing-marker helpers; three insertions into `_swap_target`; five into `_auto_swap_check`; and the `--cross-pool` flag on the four manual verbs. **What it also carries — and what this paragraph asserted the opposite of until merge review (M1; D-1890, fourth site) — is change outside `ccd/`.** Measured on the shipping tree, `git diff --name-only origin/main...HEAD` names **17 files, 15 of them outside `ccd/`**: `shared/api.ts`, `server/src/coord/journalparse.ts`, ten `server/test` files (two of them new suites), two `pwa/test` files, and this plan. Two sentences that stood here — one denying any server, agent, shared or PWA file was touched, one concluding agent-first at deploy time above a copy-pasteable command block in that order — were both false at this tip and are struck; they are quoted verbatim in D-1890's entry, which is where an obituary belongs. **The deploy order for this wave is SERVER-FIRST**, ruled by the coordinator at merge review; the mechanism, its measurement and the command block are in Task 8 Step 7. The deploy itself is run by the operator or the coordinator, never by this plan's implementer.
+**Architecture:** The wave's centre of gravity is `ccd/ccd` bash. It consumes wave 2a's reader (`_project_pool_state`), predicate (`_pool_ok`), placement (`_ws_least_loaded [project]`) and lifecycle act (`rehome`), and adds: three strand helpers beside `_swap_refuse`; three crossing-marker helpers; three insertions into `_swap_target`; five into `_auto_swap_check`; and the `--cross-pool` flag on the four manual verbs. **What it also carries — and what this paragraph asserted the opposite of until merge review (M1; D-1890, fourth site) — is change outside `ccd/`.** Measured on the shipping tree, `git diff --name-only origin/main...HEAD` names **19 files, 17 of them outside `ccd/`**: `shared/api.ts`, `server/src/coord/journalparse.ts`, ten `server/test` files (two of them new suites), two `pwa/test` files, `README.md`, the spec, and this plan. *(Read 17/15 until the fix round after the merge review, D-1965 — the merge round itself added `README.md` and the spec and the count did not follow, in all three of its homes.)* Two sentences that stood here — one denying any server, agent, shared or PWA file was touched, one concluding agent-first at deploy time above a copy-pasteable command block in that order — were both false at this tip and are struck; they are quoted verbatim in D-1890's entry, which is where an obituary belongs. **The deploy order for this wave is SERVER-FIRST**, ruled by the coordinator at merge review; the mechanism, its measurement and the command block are in Task 8 Step 7. The deploy itself is run by the operator or the coordinator, never by this plan's implementer.
 
 **Tech Stack:** bash 5.2 (`set -uo pipefail`, no `-e`), vitest + `makeCcdHarness` fixture HOMEs, `node:sqlite`-free.
 
@@ -52,9 +52,14 @@ exception, so spec §1's "crossings are explicit and recorded" is not violated b
 never reached this case. What the ruling costs is a divergence between §1's plain reading and what
 ships, and that is why it carries a deviation number of its own rather than a code change.
 
-**Do not "repair" it.** Making `_pool_ok` refuse untagged accounts takes the overflow lane out of every
-pool and silently re-imposes the 2026-07-26 rule the operator reversed on 2026-09-07. That mutation is
-measured: it reds 7 of 39 cases in `ccd-auto-swap-pool.test.ts`, including the case named below.
+**Do not "repair" it.** Making `_pool_ok` refuse untagged accounts does far more than take the overflow
+lane out of every pool — stated precisely, because the loose form understates it (corrected in the fix
+round after the merge review, D-1967): it refuses **every** untagged account, home-able ones included, and it
+bites only for **named-pool** projects, since an `untagged` project state returns 0 before the account is
+examined at all. So it would make a tagged project unservable by any untagged account and break placement
+on every roster that has not been fully tagged, as well as silently re-imposing the 2026-07-26 rule the
+operator reversed on 2026-09-07. That mutation is measured: it reds 7 of 39 cases in
+`ccd-auto-swap-pool.test.ts`, including the case named below.
 
 **Where it is pinned.** `ccd-auto-swap-pool.test.ts`, `OVERFLOWS to an untagged lane rather than
 stranding — the composed rule, ruled and shipped`, with its contrast case `STRANDS when the untagged
@@ -2019,7 +2024,7 @@ Expected: PASS. These are the suites whose subjects this wave edited around; run
 
 **SERVER-FIRST — ruled by the coordinator at merge review, and the reverse of what this plan said at plan time (D-1890).** No step below is run from this branch.
 
-This wave does not change `ccd/` only. Measured on the shipping tree: `git diff --name-only origin/main...HEAD` names **17 files, 15 outside `ccd/`** — `shared/api.ts`, `server/src/coord/journalparse.ts`, **ten** `server/test` files, two `pwa/test` files and this plan — landed to fix the meas/dec key gaps Tasks 3 and 6's own emissions opened. *(The count in this sentence read "five `server/test` files" until merge review, M3: wrong in this home and in D-1890's own entry, and it understated by half the non-`ccd/` surface the deploy order has to be decided over.)*
+This wave does not change `ccd/` only. Measured on the shipping tree: `git diff --name-only origin/main...HEAD` names **19 files, 17 outside `ccd/`** — `shared/api.ts`, `server/src/coord/journalparse.ts`, **ten** `server/test` files, two `pwa/test` files, `README.md`, the spec and this plan. Most were landed to fix the meas/dec key gaps Tasks 3 and 6's own emissions opened; `README.md` and the spec were added by the PR #61 merge round. *(The count in this sentence read "five `server/test` files" until merge review, M3: wrong in this home and in D-1890's own entry, and it understated by half the non-`ccd/` surface the deploy order has to be decided over.)*
 
 **The mechanism, measured rather than argued.** `cmd_prefer`'s tail emits a `rehome` row **unconditionally** — no pool predicate gates it (`grep -n 'THE ONE UNCONDITIONAL' ccd/ccd`) — so the new `meas.home`/`meas.pool`/`meas.reason` keys reach the journal the moment the new `ccd` is installed, tagged fleet or not. On the server side `parseJournalLine` runs **once**, at ingest: its only caller in `server/src` is `server/src/coord/mirror.ts:161`. `insertLifecycle` binds `measJson` as `JSON.stringify(r.meas)`, where `r.meas` has already been through `reviveMeas`'s closed literal; every reader re-revives from `measJson`, and **nothing in this tree re-parses the stored `raw` column back into `meas`**. And the insert is `INSERT OR IGNORE` under `CREATE UNIQUE INDEX lifecycle_uid ON lifecycle_events(uid) WHERE uid IS NOT NULL` (`server/src/coord/schema.ts`), so a row a pre-branch server has already ingested is **never rewritten by a later sweep**. A `rehome` row landing in an agent-first window therefore loses its three most meaningful fields for good — the text survives in the `raw` column, but no code path ever reads it back, so nothing recovers them.
 
@@ -2271,7 +2276,8 @@ comment before review caught it.
   in its own commit; coordinator notified before push. **Second site (extend, no new number):** Task 8 Step 7
   states *"This wave changes `ccd/` only, so it is **agent-first**"* — false in the same premise: the branch also
   carries `shared/api.ts`, `server/src/coord/journalparse.ts`, **ten** `server/test` files and two `pwa/test`
-  files — 17 files, 15 outside `ccd/`, measured with `git diff --name-only origin/main...HEAD` at the shipping
+  files — 19 files, 17 outside `ccd/` after the PR #61 merge round added `README.md` and the spec, measured with
+  `git diff --name-only origin/main...HEAD` at the shipping
   tip. *(This said "five" until merge review, M3 — wrong here and in Task 8 Step 7 both. A miscounted premise
   inside the entry whose whole subject is a miscounted premise, understating by half the surface the deploy
   order turns on.)*
@@ -2388,7 +2394,8 @@ changed, and nothing in either suite pins a comment.
   above, spec §5.7.3 and §5.5.3's note, and `_swap_target`'s bracket paragraph) and PINNED as a mechanism, because "we
   decided not to record it" and "we forgot to record it" read identically in a log six months on: `ccd-auto-swap-pool
   .test.ts`'s `OVERFLOWS to an untagged lane rather than stranding` plus its contrast case. Mutation-measured: the
-  "repair" a future reader would reach for — `_pool_ok` refusing untagged accounts — reds 7 of 39 cases.
+  "repair" a future reader would reach for — `_pool_ok` refusing untagged accounts, which refuses every
+  untagged account and not only the lane, and only for named-pool projects — reds 7 of 39 cases.
 - **D-1909** (Task 1's fixture, the class this wave already minted seven numbers for) — the shipped
   case asserted `not.toContain('gpt')` under the label *"gpt is not home-able: it was never a candidate"*. The assertion
   is true; the stated reason is not established by the fixture and, after #61, is false as a rule. gpt is absent because
@@ -2414,8 +2421,12 @@ changed, and nothing in either suite pins a comment.
   the block never named. Corrected, with the grep written in so the number stops drifting.
 - **D-1913** (`ccd/ccd`, `_swap_target`) — a `ccd:11670` self-citation pointed at
   `_pool_for` on the BASE only; on this branch it points at a uuid comment and in the merge at `GC_RECLAIMED=0`.
-  Converted to the grep form the file itself prescribes. Scope: only this one `ccd:NNNN` token falls inside the region
-  being edited; the five others are pre-existing and in unrelated functions, and were deliberately left alone.
+  Converted to the grep form the file itself prescribes. **Scope, restated honestly (corrected in the fix round after
+  the merge review, D-1957):** this entry said "the five others are pre-existing and in unrelated functions", which reads as
+  a file-wide census and is not one — I passed on a figure from the dispatching brief without measuring it. Measured now:
+  `ccd/ccd` carries **143 lines / 154 occurrences** of `ccd:NNNN`. What was actually assessed is the region this merge
+  edited, inside which exactly one such token fell; the other ~142 lines were **not** examined, and a future wave sizing
+  that sweep off this entry would budget for five and find 143. The sweep itself is deliberately not opened here.
 - **D-1914** (Task 1's mutation table) — the row read *"→ red: the reason names `gpt`,
   which was never a candidate."* That discriminator is GONE: since #61 an installed lane IS a candidate, and one of the
   reds is now the case requiring it to be NAMED. The kill survived the reversal on a DIFFERENT premise than the one
@@ -2463,3 +2474,87 @@ changed, and nothing in either suite pins a comment.
   actually journals rather than by assuming — the probe also established that the overflow tick DOES write a `rehome`
   row, with `meas.reason=pool` and home re-seeded IN pool to `claude-b` while the move itself goes to the lane, which is
   now asserted. Exactly the class this wave minted seven numbers for, committed by me while fixing it.
+
+### Found at the merge-round review (2026-09-08) — awaiting allocation
+
+**Thirteen — D-1955–D-1967, allocated and defined in ONE act on 2026-09-08 (floor moved to 1968).** Five lenses over the merge tip `9e9ebd1c` produced 26 findings, ten survived three-way
+adversarial refutation, and **none of them is a code defect** — the resolution is right, both parents'
+behaviour is present, and the composed rule ships as ruled. Every entry below is prose, a count, a
+citation, or a test assertion that does not measure what it says. I measured each myself before fixing
+it; **zero refuted**, which is worth saying plainly rather than reporting as a clean sweep.
+
+- **D-1955** (this round's own fixture, CRITICAL of its class) —
+  the composed-rule case asserted that the overflow move records nothing, and **could not have caught the
+  mutation that undoes the ruling the natural way.** Measured: dispatching the move with `--cross-pool`,
+  so the dispatched `cmd_swap` takes its crossing arm and records it, left **all 39 cases GREEN**. The
+  cause is a fixture seam — `_dispatch_swap` takes only `id target` and BUILDS the `ccd swap` command
+  itself, while the fixture's stub records `$1 -> $2` and drops everything past it, so no flag the real
+  function would add is observable. The `.crosspool` and `cross-pool` assertions were equally blind: both
+  are written by `cmd_swap`, which never runs under a stubbed dispatch. Fixed by keeping `_dispatch_swap`
+  REAL and stubbing `_svc_run_detached` beneath it, so the whole argv is captured, and asserting the
+  built command carries `swap '<id>' 'gpt'` and no `--cross-pool`. The same mutation now reds exactly
+  that case. **The operator ruled DOCUMENT IT, which makes the test the deliverable — and the deliverable
+  was ornamental.** Third time this wave has shipped a fixture that cannot distinguish the code from its
+  mutation, and the second where it was mine.
+- **D-1956** (`ccd/ccd`, #61's block) — the sentence written to stop
+  the walk count drifting could not be re-measured: it said "finds four" while its own cited grep answers
+  **five** (four walks plus one prose line inside `_default_pool` quoting the pattern), and it omitted the
+  prose disclaimer its sibling at the `_pool_ok` header carries. Worse, nothing pinned it —
+  `git grep -n 'CANDIDATE WALKS' -- server/test` was empty, so changing the digit to seven kept every
+  suite green. Fixed by stating both quantities AND adding the pin, mirroring `ccd-pool-ok.test.ts`'s form;
+  mutation-proven in both directions, including the seven case. A comment is a request; a red suite is a
+  mechanism, and I had written the request twice while quoting the doctrine.
+- **D-1957** (D-1913's own entry) — it said "the five others are
+  pre-existing and in unrelated functions", which reads as a file-wide census. Measured now: `ccd/ccd`
+  carries **143 lines / 154 occurrences** of `ccd:NNNN`. I passed on a figure from the dispatching brief
+  without measuring it — the wave's own obligation 7, broken again. Re-scoped to say what was assessed
+  (the edited region, one token) and what was not (~142 lines, untouched).
+- **D-1958** (spec §intro, §1 row, ruling 6) — §5.7.3 was added to correct
+  §1's CROSSINGS clause by name and three sibling claims about STRANDING were left alone, in the document
+  wave 3 is planned from, by the same commit that edited that document. "An empty pool strands loudly
+  rather than crossing" and ruling 6's "Stay in pool, make it loud. Never cross." are both false when an
+  untagged lane is installed — as this branch's own new case asserts. All three amended.
+- **D-1959** (`ccd/ccrc-doctor-checks`) — the highest-cost site of the
+  lot, because a human reads it: `pools-orphan-pool` told the operator "a hard-blocked session of these
+  projects will strand rather than cross", and its neighbouring comment said the same. Both false in
+  precisely the composed-rule case. D-1911's four-site prose sweep never left `ccd/ccd`, so a file the
+  merge falsified was never looked at. Warning and comment corrected; the warning's own test matches the
+  slug and a remedy line, not the sentence, so the text was free to fix.
+- **D-1960** (this round's fixture) — the comment justified `toBe` over `toContain`
+  with "a missing binary would read `gpt:missing`". Measured false: `_default_pool` applies `_account_ok`
+  before appending an overflow lane, so an uninstalled one is ABSENT from the census, never `:missing`,
+  and the weaker matcher would have caught a failed `install` too. `toBe` is still right — it pins the
+  ORDER, which `toContain` cannot see — but the stated reason was invented. D-1909's harness confusion
+  resurfacing one case earlier, in my own text.
+- **D-1961** (`ccd/ccd` file header) — "the four clauses this merge
+  amended across this file" counts the four #61 sentences D-1911 names, while the merge amended several
+  more of wave 2b's own prose, and the same parenthetical named a fifth (the walk count) in its own
+  breath. Rewritten to say which class the four belong to. Also recorded: the `_pool_ok` header's 16→17
+  count correction carried no deviation number anywhere in the fourteen, and now does.
+- **D-1962** (`cmd_project_pool`) — the corrected census comment asserted an
+  empty pool "REFUSES placement either way". False whenever a home-able account is untagged: `cmd_ws_add`'s
+  refusal builder uses `_pool_ok`, which serves any untagged account for any pool. A correction that
+  introduced its own false claim, one commit after the claim it was correcting.
+- **D-1963** (`cmd_project_pool`) — the `D-TBD-` → number substitution was
+  inserted MID-SENTENCE, cutting the predicate off its subject and leaving a fragment. Three lenses found
+  it independently. The substitution step edits prose it does not parse; anchoring it on a sentence
+  boundary is the fix, and re-reading the substituted region is the habit.
+- **D-1964** (`ccd/ccd` file header) — "a candidate chosen only when
+  no home-able account SURVIVES THE WHOLE FILTER" is false for a session whose HOME is the overflow lane:
+  `_swap_target`'s home-recovered arm returns home BEFORE the candidate loop runs, so the bracket is never
+  consulted. That is the 2026-07-26 opt-in path, which #61 added to rather than replaced. Qualified.
+- **D-1965** (three homes in this plan) — the merge round added
+  `README.md` and the spec to the branch and the "17 files, 15 outside `ccd/`" figure did not follow, in
+  all three places it appears. Measured at the tip: **19 files, 17 outside `ccd/`**. The same defect the
+  merge round had already corrected once, in the same sentences, one round earlier.
+- **D-1966** (`ccd-pool-ok.test.ts`) — the pin that catches a stale
+  header count carried its own stale measurement in the present tense: "the five comment matches" (now
+  six) and "Both are 16 today" (now 17), left behind by the very commit that corrected the header from 16
+  to 17. Plus two `ccd:NNNN` citations in this wave's test text that no longer resolve — one in a test
+  TITLE, one in a case comment — the same class as D-1913 and outside the region that sweep covered.
+- **D-1967** (three homes) — the guidance against "repairing"
+  `_pool_ok` said the change "takes the overflow lane out of every pool". Measured: it refuses EVERY
+  untagged account, home-able ones included, and only for NAMED-POOL projects, since an untagged project
+  state returns 0 before the account is examined. So it would break placement on any roster not fully
+  tagged — a much larger consequence than the one written down, in the sentence whose whole job is to stop
+  someone making that change.

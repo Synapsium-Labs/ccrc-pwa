@@ -8,7 +8,8 @@ serve a project when either side is untagged or the names agree. Every place `cc
 for a session — fresh placement, the 5-second auto-swap tick, a manual swap or start — applies that one
 rule, and so does the server before it builds the argv. Retagging a project moves its running
 sessions into the right pool on the auto-swapper's own clock. An empty pool strands loudly rather than
-crossing. A deliberate crossing needs its own flag and leaves a record.
+crossing — **unless the roster carries an untagged account, which is servable for every pool; §5.7.3**.
+A deliberate crossing needs its own flag and leaves a record.
 
 This document records what was **measured**, not what was assumed: every mechanism below is anchored
 to a `file:line` in the tree at `f6fb08f2` (the `ccd/ccd` script did not change between the panel's
@@ -25,7 +26,7 @@ shipped file, no test, and no design document.
 |---|---|
 | Mark accounts as corporate or personal | A named `pool` field on the roster (`~/.ccrc/accounts.json`), **emitted into `accounts.sh`** so a disagreement between the two hand-owned copies is visible to `rosterAgreement` (§5.3). Names, not a binary, by ruling 1. |
 | Label each project corporate or personal | A one-file marker per project at `~/.cc-sessions/pools/<project>` on the fleet box, written by a new whitelisted verb from the phone or by a shell (§5.4). Chosen over two alternatives by a lensed panel (§4). |
-| Auto-swap rotation honours the labels | One bash predicate at **every** account decision in `ccd` (§5.5), mirrored by one pure server module for the forecast and the 409 (§5.6). Retag moves running sessions (§5.5.4), empty pool strands loudly (§5.8), crossings are explicit and recorded (§5.7). |
+| Auto-swap rotation honours the labels | One bash predicate at **every** account decision in `ccd` (§5.5), mirrored by one pure server module for the forecast and the 409 (§5.6). Retag moves running sessions (§5.5.4), empty pool strands loudly (§5.8) **except where an untagged account serves it (§5.7.3)**, crossings are explicit and recorded (§5.7) **for every move a pool actually constrains (§5.7.3)**. |
 
 ---
 
@@ -38,7 +39,7 @@ shipped file, no test, and no design document.
 | 3 | What does untagged mean? | **Unconstrained** — today's behaviour. Tagging only tightens. The PWA flags untagged projects. Nothing strands on rollout. |
 | 4 | Manual cross-pool swaps? | **Refused, with a deliberate override.** PWA hides mismatched accounts by default; API answers 409 with a named slug; a separate explicit flag distinct from the transcript-loss `--force`; every crossing logged. |
 | 5 | Retag while sessions run? | **Move them automatically.** A wrong-pool current account is a must-leave; move at the next idle turn boundary (immediately if hard-blocked); re-seed the pinned home inside the pool. |
-| 6 | Pool has no account with headroom? | **Stay in pool, make it loud.** Never cross. Visible stranded state (marker, log line, chips, notify banner); resumes when an in-pool account regains headroom. |
+| 6 | Pool has no account with headroom? | **Stay in pool, make it loud.** Never cross. Visible stranded state (marker, log line, chips, notify banner); resumes when an in-pool account regains headroom. **Amended 2026-09-08 (§5.7.3, D-1958):** "in pool" means *servable for* the pool, and an UNTAGGED account is servable for every pool — so an untagged overflow lane is an in-pool destination, not a crossing, and the session takes it rather than stranding. The ruling is unchanged; what changed underneath it is that PR #61 put such a lane back into the rotation. It still never crosses to a TAGGED account of another pool. |
 | 7 | Where does the project tag live? | **`~/.cc-sessions/pools/<project>`** — a registry subdirectory marker (§4, approach B). |
 | 8 | What does a deliberate crossing mean afterwards? | **It sticks until a retag or a move.** A per-session marker records it; the pool machinery leaves the session alone while the project's pool and the account are unchanged; automatic moves never cross. |
 | 9 | Two adversarial lenses (seams, rollout) never ran. | **Fold into the spec's self-review**, no re-run. §6 (seams) and §11 (rollout) are that review. |

@@ -2924,10 +2924,20 @@ _check_pools() {
     if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then
       p_stale+=("$n")
     fi
-    # ORPHAN is about the POOL: no rostered account carries the name, so this
-    # pool is EMPTY and every session of this project will strand rather than
-    # cross (ruling 6). WARN, not FAIL — the pool may be about to gain an
-    # account (O5).
+    # ORPHAN is about the POOL: no TAGGED account carries the name, so no
+    # account is in it BY TAG. WARN, not FAIL — the pool may be about to gain
+    # an account (O5).
+    #
+    # WHAT HAPPENS TO A SESSION OF SUCH A PROJECT DEPENDS ON THE ROSTER, and
+    # this comment used to say flatly "will strand rather than cross (ruling
+    # 6)" — corrected in the fix round after the wave-2b merge review (D-1959),
+    # because PR #61 made it false in the case an operator is most likely to
+    # be in. An UNTAGGED account is servable for every pool (`_pool_ok`'s
+    # rule), so this pool is empty only of TAGGED members: an untagged
+    # home-able account still places and still rotates here, and an installed,
+    # non-kill-switched overflow lane is picked by `_swap_target`'s last-resort
+    # bracket. The session strands only when neither exists. The warning below
+    # says so; do not shorten it back.
     if [ -n "$known" ] && ! _pool_has_line "$v" "$known"; then
       p_orphan+=("$n ($v)")
     fi
@@ -2982,7 +2992,7 @@ _check_pools() {
     [ "$rc" -eq 1 ] || rc=2
   fi
   if [ "${#p_orphan[@]}" -gt 0 ]; then
-    _dr_warn pools "pools-orphan-pool: $(_dr_join ${p_orphan[@]+"${p_orphan[@]}"}) — no account in this box's roster is in that pool, so a hard-blocked session of these projects will strand rather than cross" \
+    _dr_warn pools "pools-orphan-pool: $(_dr_join ${p_orphan[@]+"${p_orphan[@]}"}) — no account in this box's roster is TAGGED into that pool. A hard-blocked session of these projects strands rather than crossing UNLESS the roster has an untagged account, which is servable for every pool: an untagged home-able one still rotates here, and an installed overflow lane is taken as a last resort" \
       "either tag an account into the pool in \$HOME/.ccrc/accounts.json and redeploy the agent lane, or retag the project: ccd project-pool --project <p> --pool <name>"
     [ "$rc" -eq 1 ] || rc=2
   fi
