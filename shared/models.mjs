@@ -1,31 +1,61 @@
-// shared/models.mjs — the registry, the catalogue and the derived states (§4)
-// for the callers that run under a BARE `node`: `deploy/models-op.mjs`,
-// `shared/modelenv.mjs`, and (Plan 2) the reader ccd shells out to. None of
-// them can import `shared/models.ts` — no build step, no `tsx`, no compiled
-// `dist/` — exactly `shared/wrapper.mjs`'s constraint in this tree.
+// shared/models.mjs — THE SINGLE IMPLEMENTATION of the registry (§4.1), the
+// catalogue (§4.2) and the derived states (§4.3), for every caller: the
+// callers that run under a BARE `node` — `deploy/models-op.mjs`,
+// `shared/modelenv.mjs`, and (Plan 2) the reader ccd shells out to, none of
+// which can import a `.ts` (no build step, no `tsx`, no compiled `dist/`,
+// exactly `shared/wrapper.mjs`'s constraint in this tree) — AND
+// `shared/models.ts`, which the server and the PWA bundle and which re-exports
+// every function, `MODEL_ID_RE`, the two error classes and the sentinel
+// constant straight from this file. See `shared/models.ts` for the TYPES
+// (`Registry`, `Catalogue`, `ModelClass`, …) and for `CLASSES`/`PROBE_KINDS`
+// as exported, `as const` TypeScript values — this file keeps its own private
+// copies of those two arrays below, unexported, solely because it cannot
+// import `shared/models.ts` without creating an import cycle (`.ts` imports
+// `.mjs`, so `.mjs` cannot import `.ts` back).
 //
-// TWIN, NOT COPY. `server/test/models.test.ts` drives both over
-// `server/test/fixtures/modelCases.ts` and compares them to EACH OTHER, so a
-// change to either alone reds. The constants that must be duplicated —
-// `CLASSES`, `PROBE_KINDS` and `MODEL_ID_RE` — are compared to the TypeScript
-// SOURCE for source, not behaviourally, because the last constant hand-copied
-// between these two languages shipped as raw control bytes with every suite
-// green (`server/test/source-bytes.test.ts:5-15`).
+// SINGLE SOURCE since fix round 1 (2026-09-08 review), controller ruling: the
+// first task-2 draft had this file and `shared/models.ts` each carrying a full,
+// hand-duplicated copy of every function body — ~200 lines the review
+// measured, the first duplicated pair in `shared/`, where every other
+// bare-`node` module (`generate.mjs`, `wrapper.mjs`, `mark.mjs`,
+// `roster-json.mjs`) is ONE implementation plus a hand-written `.d.mts`.
+// `server/test/models.test.ts` now drives the case table over this file's
+// exports ONCE, imported through `shared/models.ts`'s re-export — there is no
+// second implementation left to compare it against.
 //
 // It imports nothing, not even `node:*`.
 
-/** Mirrors `shared/models.ts`'s `CLASSES`, in the same order. */
+/** Private copy of `shared/models.ts`'s exported `CLASSES`, in the same
+ *  order. Kept here, unexported, only because this file cannot import the
+ *  `.ts` (see the file header) — `server/test/models.test.ts` pins the two
+ *  arrays to agree element-for-element, so a change to one alone reds. */
 const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
 
-/** Mirrors `shared/models.ts`'s `PROBE_KINDS`, in the same order. */
+/** Private copy of `shared/models.ts`'s exported `PROBE_KINDS`, in the same
+ *  order and for the same reason as `CLASSES` above. */
 const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
 
-/** Mirrors `shared/models.ts`'s `MODEL_ID_RE`, itself copied from the
- *  account-connections branch's `shared/roster.ts:97`. */
+/** A model id, as the account-connections branch defines it.
+ *
+ *  COPIED, not imported: that branch is not on `main` (ruling 280) and this
+ *  design must not depend on it. Its origin is `shared/roster.ts:97` on branch
+ *  `ws/gemini-subscription-account-connection`, whose own comment records the
+ *  reason for the charset — an account id becomes a filename and a bash `case`
+ *  pattern and so cannot hold `/`, `.` or `:`, while an OpenRouter model id is
+ *  `anthropic/claude-opus-4.5:beta` and holds all three. Capped at 128
+ *  characters. `server/test/models.test.ts` checks this literal against a
+ *  pinned copy of the text, because the last regex hand-copied in this tree
+ *  shipped as raw control bytes with every suite green. */
 export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
 
+/** Thrown by `parseRegistry`. Carries the offending FIELD as data, not only in
+ *  the sentence: the verbs' contract is "refuses, with the field named" (§10),
+ *  and Plan 3a's PATCH route points a UI control at it. Defined here and
+ *  re-exported (not redeclared) by `shared/models.ts`, so `instanceof
+ *  RegistryInvalid` is true for the same thrown error regardless of which of
+ *  the two files a catcher imported the class from. */
 export class RegistryInvalid extends Error {
   constructor(field, message) {
     super(message);
@@ -34,6 +64,10 @@ export class RegistryInvalid extends Error {
   }
 }
 
+/** Thrown by `parseCatalogue`. A GENERATED file, so a bad one is a bug in the
+ *  probe and not an operator's typo — there is no field to name and no remedy
+ *  to offer beyond "re-probe". Defined here and re-exported by
+ *  `shared/models.ts` for the same `instanceof` reason as `RegistryInvalid`. */
 export class CatalogueInvalid extends Error {
   constructor(message) { super(message); this.name = 'CatalogueInvalid'; }
 }
@@ -41,8 +75,10 @@ export class CatalogueInvalid extends Error {
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** `(json: unknown) => Catalogue` — the same checks, the same order, the same
- *  filled defaults as `shared/models.ts`'s `parseCatalogue`. */
+/** `(json: unknown) => Catalogue`. Validates a catalogue read off disk and
+ *  fills its optional fields. Refuses the WHOLE file on a model with no `id`
+ *  (§11): a partial catalogue would retire every model the probe happened to
+ *  drop, which is a warning on every surface about models that answer fine. */
 export function parseCatalogue(json) {
   if (!isObj(json)) throw new CatalogueInvalid('a catalogue must be an object');
   const probe = json['probe'];
@@ -80,8 +116,23 @@ export function parseCatalogue(json) {
   return out;
 }
 
-/** `(json: unknown, catalogue?: Catalogue | null) => Registry` — the same rules,
- *  in the same order, with the same field names on `RegistryInvalid`. */
+/**
+ * `(json: unknown, catalogue?: Catalogue | null) => Registry`. Validates
+ * `~/.ccrc/models/<id>.classes.json`, naming the offending field.
+ *
+ * `catalogue` is OPTIONAL and changes exactly one rule: with it, an `effort`
+ * level must be one the classed model actually offers; without it, the level is
+ * accepted unvalidated and doctor flags it once a catalogue appears (§4.1). No
+ * other rule reads the catalogue — a registry that stopped parsing because a
+ * catalogue was stale would take the server down for a fact about the network.
+ *
+ * THE UNSEEDED CASE (deviation B-1): a registry whose four slots are ALL null
+ * is what `ccrc models <id> init openrouter` writes, and it is legal. On it the
+ * "subagent's slot is non-null" and "discovery is non-empty" rules stand down —
+ * there is nothing yet to point at. Both apply in full the moment any slot is
+ * filled, and the materialiser refuses to write an env block for such a lane
+ * anyway ("a lane needs at least one class"), so nothing routes to it meanwhile.
+ */
 export function parseRegistry(json, catalogue) {
   if (!isObj(json)) throw new RegistryInvalid('', 'a class registry must be a JSON object');
   for (const key of Object.keys(json)) {
@@ -231,8 +282,13 @@ export function parseRegistry(json, catalogue) {
   return out;
 }
 
-/** `(reg, catalogue) => string[]` — visible ids for `'catalogue'`, the list as
- *  written otherwise, and EMPTY when there is no catalogue at all. */
+/** `(reg, catalogue) => string[]`. What discovery and classification operate
+ *  on. `'catalogue'` resolves to the catalogue's VISIBLE ids — hidden Codex
+ *  models are excluded (§4.2, decision 6) and reachable only by an explicit
+ *  discovery entry. With no catalogue it resolves to NOTHING, never to
+ *  "everything": never-probed is a state, and a list invented from the classed
+ *  ids would make `unclassified` silently empty on exactly the lane nobody has
+ *  ever looked at. An explicit list is returned as written. */
 export function resolveDiscovery(reg, catalogue) {
   if (reg.discovery !== 'catalogue') return [...reg.discovery];
   if (catalogue === null || catalogue === undefined) return [];
@@ -248,7 +304,23 @@ function classIds(classes) {
   return out;
 }
 
-/** `(reg, catalogue) => { classified, unclassified, retired, available }` */
+/**
+ * `(reg, catalogue) => DerivedModels` — the four derived states, from a lane's
+ * registry and its catalogue (§4.3).
+ *
+ *  - `reg` nullish — no registry file — → every class unavailable. That is
+ *    §13.1's migration state on a non-Anthropic lane, and it is deliberately
+ *    not "all four": a lane nobody has seeded routes nowhere, and doctor says
+ *    so. **An Anthropic lane is the CALLER's business** — see `availableFor`.
+ *  - `retired` is computed only against a catalogue that EXISTS and is NOT
+ *    stale. Absence from a catalogue nobody could refresh is not evidence.
+ *    It is checked against BOTH the classed ids and the resolved discovery
+ *    list — a hidden model discovered explicitly but no longer live must
+ *    retire too, not only a classed one.
+ *  - A retired id NEVER empties its slot. It stays classified, stays in the
+ *    registry, and the class simply stops being available until the operator
+ *    reassigns (§4.3, ruling 4).
+ */
 export function deriveModels(reg, catalogue) {
   if (reg === null || reg === undefined) {
     return { classified: [], unclassified: [], retired: [], available: [] };
@@ -270,14 +342,28 @@ export function deriveModels(reg, catalogue) {
   return { classified, unclassified, retired, available };
 }
 
-/** `(reg, catalogue, anthropic: boolean) => ModelClass[]` — the one place
- *  "an anthropic lane has all four" lives. See the `.ts`'s comment for why the
- *  boolean is a parameter. */
+/**
+ * `(reg, catalogue, anthropic: boolean) => ModelClass[]` — which classes
+ * routing may use on this lane, the ONE implementation of "an Anthropic lane
+ * has all four" (round-2 ruling 2).
+ *
+ * `anthropic` is a parameter and not a field because the roster on `main` has
+ * no `exec.provider` to derive it from: `ExecSpec` is `upstream | generated |
+ * external` and nothing more. Every caller computes it from the roster's own
+ * declaration, `telemetry === 'anthropic'` (deviation B-3), in one place per
+ * program. On such a lane the four classes are Claude Code's own defaults, the
+ * registry file does not exist, and there is nothing to classify.
+ */
 export function availableFor(reg, catalogue, anthropic) {
   if (anthropic) return [...CLASSES];
   return deriveModels(reg, catalogue).available;
 }
 
+/** The four family tokens, in match order — an id is FABLE-class before it is
+ *  opus-class, so a hybrid name resolves the way its most specific token says.
+ *  Matched WITH their dashes: `opus` bare would classify `opusml/x`. Plan 2's
+ *  `_session_class` implements the same rule in bash and is pinned against
+ *  this one by that plan's agreement test. */
 const FAMILY_TOKENS = [
   ['-fable-', 'fable'], ['-opus-', 'opus'], ['-sonnet-', 'sonnet'], ['-haiku-', 'haiku'],
 ];
@@ -290,7 +376,11 @@ export function familyClassOf(anthropicModelId) {
   return null;
 }
 
-/** `(reg, modelId) => ModelClass | null` — first class in CLASSES order. */
+/** `(reg, modelId) => ModelClass | null`. Reverse lookup: which class does
+ *  this lane route to `modelId`? The FIRST class in `CLASSES` order wins, so
+ *  two slots holding one id resolve deterministically rather than by object
+ *  key order. A `null` slot never matches — `classOfModel(reg, '')` is null,
+ *  not "haiku". */
 export function classOfModel(reg, modelId) {
   if (typeof modelId !== 'string' || modelId.length === 0) return null;
   for (const c of CLASSES) {
@@ -299,4 +389,11 @@ export function classOfModel(reg, modelId) {
   return null;
 }
 
+/** What the materialiser writes into the env block for a `null` slot (§6.1).
+ *  Never left unset: unset, the alias falls through to Anthropic's own id and
+ *  the proxied backend answers with an opaque 404.
+ *
+ *  IT LIVES IN A SINK. Nothing branches on it — not here, not in ccd, not in
+ *  the API, not in the UI. Availability is `DerivedModels.available` in
+ *  TypeScript and node, and the THIRD COLUMN of `<id>.classes.tsv` in bash. */
 export const UNAVAILABLE_PREFIX = 'ccrc-unavailable-';

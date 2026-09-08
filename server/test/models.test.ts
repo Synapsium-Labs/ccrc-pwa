@@ -1,12 +1,26 @@
 // `shared/models.ts` — the registry file's type and validator (§4.1), the
-// catalogue's (§4.2) and the derived states (§4.3) — and its bare-`node` twin.
-// The twin exists because `ccd/ccrc-models-probe`'s helpers, `deploy/
-// models-op.mjs` and (Plan 2) ccd's own reader all run under a bare `node`
-// that cannot load a `.ts`; the `.ts` is what the server and the PWA bundle.
-// Neither is allowed to differ: both are driven over `modelCases` and compared
-// to each other, `shared/wrapper.mjs` / `shared/generate.mjs`'s arrangement in
-// this tree and its reason — a twin that is stricter in one direction refuses
-// a lane the other routes.
+// catalogue's (§4.2) and the derived states (§4.3).
+//
+// Fix round 1 (2026-09-08 review): the first draft had `shared/models.ts` and
+// `shared/models.mjs` each carrying a full, independently-implemented copy of
+// every function, and this file drove both and compared them as twins. The
+// review measured ~200 duplicated lines — the first duplicated pair in
+// `shared/`, where every other bare-`node` module (`shared/generate.mjs`,
+// `shared/wrapper.mjs`, `shared/mark.mjs`, `shared/roster-json.mjs`) is ONE
+// implementation plus a hand-written `.d.mts`. The controller ruled
+// single-source: `shared/models.mjs` is now the one implementation — the
+// callers that run under a bare `node` (`deploy/models-op.mjs`,
+// `shared/modelenv.mjs`, and Plan 2's ccd reader) import it directly, and
+// `shared/models.ts`, which the server and the PWA bundle, re-exports every
+// function, `MODEL_ID_RE`, `RegistryInvalid`, `CatalogueInvalid` and
+// `UNAVAILABLE_PREFIX` straight from it. This file therefore imports
+// everything from `'../../shared/models.js'` ONCE and drives `modelCases`
+// over it ONCE — there is no second implementation left to disagree with the
+// first. What remains genuinely duplicated — `CLASSES` and `PROBE_KINDS`,
+// kept on the `.ts` side only for their `as const`-derived TYPES, with a
+// private unexported copy in `.mjs` because `.mjs` cannot import `.ts` back
+// — is still pinned element-for-element below, `shared/wrapper.mjs` /
+// `shared/generate.mjs`'s arrangement in this tree and its reason.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -16,12 +30,6 @@ import {
   availableFor, classOfModel, deriveModels, familyClassOf, parseCatalogue,
   parseRegistry, resolveDiscovery,
 } from '../../shared/models.js';
-import {
-  availableFor as availableForMjs, classOfModel as classOfModelMjs,
-  deriveModels as deriveModelsMjs, familyClassOf as familyClassOfMjs,
-  parseCatalogue as parseCatalogueMjs, parseRegistry as parseRegistryMjs,
-  resolveDiscovery as resolveDiscoveryMjs,
-} from '../../shared/models.mjs';
 import { CODEX, SEEDED, UNSEEDED, modelCases } from './fixtures/modelCases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -50,14 +58,6 @@ describe('deriveModels', () => {
     expect(deriveModels(c.reg, c.catalogue)).toEqual(c.expect);
   });
 
-  it('the bare-node twin answers identically, row for row', () => {
-    for (const c of modelCases) {
-      expect(deriveModelsMjs(c.reg, c.catalogue), c.why).toEqual(c.expect);
-      expect(deriveModelsMjs(c.reg, c.catalogue), `twins disagree: ${c.why}`)
-        .toEqual(deriveModels(c.reg, c.catalogue));
-    }
-  });
-
   it('a retired class NEVER empties its slot — retirement is a separate fact', () => {
     // Ruling 4 of the skeleton, and §4.3: `retired` is positive, `available` is
     // what routing consumes, and the operator's own assignment survives a
@@ -65,6 +65,17 @@ describe('deriveModels', () => {
     const c = modelCases.find((x) => x.expect.retired.length === 4)!;
     expect(deriveModels(c.reg, c.catalogue).available).toEqual([]);
     expect(c.reg!.classes.opus).toBe('gone-c');
+  });
+
+  it('an id retired ONLY through discovery, never classified, still retires', () => {
+    // Fix round 1, Finding 2: `[...classified, ...discovery]` in the
+    // retirement loop has two halves, and every OTHER case above leaves the
+    // `...discovery` half unmeasured — dropping it silently survived the
+    // whole suite. `gpt-gone` here is reachable only through `discovery`, so
+    // this is the one row that reds if that half is ever dropped again.
+    const c = modelCases.find((x) => x.why.includes('retired ONLY through discovery'))!;
+    expect(c.reg!.classes.haiku).toBe('gpt-5.6-luna');
+    expect(deriveModels(c.reg, c.catalogue)).toEqual(c.expect);
   });
 });
 
@@ -81,11 +92,6 @@ describe('availableFor — the ONE place "anthropic lanes have all four" lives',
     expect(availableFor(SEEDED, CODEX, false)).toEqual(['haiku', 'sonnet', 'opus']);
     expect(availableFor(null, CODEX, false)).toEqual([]);
     expect(availableFor(UNSEEDED, null, false)).toEqual([]);
-  });
-
-  it('the twin agrees on all four', () => {
-    expect(availableForMjs(null, null, true)).toEqual(availableFor(null, null, true));
-    expect(availableForMjs(SEEDED, CODEX, false)).toEqual(availableFor(SEEDED, CODEX, false));
   });
 });
 
@@ -108,11 +114,6 @@ describe('resolveDiscovery', () => {
     const reg = { ...UNSEEDED, discovery: ['b', 'a'] };
     expect(resolveDiscovery(reg, CODEX)).toEqual(['b', 'a']);
   });
-
-  it('the twin agrees on all three', () => {
-    expect(resolveDiscoveryMjs(SEEDED, CODEX)).toEqual(resolveDiscovery(SEEDED, CODEX));
-    expect(resolveDiscoveryMjs(SEEDED, null)).toEqual([]);
-  });
 });
 
 describe('parseRegistry (§4.1)', () => {
@@ -120,7 +121,6 @@ describe('parseRegistry (§4.1)', () => {
 
   it('round-trips the seeded gpt registry', () => {
     expect(parseRegistry(good())).toEqual(SEEDED);
-    expect(parseRegistryMjs(good())).toEqual(SEEDED);
   });
 
   it('round-trips an UNSEEDED registry — every class null is legal (deviation B-1)', () => {
@@ -271,7 +271,10 @@ describe('parseRegistry (§4.1)', () => {
     }
   });
 
-  it('the twin refuses every one of those too', () => {
+  it('refuses every one of a batch of invalid registries', () => {
+    // Fix round 1: this ran the same batch through both implementations before
+    // the single-source ruling. One implementation, one pass — still worth
+    // bundling as a batch, since each mutation is a distinct refusal path.
     const bad: Record<string, unknown>[] = [];
     const push = (mut: (r: Record<string, unknown>) => void): void => {
       const r = good(); mut(r); bad.push(r);
@@ -284,7 +287,6 @@ describe('parseRegistry (§4.1)', () => {
     push((r) => { r['probe'] = 'openrouter'; });
     for (const r of bad) {
       expect(() => parseRegistry(r), JSON.stringify(r)).toThrow();
-      expect(() => parseRegistryMjs(r), `twin accepted ${JSON.stringify(r)}`).toThrow();
     }
   });
 });
@@ -297,12 +299,10 @@ describe('familyClassOf', () => {
     ['claude-haiku-4-5-20250101', 'haiku'],
   ] as const)('%s is %s-class', (id, cls) => {
     expect(familyClassOf(id)).toBe(cls);
-    expect(familyClassOfMjs(id)).toBe(cls);
   });
 
   it('a model id with no family token is not classified', () => {
     expect(familyClassOf('gpt-5.6-sol')).toBeNull();
-    expect(familyClassOfMjs('gpt-5.6-sol')).toBeNull();
   });
 
   it('the tokens are matched with their DASHES, so a bare word does not match', () => {
@@ -320,7 +320,6 @@ describe('familyClassOf', () => {
 describe('classOfModel', () => {
   it('reverse-looks an id up in the four slots', () => {
     expect(classOfModel(SEEDED, 'gpt-5.6-terra')).toBe('sonnet');
-    expect(classOfModelMjs(SEEDED, 'gpt-5.6-terra')).toBe('sonnet');
   });
 
   it('answers null for an id no class holds, and never matches a null slot', () => {
@@ -340,7 +339,6 @@ describe('parseCatalogue', () => {
 
   it('round-trips a written catalogue', () => {
     expect(parseCatalogue(good)).toEqual(CODEX);
-    expect(parseCatalogueMjs(good)).toEqual(CODEX);
   });
 
   it.each([
@@ -353,7 +351,6 @@ describe('parseCatalogue', () => {
     ['a model with a non-string id', { ...CODEX, models: [{ id: 7, label: 'x' }] }],
   ] as const)('refuses %s', (_why, bad) => {
     expect(() => parseCatalogue(bad)).toThrow(CatalogueInvalid);
-    expect(() => parseCatalogueMjs(bad)).toThrow();
   });
 
   it('fills the optional fields rather than demanding them', () => {
@@ -371,27 +368,44 @@ describe('the sentinel prefix', () => {
     for (const c of CLASSES) expect(`${UNAVAILABLE_PREFIX}${c}`).toMatch(/^ccrc-unavailable-[a-z]+$/);
   });
 
-  it('is NOT what anything here branches on', () => {
+  it('is NOT what anything here branches on, in either file', () => {
     // §6.1: the sentinel lives in a SINK. Availability is `available` in TS and
     // node and the TSV's third column in bash. A reader that tested for the
-    // string would be a second, silent definition of "unavailable".
-    const src = readFileSync(path.join(REPO, 'shared/models.ts'), 'utf8');
-    const uses = src.split('\n').filter((l) => l.includes('UNAVAILABLE_PREFIX'));
-    expect(uses).toHaveLength(1);
-    expect(uses[0]).toContain('export const UNAVAILABLE_PREFIX');
+    // string would be a second, silent definition of "unavailable". Checked in
+    // BOTH files since fix round 1: `shared/models.ts` now only RE-EXPORTS the
+    // constant (one mention, the re-export line) and `shared/models.mjs` is
+    // where it is actually defined (one mention, the `export const` line).
+    for (const f of ['shared/models.ts', 'shared/models.mjs']) {
+      const src = readFileSync(path.join(REPO, f), 'utf8');
+      const uses = src.split('\n').filter((l) => l.includes('UNAVAILABLE_PREFIX'));
+      expect(uses, f).toHaveLength(1);
+    }
+    const mjsSrc = readFileSync(path.join(REPO, 'shared/models.mjs'), 'utf8');
+    expect(mjsSrc).toContain('export const UNAVAILABLE_PREFIX');
   });
 });
 
-describe('shared/models.ts is L0', () => {
-  it('imports NOTHING — the PWA bundles this file and no sibling exists to need', () => {
+describe('shared/models.ts is TypeScript-facing over the single models.mjs implementation', () => {
+  it('imports exactly one thing — its own ./models.mjs — and nothing else (fix round 1)', () => {
+    // Before fix round 1 this file imported NOTHING (a full duplicate
+    // implementation). The controller ruling adopted single-source instead:
+    // `shared/models.mjs` is the one implementation, and this file's only
+    // external reference is the re-export from it. The PWA still bundles this
+    // file with no `node:*` involved — `./models.mjs` is equally import-free.
     const src = readFileSync(path.join(REPO, 'shared/models.ts'), 'utf8');
-    expect([...src.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]!)).toEqual([]);
+    // Not line-anchored: the re-export is a multi-line `export { ... } from
+    // './models.mjs';` block, so this matches the specifier wherever the
+    // `from '...';` lands rather than requiring `import`/`export` on the same
+    // line as it.
+    const specifiers = [...src.matchAll(/\bfrom\s+'([^']+)';/g)].map((m) => m[1]!);
+    expect(specifiers).toEqual(['./models.mjs']);
   });
 
-  it('the twin carries the class list, and it is CLASSES element for element', () => {
-    // Source-derived, `server/test/source-bytes.test.ts:5-15`'s rule: the twin
-    // cannot import the `.ts`, so the constants it copies are compared as TEXT.
-    // The last regex hand-copied between these two languages shipped as raw
+  it('the .mjs carries the class list, and it is CLASSES element for element', () => {
+    // Source-derived, `server/test/source-bytes.test.ts:5-15`'s rule: the
+    // `.mjs` cannot import the `.ts`'s exported `CLASSES` (that would be an
+    // import cycle), so it keeps a private copy, compared here as TEXT. The
+    // last regex hand-copied between these two languages shipped as raw
     // control bytes with every suite green.
     const src = readFileSync(path.join(REPO, 'shared/models.mjs'), 'utf8');
     const m = /const CLASSES = \[([^\]]*)\];/.exec(src);
@@ -400,7 +414,7 @@ describe('shared/models.ts is L0', () => {
     expect(mirrored).toEqual([...CLASSES]);
   });
 
-  it('the twin carries PROBE_KINDS, element for element', () => {
+  it('the .mjs carries PROBE_KINDS, element for element', () => {
     const src = readFileSync(path.join(REPO, 'shared/models.mjs'), 'utf8');
     const m = /const PROBE_KINDS = \[([^\]]*)\];/.exec(src);
     expect(m, 'shared/models.mjs must declare `const PROBE_KINDS = [...];`').not.toBeNull();
@@ -408,14 +422,14 @@ describe('shared/models.ts is L0', () => {
     expect(mirrored).toEqual([...PROBE_KINDS]);
   });
 
-  it('MODEL_ID_RE is the account-connections regex, SOURCE for source, in both files', () => {
+  it('MODEL_ID_RE is the account-connections regex, SOURCE for source, in its one home', () => {
     // Round-2 ruling 2: copy that branch's regex with a comment naming its
-    // origin, do not import from the branch. Both copies are compared as text
-    // to the ONE literal this plan pins, for `source-bytes.test.ts`'s reason.
+    // origin, do not import from the branch. Fix round 1 moved the only
+    // definition into `shared/models.mjs` (re-exported, not redeclared, by
+    // `shared/models.ts`) — checked here as text against the ONE literal this
+    // plan pins, for `source-bytes.test.ts`'s reason.
     const LITERAL = String.raw`/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/`;
-    for (const f of ['shared/models.ts', 'shared/models.mjs']) {
-      const src = readFileSync(path.join(REPO, f), 'utf8');
-      expect(src, `${f} must spell MODEL_ID_RE exactly`).toContain(`MODEL_ID_RE = ${LITERAL}`);
-    }
+    const src = readFileSync(path.join(REPO, 'shared/models.mjs'), 'utf8');
+    expect(src, 'shared/models.mjs must spell MODEL_ID_RE exactly').toContain(`MODEL_ID_RE = ${LITERAL}`);
   });
 });

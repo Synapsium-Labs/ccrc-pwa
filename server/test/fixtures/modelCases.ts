@@ -165,4 +165,26 @@ export const modelCases: readonly ModelCase[] = [
       available: [],
     },
   },
+  {
+    // Fix round 1 (2026-09-08 review), Finding 2: deleting the `...discovery`
+    // half of `[...classified, ...discovery]` in the retirement loop survived
+    // every other row above, because in each of them an unclassified id was
+    // either absent from the catalogue for a reason `classified` alone already
+    // covers, or the catalogue was null/stale. Here `gpt-gone` is retired ONLY
+    // reachable through `discovery` — it is never a classed id — so this row
+    // reds the instant that half of the loop is dropped.
+    why: 'an id retired ONLY through discovery, never classified, still retires',
+    reg: {
+      probe: 'codex',
+      classes: { haiku: 'gpt-5.6-luna', sonnet: null, opus: null, fable: null },
+      subagent: 'haiku', discovery: ['gpt-5.6-luna', 'gpt-gone'],
+    },
+    catalogue: CODEX,
+    expect: {
+      classified: ['gpt-5.6-luna'],
+      unclassified: ['gpt-gone'],
+      retired: ['gpt-gone'],
+      available: ['haiku'],
+    },
+  },
 ];
