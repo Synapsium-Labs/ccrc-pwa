@@ -803,13 +803,51 @@ describe('ccrc models refresh', () => {
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
   });
 
-  it('re-materialises the lane it refreshed, so the effort file tracks the new catalogue', () => {
-    // Seeded with NO catalogue, so `effort.opus: max` was written unvalidated
-    // and `effort.fable: max` was dropped for having no model. The refresh is
-    // the run that first learns what the lane really offers.
+  it('re-materialises the lane it refreshed, so the effort file is freshly rewritten from the new catalogue', () => {
+    // Fix round 1, Finding 3: the original version of this test set no
+    // effort level of its own, so `SEEDS.codex`'s own `effort` map (written,
+    // unvalidated, by `init`'s OWN materialise call, before any catalogue
+    // exists) was byte-identical to what `refresh`'s re-materialise would
+    // separately produce — the test stayed green with that re-materialise
+    // call deleted entirely (measured directly).
+    //
+    // A CONTENT-based fix (e.g. `set-effort haiku ultra` before any catalogue
+    // exists, expecting the catalogue to DROP it once one arrives) does not
+    // work either — measured directly, not just reasoned: `parseRegistry`
+    // (`shared/models.mjs`) and `effortFile` (`shared/modelenv.mjs`) run the
+    // IDENTICAL "does the classed model's own `efforts` list include this
+    // level" check against the SAME catalogue, and `materialise`'s general op
+    // path calls `readRegistry` — which runs `parseRegistry` — BEFORE it ever
+    // calls `effortFile`. So a level the new catalogue would have DROPPED
+    // instead makes the whole re-materialise call REFUSE (`registry-invalid`)
+    // first, and that refusal is swallowed by refresh's own `|| true` (the
+    // deferred masking minor) — leaving the file exactly as stale as if
+    // refresh's materialise call had never run at all: no observable
+    // difference, for the same underlying reason as the original bug.
+    // `effortFile`'s own "dropped, not refused" case is consequently
+    // unreachable through this call path for ANY registry that stays valid.
+    //
+    // What genuinely differs, provably, on every refresh — independent of
+    // registry content — is that `materialise` always does a fresh
+    // `writeFileSync(tmp) + renameSync(tmp, path)` (`deploy/models-op.mjs`),
+    // which replaces the file's INODE even when the bytes it writes are
+    // identical. `test/ccd-swap-carry.test.ts` and
+    // `test/install-graphify-skill.test.ts` use the same `.ino` idiom for
+    // "was this file freshly rewritten, not merely left alone". Measured:
+    // with the mutation below (deleting the materialise call), the inode is
+    // IDENTICAL before and after, because nothing touches the file during
+    // refresh at all.
     run(['models', 'gpt', 'init', 'codex']);
+    const effortPath = join(home, '.ccrc', 'models', 'gpt.effort.json');
+    const before = fs.statSync(effortPath).ino;
     run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.effort.json'), 'utf8')))
+    const after = fs.statSync(effortPath).ino;
+    expect(after).not.toBe(before);
+    // The content itself is, correctly, unchanged (SEEDS.codex's own
+    // haiku/sonnet/opus levels are all valid against CODEX_RAW) — the TSV
+    // sibling test below is what a CONTENT difference (a RETIRED class)
+    // actually looks like.
+    expect(JSON.parse(fs.readFileSync(effortPath, 'utf8')))
       .toEqual({ byModel: { 'gpt-5.6-luna': 'high', 'gpt-5.6-terra': 'high', 'gpt-5.6-sol': 'max' } });
   });
 
@@ -900,7 +938,12 @@ describe('ccrc models refresh', () => {
     run(['models', 'router', 'init', 'compatible', '--base-url', 'https://api.cortecs.ai']);
     const r = run(['models', 'refresh', 'router']);
     expect(r.code).toBe(1);
-    expect(oneObject(r)['refreshed']).toEqual([{ id: 'router', probe: 'compatible', ok: false, count: 0 }]);
+    // Fix round 1, Finding 2 (ruling): every failed row now carries `reason`
+    // (the probe's own first stderr line) — `count` dropped from a failed
+    // row entirely, since it was always 0 and never a fact about the lane.
+    const refreshed = oneObject(r)['refreshed'] as { id: string; probe: string; ok: boolean; reason: string }[];
+    expect(refreshed).toEqual([{ id: 'router', probe: 'compatible', ok: false, reason: expect.any(String) }]);
+    expect(refreshed[0]!.reason.length).toBeGreaterThan(0);
     expect(poisonLog('curl').join('\n')).toContain('Bearer lane-token');
     expect(r.stdout).not.toContain('lane-token');
     expect(r.stderr).not.toContain('lane-token');
@@ -920,5 +963,72 @@ describe('ccrc models refresh', () => {
     const r = run(['models', 'refresh', 'gpt', '--all']);
     expect(r.code).toBe(2);
     expect(oneObject(r)['error']).toBe('unknown-argument');
+  });
+
+  // Fix round 1, Finding 1: `_models_answer lanes --file "$file"` can return
+  // non-zero carrying a LEGITIMATE refusal body from node (a corrupt
+  // accounts.json is the reachable case; the half-updated-box `no-answer`
+  // seam is the other). The old `|| exit $?` captured that body into `$lanes`
+  // (a command-substitution local) and exited without ever printing it —
+  // empty stdout, a real refusal silently lost. `oneObject()` is what would
+  // have caught it: an empty-stdout run fails on "stdout carried 0 lines, not
+  // one" before ever reaching `error`.
+  it('a corrupt accounts.json is reported as node\'s own refusal, not an empty stdout (Fix round 1, Finding 1)', () => {
+    fs.writeFileSync(join(home, '.ccrc', 'accounts.json'), '{not json');
+    const r = run(['models', 'refresh', '--all']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('roster-invalid');
+  });
+
+  // Fix round 1, Finding 2 (ruling): `hasRegistry` used to be computed AFTER
+  // a catalogue-read shortcut that treated a broken CATALOGUE as "no
+  // registry at all" — hiding the one lane `readCatalogue`'s own refusal text
+  // names `ccrc models refresh <id>` as the remedy for. `readRegistry` now
+  // always runs, so a valid registry behind a corrupt catalogue is still
+  // found and still refreshed.
+  it('a lane whose catalogue is corrupt is still refreshed, and repaired (Fix round 1, Finding 2)', () => {
+    // `init` itself refuses on an already-broken catalogue file (the general
+    // op path's early `cat.err` gate), so the registry has to be seeded
+    // first, with no catalogue file yet, and the catalogue corrupted after.
+    run(['models', 'gpt', 'init', 'codex']);
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
+    const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: 'gpt', probe: 'codex', ok: true, count: 9 }]);
+    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.json'), 'utf8'));
+    expect(cat.models).toHaveLength(9);
+  });
+
+  // The other half of the same ruling: a REGISTRY that exists but does not
+  // parse/validate is `hasRegistry: true` with `probe: null` — the old code
+  // fed the literal string "null" to the probe as its probe kind. Such a row
+  // is now reported as a failed row named by the registry's own message,
+  // without ever reaching the probe.
+  it('a lane whose registry does not parse/validate is a failed row with a reason, and never reaches the probe (Fix round 1, Finding 2)', () => {
+    fs.mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+    // No `subagent` key — the same fixture `models-op.test.ts`'s own
+    // registry-invalid case uses.
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'),
+      JSON.stringify({ probe: 'codex', classes: { haiku: null, sonnet: null, opus: null, fable: null } }));
+    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(1);
+    const rows = oneObject(r)['refreshed'] as Record<string, unknown>[];
+    const row = rows.find((x) => x['id'] === 'gpt')!;
+    expect(row['ok']).toBe(false);
+    expect(String(row['reason'])).toContain('subagent');
+    expect('probe' in row).toBe(false);
+    expect('count' in row).toBe(false);
+    // The probe was never invoked: no catalogue landed for this lane.
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(false);
+  });
+
+  it('refresh <id> on a lane whose registry does not parse/validate refuses with that message, not no-such-lane (Fix round 1, Finding 2)', () => {
+    fs.mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'),
+      JSON.stringify({ probe: 'codex', classes: { haiku: null, sonnet: null, opus: null, fable: null } }));
+    const r = run(['models', 'refresh', 'gpt']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('registry-invalid');
+    expect(String(oneObject(r)['detail'])).toContain('subagent');
   });
 });

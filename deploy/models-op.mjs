@@ -455,12 +455,34 @@ function main(argv) {
     const lanes = [];
     for (const acc of (json.accounts ?? [])) {
       if (!isObj(acc) || !canCarryRegistry(acc)) continue;
+      // `readRegistry` runs REGARDLESS of whether the catalogue read
+      // succeeded (round-2 ruling on Task 9's Fix round 1, Finding 2): the
+      // old code's `cat.err !== undefined ? { registry: null } : …` treated
+      // a broken CATALOGUE as if the lane had no registry at all, which hid
+      // the one lane `ccrc models refresh <id>` exists to repair (that
+      // catalogue's own refusal text names `refresh` as the remedy) behind
+      // `hasRegistry: false`. `catalogue` is optional to `readRegistry` —
+      // it only tightens the `effort` check — so passing `null` when the
+      // catalogue itself did not read is exactly the "never probed" case
+      // `parseRegistry`'s own header already documents.
       const cat = readCatalogue(acc.id);
-      const reg = cat.err !== undefined ? { registry: null } : readRegistry(acc.id, cat.catalogue);
+      const reg = readRegistry(acc.id, cat.err !== undefined ? null : cat.catalogue);
+      // `registry` is non-null ONLY on a successful parse; `registryInvalid`
+      // carries the validator's own message on every other outcome where the
+      // FILE is nonetheless present (bad JSON, unreadable, or schema-invalid
+      // per `parseRegistry`) — ENOENT is the one case that is neither, and is
+      // the actual "no registry" state. `hasRegistry` now reflects the
+      // registry FILE's presence alone, valid or not, so a lane whose
+      // registry doesn't parse still SHOWS UP for a caller to name — and
+      // `probe` stays null on that row, because there is no VALID probe kind
+      // to report.
       const registry = reg.registry ?? null;
+      const registryInvalid = reg.err !== undefined ? reg.err[1] : (reg.invalid !== undefined ? reg.invalid.message : null);
       lanes.push({
         id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: false,
-        hasRegistry: registry !== null || reg.invalid !== undefined,
+        hasRegistry: registry !== null || registryInvalid !== null,
+        registryInvalid,
+        catalogueInvalid: cat.err !== undefined ? cat.err[1] : null,
         probe: registry === null ? null : registry.probe,
         baseUrl: registry === null || registry.baseUrl === undefined ? null : registry.baseUrl,
       });

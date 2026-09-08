@@ -4054,16 +4054,24 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
   esac
 }
 
-_models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fresh catalogue
+MODELS_REFRESH_REASON=""
+_models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fresh catalogue; sets MODELS_REFRESH_REASON on failure
   local probe="$CCRC_HERE/ccrc-models-probe" args=()
   [ -x "$probe" ] \
     || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
   [ -z "$3" ] || args=(--base-url "$3")
+  local msg rc
   # THE SAME SECRETS-SOURCING SUBSHELL `_models_endpoints` uses (above): a
   # `compatible` lane's catalogue fetch sends `ANTHROPIC_AUTH_TOKEN` as a
   # Bearer header exactly like the endpoints call does, so it needs the same
-  # lane key reaching the same probe.
-  _models_run_probe "$1" "$probe" "$1" "$2" ${args[@]+"${args[@]}"} >/dev/null
+  # lane key reaching the same probe. Stdout is discarded (the probe writes
+  # its catalogue to a file, never stdout, on success); stderr is CAPTURED
+  # rather than merely discarded, because Fix round 1, Finding 2's `reason`
+  # on a failed row is the probe's own first stderr line.
+  msg="$(_models_run_probe "$1" "$probe" "$1" "$2" ${args[@]+"${args[@]}"} 2>&1 1>/dev/null)"
+  rc=$?
+  MODELS_REFRESH_REASON="$(printf '%s\n' "$msg" | head -n1)"
+  return "$rc"
 }
 
 # The box-wide half of the verb group: the CATALOGUES the class registries are
@@ -4088,8 +4096,21 @@ _models_box_sub() {   # <subcommand> [args…]
       # nobody has run `init` on has no PROBE KIND — round-2 ruling 10 puts
       # that on the registry file, so probing such a lane would be asking a
       # question with no answer.
-      local lanes
-      lanes="$(_models_answer lanes --file "$file")" || exit $?
+      #
+      # Fix round 1, Finding 1: this capture must not swallow a REFUSAL body.
+      # `_models_answer` can return non-zero with a legitimate JSON refusal
+      # already printed into `$lanes` (a corrupt accounts.json, or the
+      # half-updated-box `no-answer` seam) — a bare `|| exit $?` here exits
+      # with that body captured and NEVER PRINTED, violating "one JSON object
+      # on stdout, on every path". `_models_lane_sub`'s `discovery` arm's own
+      # pre-check (`showbody`, above) is the same shape.
+      local lanes rc
+      lanes="$(_models_answer lanes --file "$file")" || { rc=$?; printf '%s\n' "$lanes"; exit "$rc"; }
+      # `hasRegistry` now reflects the REGISTRY FILE's presence alone (Fix
+      # round 1, Finding 2, ruling): a corrupt CATALOGUE no longer excludes a
+      # lane from this list — `registryInvalid`/`catalogueInvalid` are
+      # separate facts a row can carry now, and `probe` is null only when
+      # there is no VALID registry.
       lanes="$(printf '%s' "$lanes" | jq -c '[.lanes[] | select(.hasRegistry)]')"
 
       local wanted="$lanes"
@@ -4097,29 +4118,51 @@ _models_box_sub() {   # <subcommand> [args…]
         wanted="$(printf '%s' "$lanes" | jq -c --arg id "$target" 'map(select(.id == $id))')"
         [ "$(printf '%s' "$wanted" | jq 'length')" -eq 1 ] \
           || _models_refuse no-such-lane 1 "\"$target\" is not a lane with a class registry on this box. Anthropic lanes have none — their four classes are Claude Code's own defaults, so there is nothing to probe. For any other lane run 'ccrc models $target init <${MODELS_PROBES// /|}>' first; 'ccrc status' lists the ids this box has. Nothing was written."
+        # A lane WITH a registry that does not parse or validate is a
+        # DIFFERENT fact from "no registry at all" (Fix round 1, Finding 2,
+        # ruling): named directly, with the same error code the general op
+        # path uses for the same condition (`registry-invalid`), rather than
+        # the generic no-such-lane sentence.
+        local invalid
+        invalid="$(printf '%s' "$wanted" | jq -r '.[0].registryInvalid // empty')"
+        [ -z "$invalid" ] \
+          || _models_refuse registry-invalid 1 "$invalid"
       fi
 
-      local rows=() failed=0 n i id probe baseurl count ok
+      local rows=() failed=0 n i id probe baseurl count reginvalid row
       n="$(printf '%s' "$wanted" | jq 'length')"
       i=0
       while [ "$i" -lt "$n" ]; do
         id="$(printf '%s' "$wanted" | jq -r ".[$i].id")"
         probe="$(printf '%s' "$wanted" | jq -r ".[$i].probe")"
         baseurl="$(printf '%s' "$wanted" | jq -r ".[$i].baseUrl // \"\"")"
-        if _models_refresh_one "$id" "$probe" "$baseurl"; then
-          ok=true
+        reginvalid="$(printf '%s' "$wanted" | jq -r ".[$i].registryInvalid // \"\"")"
+        if [ -n "$reginvalid" ]; then
+          # A registry that exists but does not parse/validate names no
+          # VALID probe kind (`probe` is null on this row) — reported as a
+          # failure and never handed to the probe, per the ruling: the
+          # hourly run names the real problem instead of asking the probe to
+          # make sense of the literal string "null".
+          row="$(jq -cn --arg id "$id" --arg reason "$reginvalid" '{id:$id, ok:false, reason:$reason}')"
+          failed=1
+        elif _models_refresh_one "$id" "$probe" "$baseurl"; then
           # Re-materialise: the effort map is validated against the catalogue
-          # (§4.1) and the TSV's third column is derived from it (§7), so a lane
-          # whose catalogue just changed can have a lane default that has
-          # stopped being offered and a class that has just been retired — and
-          # the files ccd and the shim read have to learn that in the same run.
+          # (§4.1) and the TSV's third column is derived from it (§7), so a
+          # lane whose catalogue just changed can have a lane default that
+          # has stopped being offered and a class that has just been retired
+          # — and the files ccd and the shim read have to learn that in the
+          # same run.
           _models_node materialise --file "$file" --id "$id" >/dev/null 2>&1 || true
           count="$(jq '.models | length' "$HOME/.ccrc/models/$id.json" 2>/dev/null || echo 0)"
+          row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" '{id:$id, probe:$p, ok:true, count:$c}')"
         else
-          ok=false; failed=1; count=0
+          # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
+          # probe's own first stderr line, captured by `_models_refresh_one`.
+          row="$(jq -cn --arg id "$id" --arg p "$probe" --arg reason "$MODELS_REFRESH_REASON" \
+            '{id:$id, probe:$p, ok:false, reason:$reason}')"
+          failed=1
         fi
-        rows+=("$(jq -cn --arg id "$id" --arg p "$probe" --argjson ok "$ok" --argjson c "$count" \
-          '{id:$id, probe:$p, ok:$ok, count:$c}')")
+        rows+=("$row")
         i=$((i + 1))
       done
 

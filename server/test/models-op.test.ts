@@ -177,8 +177,10 @@ describe('lanes', () => {
     const r = op('lanes', '--file', rosterPath());
     expect(r.code).toBe(0);
     expect(r.body['lanes']).toEqual([
-      { id: 'gpt', configDirSuffix: '.claude-gpt', anthropic: false, hasRegistry: false, probe: null, baseUrl: null },
-      { id: 'router', configDirSuffix: '.claude-router', anthropic: false, hasRegistry: false, probe: null, baseUrl: null },
+      { id: 'gpt', configDirSuffix: '.claude-gpt', anthropic: false, hasRegistry: false,
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null },
+      { id: 'router', configDirSuffix: '.claude-router', anthropic: false, hasRegistry: false,
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null },
     ]);
   });
 
@@ -188,13 +190,54 @@ describe('lanes', () => {
     const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
     expect(lanes.find((l) => l['id'] === 'router')).toEqual({
       id: 'router', configDirSuffix: '.claude-router', anthropic: false,
-      hasRegistry: true, probe: 'compatible', baseUrl: 'https://api.cortecs.ai',
+      hasRegistry: true, registryInvalid: null, catalogueInvalid: null,
+      probe: 'compatible', baseUrl: 'https://api.cortecs.ai',
     });
   });
 
   it('an upstream account is never a lane a registry can sit on', () => {
     const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as { id: string }[];
     expect(lanes.map((l) => l.id)).not.toContain('claude');
+  });
+
+  // Fix round 1, Finding 2 (ruling): the old code passed `{ registry: null }`
+  // whenever the CATALOGUE read failed, so a broken catalogue silently turned
+  // `hasRegistry` false too — hiding the one lane `readCatalogue`'s own
+  // refusal text names `ccrc models refresh <id>` as the remedy for, behind
+  // "no registry at all". `readRegistry` now always runs, with `catalogue:
+  // null` standing in for "could not be read", exactly the "never probed"
+  // case `parseRegistry` already tolerates.
+  it('a catalogue that exists but does not parse does not exclude the lane, and names it via catalogueInvalid', () => {
+    // `init` itself refuses on an already-broken catalogue file (both share
+    // the general op path's early `cat.err` gate), so the registry has to be
+    // seeded FIRST, with no catalogue file present yet, and the catalogue
+    // corrupted afterwards.
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    fs.writeFileSync(path.join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    const row = lanes.find((l) => l['id'] === 'gpt')!;
+    expect(row['hasRegistry']).toBe(true);
+    expect(row['registryInvalid']).toBeNull();
+    expect(row['probe']).toBe('codex');
+    expect(String(row['catalogueInvalid'])).toContain('not a catalogue this build understands');
+  });
+
+  // The other half of the same ruling: a registry file that IS present but
+  // does not parse/validate is still `hasRegistry: true` (the FILE exists —
+  // `hasRegistry` reflects presence alone now, not validity), with `probe:
+  // null` (there is no VALID probe kind to report) and `registryInvalid`
+  // naming the validator's own message — the fixture `show`'s own
+  // registry-invalid case uses: all four classes null but no `subagent` key.
+  it('a registry that exists but does not parse/validate is still hasRegistry, named via registryInvalid, with probe null', () => {
+    fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(regPath('gpt'),
+      JSON.stringify({ probe: 'codex', classes: { haiku: null, sonnet: null, opus: null, fable: null } }));
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    const row = lanes.find((l) => l['id'] === 'gpt')!;
+    expect(row['hasRegistry']).toBe(true);
+    expect(row['probe']).toBeNull();
+    expect(row['catalogueInvalid']).toBeNull();
+    expect(String(row['registryInvalid'])).toContain('subagent');
   });
 });
 
