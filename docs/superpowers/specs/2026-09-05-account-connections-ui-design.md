@@ -88,8 +88,12 @@ below was read or measured this week, not carried from the August spec.
    device-code login writing `~/.handoff/chatgpt-auth/auth.json`, refresh automatic,
    a FAILED refresh falls into a fresh 15-minute device-code prompt inside whatever
    process called it); `cck3`/`claude-glm` undeclared OpenRouter/Cortecs lanes sourcing a
-   shared `~/.handoff/env`. `gpt` is kill-switched by `~/.cc-sessions/gpt-disabled` since
-   2026-07-28. Every Anthropic lane exports the env token (scope `user:inference`) while
+   shared `~/.handoff/env`. **`gpt` was kill-switched by `~/.cc-sessions/gpt-disabled` from
+   2026-07-28 until 2026-09-08, when `065882ae` (PR #61) removed the file and put every
+   ENABLED non-home-able lane back into the auto-swap rotation as a last-resort overflow
+   lane. Measured 2026-09-08: the file is absent. So `enable`/`disable` raise and lower a
+   per-lane BRAKE on a lane that is otherwise already in the rotation — they do not bring a
+   dead lane to life, and no copy of ours may say they do (D-1904).** Every Anthropic lane exports the env token (scope `user:inference`) while
    ccd launches with `--remote-control`; Remote Control cannot be promised for
    token-minted lanes.
 8. **External facts that moved since August.** Claude Code is 2.1.258-2.1.261 here;
@@ -745,8 +749,19 @@ existing launcher as an OpenAI lane (`candidates` → `declare`), LOG IN through
 shown), CHECK (the probe, which lazily starts the stack), ENABLE/DISABLE (the marker —
 the live `gpt` lane's actual state), REMOVE (roster row and markers only). No API-key
 path, no LiteLLM config writer, no `ccgpt-usage` timer management. The row says
-"external launcher — ccrc does not manage its credential" and usage reads "no telemetry
-for this lane" instead of bars.
+"external launcher — ccrc does not manage its credential".
+
+**Usage does NOT read "no telemetry for this lane" (corrected 2026-09-08, D-1905).** That
+sentence conflated a roster DECLARATION with a measurement, which is the overloaded-null
+defect this repo refuses at a seam. `telemetry: 'none'` is a claim the roster makes — "this
+account will never report rate limits, so its permanent unknown is not permanent emptiness"
+— and it is not a statement about whether a usage file exists today. `ccgpt-usage.timer` is
+enabled and writes `~/.cc-limits/gpt.json` every 20 minutes (measured 2026-09-08:
+`{"five": null, "seven": 0, "fiveResetAt": null, "sevenResetAt": …}`), which ccrc still does
+not manage but does read. That shape is a THIRD state, not a missing one: **five genuinely
+absent, seven present** — weekly-only. The row must render the roster declaration and the
+measured file as the two separate things they are, and must fold the weekly-only shape into
+neither "no telemetry" nor "0%".
 
 ## 12. The UI
 
