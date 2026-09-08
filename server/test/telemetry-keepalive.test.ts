@@ -331,4 +331,149 @@ describe('the preflight and the lock — the two ways a pass can retire in silen
     expect(r.stderr).toMatch(/timeout is not on PATH — nothing was measured/);
     expect(turns()).toEqual([]);
   });
+
+  it('a box with no date refuses BEFORE the first turn — the others refuse before any spend too', () => {
+    // `date` is the entry that is not used to DECIDE anything: it runs AFTER
+    // the money is spent. MEASURED without it in the preflight: the first
+    // account's turn is taken, `dur=$(( $(date …) - t0 ))` is a fatal
+    // arithmetic error, bash abandons the whole loop, and `_ka_finish ok 0`
+    // reports `{"status":"ok","accounts":[]}` with rc 0 — money spent, no row
+    // written, the remaining accounts never reached. The doctrine one door up
+    // ("a box with no flock refuses LOUDLY") has to cover this one too.
+    plantWrapper('claude-a');
+    plantLimits('claude-a', 9, 9999);
+    const r = run({
+      PATH: thinBin(['bash', 'mkdir', 'jq', 'flock', 'timeout', 'mktemp', 'cat', 'head']),
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/date is not on PATH — nothing was measured/);
+    expect(turns(), 'a turn was taken on a box the pass could not finish on').toEqual([]);
+  });
+});
+
+/** Seed the attempt ledger the throttle and the backoff both read. */
+function plantState(id: string, lastAttemptAgo: number, fails: number): void {
+  fs.mkdirSync(j('.ccrc', 'keepalive-state'), { recursive: true });
+  fs.writeFileSync(j('.ccrc', 'keepalive-state', `${id}.json`), JSON.stringify(
+    { lastAttempt: Math.floor(Date.now() / 1000) - lastAttemptAgo, fails }));
+}
+
+describe('the throttle is on the ATTEMPT, not on the success', () => {
+  it('takes ONE turn across three passes against a wrapper that never renders', () => {
+    // THE DEFECT THIS CLOSES. Freshness in ~/.cc-limits advances only when a
+    // turn RENDERS, so a success-only gate leaves `no-render` and `failed`
+    // running at the timer's cadence for ever — measured at 3 turns for 3
+    // passes, ~96/account/day at the planned 15-minute tick, achieving nothing.
+    plantWrapper('claude-a');           // exits 0, renders nothing
+    plantLimits('claude-a', 9, 9999);
+    run();
+    expect(row('claude-a').outcome, 'the first pass must actually spend').toBe('no-render');
+    run();
+    run();
+    expect(turns().filter((l) => l.startsWith('turn claude-a ')).length,
+      'a non-rendering account was retried at the timer cadence').toBe(1);
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason).toContain('attempted');
+    expect(row('claude-a').reason).toContain('CCRC_KEEPALIVE_FRESH');
+  });
+
+  it('a failed turn throttles exactly as a no-render one does', () => {
+    plantWrapper('claude-a', 'exit 3');
+    plantLimits('claude-a', 9, 9999);
+    run();
+    expect(row('claude-a').outcome).toBe('failed');
+    run();
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(turns().filter((l) => l.startsWith('turn claude-a ')).length).toBe(1);
+  });
+});
+
+describe('the backoff — an account that can never render stops being probed', () => {
+  it('skips inside the widening window, and says how many failures and how long', () => {
+    // 4 consecutive failures with AFTER=3 gives a 7200s window (BASE 3600
+    // doubled once). The stamp is 3600s old: OUTSIDE CCRC_KEEPALIVE_FRESH, so
+    // the plain attempt throttle would let this through — the backoff is the
+    // only thing refusing, which is what makes the mutation below clean.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    plantState('claude-a', 3600, 4);
+    run();
+    expect(row('claude-a').outcome).toBe('skipped');
+    expect(row('claude-a').reason).toContain('backoff, 4 consecutive failures');
+    expect(row('claude-a').reason).toMatch(/next attempt in \d+s/);
+    expect(turns()).toEqual([]);
+  });
+
+  it('probes again once that window has elapsed', () => {
+    // The other direction. A backoff that never ended would be a way to lose
+    // an account for ever, which is worse than the spend it saves.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    plantState('claude-a', 10000, 4);   // 10000s > the 7200s window
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+    expect(turns().filter((l) => l.startsWith('turn claude-a ')).length).toBe(1);
+  });
+
+  it('one success clears the streak', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    plantState('claude-a', 10000, 4);
+    run();
+    const state = JSON.parse(
+      fs.readFileSync(j('.ccrc', 'keepalive-state', 'claude-a.json'), 'utf8'));
+    expect(state.fails, 'a transient fault must not cost an account its cadence for ever').toBe(0);
+  });
+});
+
+describe('the knob that decides the money is validated like any other input', () => {
+  it('refuses a non-integer CCRC_KEEPALIVE_FRESH instead of failing OPEN', () => {
+    // MEASURED FAIL-OPEN: `30m` — the obvious spelling, and systemd's own for
+    // timers — makes `[ 30m -lt … ]` a syntax error, `[` returns 2, EVERY
+    // account reads as not-fresh and takes a turn, and then `--argjson fresh
+    // 30m` aborts the census so the pass cannot even report what it spent.
+    for (const id of ['claude', 'claude-a', 'claude-b', 'claude-d']) {
+      plantWrapper(id, renders(id));
+      plantLimits(id, 9, 9999);
+    }
+    const r = run({ CCRC_KEEPALIVE_FRESH: '30m' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/CCRC_KEEPALIVE_FRESH must be a whole number — got '30m'/);
+    expect(turns(), 'a malformed spend knob let every account take a turn').toEqual([]);
+    expect(fs.existsSync(j('.ccrc', 'keepalive.json'))).toBe(false);
+  });
+
+  it('holds every knob that reaches arithmetic or jq to the same rule', () => {
+    for (const knob of ['CCRC_KEEPALIVE_TURN_TIMEOUT', 'CCRC_KEEPALIVE_BACKOFF_AFTER',
+      'CCRC_KEEPALIVE_BACKOFF_BASE', 'CCRC_KEEPALIVE_BACKOFF_MAX']) {
+      plantWrapper('claude-a', renders('claude-a'));
+      const r = run({ [knob]: '1h' });
+      expect(r.status, `${knob} was not validated`).toBe(1);
+      expect(r.stderr).toContain(`${knob} must be a whole number`);
+      expect(turns()).toEqual([]);
+    }
+  });
+});
+
+describe('the credential reaches the child and nowhere else', () => {
+  it('a secrets file that ERRORS when sourced still leaks nothing to the log', () => {
+    // THE MEASURED LEAK. `_ka_turn` sources inside the subshell whose stderr is
+    // $TURN_ERR, and `_ka_log` copies 400 bytes of $TURN_ERR into the durable
+    // 0600 log. A secrets file holding a BARE TOKEN rather than an assignment —
+    // a provisioning slip `ccrc doctor` cannot see, its check being `[ -s ]` —
+    // makes bash try to RUN the token and print it in `command not found`.
+    const SENTINEL = 'sk-ant-oat-SENTINEL-must-never-be-written';
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'claude-a-oauth.env'), `${SENTINEL}\n`, { mode: 0o600 });
+    plantWrapper('claude-a');           // exits 0, renders nothing -> _ka_log runs
+    plantLimits('claude-a', 9, 9999);
+    run();
+    expect(row('claude-a').outcome, 'this case only proves anything if the log was written')
+      .toBe('no-render');
+    expect(fs.existsSync(j('.ccrc', 'keepalive.log'))).toBe(true);
+    expect(fs.readFileSync(j('.ccrc', 'keepalive.log'), 'utf8'),
+      'the credential was persisted to $HOME/.ccrc/keepalive.log').not.toContain(SENTINEL);
+    expect(fs.readFileSync(j('.ccrc', 'keepalive.json'), 'utf8'),
+      'the credential reached the census').not.toContain(SENTINEL);
+  });
 });

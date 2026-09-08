@@ -31,11 +31,33 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 #     (spec §A) already covers liveness;
 #   • never a turn on an account that reported inside CCRC_KEEPALIVE_FRESH —
 #     this is for the IDLE case, and an active account reports in seconds;
+#   • never a SECOND turn on an account inside that same window, whatever the
+#     first one did. THROTTLING IS ON THE ATTEMPT, NOT ON THE SUCCESS: a
+#     `no-render` or `failed` account never advances the telemetry it is judged
+#     by, so a success-only gate would retry it on every single tick for ever
+#     (measured: 3 passes against a no-render wrapper took 3 turns) — spending
+#     at the timer's cadence rather than at this window's;
+#   • never a turn on an account that has failed CCRC_KEEPALIVE_BACKOFF_AFTER
+#     times in a row until its widening window has elapsed. An account that can
+#     never render is a broken account, and the right spend on one is a small
+#     and shrinking number of probes, not a permanent drip;
 #   • never a turn on an account a registered session is sitting on — two
 #     `claude` processes under one CLAUDE_CONFIG_DIR is a hazard this script
 #     will not take, and an account with a live session is not idle;
 #   • never a claim about a refresh it did not measure. The turn's exit code
 #     is a CLAIM; `ts` advancing in the telemetry file is the ARTIFACT.
+#
+# ── WHAT IT COSTS, PER ACCOUNT, PER DAY ──────────────────────────────────
+# WORST CASE 48. One turn per CCRC_KEEPALIVE_FRESH (1800s) per account,
+# whatever that turn achieved — the timer may tick more often, and the attempt
+# gate is what decides. Doubling the window halves the bill.
+#
+# An account that can NEVER render does not stay at 48. It takes
+# CCRC_KEEPALIVE_BACKOFF_AFTER (3) turns at that rate, and then the backoff
+# window doubles per consecutive failure from CCRC_KEEPALIVE_BACKOFF_BASE
+# (3600s) up to CCRC_KEEPALIVE_BACKOFF_MAX (86400s) — 1h, 2h, 4h, 8h, 16h, 24h
+# — so it settles at 1/day having spent about nine wasted turns in total,
+# instead of ~96 every day for ever. One success resets the count to zero.
 #
 # ── THE TWO KNOBS AN OPERATOR REACHES FOR ────────────────────────────────
 # CCRC_KEEPALIVE_FRESH widens or narrows the spend; CCRC_KEEPALIVE_MODEL picks
@@ -79,6 +101,11 @@ LOG="$HOME/.ccrc/keepalive.log"
 PAUSE="$HOME/.ccrc/keepalive-paused"
 LOCK="$HOME/.ccrc/keepalive.lock"
 WORKDIR="$HOME/.ccrc/keepalive-cwd"
+# One tiny row per account: {lastAttempt, fails}. It is SEPARATE from
+# ~/.cc-limits deliberately — that file is ccd's ground truth and this script
+# is a reader of it, never a writer. Losing this directory costs one extra
+# round of turns and nothing else, which is why it needs no durability story.
+STATE_DIR="$HOME/.ccrc/keepalive-state"
 # The freshness window is `ccd/ccd`'s SWAP_FRESH by value — "telemetry younger
 # than this qualifies for pre-emptive swaps" — re-spelled because a sibling
 # executable sources nothing from ccd. Reused rather than invented: the fleet
@@ -94,6 +121,14 @@ WORKDIR="$HOME/.ccrc/keepalive-cwd"
 : "${CCRC_KEEPALIVE_MODEL:=haiku}"
 : "${CCRC_KEEPALIVE_PROMPT:=Reply with the single word: ok}"
 : "${CCRC_KEEPALIVE_TURN_TIMEOUT:=120}"
+# The backoff, and it is deliberately three plain numbers rather than a curve:
+# after this many CONSECUTIVE non-refreshing turns an account is skipped until
+# BASE doubled once per failure beyond the threshold has elapsed, capped at MAX.
+# A single refresh resets the count, so a transient fault costs one extra wait
+# and nothing more.
+: "${CCRC_KEEPALIVE_BACKOFF_AFTER:=3}"
+: "${CCRC_KEEPALIVE_BACKOFF_BASE:=3600}"
+: "${CCRC_KEEPALIVE_BACKOFF_MAX:=86400}"
 
 # The account-id grammar. A FOURTH spelling of `shared/roster.ts`'s ID_RE,
 # after `ccd/ccrc-wrapper-shape`'s WRAPPER_ID_RE and `ccd-account-health`'s
@@ -110,12 +145,11 @@ WORKDIR="$HOME/.ccrc/keepalive-cwd"
 # else entirely) and a filename under $REG and ~/.cc-limits.
 KA_ID_RE='^[a-z][a-z0-9-]{0,31}$'
 
-STARTED="$(date -u +%FT%TZ)"
 ROWS=()
 
 _ka_say() { printf 'keepalive: %s\n' "$1" >&2; }
 
-mkdir -p "$HOME/.ccrc" "$WORKDIR" \
+mkdir -p "$HOME/.ccrc" "$WORKDIR" "$STATE_DIR" \
   || { _ka_say 'cannot create $HOME/.ccrc — nothing was measured'; exit 1; }
 
 # PREFLIGHT BEFORE THE LOCK, and `flock` is IN it — `ccd-account-health`'s
@@ -125,10 +159,34 @@ mkdir -p "$HOME/.ccrc" "$WORKDIR" \
 # holds it" arm would retire every pass, silently, forever. `jq` is here for a
 # second reason on top of that: it is what WRITES the census, so a pass that
 # discovered its absence later could not even record the discovery.
-for tool in jq flock timeout; do
+#
+# `date` is in the list for a reason the other three do not share: it is not
+# used to DECIDE anything, it is used AFTER the money is spent. Missing, the
+# turn is taken and then `dur=$(( $(date …) - t0 ))` is a fatal arithmetic
+# error — bash abandons the whole loop, `_ka_finish ok 0` reports
+# `{"status":"ok","accounts":[]}`, and the pass exits 0 having spent on one
+# account, recorded nothing, and never reached the rest. Refusing before the
+# first turn is the only answer that does not cost money to discover.
+for tool in jq flock timeout date; do
   command -v "$tool" >/dev/null 2>&1 \
     || { _ka_say "$tool is not on PATH — nothing was measured"; exit 1; }
 done
+
+# THE KNOBS THAT CONTROL THE MONEY ARE VALIDATED LIKE ANY OTHER INPUT. An
+# operator writing CCRC_KEEPALIVE_FRESH=30m in a drop-in — the obvious spelling,
+# and systemd's own for timers — used to FAIL OPEN: `[ 30m -lt … ]` is a syntax
+# error, `[` returns 2, every account reads as not-fresh, EVERY account takes a
+# turn, and then `--argjson fresh 30m` aborts the census so the pass cannot even
+# report what it did. The one input that decides the spend must refuse as loudly
+# as a missing tool, and before the lock, for the same reason.
+for knob in CCRC_KEEPALIVE_FRESH CCRC_KEEPALIVE_TURN_TIMEOUT \
+            CCRC_KEEPALIVE_BACKOFF_AFTER CCRC_KEEPALIVE_BACKOFF_BASE \
+            CCRC_KEEPALIVE_BACKOFF_MAX; do
+  [[ "${!knob}" =~ ^[0-9]+$ ]] \
+    || { _ka_say "$knob must be a whole number — got '${!knob}'; nothing was measured"; exit 1; }
+done
+
+STARTED="$(date -u +%FT%TZ)"
 
 _ka_row() {   # account outcome reason five_before five_after cost_usd duration_ms
   # UNKNOWN IS null, NEVER 0. A percentage nobody measured and a measured zero
@@ -175,6 +233,44 @@ _ka_num() {   # <file> <key> -> that integer field, or NOTHING
   v="$(jq -r --arg k "$2" '.[$k] // empty' "$1" 2>/dev/null)" || return 1
   [[ "$v" =~ ^-?[0-9]+$ ]] || return 1
   printf '%s' "$v"
+}
+
+# THE ATTEMPT LEDGER. `{lastAttempt, fails}` per account, and it is what makes
+# the throttle honest: freshness in ~/.cc-limits advances ONLY on a turn that
+# rendered, so gating on it alone throttles success and leaves failure running
+# at the timer's cadence. An absent or unreadable row reads 0 — "never
+# attempted, never failed" — which is the safe direction: it costs one turn, it
+# cannot wedge an account out of ever being measured.
+_ka_state_get() {   # <account> <key> -> that integer, or 0
+  local f="$STATE_DIR/$1.json" v
+  [ -f "$f" ] || { printf '0'; return 0; }
+  v="$(_ka_num "$f" "$2")" || v=""
+  [ -n "$v" ] || v=0
+  printf '%s' "$v"
+}
+
+# Written by rename, like every other stamp in this tree, so the only two
+# states a reader can observe are absent and complete.
+_ka_state_set() {   # <account> <last-attempt-epoch> <consecutive-failures>
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/$1.json.XXXXXX")" || { _ka_say "$1: cannot stage the attempt ledger"; return 1; }
+  jq -cn --argjson t "$2" --argjson f "$3" '{lastAttempt:$t, fails:$f}' > "$tmp" \
+    && mv -f "$tmp" "$STATE_DIR/$1.json" \
+    || { rm -f "$tmp"; _ka_say "$1: cannot write the attempt ledger"; return 1; }
+}
+
+# The widening window, in seconds — 0 means "not in backoff at all". Doubling
+# rather than linear so a permanently broken account reaches the daily cap in
+# about two days instead of eleven; the shift is clamped because it is the
+# SHIFT that overflows, not the clock.
+_ka_backoff_window() {   # <consecutive-failures> -> seconds
+  local fails="$1" sh win
+  [ "$fails" -ge "$CCRC_KEEPALIVE_BACKOFF_AFTER" ] || { printf '0'; return 0; }
+  sh=$(( fails - CCRC_KEEPALIVE_BACKOFF_AFTER ))
+  [ "$sh" -gt 20 ] && sh=20
+  win=$(( CCRC_KEEPALIVE_BACKOFF_BASE << sh ))
+  [ "$win" -gt "$CCRC_KEEPALIVE_BACKOFF_MAX" ] && win="$CCRC_KEEPALIVE_BACKOFF_MAX"
+  printf '%s' "$win"
 }
 
 # THE MARKER, read exactly as ccd reads `swapblocked`: the epoch is VALIDATED
@@ -249,10 +345,22 @@ _ka_turn() {   # <account> <config-dir> -> the child's rc; output captured
     # real ones do (ccrc-wrappers.test.ts models the live launcher's `export
     # CLAUDE_CODE_OAUTH_TOKEN`); one that does not would otherwise hand the
     # turn a 401 with nothing in the census naming the reason.
+    #
+    # BOTH STREAMS OF THE SOURCING ARE DISCARDED, and that redirection is a
+    # SECRETS control, not tidiness. This subshell's stderr is $TURN_ERR, and
+    # `_ka_log` copies 400 bytes of $TURN_ERR into the durable 0600 log — so a
+    # secrets file that is a BARE TOKEN rather than an assignment (a
+    # provisioning slip `ccrc doctor` cannot see: its check is `[ -s ]`) makes
+    # bash try to RUN the token and print it in `command not found`. Measured:
+    # the credential landed in ~/.ccrc/keepalive.log, in the file whose own
+    # SECRETS header promises it is never logged. Redirecting the group rather
+    # than the `.` covers everything the sourced file does, and a `{ }` group is
+    # not a subshell, so the exports still survive into the exec below.
     # shellcheck source=/dev/null
-    set -a
-    [ -r "$SECRETS_DIR/$acct-oauth.env" ] && . "$SECRETS_DIR/$acct-oauth.env"
-    set +a
+    { set -a
+      [ -r "$SECRETS_DIR/$acct-oauth.env" ] && . "$SECRETS_DIR/$acct-oauth.env"
+      set +a
+    } >/dev/null 2>&1
     [ -n "$cfg" ] && export CLAUDE_CONFIG_DIR="$cfg"
     exec timeout "$CCRC_KEEPALIVE_TURN_TIMEOUT" \
       "$WRAPPER_DIR/$acct" -p "$CCRC_KEEPALIVE_PROMPT" \
@@ -336,9 +444,37 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
       "$fb" "" "" 0
     continue
   fi
+  fails="$(_ka_state_get "$acct" fails)"
+  last="$(_ka_state_get "$acct" lastAttempt)"
+  # BACKOFF IS ASKED FIRST, because when both gates apply it is the one that
+  # explains the account. "skipped: attempted 400s ago" and "skipped: backoff,
+  # 5 consecutive failures" are the same silence to a machine and completely
+  # different news to an operator.
+  win="$(_ka_backoff_window "$fails")"
+  if [ "$win" -gt 0 ] && [ "$last" -gt 0 ] && [ "$((now - last))" -lt "$win" ]; then
+    _ka_row "$acct" skipped \
+      "backoff, $fails consecutive failures, next attempt in $((win - (now - last)))s" \
+      "$fb" "" "" 0
+    continue
+  fi
+  # THE THROTTLE, and it is on the ATTEMPT. See the header: gating on the
+  # telemetry's own freshness throttles only the turns that WORKED.
+  if [ "$last" -gt 0 ] && [ "$((now - last))" -lt "$CCRC_KEEPALIVE_FRESH" ]; then
+    _ka_row "$acct" skipped \
+      "attempted $((now - last))s ago, under CCRC_KEEPALIVE_FRESH=$CCRC_KEEPALIVE_FRESH" \
+      "$fb" "" "" 0
+    continue
+  fi
 
   cfg=""
   declare -F _ccrc_cfg_dir >/dev/null 2>&1 && cfg="$(_ccrc_cfg_dir "$acct")"
+  # STAMPED BEFORE THE SPEND, and counted as a failure until proved otherwise.
+  # A pass killed mid-turn — the timer's own timeout, a reboot, an OOM — has
+  # still SPENT, so the attempt must be on record before the money leaves. The
+  # optimistic order would let a crash loop spend at the timer's cadence with
+  # nothing throttling it, which is the defect one level up from the one this
+  # whole block closes.
+  _ka_state_set "$acct" "$now" "$((fails + 1))"
   t0="$(date +%s%3N)"
   _ka_turn "$acct" "$cfg"; rc=$?
   dur=$(( $(date +%s%3N) - t0 ))
@@ -359,6 +495,7 @@ for acct in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
   # unknown-becomes-a-number collapse `_ka_row`'s own header refuses.
   if [ -n "$after" ] && [ "$after" != "$ts" ]; then
     fa=""; [ -f "$lim" ] && { fa="$(_ka_num "$lim" five)" || fa=""; }
+    _ka_state_set "$acct" "$now" 0    # one success clears the whole streak
     _ka_row "$acct" refreshed "" "$fb" "$fa" "$cost" "$dur"
   elif [ "$rc" -eq 0 ]; then
     _ka_log "$acct" "$rc"
