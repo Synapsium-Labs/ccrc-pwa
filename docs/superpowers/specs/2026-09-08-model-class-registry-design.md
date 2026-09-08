@@ -31,6 +31,7 @@ Decided in the brainstorm (each was a question with options):
 | A newly advertised model | **Surfaced, never auto-classed**: reachable by its concrete name, flagged, joins a class only when the operator assigns one |
 | Approach | **A with a shortlist layer** (§2) |
 | Stopgap on the gpt lane meanwhile | **No** — ship the real thing |
+| Effort on non-Anthropic lanes (asked after spec review) | **Both levels**: a lane default per class, editable in the Models section; and the session's own `/effort` honoured per request |
 
 ## 1. What the tree says today (measured 2026-09-08)
 
@@ -81,6 +82,14 @@ Decided in the brainstorm (each was a question with options):
   `127.0.0.1:8642` injects `provider.only` from
   `~/.handoff/providers-whitelist.json` into every OpenRouter request.
 - **Telemetry refresh is a timer**: `ccgpt-usage.timer` every 20 min.
+- **Claude Code sends its effort with every request.** Captured 2026-09-08 with
+  a listener as the base URL: the body carries `output_config: {"effort":
+  "high"}` and `thinking: {"type": "adaptive"}`, under the
+  `effort-2025-11-24` beta header. The wrapper's premise ("Claude Code can't
+  express it") is stale: LiteLLM's `drop_params` discards the field and the
+  static `reasoning` in each `litellm_params` decides, so a `/effort` in a
+  gpt session — and the PWA's effort picker, which already offers the five
+  levels on gpt — changes nothing today.
 
 ## 2. Approaches considered
 
@@ -125,7 +134,8 @@ shown read-only.
 ```json
 "models": {
   "classes": { "haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra", "opus": "gpt-5.6-sol", "fable": null },
-  "shortlist": "catalogue"
+  "shortlist": "catalogue",
+  "effort": { "haiku": "high", "sonnet": "high", "opus": "max", "fable": "max" }
 }
 ```
 
@@ -141,6 +151,13 @@ shown read-only.
   alias `sonnet`. If the ruling keeps the key on the wire, it is optional and
   defaults to the derivation; a value that differs from the sonnet slot is
   refused.
+- `effort` — optional; the lane's **default reasoning effort per class**, used
+  when a request names none. Each value must be one of the classed model's
+  `efforts` from the catalogue (Luna has no `ultra`; Astra does) — validated
+  when a catalogue exists, accepted unvalidated otherwise and flagged by
+  doctor once one appears. Absent key or class → the provider's
+  `default_effort` for that model. Meaningless on `anthropic` (the client's
+  effort reaches Anthropic directly) and refused there.
 
 This replaces `ApiKeyModels`'s `{opus, sonnet, haiku, subagent, selectable?}`
 with `{classes, shortlist}`. The account-connections §4.1 wire body's `models?`
@@ -247,22 +264,35 @@ the per-lane env block the materialiser owns. Concrete ids live in the roster.
 ### 6.3 LiteLLM's model list is generated
 
 `ccrc models litellm <id>` renders `~/.handoff/litellm-config.yaml` from the
-Codex catalogue: one `chatgpt/<slug>` entry per **visible** model, its `[1m]`
-alias, and `reasoning.effort` from the per-class table below (a model that is
-in the catalogue but in no class gets the provider's `default_effort`).
+Codex catalogue: one `chatgpt/<slug>` entry per **visible** model and its
+`[1m]` alias — and **no `reasoning` key**: effort has exactly one owner, the
+shim (below), so config-versus-request precedence inside LiteLLM never
+matters.
 `drop_params` and `general_settings` are carried verbatim from a template in
 `deploy/`. If LiteLLM is running with a different rendered config, the
 generator restarts it (the wrapper's own `stop` then lazy start); in-flight
 gpt turns fail once and retry. It logs that it did.
 
-| class | effort |
-|---|---|
-| fable | `max` |
-| opus | `max` (today's Sol setting) |
-| sonnet | `high` |
-| haiku | `high` |
+### 6.4 Effort: lane default, per-request override
 
-Astra advertises `ultra`; it is not used by default (§15).
+`ccgpt-proxy` (the shim that already rewrites every `/v1/messages` body to
+fold `system`) sets Codex's `reasoning.effort` on every request:
+
+- the client's `output_config.effort` when present and not `auto` —
+  `low|medium|high|xhigh|max` are all Codex levels and pass through unchanged;
+- otherwise the lane's `effort[class]` for the request's model (the shim reads
+  the materialised map, §6.1, from a generated `~/.ccrc/models/<id>.effort.json`
+  the materialiser writes beside the env block, so the shim never parses the
+  roster);
+- otherwise nothing, and the provider's default applies.
+
+So `/effort xhigh` in a gpt session, or the PWA's effort picker, takes effect
+for that session from the next turn, and a session that never chose one runs
+at the lane default — today's `max` for Sol, `high` for Terra and Luna, which
+the seeded map preserves. `ultra` (Codex only, above `max`) is reachable as a
+lane default, not per session: the client's enum has no such level. The
+`claude-glm` lane gets the same treatment only if its backend accepts a
+reasoning field; otherwise the shim leaves the request alone (§15).
 
 ## 7. Class across swaps and restarts (ccd)
 
@@ -316,6 +346,10 @@ Astra advertises `ultra`; it is not used by default (§15).
   `Fable 5`, `Haiku 4.5`), and the file's header says so.
 - **SwapSheet**: lanes where the session's class is unavailable are listed
   with the downgrade sentence and require the explicit choice (§7).
+- **Effort**: in the Models section, one control per classed model offering
+  that model's `efforts` from the catalogue, writing `effort[class]`. The
+  session picker's existing effort rows are unchanged and now take effect on
+  gpt (§6.4).
 - **`ccrc doctor`** gains one check per non-Anthropic lane: catalogue present
   and not stale, no retired class ids, sentinel-free env block matches the
   roster (re-materialise to fix).
@@ -342,6 +376,7 @@ Astra advertises `ultra`; it is not used by default (§15).
 
 ```
 ccrc account models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
+ccrc account models <id> set-effort <haiku|sonnet|opus|fable> <level|default>
 ccrc account models <id> shortlist add <modelId> | rm <modelId> | catalogue
 ccrc account models <id> show                # classes, shortlist, derived states, JSON with --json
 ccrc models refresh [<id> | --all]           # probe(s) + LiteLLM step; the timer's entry point
@@ -406,7 +441,11 @@ marker re-stamped after every `ccd/ccd` edit.
   moves a class between rows and announces it; badges; disabled picker rows
   with reason; SwapSheet downgrade sentence; Anthropic account read-only.
 - **LiteLLM render**: today's catalogue → config with nine visible entries,
-  their `[1m]` aliases and the effort table; hidden models absent.
+  their `[1m]` aliases and no `reasoning` key; hidden models absent.
+- **Shim effort** (recorded request bodies through `ccgpt-proxy`):
+  `output_config.effort: xhigh` → `reasoning.effort: xhigh`; `auto` and absent
+  → the lane default for that model; no default → no field; the validator
+  refuses `effort.haiku: ultra` when the catalogue says Luna lacks it.
 
 ## 13. Migration and rollout
 
@@ -443,7 +482,8 @@ marker re-stamped after every `ccd/ccd` edit.
 
 | # | Decision | Default |
 |---|---|---|
-| 1 | Effort per class on Codex | fable/opus `max`, sonnet/haiku `high`; Astra's `ultra` unused |
+| 1 | Effort on Codex | lane defaults fable/opus `max`, sonnet/haiku `high` (editable per lane); a session's own `/effort` overrides per request; `ultra` as a lane default only |
+| 1b | Effort on `claude-glm` | shim-mapped only if the backend accepts a reasoning field; else untouched |
 | 2 | Auto-swap for a session whose class is unavailable on a lane | skip the lane (never silently downgrade) |
 | 3 | Refresh cadence | 60 min timer + on-demand button |
 | 4 | Anthropic catalogue probe | none; classes are client defaults |
