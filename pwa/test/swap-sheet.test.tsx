@@ -122,12 +122,12 @@ describe('SwapSheet says the move is temporary and names the home account', () =
 
   // The one entry that is NOT a pickable target, and the distinction the test
   // above must not swallow: `gpt` is `homeAble: false` and still offered,
-  // because an opt-in account is somewhere a session can be SENT on purpose —
-  // that is what this sheet is for. A `hidden` entry is different in kind: the
-  // roster says it names the Claude Code binary and is not an account at all,
-  // so offering it would invite a move onto a lane that holds no login of the
-  // operator's.
-  it('never offers a hidden entry as a target, while still offering the opt-in account', () => {
+  // because a non-home-able account is still somewhere a session can be SENT
+  // on purpose — that is what this sheet is for. A `hidden` entry is
+  // different in kind: the roster says it names the Claude Code binary and is
+  // not an account at all, so offering it would invite a move onto a lane
+  // that holds no login of the operator's.
+  it('never offers a hidden entry as a target, while still offering the overflow lane', () => {
     const roster = [...TEST_ROSTER.map((a) => (a.id === 'claude-corp' ? { ...a, hidden: true } : a))];
     const s = fleetSession({ wrapper: 'claude', home: 'claude' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s], roster)} />);
