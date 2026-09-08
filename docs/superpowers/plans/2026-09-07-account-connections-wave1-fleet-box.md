@@ -279,7 +279,7 @@ is `connect`, never `methods`: it is the field name in `ProviderRow` above, the 
 composed view carries (`deploy/account-op.mjs`, Task 20), the key the `providers` op prints, and the key
 Task 23's `check-add` reads as `P.connect`. (2) Its members are the BARE method names —
 `login`, `paste`, `setup-token`, `pkce`, `openai-login` — which are the values `--method` takes in
-`ccrc account add` (spec:413), in `ccd account-pane` (Task 50) and in `ccd-account-auth` (Task 51), so
+`ccrc account add` (spec:417), in `ccd account-pane` (Task 50) and in `ccd-account-auth` (Task 51), so
 the string in this table, the string an operator types and the string the helper's `case` matches are one
 string with no translation anywhere between them. The argument against §4.2's `pane:`-prefixed cell is in
 `ConnectMethod`'s docstring in Step 3a and is a READING of the spec (§5:413, §5:419, §6:507-508, §6:543
@@ -432,8 +432,8 @@ describe('the provider table is derived, never re-listed', () => {
     // agreement. `deploy/account-op.mjs`'s mirror is compared to this column by
     // `ccrc-account.test.ts` (Task 20) and `ccd-account-auth`'s `case` matches
     // these same strings (Tasks 51-55), so a `pane:` prefix landing here would
-    // refuse `--method setup-token` — a value spec:413 documents — everywhere at
-    // once. §4.2's cell (spec:272, :275) writes the prefixed spelling; §5:413,
+    // refuse `--method setup-token` — a value spec:417 documents — everywhere at
+    // once. §4.2's cell (spec:276, :275) writes the prefixed spelling; §5:413,
     // §5:419 and §6:507-508 write these, and §6:543 says what the prefix meant.
     expect(PROVIDERS.anthropic.connect).toEqual(['login', 'paste', 'setup-token']);
     expect(PROVIDERS.openrouter.connect).toEqual(['pkce', 'paste']);
@@ -635,7 +635,7 @@ Expected: FAIL at collection — `Failed to resolve import "../../shared/provide
  *  the elements the deploy mirror's own `connect` column carries.
  *
  *  BARE, WITH NO `pane:` PREFIX, and the spec is read rather than contradicted.
- *  §4.2's table cell writes `pane:setup-token` and `pane:login` (spec:272,
+ *  §4.2's table cell writes `pane:setup-token` and `pane:login` (spec:276,
  *  :275); every other mention writes the bare name — §5's `add` row takes
  *  `--method login|paste|setup-token` (:413), its `auth-start` row takes
  *  `--method login|setup-token|openai-login` (:419), and §6's own method table
@@ -646,7 +646,7 @@ Expected: FAIL at collection — `Failed to resolve import "../../shared/provide
  *  §4.2's `pane:login` and §6's `openai-login` are two different names rather
  *  than one name with a prefix: stripping `pane:` gives `login`, which is the
  *  ANTHROPIC method. A table carrying the prefixed spelling would make
- *  `--method setup-token` — a value spec:413 documents — refuse, and would need
+ *  `--method setup-token` — a value spec:417 documents — refuse, and would need
  *  a translation table between this column and the helper's `case`, which is
  *  the seam this file exists to remove.
  *
@@ -4192,8 +4192,8 @@ element for element, so the two have to agree on the field's NAME and on how a c
 SPELLED; Task 1's Interfaces block settles both for the whole wave and its `ConnectMethod` docstring
 carries the argument. Restated here only as far as this file needs it: the members are
 `login`, `paste`, `setup-token`, `pkce`, `openai-login` — no `pane:` prefix — because they are the
-values `--method` takes (spec `:413`, `:419`), the rows of §6's own method table (`:507-508`) and the
-`case` arms of `ccd-account-auth` (Task 51), and because §4.2's prefixed cell (`:272`, `:275`) is
+values `--method` takes (spec `:417`, `:423`), the rows of §6's own method table (`:511-512`) and the
+`case` arms of `ccd-account-auth` (Task 51), and because §4.2's prefixed cell (`:276`, `:279`) is
 prose about WHERE a method runs, which §6:543 then says in words. The `openai` row is what makes that
 reading unavoidable rather than merely convenient: §4.2 writes `pane:login` and §6 writes
 `openai-login`, which are two different NAMES and not one name with a prefix — stripping the prefix
@@ -4563,7 +4563,7 @@ const SELF = 'account-op';
  *  ── THE TWO NULLS IN `defaultBaseUrl` MEAN DIFFERENT THINGS ──────────────
  *  `compatible` has none because the operator MUST state the endpoint;
  *  `anthropic` has none because Claude Code's own default IS the endpoint and
- *  the lane has no endpoint of its own (§4.2, spec:277-280). Nothing in that
+ *  the lane has no endpoint of its own (§4.2, spec:281-284). Nothing in that
  *  column tells them apart — `envVar` does, and `check-add` reads it there.
  *  See the endpoint block in Task 23. */
 const PROVIDER_ENV_VAR = {
@@ -6026,7 +6026,7 @@ Every one of the five is exit 2: all are decidable from the flag's value alone, 
 endpoint refusal is NOT "the provider has no default and the operator named none". Two rows of
 `PROVIDER_DEPLOY` carry `defaultBaseUrl: null` and they mean opposite things — `compatible` has none
 because the operator must state the endpoint, `anthropic` has none because Claude Code's own default
-IS the endpoint (§4.2, spec `:277-280`) — and the spec scopes the class in its own words at `:413`:
+IS the endpoint (§4.2, spec `:281-284`) — and the spec scopes the class in its own words at `:417`:
 *"`base-url-required` (provider `compatible` with no `--base-url`)"*. A gate keyed on the null alone
 refuses `ccrc account add --provider anthropic`, which is the plain anthropic login lane, the default
 case of the whole feature, and which three cases in this file assert as legal. That is an overloaded
@@ -6057,7 +6057,7 @@ The method vocabulary is settled in Task 1, and restated in Task 20 for the mirr
 `login|paste|setup-token|pkce|openai-login`, in a column both sides call `connect`, with §4.2's
 `pane:` prefix read as prose about where a method runs. This task is where it becomes executable:
 `check-add` validates `--method` against `P.connect` and defaults it to `P.connect[0]`, so a prefixed
-table would refuse `--method setup-token`, which spec `:413` documents. The anthropic acceptance case
+table would refuse `--method setup-token`, which spec `:417` documents. The anthropic acceptance case
 below exercises that value.
 
 - [ ] **Step 1: Write the failing test** — append to `server/test/ccrc-account.test.ts`
@@ -6136,7 +6136,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // THE OTHER SIDE OF THE SAME GATE, and the row that keeps `base-url-required`
     // from being read as "every provider without a default". An `anthropic` lane
     // has no endpoint of its own — Claude Code's own default IS the endpoint
-    // (§4.2, spec:277-280) — so the flag is not merely optional there, it is
+    // (§4.2, spec:281-284) — so the flag is not merely optional there, it is
     // meaningless, and a value silently dropped would be a routing decision
     // nobody made. See the acceptance case below, which proves the same provider
     // with NO --base-url is a legal request.
@@ -6223,7 +6223,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     //
     // THIS CASE IS ALSO THE ONE THAT PROVES `base-url-required` IS SCOPED.
     // `anthropic`'s `defaultBaseUrl` is null and this request names none, so a
-    // gate keyed on "no default and no flag" would refuse a request spec:413
+    // gate keyed on "no default and no flag" would refuse a request spec:417
     // spells out as legal. It resolves to a plan, and `baseUrl` is null in it.
     const home = box('ccrc-account-add-login-');
     seedBoxRoster(home, FIXTURE_ROSTER);
@@ -6235,7 +6235,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     expect(plan['baseUrl']).toBe(null);
     expect(plan['envVar']).toBe(null);
 
-    // AND THE DOCUMENTED FLAG VALUE THE TABLE MUST ACCEPT. spec:413 says
+    // AND THE DOCUMENTED FLAG VALUE THE TABLE MUST ACCEPT. spec:417 says
     // `--method login|paste|setup-token`; §4.2's cell spells the third one
     // `pane:setup-token`, which is prose about where it runs (§6:507, :543).
     // The vocabulary is the bare one, and this is the assertion that keeps the
@@ -6460,9 +6460,9 @@ and the arm, placed after `roster`'s:
     // FIRST, WHICH LANES HAVE ONE AT ALL. `defaultBaseUrl: null` appears twice
     // in the table and means two different things: `compatible` has no default
     // because the operator must state the endpoint, `anthropic` has none
-    // because Claude Code's own default IS the endpoint (§4.2, spec:277-280).
+    // because Claude Code's own default IS the endpoint (§4.2, spec:281-284).
     // A gate written as "no default and no flag → refuse" collapses those two
-    // and refuses `ccrc account add --provider anthropic`, which spec:413
+    // and refuses `ccrc account add --provider anthropic`, which spec:417
     // documents as legal and which three cases in this file assert. Spec:413
     // scopes the class in its own words: "`base-url-required` (provider
     // `compatible` with no `--base-url`)".
@@ -6471,7 +6471,7 @@ and the arm, placed after `roster`'s:
     // is the column that does it: an endpoint-bearing lane is one that exports
     // `ANTHROPIC_AUTH_TOKEN`, because §4.3's env block for exactly those lanes
     // is `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_API_KEY=""`
-    // — the three keys the spec MEASURED on the fleet box (spec:306-307) — and
+    // — the three keys the spec MEASURED on the fleet box (spec:310-311) — and
     // Task 25 writes that block from `plan.baseUrl`. A lane exporting
     // `CLAUDE_CODE_OAUTH_TOKEN` writes no `ANTHROPIC_BASE_URL` at all, and one
     // exporting nothing (`openai`) never got here — `!P.generatable` refused it
@@ -6769,7 +6769,7 @@ the message, which is the failure mode a mutation table is supposed to be immune
    shape: every provider without a default now needs the flag. Re-run `-t "anthropic login lane"`:
    RED at the first assertion — `expected 2 to be 0`, with `check-add`'s stderr in the message
    because the case passes `r.stderr` as the label. RIGHT REASON: that is `--provider anthropic` with
-   no `--base-url` being refused `base-url-required`, which spec:413 documents as the default
+   no `--base-url` being refused `base-url-required`, which spec:417 documents as the default
    anthropic lane. Restore.
 4. **Narrow `endpointBearing` to `false`** (the opposite mutation, and the one that proves the other
    direction is measured too). Re-run `-t "loopback exception"`: RED —
@@ -6910,11 +6910,11 @@ name is `~/.cc-secrets/<id>-oauth.env` for a lane whose credential is an OAuth t
 `~/.cc-secrets/<id>-<provider>.env` for an api-key lane — one rule, derived from the `envVar` column
 in both writers (`check-add`'s `secretTag`, Task 23; `_acct_write_secret`'s `tag`, Task 22).
 
-The spec spells this three ways and only one of them can be the file. §5's `add` row (spec `:413`)
+The spec spells this three ways and only one of them can be the file. §5's `add` row (spec `:417`)
 says *"write `~/.cc-secrets/X-P.env` 0600 (dir 0700)"* — the general SHAPE, `<id>-<something>.env`.
-§4.3 (`:318`) gives the api-key lane's actual name, `~/.cc-secrets/<id>-openrouter.env`. §6, §7, §11
-and §12.5 give the OAuth lane's actual name, `~/.cc-secrets/<id>-oauth.env` (`:472`, `:507`,
-`:526-527`, `:707`, `:875`, and the sheet copy at `:939`: *"…and
+§4.3 (`:322`) gives the api-key lane's actual name, `~/.cc-secrets/<id>-openrouter.env`. §6, §7, §11
+and §12.5 give the OAuth lane's actual name, `~/.cc-secrets/<id>-oauth.env` (`:476`, `:511`,
+`:530-531`, `:711`, `:890`, and the sheet copy at `:954`: *"…and
 `~/.cc-secrets/claude-c-oauth.env`"*). Reading §5 as a literal template would make an anthropic lane's
 file `<id>-anthropic.env`, a name **no file in this tree has ever carried**: every anthropic lane on
 the live fleet is `-oauth` (`server/test/helpers.ts:69`, `exec.secretsFile:
@@ -8339,11 +8339,11 @@ holds an uncalled helper to.
   `{"ok":true,"id":"<id>","kind":"external","disabled":true,"roster":<roster>}` at exit 0.
 
 **Why:** `declare` is the only way an `openai` launcher, a `cck3` or a `claude-glm` ever becomes a
-ccrc lane — decision 22(c) (spec:1653-1662) rules those wrappers **declared, never adopted**, because
+ccrc lane — decision 22(c) (spec:1668-1677) rules those wrappers **declared, never adopted**, because
 `ccrc wrappers` would rewrite an adopted one into the four-line generated shape
 (`shared/wrapper.mjs:144-148`) and that is data loss, not adoption. So the verb's whole job is a
 refusal set: it must prove that `~/.local/bin/X` is a real, executable, id-shaped file that no
-rostered account already owns, and then write a roster entry and nothing else. Spec §5's row (spec:414)
+rostered account already owns, and then write a roster entry and nothing else. Spec §5's row (spec:418)
 says so in one clause — "refuse unless `~/.local/bin/X` is an undeclared, id-shaped executable (the
 doctor `wr_cands` rule, `-ef` alias collapse — ids and launchers are the same name by construction)".
 
@@ -8366,7 +8366,7 @@ no `readlink` and it catches a hard link too.
 
 **`--base-url` is DECLARATIVE here, and the verb does not gate it — the roster validator does.**
 Spec §5 says the flag "records where somebody else's launcher points so the card can say so, and
-ccrc never writes that launcher"; §4.1 (spec:245-256) puts the gate itself — `BASE_URL_OK` — inside
+ccrc never writes that launcher"; §4.1 (spec:249-260) puts the gate itself — `BASE_URL_OK` — inside
 `parseExec`, and `rosterFromJson` calls the same gate through `shared/base-url.mjs`, the bare-`node`
 twin Task 2 ships beside the `.ts`. So `declare` assembles the candidate entry,
 hands the WHOLE proposed roster to `deploy/account-op.mjs`, and a bad endpoint comes back as the
@@ -8382,7 +8382,7 @@ an operator acts on differently (put a launcher there / look at what is there), 
 that already exists). Collapsing any pair is the overloaded null CLAUDE.md forbids at a seam. The
 `bad-id`, `reserved-id` and `duplicate-id` refusals come one level up, before any disk is touched —
 `auth` is refused because the pane helper's tmux session name `cc-auth-<id>` would collide
-(spec:374-376).
+(spec:378-380).
 
 **One id gate, and this task is where it stops being two.** Task 23 spells `missing-value`, `bad-id`
 and `reserved-id` INLINE inside `_acct_add_parse` — measured against Task 23's own listing: THREE
@@ -8399,7 +8399,7 @@ the whole file rather than only the new describe.
 **And the lane lands OFF, after the roster and before the answer.** `_acct_disable_new` writes
 `$_SVC_REG/<id>-disabled`, the file `_lane_enabled` reads (`ccd/ccd:1024`), so a launcher nobody has
 probed cannot be picked by `_ws_least_loaded`. Spec §5's "Both connect verbs leave the new lane
-SWITCHED OFF" (spec:433-438) and decision 20 (spec:1625-1628) make this the same rule `add` obeys.
+SWITCHED OFF" (spec:437-442) and decision 20 (spec:1640-1643) make this the same rule `add` obeys.
 The ORDER differs from `add`'s deliberately, and the difference is measured rather than stylistic:
 `add` writes its marker before provisioning because a generated wrapper becomes pickable the instant
 the roster entry and the wrapper both exist, and `add` creates the wrapper. Here the launcher already
@@ -8664,7 +8664,7 @@ _acct_id_or_refuse() {   # <id>
     || _acct_refuse 2 missing-value "--id is required"
   [[ "$id" =~ $WRAPPER_ID_RE ]] \
     || _acct_refuse 2 bad-id "\"$id\" is not a legal account id: lowercase letters, digits and hyphens, starting with a letter, at most 32 characters. It becomes a filename under \$HOME/.local/bin. Nothing was written."
-  # §4.4 (spec:374-376). `cc-auth-<id>` is the auth pane's tmux session name, and
+  # §4.4 (spec:378-380). `cc-auth-<id>` is the auth pane's tmux session name, and
   # for the id "auth" that is `cc-auth-auth` - indistinguishable from the pane of
   # a session running on a wrapper called `auth`.
   [ "$id" != auth ] \
@@ -8862,10 +8862,10 @@ and `main` gains the two arms:
     // sentence.
     // `external` IS THE DECLARED KIND: ccrc records where somebody else's
     // launcher points and never writes that launcher (decision 22(c),
-    // spec:1653-1662). `provider` is optional on it — an entry with none is
+    // spec:1668-1677). `provider` is optional on it — an entry with none is
     // `undeclared` on the wire and offers no provider operation but
     // enable/disable and remove (§4.1) — and `baseUrl` is declarative for
-    // exactly the reason `secretsFile` is (spec:245-248).
+    // exactly the reason `secretsFile` is (spec:249-252).
     const exec = { kind: 'external' };
     if (a['provider'] !== undefined) exec.provider = a['provider'];
     if (a['base-url'] !== undefined) exec.baseUrl = a['base-url'];
@@ -8875,7 +8875,7 @@ and `main` gains the two arms:
     // `ccrc-doctor-checks:2474-2483` uses to explain why doctor asks only
     // whether the file exists. `telemetry: 'none'` is what keeps a metered lane
     // out of `CCRC_MEASURED`, which is what §4.6's `_ws_least_loaded` fix reads
-    // — spec:1663-1668 names this consequence outright. The operator turns
+    // — spec:1678-1683 names this consequence outright. The operator turns
     // either on by editing the roster; the verb does not guess.
     const entry = {
       id: a['id'], label: a['label'], hue: a['hue'],
@@ -9010,7 +9010,7 @@ git commit -m "feat(account): declare an external launcher, with the four refusa
   `ACCT_SUFFIX`, `ACCT_BASEURL`, `ACCT_HOMEABLE`. `_acct_live <id>` → sets `ACCT_LIVE_MEASURED`
   (`true`|`false`) and the array `ACCT_LIVE_IDS`. Task 32 consumes all three.
 
-**Why:** Spec §5's `credential` row (spec:415) is a rotation, not a first write: "re-auth by paste, for
+**Why:** Spec §5's `credential` row (spec:419) is a rotation, not a first write: "re-auth by paste, for
 TOKEN lanes only — a login lane has no secrets file to replace and re-auths by re-running
 `auth-start --method login`, which overwrites its `.credentials.json` in place (`not-managed` names
 the difference)". **`auth-start` is wave 2's subcommand, and the remedy names it on purpose**: it is
@@ -9039,14 +9039,14 @@ umask discipline, one temp-file rule — and a lane ccrc cannot prove it owns is
 
 **`live:[ids]` is the whole reason this subcommand returns anything.** A generated wrapper sources
 its secrets file at exec time, so a rotated token reaches a pane only when that pane is recreated.
-Decision 10 (spec:1562-1566) makes that the operator's choice rather than the verb's: "Re-auth does
+Decision 10 (spec:1577-1581) makes that the operator's choice rather than the verb's: "Re-auth does
 not restart sessions … the UI lists the live sessions on the account with a one-tap restart each".
 The verb therefore has to MEASURE which sessions are live on X, and `ccd/ccrc` has no registry reader
 to do it with — its one registry read is `_box_sessions` (`ccd/ccrc:1730-1743`), a `*.uuid` glob under
 a nullglob save/restore, and `_reg_get` (`ccd/ccd:1270`) lives in a file `ccrc` never sources. So this
 task adds the read in the shape `_box_sessions` already uses, and it reads two files per row:
 `$_SVC_REG/<sid>.uuid` for the row's existence and `$_SVC_REG/<sid>.wrapper` for which lane it is on.
-The `wrapper` field alone, not `home`: spec:697-699 defines a live session as "any registry row whose
+The `wrapper` field alone, not `home`: spec:701-703 defines a live session as "any registry row whose
 `wrapper` field is X and whose tmux session exists", and `home` is where a session was seeded, not
 what it is running.
 
@@ -9180,7 +9180,7 @@ describe('ccrc account credential', () => {
     expect((lstatSync(f).mode & 0o777).toString(8)).toBe('600');
     expect((lstatSync(path.dirname(f)).mode & 0o777).toString(8)).toBe('700');
     expect(readFileSync(f, 'utf8')).toBe(`export CLAUDE_CODE_OAUTH_TOKEN=${CANARY}\n`);
-    // THE CANARY (spec:407-409). Both streams AND every file the fixture holds
+    // THE CANARY (spec:411-413). Both streams AND every file the fixture holds
     // outside ~/.cc-secrets. `filesUnder` skips symlinks, so the whole-directory
     // links `box()` plants for `deploy` and `shared` are not walked.
     expect(r.stdout + r.stderr).not.toContain(CANARY);
@@ -9595,12 +9595,12 @@ git commit -m "feat(account): rotate a token lane's credential, and name the pan
   Answer: `{"ok":true,"id":X,"health":{"verdict","measuredAt","detail","source"},
   "limitsTouched":false,"notes":[…]}`.
 
-**Why:** §8 splits health into two questions and only one of them costs money (spec:662-668):
+**Why:** §8 splits health into two questions and only one of them costs money (spec:666-672):
 `claude auth status --json` answers *is this lane's credential alive* instantly and with no
 inference, and the `-p` probe answers the strictly larger *can this lane do work through whatever
 base URL and model map it carries* and bills a real request. So `check` runs `auth status` FIRST and
 short-circuits: `loggedIn:false` on an anthropic lane is `auth-dead` with no inference spent
-(spec:680-682). Without the short-circuit every dead subscription lane costs a billed round trip to
+(spec:684-686). Without the short-circuit every dead subscription lane costs a billed round trip to
 learn what a 136 ms local read already knew.
 
 **The short-circuit is ONE-SIDED, and that is the half a first draft got wrong.** Spec:680-682 is
@@ -9608,7 +9608,7 @@ exact: "`loggedIn: false` on an anthropic lane is `auth-dead` with no inference 
 that claims to be logged in goes on to the probe.**" So `loggedIn: true` is not a verdict at all — it
 is the PRECONDITION for asking the expensive question, and answering `ok` on it would report a lane
 as healthy on the strength of a local credential file while §8's `ok` row means *exit 0 and
-`is_error !== true` from a real `-p` request* (spec:652). A lane whose token is present but whose
+`is_error !== true` from a real `-p` request* (spec:656). A lane whose token is present but whose
 `baseUrl` is unreachable, whose model map names a model the endpoint does not serve, or whose
 subscription is out of quota would all read `ok`. The classifier therefore produces **no verdict**
 for `loggedIn: true`, and `check` goes on to the probe carrying the fact as a NOTE. Two of this
@@ -9628,15 +9628,15 @@ answer, after (b) it says the lane reports itself signed in. Collapsing them int
 them by EXIT CODE — 3 for (c), 4 for (b) — and only the reader that made the call phrases the note.
 
 **Its exit code is not the answer, and reading it as one is the trap this task exists to close.**
-Measured 2026-09-07 on a scratch config dir (spec:670-674): `auth status --json`, `auth status` and
+Measured 2026-09-07 on a scratch config dir (spec:674-678): `auth status --json`, `auth status` and
 `auth status --text` **all exit 1** when `loggedIn` is false. The command SUCCEEDED and reported a
 fact. A reader that treated non-zero as "the probe failed" would classify every signed-out lane as
-`unknown` — the one verdict §8 says is "never reported as ok" (spec:656) and which the UI renders as
+`unknown` — the one verdict §8 says is "never reported as ok" (spec:660) and which the UI renders as
 *nobody could tell* — turning the single most common real state into a shrug. So the reader parses
 stdout and treats **a non-zero exit with parseable JSON as an ANSWER**; only unparseable output is a
 failure. Two more shapes ride the same measurement and are written into the code as comments rather
 than as assumptions: with stdout not a tty, `--json` and the bare form are **byte-identical**
-(spec:675-677), so the flag is passed for intent and the reader must not assume the flag is what
+(spec:679-681), so the flag is passed for intent and the reader must not assume the flag is what
 makes it JSON; and rc 124 from `_plat_timeout` is a third thing again, neither an answer nor a parse
 failure.
 
@@ -9656,7 +9656,7 @@ carries the fact: `check` appends a NOTE, and the notes ride the answer beside t
 **`auth status` is Anthropic-only, and the short-circuit is gated on the provider, not on the kind.**
 An OpenRouter or `compatible` lane authenticates through the `settings.json` env block, not through
 Claude Code's own credential store, and the `openai` lane's credential is the launcher's — both go
-straight to the probe (spec:683-685). The provider comes from `_acct_lane`, where an `upstream`
+straight to the probe (spec:687-689). The provider comes from `_acct_lane`, where an `upstream`
 account resolves to `anthropic` by construction and a `generated` account with no `provider` resolves
 to `anthropic` under §4.1's absence-permitting rule.
 
@@ -9734,14 +9734,14 @@ const claudeArgv = (home: string): string[] => {
 };
 
 /** The shape MEASURED 2026-09-07 on an unauthenticated scratch config dir
- *  (spec:663-665), verbatim. */
+ *  (spec:667-669), verbatim. */
 const SIGNED_OUT = JSON.stringify({
   loggedIn: false, authMethod: 'none', apiProvider: 'firstParty',
   analyticsDisabled: false, projectsDirectory: '/home/fixture/.claude/projects',
 }) + '\n';
 
 /** The same object with `loggedIn` flipped and an `authMethod` beside it. ONLY
- *  the signed-out shape is measured (spec:663-665) and this plan does not
+ *  the signed-out shape is measured (spec:667-669) and this plan does not
  *  pretend otherwise — what IS measured about this one is narrower and enough:
  *  the classifier touches exactly two fields, `loggedIn` and `authMethod`, so a
  *  sibling this fixture guesses wrong about cannot change the answer. The
@@ -9767,7 +9767,7 @@ const OPENROUTER_LANE = {
 describe('ccrc account check: auth status', () => {
   it('reads exit 1 with parseable JSON as an ANSWER, not as a failure', () => {
     // THE MEASUREMENT THIS TASK IS FOR: all three spellings exit 1 when
-    // loggedIn is false (spec:670-674). A reader that believed the exit code
+    // loggedIn is false (spec:674-678). A reader that believed the exit code
     // would turn every signed-out lane into `unknown`.
     const home = box('ccrc-account-check-signedout-');
     seedRosterJson(home, [UPSTREAM]);
@@ -9803,13 +9803,13 @@ describe('ccrc account check: auth status', () => {
   });
 
   it('a lane that CLAIMS to be signed in still goes on to the probe', () => {
-    // spec:680-682, the half a short-circuit is easiest to get wrong: "Only a
+    // spec:684-686, the half a short-circuit is easiest to get wrong: "Only a
     // lane that claims to be logged in goes on to the probe." `loggedIn: true`
     // is the reason to ask the expensive question, not the answer to it — a
     // present credential says nothing about whether the lane's base URL is
     // reachable, whether its model map names a model the endpoint serves, or
     // whether the subscription has quota left, and §8's `ok` row is defined as
-    // exit 0 from a real `-p` (spec:652). So the classifier answers exit 4 (a
+    // exit 0 from a real `-p` (spec:656). So the classifier answers exit 4 (a
     // fact, no verdict), `ACCT_HEALTH` stays empty, and the probe runs.
     const home = box('ccrc-account-check-signedin-');
     seedRosterJson(home, [UPSTREAM]);
@@ -9844,7 +9844,7 @@ describe('ccrc account check: auth status', () => {
 
   it('goes straight to the probe on a non-anthropic lane, and says nothing about auth status', () => {
     // `auth status` reads Claude Code's own credential store; an OpenRouter
-    // lane authenticates through the settings env block (spec:683-685).
+    // lane authenticates through the settings env block (spec:687-689).
     const home = box('ccrc-account-check-openrouter-');
     seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
     plantClaude(home, 'orchard-api');
@@ -9946,7 +9946,7 @@ In the `cmd_account` section:
 # treat a non-zero exit carrying parseable JSON as an ANSWER.
 #
 # `--json` IS PASSED FOR INTENT, NOT FOR EFFECT. With stdout not a tty the flag
-# and the bare form are byte-identical (same measurement, spec:675-677), so
+# and the bare form are byte-identical (same measurement, spec:679-681), so
 # nothing here may assume the flag is what makes the output JSON.
 #
 # NO PARSEABLE ANSWER IS NOT A VERDICT, and the classifier says so with EXIT 3
@@ -9960,7 +9960,7 @@ In the `cmd_account` section:
 # to the probe" — because a present credential says nothing about whether the
 # lane's base URL answers, whether its model map names a model the endpoint
 # serves, or whether the subscription has quota, and §8's `ok` is defined as
-# exit 0 from a real `-p` (spec:652). So the signed-in case is a FACT and not a
+# exit 0 from a real `-p` (spec:656). So the signed-in case is a FACT and not a
 # verdict: exit 4, with the one sentence to carry on stdout, appended to
 # ACCT_NOTES here. Three and four are two conditions the caller phrases
 # differently — "the cheap question gave no parseable answer" versus "the lane
@@ -10009,7 +10009,7 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
 # ── check, half two: the question that costs a request ────────────────────
 # STUB. Task 30 replaces this body whole and adds the deadline, the scratch cwd
 # and the `~/.cc-limits` measurement. It answers `unknown` rather than `ok`
-# because §8's table ends "anything else — never reported as ok" (spec:656), and
+# because §8's table ends "anything else — never reported as ok" (spec:660), and
 # a build that cannot run the probe has measured exactly nothing. The failure
 # arm is not decoration: without it a classifier that could not run would leave
 # `ACCT_HEALTH` empty and the `health` op would refuse an empty `--row`, which
@@ -10042,7 +10042,7 @@ _acct_check() {
   # ANTHROPIC ONLY, AND GATED ON THE PROVIDER, NOT THE KIND. An OpenRouter or
   # `compatible` lane authenticates through the settings.json env block and the
   # `openai` lane's credential is its launcher's, so neither has anything for
-  # Claude Code's own credential store to report (spec:683-685).
+  # Claude Code's own credential store to report (spec:687-689).
   #
   # THE NOTE IS THE READER'S, NOT THIS FUNCTION'S. An earlier draft phrased it
   # here, from `[ -n "$ACCT_HEALTH" ]` — which cannot tell "nothing answered"
@@ -10087,7 +10087,7 @@ NEXT flag as its value and then refuse the value after it as an unknown key.
  *  beside its subject (Task 33 writes the first one).
  *
  *  `subtype` is `'success'` on every one of these failures and is NEVER read
- *  (spec:658). Neither is the exit code, on its own: `auth status` exits 1
+ *  (spec:662). Neither is the exit code, on its own: `auth status` exits 1
  *  while reporting a fact, so `exit` enters only as evidence beside the body.
  *
  *  IT RETURNS ONE OF THREE THINGS, AND NEVER A BARE `null` FOR TWO OF THEM. A
@@ -10114,16 +10114,16 @@ function classify(source, body, exit, timedOut, deadline) {
   }
   if (source === 'auth-status') {
     if (j.loggedIn === true) {
-      // NOT `ok`. spec:680-682: only a lane that claims to be logged in goes ON
+      // NOT `ok`. spec:684-686: only a lane that claims to be logged in goes ON
       // to the probe — a live credential is the precondition for the expensive
       // question, not an answer to it. §8's `ok` row is exit 0 and
-      // `is_error !== true` from a real `-p` (spec:652), which this has not run.
+      // `is_error !== true` from a real `-p` (spec:656), which this has not run.
       return defer(`the lane reports itself signed in (${j.authMethod ?? 'method not stated'}); `
         + 'the verdict below is the probe\'s, which is the question that costs something');
     }
     if (j.loggedIn === false) {
       // The one human line `auth status --text` prints, quoted because the card
-      // quotes it (spec:677-678).
+      // quotes it (spec:681-682).
       return row('auth-dead', 'Not logged in. Run claude auth login to authenticate.');
     }
     // Parseable JSON that says nothing about login IS a verdict: something
@@ -10261,7 +10261,7 @@ suite is the one that would notice a knob that leaks from the developer's shell.
   - **(viii) Return `row('ok', …)` from the `loggedIn === true` arm instead of deferring** (the first
     draft's shape): expect RED on *a lane that CLAIMS to be signed in* —
     `a signed-in lane short-circuited on auth status: expected 'auth-status' to be 'probe'`, and the
-    notes array is empty. RIGHT REASON: spec:680-682 sends a lane that claims to be logged in ON to
+    notes array is empty. RIGHT REASON: spec:684-686 sends a lane that claims to be logged in ON to
     the probe; an `ok` here reports a lane healthy on the strength of a local file.
 
   Revert each.
@@ -10305,7 +10305,7 @@ stated here rather than inherited.
 **One: `CLAUDE_CODE_MAX_RETRIES=0` is load-bearing and measured.** Without it Claude Code retries a
 401 on an exponential backoff — `attempt N/11`, eight requests in 40 s against a loopback stub — and
 the probe cannot answer inside its bound at all; with it a 401 answers in 136 ms and a refused
-connection in 167 ms, both at `total_cost_usd: 0` (spec:645-648). It is set in the probe's
+connection in 167 ms, both at `total_cost_usd: 0` (spec:649-652). It is set in the probe's
 environment and nowhere else. A variable assignment in front of a FUNCTION call reaches the
 function's children — measured, not assumed: `FOO=0 f env` with `f() { "$@"; }` prints `FOO=0`, and
 so does a `sh -c` two levels down — which is what lets `_plat_timeout` stay a shim rather than grow
@@ -10319,7 +10319,7 @@ shipping that literally would be red on arrival and wrong on a Mac.
 `:224-229` generates one `it` per file) whose first table row is
 `['bare timeout', /(?<![-_a-zA-Z])timeout\s+[-"'$0-9]/]`, and `timeout 60 …` matches it. The refusal
 is not pedantry: `timeout(1)` is GNU coreutils and is not in the BSD userland, and decision 9
-(spec:1551-1561) WITHDRAWS the Linux-only ruling — "A Mac therefore gets the full feature, not a
+(spec:1566-1576) WITHDRAWS the Linux-only ruling — "A Mac therefore gets the full feature, not a
 degraded one", and the two lanes that reach this probe (`login` and `paste`) are exactly the two that
 run identically on both. So the probe runs through `_plat_timeout` (`ccd/ccrc:412-438`), which prefers
 `timeout`, then `gtimeout` (Homebrew's coreutils installs it g-prefixed), then a bash fallback that
@@ -10331,7 +10331,7 @@ and the CODE is what is measured.
 
 **Three: the cwd is `~/.ccrc/probe/`, and neither directory is guaranteed to exist.** `-p` writes a
 transcript under the lane's `projects/<cwd>/`, and that transcript must land somewhere recognisable
-rather than inside a real project's history (spec:641-644). `~/.ccrc/probe/` is measured absent on the
+rather than inside a real project's history (spec:645-648). `~/.ccrc/probe/` is measured absent on the
 live box today, so the probe creates it — and creates `~/.ccrc` first, because that one is not
 guaranteed either and every writer in this file does its own (`ccd/ccrc:3443` and `:3932`, both
 `mkdir -p "$HOME/.ccrc" || _ccrc_die`). `mkdir -p` covers both in one call; the refusal names the
@@ -10397,7 +10397,7 @@ const probeFixture = (home: string, body: unknown, rc: number): void => {
   writeFileSync(join(home, 'fixture-probe-rc'), `${rc}\n`);
 };
 
-/** The four recorded shapes of §8's table (measured on 2.1.261, spec:650-656).
+/** The four recorded shapes of §8's table (measured on 2.1.261, spec:654-660).
  *  `subtype` is `'success'` on every failure and is deliberately present in
  *  each fixture: a classifier that read it would agree with the wrong one. */
 const PROBE_OK = { type: 'result', subtype: 'success', is_error: false,
@@ -10461,7 +10461,7 @@ describe('ccrc account check: the probe', () => {
     expect(env).toContain('retries=0');
     expect(env).toContain(`cwd=${realpathSync(join(home, '.ccrc', 'probe'))}`);
     // --bare and CLAUDE_CODE_SIMPLE are never passed: bare mode reads neither
-    // the settings env block nor the OAuth token (spec:658-660).
+    // the settings env block nor the OAuth token (spec:662-664).
     expect(claudeArgv(home).join(' ')).not.toContain('--bare');
   });
 
@@ -10592,13 +10592,13 @@ _acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
   # and a refused connection in 167ms, both at total_cost_usd 0.
   #
   # `_plat_timeout`, NEVER the bare GNU spelling: that binary is coreutils and
-  # is not in the BSD userland, macOS is supported (decision 9, spec:1551-1561),
+  # is not in the BSD userland, macOS is supported (decision 9, spec:1566-1576),
   # and macos-platform.test.ts:113 refuses the bare form outright. The shim
   # reports GNU's own 124 on expiry, which is what this branches on.
   #
   # `--bare` and CLAUDE_CODE_SIMPLE are never passed: bare mode reads neither the
   # settings env block nor the OAuth token, so a bare probe would measure
-  # nothing the lane actually uses (spec:658-660).
+  # nothing the lane actually uses (spec:662-664).
   out="$(cd "$CCRC_PROBE_DIR" && CLAUDE_CODE_MAX_RETRIES=0 \
     _plat_timeout "$CCRC_ACCOUNT_PROBE_TIMEOUT" "$WRAPPER_BIN_DIR/$id" \
       -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
@@ -10624,12 +10624,12 @@ _acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
 `deploy/account-op.mjs` — `classifyProbe`'s body replaces Task 29's stub:
 
 ```js
-/** §8's table (spec:650-656), in order, and it is exhaustive by construction:
+/** §8's table (spec:654-660), in order, and it is exhaustive by construction:
  *  anything the first four arms do not claim is `unknown`, which §8 ends with —
  *  "never reported as ok".
  *
  *  IT NEVER READS A `subtype` PROPERTY. That field is `'success'` on every one
- *  of these failures (spec:658), so a classifier keyed on it would call a 401
+ *  of these failures (spec:662), so a classifier keyed on it would call a 401
  *  healthy. The evidence is `is_error`, `terminal_reason`, `api_error_status`
  *  and the result text, and nothing else — pinned by a scan for the property
  *  access, not for the word. */
@@ -10746,7 +10746,7 @@ is. That is the same discipline `_exp_status` keeps (`ccd/ccrc:3604-3636`): repo
 never what was intended.
 
 **The refusal reads `_account_ok`, not `_lane_enabled`, and that is stricter than the spec's own
-sentence.** §5 (spec:417) says `disable` must "refuse `disable` on the last enabled home-able lane".
+sentence.** §5 (spec:421) says `disable` must "refuse `disable` on the last enabled home-able lane".
 But placement does not gate on home-able-and-enabled; it gates on
 `_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }` (`ccd/ccd:1028`), which
 `_ws_least_loaded` calls for every id in `CCRC_HOME_ABLE` (`ccd/ccd:3584-3591`), and `cmd_ws_add`'s
@@ -10756,7 +10756,7 @@ land — so counting it would let `disable` take away the last real lane while r
 remained. The predicate this task ships is the placer's own, unchanged: **home-able in the roster, no
 `-disabled` marker, and an executable at `$WRAPPER_BIN_DIR/<id>`**. Being stricter can only make the
 verb refuse more often, which is the safe direction for an operation whose failure mode is a fleet
-with nowhere to put a session. Decision 18 (spec:1615-1620) then hands the same predicate to
+with nowhere to put a session. Decision 18 (spec:1630-1635) then hands the same predicate to
 `remove`, which is why this task produces it as a named helper rather than inlining it.
 
 **"No landable lane" and "no readable projection" are two answers, not one empty array.** The first
@@ -10846,7 +10846,7 @@ describe('ccrc account enable / disable', () => {
     const j = oneObject(r);
     expect(j['error']).toBe('last-enabled-home');
     // The refusal names BOTH halves it read, because an operator who sees only
-    // "the roster has two" will go looking in the wrong file (spec:717-723).
+    // "the roster has two" will go looking in the wrong file (spec:721-727).
     expect(String(j['detail'])).toContain('disabled');
     expect(String(j['detail'])).toContain('.local/bin');
     expect(existsSync(marker(home, 'claude'))).toBe(false);
@@ -11162,12 +11162,12 @@ git commit -m "feat(account): enable/disable drive the kill switch, refusing the
   `{"ok":true,"id":X,"roster":…,"rehomed":[…],"kept":[…],"removed":[…]}`.
 
 **Why:** §9 is an ORDER, and every step of it exists because the step before it makes the next one
-impossible (spec:418). (1) Rehome first, because a supervised registry row left pointing at a gone
+impossible (spec:422). (1) Rehome first, because a supervised registry row left pointing at a gone
 wrapper respawns into a `Restart=` loop. (2) Sweep the home's hooks and skills **while X is still in
 `accounts.sh`**, because the home's NAME comes out of that file. (3) Only then drop the roster entry
 and regenerate. (4) Delete the artifacts last, and only the ones ccrc can prove it owns. The verb's
 answer states what it deleted and what it kept, and the UI repeats that before the typed-id
-confirmation (spec:699-701).
+confirmation (spec:703-705).
 
 **§5 and §9 disagree about where the roster edit goes, and this task follows §9.** Spec:443-444 says
 "the whole `add`/`remove` is ordered so that the roster entry lands LAST on add and FIRST on remove".
@@ -11185,7 +11185,7 @@ guessing a number.
 snapshot: `upstream` (the roster kind — removing it leaves every generated wrapper's `exec` line
 pointing at nothing, and `rosterFromJson` refuses a roster with zero upstream accounts anyway at
 `shared/roster-json.mjs:300-305`, so this is the readable refusal in front of the structural one),
-`last-home-able` (decision 18, spec:1615-1620 — removal adopts `disable`'s predicate and keeps its own
+`last-home-able` (decision 18, spec:1630-1635 — removal adopts `disable`'s predicate and keeps its own
 code, so it reads the kill-switch markers as well as the roster; Task 31 produced `_acct_placeable`
 for exactly this second caller), and `live-sessions` (any registry row whose `wrapper` field is X and
 whose tmux session exists, with the ids listed so the UI can offer the per-session swap). **An
@@ -11235,7 +11235,7 @@ nothing. `_acct_unprovision` therefore RESOLVES THE HOME ITSELF, at sweep time, 
 the roster edit it answers `$HOME/<suffix>`; run after it, the projection no longer names the id,
 `_ccrc_cfg_dir` falls off the end of its `case` (`shared/generate.mjs:212-216` emits no `*)` arm) and
 answers the empty string, and the sweep refuses `home-unnameable` rather than sweeping nothing and
-claiming it swept. That is spec:418's own sentence — "a roster edit first makes the home un-nameable
+claiming it swept. That is spec:422's own sentence — "a roster edit first makes the home un-nameable
 to its own cleanup" — turned from prose into a measurement.
 
 **The config dir is kept unconditionally, and that is the mutation this task is measured by.**
@@ -11250,7 +11250,7 @@ but a LOGIN lane's is `~/<suffix>/.credentials.json` — inside the directory ke
 because it also holds the transcripts. "Deleting the dir to get the credential is not something this
 design does, and leaving a live subscription credential on disk under a lane nobody can see any more
 is not acceptable either." So the same `--keep-credential` flag carries three honest meanings, one
-per lane, exactly as spec:713-715 enumerates them: delete the token file, **sign the lane out**, or
+per lane, exactly as spec:717-719 enumerates them: delete the token file, **sign the lane out**, or
 nothing to do because the credential was never ccrc's. Signing out runs `auth logout` with
 `CLAUDE_CONFIG_DIR` set to that home — through the UPSTREAM binary, because a generated wrapper is
 nothing but `exec` of that binary with that variable set (`shared/wrapper.mjs:144-148`) and the
@@ -11274,7 +11274,7 @@ with the `statSync(filePath).size > 1024 * 1024` gate FIRST so the 324 MB upstre
 read, and its `case` at `:6328-6336`: `ccrc-unmodified` → removed, `ccrc-edited` → kept and said,
 `foreign`/`oversize`/unverifiable → kept silently. This verb reuses that block verbatim for one file.
 An `external` lane's launcher is never touched at all and its credential is not ccrc's to delete
-(spec:703-704).
+(spec:707-708).
 
 **Every list in the answer is built by node from a bash ARRAY.** The first draft assembled `kept` and
 `removed` as JSON text with a comma-first idiom, so whichever array the wrapper arm did not seed
@@ -11492,7 +11492,7 @@ describe('ccrc account remove', () => {
     expect(j['removed']).not.toContain(f);
   });
 
-  it('signs a LOGIN lane out instead, and still keeps the config dir (spec:706-715)', () => {
+  it('signs a LOGIN lane out instead, and still keeps the config dir (spec:710-719)', () => {
     // A login lane declares no secretsFile: its credential is
     // `<cfg>/.credentials.json`, INSIDE the directory removal keeps. Deleting
     // the dir to get at it is not something this design does; leaving a live
@@ -11812,7 +11812,7 @@ _acct_remove() {
     || _acct_refuse 1 live-unmeasured "tmux could not be asked which sessions are running, and \$HOME/.cc-sessions holds at least one row on $id - so this cannot tell whether the lane has live panes. Nothing was removed."
   if [ "${#ACCT_LIVE_IDS[@]}" -gt 0 ]; then
     # THE ONE REFUSAL THAT CARRIES A LIST, so the UI can offer the per-session
-    # swap (spec:697-699). Node writes it for `refuse`'s own reason: the ids are
+    # swap (spec:701-703). Node writes it for `refuse`'s own reason: the ids are
     # data, and a hand-built envelope is the shape Task 20 refused.
     local -a lv=(--id "$id")
     for sid in "${ACCT_LIVE_IDS[@]}"; do lv+=(--live "$sid"); done
@@ -11841,7 +11841,7 @@ _acct_remove() {
   _acct_projection
 
   # ── 4. the artifacts, and only the ones ccrc can prove it owns ─────────
-  # AN EXTERNAL LANE'S LAUNCHER IS NEVER TOUCHED (spec:703-704): `verifyMarker`
+  # AN EXTERNAL LANE'S LAUNCHER IS NEVER TOUCHED (spec:707-708): `verifyMarker`
   # answers `foreign` for it, which is a KEEP, and the answer says so.
   _acct_remove_wrapper "$id"
   case "$ACCT_WRAPPER_VERDICT" in
@@ -11854,7 +11854,7 @@ _acct_remove() {
     rm -f -- "$f" || _acct_refuse 1 artifact-remove "could not remove $f"
     removed+=("$f")
   done
-  # THREE LANES, THREE HONEST SENTENCES (spec:713-715): delete the token file,
+  # THREE LANES, THREE HONEST SENTENCES (spec:717-719): delete the token file,
   # sign the lane out, or nothing to do because the credential was never ccrc's.
   if [ -n "$ACCT_SECRETS" ] && [ -e "$HOME/$ACCT_SECRETS" ]; then
     if [ "$keepcred" -eq 1 ]; then
@@ -12014,7 +12014,7 @@ the run that proves it.
     on *keeps a wrapper the operator edited* — `expected false to be true` — and on *never touches an
     EXTERNAL lane's launcher*, `expected false to be true` for `~/.local/bin/gpt`.
   - **(vii) Delete the login-lane `elif` arm**: expect RED on *signs a LOGIN lane out* —
-    `expected true to be false` for `<cfg>/.credentials.json`. RIGHT REASON: spec:706-715 is the
+    `expected true to be false` for `<cfg>/.credentials.json`. RIGHT REASON: spec:710-719 is the
     clause that says a kept config dir does not mean a kept credential.
   - **(viii) Build `kept` as a comma-first JSON string again** (`kept+=",\"$f\""` with the array
     dropped): expect RED on *removes what it owns* —
@@ -12102,8 +12102,8 @@ whose API key field the design deliberately leaves EMPTY (§4.3) — so it is re
 reported by key name and by endpoint, never by any other value.
 
 **Two findings in the check, three codes in the vocabulary, and the split is the spec's own.**
-§14's doctor bullet (spec:1483-1486) names exactly two for the check — declared-but-absent credential
-files, and a drifted env block. Its vocabulary bullet (spec:1491-1495) names three, adding
+§14's doctor bullet (spec:1498-1501) names exactly two for the check — declared-but-absent credential
+files, and a drifted env block. Its vocabulary bullet (spec:1506-1510) names three, adding
 `launcher-absent`, "defined once in `shared/providers.ts` and rendered by doctor and the PWA alike".
 Doctor's renderer of the third is already shipped and is not this check: `_check_wrappers`' `external)`
 arm runs `_dr_wr_present "$id" wr_hard` (`ccd/ccrc-doctor-checks:2474-2485`, the call at `:2484`) and
@@ -12309,7 +12309,7 @@ describe('ccrc doctor: accounts', () => {
     expect(line).toContain('settings-env-drift');
     expect(line).toContain('orchard-api');
     // The endpoint is roster data and is shown, not hidden (decision 22(a),
-    // spec:1644-1648). The KEY's value is never shown, and there is none here.
+    // spec:1659-1663). The KEY's value is never shown, and there is none here.
     expect(line).toContain('127.0.0.1:8642');
   });
 
@@ -12396,7 +12396,7 @@ describe('ccrc doctor: accounts', () => {
 
   it('spells the vocabulary that shared/providers.ts defines, and no other code', () => {
     // The three codes are ONE definition — `ACCOUNT_FINDINGS` in
-    // `shared/providers.ts` (spec:1491-1495) — and this file is a bare-node
+    // `shared/providers.ts` (spec:1506-1510) — and this file is a bare-node
     // module that cannot import the TypeScript one, so the subset it emits
     // (`DOCTOR_FINDINGS`, two members, under its own name because it IS a
     // subset) is kept honest by comparison rather than by promise —
@@ -12476,7 +12476,7 @@ banner (`:2640`):
 # (:426-429) is this file's ruling on that. The PASS detail below names which
 # axes were measured so a reader can see the third was asked elsewhere.
 #
-# NEVER A SKIP (spec:1491-1495). A box with no roster is exactly the box whose
+# NEVER A SKIP (spec:1506-1510). A box with no roster is exactly the box whose
 # operator most needs a line, and the roster's own health is `_check_wrappers`'
 # FAIL one entry up (:2228-2232 absent, :2300-2304 unparseable) — so this WARNs,
 # says where the FAIL lives, and returns 2. THE ARM ORDER IS PART OF THAT: the
@@ -12545,7 +12545,7 @@ joins the `node:fs` import and `join` is imported from `node:path`, and:
 
 ```js
 /** THE TWO FINDINGS THIS CHECK EMITS, drawn from the vocabulary
- *  `shared/providers.ts` defines (spec:1491-1495) — `ACCOUNT_FINDINGS`, three
+ *  `shared/providers.ts` defines (spec:1506-1510) — `ACCOUNT_FINDINGS`, three
  *  members, exported there with `type AccountFinding` over it. This module
  *  cannot import that: bare `node`, no build step, `.ts` unreachable. The copy
  *  is kept honest the way `_check_path`'s directory literal is: a test compares
@@ -12559,7 +12559,7 @@ joins the `node:fs` import and `join` is imported from `node:path`, and:
  *  the call at `:2484`), and one fact gets one verdict line. */
 const DOCTOR_FINDINGS = ['credential-declared-absent', 'settings-env-drift'];
 
-/** THE ENDPOINT A LANE SHOULD BE TALKING TO, §4.1's rule (spec:245-249): the
+/** THE ENDPOINT A LANE SHOULD BE TALKING TO, §4.1's rule (spec:249-253): the
  *  roster's own `baseUrl` when it names one, else `PROVIDERS[p].baseUrl`, else
  *  `null`. `null` means "Claude Code's own endpoint", and there is then nothing
  *  in `settings.json` for this check to compare against — which is why the
@@ -12742,7 +12742,7 @@ git commit -m "feat(doctor): an accounts check that measures declared credential
 
 This task exists because §6 of the spec (`docs/superpowers/specs/2026-09-05-account-connections-ui-design.md:489-490`) makes one structural claim that nothing else in the design can satisfy: *"the only detached-process vehicle the whitelist can create is a tmux pane, and only ccd may create one"*. `EXEC_COMMANDS = ['tmux','ccd']` and `EXEC_WHITELIST.tmux` grants exactly `has-session`, `list-panes`, `capture-pane`, `send-keys` and `resize-window` (`agent/src/whitelist.ts:307`) — no `new-session`. So a `setup-token` mint has no vehicle at all unless ccd grows the verb. Wave 1 ships the verb; the PWA cannot reach it until wave 2.
 
-**This is D-1865 — the exec grant and its `CCD_ARGV` builder must ship in the same wave, so the grant moves to wave 2.** `server/test/whitelist-subset.test.ts:135-156` iterates `EXEC_WHITELIST.ccd` and asserts, per granted prefix, `expect(reachable, \`ccd ${prefix.join(' ')} is granted but no route builds it\`).toBe(true)` (the assertion itself is `:154`). `EXEC_WHITELIST` lives in the AGENT package (`agent/src/whitelist.ts:306-369`; its `ccd` key ends at `:368`); `CCD_ARGV` lives in the SERVER package (`server/src/ccdargv.ts`, the closest model being `coordPause: (state: 'on'|'off') => argv(['coord-pause','--state',state])` at `:313`). Adding `['account-pane','--id']` to the grant in wave 1 reds `whitelist-subset` immediately, because wave 1 ships no route and therefore no builder; adding the builder without the grant reds the same suite from the other side (`:79`, `expect(Object.keys(SAMPLES).sort()).toEqual(Object.keys(CCD_ARGV).sort())`, over the `SAMPLES` table declared at `:18`). The spec's §14 line `:1464` lists the grant under "ccd", which reads as a wave-1 item and is not one.
+**This is D-1865 — the exec grant and its `CCD_ARGV` builder must ship in the same wave, so the grant moves to wave 2.** `server/test/whitelist-subset.test.ts:135-156` iterates `EXEC_WHITELIST.ccd` and asserts, per granted prefix, `expect(reachable, \`ccd ${prefix.join(' ')} is granted but no route builds it\`).toBe(true)` (the assertion itself is `:154`). `EXEC_WHITELIST` lives in the AGENT package (`agent/src/whitelist.ts:306-369`; its `ccd` key ends at `:368`); `CCD_ARGV` lives in the SERVER package (`server/src/ccdargv.ts`, the closest model being `coordPause: (state: 'on'|'off') => argv(['coord-pause','--state',state])` at `:313`). Adding `['account-pane','--id']` to the grant in wave 1 reds `whitelist-subset` immediately, because wave 1 ships no route and therefore no builder; adding the builder without the grant reds the same suite from the other side (`:79`, `expect(Object.keys(SAMPLES).sort()).toEqual(Object.keys(CCD_ARGV).sort())`, over the `SAMPLES` table declared at `:18`). The spec's §14 line `:1479` lists the grant under "ccd", which reads as a wave-1 item and is not one.
 
 Enrolment in `REQUIRED_VERB_FLAG` moves with it, and for a reason worth stating: `auditExecWhitelist` (`agent/src/whitelist.ts:481-568`) iterates the WHITELIST and looks each verb UP in `REQUIRED_VERB_FLAG` (`:557`) — it never iterates `REQUIRED_VERB_FLAG` itself, and `IllegalGrant<P>` (`:273-282`) distributes over the whitelist's prefixes. So `'account-pane': '--id'` added to `REQUIRED_VERB_FLAG` (`:240-242`) with no grant beside it is inert: it makes nothing a compile error, it makes nothing a boot refusal, and it pins nothing. Shipping it in wave 1 would be a comment wearing a mechanism's clothes, which is the one thing this repo's mutation-table discipline forbids. **What wave 2 must add, in one commit:** `['account-pane','--id']` in `EXEC_WHITELIST.ccd`; `'account-pane': '--id'` in `REQUIRED_VERB_FLAG`; a positive row in `agent/test/whitelist.test.ts:156-170` and its adjacent-refusal twin at `:172-181`; a bypass fixture beside `agent/test/types/bypasses/g9-coord-pause-without-state.ts`; an audit case inside `agent/test/whitelist-structural.test.ts`'s `withCcd` describe (which opens at `:283`; `withCcd` itself is `:284`); `CCD_ARGV.accountPane`; its `SAMPLES` row (`server/test/whitelist-subset.test.ts:18`) and its `EXPECTED` row (`:310`); and a `CCD_VERB_TIMEOUT_MS` row in `server/src/remote/runner.ts:27`, because the flat `CCD_TIMEOUT_MS = 90_000` (`:12`) would kill a pane-creating call the way it once killed the two spawning verbs (that table's own note at `:41-45`).
 
@@ -12922,7 +12922,7 @@ describe('ccd account-pane — the structural guards', () => {
   });
 
   it('EVERY tmux send-keys in ccd targets a REGISTRY id, so no typer can reach cc-auth-*', () => {
-    // §14 (spec:1466-1467). The auth pane's name is `cc-auth-<id>`, and
+    // §14 (spec:1481-1482). The auth pane's name is `cc-auth-<id>`, and
     // `_tmux` (ccd:1092) turns a registry id into `cc-<id>` — so the only way
     // a ccd typer could reach an auth pane is a send-keys with a literal
     // target. MEASURED 2026-09-07: `grep -n 'tmux send-keys' ccd/ccd` returns
@@ -12969,7 +12969,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # list-panes, capture-pane, send-keys and resize-window and nothing else
   # (agent/src/whitelist.ts:307) — so a `claude setup-token` mint, which is an
   # Ink full-screen TUI that produces ZERO BYTES without a tty (measured
-  # 2026-09-07, CC 2.1.263, spec:460), has no home without this verb.
+  # 2026-09-07, CC 2.1.263, spec:464), has no home without this verb.
   #
   # `_tmux_new_session`, NEVER `_spawn`. Two separate reasons, and both matter:
   # `_spawn_start` (ccd:11699) reads wrapper/workdir/uuid out of the registry
@@ -13026,7 +13026,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
     setup-token|openai-login) ;;
     '') die "usage: ccd account-pane --id <id> [--method setup-token|openai-login] [--cancel]" ;;
     # `login` is deliberately absent: it drives a plain pipe with no pane and
-    # no pty (spec:506, measured), so asking for a pane to run it in is a
+    # no pty (spec:510, measured), so asking for a pane to run it in is a
     # request this verb should refuse rather than quietly honour.
     *) die "bad-method: $method (want setup-token|openai-login; login needs no pane)" ;;
   esac
@@ -13118,7 +13118,7 @@ git commit -m "feat(ccd): account-pane creates the auth pane through _tmux_new_s
 
 The helper is a separate executable rather than a ccd verb because it must OUTLIVE the process that started it and own a tty it did not inherit — `ccd account-pane` returns as soon as the pane exists. **Spec:501** names it "shipped beside `ccd-graph-sweep`", which fixes its shape: a standalone `#!/usr/bin/env bash` under `ccd/`, installed by `_inst_bins`.
 
-Two constraints on that shape are measured rather than assumed, and both bite immediately. First, **`server/test/macos-platform.test.ts:175-179` derives its GNU-only corpus from the DIRECTORY** — `readdirSync(ccdRoot)`, filtered to files whose first two bytes are `#!`, minus the `unowned` exemption record at `:186-190` — and generates one `it` per survivor (`:224-229`) asserting zero hits from the ten-pattern table at `:108-126`. So the day this file lands it is scanned, and `timeout 600` — the literal the spec's own §6 bullet spells at `:538` — is a `bare timeout` hit (`['bare timeout', /(?<![-_a-zA-Z])timeout\s+[-"'$0-9]/]`, `:113`). That is the same defect **D-1858** names on the probe in Task 30, arriving here first, and the same ruling applies: decision 9 (`spec:1551-1561`) withdrew the Linux-only carve-out, so a GNU-only spelling is now a real refusal on a real supported box.
+Two constraints on that shape are measured rather than assumed, and both bite immediately. First, **`server/test/macos-platform.test.ts:175-179` derives its GNU-only corpus from the DIRECTORY** — `readdirSync(ccdRoot)`, filtered to files whose first two bytes are `#!`, minus the `unowned` exemption record at `:186-190` — and generates one `it` per survivor (`:224-229`) asserting zero hits from the ten-pattern table at `:108-126`. So the day this file lands it is scanned, and `timeout 600` — the literal the spec's own §6 bullet spells at `:542` — is a `bare timeout` hit (`['bare timeout', /(?<![-_a-zA-Z])timeout\s+[-"'$0-9]/]`, `:113`). That is the same defect **D-1858** names on the probe in Task 30, arriving here first, and the same ruling applies: decision 9 (`spec:1566-1576`) withdrew the Linux-only carve-out, so a GNU-only spelling is now a real refusal on a real supported box.
 
 Second, the helper cannot source ccd or ccrc to get `_plat_timeout`: both run code at source time (ccd dies without `~/.ccrc/accounts.sh`, which is why `makeCcdHarness` seeds it FIRST, `ccdWsHelpers.ts:283-286`). The tree already has exactly this situation and exactly one answer for it — `ccd/session-hook.sh`'s `_hook_epoch_ms`, a deliberate local copy of `_plat_epoch_ms` pinned byte-for-byte by `macos-platform.test.ts:351-363` (the `body()` helper is `:357-361`, the equality `:362`). So: `_auth_timeout` is that copy of `_plat_timeout`, under a local name, with the same pin. It passes the GNU scan for the same reason the original does — `for bin in timeout gtimeout` puts a letter where the pattern wants `[-"'$0-9]`.
 
@@ -13305,7 +13305,7 @@ Create `ccd/ccd-account-auth`, mode 755:
 # `~/<suffix>/.credentials.json`; an external launcher writes its own), and the
 # third captures a token line and SUBSTITUTES it on screen. The status file
 # carries a sign-in URL and, for the external launcher, a device code — the
-# spec says out loud that the device code is not a secret (§11, spec:744-745).
+# spec says out loud that the device code is not a secret (§11, spec:748-749).
 #
 # `set -uo pipefail`, NO `-e`, exactly as ccd and ccrc: every failure below is
 # an explicit `_auth_die`, so nothing aborts silently mid-state and leaves a
@@ -13593,13 +13593,13 @@ git commit -m "feat(ccd): the account-auth helper and its tailable status file"
 - Consumes: `_auth_state`, `_auth_publish`, `_auth_die`, `_auth_timeout`, `_auth_capture_token`/`_auth_user_code` (the Task 51 stubs) ; `_ccrc_cfg_dir` and `CCRC_UPSTREAM` (from `accounts.sh`)
 - Produces: `_auth_strip_osc8 <line>` → the line with every `ESC ] 8 ; ;` … terminator run removed; `_auth_url_of <clean line>` → the first `https://` run, rc 1 when there is none; `_auth_line <raw line>` → strip CR, strip OSC-8, classify, substitute, forward to stdout; `_auth_pump` → the one read loop; fd 8 = the child's stream, fd 9 = the child's stdin (held open by this process), fd 7 = the operator's code channel; the three FIFOs under `~/.cc-sessions/.auth/<id>.run/`
 
-**MEASURED 2026-09-07 on the fleet box, Claude Code 2.1.263, and it is why this method needs no pane at all.** `claude auth login --claudeai` with stdin on `/dev/null` and stdout to a file produced **1008 bytes and blocked**: `Opening browser to sign in…`, then `If the browser didn't open, visit: ` followed by the authorize URL **wrapped in an OSC-8 hyperlink escape** — `ESC ] 8 ; ; <URL> BEL <URL> ESC ] 8 ; ; BEL`, so the raw URL appears TWICE on that line — then `Paste code here if prompted > ` with **no trailing newline**. No tty was involved. The same probe against `claude setup-token` produced zero bytes and hung, because that one is an Ink full-screen TUI. That asymmetry is the whole of §6's restructuring (`spec:451-487`) and it is what makes macOS a first-class box (decision 9, `spec:1551-1561`).
+**MEASURED 2026-09-07 on the fleet box, Claude Code 2.1.263, and it is why this method needs no pane at all.** `claude auth login --claudeai` with stdin on `/dev/null` and stdout to a file produced **1008 bytes and blocked**: `Opening browser to sign in…`, then `If the browser didn't open, visit: ` followed by the authorize URL **wrapped in an OSC-8 hyperlink escape** — `ESC ] 8 ; ; <URL> BEL <URL> ESC ] 8 ; ; BEL`, so the raw URL appears TWICE on that line — then `Paste code here if prompted > ` with **no trailing newline**. No tty was involved. The same probe against `claude setup-token` produced zero bytes and hung, because that one is an Ink full-screen TUI. That asymmetry is the whole of §6's restructuring (`spec:455-491`) and it is what makes macOS a first-class box (decision 9, `spec:1566-1576`).
 
 Two consequences shape the code. **The escape must be stripped before the URL is taken**: a regex over the raw bytes captures `<URL> BEL <URL> ESC ] 8 ; ; BEL` — BEL is `\a`, which is NOT in `[[:space:]]`, so the naive `${u%%[[:space:]]*}` trim does not save it — a doubled, escape-bearing string that would reach the PWA as the thing an operator is asked to open. **And the prompt has no newline**, so a plain `while IFS= read -r line` blocks forever on the one line that says the machine is waiting for the operator. `read -t` is the answer and it is a bash builtin, so it costs no portability: on timeout bash returns >128 and *saves the partial input into the variable*, which is the only way a newline-less prompt is visible at all.
 
 **Which launcher this method runs — the draft's answer was wrong, and the tree says so.** The natural reading is "run the lane's OWN launcher, because a generated wrapper already exports the lane's config dir". That reading breaks the custody claim beside it. A generated wrapper is `export CLAUDE_CONFIG_DIR="$HOME/<suffix>"`, then — when the account declares one — `[ -r "$HOME/<secretsFile>" ] && . "$HOME/<secretsFile>"`, then the exec (`shared/wrapper.mjs:141-148`; the ternary is `:141-143`, the export `:146`, the sourced line `:147`, the exec `:148`). That source runs INSIDE the child, after `env -u CLAUDE_CODE_OAUTH_TOKEN` has already done its work in the parent — so on any generated lane carrying a `secretsFile` the token is put straight back. `claude-a`, the lane every test below uses, is exactly such a lane (`server/test/helpers.ts:69`, `exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' }`). A test that plants its own fixture launcher would never see it, and the assertion `seen-token-env === '<unset>'` would have been a claim about the fixture rather than about the shipped path.
 
-So `login` runs **the upstream launcher with `CLAUDE_CONFIG_DIR` set explicitly**, which is what `spec:510-512` actually says: *"it runs `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR=~/<suffix>` (the lane's REAL config dir — the point is to sign that dir in) and `CLAUDE_CODE_OAUTH_TOKEN` unset"*. That is the same shape `setup-token` takes in Task 54, and the two are now one rule rather than two: **run the upstream launcher, and set the config dir this method wants.** The only thing that differs between the methods is WHICH dir — the lane's own for `login`, a throwaway for `setup-token`. The generated wrapper's export is a convenience for an interactive shell; it is not the mechanism here, and leaning on it would have made `env -u` decorative.
+So `login` runs **the upstream launcher with `CLAUDE_CONFIG_DIR` set explicitly**, which is what `spec:514-516` actually says: *"it runs `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR=~/<suffix>` (the lane's REAL config dir — the point is to sign that dir in) and `CLAUDE_CODE_OAUTH_TOKEN` unset"*. That is the same shape `setup-token` takes in Task 54, and the two are now one rule rather than two: **run the upstream launcher, and set the config dir this method wants.** The only thing that differs between the methods is WHICH dir — the lane's own for `login`, a throwaway for `setup-token`. The generated wrapper's export is a convenience for an interactive shell; it is not the mechanism here, and leaning on it would have made `env -u` decorative.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -13809,7 +13809,7 @@ _auth_url_of() {   # <clean line> -> the first https:// run on it; rc 1 when the
 #         EOF while it waits for a code nobody has typed yet
 #   fd 7  the operator's code, arriving from outside on a FIFO this process
 #         owns — opened read-WRITE so it, too, never EOFs
-# spec:512: "stdin on a pipe the helper owns". The helper reads the code and
+# spec:516: "stdin on a pipe the helper owns". The helper reads the code and
 # writes it down fd 9 itself, so the child's stdin has exactly one writer.
 AUTH_RUN=''
 _auth_open_pipes() {
@@ -13910,7 +13910,7 @@ Replace the `_auth_login` stub:
 ```bash
 _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   # THE UPSTREAM LAUNCHER WITH THE CONFIG DIR SET EXPLICITLY, which is what
-  # spec:510-512 asks for: "with CLAUDE_CONFIG_DIR=~/<suffix> … and
+  # spec:514-516 asks for: "with CLAUDE_CONFIG_DIR=~/<suffix> … and
   # CLAUDE_CODE_OAUTH_TOKEN unset". NOT the lane's own launcher: a generated
   # wrapper re-sources its `secretsFile` inside the child
   # (shared/wrapper.mjs:147), which puts back the token `env -u` just removed
@@ -13985,9 +13985,9 @@ git commit -m "feat(ccd): login drives auth login --claudeai over a pipe, OSC-8 
 - Consumes: fd 7 / fd 9 and the three FIFOs `_auth_open_pipes` created (Task 52)
 - Produces: `_auth_forward_code` — reads one line from fd 7 while and only while the machine says `waiting-code`, writes it down fd 9, prints a SUBSTITUTION and moves to `exchanging`; the code channel `~/.cc-sessions/.auth/<id>.run/in` (one line, 0600, written by whoever has the code — wave 2's route for a `login` lane, `tmux send-keys` into `cc-auth-<id>` for a pane lane); the terminal state `done`, meaning **`~/<suffix>/.credentials.json` exists and ccrc wrote no secrets file**
 
-This task exists because §6 says two things that only reconcile one way. It says the helper runs the child with "stdin on a pipe the helper owns" (`spec:512`) and it says the server delivers the code with `tmux send-keys -t cc-auth-X` (`spec:534-536`). The second is the PANE methods' channel — a pane has a tty and `send-keys` is already granted (`agent/src/whitelist.ts:307`). `login` has no pane, so it needs the first: a FIFO the helper owns, into which one line is written and out of which the helper forwards it down fd 9. That is the spec's own sentence made into a file, and it keeps the child's stdin to exactly one writer, which is what makes `exchanging` a state anybody can trust.
+This task exists because §6 says two things that only reconcile one way. It says the helper runs the child with "stdin on a pipe the helper owns" (`spec:516`) and it says the server delivers the code with `tmux send-keys -t cc-auth-X` (`spec:538-540`). The second is the PANE methods' channel — a pane has a tty and `send-keys` is already granted (`agent/src/whitelist.ts:307`). `login` has no pane, so it needs the first: a FIFO the helper owns, into which one line is written and out of which the helper forwards it down fd 9. That is the spec's own sentence made into a file, and it keeps the child's stdin to exactly one writer, which is what makes `exchanging` a state anybody can trust.
 
-The credential half is the point of the whole method. Claude Code writes `~/<suffix>/.credentials.json` itself, 0600 — measured across every existing `~/.claude*` dir on this fleet (`spec:475-478`), which is also the evidence that every lane the operator runs today was made by logging in rather than by pasting a token. So a `login` lane has **no `~/.cc-secrets/<id>-*.env` and no `exec.secretsFile` roster field at all**: there is nothing for ccrc to hold, which is a stronger custody claim than any careful handling of a secret it did hold. `ccrc account credential --id X` must therefore answer `not-managed` on such a lane (Task 28's refusal, `spec:415`), and this task is where that fact becomes measurable rather than asserted.
+The credential half is the point of the whole method. Claude Code writes `~/<suffix>/.credentials.json` itself, 0600 — measured across every existing `~/.claude*` dir on this fleet (`spec:479-482`), which is also the evidence that every lane the operator runs today was made by logging in rather than by pasting a token. So a `login` lane has **no `~/.cc-secrets/<id>-*.env` and no `exec.secretsFile` roster field at all**: there is nothing for ccrc to hold, which is a stronger custody claim than any careful handling of a secret it did hold. `ccrc account credential --id X` must therefore answer `not-managed` on such a lane (Task 28's refusal, `spec:419`), and this task is where that fact becomes measurable rather than asserted.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -14072,7 +14072,7 @@ describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothi
     expect(fs.statSync(cred).mode & 0o777).toBe(0o600);
     // The custody claim, measured: a login lane has no secrets file, so there
     // is no ccrc-held copy of anything. `ccrc account credential` answers
-    // `not-managed` on such a lane for exactly this reason (spec:415).
+    // `not-managed` on such a lane for exactly this reason (spec:419).
     expect(fs.existsSync(path.join(h.home, '.cc-secrets'))).toBe(false);
     // …and the run directory's FIFOs are gone: nothing is left holding a pipe
     // a later writer could block on forever.
@@ -14179,7 +14179,7 @@ git commit -m "feat(ccd): the sign-in code rides the helper's own pipe; a login 
 - Consumes: `_auth_pump`, `_auth_line`, `_auth_timeout`, `_auth_state`, `AUTH_SECRET_WRITTEN`, `CCRC_AUTH_SCRIPT`, `SCRATCH_ROOT`, `SECRETS_DIR`, `CCD_OS` (all Task 51); `_auth_open_pipes` (Task 52); `CCRC_UPSTREAM` (from `accounts.sh`)
 - Produces: `~/.cc-secrets/<id>-oauth.env`, mode 0600 in a 0700 dir, one line `export CLAUDE_CODE_OAUTH_TOKEN=<token>`, tmp + rename; the on-screen substitution `[token captured to ~/.cc-secrets/<id>-oauth.env]`; the throwaway config dir `~/.ccrc/auth-scratch/<id>`; `_auth_script_argv <cmd> [args…]` → the pty argv, **one token per line**; the refusal token `pane-unsupported-here`
 
-This is the one method that still needs a terminal, and the measurement is why: `claude setup-token` with no tty produced **zero bytes and hung** (`spec:460`). It is also the second-class lane — its OAuth request carries `user:inference` and nothing else, where `auth login --claudeai` carries six scopes including `user:sessions:claude_code`, the one Remote Control needs (`spec:469-475`). So this method exists as a convenience for an operator who wants a one-year token, not as the way lanes are made.
+This is the one method that still needs a terminal, and the measurement is why: `claude setup-token` with no tty produced **zero bytes and hung** (`spec:464`). It is also the second-class lane — its OAuth request carries `user:inference` and nothing else, where `auth login --claudeai` carries six scopes including `user:sessions:claude_code`, the one Remote Control needs (`spec:473-479`). So this method exists as a convenience for an operator who wants a one-year token, not as the way lanes are made.
 
 **The file this mint lands in is the file the lane's ROSTER ENTRY already names, and that is a
 cross-cluster agreement rather than a coincidence.** This helper knows an id and a method; it does not
@@ -14196,9 +14196,9 @@ secrets-file ruling states the rule and this paragraph is its other end; Task 28
 `secrets-path-unmanaged` is what catches a roster written by hand, where the two can differ. If a
 later task changes the naming rule, it changes it in three places or it changes it in none.
 
-The config dir is a **throwaway**, `~/.ccrc/auth-scratch/<id>` (`spec:514-517`), and it is the second half of the launcher rule Task 52 states: a generated wrapper *exports* `CLAUDE_CONFIG_DIR="$HOME/<suffix>"` (`shared/wrapper.mjs:146`), which would overwrite the scratch dir the caller set and land the mint in the lane's real config dir. So `setup-token` runs the **upstream** launcher, `$WRAPPER_DIR/$CCRC_UPSTREAM`, exactly as `login` does — the two methods differ only in WHICH dir they name.
+The config dir is a **throwaway**, `~/.ccrc/auth-scratch/<id>` (`spec:518-521`), and it is the second half of the launcher rule Task 52 states: a generated wrapper *exports* `CLAUDE_CONFIG_DIR="$HOME/<suffix>"` (`shared/wrapper.mjs:146`), which would overwrite the scratch dir the caller set and land the mint in the lane's real config dir. So `setup-token` runs the **upstream** launcher, `$WRAPPER_DIR/$CCRC_UPSTREAM`, exactly as `login` does — the two methods differ only in WHICH dir they name.
 
-**`script(1)`'s argument order differs between userlands and the BSD arm is UNVERIFIED from this box** (`spec:546-547`, decision 9 at `spec:1551-1561`). It ships as a branch on `CCD_OS` — the tree's own idiom, derived at `ccd/ccrc:109-114` — plus an argv-shape test for BOTH arms, never as an assertion about the real binary. If the arm turns out wrong on a real Mac, this method answers `pane-unsupported-here` THERE ONLY and `login` and `paste` are untouched, which is the whole of the Darwin exposure and costs a convenience rather than the feature.
+**`script(1)`'s argument order differs between userlands and the BSD arm is UNVERIFIED from this box** (`spec:550-551`, decision 9 at `spec:1566-1576`). It ships as a branch on `CCD_OS` — the tree's own idiom, derived at `ccd/ccrc:109-114` — plus an argv-shape test for BOTH arms, never as an assertion about the real binary. If the arm turns out wrong on a real Mac, this method answers `pane-unsupported-here` THERE ONLY and `login` and `paste` are untouched, which is the whole of the Darwin exposure and costs a convenience rather than the feature.
 
 **Two harness facts the draft got wrong, recorded because they change the code and not only the test.** First, `CCD_OS` is DERIVED at source time from `$OSTYPE`, so passing `{ CCD_OS: 'linux' }` in a test's environment is inert — the helper overwrites it three lines into the file. The argv tests therefore set `CCD_OS` *in the snippet*, after the source, which is the only place the assignment survives; that also means both arms are measured on both platforms rather than one of them being skipped forever on the box that runs CI. Second, **`pane-unsupported-here` cannot be provoked by emptying `PATH`.** `ghContainedEnv` returns `PATH: \`${bin}:${env['PATH'] ?? ''}\`` (`ccdWsHelpers.ts:245`), so a caller-supplied empty directory leaves only `harnessBin` — which holds `gh`, `systemctl`, `launchctl`, `systemd-run` and `tmux` and nothing else. `mkdir`, `date`, `jq`, `mv` and `chmod` all vanish with `script`, `_auth_publish` returns 1 at its first line, `_auth_die` runs `_auth_publish || true`, no status file is written at all, and the assertion on that file gets `ENOENT` instead of the refusal it came to measure. That is why Task 51 shipped `CCRC_AUTH_SCRIPT`: the knob names the pty vehicle, so a test can point it at a name no box has while leaving the rest of PATH intact.
 
@@ -14275,7 +14275,7 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
     expect(fs.readFileSync(path.join(h.home, 'seen-config-dir'), 'utf8'))
       .toBe(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a'));
     // The scratch dir carries no settings.json, so no ccrc hook can fire from
-    // this pane (spec:515-517) — and the lane's own dir is untouched.
+    // this pane (spec:519-521) — and the lane's own dir is untouched.
     expect(fs.existsSync(path.join(h.home, '.ccrc', 'auth-scratch', 'claude-a', 'settings.json'))).toBe(false);
     expect(fs.existsSync(path.join(h.home, '.claude-a'))).toBe(false);
   });
@@ -14424,7 +14424,7 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
     || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound mint cannot run (use --method login or paste)"
   # A THROWAWAY dir: setup-token stores nothing and needs no account state, and
   # a scratch dir carries no settings.json — so no ccrc hook can fire from this
-  # pane (spec:515-517).
+  # pane (spec:519-521).
   scratch="$SCRATCH_ROOT/$AUTH_ID"
   mkdir -p "$scratch" || _auth_die "cannot create $scratch"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
@@ -14506,11 +14506,11 @@ git commit -m "feat(ccd): setup-token mints under script(1) on both userlands, t
 - Consumes: `_auth_script_argv` (Task 54), `_auth_pump`, `_auth_line`, `_auth_open_pipes`, `_auth_timeout`, `CCRC_AUTH_SCRIPT`
 - Produces: `_auth_user_code <clean line>` → sets `AUTH_CODE` from the FIRST `XXXX-XXXX` run and republishes; the terminal state `done` with **no ccrc-held credential of any kind**
 
-§11 fixes this method's scope tightly and the tightness is the feature: ccrc does not own the LiteLLM stack, so what the UI does with an OpenAI lane is *declare an existing launcher, log in through the pane, check, enable/disable, remove* (`spec:742-747`). There is no API-key path and no config writer. Which means this method's whole job is to run `<launcher> login` under a pty and publish what it prints — the launcher writes its own credential, ccrc never sees one, and the card says so in words: *"external launcher — ccrc does not manage its credential"* (`spec:747-748`).
+§11 fixes this method's scope tightly and the tightness is the feature: ccrc does not own the LiteLLM stack, so what the UI does with an OpenAI lane is *declare an existing launcher, log in through the pane, check, enable/disable, remove* (`spec:746-751`). There is no API-key path and no config writer. Which means this method's whole job is to run `<launcher> login` under a pty and publish what it prints — the launcher writes its own credential, ccrc never sees one, and the card says so in words: *"external launcher — ccrc does not manage its credential"* (`spec:751-752`).
 
-The one thing this method publishes that the others do not is `userCode`. §11 says out loud that the device code **is not a secret and is shown** (`spec:744-745`) — which is what makes it publishable at all, and is the reason `AUTH_CODE` may reach the status file where nothing else new may. It is also why the token filter still runs first on every line: a launcher that decides to print a bearer token is not something this helper gets to be surprised by.
+The one thing this method publishes that the others do not is `userCode`. §11 says out loud that the device code **is not a secret and is shown** (`spec:748-749`) — which is what makes it publishable at all, and is the reason `AUTH_CODE` may reach the status file where nothing else new may. It is also why the token filter still runs first on every line: a launcher that decides to print a bearer token is not something this helper gets to be surprised by.
 
-An `external` lane's id and its launcher are the same name by construction (`spec:414`, the doctor's `wr_cands` rule with its `-ef` alias collapse), so the program to run is `$WRAPPER_DIR/$AUTH_ID login`. `shared/wrapper.mjs:89-93` refuses to generate a wrapper for `external` outright — pinned by `wrapper-generate.test.ts` — so there is no ccrc-written file in this path at all: the launcher is somebody else's and stays that way.
+An `external` lane's id and its launcher are the same name by construction (`spec:418`, the doctor's `wr_cands` rule with its `-ef` alias collapse), so the program to run is `$WRAPPER_DIR/$AUTH_ID login`. `shared/wrapper.mjs:89-93` refuses to generate a wrapper for `external` outright — pinned by `wrapper-generate.test.ts` — so there is no ccrc-written file in this path at all: the launcher is somebody else's and stays that way.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -14610,7 +14610,7 @@ In `ccd/ccd-account-auth`, replacing the `_auth_user_code` stub Task 51 shipped,
 
 ```bash
 _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose
-  # §11 (spec:744-745) says out loud that this value is not a secret and is
+  # §11 (spec:748-749) says out loud that this value is not a secret and is
   # shown — which is what makes it the one thing besides the URL that may
   # reach the status file.
   #
@@ -14632,7 +14632,7 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   # AN EXTERNAL LANE'S LAUNCHER IS NOT CCRC'S. `shared/wrapper.mjs:89-93`
   # refuses to generate a wrapper for `external` outright, so `$WRAPPER_DIR/$id`
   # here is a file a human wrote and this method only runs it. Its id and its
-  # launcher are the same name by construction (spec:414). No config dir is
+  # launcher are the same name by construction (spec:418). No config dir is
   # minted, no secrets file is written, and the credential lands wherever that
   # launcher puts it (§11) — which is why the card says "external launcher —
   # ccrc does not manage its credential" rather than showing a custody line.
@@ -14788,7 +14788,7 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
   });
 
   it('the agent deploy ships it, BEFORE the agent restart', () => {
-    // AGENT-FIRST end to end (spec:1509, decision 1). The agent caches
+    // AGENT-FIRST end to end (spec:1524, decision 1). The agent caches
     // `ccd caps` at boot — the 113-second lesson deploy.sh:612-614 records — so
     // an agent restarted against yesterday's ccd pins yesterday's capability
     // set until someone restarts it again.
@@ -15242,7 +15242,7 @@ for the live macOS arm (`ccd/ccrc:4467` prints a macOS-specific bins line). Task
 Two further facts make the probe new ground rather than a copy of a precedent, and Task 30 argues rather than
 cites: **nothing in this tree has ever run `claude -p`** — the only wrapper invocation anywhere is inside a tmux
 command string at `ccd/ccd:11753` and its retry twin at `:11794` — and **`CLAUDE_CODE_MAX_RETRIES` appears
-nowhere in the tree**, its only two occurrences being prose in this very spec (`:641`, `:645`).
+nowhere in the tree**, its only two occurrences being prose in this very spec (`:645`, `:649`).
 
 ### D-1859 — the spec names a type the wire already owns
 
@@ -15322,7 +15322,7 @@ no stdin path in the agent today**: `grep -rn 'stdin|input:' agent/src/` returns
 the kill path by hand.
 
 Two adjacent traps for that wave, recorded now: `ExecReq` must NOT gain `stdinB64` (that is rejected approach C,
-spec §2 `:161-167`) — the chosen wire is a NEW member of the `AgentReq` union, leaving `ExecReq` byte-identical;
+spec §2 `:165-171`) — the chosen wire is a NEW member of the `AgentReq` union, leaving `ExecReq` byte-identical;
 and `agent/test/exec.test.ts:215-219` pins the source TEXT `const MAX_EXEC_TIMEOUT_MS = 300_000;`, so a longer
 per-sub bound needs its own constant rather than a retune of that one.
 
@@ -15342,7 +15342,7 @@ really does set `.btn-primary { display: flex }`, and `fleet.css:747` really doe
 
 ### D-1904 — §1's "gpt is kill-switched since 2026-07-28" is false as of 2026-09-08, and the verb it shapes changes meaning
 
-Spec §1 item 7 (`:91-92`) states *"gpt is kill-switched by `~/.cc-sessions/gpt-disabled` since 2026-07-28."*
+Spec §1 item 7 stated, before commit `bef75e8a` corrected it — at `:91-92` in the pre-correction file, and §1 item 7 now occupies `:91-96` — *"gpt is kill-switched by `~/.cc-sessions/gpt-disabled` since 2026-07-28."*
 Measured 2026-09-08 on this box: `ls ~/.cc-sessions/gpt-disabled` → **No such file or directory**. `origin/main`'s
 `065882ae` ("an enabled non-home-able lane rejoins the auto-swap rotation", PR #61) removed it and, in the same
 commit, changed what a non-home-able lane *is*: `_default_pool` (`origin/main:ccd/ccd:11714-11716`) now appends
@@ -15365,7 +15365,7 @@ touched by this branch and by nothing on main, so the edit is safe at any point 
 
 ### D-1905 — §11's "no telemetry for this lane" is false for gpt, and `telemetry: 'none'` is a roster claim, not a fact about a lane
 
-Spec §11 (`:749-750`) says the external-account row renders usage as *"no telemetry for this lane"* instead of
+Spec §11 said, before commit `bef75e8a` corrected it — at `:748-749` in the pre-correction file (the plan's prior citation of `:749-750` was already off by one before the correction), and the corrected §11 now runs `:752-764` — that the external-account row renders usage as *"no telemetry for this lane"* instead of
 bars. Measured 2026-09-08: `systemctl --user is-enabled ccgpt-usage.timer` → **enabled**, `active (waiting)`,
 last fired 08:09:26 and next at 08:29:26 — the 20-minute cadence its own unit description states — and
 `~/.cc-limits/gpt.json` (mtime 2026-09-08 08:09:32) reads
