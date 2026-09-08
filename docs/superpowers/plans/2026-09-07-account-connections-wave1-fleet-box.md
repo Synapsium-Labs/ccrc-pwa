@@ -15488,3 +15488,46 @@ invisible."* After this ruling they no longer both spell it, so the substitution
 mutation stops demonstrating what it was written to demonstrate. Whoever executes Task 32 must re-derive
 that mutation against the new vocabulary rather than adjust its expected string — the split has made the
 tree better and that particular test worse, and those are two different facts.
+
+### D-1983 — a refusal detail that begins with a flag turns one refusal into two contradictory signals, and the plan wrote three of them
+
+Found by Task 22's implementer, red-first, before the code shipped.
+
+Task 20's review documented a seam hazard (M7) and deliberately left it as a trap rather than closing it,
+on the grounds that it was unreachable: `deploy/account-op.mjs`'s `refuse` op can exit non-zero (2,
+`bad-argv`) **while having already written a JSON envelope to stdout for the WRONG error**, and
+`_acct_refuse` treats any non-zero as "the envelope did not print" and fires `_ccrc_die` on top of it.
+The reachability argument was that no call site passes operator bytes in a position where they could
+lead with `--`.
+
+**Task 22 made it reachable, and the plan itself is what did.** All three of the plan's refusal sentences
+for this task begin with the literal `--credential`, and the M6 guard added in Task 20's review round —
+which refuses a `--detail` value starting with `--` — fires on all three. Measured: each refusal exited
+**1 instead of 2** and emitted **two disagreeing signals at once**, a stray `bad-argv` envelope on stdout
+plus a `_ccrc_die` sentence on stderr. A caller parsing stdout receives a well-formed JSON object about
+an error that is not the one that happened.
+
+Two things this proves, and they point in opposite directions:
+
+1. **The M6 guard earned its place one task after it was written.** Without it the malformed call would
+   have been accepted and the wrong detail shipped silently. The guard turned a silent corruption into a
+   loud one, which is what a guard is for.
+2. **M7's reachability argument was wrong, and it was wrong in the way such arguments usually are** — it
+   held for every call site that existed when it was written. Task 21's brief already carried the
+   instruction "if your work makes it reachable, fix it rather than inheriting it". Task 22's work made
+   it reachable and the response was to reword the three sentences so they no longer begin with a flag.
+
+**RULING: reword is not enough; close the seam.** A rule that every future refusal detail must remember
+not to begin with `--` is a convention, and this repository's doctrine is that a comment is a request and
+a red suite is a mechanism. The property M7 relied on was POSITIONAL, not structural (Task 21's review
+established exactly that), and positional properties do not survive twelve more subcommands.
+
+The close is small and the pattern already exists in the same file. `_acct_answer` (Task 21) captures
+node's stdout and decides on the BODY rather than on the exit code alone. `_acct_refuse` must do the
+same: capture the envelope, emit it only when node exited 0, and on any non-zero **discard the body** —
+it is about the wrong error and must never reach stdout — then die on stderr alone with a sentence saying
+a malformed refusal call is a bug in ccrc rather than a fact about the operator's box. One refusal, one
+signal, one owner, which is what `_acct_refuse`'s own first sentence already claims it delivers.
+
+The three reworded sentences stay reworded — they read better as prose — but they are no longer what
+makes the verb correct.
