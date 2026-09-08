@@ -997,20 +997,31 @@ describe('the marker namespace cannot collide with a session id', () => {
   });
 });
 
-describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (Fix round 2, Finding 5)', () => {
-  // MEASUREMENT, not a fix — no code changes ride with this describe. The
-  // `echo pools-v1` comment argues that a wave-3 server meeting a 2a-only
-  // fleet box gets a LOUD failure rather than a silent `200 {ok:true}`,
-  // because `--cross-pool` is specified LEADING, before the positionals: on
-  // a `ccd` that does not know the flag it lands in a POSITIONAL slot some
-  // existing validation refuses (which check fires depends on the verb and
-  // is measured per case below — see Finding 8's correction on `swap`), and
-  // the verb DIES. Wave 3 will pin that its own builders EMIT a leading
-  // flag — a different claim from THIS one, that today's `ccd` REFUSES a
-  // leading one, and only this second claim makes advertising the token
-  // early actually safe. Nothing here asserts what the flag DOES (there is
-  // no `--cross-pool` behaviour yet); each case only asserts a nonzero exit,
-  // which is the entire safety property this early token depends on.
+describe('pools-v1 is safe to advertise before --cross-pool lands on every verb (D-1798)', () => {
+  // MEASUREMENT, not a fix on `swap`'s two cases below — wave 2b (Task 5)
+  // landed `--cross-pool` there, so their PREMISE changed underneath them:
+  // this used to be "an old `ccd` that does not know the flag refuses it by
+  // accident, because it drifts into a positional slot some existing lock
+  // rejects." That is no longer what `swap` does. `swap` now recognises
+  // `--cross-pool` and strips it BEFORE the positional parse (see its own
+  // header comment), so on `swap` the flag never reaches a positional slot
+  // at all — the two cases below still exit nonzero, but now because the
+  // REAL positionals underneath (`id`/`target`, once the flag is gone) are
+  // what the fixture happens to hand it: a bogus wrapper name, or a session
+  // id with no registry row. That is D-1798's window closing FOR `swap`: the
+  // capability token `pools-v1` promised a wave-3 server could build
+  // `--cross-pool` against this fleet box and get a real decision rather
+  // than a silently-ignored flag, and that promise is now literally true
+  // here rather than true by an accident of argument parsing.
+  //
+  // `start` and `enable` are now the SAME SHAPE as `swap` above — Task 6
+  // landed the identical strip-before-positional-parse on both, so their two
+  // cases below measure the window closing for them too, not the old
+  // accident. Nothing here asserts what `--cross-pool` DOES on those two
+  // verbs beyond that (their own pool-guard behaviour is
+  // `ccd-crosspool.test.ts`'s job); each case still only asserts a nonzero
+  // exit and the REAL positional underneath naming the refusal, which is the
+  // entire safety property this early token ever depended on.
   //
   // THREE OF SPEC §5.5.5's FOUR VERBS, and the fourth is unpinned on purpose.
   // That section names `cmd_swap`, `cmd_start`, `cmd_enable` and `cmd_prefer`;
@@ -1022,90 +1033,124 @@ describe('pools-v1 is safe to advertise before wave 2b implements --cross-pool (
   // whitelist entry either (`agent/src/whitelist.ts`'s `ccd:` list). It is a
   // shell-only verb, and the safety property this describe measures is about
   // what crosses the wire.
-  it('a leading --cross-pool on `swap` dies loudly — but not because `_is_valid_wrapper` sees the flag itself', () => {
-    // Corrected in fix round 3 (Finding 8): the flag lands in the `id` slot
-    // (the `*)` arm collects it as the first positional) and `id` is never
-    // passed to `_is_valid_wrapper` at all — only checked against
-    // `$REG/$id.uuid`'s existence, further down. What actually refuses HERE
-    // is the SECOND positional, shifted one slot right by the flag's
-    // presence: `target` becomes the string meant to be the session id
-    // ("demo"), and THAT fails `_is_valid_wrapper` (a session id string is
-    // not a wrapper name).
+  it('a leading --cross-pool on `swap` dies loudly — stripped by the flag loop, not caught by `_is_valid_wrapper` seeing the literal', () => {
+    // MEASURED after Task 5 landed the strip (was: "the flag lands in the
+    // `id` slot… what actually refuses HERE is the SECOND positional,
+    // shifted one slot right"). `--cross-pool` is now stripped before the
+    // positional parse, so `id`="demo" and `target`="pool-a" — the REAL
+    // positionals, no longer shifted by the flag's presence. `target`
+    // ("pool-a") is what `_is_valid_wrapper` refuses, exactly as it would
+    // for `ccd swap demo pool-a` with no flag at all.
     const r = shFail('cmd_swap --cross-pool demo pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("unknown wrapper 'pool-a'");
+  });
+
+  it('a leading --cross-pool on `swap` still dies when both positionals happen to be real wrappers — the registry lock catches it', () => {
+    // MEASURED after Task 5 landed the strip (was: "$id is still the literal
+    // flag `--cross-pool`… the refusal comes from `no registry for
+    // '--cross-pool'`"). Stripped now, so `id`="claude-a" and
+    // `target`="claude-b" — both genuine roster wrappers, so
+    // `_is_valid_wrapper` PASSES; the refusal instead comes from the next
+    // lock down, `[[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"`,
+    // where `$id` is the real positional "claude-a", not the flag.
+    const r = shFail('cmd_swap --cross-pool claude-a claude-b');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("no registry for 'claude-a'");
+  });
+
+  it('a leading --cross-pool on `start` now dies for the REAL positional — Task 6 stripped the flag here too', () => {
+    // MEASURED after Task 6 landed the strip (was: "`$# -ge 2` makes
+    // `wrapper` the flag itself, `_is_valid_wrapper` refuses it" —
+    // `cmd_start --cross-pool demo pool-a` used to die on
+    // `unknown wrapper '--cross-pool'`, because with no flag loop `$#`
+    // was 3, so `wrapper` bound to the literal flag itself). Stripped now,
+    // exactly like `swap` above: `wrapper`="demo" and `project`="pool-a" —
+    // the REAL positionals, no longer shifted by the flag's presence.
+    // `_is_valid_wrapper "demo"` is what refuses, exactly as it would for
+    // `ccd start demo pool-a` with no flag at all — "demo" is a project
+    // name in every other case in this file, not a roster wrapper.
+    //
+    // This case no longer measures an ACCIDENT: `cmd_start` now has its own
+    // `--cross-pool` behaviour (Task 6's creation-only pool guard, covered by
+    // `ccd-crosspool.test.ts`), so a flag that reached this point would be
+    // meaningful. What stays true, and is still all this describe claims, is
+    // that the flag never lands in `$wrapper` or `$project` — the safety
+    // property `pools-v1` depends on.
+    //
+    // M3 (coordinator review, fix round 1): MEASURED, same as before the
+    // rewrite — replacing `_is_valid_wrapper`'s die with `:` still exits 1
+    // here, falling through to `[[ -x "$WRAPPER_DIR/$wrapper" ]] || die
+    // "wrapper missing: …"` for the same nonexistent `demo` wrapper. A bare
+    // `r.code).not.toBe(0)` would stay green in both worlds; pinning this
+    // stderr line is what makes the assertion mean something specific.
+    const r = shFail('cmd_start --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain("unknown wrapper 'demo'");
   });
 
-  it('a leading --cross-pool on `swap` still dies when the shifted target happens to be a real wrapper — a different lock catches it', () => {
-    // The realistic skew, added per fix round 3 (Finding 8): a session id
-    // that COLLIDES with a roster wrapper id (`claude-a`/`claude-b`, both
-    // real fixture wrappers). Here `_is_valid_wrapper "$target"` PASSES
-    // ("claude-a" is a genuine wrapper) — the refusal instead comes from
-    // the FIRST lock further down: `[[ -f "$REG/$id.uuid" ]] || die "no
-    // registry for '$id'"`, where `$id` is still the literal flag
-    // `--cross-pool`. Still nonzero, but by a DIFFERENT lock than the case
-    // above — the pin covers both paths, not only the one where the target
-    // happens to be invalid.
-    const r = shFail('cmd_swap --cross-pool claude-a claude-b');
-    expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain("no registry for '--cross-pool'");
-  });
-
-  it('a leading --cross-pool on `start` dies loudly — `$# -ge 2` makes `wrapper` the flag itself, `_is_valid_wrapper` refuses it', () => {
-    // THE TITLE IS NOW PINNED, NOT MERELY ASSERTED (fix round 7, must-fix 6).
-    // `expect(r.code).not.toBe(0)` alone stayed green for ANY nonzero exit,
-    // including one that refuses for a completely different reason — the
-    // fixture-shaped guarantee this wave has been closing everywhere. The
-    // sentence below is `cmd_start`'s own
-    // `_is_valid_wrapper "$wrapper" || die "unknown wrapper '$wrapper' …"`,
-    // and it names THE FLAG ITSELF, which is exactly what separates this case
-    // from the two `swap` cases above: there the flag lands in the `id` slot
-    // and something else does the refusing.
+  it('a leading --cross-pool on `enable` now journals the REAL id, because the strip runs before `_id`', () => {
+    // MEASURED after Task 6 moved `cmd_enable`'s own strip ABOVE `_id "$1"
+    // "$2"` (was: "`_lc_done enable "$id" ""` runs BEFORE delegating to
+    // `cmd_start`, so a skewed `enable --cross-pool …` writes a lifecycle
+    // entry for a bogus id — `_id "--cross-pool" demo` = `--cross-pool-demo`
+    // — and only THEN fails"). That side effect is exactly what the strip
+    // was FOR: with the flag gone from argv before `_id` ever runs,
+    // `_id demo pool-a` = `demo-pool-a` — the id this verb actually means —
+    // and `cmd_enable`'s `_lc_done enable "$id" ""` names THAT row, not a
+    // bogus one, before delegating into `cmd_start --cross-pool demo pool-a`.
     //
-    // MEASURED BOTH WAYS against a scratchpad copy of `ccd` with that one line
-    // replaced by `:` — the mutant STILL EXITS 1, falling through to
-    // `[[ -x "$WRAPPER_DIR/$wrapper" ]] || die "wrapper missing: …"` — so the
-    // code-only assertion is green in both worlds and this stderr line is the
-    // only thing that goes red.
-    //
-    // Only the roster-independent half of the sentence is pinned: the real
-    // message ends `(valid: <CCRC_ACCOUNTS>)`, and pinning that would make this
-    // test track `DEFAULT_TEST_ROSTER`'s contents instead of the guard.
-    const r = shFail('cmd_start --cross-pool demo pool-a');
-    expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain("unknown wrapper '--cross-pool'");
-  });
-
-  it('a leading --cross-pool on `enable` dies loudly too, but only AFTER one lifecycle line is written for the bogus id it computes first', () => {
-    // Nuance that must not be lost: `cmd_enable` runs `_lc_done enable "$id" ""`
-    // BEFORE delegating to `cmd_start`, so a skewed `enable --cross-pool …`
-    // writes a lifecycle entry for a bogus id (`_id "--cross-pool" demo` =
-    // `--cross-pool-demo`) and only THEN fails — it does not die before doing
-    // anything. Harmless (the id is bogus and nothing downstream trusts it),
-    // but this test's own name must say what actually happens, not "dies
-    // before doing anything".
-    //
-    // WHICH VERB ACTUALLY REFUSES (fix round 7, must-fix 6): `cmd_enable` has
-    // no wrapper check of its own — its only arity gate is `$# -ge 1`, which
-    // three arguments pass — so the sentence on stderr is `cmd_start`'s,
-    // reached through the `cmd_start "$@"` this verb delegates to AFTER the
-    // lifecycle write. Pinning it is what makes the ordering claim in this
-    // test's name load-bearing: the lifecycle line and the refusal are then
-    // both attributed, rather than "something wrote a line and something
-    // exited nonzero".
-    //
-    // MEASURED BOTH WAYS against the same scratchpad copy of `ccd` used by the
-    // `start` case above (`_is_valid_wrapper`'s die replaced by `:`): the
-    // mutant still exits 1 AND still writes exactly one lifecycle line for
-    // `--cross-pool-demo`, so BOTH pre-existing assertions here stay green and
-    // only the stderr line goes red.
+    // WHICH VERB ACTUALLY REFUSES is unchanged: `cmd_enable` has no wrapper
+    // check of its own — its only arity gate is `$# -ge 1`, which the
+    // stripped two positionals still pass — so the sentence on stderr is
+    // still `cmd_start`'s, reached through the `cmd_start ${cross:+--cross-pool}
+    // "$@"` this verb delegates to AFTER the lifecycle write, and it is the
+    // identical "demo" refusal the `start` case above measures directly.
     const r = shFail('cmd_enable --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
-    expect(r.stderr).toContain("unknown wrapper '--cross-pool'");
+    expect(r.stderr).toContain("unknown wrapper 'demo'");
     const lcDir = path.join(REG(), '.lifecycle');
     expect(fs.existsSync(lcDir)).toBe(true);
     const journal = fs.readdirSync(lcDir)
       .map((f) => fs.readFileSync(path.join(lcDir, f), 'utf8')).join('\n');
-    expect(journal).toContain('"id":"--cross-pool-demo"');
+    expect(journal).toContain('"id":"demo-pool-a"');
+  });
+});
+
+describe('the swap.log project-line comment: rehome and auto-pool are real now', () => {
+  it('`_lc_done rehome` and `aff_verb=auto-pool` both still appear (the re-measurement the comment cites)', () => {
+    // Task 7 (docs-honesty) corrected `cmd_project_pool`'s swap.log comment
+    // from "neither effect exists yet: `rehome` is spec-only, `auto-pool`
+    // appears nowhere in this file" to a statement that both now land, once
+    // `_auto_swap_check`'s home re-seed and affinity arm started actually
+    // writing them. The comment names its own re-measurement
+    // (`grep -n '_lc_done rehome\|aff_verb=auto-pool' ccd/ccd`) — re-run
+    // that same pattern here so a regression that silently dropped either
+    // write reds this suite rather than only leaving the prose stale.
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src, '`_lc_done rehome` no longer appears — the swap.log comment\'s claim is now false').toMatch(/_lc_done rehome/);
+    expect(src, '`aff_verb=auto-pool` no longer appears — the swap.log comment\'s claim is now false').toMatch(/aff_verb=auto-pool/);
+  });
+});
+
+describe('the `pools-v1` header states a --cross-pool arm count that stays honest', () => {
+  it('the number the header claims equals grep -c -- \'--cross-pool)\' ccd/ccd', () => {
+    // Fix round 1 review: `--cross-pool)` (the literal `case` arm shape) is a
+    // clean count with zero false positives elsewhere in the file — no
+    // control-flow parsing needed, unlike the "several callers branch three
+    // ways" claim beside it that this task's report explains was left
+    // unmechanised on purpose. The header names the grep that produces the
+    // count ("Measured: `grep -c -- '--cross-pool)' ccd/ccd` finds exactly
+    // N now") — re-run that same pattern here and require the stated N to
+    // still be true.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('and so did `--cross-pool`');
+    expect(from, 'the pools-v1 --cross-pool sentence could not be found').toBeGreaterThan(-1);
+    const block = src.slice(from, from + 700);
+    const claimed = block.match(/finds exactly (\d+) now/);
+    expect(claimed, 'the header no longer states a --cross-pool arm count in the expected shape').not.toBeNull();
+    const stated = Number(claimed![1]);
+    const live = (src.match(/--cross-pool\)/g) || []).length;
+    expect(live, `grep -c -- '--cross-pool)' ccd/ccd now finds ${live}, but the header still claims ${stated}`).toBe(stated);
   });
 });

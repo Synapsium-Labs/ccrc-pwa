@@ -655,12 +655,25 @@ under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
 placement and out of being any session's default home, while leaving it in the
 auto-swap rotation as an **overflow lane** — a LAST RESORT, chosen only when no
-home-able account has headroom, never merely because it scored better — for as
-long as it is installed and not kill-switched. `touch ~/.cc-sessions/<id>-disabled`
-is the per-lane brake, and a session that overflowed onto it returns home the
-moment home has headroom;
+home-able account survives the rotation's whole filter, never merely because it
+scored better — for as long as it is installed and not kill-switched.
+`touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
+overflowed onto it returns home when home has headroom again *and* home is still
+servable for the project's pool;
 `telemetry: 'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness.
+
+Both clauses above were unconditional until account pools shipped, and neither is
+any more (D-1911; the ruled behaviour named below is D-1908, and this file still
+owes account pools a section of its own — D-1918). The rotation's filter is the pool rule, then the kill-switch, then
+headroom — so the home-able bracket can empty with every account perfectly
+healthy, simply because they are in another pool; and the return home is
+pool-gated, so a session whose home is in the wrong pool is re-homed rather than
+returned. One consequence is worth stating plainly because it looks like a bug:
+an account with **no** pool tag is servable for every pool, so an untagged
+overflow lane can be chosen while healthy tagged accounts sit refused. That is
+ruled behaviour, and such a move is deliberately **not** recorded as a pool
+crossing — nothing was overridden, because nothing constrained it.
 
 **Getting the file onto a box.** The deploy seeds it, create-if-missing, on
 both targets:

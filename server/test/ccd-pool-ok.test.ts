@@ -16,7 +16,7 @@
 //     REAL generated `accounts.sh`, which is the only thing that can prove the
 //     generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
@@ -328,5 +328,61 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
     expect(r.stderr).toContain('no account available for placement —');
     expect(r.stderr).not.toContain('in pool');
     expect(r.stderr).not.toContain(':pool=');
+  });
+});
+
+describe('the `_pool_ok` header states counts that stay honest', () => {
+  it('both numbers the header claims match grep -c \'_pool_ok \' ccd/ccd and its comment split', () => {
+    // Task 7 (docs-honesty) corrected this header from "kept for wave 2b,
+    // not consumed today" to a plain count, exactly the kind of numeric
+    // claim that goes stale the next time a call site is added or removed
+    // without the prose being updated alongside it. The header's own
+    // sentence names the grep that produces the number ("Measured:
+    // `grep -c '_pool_ok ' ccd/ccd` finds N matching LINES now, M of them
+    // call sites") — re-run that same pattern here and require both stated
+    // numbers to still be true.
+    //
+    // CORRECTED AGAIN (merge review, M5): the header used to state ONE
+    // number and label it "call sites", and this pin computed the LINE
+    // count. Both were 16, so the suite was green — validating a quantity
+    // the sentence was not claiming, while its own failure message named the
+    // right one. Five of those sixteen lines are comments, so the real
+    // call-site count is 11 and the header asserted 15. The header now
+    // states both numbers and this pin checks both, each against the thing
+    // it is labelled as.
+    //
+    // The call-site classifier is "the line, trimmed, does not start with
+    // `#`". That is exact for `ccd/ccd` today (re-measured in the fix round
+    // after the merge review (D-1966): SIX comment matches of seventeen lines, all
+    // of them whole-line comments, and no code line carries a trailing comment
+    // mentioning the pattern — this said "five" and was left in the present
+    // tense while the header above it was corrected to 17/11, so the pin's own
+    // prose went stale in the commit that corrected the prose it pins). A
+    // future code line with
+    // `_pool_ok ` inside a trailing comment would be counted as a call site
+    // — this pin would then need a real tokenizer, not a looser regex.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('THE THIRD CODE IS CONSUMED TODAY');
+    expect(from, 'the _pool_ok header could not be found').toBeGreaterThan(-1);
+    const block = src.slice(from, from + 400);
+    const claimed = block.match(/finds (\d+) matching LINES now, (\d+) of\n?/);
+    expect(claimed, 'the header no longer states its two counts in the expected shape').not.toBeNull();
+    const statedLines = Number(claimed![1]);
+    const statedCalls = Number(claimed![2]);
+    // CORRECTED (final whole-branch review, M-1): the header's own cited
+    // command is `grep -c`, which counts LINES containing a match, not
+    // occurrences — `.match(/g)` counted occurrences instead, silently
+    // measuring something else. Line count and occurrence count agreed at 16
+    // WHEN THAT WAS WRITTEN, and only because no line in `ccd/ccd` holds two
+    // `_pool_ok ` calls — which is still true at 17. Count lines here, so this
+    // test measures the same thing the header's cited command measures.
+    const matching = src.split('\n').filter((line) => line.includes('_pool_ok '));
+    const calls = matching.filter((line) => !line.trim().startsWith('#'));
+    expect(matching.length,
+      `grep -c '_pool_ok ' ccd/ccd now finds ${matching.length} matching LINES, `
+      + `but the header still claims ${statedLines}`).toBe(statedLines);
+    expect(calls.length,
+      `${calls.length} of those ${matching.length} lines are CALL SITES (the rest are comments), `
+      + `but the header still claims ${statedCalls}`).toBe(statedCalls);
   });
 });
