@@ -476,3 +476,82 @@ describe('gen-wrappers.mjs', () => {
     expect(r.stdout).toBe('');
   });
 });
+
+// THE MANIFEST'S ARITY, which the non-empty-field test above does not cover.
+// The grammar is `deploy/gen-wrappers.mjs`'s own header — the four record
+// lines are :43-46, under the `THE MANIFEST GRAMMAR (plan D6)` banner at :40:
+//   summary\t<total>\t<generated>\t<upstream>\t<external>
+//   wrapper\t<id>\t<classify>\t<equal>
+//   protected\t<id>
+//   orphan\t<id>
+describe('the manifest grammar cannot grow a column in silence', () => {
+  const ARITY: Readonly<Record<string, number>> = {
+    summary: 5, wrapper: 4, protected: 2, orphan: 2,
+  };
+
+  it('every record has exactly the field count its grammar declares', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    // An orphan and a foreign file, so all four record types are present in one
+    // run: a scan that never sees an `orphan` line asserts nothing about it.
+    writeFileSync(path.join(binDir, 'leftover'), markGenerated(generateWrapperBody(
+      { id: 'leftover', configDirSuffix: '.leftover', execKind: 'generated' }, UPSTREAM_ID)), { mode: 0o755 });
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    const seen = new Set<string>();
+    for (const line of lines) {
+      const fields = line.split('\t');
+      const kind = fields[0]!;
+      expect(ARITY, `unknown record type "${kind}" — add it to ARITY and to ccd/ccrc's reader`)
+        .toHaveProperty(kind);
+      expect(fields.length, `record type "${kind}" carries ${fields.length} fields: ${line}`)
+        .toBe(ARITY[kind]);
+      seen.add(kind);
+    }
+    // All four types were exercised, so no arity above went unchecked.
+    expect([...seen].sort()).toEqual(['orphan', 'protected', 'summary', 'wrapper']);
+  });
+
+  it('the reader in ccd/ccrc takes at least as many variables as the widest record', () => {
+    // Producer and consumer, in one assertion. `ccd/ccrc`'s manifest loop reads
+    // `local kind a b c d` — five names for a five-field `summary` — and its own
+    // comment says why five and not four. A sixth field with no sixth variable
+    // is a field the reader discards without saying so.
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    const m = /^\s*local kind ([a-z ]+)$/m.exec(ccrc);
+    expect(m, 'ccd/ccrc must declare the manifest reader as `local kind a b c d`').not.toBeNull();
+    const vars = m![1]!.trim().split(/\s+/).length;
+    expect(vars + 1).toBeGreaterThanOrEqual(Math.max(...Object.values(ARITY)));
+  });
+
+  it('the collapse this arity guards against is real, in bash, right now', () => {
+    // MEASURED rather than asserted. `deploy/gen-wrappers.mjs:77-90` and
+    // `ccd/ccrc:2367-2384` both argue from this behaviour (plan D-71); a guard
+    // whose reason lives only in prose is a guard nobody can check.
+    //
+    // THE ROW IS BUILT IN JS AND PASSED AS AN ARGUMENT, not written into the
+    // snippet as an escape. A here-string spelled `<<< "ok\tclaude\t…"` inside
+    // a JS template literal reaches bash as `<<< "ok\tclaude\t…"` with a
+    // BACKSLASH-t, because a double-quoted here-string does not interpret `\t`
+    // — measured 2026-09-07, that spelling prints
+    // `ok\tclaude\t.claude-plain\t\topenrouter||||`, i.e. one field and four
+    // empties, which is not the collapse and would pin nothing. `$'…'` would
+    // fix it; passing the row through `$1` removes the question, and lets the
+    // JS assertion below run over the SAME string rather than a transcription
+    // of it.
+    const row = ['ok', 'claude', '.claude-plain', '', 'openrouter'].join('\t');
+    const out = spawnSync('bash', [
+      '-c',
+      `IFS=$'\\t' read -r a b c d e <<< "$1"; printf '%s|%s|%s|%s|%s' "$a" "$b" "$c" "$d" "$e"`,
+      'bash', row,
+    ], { encoding: 'utf8' });
+    expect(out.status, out.stderr).toBe(0);
+    // The 4th field was EMPTY; `openrouter` landed in it and the 5th is gone.
+    expect(out.stdout).toBe('ok|claude|.claude-plain|openrouter|');
+    // …and JS `split` does NOT collapse — same string, five elements, the empty
+    // one intact. That is why `wrapper-roundtrip.test.ts:21`, which reads the
+    // same record shape with `String.prototype.split`, is NOT a second witness
+    // to this hazard.
+    expect(row.split('\t')).toEqual(['ok', 'claude', '.claude-plain', '', 'openrouter']);
+  });
+});
