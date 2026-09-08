@@ -313,7 +313,13 @@ reasoning field; otherwise the shim leaves the request alone (§15).
   up in the account's `classes`. Unknown → `""` (carry nothing, today's
   behaviour). The result is stored in the registry as `class` at every swap,
   `ensure` and `stop`, so a session that was last seen on Fable restarts on
-  Fable.
+  Fable. The field is **declared in the registry field inventory** that
+  account-pools wave 2b (PR #62) introduces, not at its first write site; and
+  it is **read with a measured read**, never through `_reg_get` (which is
+  `cat "$REG/$1.$2" 2>/dev/null` and folds absent, unreadable and empty into
+  one empty string): absent means no class recorded, a readable value is
+  validated against the four classes, and present-but-unreadable refuses the
+  operation naming the path. Routing never acts on a fold.
 - **Spawning.** `_spawn_start` appends `--model <class>` when the registry's
   `class` is non-empty **and** the class is available on the destination lane
   (§4.3). Aliases only — the destination's env block resolves them.
@@ -470,15 +476,23 @@ marker re-stamped after every `ccd/ccd` edit.
    (routes, PWA). `ccrc-models.timer` is enabled by the agent lane like
    `ccd-cap-scopes.timer`.
 
-## 14. Dependencies, ordering and the pending ruling
+## 14. Dependencies, ordering and the pending rulings
 
+- **Account-pools PR #62 (wave 2b) gates the ccd part (§7).** Ruling from that
+  program's coordinator (mail 275, 2026-09-08): no per-session registry field
+  and no edit to `_swap_target`, `cmd_swap`, `cmd_start`, `cmd_enable`,
+  `cmd_prefer` or `cmd_ensure` until #62 is merged AND deployed; rebase after
+  it; declare `class` through wave 2b's registry field inventory. Plans 1 and
+  3 do not touch that path and are not gated.
 - Depends on account-connections wave 1 (`ccrc account`, `PROVIDERS`, the
   settings-block writer, the Accounts screen card). Its branch is at task 20
   of its plan (`842f3c5d`, 2026-09-08). This design's plan orders the work so
   the units that do not touch that wave's files go first: probes, catalogue
   file, `shared/models.ts`, LiteLLM render, class carry in ccd, the picker.
   Roster block, verbs, routes and the Models section follow the merge.
-- Ruling requested (mail 272 to `ccrc-pwa-amber-summit`): (1) amendment to
+- The account-connections spec is owned by session `ccrc-pwa-plain-hollow`
+  (not the pools coordinator); no PR is open for its branch yet. Ruling
+  requested from it (mail 277, after 272/274 were forwarded): (1) amendment to
   their spec vs. this separate spec; (2) `fable` slot and derived `subagent`;
   (3) `selectable` → shortlist; (4) merge window. Outcomes: **amendment** —
   §4.1 of this spec moves into theirs verbatim and this document keeps §5–§13;
