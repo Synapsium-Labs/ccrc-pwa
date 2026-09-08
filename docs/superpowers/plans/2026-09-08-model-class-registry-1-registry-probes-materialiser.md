@@ -7125,7 +7125,7 @@ MSG
 
 **Interfaces:**
 - Consumes: `parseCatalogue` shape from `shared/models.mjs` (Task 2); `readCatalogue`, `out`, `refuse`, `OPS`, `readPairs` in `deploy/models-op.mjs` (Task 6); `_models_box_sub`, `_models_answer`, `_models_roster_path` (Tasks 7, 9).
-- Produces: `shared/litellm.mjs`'s `MODEL_LIST_MARKER`, `LitellmTemplateInvalid` and `renderLitellmConfig(templateText, catalogue)`; the `litellm` op; the verb `ccrc models litellm <id>`; and the refresh loop's per-lane `litellm` field (`rendered | unchanged | skipped | failed`).
+- Produces: `shared/litellm.mjs`'s `MODEL_LIST_MARKER`, `LitellmTemplateInvalid` and `renderLitellmConfig(templateText, catalogue)`; the `litellm` op; the verb `ccrc models litellm <id>`; and the refresh loop's per-lane `litellm` field (`rendered | unchanged | skipped` — fix round 1: a lane whose restart fails is a FAILED ROW, `{id, ok:false, reason}`, not a fourth `litellm` value).
 
 - [ ] **Step 1: Write the template**
 
@@ -7614,28 +7614,53 @@ _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.te
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
 
-# Render, and restart only if BOTH halves are true: the bytes changed AND a
-# proxy is holding the old ones. In-flight gpt turns fail once and retry (§6.3),
-# which is a cost worth paying for a config that has changed and not one for a
-# config that has not.
-_models_litellm() {   # <accountId> -> prints the op's JSON body
-  local file body rc
+# STOP-THEN-WRITE (fix round 1, controller ruling): restart is owed only when
+# BOTH halves are true — the bytes changed AND a proxy is holding the old
+# ones — but deciding that and acting on it has to happen BEFORE the new
+# bytes land on disk, or a stop that fails leaves the config already
+# rewritten: the next run compares equal bytes, reports "unchanged", and
+# never retries, while the box keeps serving the stale rendering with no
+# operator signal. So this is TWO calls into the op: PHASE 1 asks it to
+# render and compare only (no `--commit`, never writes); if a restart is
+# owed and cannot be had, this function REFUSES here — `restart-failed`,
+# nothing written — before PHASE 2 (`--commit true`, the write) is ever
+# asked for, so the next run sees the same difference and retries. In-flight
+# gpt turns fail once and retry (§6.3), which is a cost worth paying for a
+# config that has changed and not one for a config that has not.
+_models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
+  local file check crc
   file="$(_models_roster_path)"
-  body="$(_models_answer litellm --file "$file" --id "$1" \
-            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; rc=$?
-  printf '%s\n' "$body"
-  [ "$rc" -eq 0 ] || return "$rc"
-  if [ "$(printf '%s' "$body" | jq -r '.changed')" = "true" ] && _models_litellm_running; then
+  check="$(_models_answer litellm --file "$file" --id "$1" \
+             --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; crc=$?
+  [ "$crc" -eq 0 ] || { printf '%s\n' "$check"; return "$crc"; }
+  if [ "$(printf '%s' "$check" | jq -r '.changed')" != "true" ]; then
+    printf '%s\n' "$check"
+    return 0
+  fi
+  local restarted=false
+  if _models_litellm_running; then
     if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
+      restarted=true
       echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
     else
-      echo "$PROG: the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand; until then this box serves the old model list. The previous config is at $(_models_litellm_path).prev." >&2
-      return 1
+      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand, then re-run this command — until then this box serves the old model list. Nothing was written."
     fi
   fi
-  return 0
+  local body
+  body="$(_models_answer litellm --file "$file" --id "$1" \
+            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)" --commit true)"; crc=$?
+  if [ "$crc" -eq 0 ]; then
+    printf '%s\n' "$(printf '%s' "$body" | jq -c --argjson r "$restarted" '. + {restarted: $r}')"
+  else
+    printf '%s\n' "$body"
+  fi
+  return "$crc"
 }
 ```
+
+`deploy/models-op.mjs`'s `litellm` op gains an OPTIONAL `commit` key (`OPS.litellm.keys`, not `required`):
+omitted or anything but the literal string `"true"` renders and reports `changed` WITHOUT writing;
+`--commit true` performs the write (the `.prev` copy and the atomic rename, unchanged from Step 9).
 
 and add the arm to `_models_box_sub`'s `case "$sub"`, before its `*)`:
 
@@ -7652,36 +7677,38 @@ and add the arm to `_models_box_sub`'s `case "$sub"`, before its `*)`:
 
 - [ ] **Step 13: Hook the litellm step into the refresh loop**
 
-In `_models_box_sub`'s refresh loop, replace the `if _models_refresh_one …` block with:
+In `_models_box_sub`'s refresh loop's `elif _models_refresh_one …` branch (kept as an `elif`, alongside
+the pre-existing `reginvalid` and probe-failure branches — not collapsed into a single `ok` variable),
+after the existing `materialise`/`count` lines, add the litellm step. Fix round 1 (controller ruling):
+`_models_litellm` now REFUSES (stop-then-write, Step 12) rather than returning 1 after already printing
+an `ok:true` body, so a lane whose restart fails becomes a FAILED ROW — `{id, ok:false, reason}`, same
+shape as every other failed row in this loop — and `failed=1`, not a fourth `litellm` value:
 
 ```bash
-        if _models_refresh_one "$id" "$probe" "$baseurl"; then
-          ok=true
-          _models_node materialise --file "$file" --id "$id" >/dev/null 2>&1 || true
-          count="$(jq '.models | length' "$HOME/.ccrc/models/$id.json" 2>/dev/null || echo 0)"
-          # §5: the LiteLLM step runs for a CODEX lane, and the RENDERER decides
-          # whether anything changed — comparing bytes it just produced against
-          # the bytes on disk is a stronger question than "did the visible set
-          # change", and it is the same question, because the visible set is the
-          # only input the rendering has.
           lit="skipped"
+          local lreason=""
           if [ "$probe" = "codex" ]; then
             local lbody
             if lbody="$(_models_litellm "$id" 2>/dev/null)"; then
               [ "$(printf '%s' "$lbody" | tail -n1 | jq -r '.changed')" = "true" ] \
                 && lit="rendered" || lit="unchanged"
             else
-              lit="failed"
+              lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail')"
             fi
           fi
-        else
-          ok=false; failed=1; count=0; lit="skipped"
-        fi
-        rows+=("$(jq -cn --arg id "$id" --arg p "$probe" --argjson ok "$ok" --argjson c "$count" \
-          --arg lit "$lit" '{id:$id, probe:$p, ok:$ok, count:$c, litellm:$lit}')")
+          if [ -n "$lreason" ]; then
+            row="$(jq -cn --arg id "$id" --arg reason "$lreason" '{id:$id, ok:false, reason:$reason}')"
+            failed=1
+          else
+            row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
+              '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
+          fi
 ```
 
-and add `lit` to the loop's `local` declaration (`local rows=() failed=0 n i id probe baseurl count ok lit`).
+add `lit` to the loop's `local` declaration (`local rows=() failed=0 n i id probe baseurl count reginvalid
+row lit`); the catalogue probe and materialise for this lane already succeeded and their effects stand —
+only the litellm step's own refusal turns the row `ok:false`, via `.detail` off `_models_litellm`'s own
+refusal body, the same `tail -n1` idiom the success path already uses.
 
 The `refreshes one lane and writes its catalogue` case from Task 9 now expects the extra field; update its expectation to
 
