@@ -8931,7 +8931,7 @@ Expected: FAIL — `test_ccgpt_exports_no_model_variable` ("ccgpt still exports 
 
 - [ ] **Step 3: Edit `infra/handoff/ccgpt`**
 
-Replace lines 105–138 (the tier-mapping comment block, the three `model=`/`sonnet=`/`small=` assignments and the six exports) with:
+Replace lines 105–140, not 105–138 (the tier-mapping comment block, the three `model=`/`sonnet=`/`small=` assignments and the SIX exports, plus the two existing `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`/`DISABLE_TELEMETRY` exports at the old 139–140: the replacement block below ends with its own copies of those same two exports, and stopping the replace at :138 would leave the old pair standing beside them — a duplicated export, which is the defect this sweep exists to remove; b3034ff) with:
 
 ```bash
 # THE LANE'S MODELS ARE NOT DECIDED HERE ANY MORE (model-class registry §6.2).
@@ -9045,7 +9045,7 @@ Expected: FAIL — "claude-glm still exports ANTHROPIC_MODEL: export ANTHROPIC_M
 
 - [ ] **Step 2: Edit `infra/handoff/claude-glm`**
 
-Replace lines 49–57 (the two `export ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL` lines, the three-line "Remap ALL Claude aliases" comment and the four alias exports) with:
+Replace lines 49–59, not 49–57 (the two `export ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL` lines, the three-line "Remap ALL Claude aliases" comment and the four alias exports, plus the two existing `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`/`DISABLE_TELEMETRY` exports at the old 58–59 — same reason as Task 14: the replacement block below ends with its own copies of those same two exports, and stopping the replace at :57 would leave the old pair standing beside them; 5f8815f) with:
 
 ```bash
 # THE LANE'S MODELS ARE NOT DECIDED HERE ANY MORE (model-class registry §6.2).
