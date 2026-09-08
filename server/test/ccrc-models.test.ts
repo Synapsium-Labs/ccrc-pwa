@@ -99,6 +99,15 @@ const STUB_SILENT_OK = '#!/usr/bin/env node\nprocess.exit(0);\n';
 const STUB_STACK = "#!/usr/bin/env node\n"
   + "process.stdout.write('Error: kaboom\\n    at somewhere.js:12:34\\n');\n"
   + 'process.exit(7);\n';
+/** Round 1 review addendum: the SAME two-line non-JSON body as `STUB_STACK`,
+ *  but exiting 0 — INSIDE the rc-clamp's 0/1/2 allow-list, so this stub can
+ *  be caught ONLY by the shape check, never by the clamp. `STUB_STACK`'s own
+ *  exit 7 trips both guards at once, which is why removing the shape check
+ *  alone left it green; this one isolates the shape check as its own
+ *  measured, committed case. */
+const STUB_STACK_EXIT0 = "#!/usr/bin/env node\n"
+  + "process.stdout.write('Error: kaboom\\n    at somewhere.js:12:34\\n');\n"
+  + 'process.exit(0);\n';
 /** Prints one valid refusal object and exits 1 — the shape check and the
  *  rc-clamp must both let this through UNCHANGED. */
 const STUB_VALID_REFUSAL = '#!/usr/bin/env node\n'
@@ -396,6 +405,22 @@ describe('the _models_answer seam ("no-answer")', () => {
     // own 0/1/2.
     fs.rmSync(home, { recursive: true, force: true });
     home = boxWithStubOp(STUB_STACK);
+    const r = run(['models', 'gpt', 'show']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('no-answer');
+    expect(r.stderr).not.toBe('');
+  });
+
+  it('the node half prints a bare stack and exits 0: refused by the SHAPE check alone', () => {
+    // Round 1 review addendum: `STUB_STACK`'s exit 7 trips the rc-clamp too,
+    // so removing the shape check leaves that case green — the clamp alone
+    // still catches it. This stub's exit code (0) is inside the clamp's
+    // 0/1/2 allow-list, so ONLY the shape check can refuse it; the mutation
+    // check below removes that check and expects exactly this case to go
+    // red while (b) stays green.
+    fs.rmSync(home, { recursive: true, force: true });
+    home = boxWithStubOp(STUB_STACK_EXIT0);
     const r = run(['models', 'gpt', 'show']);
     expect(r.code).toBe(1);
     const b = oneObject(r);
