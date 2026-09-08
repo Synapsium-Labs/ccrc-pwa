@@ -642,8 +642,7 @@ if [ "$TARGET" = "agent" ]; then
   # exactly as its two siblings above: the agent lane only ever ships to a
   # fleet host, so there is no server-role branch to gate it against. The
   # rsync of `ccd/` above ALSO lands it at ~/ccrc/ccd/, which is where the
-  # verbs resolve it from; this copy is the one an operator can run by hand and
-  # the one the timer's ExecStart reaches through the ccrc launcher.
+  # verbs resolve it from; this copy is the one an operator can run by hand.
   install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755
   # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
   # every corpus. Shipped on this lane and not only by `ccrc install`, because a

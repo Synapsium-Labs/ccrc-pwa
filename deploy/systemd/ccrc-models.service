@@ -2,4 +2,10 @@
 Description=Refresh every lane's model catalogue (model-class registry, added 2026-09-08)
 [Service]
 Type=oneshot
+# user units carry no ~/.local/bin on PATH (measured on the fleet host); ccgpt
+# and litellm live only there, so the codex-lane step needs it spelled out.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# one probe per registered lane at --max-time 30, plus a codex render/restart;
+# a multi-lane pass can outrun the 90s default and get SIGTERM'd mid-run
+TimeoutStartSec=300
 ExecStart=%h/.local/bin/ccrc models refresh --all

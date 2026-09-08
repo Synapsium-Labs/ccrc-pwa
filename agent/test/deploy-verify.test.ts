@@ -555,6 +555,23 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccrc-models-probe')),
       'the model catalogue probe is not in the repo').toBe(true);
 
+    // Fix round 1, Finding 1 (Important, plan-mandated): measured on the
+    // fleet host, read-only — every `systemd --user` unit's process carries a
+    // PATH with no `~/.local/bin`, and `ccgpt`/`litellm` live only there. An
+    // unpinned PATH means the codex-lane step in `refresh --all` can't find
+    // `ccgpt`, and the unit fails every hour.
+    const modelsUnit = readFileSync(path.join(deployDir, 'systemd', 'ccrc-models.service'), 'utf8');
+    expect(modelsUnit,
+      'ccrc-models.service has no explicit PATH — ccgpt/litellm live outside the user-unit default')
+      .toMatch(/^Environment=PATH=%h\/\.local\/bin:/m);
+    // Fix round 1, Folded Minor B: `refresh --all` probes every registered
+    // lane (each curl at --max-time 30), then renders/restarts litellm for
+    // codex — a multi-lane pass can outrun systemd's 90s default and get
+    // SIGTERM'd mid-run, silently, since the writes are atomic.
+    expect(modelsUnit,
+      'ccrc-models.service has no TimeoutStartSec — the 90s default can SIGTERM a multi-lane refresh mid-run')
+      .toMatch(/^TimeoutStartSec=\d+$/m);
+
     // I1, final review: the installs live in AGENT_BUILD_CMD (the build half —
     // npm ci/build plus every unit-file install) — NOT in AGENT_CMD, which is
     // now the restart-only half run in a SEPARATE ssh, after stamp_build.
