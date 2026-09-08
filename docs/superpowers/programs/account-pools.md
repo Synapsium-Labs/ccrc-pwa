@@ -1046,3 +1046,71 @@ claims were both living there: the wave-numbering rule that produced a destructi
 the sentence whose absence from tracked text I read as proof it had never been written. No mechanism is
 proposed here — wave 3 is the server and C1's embargo still stands — but the gap is the widest-blast-
 radius one this program has found, and it belongs in the record before it is forgotten.
+
+## C1 — merged, held at the deploy, and three corrections to my own ruling (2026-09-08)
+
+C1 merged as `db580771` (#67) at 20:31Z, by the operator, while my review of it was still running. The
+review finished at 21:20Z and found six survivors; one of them was already on `main`.
+
+### R1 — the fix opened a live regression in the rescue lane
+
+The two new guards sit at `ccd/ccd:12536-12537` and `return 0` from `_auto_swap_check`; `_swap_target`
+(`:12658`), `_strand_mark` (`:12666`) and the `auto-rescue` line (`:12696`) are ALL BELOW them. So a fix
+for the crossing marker also deleted the LIMIT-RESCUE lane, which consumes neither value as a crossing
+input. A session whose `.home` becomes UNREADABLE — not absent, not empty — and then hits a limit is
+never evacuated, every five seconds, forever, with no `.stranded` marker and no notify; the only artifact
+is a line in `swap.log`, which nothing in `server/src`, `agent/src`, `shared/` or `pwa/src` reads.
+Measured on the merged sha, which is content-identical to the reviewed branch tip.
+
+The worker then supplied the structural half I had only inferred: `_swap_target` consumes `home` in
+exactly two places (`:12316`, `:12329-12330`), and an unmeasured `home` fails both and falls through to
+the pool loop, which still finds a target — so **the rescue does not need a measured `home`**, which is
+precisely what makes refusing the whole tick stronger than the crossing decision required.
+
+### I recommended PROCEED; the operator held; the operator was right, and the hole is worth naming
+
+I weighed a low-probability live regression against C1's benefit and said ship it. **I applied my own
+inertness test to the cost and not to the benefit.** C1's benefit is also zero right now — the crossing
+defect cannot bite because the embargo means no `.crosspool` marker exists on the box. The trade was
+never "small live risk vs real benefit", it was "small live risk vs nothing yet". One deploy will now
+carry #66, C1 and C1's fix together.
+**Standing rule: when a fix is gated behind a deploy, apply the inertness test to BOTH sides of the
+trade. A dormant benefit does not pay for a live risk.**
+
+### Three of ruling 1's four instructions needed correcting by the worker
+
+- **D-2010, mine.** I wrote "if its byte length EXCEEDS 64" — `> 64`. Measured directly:
+  `printf 'pool-a%*s' 58 ''` is 64 bytes and `{ IFS= read -r -d '' -n 64 v; }` SUCCEEDS on it, so `ccd`
+  answers `malformed`; at 63 bytes the read fails and the tag is accepted. **The boundary is `>= 64`** —
+  an off-by-one in a ruling whose entire subject was two readers cutting at the same byte, and `ccd`'s
+  own "58+ characters" example, which I quoted to justify the cap, is exactly the input my rule passed.
+- **D-2017, mine.** I ordered "treat an embedded NUL the same way"; on the server side that is a NO-OP,
+  because `POOL_NAME_RE` already refuses every NUL-bearing content. I specified a guard for a condition
+  another guard had closed, and the first case for it passed on the grammar while reading as a pin —
+  this program's oldest class, arriving because I specified it. Kept as a DOCUMENTED no-op, which is the
+  honest disposition: a no-op labelled as one is fine; a no-op labelled as a mechanism is the defect.
+- **R1's scope**, already recorded above.
+
+The instruction that survived intact is the one that mattered — *mirror the cap* — and it survived
+**because it was a requirement about behaviour rather than an implementation I dictated.**
+**Standing rule: rule at the altitude of the requirement. Every time this coordinator specified the
+guard rather than the property, the specification was the thing that was wrong.**
+
+### D-2009 — a guard dead in exactly the state it was written for
+
+My "inert" was wrong as the whole of it. `_project_pool_state`'s empty-argument short-circuit (`:1148`)
+PRECEDES its registry-unreadable guard (`:1167`), and the argument arrives from `_reg_get "$id" project`,
+which folds unreadable to `""` — so the condition that would fire the guard is the same condition that
+empties its argument, and `:1167` cannot fire at any of its three call sites. The ledger sentence is
+**"inert at the tag level; one arm already unreachable"**. The worker under-claimed it deliberately
+(measuring that the rest of each verb fails too, so what is lost is a clean refusal rather than a proven
+bad placement), which is why it could be acted on immediately.
+
+### The constraint became a gate
+
+"No project is tagged until D-2000 lands" governed a capability that is already one command
+(`ccd project-pool`, live since wave 2a) and that wave 3 Task 9 puts one tap away in the PWA — a
+convention with a speed bump, in this repo's own words for `coordinator-paused`. Replaced:
+**wave 3 may be built and merged; wave 3's SERVER DEPLOY is gated on D-2000 landing and deploying.**
+Enforceable at the deploy step rather than by anyone's restraint, and it costs the wave nothing.
+D-2000 is no longer a wave-5 item: it is a wave-3 deploy prerequisite, taken as its own small ccd PR.
