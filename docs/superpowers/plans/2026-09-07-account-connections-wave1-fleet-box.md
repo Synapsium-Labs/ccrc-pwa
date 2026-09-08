@@ -15447,3 +15447,44 @@ replaced one, and it is the replaced ones that produce the citations nothing wil
 `shared/providers.ts:42-53` carries seven more of these and is deliberately NOT in `65387312`: a review was
 in flight over a commit that reads it, and editing a file underneath a reviewer manufactures exactly the
 false finding the review would then have to disprove. It rides with Task 20's fix round.
+
+### D-1923 — the roster and its projection are two files, and must not share a refusal vocabulary
+
+Found by Task 21's review. `~/.ccrc/accounts.json` (the roster; the operator owns it) and
+`~/.ccrc/accounts.sh` (its projection; `ccrc install` generates it and nothing hand-edits it) are read by
+different helpers that refuse with **the same codes**:
+
+| file | reader | codes today |
+|---|---|---|
+| `accounts.json` | `readRoster` (`deploy/account-op.mjs:180`, `:184`, `:194`, `:203`) | `roster-absent`, `roster-unreadable`, `roster-invalid` |
+| `accounts.sh` | `_acct_candidates` / `_acct_roster_ids` (`ccd/ccrc:3856`, `:3866`) | `roster-absent`, `roster-invalid` |
+
+**The remedies are not the same, and that is the whole point.** The JSON's is *edit the file you wrote*;
+the projection's is *run `ccrc install` to regenerate it from the JSON* — the projection's own refusal text
+already says so. Two conditions a caller must act on differently, arriving as one value, is the overloaded
+seam this repo forbids by name.
+
+**Why (subcommand, code) does NOT rescue it, which is what makes this a defect rather than a wrinkle.** A
+caller knows which subcommand it ran, so if each subcommand read exactly one file the pair would
+disambiguate. They do not: **`declare` (Task 27) reads both** — the plan gives it the `accounts.sh` refusal
+at plan `:8684` and `readRoster`'s three conditions at `:8848`. `add` (Task 24) is the same shape. So one
+subcommand can answer `roster-absent` about either file, and the operator cannot tell from the code which
+thing to go and fix.
+
+**RULING: the word `roster` belongs to `accounts.json`.** The projection's reader refuses
+**`projection-absent`** and **`projection-invalid`**. `readRoster` keeps its three unchanged.
+
+**Scope, deliberately limited.** Task 21's two sites (`ccd/ccrc:3856`, `:3866`) are changed in its fix
+round. Tasks 27, 28, 31 and 32 adopt the new spelling when they land; their plan text still carries the old
+one at plan `:8684`, `:10737`, `:10768`, `:10882`, `:10927`, `:10993`, `:11088-11101`, `:11598` and
+`:11611`, and this entry is the amendment of record. They are NOT rewritten in place, because a plan is
+amended by its ledger and because rewriting mutation arguments without the task in front of you is how a
+mutation table stops meaning what it says — which is precisely the next paragraph.
+
+**One downstream argument is invalidated and must be rebuilt, not re-pointed.** Task 32's mutation (v)
+(plan `:11088-11101`) exists to show that substituting `_acct_roster_ids`' refusal is *invisible*, and its
+stated reason is verbatim: *"Both spell the code `roster-absent`, which is why the substitution was
+invisible."* After this ruling they no longer both spell it, so the substitution becomes VISIBLE and the
+mutation stops demonstrating what it was written to demonstrate. Whoever executes Task 32 must re-derive
+that mutation against the new vocabulary rather than adjust its expected string — the split has made the
+tree better and that particular test worse, and those are two different facts.
