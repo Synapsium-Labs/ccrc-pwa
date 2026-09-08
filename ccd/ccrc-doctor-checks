@@ -2717,6 +2717,19 @@ _check_credentials() {
     _dr_skip credentials "no account on this box declares telemetry \"anthropic\", so there is no Anthropic credential to look for"
     return 3
   fi
+  # SKIP, NOT FAIL, WHEN THE DIRECTORY ITSELF IS ABSENT: a box with a roster
+  # but no $HOME/.cc-secrets at all has not been PROVISIONED with credentials
+  # yet — a state the operator is legitimately in, most concretely right
+  # before the first `ccrc install` on a fresh box, or in an install fixture
+  # HOME that never creates the directory. `ccrc install` runs `cmd_doctor`
+  # and aborts on any FAIL, so failing this check here would block the very
+  # install that has to happen BEFORE provisioning can — an unmeasurable
+  # "not provisioned yet" is not the same finding as a measured "provisioned,
+  # and THIS account's file is missing", which stays a FAIL below.
+  if [ ! -d "$HOME/.cc-secrets" ]; then
+    _dr_skip credentials "no \$HOME/.cc-secrets directory — this box has not been provisioned with credentials yet; run again once \$HOME/.cc-secrets/<id>-oauth.env exists for each account declaring telemetry \"anthropic\""
+    return 3
+  fi
   local id n=0 miss=0
   local -a bad=()
   for id in $ids; do

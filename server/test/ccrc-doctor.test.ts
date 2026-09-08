@@ -3731,6 +3731,23 @@ describe('ccrc doctor: credentials', () => {
     rmSync(join(home, '.ccrc', 'accounts.json'));
     expect(runDoctor(home).stdout).toMatch(/^SKIP credentials: /m);
   });
+
+  it('SKIPs rather than FAILing when $HOME/.cc-secrets does not exist at all — the box is not provisioned yet', () => {
+    // THE REGRESSION THIS TEST PINS. `ccrc install` runs `cmd_doctor` and dies
+    // on any FAIL, so on every fresh box — and every install fixture — where
+    // credentials have not been provisioned yet, this check must not be the
+    // thing that blocks the install that has to happen BEFORE provisioning
+    // can. "Not provisioned yet" is unmeasurable, and unmeasurable SKIPS; it is
+    // a DIFFERENT finding from "provisioned, and this account's file happens
+    // to be missing", which stays a FAIL (see the tests above and below this
+    // one — they must stay red-on-delete for the arm to mean anything).
+    const home = healthy('ccrc-doctor-cred-noprovision-');
+    rmSync(join(home, '.cc-secrets'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP credentials: /m);
+    expect(r.stdout).not.toMatch(/^FAIL credentials: /m);
+    expect(r.stdout).toMatch(/\.cc-secrets/);
+  });
 });
 
 describe('ccrc doctor: pools', () => {
