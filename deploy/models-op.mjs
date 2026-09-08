@@ -632,6 +632,19 @@ function main(argv) {
           `"${a.model}" is not in account "${a.id}"'s catalogue. Run 'ccrc models refresh ${a.id}' `
           + 'if it is new, or check the spelling.');
       }
+      // Ruling 2026-09-08 / spec §10: the ownership whitelist is a property of
+      // the LANE, not of a flag on this call — an openrouter registry's
+      // `discovery` is always an explicit list (`parseRegistry` never allows
+      // "catalogue" on this probe), and `set-class` never appends to it
+      // implicitly, because that would let a model skip the whitelist check
+      // `discovery add --endpoints` runs by being named directly here instead.
+      if (registry.probe === 'openrouter'
+          && !(Array.isArray(registry.discovery) && registry.discovery.includes(a.model))) {
+        return refuse(1, 'not-discovered',
+          `"${a.model}" is not on account "${a.id}"'s discovery list yet. Run 'ccrc models ${a.id} `
+          + `discovery add ${a.model} --endpoints <path>' first — an openrouter lane never appends `
+          + 'to the list implicitly.', 'discovery');
+      }
       // ONE MODEL, ONE CLASS — §8's radio-across-the-row rule, enforced in the
       // verb because the verb exists for scripts and for doctor's remedies.
       const moved = [];
@@ -642,7 +655,10 @@ function main(argv) {
       // An explicit discovery list has to offer what a class routes to, and the
       // operator asked for this model by name — so the list GAINS it rather
       // than the assignment being refused for a reason the caller cannot act on.
-      if (Array.isArray(next.discovery) && !next.discovery.includes(a.model)) {
+      // NEVER on openrouter (above): there, the list only grows through
+      // `discovery add`'s whitelist check.
+      if (registry.probe !== 'openrouter'
+          && Array.isArray(next.discovery) && !next.discovery.includes(a.model)) {
         next.discovery = [...next.discovery, a.model];
       }
       extra = { moved };
@@ -679,6 +695,10 @@ function main(argv) {
     }
   } else if (opName === 'discovery') {
     if (a.action === 'catalogue') {
+      // Ruling 2026-09-08 / spec §10: the third scope transition — restores
+      // the whole-catalogue scope from an explicit list. `parseRegistry`
+      // itself refuses this on an openrouter lane ("requires an explicit
+      // discovery list"), so that guard needs no separate check here.
       next.discovery = 'catalogue';
     } else if (a.action === 'add' || a.action === 'rm') {
       if (a.model === undefined) {
@@ -687,15 +707,56 @@ function main(argv) {
       if (!MODEL_ID_RE.test(a.model)) {
         return refuse(1, 'bad-model-id', `"${a.model}" is not a model id.`);
       }
-      const current = Array.isArray(next.discovery) ? [...next.discovery] : [];
+      const isOpenrouter = registry.probe === 'openrouter';
+      // Ruling 2026-09-08 / spec §10: `--endpoints` is meaningful on exactly
+      // one probe. Accepting it silently elsewhere would let a caller believe
+      // a whitelist check ran when none did.
+      if (!isOpenrouter && a.endpoints !== undefined) {
+        return refuse(2, 'bad-argv',
+          `--endpoints is only meaningful on an openrouter lane; account "${a.id}" probes `
+          + `"${registry.probe}".`);
+      }
+      const wasCatalogue = next.discovery === 'catalogue';
       if (a.action === 'add') {
-        if (a.endpoints !== undefined) {
+        if (isOpenrouter) {
+          // The ownership whitelist is a property of the LANE, not of a flag:
+          // every add on an openrouter lane passes through it. There is no
+          // "catalogue" scope to convert on this probe — `parseRegistry`
+          // never allows one — so `next.discovery` is always already an
+          // explicit list here.
+          if (a.endpoints === undefined) {
+            return refuse(1, 'endpoints-required',
+              `account "${a.id}" is an openrouter lane: discovery add needs the probe's endpoints `
+              + `answer. Run 'ccrc-models-probe ${a.id} openrouter --endpoints <author/slug> --out `
+              + "<path>' first, then pass --endpoints <path> to this command.");
+          }
           const w = whitelistCheck(a.endpoints);
           if (w.err !== undefined) return refuse(1, w.err[0], w.err[1]);
           extra = { servedBy: w.servedBy };
         }
-        next.discovery = current.includes(a.model) ? current : [...current, a.model];
+        // Ruling 2026-09-08 / spec §10: `add` on a "catalogue" scope CONVERTS
+        // it to an explicit list — every already-classed id, deduplicated, in
+        // CLASSES order, plus the new one — so §4.1's containment rule still
+        // holds. Starting from an EMPTY list instead would silently drop
+        // every id the "catalogue" scope used to cover, the moment a caller
+        // asked to add one more.
+        const base = wasCatalogue
+          ? CLASSES.reduce((ids, c) => {
+            const v = next.classes[c];
+            return v !== null && !ids.includes(v) ? [...ids, v] : ids;
+          }, [])
+          : (Array.isArray(next.discovery) ? next.discovery : []);
+        next.discovery = base.includes(a.model) ? base : [...base, a.model];
+      } else if (wasCatalogue) {
+        // Ruling 2026-09-08 / spec §10: `rm` on a "catalogue" scope refuses —
+        // there is no explicit list to remove an id FROM, and silently
+        // materialising `[]` (the old behaviour) turned "the whole catalogue"
+        // into "nothing" on the next mutation.
+        return refuse(1, 'discovery-is-catalogue',
+          'the scope is the whole catalogue; \'discovery add <id>\' switches to an explicit list, '
+          + "'set-class <class> none' unassigns.", 'discovery');
       } else {
+        const current = Array.isArray(next.discovery) ? next.discovery : [];
         next.discovery = current.filter((m) => m !== a.model);
       }
     } else {
@@ -715,6 +776,13 @@ function main(argv) {
   } catch (e) {
     if (e instanceof RegistryInvalid) return refuseRegistry(e, a.id);
     throw e;
+  }
+  if (opName === 'discovery') {
+    // Ruling 2026-09-08 / spec §10: every discovery answer carries which
+    // scope it left the registry in, from the VALIDATED (post-conversion)
+    // discovery — not `next`'s pre-validation shape — so a caller never has
+    // to re-derive it from `Array.isArray(registry.discovery)` itself.
+    extra = { ...extra, scope: Array.isArray(validated.discovery) ? 'list' : 'catalogue' };
   }
   if (CLASSES.some((c) => validated.classes[c] !== null)) {
     try {

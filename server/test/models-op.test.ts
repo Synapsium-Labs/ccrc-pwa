@@ -78,6 +78,21 @@ const writeCatalogue = (id: string, cat: unknown = CODEX): void => {
   fs.writeFileSync(path.join(home, '.ccrc', 'models', `${id}.json`), JSON.stringify(cat));
 };
 
+// The ownership whitelist (§5, §11) and a probe's `--endpoints` answer.
+// Module-scope, not local to one `describe`: Fix round 1's Finding 1 made
+// `discovery add` on an openrouter lane REQUIRE `--endpoints` (ruling
+// 2026-09-08), so every discovery test on the `router` lane needs these now,
+// not only the ones that exist to test the whitelist itself.
+const whitelist = (providers: string[]): void => {
+  fs.mkdirSync(path.join(home, '.handoff'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.handoff', 'providers-whitelist.json'), JSON.stringify({ providers }));
+};
+const endpoints = (names: string[]): string => {
+  const p = path.join(home, 'endpoints.json');
+  fs.writeFileSync(p, JSON.stringify({ data: { endpoints: names.map((n) => ({ provider_name: n })) } }));
+  return p;
+};
+
 beforeEach(() => { home = mkTmp('ccrc-models-op-'); seed(); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
@@ -432,12 +447,35 @@ describe('set-class', () => {
     expect(r.body['error']).toBe('bad-model-id');
   });
 
-  it('adds the model to an EXPLICIT discovery list rather than refusing the assignment', () => {
-    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+  it('adds the model to an EXPLICIT discovery list rather than refusing the assignment (compatible lane)', () => {
+    // Fix round 1, Finding 1: an OPENROUTER lane's `set-class` never appends
+    // implicitly any more — see the two `router` cases below — but a
+    // `compatible` lane still does, since the ownership whitelist is an
+    // openrouter-only property of the LANE (ruling 2026-09-08, spec §10).
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible', '--base-url', 'https://x');
     op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'a/b');
     const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'a/c');
     expect(r.code).toBe(0);
     expect(registryOf('router')['discovery']).toEqual(['a/b', 'a/c']);
+  });
+
+  it('openrouter set-class refuses an id not yet on the discovery list — it never appends implicitly (ruling 2026-09-08)', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'a/c');
+    expect(r.code).toBe(1);
+    expect(r.body['field']).toBe('discovery');
+    expect(String(r.body['detail'])).toMatch(/discovery add/);
+    expect(classesOf('router')['sonnet']).toBeNull();
+  });
+
+  it('openrouter set-class succeeds once discovery add has whitelisted the id, without appending twice', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    whitelist(['fireworks']);
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'a/c',
+      '--endpoints', endpoints(['Fireworks']));
+    const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'a/c');
+    expect(r.code).toBe(0);
+    expect(registryOf('router')['discovery']).toEqual(['a/c']);
   });
 
   it('refuses clearing the LAST class rather than writing a lane that routes nowhere (§11)', () => {
@@ -549,19 +587,28 @@ describe('discovery (§10) — the set discovery and classification operate on',
   });
 
   it('add builds the explicit list an openrouter lane requires', () => {
-    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    whitelist(['fireworks']);
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5',
+      '--endpoints', endpoints(['Fireworks']));
     expect(r.code).toBe(0);
+    expect(r.body['scope']).toBe('list');
     expect(registryOf('router')['discovery']).toEqual(['gpt-5.5']);
   });
 
   it('add is idempotent and never duplicates', () => {
-    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
-    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    whitelist(['fireworks']);
+    const ep = endpoints(['Fireworks']);
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5',
+      '--endpoints', ep);
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5',
+      '--endpoints', ep);
     expect(registryOf('router')['discovery']).toEqual(['gpt-5.5']);
   });
 
   it('rm removes, and refuses to remove one a class still routes to', () => {
-    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    whitelist(['fireworks']);
+    op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5',
+      '--endpoints', endpoints(['Fireworks']));
     op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', 'gpt-5.5');
     const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'rm', '--model', 'gpt-5.5');
     expect(r.code).toBe(1);
@@ -575,31 +622,76 @@ describe('discovery (§10) — the set discovery and classification operate on',
     expect(String(r.body['detail'])).toMatch(/openrouter requires an explicit discovery list/);
   });
 
-  it('catalogue is accepted on a codex lane', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5');
-    const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'catalogue');
-    expect(r.code).toBe(0);
-    expect(registryOf('gpt')['discovery']).toBe('catalogue');
-  });
-
   it('an unknown action is a usage error', () => {
     const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'purge');
     expect(r.code).toBe(2);
   });
 });
 
+describe('discovery scope transitions (Fix round 1, Finding 2 — ruling 2026-09-08, spec §10)', () => {
+  beforeEach(() => { op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex'); });
+
+  it('add on a "catalogue" scope CONVERTS it to an explicit list of every classed id plus the new one', () => {
+    const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5');
+    expect(r.code).toBe(0);
+    expect(r.body['scope']).toBe('list');
+    // The seed's three classed ids (fable is null, excluded), in CLASSES
+    // order, then the new one — never an empty list that silently drops what
+    // "catalogue" used to cover.
+    expect(registryOf('gpt')['discovery']).toEqual(
+      ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.5']);
+  });
+
+  it('rm on a "catalogue" scope REFUSES — there is no explicit list to remove an id from', () => {
+    const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'rm', '--model', 'gpt-5.6-luna');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('discovery-is-catalogue');
+    expect(r.body['field']).toBe('discovery');
+    expect(String(r.body['detail'])).toMatch(/discovery add/);
+    expect(String(r.body['detail'])).toMatch(/set-class .* none/);
+    // …unchanged: the old behaviour silently turned "the whole catalogue"
+    // into an empty explicit list here.
+    expect(registryOf('gpt')['discovery']).toBe('catalogue');
+  });
+
+  it('catalogue RESTORES the whole-catalogue scope, from an explicit list back to "catalogue"', () => {
+    // Finding 3: the OLD version of this test never actually exercised this —
+    // its setup `discovery add` refused (the seed's own classed ids were not
+    // yet in the list), so `discovery` was already "catalogue" from `init`
+    // when the final assertion ran. With the conversion rule above, `add` now
+    // succeeds, so the pre-state here is genuinely an explicit list.
+    const added = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5');
+    expect(added.code).toBe(0);
+    expect(registryOf('gpt')['discovery']).toEqual(
+      ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.5']);
+    const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'catalogue');
+    expect(r.code).toBe(0);
+    expect(r.body['scope']).toBe('catalogue');
+    expect(registryOf('gpt')['discovery']).toBe('catalogue');
+  });
+});
+
+describe('the ownership whitelist gates on the LANE, not the flag (Fix round 1, Finding 1 — ruling 2026-09-08, spec §10)', () => {
+  it('openrouter discovery add without --endpoints refuses', () => {
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter');
+    const r = op('discovery', '--file', rosterPath(), '--id', 'router', '--action', 'add', '--model', 'gpt-5.5');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('endpoints-required');
+    expect(String(r.body['detail'])).toMatch(/ccrc-models-probe/);
+    expect(registryOf('router')['discovery']).toEqual([]);
+  });
+
+  it('--endpoints on a non-openrouter probe is a usage error, not a silently-ignored flag', () => {
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const r = op('discovery', '--file', rosterPath(), '--id', 'gpt', '--action', 'add', '--model', 'gpt-5.5',
+      '--endpoints', '/nonexistent/endpoints.json');
+    expect(r.code).toBe(2);
+  });
+});
+
 describe('the ownership whitelist at discovery-add (§5, §11)', () => {
-  const whitelist = (providers: string[]): void => {
-    fs.mkdirSync(path.join(home, '.handoff'), { recursive: true });
-    fs.writeFileSync(path.join(home, '.handoff', 'providers-whitelist.json'),
-      JSON.stringify({ providers }));
-  };
-  const endpoints = (names: string[]): string => {
-    const p = path.join(home, 'endpoints.json');
-    fs.writeFileSync(p, JSON.stringify({ data: { endpoints: names.map((n) => ({ provider_name: n })) } }));
-    return p;
-  };
+  // `whitelist`/`endpoints` are module-scope now (Fix round 1) — see their
+  // definitions near `writeCatalogue`.
   beforeEach(() => { op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'openrouter'); });
 
   it('admits a model a whitelisted provider serves, and reports which', () => {
