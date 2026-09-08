@@ -163,16 +163,38 @@ describe('the Codex arm (§5)', () => {
   });
 
   it('--out an existing directory refuses instead of writing inside it', () => {
-    // `mv -fT`, not a bare `mv -f`: `-T` REFUSES when the destination is a
-    // directory rather than moving the staged file inside it, which would
-    // "succeed" into the wrong place. Exit 1 — the same family as every other
-    // write failure past usage validation (`die`), not exit 2 (usage): the
-    // arguments themselves were fine, the destination was not.
+    // `_probe_mv_notdir`, not a bare `mv -f`: it REFUSES when the destination
+    // is a directory rather than moving the staged file inside it, which
+    // would "succeed" into the wrong place. Exit 1 — the same family as every
+    // other write failure past usage validation (`die`), not exit 2 (usage):
+    // the arguments themselves were fine, the destination was not.
     const dir = path.join(home, 'existing-dir');
     fs.mkdirSync(dir);
     const r = run(['gpt', 'codex', '--out', dir], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(1);
     expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  it('--out a symlink to a directory replaces the link, like GNU mv -fT does', () => {
+    // `[ -d "$2" ]` alone follows symlinks, so a naive fix would just exclude
+    // a symlink from the refusal above and leave the actual move as a plain
+    // `mv -f` — and measured, `mv -f "$1" symlink-to-dir` (no `-T` available
+    // to this file) FOLLOWS the link and drops the file INSIDE the target
+    // directory, which is the exact wrong-place write the refusal exists for,
+    // now silent instead of refused. The correct behaviour, matching GNU
+    // `mv -fT` and ccd/ccd's darwin `_plat_mv_notdir` arm: the link itself is
+    // replaced by the catalogue, and the directory it pointed at is
+    // untouched.
+    const target = path.join(home, 'symlink-target-dir');
+    fs.mkdirSync(target);
+    const link = path.join(home, 'out-link');
+    fs.symlinkSync(target, link);
+    const r = run(['gpt', 'codex', '--out', link], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(0);
+    expect(fs.lstatSync(link).isSymbolicLink(), 'the link must be REPLACED, not left pointing at a now-populated directory').toBe(false);
+    const cat = parseCatalogue(JSON.parse(fs.readFileSync(link, 'utf8')));
+    expect(cat.probe).toBe('codex');
+    expect(fs.readdirSync(target), 'the directory the link pointed at must stay untouched').toEqual([]);
   });
 
   it('--out redirects the write and leaves the default path alone', () => {
@@ -424,9 +446,10 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
   });
 
   it('--out an existing directory refuses instead of writing inside it (fix round 1, finding 2)', () => {
-    // Mirrors the Codex catalogue arm's own directory-refusal test: `-T` on
-    // the final rename must REFUSE when --out names an existing directory,
-    // not "succeed" by dropping the answer inside it under $RAW's basename.
+    // Mirrors the Codex catalogue arm's own directory-refusal test:
+    // `_probe_mv_notdir` on the final rename must REFUSE when --out names an
+    // existing directory, not "succeed" by dropping the answer inside it
+    // under $RAW's basename.
     const dir = path.join(home, 'endpoints-existing-dir');
     fs.mkdirSync(dir);
     const r = run(['router', 'openrouter', '--endpoints', 'z-ai/glm-5.2', '--out', dir],

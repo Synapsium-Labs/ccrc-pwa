@@ -63,10 +63,24 @@ usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
 # GNU-only scan forbids a bare `mv -fT` at any call site outside that block.
 # GNU `-T`'s point was never "fail whenever $2 exists", it was "never move the
 # tmp INTO a directory sitting at $OUT" — a plain `mv -f` "succeeds" there by
-# dropping the file inside it instead of onto it. An explicit `-d` check on
-# $2 before the rename gives that same refusal with no GNU flag: the exact
-# trade `_plat_mv_notdir`'s darwin arm makes in ccd/ccd.
-_probe_mv_notdir() { [ -d "$2" ] && return 1; mv -f -- "$1" "$2"; }
+# dropping the file inside it instead of onto it. `[ -d "$2" ]` alone follows
+# symlinks, so it refused a SYMLINK to a directory too, where `mv -fT` (and
+# `_plat_mv_notdir`'s darwin arm, which excludes `[ ! -L "$2" ]`) replaces the
+# link instead — the link is the entry being renamed onto, not the directory
+# it happens to point at. Excluding the symlink from the refusal is not
+# enough by itself, though: measured against this file's own `mv -f` (no
+# `-T` available), a plain `mv -f "$1" symlink-to-dir` FOLLOWS the link and
+# drops the file INSIDE the target directory — the exact wrong-place write
+# this helper exists to refuse, now silent instead of refused. So for that
+# one case, and only that one, the link is removed first, leaving nothing
+# for the `mv -f` below to enter; a symlink to a file (or a dangling one)
+# needs no such step, because a plain `mv -f` there already replaces the
+# link entry directly (measured), matching what `-T` would do.
+_probe_mv_notdir() {
+  [ ! -L "$2" ] && [ -d "$2" ] && return 1
+  [ -L "$2" ] && [ -d "$2" ] && rm -f -- "$2"
+  mv -f -- "$1" "$2"
+}
 
 ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""
 [ $# -ge 1 ] || usage_die "an account id is required"
