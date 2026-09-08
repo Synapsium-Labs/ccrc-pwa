@@ -8775,7 +8775,7 @@ and replace the body-rewriting block inside `_relay`:
 ```bash
 cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 infra/handoff/test_ccgpt_proxy.py -v
 ```
-Expected: `OK`, with 20 tests run and none skipped.
+Expected: `OK`, with 19 tests run and none skipped (measured from the shown code, not 20: three `unittest.TestCase` classes contribute 7 + 9 + 3 test methods — 65d402f5).
 
 - [ ] **Step 6: Measured mutation check — the client wins over the lane default**
 
