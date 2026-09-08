@@ -869,7 +869,7 @@ Record before/after counts in the commit message.
 
 ```bash
 git add ccd/ccd-telemetry-keepalive server/test/telemetry-keepalive.test.ts
-git commit -m "feat(ccd): a telemetry keepalive for idle measured accounts (D-TBD-keepalive)
+git commit -m "feat(ccd): a telemetry keepalive for idle measured accounts (D-1940)
 
 An idle account's ~/.cc-limits row goes stale for ever: the only writer is a
 statusline render, and a render only carries numbers after an API call (E6/E7).
@@ -993,7 +993,7 @@ first case reds with `expected exactly one occurrence, found 2`, and remove it.
 
 ```bash
 git add server/test/keepalive-freshness-parity.test.ts
-git commit -m "test(ccd): pin the keepalive's freshness window to SWAP_FRESH (D-TBD-keepalive-fresh-parity)
+git commit -m "test(ccd): pin the keepalive's freshness window to SWAP_FRESH (D-1941)
 
 One number, two files, neither able to import the other. pool-name-parity's
 mechanism applied to the value that decides both what the swap lane trusts and
@@ -1161,7 +1161,7 @@ ABOVE the `daemon-reload` link in `AGENT_CMD`, re-run, confirm it reds again on 
 
 ```bash
 git add deploy/systemd/ccd-telemetry-keepalive.service deploy/systemd/ccd-telemetry-keepalive.timer deploy/deploy.sh agent/test/deploy-verify.test.ts
-git commit -m "feat(deploy): ship and enable the telemetry keepalive timer (D-TBD-keepalive)
+git commit -m "feat(deploy): ship and enable the telemetry keepalive timer (D-1940)
 
 Three edits on the agent lane, the ccd-graph-sweep template exactly:
 install_atomic the executable, cp the unit pair inside AGENT_BUILD_CMD, enable
@@ -1523,7 +1523,7 @@ assertion.
 
 ```bash
 git add ccd/ccrc deploy/gen-wrappers.mjs server/test/ccrc-install.test.ts server/test/ccrc-install-graphify.test.ts server/test/ccrc-uninstall.test.ts server/test/gen-wrappers.test.ts
-git commit -m "feat(ccrc): install and uninstall the telemetry keepalive (D-TBD-keepalive)
+git commit -m "feat(ccrc): install and uninstall the telemetry keepalive (D-1940)
 
 Six edits in ccd/ccrc plus the orphan-scan set: _inst_bins places the fifth
 executable on every non-Darwin role, _inst_units and _inst_enable role-gate the
@@ -1541,14 +1541,13 @@ input and assert nothing — recorded, not claimed."
 
 ## Deviations found
 
-Numbers are written `D-TBD-<slug>` because **the ledger allocator was unreachable when this plan was
-written** — `POST /api/ledger/deviations` is box-token gated and lives on the server box, which this
-session could not reach. Per worker clause 11 the number is deferred, and every one below must be
-MINTED and DEFINED IN THE SAME ACT before merge. Do not look a number up; `GET /api/ledger`'s `floor`
-is what the next POST would mint, not a number you may take. Do not reuse a number from the
-account-pools block `D-1663–D-1688`.
+**Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
+1924 → 1954) covering all five plans on this branch, defined in the same act. The
+"allocator unreachable" claim this paragraph used to carry was **wrong** — the fleet box reaches the
+server over `CCRC_SERVER_URL`, and `ccrc-api ledger allocate` is a row in that client's closed table.
+The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
 
-- **D-TBD-keepalive** — an idle measured account's `~/.cc-limits/<id>.json` had no path back to
+- **D-1940** — an idle measured account's `~/.cc-limits/<id>.json` had no path back to
   freshness at all. The file's only writer is `ccd/statusline-command.sh`, which runs on a statusline
   render, which happens only inside a live session; an account with no session therefore stops
   reporting for ever, and `_limit_field`'s own comment (`ccd/ccd:11728`) records the measured
@@ -1556,12 +1555,12 @@ account-pools block `D-1663–D-1688`.
   (unknown, not a confident `0`), which is what makes the gap load-bearing rather than merely untidy.
   Closed by this plan.
 
-- **D-TBD-keepalive-fresh-parity** — "how fresh is fresh" is one number in two files with no
+- **D-1941** — "how fresh is fresh" is one number in two files with no
   mechanism holding them equal. `SWAP_FRESH` (`ccd/ccd:830`) had **zero readers** (spec E10) and this
   plan adds a second spelling in a file that cannot import it. Closed by Task 2's parity pin, in the
   `pool-name-parity.test.ts` shape.
 
-- **D-TBD-statusline-seven-default-zero** — **found, NOT fixed by this plan.**
+- **D-1942** — **found, NOT fixed by this plan.**
   `ccd/statusline-command.sh:244` gates the write on `five_int` alone, and `:250` then writes
   `"${seven_int:-0}"`. A payload carrying `five_hour` but no `seven_day` therefore writes a
   **fabricated `seven: 0`** that is byte-indistinguishable from a measured zero — with no
@@ -1572,7 +1571,7 @@ account-pools block `D-1663–D-1688`.
   exposure. It belongs to §B's plan or to its own, and must not be quietly folded into a keepalive
   commit.
 
-- **D-TBD-toolchain-census-hand-kept** — **found, NOT fixed by this plan.** "Which files are ccrc's
+- **D-1943** — **found, NOT fixed by this plan.** "Which files are ccrc's
   own executables" is answered by four hand-kept lists that no mechanism holds in step:
   `_inst_bins`'s install calls (`ccd/ccrc:4441-4457`), `_uninst_wrappers`' `case` (`:6318`),
   `_uninst_tree_bins`' `rm -f` list (`:6421-6422`) and `TOOLCHAIN_EXECUTABLES`
@@ -1583,7 +1582,7 @@ account-pools block `D-1663–D-1688`.
   second time; the class stays open and should be closed by a derivation, not by another careful
   edit.
 
-- **D-TBD-keepalive-no-doctor-check** — **found, NOT fixed by this plan.** Doctor's generic
+- **D-1944** — **found, NOT fixed by this plan.** Doctor's generic
   `services` check asks about a hardcoded three-name list (`ccd/ccrc-doctor-checks:808`) that no
   timer added since has joined; `ccd-graph-sweep` answered that by shipping its own bespoke check
   (`ccrc-doctor-checks:3345,3360`). This plan ships **no** doctor check for the keepalive, so a box
@@ -1591,6 +1590,20 @@ account-pools block `D-1663–D-1688`.
   in `ccrc doctor`. That is a deliberate scope line, recorded so its absence is a decision rather
   than an oversight — and it is the natural first follow-up once one live pass has told us what the
   healthy census actually looks like.
+
+- **D-1945** — **found and fixed during final review, after every task in this plan was
+  green.** Task 3 Step 2 appended the keepalive's `install_atomic` to `deploy/deploy.sh`'s agent
+  lane; §A's probe had appended its own one plan earlier. Both landed BETWEEN
+  `install_atomic ccd/ccd-graph-sweep` and `install_atomic ccd/graph-noise.default.list`, widening
+  that pair to four executable lines and tripping D-1160/D-1161's own guard
+  (`graph-noise-ship.test.ts`, which allows at most three lines of drift). Neither plan's task list
+  could see it: each append was adjacency-neutral read alone, and the guard counts only the total —
+  the second appender pays for the first. Fixed in `def7cb3e` by moving both later installs BELOW
+  the sweep+list pair, changing no file that ships, and the reason now stands at the insertion point
+  so the next appender reads it before appending. **This is the one number in the `D-1924`–`D-1953`
+  block whose only reference lives in shipped source (`deploy/deploy.sh`) rather than in a plan** —
+  which is also why the branch's own census of placeholders came up one short until it was measured
+  instead of remembered.
 
 **One number this plan deliberately does NOT mint:** the roster's structural inability to declare a
 `secretsFile` for the `upstream` account (spec §A.2). This plan *depends* on the convention that
@@ -1624,14 +1637,14 @@ keepalive ships on the same template as the probe.
 | skip an account that reported recently, reusing the existing window constants | Task 1's freshness gate; Task 2 pins its default to `SWAP_FRESH` (`ccd/ccd:830`) |
 | never run against an account carrying `-authdead` | Task 1's `_authdead` gate, with the digits validation `ccd`'s `swapblocked` reader uses |
 | eligibility is roster-derived `telemetry === 'anthropic'`, no account names | Task 1 walks `CCRC_MEASURED` from `~/.ccrc/accounts.sh`; the first test case asserts the telemetry-less account is never turned |
-| units and the five deploy edits, same template as the probe **minus its own doctor check** | Tasks 3 and 4 (plus the two edits the spec's list omits, argued in Background). The omission is deliberate and recorded as `D-TBD-keepalive-no-doctor-check`: §A.7's template names "its own doctor check" as one of its elements, and this plan ships none |
+| units and the five deploy edits, same template as the probe **minus its own doctor check** | Tasks 3 and 4 (plus the two edits the spec's list omits, argued in Background). The omission is deliberate and recorded as `D-1944`: §A.7's template names "its own doctor check" as one of its elements, and this plan ships none |
 
 The spec's §12 open question *"whether a purpose-built keepalive turn actually costs a small fraction
 of the measured $0.19 — sized at plan time"* is answered as far as it honestly can be: the **rate** is
 derived exactly and the **absolute** figure is turned into a per-row measurement rather than a guess.
 
-**Placeholder scan.** No `TBD` outside the deliberate `D-TBD-<slug>` convention the unreachable
-allocator prescribes. No "add error handling", no "similar to Task N", no reference to a function no
+**Placeholder scan.** No `TBD` — the `D-TBD-<slug>` names this plan carried were replaced by their
+minted numbers on 2026-09-08. No "add error handling", no "similar to Task N", no reference to a function no
 task defines. Every code step carries its literal content; every `expect` message is written out.
 
 **Type consistency.** The script defines seven helpers — `_ka_row`, `_ka_finish`, `_ka_num`,

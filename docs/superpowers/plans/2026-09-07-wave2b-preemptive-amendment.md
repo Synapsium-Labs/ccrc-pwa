@@ -58,9 +58,11 @@ is sequenced against.
 - **No overloaded null at a seam.** `_swap_target`'s stdout overload is resolved at the caller and is
   deliberately **not** widened here (wave 2b's D-1673 argues that seam); the headroom test re-reads
   `_limit_score` rather than asking `_swap_target` to publish a second value.
-- **Deviation numbers come only from the ledger allocator.** This plan's numbers are written
-  `D-TBD-<slug>` and must be MINTED AND DEFINED IN THE SAME ACT before merge. See
-  `## Deviations found`.
+- **Deviation numbers come only from the ledger allocator.** This plan's eight numbers
+  (`D-1946`–`D-1953`) were MINTED AND DEFINED on 2026-09-08, before execution, as part of the
+  thirty-number block `D-1924`–`D-1953`. Use the number each task names; allocate nothing further
+  unless you find a deviation this plan does not list, and then allocate it the same way — `ccrc-api
+  ledger allocate`, which reaches the server from the fleet box. See `## Deviations found`.
 
 ---
 
@@ -172,7 +174,7 @@ Two things about that block are **not** restored, deliberately, and each is a de
   it.
 - `own_seven=$(_limit_field "$wrapper" seven 86400)` — a **second** non-zero `maxage`. Restoring it
   would falsify §2 above and `SWAP_THRESHOLD`'s own "own 5h %" comment.
-  (**D-TBD-preempt-weekly-arm-dropped**.)
+  (**D-1950**.)
 
 ### 5. What killed it, and why `SWAP_JITTER` does not cover it
 
@@ -435,7 +437,7 @@ Two outcomes, and they are a fork in the plan:
 
 ```bash
 git add server/test/ccd-preempt.test.ts
-git commit -m "test(ccd): the pre-empt lane refuses to exist on a tree where a rolled-over account is the magnet (D-TBD-preempt-b-gate)"
+git commit -m "test(ccd): the pre-empt lane refuses to exist on a tree where a rolled-over account is the magnet (D-1946)"
 ```
 
 ---
@@ -484,7 +486,7 @@ from `:11899` down). Placed after 2b Task 4 rather than earlier only so that
   function shadows only the builtin; the real `flock` binary is still on PATH and still succeeds, so
   without the probe the take goes through and stamps the marker.
 
-`LEDGER: the spec asks for a read-side cooldown in the swapblocked shape, and a bare read-side compare cannot deliver "at most one pre-emptive swap per interval across the fleet" — ~20 independent supervisors read the same open budget in the same second and all pass; the compare is therefore re-asked INSIDE a `flock -n`, the same shape _lc_rotate measured into existence at ccd:2222-2236 (D-TBD-preempt-convergence-budget).`
+`LEDGER: the spec asks for a read-side cooldown in the swapblocked shape, and a bare read-side compare cannot deliver "at most one pre-emptive swap per interval across the fleet" — ~20 independent supervisors read the same open budget in the same second and all pass; the compare is therefore re-asked INSIDE a `flock -n`, the same shape _lc_rotate measured into existence at ccd:2222-2236 (D-1947).`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -534,7 +536,7 @@ describe('_preempt_budget_take — the fleet-wide convergence guard (§D.3)', ()
     // gate (ccd:11909-11910) rather than inventing a second convention: the
     // digit guard fails, the comparison falls through, the take succeeds, and
     // the marker is immediately overwritten with a valid stamp. Self-healing,
-    // and stated rather than hidden (D-TBD-preempt-torn-budget-opens).
+    // and stated rather than hidden (D-1948).
     // THE PAYLOAD MUST CONTAIN NO LITERAL SPACE, and this is measured, not
     // assumed. `ts="${raw%% *}"` truncates at the FIRST space, so the familiar
     // `REG[$(touch "$HOME/…")]` spelling arrives at the arithmetic as the
@@ -761,7 +763,7 @@ the `${IFS}` spelling.
 
 ```bash
 git add ccd/ccd server/test/ccd-preempt.test.ts
-git commit -m "feat(ccd): a fleet-wide pre-empt budget, decided by flock and not by the tick (D-TBD-preempt-convergence-budget)
+git commit -m "feat(ccd): a fleet-wide pre-empt budget, decided by flock and not by the tick (D-1947)
 
 ~20 supervisors are ~20 processes reading one ~/.cc-limits and taking one
 argmin, so a bare read-side compare is passed by all of them in the same
@@ -829,9 +831,9 @@ This task inserts **between** the `_strand_clear` line and the `target=` line, a
 - Delete `"$own" =~ ^[0-9]+$ && ` from the arming guard → **red** on the structural row
   `_auto_swap_check (preempt arming)` in `ccd-arith-containment.test.ts` (Task 6).
 
-`LEDGER: _limit_field's `maxage` parameter (ccd:11729, ccd:11734) has shipped with no user since it was written — all four call sites pass 0 or default to it (ccd:1268, ccd:11760, ccd:11767 x2) — so the stale-HIGH hazard it exists to close has been open the whole time; this is its first and only non-zero caller (D-TBD-preempt-maxage-first-user).`
+`LEDGER: _limit_field's `maxage` parameter (ccd:11729, ccd:11734) has shipped with no user since it was written — all four call sites pass 0 or default to it (ccd:1268, ccd:11760, ccd:11767 x2) — so the stale-HIGH hazard it exists to close has been open the whole time; this is its first and only non-zero caller (D-1949).`
 
-`LEDGER: the removed policy took own pressure as max(fresh 5h, day-fresh 7d) via a SECOND non-zero maxage (`_limit_field "$wrapper" seven 86400`); only the 5h arm is restored, so `SWAP_THRESHOLD`'s own "own 5h %" comment is literally true and §D.1's "only non-zero maxage in the tree" claim survives — the weekly axis stays covered above SWAP_CEILING by `_limit_score`/`_avail` and is uncovered in the 90-97 band (D-TBD-preempt-weekly-arm-dropped).`
+`LEDGER: the removed policy took own pressure as max(fresh 5h, day-fresh 7d) via a SECOND non-zero maxage (`_limit_field "$wrapper" seven 86400`); only the 5h arm is restored, so `SWAP_THRESHOLD`'s own "own 5h %" comment is literally true and §D.1's "only non-zero maxage in the tree" claim survives — the weekly axis stays covered above SWAP_CEILING by `_limit_score`/`_avail` and is uncovered in the 90-97 band (D-1950).`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1089,7 +1091,7 @@ editing the assertion.
 
 ```bash
 git add ccd/ccd server/test/ccd-preempt.test.ts
-git commit -m "feat(ccd): the must-leave path gets an earlier trigger, on fresh telemetry only (D-TBD-preempt-maxage-first-user, D-TBD-preempt-weekly-arm-dropped)
+git commit -m "feat(ccd): the must-leave path gets an earlier trigger, on fresh telemetry only (D-1949, D-1950)
 
 SWAP_THRESHOLD and SWAP_FRESH have readers for the first time since 0bfd0c26.
 _limit_field's maxage parameter gets its first non-zero caller in the tree.
@@ -1153,9 +1155,9 @@ declares that local and replaces the literal `auto-home` at `:11294` (today `:11
   and for a compound reason, `expected '' to contain 'dispatch claude-demo -> claude'`: its budget is
   CLOSED, so the unguarded take declines and the return-home never happens at all.
 
-`LEDGER: arming `force` before `_swap_target` also skips the `cur != home` stay shortcut, so an armed session whose home has recovered produces a return-home MOVE that would have happened anyway; the price block must exclude `target == home` explicitly or a return-home starts waiting SWAP_QUIET (600 s) instead of SWAP_CEIL_QUIET (30 s) and can be refused by a headroom test that was never meant to judge it (D-TBD-preempt-return-home-not-charged).`
+`LEDGER: arming `force` before `_swap_target` also skips the `cur != home` stay shortcut, so an armed session whose home has recovered produces a return-home MOVE that would have happened anyway; the price block must exclude `target == home` explicitly or a return-home starts waiting SWAP_QUIET (600 s) instead of SWAP_CEIL_QUIET (30 s) and can be refused by a headroom test that was never meant to judge it (D-1951).`
 
-`LEDGER: `_swap_target` does not publish its winner's score and is deliberately not widened to (its stdout seam is already overloaded — wave 2b's D-1673 argues exactly that), so the headroom test re-reads `_limit_score "$target"`; a target chosen at score S can be re-read at S' if telemetry moved between the two reads, and the headroom test then judges the newer number, which is the more honest of the two (D-TBD-swap-target-score-reread).`
+`LEDGER: `_swap_target` does not publish its winner's score and is deliberately not widened to (its stdout seam is already overloaded — wave 2b's D-1673 argues exactly that), so the headroom test re-reads `_limit_score "$target"`; a target chosen at score S can be re-read at S' if telemetry moved between the two reads, and the headroom test then judges the newer number, which is the more honest of the two (D-1952).`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1431,7 +1433,7 @@ code, never this file.
 
 ```bash
 git add ccd/ccd server/test/ccd-preempt.test.ts
-git commit -m "feat(ccd): the pre-empt pays a headroom test, a 10-minute quiet wait and one fleet slot (D-TBD-preempt-return-home-not-charged, D-TBD-swap-target-score-reread)
+git commit -m "feat(ccd): the pre-empt pays a headroom test, a 10-minute quiet wait and one fleet slot (D-1951, D-1952)
 
 SWAP_HEADROOM and SWAP_QUIET have readers for the first time since 0bfd0c26,
 and SWAP_CEILING's comment about a 10-minute wait to cut short is true again.
@@ -1808,12 +1810,12 @@ git fetch origin main
 cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts
 ```
 
-Expected: `deviation-refs` PASS. **`dtbd` will FAIL for as long as this plan file carries
-`D-TBD-<slug>` entries** — `dtbd.test.ts` git-greps every TRACKED file, and this file becomes tracked
-the moment it is `git add`ed. That is the mechanism working, not a break: allocate the block via
-`POST /api/ledger/deviations`, define every number in `## Deviations found` in the same act, replace
-every `D-TBD-<slug>` in this file (eight distinct slugs) and in the four commit messages that carry
-one as a trailer (Tasks 1, 2, 3 and 4), and re-run until green.
+Expected: **both PASS.** This plan's eight numbers were minted and substituted on 2026-09-08 (the
+`D-1946`–`D-1953` tail of the `D-1924`–`D-1953` block), in this file and in the four commit-message
+trailers alike, so no `D-TBD-<slug>` remains for `dtbd.test.ts` to catch. If `dtbd` reds, YOU wrote a
+placeholder during execution — allocate its number with `ccrc-api ledger allocate` and define it in
+`## Deviations found` in the same act. If `deviation-refs` reds, one of these eight is defined in a
+plan on `origin/main` too, which is a collision to resolve before merging, not after.
 Do not merge on a red `dtbd`.
 
 - [ ] **Step 6: Run the two tree-wide scans** (`dtbd` is Step 5's)
@@ -1888,57 +1890,54 @@ This task adds no file. If Steps 1-7 required a fix, that fix belongs to the tas
 
 ## Deviations found
 
-**The ledger allocator was unreachable when this plan was written.** `POST /api/ledger/deviations`
-lives on the server box and this session ran without a route to it, so every number below is written
-`D-TBD-<slug>` per the convention and **must be MINTED AND DEFINED IN THE SAME ACT before merge**
-(`GET /api/ledger`'s `floor` is what the next POST would mint, not a number anyone may take). Do not
-look a number up; do not invent one; and **do not reuse a number from the account-pools block
-`D-1663`–`D-1688`**, every one of which is already defined in one of that program's six wave plans.
-`server/test/dtbd.test.ts` reds the moment this file is tracked and stays red until the placeholders
-are replaced — that is the mechanism, not a break (Task 7 Step 5).
+**Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
+1924 → 1954) covering all five plans on this branch, defined in the same act. The
+"allocator unreachable" claim this paragraph used to carry was **wrong** — the fleet box reaches the
+server over `CCRC_SERVER_URL`, and `ccrc-api ledger allocate` is a row in that client's closed table.
+The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
 
-- **D-TBD-preempt-b-gate** (Task 1) — §D's target side depends on §B, and nothing in the tree said
+- **D-1946** (Task 1) — §D's target side depends on §B, and nothing in the tree said
   so. `_limit_field`'s `resetAt` branch (`ccd/ccd:11746-11749`) rewrites a rolled-over window to a
   confident `0`; `_limit_score` returns `max(0,0)`; `_swap_target`'s strict `<` (`ccd/ccd:11881`)
   then makes a dead account beat every honest one, permanently, because nothing runs there to report
   a real number. Today that magnet aims only rescues. The pre-empt lane would aim a VOLUNTARY swap
   at it, on a fleet-wide schedule. Fixed by making the dependency a standing red assertion rather
   than a sentence in a plan.
-- **D-TBD-preempt-convergence-budget** (Task 2) — the spec asks for the budget as "a registry marker
+- **D-1947** (Task 2) — the spec asks for the budget as "a registry marker
   with a read-side cooldown", and a bare read-side compare cannot deliver "at most one pre-emptive
   swap per interval across the fleet": `claude-session@.service` is a systemd template, so ~20
   independent supervisors on a 5-second tick read the same open budget in the same second and all
   pass. The compare is therefore re-asked INSIDE a `flock -n`, the shape `_lc_rotate` measured into
   existence (`ccd/ccd:2222-2236`: two concurrent processes minted two generations from one event in
   8 of 10 runs).
-- **D-TBD-preempt-torn-budget-opens** (Task 2) — a torn or hand-edited `preempt-budget` marker fails
+- **D-1948** (Task 2) — a torn or hand-edited `preempt-budget` marker fails
   the digit guard, so the comparison falls through and the budget opens for exactly one swap, which
   then overwrites it with a valid stamp. Fail-OPEN, matching `_auto_swap_check`'s own `swapblocked`
   gate (`ccd/ccd:11909-11910`) rather than inventing a second convention on the same shape —
   self-healing, and stated here rather than discovered later.
-- **D-TBD-preempt-maxage-first-user** (Task 3) — `_limit_field`'s `maxage` parameter
+- **D-1949** (Task 3) — `_limit_field`'s `maxage` parameter
   (`ccd/ccd:11729`, `:11734`) has shipped with no user: `ccd/ccd:1268` omits it, `ccd/ccd:11760`'s
   shim defaults it to `0` and has no callers of its own, and `ccd/ccd:11767` passes an explicit `0`
   twice. The stale-HIGH hazard it exists to close has therefore been open the whole time. This is
   its first and only non-zero caller.
-- **D-TBD-preempt-weekly-arm-dropped** (Task 3) — the removed policy took own pressure as
+- **D-1950** (Task 3) — the removed policy took own pressure as
   `max(fresh 5h, day-fresh 7d)` through a SECOND non-zero `maxage`
   (`own_seven=$(_limit_field "$wrapper" seven 86400)`, `0bfd0c26^:ccd/ccd:137`). Only the 5h arm is
   restored, so `SWAP_THRESHOLD`'s own "own 5h %" comment is literally true and §D.1's "only non-zero
   `maxage` in the tree" claim survives. The cost, stated: the weekly axis stays covered ABOVE
   `SWAP_CEILING` by `_limit_score`/`_avail` and is uncovered in the 90-97 band.
-- **D-TBD-preempt-return-home-not-charged** (Task 4) — arming `force` before `_swap_target` also
+- **D-1951** (Task 4) — arming `force` before `_swap_target` also
   skips the `cur != home` stay shortcut (`ccd/ccd:11849`), so an armed session whose home has
   recovered produces a return-home MOVE that would have happened anyway. Without an explicit
   `"$target" != "$home"` in the price block, that move would start waiting `SWAP_QUIET` (600 s)
   instead of `SWAP_CEIL_QUIET` (30 s) and could be refused by a headroom test that was never meant to
   judge it — a regression dressed as a guard.
-- **D-TBD-swap-target-score-reread** (Task 4) — `_swap_target` does not publish its winner's score
+- **D-1952** (Task 4) — `_swap_target` does not publish its winner's score
   and is deliberately not widened to (its stdout already folds "stay, fine" into "must leave,
   nowhere", which wave 2b's D-1673 argues), so the headroom test re-reads `_limit_score "$target"`.
   A target chosen at score S is judged at S' if telemetry moved between the two reads. Accepted: S'
   is the newer measurement, and judging a move on the newer number is the more honest of the two.
-- **D-TBD-fleet-polish-swap-threshold-prose** (Task 6) —
+- **D-1953** (Task 6) —
   `docs/superpowers/specs/2026-07-29-ccrc-fleet-polish-design.md:72-74` asserts that
   "`_auto_swap_check` moves `wrapper` off `home` when that account's 5h score crosses
   `SWAP_THRESHOLD`". That has been false since `0bfd0c26` (2026-07-07), which left the constant with
@@ -1965,11 +1964,11 @@ finds **no** occurrence in `2026-09-05-account-pools-wave5-docs.md` or in the ac
 spec — its nine tasks are README, `config.ts`, `ccd`'s `CCRC_MEASURED` comment, `deploy.sh` and
 `CLAUDE.md`. The only stale prose I could measure is
 `docs/superpowers/specs/2026-07-29-ccrc-fleet-polish-design.md:72-74`, recorded as
-**D-TBD-fleet-polish-swap-threshold-prose**. If a wave-5 item does exist under different wording,
+**D-1953**. If a wave-5 item does exist under different wording,
 this plan does not retire it and does not claim to.
 
-**Placeholder scan.** No `TBD` outside the deliberate `D-TBD-<slug>` the convention prescribes for an
-unreachable allocator; no "add error handling"; no "similar to Task N" — the arming, the price block,
+**Placeholder scan.** No `TBD` at all — the eight `D-TBD-<slug>` names this plan carried were
+replaced by their minted numbers on 2026-09-08; no "add error handling"; no "similar to Task N" — the arming, the price block,
 the budget helper and every test case carry their literal content, including the two fixtures
 (`QUIET`, `BLOCKED`) that resemble wave 2b's and are written out in full rather than referenced.
 No step names a function no task defines.
@@ -2007,7 +2006,8 @@ reads `_cfg_dir "$wrapper"`. `_swap_target`'s signature,
 4. **The four cases in Task 5 pass with no code change.** That is intended and stated, but it makes
    them the easiest four tests in this plan to write wrong and never notice. Step 3's three mutations
    are what prove them; do not skip that step because Step 2 was green.
-5. **`dtbd.test.ts` reds as soon as this file is `git add`ed** and stays red until the **eight**
-   D-TBD slugs are replaced with minted, defined numbers — in this file AND in the commit-message
-   trailers of Tasks 1, 2, 3 and 4 (Tasks 5, 6 and 7 carry no trailer). Allocate a block of eight in
-   one `POST /api/ledger/deviations`, and plan that call before the first commit, not after the last.
+5. **The eight numbers are already minted and defined** (`D-1946`–`D-1953`, 2026-09-08), in this
+   file and in the commit-message trailers of Tasks 1, 2, 3 and 4 alike (Tasks 5, 6 and 7 carry no
+   trailer), so `dtbd.test.ts` is green at rest. It reds only if execution writes a NEW placeholder.
+   Do not re-allocate this plan's eight; a number written without being issued seals its band
+   forever, and a number issued twice is the incident the ledger exists to prevent.

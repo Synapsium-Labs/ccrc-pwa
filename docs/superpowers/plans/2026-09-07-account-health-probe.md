@@ -538,7 +538,7 @@ before/after in the commit message.
 
 ```bash
 git add ccd/ccd server/test/ccd-authdead.test.ts
-git commit -m "feat(ccd): _authdead reads the probe's marker, and the dotless namespace keeps it (D-TBD-authdead-purge-sites)
+git commit -m "feat(ccd): _authdead reads the probe's marker, and the dotless namespace keeps it (D-1929)
 
 The marker is \$REG/<account>-authdead, \"<epoch> <reason>\" — swapblocked's shape.
 Dotless, so the one-dot suffix rule at all THREE registry-glob sites (_reg_purge,
@@ -771,7 +771,7 @@ rather than editing an assertion.
 
 ```bash
 git add ccd/ccd server/test/ccd-authdead.test.ts
-git commit -m "feat(ccd): auth-dead ranks last and drops out of scoring, never out of eligibility (D-TBD-authdead-least-loaded-first)
+git commit -m "feat(ccd): auth-dead ranks last and drops out of scoring, never out of eligibility (D-1930)
 
 _swap_target forces the candidate to 100 — the block unmeasured already occupies —
 rather than skipping it: that loop is the rescue lane, and a rescue with no
@@ -1499,7 +1499,7 @@ chosen off that table (`macos-platform.test.ts:108-127`).
 
 ```bash
 git add ccd/ccd-account-health server/test/account-health.test.ts
-git commit -m "feat(ccd): a credential-liveness probe with four outcomes, beside ccd and not inside it (D-TBD-authhealth-403-body, D-TBD-authhealth-id-re, D-TBD-authhealth-ddns-pattern)
+git commit -m "feat(ccd): a credential-liveness probe with four outcomes, beside ccd and not inside it (D-1935, D-1936, D-1934)
 
 401 = dead, 403-scope = live, everything else = unmeasured (write nothing, CLEAR
 nothing), and a missing or empty token file REFUSES before the wire — spec E4
@@ -2404,7 +2404,7 @@ units whose FILE is present, and no fixture except the two new `itLinux` cases p
 
 ```bash
 git add ccd/ccrc-doctor-checks server/test/ccrc-doctor.test.ts server/test/single-definition.test.ts
-git commit -m "feat(doctor): an absent account token file is LOUD, and services asks about the probe's timer (D-TBD-authtoken-doctor-fixture, D-TBD-services-timer-consequence)
+git commit -m "feat(doctor): an absent account token file is LOUD, and services asks about the probe's timer (D-1937, D-1933)
 
 The probe derives each token's path by convention because the roster cannot
 declare an upstream account's secretsFile — and a convention with no measurement
@@ -2486,7 +2486,7 @@ on the whole `ProjectedHome`, `_ws_least_loaded === c.expect.wrapper`, and
 `_limit_score claude` still reads the **80** that is on disk. No value of `expect.score` satisfies
 assertions 1 and 3 at once, so that case is pinned in Step 1(b)'s own test instead, asserting each
 side in its own idiom the way the runner's `expect === null` branch already does. The score
-divergence is real and is recorded as `D-TBD-authdead-allcondemned-score`.
+divergence is real and is recorded as `D-1932`.
 
 (b) `server/test/projected-home.test.ts` — a seeder beside `seedDisabled`, and its call:
 
@@ -2778,7 +2778,7 @@ Record all three.
 git add server/src/limits.ts shared/api.ts server/src/server.ts \
         server/test/fixtures/leastLoaded.ts server/test/projected-home.test.ts \
         server/test/limits.test.ts server/test/accounts-route.test.ts
-git commit -m "feat(server): carry authDead beside disabled, and spend it on scoring only (D-TBD-authdead-projecthome-fallback)
+git commit -m "feat(server): carry authDead beside disabled, and spend it on scoring only (D-1931)
 
 readLimits reads <w>-authdead off the registry readdir it already does, and
 surfaces a condemned lane that has never written telemetry for disabled's exact
@@ -2989,26 +2989,26 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
 
 ## Deviations found
 
-- **D-TBD-authdead-purge-sites** — the spec says the one-dot suffix rule (`[[ "$suffix" == *.* ]] &&
+- **D-1929** — the spec says the one-dot suffix rule (`[[ "$suffix" == *.* ]] &&
   continue`) lives at **two** sites. Measured on `main` @ `58ef97b6`: **three** — `ccd/ccd:1656`
   (`_reg_purge`), `:3757` (`_ws_slug_free`), `:3768` (`_ws_slug_residue`). All three glob
   `"$REG/$id".*`, so the dotless marker is safe from all three, and Task 1 measures the property
   against a session id that spells the marker exactly rather than restating the count.
 
-- **D-TBD-authdead-least-loaded-first** — the spec asks `_ws_least_loaded` to SKIP an auth-dead lane
+- **D-1930** — the spec asks `_ws_least_loaded` to SKIP an auth-dead lane
   while also requiring the `first` fallback to stay reachable "when every pool member is condemned".
   Those two are only compatible at one insertion point: **after** `[[ -z "$first" ]] && first="$w"`
   and **before** the score. Written one line higher, `_ws_least_loaded` answers `""` on an
   all-condemned fleet and `cmd_ws_add` dies. Task 2 fixes the placement and measures it by MOVING the
   guard, not by deleting it.
 
-- **D-TBD-authdead-projecthome-fallback** — the same defect in the other language, and it would not
+- **D-1931** — the same defect in the other language, and it would not
   have been caught by porting the bash line naively: `projectHome`'s fallback base is
   `scorable[0] ?? live[0]`, so filtering `authDead` out of `live` or `scorable` makes the server
   answer a different account — or `null` — than ccd does on the identical HOME. Task 8 filters
   `scored` alone and measures the divergence with the shared parity fixture.
 
-- **D-TBD-authdead-allcondemned-score** — the all-condemned case cannot live in the shared parity
+- **D-1932** — the all-condemned case cannot live in the shared parity
   fixture, and the reason is a real divergence rather than a harness detail. `projected-home.test.ts`
   asserts three things per fixture case (`:101-106`): the whole `ProjectedHome` by `toEqual`, the
   bash wrapper, and `shellScore(expect.wrapper) === expect.score`. With every home-able lane
@@ -3021,7 +3021,7 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   honest projection for an all-condemned fleet is a question for whoever needs the number. Recorded
   so the next reader knows the 0 is deliberate rather than unnoticed.
 
-- **D-TBD-services-timer-consequence** — §A.7 asks for the timer's own doctor coverage because
+- **D-1933** — §A.7 asks for the timer's own doctor coverage because
   "doctor's generic `services` check asks about a hardcoded three-name list a new timer would not be
   in". Measured: `ccd/ccrc-doctor-checks:808`, `local -a known=(ccrc.service ccrc-agent.service
   ccd-cap-scopes.timer)`. Adding the name is not enough, and that is the deviation: the `*.timer`
@@ -3032,7 +3032,7 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   (`ccd-graph-sweep.timer` remains outside `known` — untouched here, since nothing in this plan
   measured what its own consequence sentence should say.)
 
-- **D-TBD-authhealth-ddns-pattern** — §A.7 says to follow "the `ccrc-ddns` pattern exactly": curl in
+- **D-1934** — §A.7 says to follow "the `ccrc-ddns` pattern exactly": curl in
   `ExecStart`, credentials expanded by systemd from the 0600 `EnvironmentFile`. That is impossible
   here and the impossibility is structural, not incidental: `ccrc-ddns` expands ONE credential from
   ONE file, and this probe reads N — one `~/.cc-secrets/<id>-oauth.env` per account. The half that
@@ -3040,19 +3040,19 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   a subshell; handed to curl on stdin via `-K -`, never argv, never this process's environ, never a
   log line), and Task 5's unit file states the boundary in place.
 
-- **D-TBD-authhealth-403-body** — the spec's classifier row is `403 oauth_scope_insufficient`. The
+- **D-1935** — the spec's classifier row is `403 oauth_scope_insufficient`. The
   probe implements exactly that: a 403 whose body does NOT name that error type is **unmeasured**, not
   live. Recorded because it makes "live" strictly narrower than a bare status check would, and because
   it is the branch that stops an unrecognised 403 from clearing a true verdict.
 
-- **D-TBD-authhealth-id-re** — the account-id grammar (`^[a-z][a-z0-9-]{0,31}$`) gains a THIRD
+- **D-1936** — the account-id grammar (`^[a-z][a-z0-9-]{0,31}$`) gains a THIRD
   spelling: `shared/roster.ts`'s module-private `ID_RE`, `ccd/ccrc-wrapper-shape`'s `WRAPPER_ID_RE`,
   and now the probe's `AH_ID_RE`. Unavoidable — the probe is installed alone into `$HOME/.local/bin`
   with no library beside it to source, the situation `session-hook.sh` is already in — so the
   agreement is MEASURED rather than commented, in `pool-name-parity.test.ts`'s shape: Task 4 extracts
   both literals and holds them equal.
 
-- **D-TBD-authtoken-doctor-fixture** — `ccrc-doctor.test.ts`'s `healthy()` writes a roster that
+- **D-1937** — `ccrc-doctor.test.ts`'s `healthy()` writes a roster that
   declares no `telemetry` at all (`writeRoster`, `:276-281`), so a `credentials` check reading it
   would find zero eligible accounts and SKIP — moving `HEALTHY_SKIPS` from 0 to 1 on Linux and, by that
   file's OWN recorded measurement of the identical shape (`ccrc-doctor.test.ts:1018-1026`: deleting
@@ -3062,14 +3062,14 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   rather than weakening the check, which is that fixture's stated contract: "a healthy box is one
   where every check PASSES".
 
-- **D-TBD-authhealth-macos-corpus** — `server/test/macos-platform.test.ts:175-180` derives its
+- **D-1938** — `server/test/macos-platform.test.ts:175-180` derives its
   portability corpus from **every shebang'd file in `ccd/`**, so `ccd/ccd-account-health` joins it the
   moment it exists. Recorded because the last file to arrive there (`ccd-graph-sweep`) needed an
   `unowned` escape-hatch entry; this one is written against that table
   (`macos-platform.test.ts:108-127`) — `curl --max-time` instead of `timeout`, `mktemp` with an
   `XXXXXX` template, `date +%s` — so it stays in the owned half, and Task 4 Step 6 measures that.
 
-- **D-TBD-authhealth-endpoint-origin** — the endpoint PATH (`/api/oauth/usage`) is the spec's, from
+- **D-1939** — the endpoint PATH (`/api/oauth/usage`) is the spec's, from
   its own measurements E1–E4 on the fleet host. The **origin** appears nowhere in this tree: measured
   with a full-repo grep at plan time, the only hits for `api.anthropic.com`, `oauth/usage` or
   `ANTHROPIC_BASE_URL` are in the two design documents. The probe therefore carries
@@ -3078,15 +3078,11 @@ Mutations measured: dropping authDead from the disjunction reds 3; loosening the
   run **before the first fleet deploy** — a wrong origin makes every account read "unmeasured" for
   ever, which is silent by construction.
 
-**The ledger allocator was unreachable when this plan was written** — `POST /api/ledger/deviations`
-lives on the server box and this session ran with no route to its loopback port. Per the convention,
-every number above is written `D-TBD-<slug>` and must be **MINTED AND DEFINED IN THE SAME ACT** before
-merge. Do not look a number up; `GET /api/ledger`'s `floor` is what the next POST would mint, not a
-number you may take. In particular, do not take any number the account-pools programme's six wave
-plans — merged to `main` in `ece7597a` (#56), so they are in your checkout — already define — that block was allocated and DEFINED before this plan
-existed, and `deviation-refs.test.ts` (`cd server && ./node_modules/.bin/vitest run
-test/deviation-refs.test.ts`, after `git fetch origin main`) is what measures the collision from this
-branch rather than remembering it.
+**Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
+1924 → 1954) covering all five plans on this branch, defined in the same act. The
+"allocator unreachable" claim this paragraph used to carry was **wrong** — the fleet box reaches the
+server over `CCRC_SERVER_URL`, and `ccrc-api ledger allocate` is a row in that client's closed table.
+The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
 
 ---
 
@@ -3103,7 +3099,7 @@ branch rather than remembering it.
 | A.5 the marker, dotless, `"<epoch> <reason>"`, not `-disabled` | Tasks 1 and 4 |
 | A.6 three clearing owners, no timer-only clear | probe-on-403 (Task 4), successful spawn (Task 3), operator `rm` (nothing to build). No timer clears anything anywhere. |
 | A.7 cadence, placement, units, the five deploy edits, secrets | Tasks 5 and 6 |
-| A.7's own doctor check for the TIMER — the "hardcoded three-name list" parenthesis | Task 7, Step 5: `_check_services`' `known` gains `ccd-account-health.timer`, with a per-timer consequence sentence (D-TBD-services-timer-consequence) |
+| A.7's own doctor check for the TIMER — the "hardcoded three-name list" parenthesis | Task 7, Step 5: `_check_services`' `known` gains `ccd-account-health.timer`, with a per-timer consequence sentence (D-1933) |
 | A.4's server/PWA clause | Tasks 8 and 9 |
 
 **Deliberately out of scope, with the spec's own words.** `_strand_why`'s fifth token is **not** in
@@ -3116,8 +3112,8 @@ own already-approved plan) are likewise untouched.
 function no task defines. `_authdead` is defined in Task 1 and consumed in Tasks 2 and 3;
 `_ah_token_file`, `_ah_token`, `_ah_mark`, `_ah_clear`, `_ah_say` are all defined in the same file in
 Task 4; `_check_credentials` is defined in Task 7 and its table entry lands in the same task;
-`seedAuthDead` is defined in Task 8 beside the `seedDisabled` it copies. The only `TBD`s present are
-the deliberate `D-TBD-<slug>` tokens the convention prescribes for an unreachable allocator. TWO test
+`seedAuthDead` is defined in Task 8 beside the `seedDisabled` it copies. The eleven `D-TBD-<slug>`
+tokens this section once carried were replaced by their minted numbers on 2026-09-08. TWO test
 edits say "use the surrounding file's own idiom" for an `mkTmp`/`seedRoster`/`await` spelling rather
 than inventing another one (Task 8's `limits.test.ts` and `accounts-route.test.ts` additions) — the
 assertions themselves are literal in every case. Task 9's cases are now spelled out in full
@@ -3137,7 +3133,7 @@ per side. `reviveFleetSession` is not involved — `AccountUsage` is not persist
 
 **Risks handed to the implementer, all five named where they bite:**
 
-1. **The endpoint origin is unmeasured in this tree** (D-TBD-authhealth-endpoint-origin). A wrong
+1. **The endpoint origin is unmeasured in this tree** (D-1939). A wrong
    origin fails SILENTLY — every account reads "unmeasured", nothing is written, nothing is cleared,
    and the only trace is a journal line. Confirm it against the spec's E1 before the first fleet
    deploy, and confirm the first live pass writes or clears something rather than logging N

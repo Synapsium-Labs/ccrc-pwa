@@ -238,7 +238,7 @@ written — stop and re-derive rather than editing the assertion.
 
 ```bash
 git add server/src/remote/runner.ts server/test/swap-timeout-budget.test.ts
-git commit -m "fix(remote): swap gets the agent's full exec ceiling, not the flat 90s (D-TBD-swap-timeout)
+git commit -m "fix(remote): swap gets the agent's full exec ceiling, not the flat 90s (D-1924)
 
 cmd_swap stops the unit and kills the pane before it flips \`wrapper\`. Under the
 flat CCD_TIMEOUT_MS the agent SIGTERMs inside that window, leaving a dead session
@@ -251,15 +251,22 @@ Mutation measured: removing the row reds 3 assertions in swap-timeout-budget."
 
 ## Deviations found
 
-- **D-TBD-swap-timeout** — `CCD_VERB_TIMEOUT_MS` had no `swap` key, so the verb inherited the flat
+- **D-1924** — `CCD_VERB_TIMEOUT_MS` had no `swap` key, so the verb inherited the flat
   90 s default while `cmd_swap`'s stop→flip window is bounded only by the agent's 300 s ceiling. A kill
   inside that window is unrecorded in every channel the tree has. Fixed by this plan.
 
-**The ledger allocator was unreachable when this plan was written** — `POST /api/ledger/deviations`
-lives on the server box and this session ran on the fleet box, where the server's loopback port does
-not answer. Per the convention, the number above is written `D-TBD-<slug>` and must be MINTED and
-DEFINED in the same act before merge. Do not look a number up; do not reuse a number from the
-account-pools block `D-1663–D-1688`.
+**Minted 2026-09-08.** `D-1924` opens a contiguous block of THIRTY (`D-1924`–`D-1953`, floor
+1924 → 1954) allocated in one `POST /api/ledger/deviations` for all five plans on this branch and
+defined in the same act.
+
+**The claim this paragraph used to make was wrong, and it cost this branch a merge gate.** It said
+the allocator "lives on the server box and this session ran on the fleet box, where the server's
+loopback port does not answer". The loopback half is true and the conclusion does not follow: the
+fleet box reaches the server over `CCRC_SERVER_URL` (`~/.ccrc/agent.env`), and `ledger allocate` is a
+row in `ccrc-api`'s closed table — `ccrc-api ledger allocate --json -` with
+`{"project","count","title"}`. Every one of the five plans inherited the same untested inference and
+wrote `D-TBD` for a day. Before writing another, MEASURE:
+`ccrc-api ledger list --project ccrc-pwa` answers or it does not.
 
 ---
 
@@ -269,8 +276,8 @@ account-pools block `D-1663–D-1688`.
 independently and first. Task 1 implements it. No other spec section is in this plan's scope.
 
 **Placeholder scan.** No TBD, no "add error handling", no "similar to Task N". Every code step carries
-its literal content. The one `TBD` present is the deliberate `D-TBD-<slug>` the convention prescribes
-for an unreachable allocator, not an unfinished thought.
+its literal content. The one `D-TBD-<slug>` this section once carried was replaced by its minted
+number on 2026-09-08; no placeholder of any kind remains.
 
 **Type consistency.** The plan defines three helpers — `verbTimeoutMs`, `agentCeilingMs`,
 `flatDefaultMs` — used under exactly those names in the three `it` blocks. `verbTimeoutMs` returns

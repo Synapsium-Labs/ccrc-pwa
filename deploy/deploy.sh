@@ -647,7 +647,7 @@ if [ "$TARGET" = "agent" ]; then
   # `graph-noise-ship.test.ts`, allows at most 3 executable lines of drift) —
   # the two later installs below (account-health, telemetry-keepalive) sit
   # AFTER this pair rather than between them for exactly that reason
-  # (D-TBD-graph-noise-adjacency).
+  # (D-1945).
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
   install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
   # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on

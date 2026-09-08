@@ -459,7 +459,7 @@ mechanism.
 
 ```bash
 cd "$(git rev-parse --show-toplevel)" && git add server/src/limits.ts shared/api.ts server/test/fixtures/rollover.ts server/test/limits.test.ts
-git commit -m "fix(limits): an age-inferred zero sets the flag that says it was inferred (D-TBD-age-fallback-flag)
+git commit -m "fix(limits): an age-inferred zero sets the flag that says it was inferred (D-1926)
 
 readLimits' age fallback wrote a 0 it had inferred from the sample's own age and
 left fiveRolledOver/sevenRolledOver false, so AccountsScreen's Bar rendered '0%'
@@ -830,7 +830,7 @@ In `server/test/projected-home.test.ts`, add these two `it`s at the end of
     // SUPERSEDED BY FIX ROUND 1 — the comment this plan originally specified
     // here said bash does NOT agree on this shape and that a shared fixture
     // over it "would red the parity harness by design". Both clauses were made
-    // false by the same round that closed D-TBD-half-rolled-score-divergence:
+    // false by the same round that closed D-1927:
     // `_limit_score` now answers "" unless BOTH halves are measured, so bash
     // agrees, and `half-rolled-window` IS in the shared leastLoaded fixtures.
     // What shipped is the corrected text; see the ledger entry. This case
@@ -1020,7 +1020,7 @@ than left to mislead. `_limit_score` gained the `||` (either half unknown makes 
 lost its `: "${five:=0}"` defaults; `_avail` was rewritten to read `_limit_field` directly and refuse
 only a KNOWN half at the ceiling, which is what let `_limit_score` tighten without stripping the gpt
 lane of its only exclusion. `_ws_least_loaded` and `_swap_target` are genuinely untouched in both
-commits. See D-TBD-half-rolled-score-divergence for the argument and the measurements.
+commits. See D-1927 for the argument and the measurements.
 
 - [ ] **Step 7: Name the new source of "unknown" where the three sites explain themselves**
 
@@ -1204,7 +1204,7 @@ rather than accepting the count.
 
 ```bash
 cd "$(git rev-parse --show-toplevel)" && git add ccd/ccd server/src/limits.ts server/test/fixtures/leastLoaded.ts server/test/ccd-limits.test.ts server/test/projected-home.test.ts
-git commit -m "fix(limits,ccd): an inferred zero is unknown, not the emptiest account on the fleet (D-TBD-inferred-zero-outranks-measured)
+git commit -m "fix(limits,ccd): an inferred zero is unknown, not the emptiest account on the fleet (D-1925)
 
 _limit_field printed a confident 0 for a window it had only inferred had ended,
 and measured() read the mirrored 0 the same way. _limit_score returned max(0,0),
@@ -1249,19 +1249,19 @@ until the sweep has run. The server lane's final gate is `/health` reporting the
 
 ## Deviations found
 
-- **D-TBD-inferred-zero-outranks-measured** — `_limit_field`'s `resetAt` branch printed `0` for a
+- **D-1925** — `_limit_field`'s `resetAt` branch printed `0` for a
   window it had inferred had ended, and `server/src/limits.ts`'s `measured()` read the mirrored `0`
   as a measurement. `_limit_score` returned `max(0, 0)`, `_ws_least_loaded`'s strict `<` kept it over
   every honestly-reporting account, and because nothing runs on an account nothing was placed on, no
   real number ever replaced the inferred one: the rolled-over lane won placement permanently. Third
   site of the magnet already recorded in `_ws_least_loaded` and `_swap_target`, and the only one that
   fires on a healthy fleet. Fixed by Task 3.
-- **D-TBD-age-fallback-flag** — `server/src/limits.ts`'s age fallback wrote an inferred `0` and left
+- **D-1926** — `server/src/limits.ts`'s age fallback wrote an inferred `0` and left
   `fiveRolledOver`/`sevenRolledOver` **false**, so `AccountsScreen.tsx`'s `Bar` and
   `AccountsStrip.tsx`'s `LimitRow` rendered `0%` — a measured zero — for a window nobody had measured.
   The flag's own docstring already defined it as "the 0 above is inferred rather than observed"; this
   path was the one writer that never honoured it. Fixed by Task 1.
-- **D-TBD-half-rolled-score-divergence** — Task 3's own fix opened this and Task 3 closed it, in the
+- **D-1927** — Task 3's own fix opened this and Task 3 closed it, in the
   follow-up commit `2b8743bd`. On a row with ONE window rolled over, TypeScript's `measured()`
   answered `null` (the flag is set, and the score is a maximum bounded only from below) while bash's
   `_limit_score` substituted `0` for the empty half and answered the surviving one — so
@@ -1290,7 +1290,7 @@ until the sweep has run. The server lane's final gate is `/health` reporting the
   two differently. It is harmless today only because the one file with a null half (gpt's) is absent
   rather than retracted. The recorded close remains a second channel — an exit status separating the
   two — as its own change.
-- **D-TBD-fleet-limits-no-provenance** — `FleetSession.limits` (`shared/api.ts:41`) carries
+- **D-1928** — `FleetSession.limits` (`shared/api.ts:41`) carries
   `{five, seven}` and no provenance, so `pwa/src/fleet/SwapSheet.tsx`'s `load` ranks an inferred `0`
   as the emptiest pool and awards it the "suggested" tag — the exact defect that function's own
   docstring exists to prevent, reached through a seam it cannot see. `SessionLine.tsx` and
@@ -1300,15 +1300,11 @@ until the sweep has run. The server lane's final gate is `/health` reporting the
   until every path computes it), `server/src/fleet.ts:408`, and the PWA's three readers. Additive and
   absence-permitting, so it needs no `FLEET_PROTO` bump when someone does it.
 
-**The ledger allocator was unreachable when this plan was written** — `POST /api/ledger/deviations`
-lives on the server box and this session ran on the fleet box, where the server's loopback port does
-not answer. Per the convention, each number above is written `D-TBD-<slug>` and must be MINTED and
-DEFINED in the same act before merge: one `POST /api/ledger/deviations` for a contiguous block of
-four, and every number in that block defined in this file in the same edit. Do not look a number up;
-`GET /api/ledger`'s `floor` is what the next POST would mint, not a number you may take. And do not
-reuse a number from the account-pools programme's block — those were minted and defined together across the
-six account-pools wave plans, which are merged to `main` (`ece7597a`, #56), so they are allocated
-even though nothing here names them.
+**Minted 2026-09-08**, as part of one contiguous block of thirty (`D-1924`–`D-1953`, floor
+1924 → 1954) covering all five plans on this branch, defined in the same act. The
+"allocator unreachable" claim this paragraph used to carry was **wrong** — the fleet box reaches the
+server over `CCRC_SERVER_URL`, and `ccrc-api ledger allocate` is a row in that client's closed table.
+The measurement is in `2026-09-07-swap-verb-timeout.md`'s `## Deviations found`.
 
 ---
 
@@ -1334,8 +1330,8 @@ swap verb timeout, already planned and shipping first). No `-authdead` marker, n
 
 **Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N", no reference to a
 function no task defines. Every code step carries its literal content, and every bash and TypeScript
-edit is given as an exact before/after pair rather than a description. The only `TBD` tokens are the
-four deliberate `D-TBD-<slug>` names the convention prescribes for an unreachable allocator.
+edit is given as an exact before/after pair rather than a description. The four `D-TBD-<slug>` names
+this section once carried were replaced by their minted numbers on 2026-09-08; no `TBD` remains.
 
 **Type consistency.**
 - `measured` keeps its declared type `(l: AccountLimits | undefined) => number | null`. The added
@@ -1359,7 +1355,7 @@ four deliberate `D-TBD-<slug>` names the convention prescribes for an unreachabl
 
 **Risks handed to the implementer.**
 
-1. **The half-rolled divergence (D-TBD-half-rolled-score-divergence) is introduced by this change, not
+1. **The half-rolled divergence (D-1927) is introduced by this change, not
    inherited.** Today both sides agree on `{five: rolled, seven: 40}` at 40. After Task 3 they do not.
    **RESOLVED IN FIX ROUND 1** (`2b8743bd`), overriding the deferral this paragraph originally
    recommended: it was closed in the same task that opened it, `half-rolled-window` IS now a shared
