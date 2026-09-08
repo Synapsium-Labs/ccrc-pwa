@@ -3706,7 +3706,7 @@ _exp_status() {
 #    refusal goes through `_acct_refuse` like any other box-said-no.
 #
 #    THE RULE BINDS WHAT THIS VERB CALLS, NOT ONLY WHAT IT PRINTS.
-#    `_inst_accounts_sh` (:4923, :4929) and `cmd_wrappers` (:2904) both write
+#    `_inst_accounts_sh` (:5095, :5101) and `cmd_wrappers` (:2904) both write
 #    their transcript to STDOUT, which is right for `install` and wrong here, so
 #    `_acct_converge` (Task 24) redirects them and contains their `_ccrc_die`.
 #
@@ -3717,13 +3717,13 @@ _exp_status() {
 #    hand-rolled envelope into a body nobody can parse. So bash owns argv,
 #    refusal classes, tty rules and side effects; `deploy/account-op.mjs` owns
 #    every byte of stdout. That is the split `deploy/gen-accounts.mjs:4-11` and
-#    `_inst_accounts_sh` (:4902-4930) already draw, applied to an answer instead
+#    `_inst_accounts_sh` (:5074-5102) already draw, applied to an answer instead
 #    of a generated file.
 #
 #  - ONE EXIT-CODE TABLE, TWO DECIDERS. Whoever decides owns the code, on this
 #    file's own table (:24-33): 2 when the request was not legal on its face —
 #    decidable from argv alone, which is `cmd_install`'s "the operator typed the
-#    right flag and the wrong value" class (:4651-4655, refused at :4670) —
+#    right flag and the wrong value" class (:4823-4827, refused at :4842) —
 #    and 1 when the request was legal and the BOX said no (an id already in the
 #    roster, a suffix another account holds). Nothing translates at the seam,
 #    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2929-2930).
@@ -3785,7 +3785,7 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # PARAGRAPH DID NOT (corrected at review round 1). Task 21 added NINE call
   # sites, not four: `_acct_answer` x1, `_acct_shape` x3, `_acct_candidates`
   # x3, and `cmd_account` x2 — the two `unknown-argument` refusals at the
-  # `roster` and `candidates` arms (:4576, :4581 — this pair read :4040, :4045
+  # `roster` and `candidates` arms (:4748, :4753 — this pair read :4040, :4045
   # until review round 1, which is the citation Task 22's own insertion broke;
   # :4040 had by then landed inside the comment block that insertion added).
   # Those last two are the ones
@@ -3980,7 +3980,7 @@ _acct_candidates() {
   local sh="$HOME/.ccrc/accounts.sh"
   [ -f "$sh" ] \
     || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
-  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:5969-5980): the projection
+  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:6141-6152): the projection
   # declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` in the SAME `_ccrc_*`
   # namespace as `_ccrc_die`, and sourcing it here would let a generator change
   # redefine a refusal helper mid-verb. Only the id list crosses back.
@@ -4072,7 +4072,7 @@ _acct_candidates() {
 #
 #  2. THE TTY GATE INVERTS HERE, and nowhere else in this file. All three of
 #     this file's other `[ -t 0 ]` gates — `cmd_passwd` (:3026), `cmd_expose`
-#     (:3221) and `_inst_agent_env` (:4994) — refuse a PIPE, because
+#     (:3221) and `_inst_agent_env` (:5166) — refuse a PIPE, because
 #     under `curl … | bash` stdin is the installer script and a `read` would
 #     take a line of shell as the operator's answer. This flag exists for the
 #     machine caller and requires a pipe, so it refuses a TERMINAL — a human
@@ -4190,7 +4190,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   #
   # The temp name carries a leading dot, `cmd_wrappers`' spelling for a
   # roster-derived destination (the rule is stated in the negative at
-  # :5221-5226). Nothing below distinguishes it from `<dest>.tmp.$$`, because
+  # :5393-5398). Nothing below distinguishes it from `<dest>.tmp.$$`, because
   # `.env` already puts both outside `WRAPPER_ID_RE`; it is the consistent
   # spelling, not a measured guard.
   # The same shell-option bound `_acct_read_credential` states above, for the
@@ -4263,10 +4263,10 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
 }
 
 # ── THE `add` FLAG LOOP ────────────────────────────────────────────────────
-# `cmd_install`'s loop (:4657-4667) widened: BOTH spellings for every
+# `cmd_install`'s loop (:4829-4839) widened: BOTH spellings for every
 # value-taking flag, a missing value with its own message at exit 2, and a WRONG
 # VALUE for a right flag getting its own sentence rather than "unknown argument"
-# (:4668-4671) — the operator typed the right flag and the wrong value, which
+# (:4840-4843) — the operator typed the right flag and the wrong value, which
 # are two different mistakes to fix.
 #
 # THE FLAG NAME IS CAPTURED BEFORE THE SHIFT, and that is the whole reason
@@ -4365,8 +4365,8 @@ _acct_add_parse() {
 # at the seam, and neither is cosmetic.
 #
 #  1. THEY PRINT ON STDOUT. `_inst_accounts_sh` echoes "install: accounts.sh:
-#     converged" (:4923) or "… generated from $HOME/.ccrc/accounts.json"
-#     (:4929); `cmd_wrappers` prints a line per written account and a
+#     converged" (:5095) or "… generated from $HOME/.ccrc/accounts.json"
+#     (:5101); `cmd_wrappers` prints a line per written account and a
 #     `summary: …` line (:2904). Read that off the SOURCE, not off a suite:
 #     `ccrc-install.test.ts:2818-2819` pins only `cmd_wrappers`' summary onto
 #     `install`'s stdout, and nothing in server/test/ pins the accounts.sh
@@ -4379,7 +4379,7 @@ _acct_add_parse() {
 #     The subshell contains the exit; the `||` arm gives the refusal a class.
 #
 # NO FLAGS ON `cmd_wrappers`, deliberately, `_inst_wrappers`' choice
-# (:6484-6487): the two flags that decide what may be overwritten are the two an
+# (:6656-6659): the two flags that decide what may be overwritten are the two an
 # install must never pass, "an install that passed either would be an install
 # that can destroy a hand-written launcher without anybody typing the flag that
 # authorises it". D-1862: there is no per-id mode and this verb does not add one
@@ -4390,6 +4390,169 @@ _acct_converge() {
     || _acct_refuse 1 accounts-sh "regenerating \$HOME/.ccrc/accounts.sh from the roster failed — read the lines above; the generator's own remedy is among them. The roster entry WAS written and nothing rolls back: run 'ccrc install' once the cause is fixed."
   ( cmd_wrappers ) >&2 \
     || _acct_refuse 1 wrapper-converge "the wrapper converge refused — read the lines above; each refusal carries its own remedy. The roster entry WAS written and nothing rolls back: run 'ccrc wrappers' once the cause is fixed."
+}
+
+# ── WHICH settings.json ENV KEYS ARE CCRC'S ───────────────────────────────
+# `install-session-hooks.sh:83-86`'s `JQ_UNMANAGED` argument, applied to the
+# env block: ONE definition, shared by the writer (`account add`) and the
+# remover (`account remove`), because a second spelling in the remover is
+# exactly how the two come to disagree about whose key a file holds.
+#
+# DERIVED, NOT LISTED, which is one step stronger than that installer manages.
+# `modelmap` names the four alias -> env-var pairs ONCE; `managed` is computed
+# from it plus the two endpoint keys; `unmanaged` filters on `managed`. A fifth
+# alias is one pair in one object, not three edits across two modes — CLAUDE.md's
+# `PR_REASONS = Object.keys(PR_REASON_MAP)` rule, in jq.
+#
+# `ANTHROPIC_AUTH_TOKEN` IS DELIBERATELY ABSENT. The key lives in the 0600 file
+# the generated wrapper sources at exec time; this file sits beside the
+# transcripts, where the operator can read it and doctor can check it without
+# ever opening a secret (spec §4.3). `ANTHROPIC_API_KEY` is written EMPTY so the
+# sourced auth token wins — measured, §4.3.
+#
+# BESIDE THEIR ONE CONSUMER, NOT IN THE FILE-SCOPE CONSTANTS BLOCK, and that is
+# a DEVIATION from this task's plan snippet, argued rather than transcribed.
+# That block spells a value once because TWO sections read it (`ACCT_SECRETS_DIR`
+# states the reason: a writer and a reader that spelled the path separately is
+# the drift D-166 names). These three programs have exactly one reader —
+# `_acct_settings_env` below, which is itself the single writer in both
+# directions — so the block's own argument does not reach them, while the
+# installer this merge is copied from puts its jq programs immediately above the
+# loop that runs them (`install-session-hooks.sh:86`, used at `:118-121`). The
+# measured cost of the other placement is the reason it matters: inserting at
+# the constants block moves every line below it, which is ~98 line citations in
+# this tree against ~30 here, and 20 of those live in files this task may not
+# touch. D-1985's class, avoided rather than swept.
+JQ_ACCT_MANAGED='
+def modelmap: {opus:"ANTHROPIC_DEFAULT_OPUS_MODEL", sonnet:"ANTHROPIC_DEFAULT_SONNET_MODEL",
+               haiku:"ANTHROPIC_DEFAULT_HAIKU_MODEL", subagent:"CLAUDE_CODE_SUBAGENT_MODEL"};
+def managed: ["ANTHROPIC_BASE_URL","ANTHROPIC_API_KEY"] + (modelmap|to_entries|map(.value));
+def unmanaged: with_entries(select(.key as $k | (managed|index($k)) == null));
+'
+JQ_ACCT_SET="$JQ_ACCT_MANAGED"'
+( (if $burl == "" then {} else {ANTHROPIC_BASE_URL: $burl, ANTHROPIC_API_KEY: ""} end)
+  + ( if ($models|type) == "object"
+      then ($models | with_entries(select(modelmap[.key] != null))
+                    | with_entries(.key |= modelmap[.]))
+      else {} end ) ) as $add
+| .env = (((.env // {}) | unmanaged) + $add)
+| if .env == {} then del(.env) else . end
+'
+JQ_ACCT_CLEAR="$JQ_ACCT_MANAGED"'
+.env = ((.env // {}) | unmanaged)
+| if .env == {} then del(.env) else . end
+'
+
+_acct_settings_env() {   # <cfgdir> <set|clear> [<base-url>] [<models-json>]
+  # `install-session-hooks.sh:104-132`, clause for clause: jq validates BEFORE
+  # (:109) and AFTER (:128), the converge is byte-level under `jq -S` key-sorted
+  # normalisation (:126) so a converged file is never touched, every rewritten
+  # file is backed up first (:129), and the write is tmp + `mv -f` (:130-131).
+  # Values enter the program through --arg/--argjson (:120), never shell
+  # interpolation.
+  local dir="$1" mode="$2" burl="${3:-}" models="${4:-{\}}" f cur next prog tmp
+  f="$dir/settings.json"
+  if [ -f "$f" ]; then
+    jq empty "$f" 2>/dev/null \
+      || _acct_refuse 1 settings-invalid "$f is not valid JSON. This verb never rewrites a settings.json it could not validate, so that file is exactly as it was."
+    cur="$(cat "$f")" \
+      || _acct_refuse 1 settings-invalid "$f could not be read"
+  else
+    # NOTHING TO CLEAR FROM. A home with no settings.json must not gain one
+    # from a removal — install-session-hooks.sh:112-114's rule.
+    [ "$mode" = clear ] && return 0
+    cur='{}'
+  fi
+
+  prog="$JQ_ACCT_SET"
+  [ "$mode" = clear ] && prog="$JQ_ACCT_CLEAR"
+  next="$(jq --arg burl "$burl" --argjson models "$models" "$prog" <<<"$cur")" \
+    || _acct_refuse 1 settings-merge "merging the account env block into $f failed — that file is exactly as it was"
+
+  # AND NOTHING TO SET, EITHER. A `login` lane has no endpoint and no model map,
+  # so `next` is `{}` — measured against real jq. Creating a settings.json to
+  # hold `{}` in a home that never had one is a key that decides nothing, the
+  # same empty distinction `_exp_env_write` refuses at :3501-3505, and the
+  # mirror of the `clear` rule two blocks up.
+  if [ ! -f "$f" ] && [ "$(jq -S -c . <<<"$next")" = '{}' ]; then
+    return 0
+  fi
+
+  # CONVERGED? Do not touch it. The next run re-derives the same JSON and
+  # compares equal under key-sorted normalisation, so the file's bytes stay
+  # exactly what they were and idempotence is measurable on mtime.
+  if [ -f "$f" ] && [ "$(jq -S . <<<"$next")" = "$(jq -S . "$f")" ]; then
+    return 0
+  fi
+  jq empty <<<"$next" >/dev/null 2>&1 \
+    || _acct_refuse 1 settings-merge "the merged settings for $f are not valid JSON — this is a bug in ccrc, not a fact about your box, and that file is exactly as it was"
+  if [ -f "$f" ]; then
+    local stamp bdir
+    # `date +%Y%m%d-%H%M%S`, AND NOT THE PLAN SNIPPET'S `date -u
+    # +%Y%m%dT%H%M%SZ`: `BOX_BACKUP_ROOT`'s own note (:1034-1042) makes the
+    # timestamp shape part of the contract — "the timestamp shape below it is
+    # `prune_backups`' glob (deploy.sh:68-72) — a backup named outside that
+    # shape is a backup the pruner can never reclaim" — and that glob is
+    # `[0-9]{8}-[0-9]{6}` (:7179's loop). The UTC `T…Z` spelling matches it
+    # nowhere, so every backup this function took would accumulate forever. The
+    # three writers already under this root — `_exp_caddyfile` (:3591),
+    # `_upd_backup` (:6878) and `install-session-hooks.sh:38` — all spell it
+    # this way, and the last one is the file this whole function is copied from.
+    stamp="$(date +%Y%m%d-%H%M%S)" \
+      || _acct_refuse 1 settings-merge "cannot read the clock (date failed), and a backup needs a name — $f is exactly as it was"
+    bdir="$BOX_BACKUP_ROOT/$stamp"
+    # `${dir##*/}` and not `$(basename "$dir")`: the installer's naming, reached
+    # by pure parameter expansion, which is `CCRC_HERE`'s argument (:834-841) —
+    # a box whose PATH is broken is the box this must work on.
+    mkdir -p "$bdir" && cp -a "$f" "$bdir/${dir##*/}.settings.json" \
+      || _acct_refuse 1 settings-merge "could not back up $f to $bdir — refusing to rewrite it"
+  fi
+  tmp="$f.tmp.$$"
+  jq . <<<"$next" > "$tmp" && mv -f "$tmp" "$f" \
+    || { rm -f "$tmp"; _acct_refuse 1 settings-merge "writing $f failed"; }
+}
+
+# THE STEPS THIS RUN ACTUALLY RAN, appended as they happen. An ARRAY and not a
+# printed list, deliberately: `_acct_provision` refuses through `_acct_refuse`,
+# which prints an envelope and `exit`s, and a caller that had wrapped it in
+# `$( … )` would have captured that envelope into a variable while the `exit`
+# killed only the subshell — the run would then continue and answer `ok:true`
+# with a refusal embedded in it. Nothing here runs in a subshell, so a refusal
+# ends the verb.
+ACCT_PROVISIONED=()
+_acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PROVISIONED
+  # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs`
+  # (:6139), `_inst_hooks` (:6338), `_inst_skills` (:6376) and
+  # `_inst_graphify_skill` (:6391) take no arguments by contract and converge
+  # EVERY rostered home; this verb has one home to provision and the four
+  # standalone scripts all take `--homes <dir>…` (install-session-hooks.sh:63,
+  # and the identical line at install-coordinator-skill.sh:36,
+  # install-worker-skill.sh:36, install-graphify-skill.sh:77). So the scripts
+  # are called directly, `ccrc-install.test.ts:1966-2047`'s 23-entry `_inst_*`
+  # spine is untouched, and no agent restart is needed — every one of them is
+  # idempotent per home.
+  local dir="$1" burl="$2" models="$3" n step
+  mkdir -p "$dir" \
+    || _acct_refuse 1 provision-failed "cannot create the config directory $dir — the session hooks would have nowhere to be installed, and this lane's transcripts nowhere to live. The roster entry was written; run 'ccrc install' once the directory can be created."
+  _acct_settings_env "$dir" set "$burl" "$models"
+  ACCT_PROVISIONED+=(settings-env)
+  # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's —
+  # `_inst_hooks`' rule (:6325-6330): "the INSTALLED copy, never the one in the
+  # tree … It is also the copy every future run, and every operator, will
+  # reach." COORDINATOR BEFORE WORKER, because the worker skill points at
+  # ../ccrc-coordinator/references/… (`_inst_skills`, :6367-6370).
+  for n in install-session-hooks.sh install-coordinator-skill.sh \
+           install-worker-skill.sh install-graphify-skill.sh; do
+    [ -x "$HOME/.cc-sessions/$n" ] \
+      || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged. The roster entry was written; run 'ccrc install' to place the installers, then re-run it to converge this home."
+    bash "$HOME/.cc-sessions/$n" --homes "$dir" \
+      || _acct_refuse 1 provision-failed "the installer $n refused for $dir — read its lines above; it converges one home at a time and never rewrites a settings.json it could not validate, so nothing was left half-written. The roster entry was written; run 'ccrc install' once the cause is fixed."
+    # PURE PARAMETER EXPANSION, no `sed`: this function makes no PATH lookup of
+    # its own, which is `CCRC_HERE`'s argument (:834-841) — a box whose
+    # environment is broken is the box this must work on.
+    step="${n#install-}"
+    ACCT_PROVISIONED+=("${step%.sh}")
+  done
 }
 
 # ── THE ORDERED WRITE ──────────────────────────────────────────────────────
@@ -4522,6 +4685,15 @@ _acct_add() {
   # ── 3. THE PROJECTION, and 4. THE WRAPPERS ──────────────────────────────
   _acct_converge
 
+  # ── 5. THE NEW HOME ─────────────────────────────────────────────────────
+  # NOT IN A COMMAND SUBSTITUTION — `ACCT_PROVISIONED`'s own note above says
+  # why. Both values are the CHECKED plan's, read once by the NUL reader above:
+  # `ACCT_BASE_URL_RESOLVED` is the plan's `baseUrl`, which is null for a login
+  # lane and therefore the empty string here — exactly the value `JQ_ACCT_SET`
+  # treats as "no endpoint key" — and `ACCT_MODELS_RESOLVED` is the plan's
+  # validated `models` object, or `{}`, which is what `--argjson` needs.
+  _acct_provision "$HOME/$ACCT_SUFFIX" "$ACCT_BASE_URL_RESOLVED" "$ACCT_MODELS_RESOLVED"
+
   # `_acct_answer`, NOT `_acct_node`, and this is a DEVIATION FROM THE PLAN'S
   # OWN SNIPPET, argued rather than transcribed: this line is a pure
   # pass-through of one op's stdout — the shape `_acct_answer` exists for, and
@@ -4539,7 +4711,7 @@ cmd_account() {
   esac
 
   # BY NAME, ONCE, AND BEFORE THE FIRST REFUSAL IS PRINTED — `cmd_install`'s
-  # guard (stated :4677-4689, probed :4691) in its own shape. Without it a box
+  # guard (stated :4849-4861, probed :4863) in its own shape. Without it a box
   # with no node cannot
   # even hear "that id is taken": the refusal would arrive as `_acct_node`
   # failing, i.e. as a missing dependency wearing a bad request's clothes. THIS

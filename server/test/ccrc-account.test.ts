@@ -101,8 +101,8 @@ function run(home: string, args: string[], stdin = ''): Result {
  *  printed a progress line before its answer would still parse at a call site
  *  that used `.split('\n')[0]`. It is also what catches the failure this
  *  cluster is most exposed to: `add` calls two of `ccrc install`'s own
- *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:4923,
- *  :4929, :2904). Every `add` case below runs through here. */
+ *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:5095,
+ *  :5101, :2904). Every `add` case below runs through here. */
 function oneObject(r: Result): Record<string, unknown> {
   const lines = r.stdout.split('\n');
   expect(lines[lines.length - 1], 'stdout is not newline-terminated').toBe('');
@@ -367,7 +367,7 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
     expect(String(j['detail'])).toContain('unknown hue');
     // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
-    // (ccd/ccrc:4913-4915): re-wording a fix into a shrug helps nobody.
+    // (ccd/ccrc:5085-5087): re-wording a fix into a shrug helps nobody.
     expect(String(j['detail'])).toContain('cyan, violet, blue, magenta, amber, green');
   });
 
@@ -803,7 +803,7 @@ function filesUnder(dir: string, out: string[] = []): string[] {
 }
 
 /** Sources `ccd/ccrc` and calls one function — the `BASH_SOURCE` guard at
- *  ccd/ccrc:7474 exists for exactly this, and `ccd-clip.test.ts:32` /
+ *  ccd/ccrc:7646 exists for exactly this, and `ccd-clip.test.ts:32` /
  *  `ccd-workspaces.test.ts:487` already do it to `ccd`. Task 24 gives these two
  *  helpers a caller; proving them before that caller exists is what stops a
  *  defect in either from hiding inside `add`'s longer transcript. */
@@ -871,7 +871,7 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
 
   it('refuses a TERMINAL — the one place in this file the tty gate inverts', async () => {
     // `cmd_passwd` (ccd/ccrc:3026), `cmd_expose` (:3221) and `_inst_agent_env`
-    // (:4994) all REQUIRE a terminal, because under `curl … | bash` stdin is
+    // (:5166) all REQUIRE a terminal, because under `curl … | bash` stdin is
     // the installer script. This flag is driven by the server and requires a
     // pipe, so it refuses the terminal instead — three conditions, three codes,
     // and this is the third.
@@ -1536,9 +1536,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
   });
 
   it('both flag spellings work, and a flag with no value is exit 2', () => {
-    // `cmd_install`'s rule (:4657-4667): BOTH `--flag VALUE` and `--flag=VALUE`
+    // `cmd_install`'s rule (:4829-4839): BOTH `--flag VALUE` and `--flag=VALUE`
     // for every value-taking flag, a missing value with its own message, and a
-    // wrong VALUE for a right flag getting its own sentence (:4668-4671).
+    // wrong VALUE for a right flag getting its own sentence (:4840-4843).
     //
     // THE SPACE FORM IS THE ONE THAT BREAKS SILENTLY. A loop that shifts inside
     // its first `case` and then switches on `$1` again is switching on the
@@ -1578,11 +1578,38 @@ function plantUpstream(home: string): void {
   writeFileSync(join(bin, 'claude'), 'PKnot-a-script\n', { mode: 0o755 });
 }
 
+/** The four standalone installers, as ARGV RECORDERS at the installed path
+ *  `_acct_provision` must reach them by. Recorders rather than the real
+ *  scripts because three of the four need a box this fixture is not
+ *  (`install-graphify-skill.sh` assembles from a pinned venv, :12-20) — and
+ *  because the property under test is that each is invoked once, in order,
+ *  scoped to the one new home. The settings.json merge gets the REAL script in
+ *  its own case below.
+ *
+ *  IT IS PART OF EVERY SUCCESSFUL `add` FIXTURE FROM TASK 25 ON, and that is a
+ *  statement about the verb rather than about this helper: `_acct_provision`
+ *  REFUSES when `$HOME/.cc-sessions/<installer>` is missing, so a box that
+ *  never ran `ccrc install` cannot complete an `add`. Every case above that
+ *  expects exit 0 therefore plants these beside `plantUpstream`'s binary —
+ *  the fixture models an installed box because that is the only box this
+ *  verb runs on. The plan's Task 25 did not say so; measured here instead. */
+function plantInstallers(home: string): void {
+  const d = join(home, '.cc-sessions');
+  mkdirSync(d, { recursive: true });
+  for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh',
+    'install-worker-skill.sh', 'install-graphify-skill.sh']) {
+    writeFileSync(join(d, n),
+      `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\nexit 0\n`,
+      { mode: 0o755 });
+  }
+}
+
 describe('ccrc account add: the ordered write', () => {
   it('writes the secret, then the roster entry, then both projections', () => {
     const home = box('ccrc-account-add-ok-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const r = run(home, addArgs(), `${CANARY}\n`);
     expect(r.code, r.stderr).toBe(0);
     const j = oneObject(r);
@@ -1640,10 +1667,10 @@ describe('ccrc account add: the ordered write', () => {
 
   it('the convergers\' transcript goes to stderr, so stdout stays one object', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
-    // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:4929)
+    // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5101)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
     // Only the second is pinned there (ccrc-install.test.ts:2818-2819, the
-    // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:6502, and
+    // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:6674, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh
     // line, from the stream this verb moves it to. Here they are the remedy,
@@ -1651,6 +1678,7 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-streams-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const r = run(home, addArgs(), `${CANARY}\n`);
     expect(r.code, r.stderr).toBe(0);
     oneObject(r);
@@ -1683,6 +1711,7 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-retry-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     chmodSync(join(home, '.ccrc'), 0o500);
     expect(run(home, addArgs(), 'first-token-value\n').code).toBe(1);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -1696,6 +1725,7 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-loginlane-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
       '--label', 'lab·dev0', '--hue', 'amber']);
     expect(r.code, r.stderr).toBe(0);
@@ -1741,6 +1771,7 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-shell-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const r = run(home, addArgs(), `${SHELL_SYNTAX}\n`);
     expect(r.code, r.stderr).toBe(0);
     oneObject(r);
@@ -1782,6 +1813,7 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-models-ok-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const models = {
       opus: 'orchard/opus-1', sonnet: 'orchard/sonnet-1',
       haiku: 'orchard/haiku-1', subagent: 'orchard/haiku-1',
@@ -1811,6 +1843,7 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-fields-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const models = '{"opus":"o/o","sonnet":"o/s","haiku":"o/h","subagent":"o/g"}';
     const r = sourceCall(home,
       "_acct_add --id lab-dev0 --provider compatible --label 'lab\u00b7dev0' --hue amber "
@@ -1830,7 +1863,7 @@ describe('ccrc account add: the ordered write', () => {
     // The ruling, pinned in the source rather than asserted in prose: `add`
     // reaches `cmd_wrappers` the way `_inst_wrappers` does — as a function, with
     // no flags — so no `--force`/`--adopt` can destroy a hand-written launcher
-    // without an operator typing the flag that authorises it (ccd/ccrc:6484-6487).
+    // without an operator typing the flag that authorises it (ccd/ccrc:6656-6659).
     // Comment lines are stripped first: this asserts about CODE, and the
     // paragraph above the code names the flags it does not pass.
     const src = readFileSync(CCRC_SRC, 'utf8');
@@ -1953,6 +1986,7 @@ describe('ccrc account add: the roster keeps the mode it had (D-2052)', () => {
     const home = box('ccrc-account-add-rostermode-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
+    plantInstallers(home);
     const roster = join(home, '.ccrc', 'accounts.json');
     chmodSync(roster, 0o600);
     const r = run(home, addArgs(), `${CANARY}\n`);
@@ -2097,5 +2131,191 @@ describe('deploy/account-op.mjs: the validator\'s constants are imported, never 
     expect(code, 'HUES is re-spelled here — import it').not.toContain('cyan');
     expect(code, 'LABEL_UNSAFE_RE is re-spelled here — import it')
       .not.toContain('\\u0000-\\u001f');
+  });
+});
+
+const installerCalls = (home: string): string[] => {
+  const p = join(home, 'installer-calls');
+  return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
+const settingsAt = (home: string, suffix: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(home, suffix, 'settings.json'), 'utf8')) as Record<string, unknown>;
+
+describe('ccrc account add: the new home, provisioned', () => {
+  it('creates the config dir, writes the managed env block, and runs the four installers', () => {
+    const home = box('ccrc-account-prov-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, addArgs({
+      '--models': JSON.stringify({
+        opus: 'orchard/opus-1', sonnet: 'orchard/sonnet-1',
+        haiku: 'orchard/haiku-1', subagent: 'orchard/haiku-1',
+      }),
+    }), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+
+    expect(settingsAt(home, '.claude-lab-dev0')).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: 'https://orchard-api/v1',
+        ANTHROPIC_API_KEY: '',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'orchard/opus-1',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'orchard/sonnet-1',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'orchard/haiku-1',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'orchard/haiku-1',
+      },
+    });
+    // THE KEY IS NOT HERE. It is in the 0600 file the wrapper sources; this
+    // file sits beside the transcripts where doctor reads it (§4.3).
+    expect(readFileSync(join(home, '.claude-lab-dev0', 'settings.json'), 'utf8'))
+      .not.toContain(CANARY);
+
+    // FOUR CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker.
+    // This is also the step list Task 26 turns into an answer key: at THIS
+    // commit `ACCT_PROVISIONED` is written and not yet read, and the recorder
+    // is what measures it.
+    expect(installerCalls(home)).toEqual([
+      `install-session-hooks.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-coordinator-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-worker-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-graphify-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+    ]);
+  });
+
+  it('an anthropic login lane gets a config dir and NO env block at all', () => {
+    // No endpoint and no models means no managed key has a value, and the merge
+    // yields `{}` (measured against real jq). A settings.json a home never had,
+    // created to hold `{}`, would be a file that decides nothing — the empty
+    // distinction `_exp_env_write` refuses one level down (ccd/ccrc:3501-3505),
+    // and install-session-hooks.sh:112-114's rule from the other side.
+    const home = box('ccrc-account-prov-login-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+      '--label', 'lab·dev0', '--hue', 'amber']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.claude-lab-dev0'))).toBe(true);
+    expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
+    // The step still RAN — it decided to write nothing, which is a different
+    // thing from being skipped, and the installers still got their home.
+    expect(installerCalls(home).length).toBe(4);
+  });
+
+  it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
+    const home = box('ccrc-account-prov-keep-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    mkdirSync(join(home, '.claude-lab-dev0'), { recursive: true });
+    writeFileSync(join(home, '.claude-lab-dev0', 'settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: 'bash "$HOME/mine.sh"' },
+      env: { MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://stale-endpoint/v1' },
+      permissions: { allow: ['Bash(ls:*)'] },
+    }, null, 2));
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const s = settingsAt(home, '.claude-lab-dev0');
+    expect(s['statusLine']).toEqual({ type: 'command', command: 'bash "$HOME/mine.sh"' });
+    expect(s['permissions']).toEqual({ allow: ['Bash(ls:*)'] });
+    // The unmanaged env key survives; the managed one is REPLACED, not merged
+    // onto — a stale endpoint that survived would be a lane whose settings and
+    // roster disagree, which is doctor's `settings-env-drift` by construction.
+    expect(s['env']).toEqual({
+      MY_OWN_KEY: 'kept',
+      ANTHROPIC_BASE_URL: 'https://orchard-api/v1',
+      ANTHROPIC_API_KEY: '',
+    });
+    // BACKED UP BEFORE THE REWRITE (install-session-hooks.sh:129), under
+    // BOX_BACKUP_ROOT (ccd/ccrc:1042) and named for the config dir, which is
+    // that installer's own naming (`$(basename "$dir").settings.json`).
+    const backups = readdirSync(join(home, 'ccrc-backups'));
+    expect(backups.length).toBe(1);
+    // AND UNDER THE NAME THE PRUNER CAN RECLAIM — `BOX_BACKUP_ROOT`'s own note
+    // (ccd/ccrc:1034-1042) makes the timestamp shape part of the contract, and
+    // `prune_backups`' glob is `[0-9]{8}-[0-9]{6}`. A backup outside that shape
+    // is one nothing ever collects.
+    expect(backups[0]).toMatch(/^\d{8}-\d{6}$/);
+    expect(JSON.parse(readFileSync(
+      join(home, 'ccrc-backups', backups[0]!, '.claude-lab-dev0.settings.json'), 'utf8'))['env'])
+      .toEqual({ MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://stale-endpoint/v1' });
+  });
+
+  it('a converged home is not rewritten — idempotence is byte-level', () => {
+    const home = box('ccrc-account-prov-converge-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    // FOUR-SPACE INDENT, WHICH IS NOT WHAT `jq .` EMITS, and that is the whole
+    // point of the fixture. The converge compares `jq -S .` of both sides, so
+    // this file IS converged — same JSON, different bytes — and the guard must
+    // therefore leave it alone. With jq's own two-space serialisation here the
+    // assertion below could not fail at all: a rewrite would reproduce the file
+    // byte for byte, and only the backup would show it. Measured: that is
+    // exactly what the plan's own mutation 3 did, and this is the fixture that
+    // makes "not re-serialised, not re-indented" a claim a test can lose.
+    const already = '{\n    "env": {\n        "ANTHROPIC_BASE_URL": "https://orchard-api/v1",\n'
+      + '        "ANTHROPIC_API_KEY": ""\n    }\n}\n';
+    writeFileSync(join(dir, 'settings.json'), already);
+    const r = sourceCall(home,
+      `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+    expect(r.code, r.stderr).toBe(0);
+    // The bytes are EXACTLY what they were — not re-serialised, not re-indented.
+    expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe(already);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('clear removes exactly the managed keys, and deletes an env block it emptied', () => {
+    // Task 32's half, landed and pinned HERE so `remove` and `add` can never
+    // hold two definitions of "which env keys are ccrc's" —
+    // `install-session-hooks.sh`'s JQ_UNMANAGED argument (:83-86), applied.
+    const home = box('ccrc-account-prov-clear-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({
+      env: { MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://orchard-api/v1',
+        ANTHROPIC_API_KEY: '', CLAUDE_CODE_SUBAGENT_MODEL: 'orchard/haiku-1' },
+    }));
+    expect(sourceCall(home, `_acct_settings_env "${dir}" clear`).code).toBe(0);
+    expect(settingsAt(home, '.claude-lab-dev0')).toEqual({ env: { MY_OWN_KEY: 'kept' } });
+
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: 'https://orchard-api/v1' }, model: 'sonnet',
+    }));
+    expect(sourceCall(home, `_acct_settings_env "${dir}" clear`).code).toBe(0);
+    expect(settingsAt(home, '.claude-lab-dev0')).toEqual({ model: 'sonnet' });
+  });
+
+  it('refuses a settings.json that is not valid JSON, and changes nothing', () => {
+    const home = box('ccrc-account-prov-badjson-');
+    const dir = join(home, '.claude-lab-dev0');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'settings.json'), '{ this is not json');
+    const r = sourceCall(home, `_acct_settings_env "${dir}" set "https://orchard-api/v1" '{}'`);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('settings-invalid');
+    expect(readFileSync(join(dir, 'settings.json'), 'utf8')).toBe('{ this is not json');
+  });
+
+  it('the REAL session-hooks installer converges the same file, in the same run', () => {
+    // The one case that runs the shipped script rather than a recorder: the two
+    // merges touch ONE file, and a jq program that dropped the other's keys
+    // would only show up here.
+    const home = box('ccrc-account-prov-real-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'),
+      join(home, '.cc-sessions', 'install-session-hooks.sh'));
+    for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh',
+      'install-graphify-skill.sh']) {
+      writeFileSync(join(home, '.cc-sessions', n), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const s = settingsAt(home, '.claude-lab-dev0');
+    expect((s['env'] as Record<string, string>)['ANTHROPIC_BASE_URL'])
+      .toBe('https://orchard-api/v1');
+    expect(JSON.stringify(s['hooks'])).toContain('/session-hook.sh');
+    expect(JSON.stringify(s['statusLine'])).toContain('/statusline-command.sh');
   });
 });
