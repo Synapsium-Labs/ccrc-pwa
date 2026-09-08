@@ -19,8 +19,10 @@
 #
 # ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
 # The catalogue is read by another process (the server's fleet poll, ccd, the
-# verbs), so it lands tmp + `mv -f` — this repo's rule for any such file. And a
-# failed probe NEVER deletes a catalogue: it rewrites the previous one with
+# verbs), so it lands tmp + `mv -fT`, staged BESIDE the destination as
+# `$OUT.tmp.$$` (spec §4.2: tmp + mv in the SAME directory — a cross-
+# filesystem `mv` degrades to copy+unlink, which a reader can observe
+# mid-write). And a failed probe NEVER deletes a catalogue: it rewrites the previous one with
 # `stale: true` and the error text in `lastError` (§11), because "the network
 # was down for an hour" must not read on every surface as "every model this lane
 # had is retired".
@@ -82,9 +84,17 @@ MODELS_DIR="$HOME/.ccrc/models"
 [ -n "$OUT" ] || OUT="$MODELS_DIR/$ACCOUNT.json"
 
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-models-probe.XXXXXX")" || die "could not make a temp directory"
-trap 'rm -rf "$TMPD"' EXIT
+# NORM stages the CATALOGUE write beside its destination, `$OUT.tmp.$$`, not
+# inside $TMPD — spec §4.2 is tmp + mv in the SAME directory, and $TMPD can be
+# a different filesystem from $HOME/.ccrc/models: a cross-filesystem `mv`
+# degrades to copy+unlink, which is exactly the torn-file window the readers
+# named above (the fleet poll, ccd, the verbs) cannot tolerate. $TMPD is still
+# fine for RAW: that file is only ever read by the normaliser, never renamed
+# into place, so it carries none of that risk. `_mark_stale` reuses this same
+# $NORM path for its own rewrite, for the same reason.
 RAW="$TMPD/raw.json"
-NORM="$TMPD/catalogue.json"
+NORM="$OUT.tmp.$$"
+trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 
 # ── the fetch ────────────────────────────────────────────────────────────
 # Each arm writes the provider's RAW body to $RAW and returns non-zero when it
@@ -100,16 +110,24 @@ _fetch_codex() {
   venv_py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"
   [ -x "$venv_py" ] || venv_py="python3"
   token_dir="${CHATGPT_TOKEN_DIR:-$HOME/.handoff/chatgpt-auth}"
-  [ -f "$token_dir/auth.json" ] \
-    && CHATGPT_TOKEN_DIR="$token_dir" CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" \
-       "$venv_py" - > "$RAW" <<'PY'
+  [ -f "$token_dir/auth.json" ] || { echo "$PROG: not logged in ($token_dir)" >&2; return 1; }
+  CHATGPT_TOKEN_DIR="$token_dir" CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" \
+    "$venv_py" - > "$RAW" <<'PY'
 import json, os, sys, urllib.request
 from litellm.llms.chatgpt.authenticator import Authenticator
 
 token_dir = os.environ["CHATGPT_TOKEN_DIR"]
 account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
 token = Authenticator().get_access_token()
-headers = {"Authorization": f"Bearer {token}", "User-Agent": "codex-cli"}
+# The header block is `ccgpt-usage`'s, verbatim (read-only reference; never
+# run it): originator/user-agent/session_id are what the backend expects from
+# a real Codex CLI caller, alongside Authorization and ChatGPT-Account-Id.
+headers = {
+    "Authorization": f"Bearer {token}",
+    "originator": "codex_cli_rs",
+    "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
+    "session_id": "00000000-0000-0000-0000-000000000000",
+}
 if account_id:
     headers["ChatGPT-Account-Id"] = account_id
 url = ("https://chatgpt.com/backend-api/codex/models?client_version="
@@ -208,7 +226,7 @@ _mark_stale() {   # <reason>
     return 1
   }
   local why="$1"
-  CCRC_STALE_WHY="$why" python3 - "$OUT" "$TMPD/stale.json" <<'PY' || return 1
+  CCRC_STALE_WHY="$why" python3 - "$OUT" "$NORM" <<'PY' || return 1
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
 try:
@@ -217,9 +235,15 @@ except ValueError:
     raise SystemExit(1)
 cat["stale"] = True
 cat["lastError"] = os.environ["CCRC_STALE_WHY"]
-json.dump(cat, open(dst, "w"))
+with open(dst, "w") as f:
+    json.dump(cat, f)
+# The mode must survive a failure too: without this, the rewritten file comes
+# out at whatever `open(dst, "w")`'s umask gives it — measured 0644/0664, not
+# the 0600 a successful probe writes, and an OpenRouter catalogue carries the
+# lane's price list.
+os.chmod(dst, 0o600)
 PY
-  mv -f "$TMPD/stale.json" "$OUT" || return 1
+  mv -fT "$NORM" "$OUT" || return 1
   echo "$PROG: $why — keeping the previous catalogue, marked stale." >&2
   return 1
 }
@@ -238,5 +262,9 @@ fi
 # 0600 before the rename, not after: the file is world-readable for the width of
 # an fchmod otherwise, and an OpenRouter catalogue carries the lane's price list.
 chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
-mv -f "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
+# `-T`: rename, and REFUSE when $OUT is a directory, rather than moving $NORM
+# INSIDE it — a bare `mv -f` would "succeed" into the wrong place instead of
+# failing (the same reasoning `ccd`'s `_plat_mv_notdir` and `ccrc-adopt`'s
+# `$OUT.tmp.$$` staging record for this repo's other tmp+mv writers).
+mv -fT "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
 exit 0

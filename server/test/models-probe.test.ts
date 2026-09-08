@@ -138,6 +138,35 @@ describe('the Codex arm (§5)', () => {
     expect(mode).toBe(0o600);
   });
 
+  it('stages the catalogue write beside its destination, not in a shared temp dir (§4.2)', () => {
+    // spec §4.2 is tmp + mv in the SAME directory as the destination: a
+    // cross-filesystem `mv` (staging under `$TMPDIR`/`mktemp -d`, then moving
+    // into `~/.ccrc/models`) degrades to copy+unlink, which a reader (the
+    // fleet poll, ccd, the verbs) can observe mid-write. A temp DIRECTORY is
+    // still fine for the RAW fetch's own scratch space — it is only ever
+    // read, never renamed into place — so this checks the lines that actually
+    // get `mv`'d onto the destination, not every temp-file use in the file.
+    const src = fs.readFileSync(PROBE, 'utf8');
+    expect(src).toContain('"$OUT.tmp.$$"');
+    expect(src).toMatch(/mktemp -d/); // the RAW fetch's scratch dir — still fine, see above
+    const movedLines = src.split('\n').filter((l) => l.includes('mv -fT'));
+    expect(movedLines.length).toBeGreaterThan(0);
+    for (const l of movedLines) expect(l).not.toMatch(/\$TMPD\b/);
+  });
+
+  it('--out an existing directory refuses instead of writing inside it', () => {
+    // `mv -fT`, not a bare `mv -f`: `-T` REFUSES when the destination is a
+    // directory rather than moving the staged file inside it, which would
+    // "succeed" into the wrong place. Exit 1 — the same family as every other
+    // write failure past usage validation (`die`), not exit 2 (usage): the
+    // arguments themselves were fine, the destination was not.
+    const dir = path.join(home, 'existing-dir');
+    fs.mkdirSync(dir);
+    const r = run(['gpt', 'codex', '--out', dir], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code).toBe(1);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
   it('--out redirects the write and leaves the default path alone', () => {
     const out = path.join(home, 'elsewhere.json');
     const r = run(['gpt', 'codex', '--out', out], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
@@ -161,6 +190,18 @@ describe('the Codex arm (§5)', () => {
 describe('failure keeps the previous catalogue and marks it stale (§11)', () => {
   it('a failed fetch rewrites the previous file with stale:true and lastError, and NOTHING else changes', () => {
     run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    // Pin fetchedAt to a sentinel the failure path could never reproduce by
+    // coincidence. `Date.now()`-derived timestamps are `int(time.time())` —
+    // whole SECONDS — and the two `run()` calls in this test are typically
+    // well under a second apart, so comparing "before" and "after" against
+    // each other lets a mutant that refreshes fetchedAt slip through most of
+    // the time (measured: 18/20 mutant reds in a tight repeat loop, not a
+    // reliable single-run signal). A sentinel far from `Date.now()` makes the
+    // check deterministic instead of probabilistic.
+    const seededPath = path.join(home, '.ccrc', 'models', 'gpt.json');
+    const seeded = JSON.parse(fs.readFileSync(seededPath, 'utf8')) as { fetchedAt: number };
+    seeded.fetchedAt = 1600000000;
+    fs.writeFileSync(seededPath, JSON.stringify(seeded));
     const before = parseCatalogue(catalogueAt('gpt'));
     const r = run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'no-such-file') });
     expect(r.code).toBe(1);
@@ -169,7 +210,21 @@ describe('failure keeps the previous catalogue and marks it stale (§11)', () =>
     expect(after.stale).toBe(true);
     expect(after.lastError).toBeTruthy();
     expect(after.models).toEqual(before.models);
-    expect(after.fetchedAt).toBe(before.fetchedAt);
+    expect(after.fetchedAt).toBe(1600000000);
+  });
+
+  it('a failed probe does not downgrade the catalogue\'s mode', () => {
+    // Measured before the fix: 0600 after the successful seed, 0664 after the
+    // next failed run — `_mark_stale`'s python rewrite created the staged
+    // file with `open(dst, "w")`, which takes the umask, and nothing chmod'd
+    // it before the rename. An OpenRouter catalogue carries the lane's price
+    // list, so a failure must not loosen its mode.
+    run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    const out = path.join(home, '.ccrc', 'models', 'gpt.json');
+    expect(fs.statSync(out).mode & 0o777).toBe(0o600);
+    const r = run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'no-such-file') });
+    expect(r.code).toBe(1);
+    expect(fs.statSync(out).mode & 0o777).toBe(0o600);
   });
 
   it('a failed fetch with NO previous catalogue writes nothing at all', () => {
