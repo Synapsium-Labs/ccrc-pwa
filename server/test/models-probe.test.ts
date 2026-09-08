@@ -173,18 +173,26 @@ describe('the Codex arm (§5)', () => {
     const r = run(['gpt', 'codex', '--out', dir], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(1);
     expect(fs.readdirSync(dir)).toEqual([]);
+    // The explicit `[ ! -L "$2" ] && [ -d "$2" ]` guard is what keeps this
+    // refusal clean: measured, `os.rename(2)` on its own already refuses a
+    // real directory (`IsADirectoryError`, rc 1 — the same exit code), but it
+    // does so by raising, and an unhandled python exception prints its
+    // Traceback to stderr. The bash guard short-circuits before python ever
+    // runs, so this stays a one-line message, not a leaked stack.
+    expect(r.stderr, 'a python Traceback on stderr means the -d guard was skipped, not just that the write happened to be refused')
+      .not.toContain('Traceback');
   });
 
   it('--out a symlink to a directory replaces the link, like GNU mv -fT does', () => {
     // `[ -d "$2" ]` alone follows symlinks, so a naive fix would just exclude
-    // a symlink from the refusal above and leave the actual move as a plain
+    // a symlink from the refusal above and leave the actual write as a plain
     // `mv -f` — and measured, `mv -f "$1" symlink-to-dir` (no `-T` available
     // to this file) FOLLOWS the link and drops the file INSIDE the target
     // directory, which is the exact wrong-place write the refusal exists for,
-    // now silent instead of refused. The correct behaviour, matching GNU
-    // `mv -fT` and ccd/ccd's darwin `_plat_mv_notdir` arm: the link itself is
-    // replaced by the catalogue, and the directory it pointed at is
-    // untouched.
+    // now silent instead of refused. `_probe_mv_notdir` uses `os.rename(2)`
+    // through python3 instead: measured to replace the link entry in one
+    // syscall, whatever it points at — the link itself ends up holding the
+    // catalogue, and the directory it pointed at stays untouched.
     const target = path.join(home, 'symlink-target-dir');
     fs.mkdirSync(target);
     const link = path.join(home, 'out-link');
@@ -195,6 +203,15 @@ describe('the Codex arm (§5)', () => {
     const cat = parseCatalogue(JSON.parse(fs.readFileSync(link, 'utf8')));
     expect(cat.probe).toBe('codex');
     expect(fs.readdirSync(target), 'the directory the link pointed at must stay untouched').toEqual([]);
+    // The header's ATOMIC claim, checked on this branch specifically: one
+    // `rename(2)` call means there is no window in which $OUT names nothing
+    // (a remove-then-rename pair would open exactly that window). What that
+    // leaves to measure post-hoc is the END state — no `$OUT.tmp.$$` staging
+    // file surviving beside the destination, and exactly one entry at the
+    // destination's own name.
+    expect(fs.readdirSync(home).filter((n) => n.startsWith('out-link')),
+      'no .tmp staging file may survive beside the destination, and nothing but the destination itself may be there')
+      .toEqual(['out-link']);
   });
 
   it('--out redirects the write and leaves the default path alone', () => {
@@ -456,6 +473,9 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
       { CCRC_MODELS_PROBE_FIXTURE: ENDPOINTS_RAW, ANTHROPIC_AUTH_TOKEN: 'lane-token' });
     expect(r.code).toBe(1);
     expect(fs.readdirSync(dir)).toEqual([]);
+    // Same guard, same helper — see the Codex catalogue arm's own version of
+    // this assertion for what a skipped `-d` guard would leak here instead.
+    expect(r.stderr).not.toContain('Traceback');
   });
 
   it('the endpoints call needs the lane\'s key — the LIST stays credential-free (fix round 1, finding 3)', () => {

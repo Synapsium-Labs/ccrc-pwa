@@ -64,22 +64,26 @@ usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
 # GNU `-T`'s point was never "fail whenever $2 exists", it was "never move the
 # tmp INTO a directory sitting at $OUT" — a plain `mv -f` "succeeds" there by
 # dropping the file inside it instead of onto it. `[ -d "$2" ]` alone follows
-# symlinks, so it refused a SYMLINK to a directory too, where `mv -fT` (and
-# `_plat_mv_notdir`'s darwin arm, which excludes `[ ! -L "$2" ]`) replaces the
-# link instead — the link is the entry being renamed onto, not the directory
-# it happens to point at. Excluding the symlink from the refusal is not
-# enough by itself, though: measured against this file's own `mv -f` (no
-# `-T` available), a plain `mv -f "$1" symlink-to-dir` FOLLOWS the link and
+# symlinks, so it refused a SYMLINK to a directory too. Measured: a plain
+# `mv -f "$1" symlink-to-dir` (no `-T` available here) FOLLOWS the link and
 # drops the file INSIDE the target directory — the exact wrong-place write
-# this helper exists to refuse, now silent instead of refused. So for that
-# one case, and only that one, the link is removed first, leaving nothing
-# for the `mv -f` below to enter; a symlink to a file (or a dangling one)
-# needs no such step, because a plain `mv -f` there already replaces the
-# link entry directly (measured), matching what `-T` would do.
+# this helper exists to refuse, silent instead of refused; `mv -fT` replaces
+# the link instead, in one step. `os.rename(2)`, called through python3 (this
+# file already requires it — see the normaliser and `_mark_stale` below),
+# gives that same one-step replacement for ANY non-directory destination,
+# symlink or not: measured `os.rename(src, symlink-to-dir)` -> rc 0, the link
+# becomes the staged file, the target directory untouched; measured
+# `os.rename(src, real-directory)` -> `IsADirectoryError`, rc 1 — which the
+# explicit `-d` guard below refuses before python ever runs, so that path
+# stays a clean exit 1 rather than a traceback. One syscall for the actual
+# write keeps the header's ATOMIC claim true on the symlink branch too: unlike
+# a remove-then-rename pair, there is no instant at which $2 names nothing.
+# ccd/ccd's darwin arm guards the same `! -L "$2"`/`-d "$2"` shape before its
+# own bare `mv -f`; whether THAT `mv -f` also follows a symlink-to-dir on BSD
+# the way GNU's does is not measured here.
 _probe_mv_notdir() {
   [ ! -L "$2" ] && [ -d "$2" ] && return 1
-  [ -L "$2" ] && [ -d "$2" ] && rm -f -- "$2"
-  mv -f -- "$1" "$2"
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2"
 }
 
 ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""
