@@ -1374,3 +1374,40 @@ reaches the candidate loop. And **S3 traded a loud failure for a silent one**: a
 FIFO used to wedge the supervisor visibly and now reads as untagged, which relocates across pools with
 no strand and no line — the constraint-lifting class arrived at from the other direction. The remedy is
 the measured reader at that site, not reverting the guard.
+
+## D-TBD-doctor-models-timer — the ccd queue takes a third item, and the instance was smaller than the rule
+
+`claude-OpenClawHetzner` (mail 327) reported that `ccd/ccrc-doctor-checks`'s `_check_services` builds
+`installed` from a hardcoded five-unit `known` list (`:809` on `origin/main`), so the `ccrc-models.timer`
+their Plan 1 installs would never be asked about — and doctor's PASS line, whose own comment promises
+*"a box that answers 'PASS services' cannot be a box where the check quietly measured one unit"*, would
+silently omit it. All four of their claims confirmed by measurement.
+
+**Two things measurement added that the report did not have.**
+
+**The ordering they proposed is unnecessary, and backwards.** They offered it as a gate item behind
+their PR. But `installed` membership is gated on the unit FILE existing
+(`[ -f "$dir/$(_dr_unit_file "$u")" ]`), so naming a not-yet-installed unit is inert. Measured on a
+scratch worktree of main: **350 passed | 3 skipped, before and after.** So it ships independently of
+their PR — and it *should* ship first, because the failure it closes is SILENT and appears the moment
+their installer runs. A check for a thing should exist before the thing does.
+
+**And that same measurement says the one-liner would ship UNPINNED.** 350 pass with and without, which
+by this repo's doctrine makes it a request, not a mechanism. It is one line PLUS the fixture, never the
+line alone. Worth stating because the instinct on a "just add it to the list" fix is to skip the test,
+and I have spent this week booking other people's unpinned guards.
+
+**The rule was bigger than the instance.** Measuring every unit `ccrc` installs against every unit
+doctor asks about found two more outside `known` — `ccd-graph-sweep.timer` and `ccrc-ddns.timer` — both
+deliberately, because this file already runs **two designs**: ask systemd whether the unit runs
+(`known`), or measure the artifact the unit produces including its freshness (graph-sweep's census via
+`_plat_mtime`; ddns's actual DNS record). The models timer has neither, which is the true shape of the
+finding — not "the list went stale" but "a unit landed and neither design was extended to it". A `known`
+entry cannot see a timer that fires and produces nothing, which for a catalogue is the failure that
+bites. Recommended both, `known` first, and asked them for the catalogue's freshness contract since
+they own its semantics rather than me.
+
+**Queue, in order:** D-2000 (gates wave 3's SERVER deploy) → #69 round 3 (a LIVE log storm) →
+D-TBD-mv-symlink-dir → D-TBD-doctor-models-timer. No numbers minted for the two TBDs: a `D-N` is DEFINED
+in a plan, and one written into this ledger without a plan definition raises `deviation-refs.test.ts`'s
+tree scan without raising its plan scan.
