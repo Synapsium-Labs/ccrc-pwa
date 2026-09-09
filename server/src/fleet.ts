@@ -80,15 +80,17 @@ function hookAskText(hs: HookState | null): string | null {
  * chip would be reporting ancient history as if it were live.
  *
  * Thirty minutes, a judgement call rather than a measured ceiling (unlike
- * `ASK_GRACE_MS`/`ASK_ANSWERING_MAX_MS` in `watch.ts`, which are each
+ * `ASK_GRACE_MS`/`ASK_ANSWERING_MAX_MS` in `askwindow.ts`, which are each
  * argued from a specific failure mode): long enough that an operator who
  * glances at the fleet view some time after the fact still finds the
  * explanation waiting, short enough that the chip cannot outlive the
  * session's next several turns. Deliberately NOT tied to the child's own
  * hookstate — answering the question writes a hook event, so gating on
  * that would clear the chip the instant it appeared, defeating the whole
- * point of "ruled by" (`held` needs no such bound: a held ask is live by
- * definition, unaffected by this constant). */
+ * point of "ruled by" (`held` is bound too, by `ASK_HELD_CHIP_MAX_MS` —
+ * but that ceiling is DERIVED from `ASK_GRACE_MS` and
+ * `ASK_ANSWERING_MAX_MS` rather than chosen like this window, since past
+ * their sum a held row is stale by construction, not by judgement). */
 const ASK_ANSWERED_CHIP_WINDOW_MS = 30 * 60_000;
 
 /**
