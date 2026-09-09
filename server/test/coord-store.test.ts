@@ -7,7 +7,9 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { openCoordDb } from '../src/coord/db.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
@@ -1985,14 +1987,15 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
     parkRendered(s, 'coordinator', ids[3]!, MAIL_REPLAY_CEILING_ERROR);
     const reach = s as unknown as {
-      requeueAbandonedCoordinatorMail: (p: string, to: string, d: readonly string[]) => number;
+      requeueAbandonedMail: (role: { role: 'coordinator'; program: string },
+                             to: string, d: readonly string[]) => number;
     };
 
-    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(2);
+    expect(reach.requeueAbandonedMail({ role: 'coordinator', program: 'build4' }, LIVE, [DEAD])).toBe(2);
     // Again, with nothing left to move: the `NOT EXISTS` guard sees the two rows
     // the first call minted, so the answer is 0 rather than 2 a second time —
     // which is also why the number cannot be pinned as a constant.
-    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(0);
+    expect(reach.requeueAbandonedMail({ role: 'coordinator', program: 'build4' }, LIVE, [DEAD])).toBe(0);
   });
 
   it('re-queues exactly the abandoned role mail this program owes the chair — nothing else', () => {
@@ -2136,8 +2139,8 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const s = store();
     const ids = waves(s);
     const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
-    const patched = s as unknown as { requeueAbandonedCoordinatorMail: () => void };
-    patched.requeueAbandonedCoordinatorMail = () => { throw new Error('requeue failed'); };
+    const patched = s as unknown as { requeueAbandonedMail: () => void };
+    patched.requeueAbandonedMail = () => { throw new Error('requeue failed'); };
 
     expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('requeue failed');
 
@@ -2466,5 +2469,103 @@ describe('the programme row remembers its home', () => {
     const t = store();
     const b = open(t);
     expect(toRunSummary(t.run(b.id)!).homeProject).toBeNull();
+  });
+});
+
+describe('bindSession — the one writer of runs.sessionId, and the heir inherits the mail', () => {
+  const store = () => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const openOne = (s: CoordStore): number => {
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
+    if ('refused' in r) throw new Error('open refused');
+    return r.id;
+  };
+  /** One `to:'worker'` mail queued to the session that holds the run today —
+   *  the shape `POST /api/mail` mints once the role resolves. */
+  const workerMail = (s: CoordStore, runId: number, toId: string, subject: string): number =>
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'worker', runId,
+        kind: 'status', subject, body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, toId, '');
+      const stamped = s.setDeliveryEnvelope(d.id, `to: ${toId}\nack: ccrc-api mail ack ${d.id}\n`);
+      if (!stamped.ok) throw new Error(stamped.why);
+      return d.id;
+    });
+
+  it('a FIRST bind, from null, re-issues nothing', () => {
+    const s = store();
+    const runId = openOne(s);
+    expect(s.bindSession(runId, 'demo-worker')).toEqual({ rebound: false, reissued: 0 });
+    expect(s.run(runId)?.sessionId).toBe('demo-worker');
+  });
+
+  it('re-binding to the SAME session re-issues nothing', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    workerMail(s, runId, 'demo-worker', 'the wave brief');
+    expect(s.bindSession(runId, 'demo-worker')).toEqual({ rebound: false, reissued: 0 });
+    expect(s.mailForRecipient('demo-worker')).toHaveLength(1);
+  });
+
+  it('re-binding to a DIFFERENT session gives the heir a freshly rendered row and parks the predecessor', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    const oldDelivery = workerMail(s, runId, 'demo-worker', 'the wave brief');
+
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+
+    // The heir gets a NEW delivery of the SAME mail — two delivery rows for one
+    // mail is what this schema has always meant by "delivered to two
+    // recipients", and its counters are ZERO because they are true of it.
+    const heirs = s.mailForRecipient('demo-heir');
+    expect(heirs).toHaveLength(1);
+    expect(heirs[0]!.subject).toBe('the wave brief');
+    expect(heirs[0]!.attempts).toBe(0);
+    expect(heirs[0]!.state).toBe('queued');
+    expect(heirs[0]!.deliveryId).not.toBe(oldDelivery);
+
+    // FRESHLY RENDERED — the envelope names the HEIR, not the corpse, and its
+    // `ack:` line names its own delivery id. A replay may never be re-rendered;
+    // this is a second delivery, so it renders its own.
+    const env = s.deliveryEnvelope(heirs[0]!.deliveryId)!.envelope;
+    expect(env).toContain('to: demo-heir');
+    expect(env).not.toContain('to: demo-worker');
+    expect(env).toContain(`ack: ccrc-api mail ack ${heirs[0]!.deliveryId}`);
+
+    // …and the predecessor's row is PARKED, with a sentence that is true of it.
+    const old = s.delivery(oldDelivery)!;
+    expect(old.state).toBe('rejected');
+    // A DELIBERATE cancel: it must not read as "this park still needs a human"
+    // in a mailbox nobody is watching any more.
+    expect(s.outstandingMailFor('demo-worker')).toHaveLength(0);
+  });
+
+  it('leaves mail addressed to a literal session id alone — it was sent to a session, not to a chair', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
+        runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, 'demo-worker', '');
+      s.setDeliveryEnvelope(d.id, 'to: demo-worker\n');
+      return m;
+    });
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 0 });
+    expect(s.mailForRecipient('demo-heir')).toHaveLength(0);
+    expect(s.outstandingMailFor('demo-worker')).toHaveLength(1);
+  });
+
+  it('runs.sessionId has exactly ONE writer in the store, and it is bindSession', () => {
+    // The funnel as a MECHANISM. `setSession` and `markDispatched` both wrote
+    // this column directly before this wave, and either one restored would keep
+    // every behavioural case above green while silently reopening the hole the
+    // funnel exists to close: a re-bind that hands nobody the mail.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
+    const writers = [...src.matchAll(/UPDATE runs SET sessionId\b/g)];
+    expect(writers, 'runs.sessionId is written outside bindSession').toHaveLength(1);
   });
 });

@@ -419,31 +419,26 @@ describe('Build 7 nouns', () => {
   // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
-  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
-    const PAIR = new RegExp(
-      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
-    // The premise, established inside the test rather than assumed: this pattern
-    // really does recognise the copy it forbids, in both orders. Without these
-    // two lines the assertion below is satisfied by a regex that matches nothing.
-    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
-    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
-    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+  it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,2}\\)`);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound')")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
-    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+    const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the two named constants, so
-    // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
-    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
+                        'MAIL_REBIND_SUPERSEDED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
     }
-    // The two readers that must keep reaching the constant — "the copies are
-    // gone" is also satisfied by deleting the exclusion from both.
     expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
       .toBeGreaterThanOrEqual(2);
   });
@@ -749,7 +744,7 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
       'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
     expect(doc, 'the docstring does not name the in-file caller')
-      .toContain('requeueAbandonedCoordinatorMail');
+      .toContain('requeueAbandonedMail');
   });
 
   /** Statement keywords that wear a declaration's shape at two-space indent. A
