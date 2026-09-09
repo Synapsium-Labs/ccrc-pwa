@@ -5,8 +5,15 @@ operator 2026-09-08; inherits every 2026-08-11 ruling from `2026-08-11-crossrepo
 Plan: three wave plans, written before the program opened —
 `docs/superpowers/plans/2026-09-08-crossrepo-wave{1-server,2-skills-pwa,3-docs-flip}.md`
 Workspace: worker workspace spawned by wave 1's dispatch (recorded in the Waves table once it exists)
-Coordinator: operator-designated at open — a workspace-resident session running the `ccrc-coordinator`
-skill, homed in ccrc-pwa. NOT the account-pools coordinator, which owns a live program of its own.
+Coordinator: operator-designated at open (ruled 2026-09-09, the clean path): a FRESH main-checkout session
+of ccrc-pwa started from the run board's Start Program door, which queues the standing kickoff
+(`programKickoff`, `shared/api.ts`) that invokes the `ccrc-coordinator` skill — the operator types no skill.
+Opened only AFTER account-pools has closed: the sheet refuses a project with an open run, and the refusal
+is real — coordinator-role mail carrying no `runId` resolves to the single active programme FLEET-wide
+(`coord/routes.ts`, the mail ingress's role resolution), so two open programmes make every such mail
+`unknown-recipient`. The operator stops the live main checkout of ccrc-pwa first (the sheet starts a main
+checkout and refuses while one is alive). NOT the account-pools coordinator, which owns a live program of
+its own.
 
 The spec, the three plans and this ledger merge to `main` BEFORE wave 1 is dispatched, so every worker
 workspace is cut with its requirements in the tree. This ledger moves on the coordinator's branch (pushed
