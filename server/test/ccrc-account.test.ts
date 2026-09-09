@@ -75,13 +75,34 @@ function box(prefix: string): string {
 
 function env(home: string): NodeJS.ProcessEnv {
   const e = ghContainedEnv(home, { ...process.env, HOME: home });
-  const poison = (name: string, says: string): void =>
-    writeFileSync(join(home, '.local', 'bin', name),
+  const poison = (name: string, says: string, ifAbsent = false): void => {
+    const p = join(home, '.local', 'bin', name);
+    if (ifAbsent && existsSync(p)) return;
+    writeFileSync(p,
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
       + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
+  };
   poison('curl', 'ccrc tests must never reach a real server');
   poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
   poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
+  // THE FOURTH POISON, AND IT IS CREATE-IF-ABSENT while the three above are
+  // not. `env()` runs on EVERY `run()`, so an unconditional write would
+  // re-plant itself between two calls and displace a test's own tmux stub;
+  // curl/systemctl/launchctl want the unconditional write because nothing in
+  // this file ever wants those to answer. `ghContainedEnv` draws exactly this
+  // line for exactly this reason (ccdWsHelpers.ts:192-200, the guard at :233).
+  // Without it `_acct_live` (Task 28) reaches the DEVELOPER's tmux server: this
+  // runner keeps the real PATH, and a box that happens to have a server running
+  // would answer `measured` where a box that does not would answer `null`.
+  //
+  // IT IS THIS FILE'S OWN POISON RATHER THAN `ghContainedEnv(…, {tmux:true})`,
+  // and the difference is the LOG NAME. That one records into `$HOME/tmux-calls`
+  // (ccdWsHelpers.ts:229), which is also where `plantTmux` below records — so
+  // "the poison answered" and "the fixture's own tmux answered" would be the
+  // same file, and the case that asserts tmux was never asked could not tell a
+  // silent poison from an absent stub. `$HOME/tmux-poison` keeps the two
+  // conditions apart, which is the whole claim of the no-rows case.
+  poison('tmux', 'ccrc account tests must never reach this box\'s real tmux', true);
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete e[k];
   return e;
 }
@@ -618,17 +639,25 @@ describe('ccrc account candidates: doctor\'s own rule, and sizes only', () => {
     // NOT an empty directory, and the name says so: `ghContainedEnv` +
     // `harnessBin` (ccdWsHelpers.ts:123-127) create `<home>/.local/bin` and
     // plant `gh`, and this file's own `env()` plants curl/systemctl/launchctl
-    // beside it. All four are id-shaped `#!` scripts, so they pass two of the
+    // and — since Task 28 — tmux beside it. All FIVE are id-shaped `#!`
+    // scripts, so they pass two of the
     // predicates and are dropped by `_wrap_declares_config_dir` — which is
     // exactly the "anything looser would report every tool in ~/.local/bin as
     // an account" case doctor's comment names (ccrc-doctor-checks:2382-2386),
     // arriving here for free.
+    //
+    // THE COUNT IS AN ASSERTION AND IT CAUGHT ONE (Task 28): this listing is a
+    // CENSUS, so the fourth poison reddened it the moment it landed and had to
+    // be admitted here on purpose rather than absorbed. A poison that started
+    // declaring a config dir would leave this list unchanged and turn the
+    // `candidates` answer below non-empty, which is the half the census cannot
+    // see and the `toEqual([])` can.
     const home = box('ccrc-account-cands-empty-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     const r = run(home, ['account', 'candidates']);
     expect(r.code).toBe(0);
     expect(readdirSync(join(home, '.local', 'bin')).sort())
-      .toEqual(['curl', 'gh', 'launchctl', 'systemctl']);
+      .toEqual(['curl', 'gh', 'launchctl', 'systemctl', 'tmux']);
     expect(oneObject(r)['candidates']).toEqual([]);
   });
 });
@@ -4576,5 +4605,379 @@ describe('ccrc account declare: the pre-pass, and the class a field fault answer
     expect(readFileSync(file, 'utf8'), 'declare-entry wrote a roster it had refused').toBe(before);
     expect(detail(wrote).startsWith(decOpening), `declare-entry's opening moved:\n    ${detail(wrote)}`)
       .toBe(true);
+  });
+});
+
+/** A registry row: the `.uuid` that makes it a row, plus the two fields this
+ *  cluster reads. Written as ccd writes them — one file per field, no trailing
+ *  newline (`_reg_set`, ccd/ccd:1285-1291). */
+function plantRow(home: string, sid: string, o: { wrapper: string; home?: string }): void {
+  const reg = join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(join(reg, `${sid}.uuid`), 'u-1234');
+  writeFileSync(join(reg, `${sid}.wrapper`), o.wrapper);
+  if (o.home !== undefined) writeFileSync(join(reg, `${sid}.home`), o.home);
+}
+
+/** A tmux on the fixture's PATH that names exactly these sessions, ANSWERING at
+ *  exit 0 — the measured case. It displaces the create-if-absent poison
+ *  `env()` plants, which is why that one is conditional. Any argv other than
+ *  `list-sessions` is a loud failure: a verb that started DRIVING tmux rather
+ *  than asking it could not pass unnoticed (stubTmux's rule,
+ *  ccrc-doctor.test.ts:191-199). */
+function plantTmux(home: string, sessions: string[]): void {
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'tmux'), [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/tmux-calls"',
+    'if [ "$1" = list-sessions ]; then',
+    ...sessions.map((s) => `  printf '${s}\\n'`),
+    '  exit 0',
+    'fi',
+    'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
+  ].join('\n') + '\n', { mode: 0o755 });
+}
+
+const TOKEN_LANE = {
+  id: 'alt-max', label: 'alt·max', hue: 'violet', configDirSuffix: '.claude-alt-max',
+  homeAble: true, telemetry: 'anthropic',
+  exec: { kind: 'generated', provider: 'anthropic',
+    // THE PATH ccrc ITSELF WRITES: `_acct_write_secret` derives `<id>-<tag>.env`
+    // from its own arguments (Task 22), where the tag is `oauth` for a lane
+    // exporting CLAUDE_CODE_OAUTH_TOKEN and the provider id for an api-key lane,
+    // and `add` records exactly that (Task 23's `secretTag`, account-op.mjs:1075).
+    // It is also the name `ccd-account-auth` writes when a `setup-token` re-auth
+    // mints a new one (Task 54), which is why the three derivations are one rule.
+    // A fixture naming anything else would be about `secrets-path-unmanaged`,
+    // which is its own case below.
+    secretsFile: '.cc-secrets/alt-max-oauth.env' },
+};
+
+describe('deploy/account-op.mjs: lane and rotated, driven by hand', () => {
+  const OP = join(REPO, 'deploy', 'account-op.mjs');
+  const node = (args: string[]): Result => {
+    const r = spawnSync('node', [OP, ...args], { encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const rosterFile = (home: string): string => join(home, '.ccrc', 'accounts.json');
+
+  it('lane answers EIGHT lines with every empty field still in its own slot', () => {
+    // THE WHOLE REASON THIS OP IS NOT JSON, measured at the op rather than
+    // argued: `upstream` carries no secretsFile and an anthropic lane no
+    // baseUrl, so two of the seven fields are empty and one of them is not the
+    // last. TSV would collapse them (CLAUDE.md's measured hazard) and a bare
+    // list would lose a trailing one to `$( )`; the sentinel makes both loud.
+    const home = box('ccrc-account-op-lane-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = node(['lane', '--file', rosterFile(home), '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toEqual([
+      'upstream',                    // kind
+      'anthropic',                   // provider — ABSENCE-PERMITS (§4.1)
+      '',                            // secretsFile — absent, and NOT the last field
+      'CLAUDE_CODE_OAUTH_TOKEN',     // secretEnv, off PROVIDER_DEPLOY
+      '.claude',                     // configDirSuffix
+      '',                            // baseUrl — absent, and the last real field
+      '1',                           // homeAble
+      'END',
+      '',
+    ]);
+  });
+
+  it('lane leaves BOTH the provider and the env var empty for an external lane', () => {
+    // The two nulls `not-managed` is decidable from, and they are separate
+    // fields: an `external` entry's provider is genuinely undeclared (so the
+    // anthropic default must NOT apply), and a provider the table knows with no
+    // env var of its own answers '' rather than a guessed variable name.
+    const home = box('ccrc-account-op-lane-ext-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'gpt', label: 'gpt', hue: 'amber', configDirSuffix: '.claude-gpt',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external' } },
+      { id: 'gpt2', label: 'gpt2', hue: 'amber', configDirSuffix: '.claude-gpt2',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai' } }]);
+    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt']).stdout.split('\n').slice(0, 4))
+      .toEqual(['external', '', '', '']);
+    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt2']).stdout.split('\n').slice(0, 4))
+      .toEqual(['external', 'openai', '', '']);
+  });
+
+  it('lane refuses a missing key at exit 2, and an unknown id at exit 1', () => {
+    const home = box('ccrc-account-op-lane-argv-');
+    seedRosterJson(home, [UPSTREAM]);
+    const noId = node(['lane', '--file', rosterFile(home)]);
+    expect(noId.code).toBe(2);
+    expect(JSON.parse(noId.stdout)['error']).toBe('bad-argv');
+    const noFile = node(['lane', '--id', 'claude']);
+    expect(noFile.code).toBe(2);
+    expect(JSON.parse(noFile.stdout)['error']).toBe('bad-argv');
+    const bad = node(['lane', '--file', rosterFile(home), '--id', 'nope']);
+    expect(bad.code).toBe(1);
+    expect(JSON.parse(bad.stdout)['error']).toBe('unknown-id');
+  });
+
+  it('rotated refuses a --measured this file would have to guess at (D-2131)', () => {
+    // THE TOTAL CONVERSION, at a third address. `=== "true"` alone maps every
+    // other value — a typo, an empty string, a shell that dropped the flag — to
+    // `false`, which publishes "nobody could tell" about a box that answered.
+    for (const bad of ['yes', 'True', '1', '']) {
+      const r = node(['rotated', '--id', 'x', '--measured', bad]);
+      expect(r.code, `--measured ${JSON.stringify(bad)}`).toBe(2);
+      expect(JSON.parse(r.stdout)['error']).toBe('bad-argv');
+    }
+    expect(node(['rotated', '--id', 'x']).code).toBe(2);
+  });
+
+  it('rotated refuses live ids handed in beside --measured false', () => {
+    // The one shape neither side may send: a session named on a lane nothing
+    // could be measured on. Dropping the list silently would let the caller
+    // believe it had been carried.
+    const r = node(['rotated', '--id', 'x', '--measured', 'false', '--live', 'orchard-api']);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout)['error']).toBe('bad-argv');
+  });
+
+  it('rotated tells an EMPTY list from an unmeasured one, and neither is the other', () => {
+    expect(JSON.parse(node(['rotated', '--id', 'x', '--measured', 'true']).stdout))
+      .toEqual({ ok: true, id: 'x', live: [] });
+    expect(JSON.parse(node(['rotated', '--id', 'x', '--measured', 'false']).stdout))
+      .toEqual({ ok: true, id: 'x', live: null });
+    expect(JSON.parse(node(['rotated', '--id', 'x', '--measured', 'true',
+      '--live', 'a', '--live', 'b']).stdout))
+      .toEqual({ ok: true, id: 'x', live: ['a', 'b'] });
+  });
+});
+
+describe('ccrc account credential', () => {
+  it('writes the secret 0600 into a 0700 directory, and prints nothing of it', () => {
+    const home = box('ccrc-account-cred-write-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantTmux(home, []);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const f = join(home, '.cc-secrets', 'alt-max-oauth.env');
+    expect((lstatSync(f).mode & 0o777).toString(8)).toBe('600');
+    expect((lstatSync(path.dirname(f)).mode & 0o777).toString(8)).toBe('700');
+    expect(readFileSync(f, 'utf8')).toBe(`export CLAUDE_CODE_OAUTH_TOKEN=${CANARY}\n`);
+    // THE CANARY (spec:411-413). Both streams AND every file the fixture holds
+    // outside ~/.cc-secrets. `filesUnder` skips symlinks, so the whole-directory
+    // links `box()` plants for `deploy` and `shared` are not walked.
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+    const leaked = filesUnder(home)
+      .filter((p) => p !== f)
+      .filter((p) => { try { return readFileSync(p, 'utf8').includes(CANARY); } catch { return false; } });
+    expect(leaked, 'the credential appears outside ~/.cc-secrets').toEqual([]);
+    // THE ROSTER IS NOT TOUCHED (spec:419, "no roster change") — this verb
+    // rotates a file the entry already names.
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))['accounts'])
+      .toEqual([UPSTREAM, TOKEN_LANE]);
+  });
+
+  it('lists the LIVE sessions on the lane, and only those', () => {
+    const home = box('ccrc-account-cred-live-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });   // live
+    plantRow(home, 'lab-dev0', { wrapper: 'alt-max' });      // registered, pane gone
+    plantRow(home, 'team-shared', { wrapper: 'claude' });    // another lane
+    plantTmux(home, ['cc-orchard-api', 'cc-team-shared']);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['live']).toEqual(['orchard-api']);
+  });
+
+  it('answers live:[] from the REGISTRY when no row names the lane, without asking tmux', () => {
+    // Two measurements, and only the second one can fail. A box with no rows on
+    // this lane has nothing that could be live, so a tmux that cannot answer is
+    // not a gap — and rotating a credential must not need a tmux server.
+    const home = box('ccrc-account-cred-norows-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    // A REGISTRY WITH ROWS ON ANOTHER LANE, not an absent one: without this the
+    // case would also pass on a verb that never read the registry at all.
+    plantRow(home, 'team-shared', { wrapper: 'claude' });
+    // no plantTmux: env()'s poison records argv and exits 97
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['live']).toEqual([]);
+    expect(existsSync(join(home, 'tmux-poison')), 'tmux was asked with nothing to ask about')
+      .toBe(false);
+  });
+
+  it('answers live:null — never [] — when a row exists and tmux cannot be measured', () => {
+    const home = box('ccrc-account-cred-notmux-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(j['live']).toBeNull();
+    expect(j['live']).not.toEqual([]);
+    // The write still happened: the report of a gap is not a refusal.
+    expect(existsSync(join(home, '.cc-secrets', 'alt-max-oauth.env'))).toBe(true);
+    // AND THE POISON IS WHAT ANSWERED, which is the whole containment claim:
+    // the argv it recorded is this verb's one tmux call and nothing else.
+    expect(readFileSync(join(home, 'tmux-poison'), 'utf8'))
+      .toBe('list-sessions -F #{session_name}\n');
+  });
+
+  it('refuses a login lane with not-managed, and writes nothing', () => {
+    const home = box('ccrc-account-cred-login-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'lab-dev0', label: 'lab·dev0', hue: 'blue', configDirSuffix: '.claude-lab-dev0',
+        homeAble: true, telemetry: 'anthropic', exec: { kind: 'generated', provider: 'anthropic' } }]);
+    const r = run(home, ['account', 'credential', '--id', 'lab-dev0', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('not-managed');
+    // THE REMEDY IS A COMMAND THE OPERATOR CAN TYPE, so it carries `--id`
+    // between the verb and the method — `_acct_add`'s own
+    // `credential-not-managed` sentence has the identical shape. This task's
+    // plan asserted the contiguous string `auth-start --method login`, which
+    // its OWN refusal sentence two steps later cannot contain; the two halves
+    // are asserted separately rather than the sentence bent to the assertion.
+    expect(String(j['detail'])).toContain('auth-start --id lab-dev0');
+    expect(String(j['detail'])).toContain('--method login');
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+
+  it('refuses an external lane with not-managed — its credential is not ccrc’s', () => {
+    const home = box('ccrc-account-cred-external-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'gpt', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-gpt',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai' } }]);
+    const r = run(home, ['account', 'credential', '--id', 'gpt', '--credential', '-'], `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('not-managed');
+  });
+
+  it('refuses a lane whose provider keeps no env var, even when it names a secretsFile', () => {
+    // THE SECOND `not-managed` GATE, WHICH THE TWO CASES ABOVE NEVER REACH
+    // (D-2145's rule: not "is this tested" but which line, on which input).
+    // `rosterFromJson` validates `exec.secretsFile` on ALL THREE exec kinds
+    // (shared/roster-json.mjs:69, :231-250), so a hand-written external entry
+    // may legally name one — and `PROVIDER_DEPLOY['openai'].envVar` is null, so
+    // there is no variable to write into it. Deleting the first gate leaves this
+    // case green and deleting the second leaves the external case above green;
+    // only the pair pins both, and their DETAILS are what tell them apart.
+    const home = box('ccrc-account-cred-noenv-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'gpt', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-gpt',
+        homeAble: false, telemetry: 'none',
+        exec: { kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/gpt-openai.env' } }]);
+    const r = run(home, ['account', 'credential', '--id', 'gpt', '--credential', '-'], `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('not-managed');
+    expect(String(j['detail'])).toContain('keeps its credential outside ccrc');
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+
+  it('refuses a secretsFile ccrc did not write, rather than filling a file nothing sources', () => {
+    const home = box('ccrc-account-cred-unmanaged-');
+    // A HAND-WRITTEN path: legal in the roster (`SECRETS_SAFE_RE` admits it) and
+    // not what `_acct_write_secret` derives for this lane, which is the whole
+    // condition. The lane's own file would be `.cc-secrets/alt-max-oauth.env`
+    // — `oauth` because the lane exports CLAUDE_CODE_OAUTH_TOKEN (Task 22's
+    // `tag`) — so this roster points its wrapper somewhere ccrc cannot claim.
+    seedRosterJson(home, [UPSTREAM,
+      { ...TOKEN_LANE, exec: { ...TOKEN_LANE.exec, secretsFile: '.cc-secrets/alt-max.env' } }]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    // THE FILE FIRST, THE EXIT CODE SECOND, and the order is the assertion.
+    // What this gate exists to prevent is not a wrong exit code: it is a live
+    // credential landing in `<id>-oauth.env` while the wrapper sources
+    // `alt-max.env` and the operator reads a success line. Deleting the gate
+    // must red on the FILE, so the file is what is measured first — and
+    // `filesUnder` is used rather than one `existsSync` so a writer that picked
+    // any other name is caught too.
+    const dir = join(home, '.cc-secrets');
+    expect(existsSync(dir) ? filesUnder(dir) : [],
+      'a credential file was written for a lane ccrc cannot prove it owns')
+      .toEqual([]);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('secrets-path-unmanaged');
+    // BOTH paths, because the operator has to see which one their wrapper reads.
+    expect(String(j['detail'])).toContain('.cc-secrets/alt-max.env');
+    expect(String(j['detail'])).toContain('.cc-secrets/alt-max-oauth.env');
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+
+  it('derives the api-key lane\'s file from the PROVIDER, not the literal "oauth"', () => {
+    // THE OTHER HALF OF THE TAG RULE, and it is the same line measured on a
+    // second fixture shape (D-2145's two-fixtures finding). An `openrouter`
+    // lane exports ANTHROPIC_AUTH_TOKEN, so its file is `<id>-openrouter.env`
+    // — a `want` that hard-coded `oauth` would refuse this lane, and a `want`
+    // built from the provider alone (the plan's own snippet) would refuse the
+    // anthropic lane above. Only the shared derivation admits both.
+    const home = box('ccrc-account-cred-apikey-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'orchard-api', label: 'orchard·api', hue: 'green',
+        configDirSuffix: '.claude-orchard-api', homeAble: true, telemetry: 'none',
+        exec: { kind: 'generated', provider: 'openrouter',
+          secretsFile: '.cc-secrets/orchard-api-openrouter.env' } }]);
+    plantTmux(home, []);
+    const r = run(home, ['account', 'credential', '--id', 'orchard-api', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const f = join(home, '.cc-secrets', 'orchard-api-openrouter.env');
+    expect(readFileSync(f, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('refuses an id no roster carries, and reads the roster through the validator', () => {
+    // `unknown-id` is the `lane` op's own refusal and it arrives through
+    // `_acct_run_op`'s verbatim re-emit — so this also pins that the eight-line
+    // reader never sees a refusal envelope (the wrapper exits on node's class
+    // first, which is why `_acct_lane`'s own guard only ever judges rc 0).
+    const home = box('ccrc-account-cred-unknown-');
+    seedRosterJson(home, [UPSTREAM]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('unknown-id');
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
+  });
+
+  it('dies on empty stdin at exit 2, before it opens the destination', () => {
+    // `credential-empty`, class 2 — `_acct_read_credential`'s own code and its
+    // own class (Task 22's `[ -n "${v//[[:space:]]/}" ] || _acct_refuse 2
+    // credential-empty …`), not a second spelling here.
+    const home = box('ccrc-account-cred-empty-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'], '');
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('credential-empty');
+    expect(existsSync(join(home, '.cc-secrets', 'alt-max-oauth.env'))).toBe(false);
+  });
+
+  it('refuses --credential with anything but "-"', () => {
+    const home = box('ccrc-account-cred-rot-argv-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', CANARY]);
+    expect(r.code).toBe(2);
+    expect(oneObject(r)['error']).toBe('credential-not-stdin');
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('refuses a flag present with nothing in it, rather than dropping it (D-2148)', () => {
+    // The empty-flag loop `add` and `declare` both carry, at this verb's
+    // address. `--id ''` would otherwise fall through to `missing-value` from
+    // `_acct_id_or_refuse` and `--credential ''` would reach
+    // `credential-not-stdin`; both are the right class and the wrong sentence,
+    // and neither is what the operator did.
+    const home = box('ccrc-account-cred-emptyflag-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    for (const argv of [['--id', '', '--credential', '-'], ['--id', 'alt-max', '--credential', '']]) {
+      const r = run(home, ['account', 'credential', ...argv], `${CANARY}\n`);
+      expect(r.code, `${argv.join(' ')}: ${r.stderr}`).toBe(2);
+      const j = oneObject(r);
+      expect(j['error']).toBe('missing-value');
+      expect(String(j['detail'])).toContain('was given an empty value');
+    }
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
   });
 });

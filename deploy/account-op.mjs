@@ -588,6 +588,17 @@ const OPS = {
     keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
   },
   declared: { keys: ['file', 'id', 'disabled'], repeat: [] },
+  // THE ONE OP IN THIS FILE THAT DOES NOT ANSWER JSON, and the exception is
+  // argued at its arm below rather than here: bash needs seven roster values
+  // and `$( )` + `read` cannot carry an empty field safely in either of the
+  // shapes JSON would arrive in.
+  lane: { keys: ['file', 'id'], repeat: [] },
+  // `live` REPEATS — `candidates`' pair at a third address, and for its reason:
+  // one JSON blob on argv would put a value bash built with `printf` back into
+  // the JSON-shaped position this file owns. `measured` is a separate key from
+  // the list itself precisely so an EMPTY list and an UNMEASURED one are two
+  // argv shapes rather than one.
+  rotated: { keys: ['id', 'measured', 'live'], repeat: ['live'] },
 };
 
 function out(o) {
@@ -1510,6 +1521,89 @@ function main(argv) {
       kind: entry['exec']['kind'],
       disabled: a['disabled'] === 'true',
       roster: json,
+    });
+    return 0;
+  }
+
+  if (op === 'lane') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `lane needs --${k}`); return 2; }
+    }
+    // `readRoster` (Task 21), the module's one VALIDATING reader: three
+    // conditions, three codes, the validator's remedy verbatim. A lane read out
+    // of a roster the server would refuse to boot on is a fact about a box
+    // nobody can run, so refusing here is the answer rather than a nuisance.
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // `json['accounts']` UNGUARDED, `declared`'s spelling and not this task's
+    // plan snippet's `Array.isArray(json?.accounts) ? … : []`. `readRoster`
+    // returns only after `rosterFromJson` has refused a non-array `accounts`
+    // (shared/roster-json.mjs:437), so the guard could never be false — an
+    // unmeasurable branch, and a second spelling of a read this file already
+    // has one spelling of.
+    const acct = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);
+    if (acct === undefined) {
+      refuse('unknown-id',
+        `no account "${a['id']}" in ${a['file']} — 'ccrc account roster' lists what is there`);
+      return 1;
+    }
+    const e = (acct['exec'] !== null && typeof acct['exec'] === 'object') ? acct['exec'] : {};
+    // §4.1's absence-permitting rule: an account that names no provider is
+    // anthropic, EXCEPT an `external` one, whose provider is genuinely
+    // undeclared and whose credential is therefore nobody's business here.
+    const provider = e['provider'] ?? (e['kind'] === 'external' ? null : 'anthropic');
+    // `PROVIDER_DEPLOY` is the deploy-side mirror this file already carries and
+    // the `providers` op already proves against `shared/providers.ts` in both
+    // directions (Task 20). A provider the table does not know answers '' and
+    // the caller refuses `not-managed` — never a guessed env var name.
+    const envVar = provider === null ? null : (PROVIDER_DEPLOY[provider]?.envVar ?? null);
+    const q = (v) => (v === null || v === undefined ? '' : String(v));
+    // ONE FIELD PER LINE, AND AN `END` SENTINEL. Not TSV: TAB is an IFS
+    // whitespace character, so bash's `read` collapses a run of them and an
+    // empty middle field silently shifts every field after it (CLAUDE.md's
+    // measured 5th-TSV-field hazard). Not a bare list either: `$( )` strips
+    // trailing newlines, so a trailing EMPTY field would vanish. `END` is
+    // `_box_build_fields`' answer to the identical problem in this identical
+    // file (ccd/ccrc:1300-1301), and the reader's count check is :1318.
+    process.stdout.write([
+      q(e['kind']), q(provider), q(e['secretsFile']), q(envVar),
+      q(acct['configDirSuffix']), q(e['baseUrl']), acct['homeAble'] === true ? '1' : '0', 'END',
+    ].join('\n') + '\n');
+    return 0;
+  }
+
+  if (op === 'rotated') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'rotated needs --id'); return 2; }
+    // A BOOLEAN ON THE WIRE, TOTAL, `declared`'s rule (D-2131) at a third
+    // address — and here it decides which of two facts the answer states, so a
+    // `=== 'true'` that mapped every typo to `false` would publish "nobody
+    // could tell" about a box that told us plainly.
+    if (a['measured'] !== 'true' && a['measured'] !== 'false') {
+      refuse('bad-argv',
+        `rotated needs --measured true or --measured false, and got ${JSON.stringify(a['measured'] ?? null)}`
+        + ' — this field says whether tmux answered at all, so a value this file would have to '
+        + 'guess at is refused rather than read as a measurement');
+      return 2;
+    }
+    // A LIST WITH NOTHING MEASURED BEHIND IT IS THE ONE SHAPE NEITHER SIDE MAY
+    // SEND. `--measured false --live x` would be bash claiming a session it
+    // also says it could not see; silently dropping the list would let a caller
+    // believe it had been carried.
+    if (a['measured'] === 'false' && a['live'] !== undefined) {
+      refuse('bad-argv',
+        'rotated was given --live ids together with --measured false, which says both that a '
+        + 'session is running on this lane and that nothing could be measured — this is a bug in '
+        + 'ccrc, not a fact about your box');
+      return 2;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      // THE ONE READER OF THE DISTINCTION. `null` is "nobody could tell" and
+      // `[]` is "nobody is running": two facts an operator acts on differently,
+      // so they are decided once, here, from a flag bash had to set on purpose
+      // — never inferred from an empty list.
+      live: a['measured'] === 'true' ? (a['live'] ?? []) : null,
     });
     return 0;
   }

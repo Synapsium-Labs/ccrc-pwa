@@ -950,7 +950,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates declare roster"
+ACCT_SUBS="add candidates credential declare roster"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -4140,6 +4140,36 @@ _acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
   ACCT_CREDENTIAL="$v"
 }
 
+# ── THE SECRETS-FILE NAME, DERIVED ONCE IN BASH (Task 28) ─────────────────
+# `_acct_write_secret` builds its destination from this, and `_acct_credential`
+# re-measures the roster's `exec.secretsFile` against it. Two callers, one rule:
+# the writer's own header below says "THE TWO DERIVATIONS MUST STAY ONE RULE"
+# about this exact derivation, and a second hand-typed copy in the reader would
+# have been the drift that sentence forbids — measured, this task's plan snippet
+# spelled the reader's copy `.cc-secrets/$id-$ACCT_PROVIDER.env`, which refuses
+# every anthropic lane ccrc itself created, because that lane's file is
+# `<id>-oauth.env`.
+#
+# NODE KEEPS THE THIRD SPELLING and cannot be made to share this one:
+# `deploy/account-op.mjs:1075`'s `secretTag` is the same rule in the other
+# language, and a bare `node` cannot import bash. Two spellings, one per
+# language, is this tree's stated floor for exactly this shape
+# (`ccrc-wrapper-shape`'s note on `WRAPPER_SUFFIX_SAFE_RE`); `add` writing the
+# path it derives into the roster and `credential` refusing when the roster
+# disagrees is what makes the pair measurable rather than remembered.
+ACCT_SECRET_TAG=""
+_acct_secret_tag() {   # <provider> <envvar> -> ACCT_SECRET_TAG
+  # THE THIRD ARGUMENT DECIDES, NOT THE SECOND: a lane exporting
+  # `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth token whatever its provider is
+  # called, and `check-add` reads it out of the same column for the same reason.
+  ACCT_SECRET_TAG="$1"
+  [ "$2" = CLAUDE_CODE_OAUTH_TOKEN ] && ACCT_SECRET_TAG=oauth
+  # `return 0` because the `&&` above is this function's last command and would
+  # otherwise hand every api-key lane a non-zero status for having a provider
+  # tag rather than an oauth one.
+  return 0
+}
+
 _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forget it
   # `_exp_env_write`'s discipline (:3492-3544) at a different address: `umask
   # 077` INSIDE the writing subshell so the temp is 0600 from its FIRST byte —
@@ -4218,8 +4248,15 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # `ccd-account-auth`'s `setup-token` capture writes the same name on re-auth
   # (Task 54), and Task 28 REFUSES rather than guessing when the roster and this
   # derivation disagree (`secrets-path-unmanaged`).
-  tag="$provider"
-  [ "$var" = CLAUDE_CODE_OAUTH_TOKEN ] && tag=oauth
+  #
+  # THE RULE ITSELF IS ONE LINE UP, IN `_acct_secret_tag`, SINCE TASK 28 — the
+  # sentence above says the derivations must stay one rule, and `credential`
+  # became the second bash caller of it. It was lifted rather than copied for
+  # the reason `_acct_id_or_refuse` was: a second spelling in bash is drift
+  # nothing in this tree can see, because `single-definition.test.ts` filters
+  # `/\.tsx?$/` and never reads `ccd/`.
+  _acct_secret_tag "$provider" "$var"
+  tag="$ACCT_SECRET_TAG"
   dest="$ACCT_SECRETS_DIR/$id-$tag.env"
   tmp="$ACCT_SECRETS_DIR/.$id-$tag.env.tmp.$$"
   # `%q`, NOT `%s`, AND THE FILE IS THE REASON (D-1984, review round 1). This
@@ -5310,6 +5347,244 @@ _acct_declare() {
   printf '%s\n' "$ACCT_OUT"
 }
 
+# ── the roster's exec block, read once, through the node sibling ──────────
+# `~/.ccrc/accounts.sh` carries NO exec fields — `generateAccountsSh`
+# (shared/generate.mjs:170-238) emits three id arrays (CCRC_ACCOUNTS,
+# CCRC_HOME_ABLE, CCRC_MEASURED), one scalar (CCRC_UPSTREAM) and five lookup
+# functions, and nothing else — so a subshell source cannot
+# answer any of this. One reader, seven values, and the EMPTY STRING for every
+# field the roster does not carry: an absent `secretsFile` and a declared one
+# are two different lanes, and the caller below branches on exactly that.
+#
+# EIGHT LINES AND AN `END` SENTINEL, NOT TSV. TAB is an IFS whitespace
+# character, so `IFS=$'\t' read -r a b c d e` over `ok\tclaude\t.claude-plain\t\topenrouter`
+# COLLAPSES the empty field and yields `d=[openrouter] e=[]` (CLAUDE.md's
+# measured hazard). One field per line has no such collapse — but `$( )` strips
+# trailing newlines, so a trailing EMPTY field would vanish instead.
+# `_box_build_fields` already solved this exact problem in this exact file
+# (:1300-1301, read back at :1317-1318), and this is that with eight lines
+# instead of six.
+#
+# `ACCT_PROVIDER` AND `ACCT_SUFFIX` ARE ALREADY WRITTEN BY `_acct_add_parse`,
+# where they mean what the OPERATOR ASKED FOR rather than what the roster says.
+# Nothing runs both today — `add` never calls this, and every caller of this
+# never parses `add`'s flags — and the names are the ones this plan's Task 32
+# is written against, so they are kept and the overload is named here rather
+# than discovered. A verb that ever needs both must give one pair its own names.
+ACCT_KIND=""; ACCT_SECRETS=""; ACCT_SECRET_ENV=""; ACCT_BASEURL=""; ACCT_HOMEABLE=0
+_acct_lane() {   # <id>
+  local -a f=()
+  local x
+  # `_acct_read_op`, NOT `_acct_write_op`: this op ANSWERS, so an empty body is
+  # `no-answer` and not success — and this op's answer is not JSON, which is the
+  # one thing that wrapper does not care about. It captures stdout, re-emits a
+  # refusal envelope verbatim on a non-zero exit and leaves with node's class,
+  # so nothing below ever judges anything but the rc-0 case. The clause is the
+  # honest one at every call site this function has: it runs before any write.
+  _acct_read_op "Nothing was written." lane --file "$(_acct_roster_path)" --id "$1"
+  mapfile -t f <<<"$ACCT_OUT"
+  # `_box_build_fields`' guard (:1318), verbatim in shape: the count AND the
+  # sentinel, so a helper that grew a field is a refusal rather than seven
+  # values silently shifted by one.
+  [ "${#f[@]}" -eq 8 ] && [ "${f[7]}" = END ] \
+    || _acct_refuse 1 lane-unreadable "the account helper described account \"$1\" in ${#f[@]} lines instead of 8 - this is a bug in ccrc, not a fact about your box, and nothing was written"
+  # THE CONTROL-CHARACTER LOOP IS NOT `_box_build_fields`' AND MEASURES NOTHING
+  # TODAY, said out loud rather than left to be credited (D-2145, D-2163). That
+  # function reads a stamp `jq` parsed with no validator in front of it, so a
+  # newline in `ref` really can arrive; every one of the eight fields here comes
+  # back through `readRoster`, whose `rosterFromJson` refuses a `configDirSuffix`
+  # outside `^\.[A-Za-z0-9._-]+$`, a `secretsFile` outside
+  # `^[A-Za-z0-9._/-]+$`, a `kind` and a `provider` outside fixed sets, and a
+  # `baseUrl` `new URL()` has already stripped every raw control byte from — so
+  # no roster this reader can be handed can carry one. It is kept because the
+  # ninth field nobody has thought of yet is the case it is for, and because
+  # these values are interpolated into refusal sentences an operator reads on a
+  # terminal; it is NOT kept because a test reds when it goes.
+  for x in "${f[@]}"; do
+    [[ "$x" =~ [[:cntrl:]] ]] \
+      && _acct_refuse 1 lane-unreadable "account \"$1\" carries a control character in its roster entry, which this verb will not interpolate - fix \$HOME/.ccrc/accounts.json"
+  done
+  ACCT_KIND="${f[0]}"; ACCT_PROVIDER="${f[1]}"; ACCT_SECRETS="${f[2]}"
+  ACCT_SECRET_ENV="${f[3]}"; ACCT_SUFFIX="${f[4]}"; ACCT_BASEURL="${f[5]}"
+  ACCT_HOMEABLE="${f[6]}"
+}
+
+# ── which panes have not seen a rotated token yet ─────────────────────────
+# TWO MEASUREMENTS, AND ONLY THE SECOND ONE CAN FAIL. First the registry: a row
+# is a `<id>.uuid` file (`_box_sessions` counts them the same way, :1775-1788)
+# and its `.wrapper` field says which lane it runs on. If NO row names this
+# lane, nothing could be live and `[]` is a measurement of the registry — so
+# tmux is never asked, and a box with no tmux server can still rotate a
+# credential.
+#
+# Only when a row does name it is tmux asked, ONCE, bounded, for the whole
+# answer rather than N has-session calls. A tmux that is absent, or whose server
+# is gone, or whose socket holds without answering, has told us NOTHING about
+# liveness — and "no session is running on this lane" is a different fact for
+# the operator than "nobody could tell". Collapsing them into `[]` would put a
+# Restart-each-session list of length zero in front of somebody whose panes are
+# all still holding the old token. Any non-zero rc is read as "nobody could
+# tell", which is the reading `_check_tmux_skew` takes of the same call
+# (ccrc-doctor-checks:443-457 — rc 124 and every other non-zero alike SKIP). The
+# polarity is deliberately the opposite of `remove`'s (Task 32), which REFUSES
+# on an unmeasurable tmux: reporting a gap is right for a write that has already
+# succeeded, and refusing is right for a delete that has not started.
+#
+# A LITERAL 5, AND NO KNOB. `ccrc doctor` accepts no arguments (:2000), so every
+# `CCRC_*` a verb declares must also join `ccrc-cli.test.ts`'s deletion array or
+# the suite's answer starts depending on the developer's exported shell. A knob
+# earns that line when a test would otherwise have to wait out a production
+# timeout (`ccrc-doctor-checks:152-158`). Nothing here waits: the fixture's tmux
+# either answers at once or exits 97.
+#
+# `$_SVC_REG` AND NOT A SECOND `$HOME/.cc-sessions` — the constant is declared
+# at :96 for exactly this, and `_box_sessions` spelling it again is the drift
+# that comment names, not a precedent.
+ACCT_LIVE_MEASURED=false
+ACCT_LIVE_IDS=()
+_acct_live() {   # <id>
+  local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0
+  local -a rows=()
+  ACCT_LIVE_MEASURED=true
+  ACCT_LIVE_IDS=()
+  if [ -d "$reg" ]; then
+    shopt -q nullglob && had_nullglob=1
+    shopt -s nullglob
+    # `u`, not `f`: `_acct_lane` one function up uses `f` for an ARRAY, and
+    # the linter reads the two as one variable (SC2178, and a comment opening
+    # with that tool's own name is parsed as a directive rather than prose,
+    # which is why this sentence does not). A name that makes a linter tell the
+    # truth costs nothing.
+    for u in "$reg"/*.uuid; do
+      sid="${u##*/}"; sid="${sid%.uuid}"
+      [ -r "$reg/$sid.wrapper" ] || continue
+      # THE RETURN CODE IS NOT THE TEST, THE VALUE IS — `_acct_read_credential`'s
+      # own rule at a second address, and this task's plan snippet had the
+      # opposite: `IFS= read -r w < … || w=""`. `_reg_set` (ccd/ccd:1285-1291)
+      # writes each field with NO trailing newline, so `read` returns 1 at EOF
+      # having ALREADY set the variable — and that `|| w=""` wiped every
+      # wrapper name on the way past, which would have answered `live: []` for
+      # every box on earth while claiming a measurement.
+      w=""
+      IFS= read -r w < "$reg/$sid.wrapper"
+      [ "$w" = "$id" ] && rows+=("$sid")
+    done
+    [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  fi
+  [ "${#rows[@]}" -gt 0 ] || return 0
+  names="$(_plat_timeout 5 tmux list-sessions -F '#{session_name}' 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then ACCT_LIVE_MEASURED=false; return 0; fi
+  # The pane's tmux session name is `cc-<id>` — `ccd`'s `_tmux()` (ccd/ccd:1114)
+  # is the one place that mapping is spelled, and this is its second reader
+  # rather than a looser substring match: `*"$sid"*` would call `cc-orchard`
+  # live because `cc-orchard-api` is.
+  for sid in "${rows[@]}"; do
+    case $'\n'"$names"$'\n' in *$'\n'"cc-$sid"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
+  done
+  return 0
+}
+
+# ── credential — replace a token lane's secret, and say who has not seen it ─
+# Spec §5's `credential` row (spec:419) is a ROTATION, not a first write: the
+# roster is not touched, one 0600 file is replaced through the writer `add`
+# already uses, and the answer names the panes still holding the old token.
+_acct_credential() {
+  local id="" cred="" v="" flag=""
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id|--credential)
+        [ $# -ge 2 ] \
+          || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
+        v="$2"; shift ;;
+      --id=*|--credential=*) v="${1#*=}" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account credential has no argument \"$1\"" ;;
+    esac
+    # A FLAG GIVEN AN EMPTY VALUE IS NOT A FLAG NOBODY GAVE (D-2148, D-2154) —
+    # the loop `add` and `declare` both carry, at this verb's address and NOT
+    # left out because both of this verb's flags happen to have a downstream
+    # gate. They do, and both answer the wrong sentence: `--id ''` would reach
+    # `_acct_id_or_refuse`'s "an account id is required" and `--credential ''`
+    # would reach `credential-not-stdin`, telling an operator who typed an
+    # empty value that they typed no value and that they typed a secret on
+    # argv. THE GATE IS HERE, ON `$v`, for this pair's reason: both spellings
+    # of both flags land in `$v` exactly once.
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag $flag was given an empty value. A flag present with nothing in it is not the same as a flag nobody passed, so it is refused rather than dropped: give it a value, or leave it off. Nothing was written."
+    case "$flag" in
+      --id)         id="$v" ;;
+      --credential) cred="$v" ;;
+    esac
+    shift
+  done
+  _acct_id_or_refuse "$id"
+  _acct_lane "$id"
+
+  # TOKEN LANES ONLY, and `not-managed` names the difference rather than hiding
+  # it. A login lane's credential is Claude Code's own `.credentials.json`
+  # inside the config dir; an external lane's is the launcher's. Neither is a
+  # file this verb may replace, and both re-auth some other way.
+  #
+  # THE REMEDY NAMES A SUBCOMMAND WAVE 1 DOES NOT SHIP, deliberately, and
+  # `_acct_add`'s `credential-not-managed` sentence says the same thing at its
+  # own address: `auth-start` is §5's own name for the sign-in door and lands
+  # with wave 2's routes. On a wave-1 box the same act is `ccd-account-auth <id>
+  # login` (Tasks 51-53) or `ccd account-pane --id <id> --method setup-token`
+  # (Task 50). The sentence is written for the finished system because a remedy
+  # the operator reads a month from now should name the verb they have; naming
+  # `ccd-account-auth` in a message that outlives wave 2 by years would be a
+  # remedy that ages into a lie.
+  #
+  # TWO GATES, TWO SENTENCES, BECAUSE THEY ARE TWO CONDITIONS. The first is a
+  # lane with no secrets file at all; the second is a lane that names one whose
+  # PROVIDER keeps no env var — `rosterFromJson` validates `exec.secretsFile` on
+  # all three exec kinds, so a hand-written `openai` entry can reach the second
+  # while the first passes. One code, because the operator's next move is the
+  # same (re-auth elsewhere); two details, because what they are looking at is
+  # not.
+  [ -n "$ACCT_SECRETS" ] \
+    || _acct_refuse 1 not-managed "account $id declares no secretsFile, so there is no credential file for ccrc to replace - a subscription lane re-auths with: ccrc account auth-start --id $id --method login; an external lane's credential belongs to its own launcher. Nothing was written."
+  [ -n "$ACCT_SECRET_ENV" ] \
+    || _acct_refuse 1 not-managed "account $id's provider keeps its credential outside ccrc, so there is no env file for this verb to write, whatever exec.secretsFile says. Nothing was written."
+
+  # THE PATH IS RE-MEASURED, NOT TRUSTED. `_acct_write_secret` DERIVES its
+  # destination from <id> and the tag `_acct_secret_tag` decides, and `add`
+  # records exactly that path, so on a lane ccrc created these agree by
+  # construction. On a hand-written roster entry they may not — and writing the
+  # new token into a file the wrapper does not source, under a success message,
+  # is worse than refusing. One writer, one umask discipline; a lane ccrc cannot
+  # prove it owns is told so.
+  #
+  # `${ACCT_SECRETS_DIR#"$HOME/"}` RATHER THAN A LITERAL `.cc-secrets`: the
+  # roster stores the path relative to $HOME and the writer's own directory
+  # constant is the only spelling of it in this file (:943).
+  _acct_secret_tag "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
+  local want="${ACCT_SECRETS_DIR#"$HOME/"}/$id-$ACCT_SECRET_TAG.env"
+  [ "$ACCT_SECRETS" = "$want" ] \
+    || _acct_refuse 1 secrets-path-unmanaged "account $id's roster entry names \$HOME/$ACCT_SECRETS, and this verb writes \$HOME/$want - rotating would fill a file $WRAPPER_BIN_DIR/$id does not source. Either edit exec.secretsFile to $want, or replace \$HOME/$ACCT_SECRETS by hand. Nothing was written."
+
+  # THE CREDENTIAL IS READ LAST, `_acct_add`'s order and its reason: it is the
+  # one value in this run that must never be read for a request the box was
+  # going to refuse anyway.
+  _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
+  _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
+  _acct_live "$id"
+
+  # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
+  local -a args=(--id "$id" --measured "$ACCT_LIVE_MEASURED")
+  local sid=""
+  for sid in ${ACCT_LIVE_IDS[@]+"${ACCT_LIVE_IDS[@]}"}; do args+=(--live "$sid"); done
+  # CAPTURED WITH THIS SITE'S OWN CLAUSE (D-2130, D-2135), not passed straight
+  # through: by this line the 0600 file has been replaced and cannot be rolled
+  # back, so a shared "Nothing was written." would state the opposite of what
+  # happened — and what this run can no longer tell the operator is precisely
+  # the list it was about to print.
+  _acct_read_op "The 0600 credential file $ACCT_SECRET_WRITTEN WAS replaced and nothing rolls it back; the roster was not touched and no session was restarted. Only this report failed, so this run cannot name the panes still holding the OLD token: a wrapper sources its secrets file at exec time, so every session already running on \"$id\" keeps the old value until it is recreated." \
+    rotated "${args[@]}"
+  printf '%s\n' "$ACCT_OUT"
+}
+
 cmd_account() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
@@ -5366,6 +5641,14 @@ cmd_account() {
       # path that RETURNS non-zero instead of exiting would otherwise be
       # swallowed here and answered as exit 0 over whatever stdout carried.
       _acct_candidates || exit $?
+      return 0
+      ;;
+    credential)
+      # NO `[ $# -eq 0 ]` GATE, `add`'s reason at a third address: this
+      # subcommand TAKES arguments and `_acct_credential` owns every refusal
+      # about them. Every failure path inside it `exit`s, so the `return 0`
+      # below is reached only when the file was replaced and the report printed.
+      _acct_credential "$@"
       return 0
       ;;
     declare)
