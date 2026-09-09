@@ -17111,3 +17111,56 @@ round was right that no distinction is narrowed, because the per-verb sentence s
 
 Both are small, both are the last of Task 27, and neither is a defect the round introduced — they are
 the two things it found while doing what it was told and correctly left for a ruling.
+
+### D-2163 — a ruling has now named an empty gate load-bearing twice, and that earns a rule about rulings
+
+Round 5's extraction work found **four more unmeasured mechanisms** — three of the five `RosterInvalid`
+openings (`readRoster`, `check-declare`, `declare-entry`) and, sharpest, **`declare-entry`'s own
+`rosterFromJson`**. That last one could be deleted with the file green at 167/167, whereupon it answered
+exit 0 and appended an entry the roster's own validator refuses.
+
+Its source calls it *"the writer's own last gate"*. **D-2143's ruling relies on it.** That is the second
+time in two rounds — D-2153 was the first, with `add-entry`'s twin — that a ruling of mine named a
+mechanism as load-bearing while that mechanism was measuring nothing.
+
+Two instances is a pattern, and it produces a rule about how rulings get written:
+
+> **When a ruling argues "keep gate X because Y", the same act must delete X and record what reds.**
+
+The argument and the evidence are different claims, and this ledger now contains two cases where I
+produced the first and assumed the second. It costs one mutation to convert the assumption into a
+measurement, at the moment the ruling is made rather than two rounds later — and both times the gate was
+genuinely correct, so the cost of checking would have been a paragraph and the cost of not checking was
+a mechanism that would have rotted silently.
+
+**The other three have their own shape and it generalises past this file.** The one opening that WAS
+measured was the pair D-2152 happened to pin for an unrelated reason; nothing pinned the other three, so
+the extraction could have collapsed three per-verb sentences into one and no suite would have said so.
+**A formatter's per-caller parameter is only as safe as the rows that read it back** — which is the rule
+to apply to any future extraction in this file, and there will be more.
+
+Wave total: **twelve unmeasured mechanisms**, every one with a measured neighbour.
+
+### D-2164 — a deliberate tripwire, and a sentence changed to let two arms share honestly
+
+Two smaller things from the same round, recorded so neither reads as an accident later.
+
+**The tripwire.** D-2150 accepted `declare`'s base-url residual and asked that wave 2 not rediscover the
+choice from scratch. Round 5's four-key table now asserts `--base-url ''` answers `roster-invalid` at 1,
+which means it goes **red the day the `shared/roster-json.mjs` export lands** and the residual closes.
+That is intended, and the row says so. **Wave 2 must update that row, not route `--base-url` into
+`emptyFlagClass`** — the loop is for flags no roster validator can name, and `baseUrl` is a field the
+validator names precisely. A red row is a question, and this one has a written answer waiting.
+
+**The sentence.** `check-add`'s shipped refusal noun changed from "the plan" to *"carried into the entry
+it proposes"*, so that `check-add` and `check-declare` could share one `emptyFlagClass` honestly: only
+one of the two answers with a `plan`, both propose an entry. The alternative was parameterising the
+noun, which would have put a distinction on an argument where the shared truth is that both callers
+propose an entry. **RULING: accept.** A shared helper whose sentence needs a per-caller noun is usually
+telling you the callers differ; here it was telling us the original noun was the narrower of the two,
+and widening it made the sharing honest rather than papering over it.
+
+The boundary D-2142/D-2150 drew survives and is now argued on the function itself: **field vocabulary is
+the validator's; an empty flag is an argv question no roster validator can name, because by the time it
+reads the entry the flag is gone.** That sentence is the reason the loop exists and the reason it stops
+where it does.
