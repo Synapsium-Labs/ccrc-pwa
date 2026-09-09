@@ -6204,6 +6204,18 @@ describeLinux('ccrc doctor: scopes', () => {
 // (settings.json exists but could not be READ, a WARN distinct from both
 // hard FAILs) — get different bodies and different remedies on purpose (task
 // brief, "Why three conditions and not two"; R22/R23 add the third).
+//
+// R33 (controller ruling, whole-branch review): "forked" is a WARN, not a
+// FAIL. `cmd_install` ends with `cmd_doctor`, whose non-zero exit on any FAIL
+// hard-dies `ccrc update` before its supervisor sweep ever runs, and `forked`
+// FAILs by construction on every multi-home box until the operator runs the
+// one irreversible `ccrc memory --apply` — so an unrelated verb was coercing
+// that migration. "unreachable" stays a FAIL: it names a misconfiguration,
+// not an expected pre-migration state. The tests below were all written
+// against the pre-R33 FAIL and are updated in place, not reworded around it —
+// see `_check_memory`'s own comments in ccd/ccrc-doctor-checks for the fuller
+// reasoning.
+//
 // `healthy()` plants no `.claude*` directory at all, so these tests build
 // agent homes by hand under each fixture's own `home`.
 //
@@ -6263,7 +6275,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // store as a dangling link — and it does not even LOOK dangling. `[ -d
   // "$store" ]` is what this test pins as a SEPARATE, independently mutable
   // conjunct from `-ef`.
-  it('FAILs (forked) when the store exists but is a regular FILE, not a directory (R20)', () => {
+  it('WARNs (forked) when the store exists but is a regular FILE, not a directory (R20, R33)', () => {
     const home = healthy('ccrc-doctor-mem-store-is-file-');
     const d = join(home, '.claude', 'projects', '-p-demo');
     mkdirSync(d, { recursive: true });
@@ -6273,19 +6285,24 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     writeFileSync(store, '');   // the "store" is a FILE, not a directory
     symlinkSync(store, join(d, 'memory'));
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
   });
 
-  it('FAILs and names the home and project when a pair is forked (plain directory, not a symlink)', () => {
+  it('WARNs and names the home and project when a pair is forked (plain directory, not a symlink) (R33)', () => {
     const home = healthy('ccrc-doctor-mem-fork-');
     const d = join(home, '.claude', 'projects', '-p-demo', 'memory');
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, 'a.md'), 'x');
     writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
-    const i = r.stdout.split('\n').findIndex((l) => l.startsWith('FAIL memory:'));
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+    const i = r.stdout.split('\n').findIndex((l) => l.startsWith('WARN memory:'));
     expect(r.stdout.split('\n')[i + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
+    // R33: a forked-only box is a WARN, not a FAIL — `ccrc update` (which ends
+    // in `cmd_doctor`) must not hard-die over the expected pre-migration
+    // state of a multi-home box.
+    expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+    expect(r.code).toBe(0);
   });
 
   // R4: the brief's fork fixture seeds a plain DIRECTORY, which a mutation
@@ -6293,7 +6310,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // still fail correctly on, because a directory is not a symlink at all.
   // This fixture is the one M3 actually has to answer to: a symlink that
   // IS a symlink, but points at the wrong place.
-  it('FAILs and names the pair when the symlink exists but points at the wrong target (R4)', () => {
+  it('WARNs and names the pair when the symlink exists but points at the wrong target (R4, R33)', () => {
     const home = healthy('ccrc-doctor-mem-wrong-target-');
     const d = join(home, '.claude', 'projects', '-p-demo');
     mkdirSync(d, { recursive: true });
@@ -6302,7 +6319,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     mkdirSync(elsewhere, { recursive: true });
     symlinkSync(elsewhere, join(d, 'memory'));
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
   });
 
   // R12 (review round 2, extended here from Task 2's `_mem_state`): a link
@@ -6311,7 +6328,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // to do on it, and a doctor that PASSed here would be the exact silence
   // this task exists to remove, one layer down. This also exercises R10: a
   // dangling symlink like this one is invisible to a bare `[ -e "$link" ]`.
-  it('FAILs, not PASSes, when the link already points at the correct store but the store does not exist (R12)', () => {
+  it('WARNs, not PASSes, when the link already points at the correct store but the store does not exist (R12, R33)', () => {
     const home = healthy('ccrc-doctor-mem-dangling-');
     const d = join(home, '.claude', 'projects', '-p-demo');
     mkdirSync(d, { recursive: true });
@@ -6319,7 +6336,62 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     const store = join(home, '.ccrc', 'memory', '-p-demo');
     symlinkSync(store, join(d, 'memory'));   // store deliberately never created
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  // R33 (controller ruling, whole-branch review Important — "none of
+  // `_check_memory`'s three verdict→rc assignments has a red test"): each of
+  // the three `rc=`/`[ "$rc" -eq 1 ] || rc=2` lines gets its own dedicated
+  // fixture here, isolated so exactly one of the three findings fires, and
+  // pins BOTH the printed verdict word AND `cmd_doctor`'s own worst-class
+  // cross-check (`ccd/ccrc:2048`-`:2063`) — deleting any one of the three
+  // lines leaves the WARN/FAIL text unchanged (that text is printed by
+  // `_dr_warn`/`_dr_fail` unconditionally) but desyncs the check's return code
+  // from what it printed, which `cmd_doctor` catches as a bug and reports as
+  // an EXTRA `FAIL memory: the check exited …` line — invisible to a test
+  // that only regexes for the original verdict line, which is exactly why
+  // R21/R23's existing assertions above did not catch it.
+  it('a forked-only box: WARN, no synthetic bug line, exit 0 (pins the forked rc=2 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-forked-');
+    const d = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked/m);
+    expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(0);
+  });
+
+  it('an unreachable-only box: exactly one FAIL memory line, no synthetic bug line, exit 1 (pins the unreachable rc=1 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-unreach-');
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    const failLines = r.stdout.split('\n').filter((l) => l.startsWith('FAIL memory:'));
+    expect(failLines).toEqual(['FAIL memory: agent homes the session hook cannot reach, so they will fork on first use: .claude-glm']);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(1);
+  });
+
+  it('an unmeasured-only box: WARN, no synthetic bug line, exit 0 (pins the unmeasured rc=2 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-unmeasured-');
+    const h = join(home, '.claude-corp');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const settings = join(h, 'settings.json');
+    writeFileSync(settings, HOOKED_SETTINGS);
+    chmodSync(settings, 0o000);
+    try {
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches/m);
+      expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+      expect(r.stdout).not.toMatch(/the check exited/);
+      expect(r.code).toBe(0);
+    } finally {
+      chmodSync(settings, 0o644);   // afterEach's rmSync must still be able to clean up
+    }
   });
 
   it('FAILs differently for a home the session hook can never reach, and does not confuse it with a fork', () => {
@@ -6402,28 +6474,41 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     expect(r.stdout).toMatch(/^PASS memory: /m);
   });
 
-  // Guard test, same rule: `.claude-docserver` is the docs-preview server's
-  // own config dir (a fleet-host convention, not a Claude Code agent home at
-  // all) and must never be examined for memory convergence, whatever shape
-  // its `projects/` directory happens to hold.
-  it('skips .claude-docserver even when it looks forked', () => {
+  // `.claude-docserver` is NO LONGER special-cased (Minor, whole-branch
+  // review round 3 — reached independently for this file's own reason, see
+  // `_check_memory`'s comments in ccd/ccrc-doctor-checks): hard-coding a
+  // single operator's box-local tool name into shipped, public-release-bound
+  // source is the residue class CLAUDE.md bans, and on every measured box the
+  // exclusion excluded nothing the generic `[ -d "${h}projects" ]` guard did
+  // not already exclude. So a `.claude-docserver`-named directory is now
+  // examined like any other `.claude*` home — this test used to pin a PASS
+  // here (the old guard test) and now pins the opposite: a `projects/` dir
+  // under that name is real evidence, and doctor reports it like it would for
+  // any other home.
+  it('no longer special-cases .claude-docserver — a forked pair there is reported like any other home', () => {
     const home = healthy('ccrc-doctor-mem-docserver-skip-');
     const d = join(home, '.claude-docserver', 'projects', '-p-demo', 'memory');
     mkdirSync(d, { recursive: true });
     writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude-docserver', 'settings.json'), HOOKED_SETTINGS);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS memory: /m);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-docserver:-p-demo/m);
   });
 
   // R21 (fix round 2, Important 2): round 1's "emit exactly one verdict line"
   // instruction was wrong twice over — `cmd_doctor` counts verdict LINES, not
   // a fixed arity per check, and this file's own header already rules that
   // two distinct hard findings are two distinct operator actions and get two
-  // FAIL lines, each with its own remedy. A fork on one home and an
-  // unreachable finding on an unrelated home are independent facts; dropping
-  // either one to keep to "one line" is exactly the silence this task exists
-  // to end.
-  it('prints BOTH FAIL lines, each with its own remedy, when a box is both forked and unreachable', () => {
+  // lines, each with its own remedy. A fork on one home and an unreachable
+  // finding on an unrelated home are independent facts; dropping either one
+  // to keep to "one line" is exactly the silence this task exists to end.
+  //
+  // SINCE R33 THIS IS A WARN LINE AND A FAIL LINE, not two FAILs: forked is
+  // demoted, unreachable is not, and the worst-class cross-check
+  // (`ccd/ccrc:2048`-`:2063`) still has to pick FAIL as the check's return
+  // code — this test pins that too (`r.code`), which the pre-R33 version of
+  // this test never needed to.
+  it('prints a WARN line and a FAIL line, each with its own remedy, when a box is both forked and unreachable (R33)', () => {
     const home = healthy('ccrc-doctor-mem-both-');
     const forkedDir = join(home, '.claude', 'projects', '-p-demo', 'memory');
     mkdirSync(forkedDir, { recursive: true });
@@ -6436,7 +6521,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     const lines = r.stdout.split('\n');
     const verdictLines = lines.filter((l) => /^(PASS|WARN|FAIL|SKIP) memory: /.test(l));
     expect(verdictLines.length).toBe(2);
-    const forkedIdx = lines.findIndex((l) => l.startsWith('FAIL memory: memory is forked across agent homes:'));
+    const forkedIdx = lines.findIndex((l) => l.startsWith('WARN memory: memory is forked across agent homes:'));
     const unreachIdx = lines.findIndex((l) => l.startsWith('FAIL memory: agent homes the session hook cannot reach'));
     expect(forkedIdx).toBeGreaterThanOrEqual(0);
     expect(unreachIdx).toBeGreaterThanOrEqual(0);
@@ -6444,5 +6529,7 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     expect(lines[unreachIdx]).toContain('.claude-glm');
     expect(lines[forkedIdx + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
     expect(lines[unreachIdx + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(1);
   });
 });

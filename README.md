@@ -448,7 +448,8 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
 host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
 fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, and `~/.ccrc/memory` — the
+sole live copy of every project's durable memory since `ccrc memory --apply` — complete before any
 install write); re-run the install spine from the verified staged tree (role-aware, atomic,
 seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
 the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
@@ -468,8 +469,11 @@ takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
 inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
 `~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
-backups — never worktrees, never tmux state.
+(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
+(roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
+`~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
+a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
+to remove it too; never worktrees, never tmux state.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -955,17 +959,25 @@ harness mints one for every throwaway directory a session was started in.
 home is copied across; a byte-identical collision stays one file; a same-named file whose
 content *differs* keeps **both** copies, the incoming one suffixed with the home it came
 from, for a human to reconcile. `MEMORY.md` is the exception — an index of one line per file,
-derivable from each file's own `name`/`description` frontmatter, so it is rebuilt rather than
-merged. Sub-directories and non-`.md` files are not memory files: they are counted, not
-copied, and where a backup was taken the run names how many stayed behind in it. Only a
-**real directory** is backed up — beside itself as `memory.pre-ccrc-<UTC>`, with the path
-printed on that pair's line; the symlink arms take no backup, because a link holds no data.
-And it **refuses rather than reporting a success it did not achieve**: a union that cannot
-read a source or land a copy exits non-zero with the pair named, leaving the original
-directory exactly where it stood. It also normalises a converged link whose own text is not
-the store — a relative spelling, or a *chain* through another home's link, which would
-quietly make one account's home load-bearing for every other, reintroducing one level up the
-very failure this replaces.
+derived from each file's own `name`/`description` frontmatter where it has one. A file that
+does not (measured: a small minority fleet-wide) is dropped from the index — there is nothing
+to derive a line from — but never silently: the run counts what it dropped and names the
+count and the store in its own `NOTE:` line, the same discipline a suffixed conflict copy
+already gets. It is therefore rebuilt rather than merged. Sub-directories and non-`.md` files
+are not memory files: they are counted, not copied, and the run names how many stayed behind
+and where — a backup path on the plain-directory arm, the resolved source itself on the
+symlink arm, whichever ran. Only a **real directory** is backed up — beside itself as
+`memory.pre-ccrc-<UTC>`, with the path printed on that pair's line; the symlink arms take no
+backup, because a link holds no data. And it **refuses rather than reporting a success it did
+not achieve**: a union that cannot read a source or land a copy stops the *whole run* at that
+pair — the operator sees the failing pair's own diagnostic (or, on the symlink arm, the
+resolved target that could not be read, which names neither home nor project slug), but every
+home not yet processed is simply never reached and never mentioned, converged or not. Only the
+plain-directory arm's own source is guaranteed left exactly where it stood; nothing else is,
+once one pair fails. It also normalises a converged link whose own text is not the store — a
+relative spelling, or a *chain* through another home's link, which would quietly make one
+account's home load-bearing for every other, reintroducing one level up the very failure this
+replaces.
 
 `--apply` is a one-time operator act; two mechanisms keep it honest afterwards. The
 SessionStart hook converges one `(home, project)` pair per start and **never merges data** —
@@ -973,12 +985,15 @@ it acts only where there is nothing to lose (an absent link, or a plain director
 empty, tested by `rmdir`'s own failure so there is no check-then-act window across a live
 fleet), leaving a non-empty directory or a link pointing elsewhere exactly as found.
 `ccrc doctor`'s `memory` check then reports what the hook declined to touch, in three
-conditions it never collapses into one: **forked** pairs (remedy: `ccrc memory --apply`);
-homes the hook **cannot reach at all**, because `install-session-hooks.sh` builds its list
-from the roster (remedy: add the account to the roster, or register `session-hook.sh` in
-that home's `settings.json` by hand); and a `settings.json` that exists but **cannot be
-read**, which earns a WARN and its own remedy — "I could not measure it" is not "it is
-definitely not wired".
+conditions it never collapses into one, each its own severity: **forked** pairs are a
+**WARN** (remedy: `ccrc memory --apply`) — a fork is the expected state of every multi-home
+box before its one-time migration, not a misconfiguration, and FAILing it would hard-die
+`ccrc update` before its supervisor sweep ever runs, coercing an unrelated verb into demanding
+that migration; homes the hook **cannot reach at all** are a **FAIL**, because
+`install-session-hooks.sh` builds its default list from the roster (remedy: add the account to
+the roster, or register `session-hook.sh` in that home's `settings.json` by hand) — nothing
+repairs that on its own; and a `settings.json` that exists but **cannot be read** earns its own
+**WARN** and remedy — "I could not measure it" is not "it is definitely not wired".
 
 ## Attention, notifications and answering
 

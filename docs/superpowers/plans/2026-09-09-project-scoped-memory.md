@@ -254,6 +254,15 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
 }
 ```
 
+*(This is the Step-3 snapshot as originally planned. **FALSIFIED 2026-09-09 (R32, final whole-branch
+review) — see D-2178's rewritten entry below.** "THE SLUG IS READ, NEVER COMPUTED" is this snippet's
+own headline rule, and reading `dirname(transcript_path)` as the pair to converge is exactly what
+converges the wrong directory inside a git worktree — the modality this fleet runs in. The shipped
+`_hook_memory_converge` computes the slug from the project root instead, and the existence check in
+this same snapshot (`[ -d "$d" ]`, generalized to `[ -d "$projects/$slug" ]`) is what makes computing
+it safe. Do not use this snippet as a reference for the shipped function's slug derivation; every
+other row of its behaviour table below is otherwise still what shipped.)*
+
 - [ ] **Step 4: Call it from the SessionStart arm**
 
 In `ccd/session-hook.sh`, locate the `SessionStart)` arm by content — the line
@@ -293,6 +302,14 @@ record the failing assertion text, then restore.
 
 M4 is the important one: it is the exact defect the plugin's #294 records, and it must be
 demonstrated to red rather than argued.
+
+*(**Superseded 2026-09-09 (R32, final whole-branch review) — see D-2178's rewritten entry above.** M4
+guarded the ORIGINAL rule, "the slug is read, never computed"; that rule is reversed in the shipped
+function, so M4 as worded no longer describes a mutation of the shipped code. The shipped
+`_hook_memory_converge` carries its own mutation table instead — reverting the slug derivation to the
+old `dirname(transcript_path)` reading, deleting the `[ -d "$projects/$slug" ]` existence check, and
+deleting the `*/projects` layout assertion — each measured RED against a real `git worktree add`
+fixture in `server/test/session-hook.test.ts`.)*
 
 - [ ] **Step 7: Verify the live-box syntax and commit**
 
@@ -514,8 +531,11 @@ git commit -m "feat(ccrc): a memory census that enumerates homes from disk (D-21
 same-named file whose content **differs** is not resolved — **both are kept**, the incoming copy
 suffixed with the home it came from — because a memory file is prose a session wrote once and
 choosing between two of them is a judgement no script has the standing to make. `MEMORY.md` is the one
-exemption: it is an *index*, one line per memory file, and every memory file carries its own `name`
-and `description` in frontmatter, so it is **rebuilt** from the union rather than merged.
+exemption: it is an *index*, one line per memory file, derived from each file's own `name` and
+`description` frontmatter, so it is **rebuilt** from the union rather than merged. (**Corrected
+2026-09-09, whole-branch review:** not every memory file carries that frontmatter — measured 6 of 801
+fleet-wide — and the shipped rebuild (`ccd/ccrc`'s `_mem_rebuild_index`, R30) counts what it drops and
+reports it rather than silently losing the line; see the spec's §3 correction for the full measurement.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -704,6 +724,11 @@ _mem_apply() {
 }
 ```
 
+*(This is the Step-3 snapshot as originally planned; the "Deviations found" section below and the
+final whole-branch review carry everything that changed in `ccd/ccrc`'s shipped `_mem_apply` and its
+helpers since — including, as `_mem_index_line`'s comment above overstates, that not every memory file
+carries `name`/`description` frontmatter: see the spec's §3 correction.)*
+
 - [ ] **Step 4: Run to verify they pass**
 
 ```bash
@@ -750,9 +775,13 @@ git commit -m "feat(ccrc): union the memory stores, keeping both sides of a conf
 
 **Why three conditions and not two.** A home can be perfectly converged today and still be unable to
 *stay* converged: `.claude-glm` and `.claude-kimi` carry a `settings.json` that does not reference
-`~/.cc-sessions/session-hook.sh`, and `ccd/install-session-hooks.sh:68` builds its home list from
-`CCRC_ACCOUNTS` — the roster — so a home in no roster entry can never be wired. Collapsing
-"forked" and "unreachable" into one FAIL would send the operator to the wrong remedy.
+`~/.cc-sessions/session-hook.sh`, and `ccd/install-session-hooks.sh`'s DEFAULT (no-argv) home list is
+built from `CCRC_ACCOUNTS` — the roster — so a home in no roster entry is never wired *by that default
+run* (the installer also takes `--homes <dir>…`, unused by any `ccrc` verb — see D-2179's correction).
+Collapsing "forked" and "unreachable" into one bucket would send the operator to the wrong remedy;
+since R33 (final whole-branch review) they also carry different severities — forked is a WARN, and
+only unreachable stays a FAIL — because a fork is the expected pre-migration state of every multi-home
+box and an unreachable home is not.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -789,6 +818,11 @@ describe('_check_memory (spec 2026-09-08 §4)', () => {
   });
 });
 ```
+
+*(This is the Step-1 snapshot as originally planned. **Corrected 2026-09-09 (R33, final whole-branch
+review):** "FAILs and names the home when a pair is forked" is no longer accurate — the shipped
+`_check_memory` WARNs, not FAILs, on `forked` (see D-2249's correction below); only the "cannot reach"
+row stays a FAIL. `server/test/ccrc-doctor.test.ts` carries the updated assertions.)*
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -854,6 +888,11 @@ _check_memory() {
   _dr_pass memory "one memory store per project; every agent home converged"
 }
 ```
+
+*(This is the Step-3 snapshot as originally planned; the "Found during execution" deviations below —
+D-2246 through D-2252 — carry most of what changed in the shipped `_check_memory` since, and the
+final whole-branch review changed one more thing not yet in that list: `forked` is now a **WARN**, not
+a FAIL — see D-2249's correction below and the spec's §4 correction for why.)*
 
 Register it in `ccd/ccrc`'s doctor run. Locate how the existing checks are invoked (search
 `cmd_doctor` and the `_check_` call sites), and add `_check_memory` following that exact idiom.
@@ -938,7 +977,10 @@ Then, on the fleet host, **read the artifact rather than the exit code**:
 
 ```bash
 ccrc memory            # the census, before anything moves
-ccrc doctor            # expect FAIL memory, naming the forked pairs
+ccrc doctor            # expect WARN memory, naming the forked pairs (R33, final whole-branch
+                        # review: forked is a WARN, not a FAIL — a fork is the expected
+                        # pre-migration state of every multi-home box, and FAILing it would
+                        # hard-die `ccrc update` before its supervisor sweep ever runs)
 ```
 
 Only after reading that census, and with the operator's go, run `ccrc memory --apply` and re-read
@@ -954,21 +996,60 @@ both. Expect the two known content conflicts to appear as kept-both pairs needin
 Numbers are allocated by `ccrc-api ledger allocate` and defined here in the same act. Do not look a
 number up; do not invent one.
 
-- **D-2178** — the spec's §2 says the hook "resolves `(CLAUDE_CONFIG_DIR, project dir) → slug`". The
-  plan does **not** resolve a slug at all: it reads `dirname(transcript_path)` from the hook payload,
-  which IS `<config dir>/projects/<slug>/`. A second implementation of the slug function disagrees
-  SILENTLY — the `remember` plugin's own README records this as issue #294, where a slug that misses
-  names a directory that does not exist so the caller finds nothing and exits 0. Reading the harness's
-  own answer removes that failure mode entirely rather than guarding against it. Task 1, mutation M4
-  demonstrates it.
+- **D-2178** — **FALSIFIED 2026-09-09 (R32, final whole-branch review) — reversed, not merely
+  superseded.** This entry originally read: the spec's §2 says the hook "resolves
+  `(CLAUDE_CONFIG_DIR, project dir) → slug`"; the plan does **not** resolve a slug at all, it reads
+  `dirname(transcript_path)` from the hook payload, on the premise that this path already IS
+  `<config dir>/projects/<slug>/`; and reading the harness's own answer removes the `remember`
+  plugin's #294 failure mode (a computed slug that misses names a directory that does not exist)
+  entirely rather than guarding against it. **THE SLUG IS READ, NEVER COMPUTED** was this entry's own
+  headline rule.
+
+  That premise is false inside a git worktree, which is the modality this fleet runs in. Claude Code
+  files the **transcript** under the session's **cwd** slug and the **memory** directory under the
+  **repository's main-checkout** slug — two different directories once a worktree is in play, and
+  `dirname(transcript_path)` names the wrong one. Measured read-only on the fleet: 248
+  worktree-shaped slugs across 8 homes, not one carrying a `memory/` entry, sitting beside project
+  directories that hold memory files and zero transcripts. The hook was minting an empty, permanent
+  store per workspace ever created (`~/.ccrc/memory/<worktree-slug>`, unbounded, nothing prunes it),
+  leaving the real (home, project) pair forked forever, and making the census print `converged` for
+  the pair that does not exist beside `forked` for the one that does — for every worktree session on
+  this fleet, which is most of them.
+
+  **What replaced it:** the slug is now COMPUTED from the project root — the parent of `git
+  rev-parse --git-common-dir` (the main checkout's `.git` from anywhere inside the repository,
+  worktree or subdirectory alike; `--show-toplevel` would answer the worktree instead), resolved via
+  `cd`+`pwd -P` because the harness slugifies the physical path, and the cwd itself for a tree that is
+  no git repository at all. **Why computing it is safe now, when D-2178 rejected computing it in the
+  first place:** the existence check already in the hook's contract — `<config dir>/projects/<slug>`
+  must already exist before the function acts — makes a miss a silent no-op rather than a junk-store
+  factory: a wrong answer names a directory the harness never made, and the pair is simply skipped.
+  That is the same #294 failure mode this entry originally invoked to justify reading rather than
+  computing, now closed by the existence check instead of by avoiding computation. Task 1 (original);
+  the reversal ships in `ccd/session-hook.sh`'s `_hook_memory_converge`, with its own mutation table
+  (slug-derivation revert, existence-check deletion, layout-assertion deletion — all measured RED) and
+  a worktree fixture (`mkWorktree()`, a real `git worktree add`) in `server/test/session-hook.test.ts`.
 
 - **D-2179** — the spec's §4 requires doctor to report homes the hook cannot reach, but did not name
-  the cause. Measured: `ccd/install-session-hooks.sh:68` builds its home list from `CCRC_ACCOUNTS`
-  (`for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")"); done`), so a home in no
-  roster entry can never be wired, however correct the hook is. This plan does **not** auto-add
+  the cause. Measured: `ccd/install-session-hooks.sh`'s DEFAULT home list (no argv) builds from
+  `CCRC_ACCOUNTS` (`for _a in "${CCRC_ACCOUNTS[@]}"; do homes+=("$(_ccrc_cfg_dir "$_a")"); done`), so a
+  home in no roster entry is never wired **by that default run**. This plan does **not** auto-add
   `.claude-glm`/`.claude-kimi` to the roster: rostering an account changes where ccrc PLACES WORK, which
   is an operator decision with consequences well beyond memory. Doctor reports it and names both
   remedies. Task 4.
+  **Corrected 2026-09-09 (whole-branch review, Minor):** "a home in no roster entry can never be
+  wired, however correct the hook is" overstated what the installer can do — `install-session-hooks.sh`
+  itself takes `--homes <dir>…`, and its own header calls the roster list "the DEFAULT home list", not
+  the only one. An arbitrary home can be wired with one idempotent, jq-validating, backing-up
+  invocation of the installer without touching the roster at all. Doctor's own remedy text does not
+  offer this path — it still reads "add the account to the roster … or register `session-hook.sh` in
+  that home's `settings.json` by hand", sending the operator to the paranoid, backed-up script's own
+  header-declared danger zone (hand-editing the file the installer exists to protect) instead of the
+  installer's own `--homes` argv. A second inaccuracy in the same remedy: the `unreachable` bucket
+  also fires for an ALREADY-rostered home whose `settings.json` exists but no longer references the
+  hook, for which "add the account to the roster" is a no-op. Both are remedy-text inaccuracies that
+  live in `ccd/ccrc-doctor-checks`, outside this plan's file scope for this correction; recorded here
+  because the false "can never be wired" claim originates in this document.
 
 - **D-2180** — the spec describes the empty-directory case as a test followed by a replacement. The
   implementation uses `rmdir`'s own failure as the test, because `rmdir` succeeds only on an empty
@@ -986,6 +1067,12 @@ number up; do not invent one.
   must not be lost. `_mem_absorb` therefore unions the LINK TARGET into the store before re-pointing,
   and leaves the target directory itself standing — the home that owns it converges on its own pass.
   Task 3, mutation M5.
+  **Corrected 2026-09-09 (whole-branch review, Critical, fixed):** "the home that owns it" overstated
+  what the code can know — the target directory need not belong to any agent home's own pair at all
+  (the R18a/R18b tests deliberately point the link at a bare foreign directory that owns no pair), so
+  nothing guarantees it is ever converged on "its own pass". The run now names what was left behind:
+  `_mem_apply` prints the resolved target's own location in its `NOTE:` line whenever the symlink arm
+  leaves entries uncounted, rather than discarding that path once the link is dropped.
 
 ### Found during execution, 2026-09-09
 
@@ -1008,7 +1095,16 @@ blocks say.
   wrong, and the same rule strands a worse shape — a link CHAIN (`.claude-corp` -> `.claude`'s link ->
   store) also resolves, so `--apply` skipped it permanently and doctor printed PASS, leaving one
   account's HOME load-bearing for every other. That is the second defect of the existing prior art this
-  design exists to remove, and `.claude` sorts first, so it is the ordering a real box produces.
+  design exists to remove, and under this box's actual `en_US.UTF-8` locale `.claude` sorts before
+  `.claude-corp`, so it is an ordering a real box plausibly produces, not a contrived one.
+  **Corrected 2026-09-09 (whole-branch review, critic item D):** "`.claude` sorts first" is not a
+  general rule, and an earlier version of this entry stated it as one. Bash sorts the expanded glob
+  strings INCLUDING the trailing `/`, so under `LC_ALL=C` — what a stripped systemd environment
+  typically sets, and what this suite's own `doctorEnv` sets for `ccrc-doctor.test.ts` — `-` (0x2D)
+  beats `/` (0x2F) and `.claude-corp/` sorts BEFORE `.claude/`, the opposite order, which would
+  mis-attribute a conflict copy to the wrong home rather than manufacture the chain this arm repairs.
+  The chain shape itself is real prior art on this box regardless of which order manufactures it
+  mid-run; only the false universal ordering claim is retracted here.
   `_mem_apply` therefore NORMALISES a converged pair whose link text is not the store, with a bare
   `ln -sfn` and no `_mem_absorb` call, turning a chain into a star. `-n` is load-bearing: `ln -sf`
   without it writes the new link INSIDE the store. **The reason there is no absorb is not the obvious
@@ -1077,12 +1173,21 @@ blocks say.
   tool-not-found error. The file's real doctrine is narrower than "no external binaries": an external
   tool is allowed, but its absence must become a SKIP, never a narrowed verdict. Task 4.
 
-- **D-2249** — **TWO FAIL LINES, NOT ONE.** This plan returns 1 after the forked branch, so a box that
-  is both forked and unreachable reports only the fork and silently discards a measured finding.
+- **D-2249** — **TWO VERDICT LINES, NOT ONE** *(retitled 2026-09-09; originally "TWO FAIL LINES, NOT
+  ONE" — see the correction below).* This plan returns 1 after the forked branch, so a box that is
+  both forked and unreachable reports only the fork and silently discards a measured finding.
   `ccrc-doctor-checks`'s own header rules the opposite: two hard findings with two different operator
-  actions get two FAIL lines, each with its own remedy, rather than one bucket whose remedy is right
-  for only one of the two sentences it joined. `cmd_doctor` counts verdict LINES, not arity, so this
-  costs nothing. Task 4.
+  actions get two separate lines, each with its own remedy, rather than one bucket whose remedy is
+  right for only one of the two sentences it joined. `cmd_doctor` counts verdict LINES, not arity, so
+  this costs nothing. Task 4.
+  **Corrected 2026-09-09 (R33, final whole-branch review):** the two lines are no longer both FAIL. A
+  FAIL here hard-dies `cmd_update` (`cmd_install` ends every role arm with `cmd_doctor`, which returns
+  non-zero the moment any check FAILs) *before* the supervisor sweep runs — and this check FAILed on
+  `forked` by construction on every box that has ever run more than one agent home, coercing an
+  unrelated verb into demanding the one irreversible `ccrc memory --apply`. `forked` is now a **WARN**;
+  `unreachable` stays a **FAIL**, because a fork is the expected pre-migration state of a multi-home box
+  and an unreachable home is not. Both still print, independently, exactly as this deviation
+  established — only their severities changed, not the "never collapse to one line" rule itself.
 
 - **D-2250** — this plan tests `[ -f "${h}settings.json" ]` before asking whether a home references the
   hook, so a home carrying `projects/` and NO `settings.json` at all was never reported. That is the
@@ -1126,7 +1231,11 @@ wearing the clothes of an instruction.
 
 **Type consistency.** `_mem_homes`, `_mem_state`, `_mem_absorb`, `_mem_rebuild_index`,
 `_mem_index_line`, `_mem_apply`, `cmd_memory`, `_hook_memory_converge`, `_check_memory` — each is
-defined once and called under exactly that name. `_mem_state` returns the three tokens
-`converged|forked|absent`, and every caller tests those spellings.
+defined once and called under exactly that name. `_mem_state` returns three tokens,
+`converged|forked|absent`. **Corrected 2026-09-09 (whole-branch review, Minor):** "every caller tests
+those spellings" overstated it — both shipped call sites (`cmd_memory`, `_mem_apply`) gate on
+`[ -e "$link" ] || [ -L "$link" ] || continue` *before* calling `_mem_state`, so `absent` is
+unreachable from either. `usage()`'s own advertised census states were fixed to say "converged or
+forked" to match, in the same review.
 
 **Scope.** One subsystem, five tasks, each independently testable and independently rejectable.

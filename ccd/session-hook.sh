@@ -558,10 +558,12 @@ _hook_ccrc_card() {
 # home. `$CLAUDE_CONFIG_DIR/projects/<slug>/memory` is per-home, so a session
 # that swaps accounts mid-run keeps its transcript, workspace, hold and branch
 # and silently changes memory stores — the one continuity ccrc exists to
-# provide, missing. Measured 2026-09-09 (re-taken by the whole-branch review's
-# fix wave): 66 real memory directories across 8 homes — the figure was 40 four
-# days earlier, so it is a QUOTE, not a constant — and a session that read its
-# own superseded record after a swap.
+# provide, missing. Measured on the fleet host, re-taken 2026-09-09: 40 real memory
+# directories across 8 agent homes covering 13 distinct projects — the draft measured 28 across 5
+# homes one day earlier (2026-09-08), so this is a QUOTE, not a constant. (The `66` this comment cited
+# for one round was a DIFFERENT measurement — file instances for one project, `ccrc-pwa`, across the 5
+# homes that hold it — mistaken for the fleet-wide directory count it sits beside in the spec.) A
+# session read its own superseded record after a swap.
 #
 # THE SLUG IS COMPUTED FROM THE PROJECT ROOT, AND THE PROJECT DIRECTORY MUST
 # ALREADY EXIST. This REVERSES D-2178, whose headline rule was "THE SLUG IS

@@ -169,6 +169,27 @@ describe('ccrc memory — the census', () => {
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/usage: ccrc/);
   });
+
+  // Final whole-branch review (Minor): usage() used to advertise a third
+  // census state, "absent", that no shipped call site can ever elicit — both
+  // callers of `_mem_state` gate on `[ -e ] || [ -L ]` first, so `_mem_state`
+  // never returns `absent` to either of them. README already got this
+  // right; usage() did not.
+  it('usage text does not advertise an "absent" census state the census can never print', () => {
+    const r = run(['memory', '-h']);
+    expect(r.out).not.toMatch(/absent/);
+  });
+
+  // Minor (R13 audit, final whole-branch review): the summary's `forked`
+  // count had no assertion able to fail on a dead counter — `toMatch(/0
+  // forked/)` elsewhere in this file is satisfied by a counter that is
+  // permanently zero. Assert a NON-zero count against a fixture that is
+  // genuinely forked twice.
+  it('the summary forked count is a real count, not a permanently-zero counter', () => {
+    seed('.claude', '-p-a', { 'a.md': 'A' });
+    seed('.claude', '-p-b', { 'b.md': 'B' });
+    expect(run(['memory']).out).toMatch(/\n2 pairs, 2 forked\n/);
+  });
 });
 
 describe('ccrc memory --apply — the union', () => {
@@ -246,19 +267,106 @@ describe('ccrc memory --apply — the union', () => {
       .toEqual(['MEMORY.md']);
   });
 
+  // R30 (Critical, final whole-branch review): `_mem_index_line` used to
+  // return silently (rc 0) for a file with no `name:` frontmatter, and
+  // `_mem_rebuild_index` overwrote MEMORY.md with whatever survived — the
+  // file stayed on disk but vanished from the artefact actually loaded into
+  // context, with no count, no warning, exit 0. The fix is a COUNT, never a
+  // basename fallback: inventing a name for a file whose author did not
+  // write one is the same silent-decision defect this branch forbids for a
+  // conflict winner.
+  it('R30: a memory file with no name: frontmatter is COUNTED and named in a NOTE, never silently dropped', () => {
+    seed('.claude', '-p-demo', {
+      'kept.md': '---\nname: Kept\ndescription: has frontmatter\n---\nbody\n',
+      'nofm.md': 'plain prose with no name: frontmatter at all\n',
+    });
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    // the file is on disk, in the store — never lost
+    expect(fs.existsSync(path.join(storeDir(), 'nofm.md'))).toBe(true);
+    const idx = fs.readFileSync(path.join(storeDir(), 'MEMORY.md'), 'utf8');
+    expect(idx).toContain('Kept');
+    expect(idx).not.toContain('nofm.md');
+    // …and the run says so, unlike the shipped-before-this-fix behaviour
+    expect(r.out).toMatch(/NOTE: 1 file not indexed in MEMORY\.md \(no name: frontmatter\)/);
+  });
+
+  // R30 sibling (Critical): `mv -f -- "$tmp" "$store/MEMORY.md"` SUCCEEDS
+  // when the destination is a DIRECTORY — it moves $tmp INSIDE it — so a
+  // `MEMORY.md` that is somehow a directory used to swallow the whole index
+  // silently, rc 0, and the call site discarded even a real failure with
+  // `|| true`. Refuse the pair instead of claiming `converged` over a store
+  // whose index just failed to write.
+  it('R30 sibling: a MEMORY.md that is a DIRECTORY is refused, not silently swallowed by mv -f', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    fs.mkdirSync(path.join(storeDir(), 'MEMORY.md'), { recursive: true });
+    const r = run(['memory', '--apply']);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('is a directory, not a file');
+    expect(r.out).not.toMatch(/converged \.claude -p-demo/);
+  });
+
+  // Final whole-branch review (Important): `_mem_absorb`'s generic
+  // non-`.md`/directory counters do not check whether `$dest` is the SAME
+  // path as `$f` — so a self-resolving source (src -ef store, the R12
+  // dangling-correctly-spelled-link repair shape below) used to count the
+  // store's OWN pre-existing non-memory entries as "left behind, not
+  // migrated", exactly backwards. Exercise `_mem_absorb` directly (the
+  // file's own documented source-able idiom) with src==store holding
+  // exactly that shape.
+  it('_mem_absorb short-circuits when src and store are the SAME directory — no false "left behind" count', () => {
+    const store = storeDir();
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'a.md'), 'A');
+    fs.writeFileSync(path.join(store, 'notes.txt'), 'an operator note, not a memory file');
+    fs.mkdirSync(path.join(store, 'sub'));
+    const r = spawnSync('bash', ['-c',
+      'source "$1"; left=$(_mem_absorb "$2" "$2" corp) && printf \'left=%s\\n\' "$left"',
+      'wrapper', CCRC, store],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(r.status, `stderr: ${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe('left=0');
+    // nothing in the store was touched by the self-absorb
+    expect(fs.readdirSync(store).sort()).toEqual(['a.md', 'notes.txt', 'sub']);
+  });
+
   // I5 (review round 1): the original assertion here checked for a directory
   // NAME starting with `memory.pre-ccrc-` and nothing else — it passed
   // against a mutation that did `mkdir -p "$bk"; rm -rf "$link"` (an EMPTY
   // backup and a deleted source), because an empty directory still has the
   // right name. The backup is the sole recovery path for C1, C2 and I3, so
   // this is the assertion that most needs to check a byte actually arrived.
-  it('backs up each source directory before replacing it, with the bytes intact', () => {
+  //
+  // Retitled (final whole-branch review, Minor): the old name — "backs up
+  // EACH source directory" — was a universal this suite never checked; it
+  // seeds and asserts on exactly one PLAIN-DIRECTORY pair. Only that arm
+  // ever takes a backup at all (README's own documented distinction); the
+  // symlink arm's sibling behaviour is its own test right below.
+  it('backs up the source directory before replacing it, with the bytes intact (plain-directory arm)', () => {
     seed('.claude', '-p-demo', { 'a.md': 'A' });
     run(['memory', '--apply']);
     const parent = path.join(home, '.claude', 'projects', '-p-demo');
     const backupName = fs.readdirSync(parent).find((n) => n.startsWith('memory.pre-ccrc-'));
     expect(backupName).toBeDefined();
     expect(fs.readFileSync(path.join(parent, backupName!, 'a.md'), 'utf8')).toBe('A');
+  });
+
+  // The other half of the same distinction: the symlink arm's target is
+  // never renamed away, never backed up — the ONLY change on that arm is
+  // the link itself. Without a test naming this directly, "backs up EACH
+  // source directory" could regress into also backing up a symlink's
+  // target and nothing here would notice.
+  it('the symlink arm never takes a backup of its (untouched) target directory', () => {
+    const foreignTarget = path.join(home, 'foreign-memory');
+    fs.mkdirSync(foreignTarget, { recursive: true });
+    fs.writeFileSync(path.join(foreignTarget, 'z.md'), 'Z');
+    const d = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(foreignTarget, path.join(d, 'memory'));
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.readdirSync(foreignTarget).sort()).toEqual(['z.md']);
+    expect(r.out).not.toContain('(backup:');
   });
 
   // THE STAR ASSERTION, RESTORED (R27) — and the story of why it left is the
@@ -337,6 +445,39 @@ describe('ccrc memory --apply — the union', () => {
     const r = run(['memory', '--apply']);
     expect(fs.readdirSync(storeDir()).sort()).toEqual(before);
     expect(r.out).toMatch(/0 forked/);
+  });
+
+  // Important (final whole-branch review): the census's own `-tmp*` skip
+  // (ccd/ccrc:2965-ish) has a red test ('ignores scratch slugs' above); its
+  // sibling in `_mem_apply` did not — deleting the apply-side guard left
+  // the whole suite green while `--apply` happily converged a throwaway
+  // scratch slug into the shared store.
+  it('--apply ignores scratch (-tmp*) slugs — never converges them', () => {
+    seed('.claude', '-tmp-scratch', { 'a.md': 'A' });
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'memory', '-tmp-scratch'))).toBe(false);
+    expect(fs.lstatSync(path.join(home, '.claude', 'projects', '-tmp-scratch', 'memory'))
+      .isSymbolicLink()).toBe(false);
+  });
+
+  // Important (final whole-branch review): R27's "already canonical, do
+  // nothing" short-circuit (`[ "$(readlink -- "$link")" = "$store" ] &&
+  // continue`) had NO test at all — deleting it left the whole suite green
+  // while every `--apply` on a fully converged box silently re-wrote every
+  // home's symlink and printed a `normalised …` line for pairs that needed
+  // no repair, breaking the "one-time operator act" idempotence README
+  // promises.
+  it('R27: a canonically-spelled converged pair is left untouched by a second --apply — no normalise line, same link', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'A' });
+    run(['memory', '--apply']);
+    const before = fs.readlinkSync(linkOf('.claude'));
+    const beforeStat = fs.lstatSync(linkOf('.claude'));
+    const r2 = run(['memory', '--apply']);
+    expect(r2.code).toBe(0);
+    expect(fs.readlinkSync(linkOf('.claude'))).toBe(before);
+    expect(fs.lstatSync(linkOf('.claude')).ino).toBe(beforeStat.ino);
+    expect(r2.out).not.toMatch(/normalised/);
   });
 
   // R12/R10: `_mem_state` (Task 2) classifies a link whose TARGET TEXT matches
@@ -530,6 +671,55 @@ describe('ccrc memory --apply — the union', () => {
     expect(fs.existsSync(path.join(storeDir(), 'a.md'))).toBe(false);
   });
 
+  // Important (final whole-branch review): R17's guard (`[ ! -r "$src" ]`)
+  // does not cover the SIBLING mode — mode 0400 is READABLE but not
+  // SEARCHABLE. `readdir` (what `-r` guards) succeeds, so the glob still
+  // expands every name, but every per-entry `[ -e ]`/`[ -L ]` stat then
+  // fails for want of search permission, so the loop body never runs:
+  // `left=0`, `err=0`, a silent `converged` over an EMPTY store — the same
+  // defect R17 closed for mode 0300, in the one shape its own guard cannot
+  // see.
+  it('a READABLE but not SEARCHABLE source directory (mode 0400) is refused, not treated as empty', () => {
+    const parent = path.join(home, '.claude', 'projects', '-p-demo');
+    const dir = path.join(parent, 'memory');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'keep.md'), 'K');
+    fs.chmodSync(dir, 0o400);
+    let r: { code: number; out: string };
+    try {
+      r = run(['memory', '--apply']);
+    } finally {
+      for (const n of fs.readdirSync(parent)) {
+        const p = path.join(parent, n);
+        if (fs.lstatSync(p).isDirectory()) fs.chmodSync(p, 0o700);
+      }
+    }
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('cannot read');
+    expect(fs.lstatSync(dir).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(storeDir(), 'keep.md'))).toBe(false);
+  });
+
+  // The other shape the old guard could not see at all: `$src` is not a
+  // directory — a plain FILE (or a symlink resolving to one) sitting at the
+  // memory path. The glob simply does not expand; same silent `left=0`,
+  // `err=0`, `converged` over an empty store.
+  it('a source that is a plain FILE, not a directory, is refused, not treated as empty', () => {
+    const parent = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(parent, { recursive: true });
+    fs.writeFileSync(path.join(parent, 'memory'), 'two lines of prose\nnot a directory\n');
+    const r = run(['memory', '--apply']);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('cannot read');
+    // the source is untouched — still a plain file, same bytes, never
+    // renamed into a backup (the `mkdir -p "$store"` a few lines earlier in
+    // `_mem_apply` runs unconditionally, so the store DIRECTORY may exist —
+    // it must simply hold nothing, never a stray "converged" claim)
+    expect(fs.readFileSync(path.join(parent, 'memory'), 'utf8'))
+      .toBe('two lines of prose\nnot a directory\n');
+    expect(r.out).not.toMatch(/converged/);
+  });
+
   // R18 (review round 2): the `bk=""` reset added in round 1 to stop a
   // symlink pair from printing the PREVIOUS pair's backup path ships with no
   // test that goes red on its own deletion — exactly the gap this branch's
@@ -579,6 +769,38 @@ describe('ccrc memory --apply — the union', () => {
     expect(fs.readFileSync(path.join(home, '.ccrc', 'memory', '-p-only', 'z.md'), 'utf8')).toBe('Z');
   });
 
+  // Critical (final whole-branch review): the symlink arm computed `left`
+  // (what it deliberately did not absorb — non-`.md` files, subdirectories)
+  // and then threw it away, because the NOTE that prints it was gated on
+  // `$bk`, which only the plain-directory arm ever sets. `rm -f -- "$link"`
+  // then deleted the only reference to the target directory, so an operator
+  // got a bare `converged <home> <slug>` naming no path while real,
+  // untouched content sat at a location the run never printed. Fix: the
+  // symlink arm names its own resolved source (`$src`) instead of a backup
+  // path when something was left behind.
+  it('a symlink pair also reports NOTE with its OWN location when something is left behind — not gated on a backup path', () => {
+    const foreignTarget = path.join(home, 'shared-mem');
+    fs.mkdirSync(path.join(foreignTarget, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(foreignTarget, 'shared.md'), 'S');
+    fs.writeFileSync(path.join(foreignTarget, 'orphan.txt'), 'left behind');
+    fs.writeFileSync(path.join(foreignTarget, 'sub', 'subdeep.md'), 'deep, not top-level');
+    const d = path.join(home, '.claude-zzz', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(foreignTarget, path.join(d, 'memory'));
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/converged \.claude-zzz -p-demo$/m);
+    expect(r.out).not.toMatch(/\(backup:/);
+    // left = 2 (orphan.txt, sub/) — and now NAMED, not silently discarded
+    const escaped = foreignTarget.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expect(r.out).toMatch(new RegExp(`NOTE: 2 entries not migrated, left in ${escaped}`));
+    // the target directory itself still holds exactly what was not taken —
+    // it was never moved, only its link was
+    expect(fs.readFileSync(path.join(foreignTarget, 'orphan.txt'), 'utf8')).toBe('left behind');
+    expect(fs.readFileSync(path.join(foreignTarget, 'sub', 'subdeep.md'), 'utf8'))
+      .toBe('deep, not top-level');
+  });
+
   // R19a (review round 2, Minor promoted): `[ -e "$f" ]` alone dereferences,
   // so a dangling entry (a broken symlink) inside the source was invisible
   // to the `left` counter — measured: `dangling.md` and `dangling.txt` both
@@ -622,5 +844,34 @@ describe('ccrc memory --apply — the union', () => {
     // absorb failed, so the source was refused a move — still there, whole
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(path.join(link, 'a.md'), 'utf8')).toBe('x'.repeat(5000));
+  });
+
+  // Minor (final whole-branch review): R19b's own guard (`rm -f -- "$sdest"`
+  // on a failed copy) ships at TWO sites — the primary `$dest` slot above,
+  // and the SUFFIXED conflict slot below it — but the `ulimit -f 1` fixture
+  // above only ever reaches the primary arm (it seeds one home with one
+  // file, so no conflict slot is ever computed). Force a real conflict
+  // FIRST (two pre-existing store entries occupying `same.md` and
+  // `same.claude-corp.md`), so the incoming differing file must walk to the
+  // SUFFIXED `.2.md` slot, and let `ulimit -f` fail the copy there instead.
+  it('R19b (second site): a failed copy to a SUFFIXED conflict slot does not leave debris either', () => {
+    fs.mkdirSync(storeDir(), { recursive: true });
+    fs.writeFileSync(path.join(storeDir(), 'same.md'), 'primary');
+    fs.writeFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'already-taken-slot');
+    seed('.claude-corp', '-p-demo', { 'same.md': 'x'.repeat(5000) });
+    const r = spawnSync(
+      'bash',
+      ['-c', 'ulimit -c 0; ulimit -f 1; exec bash "$1" memory --apply', 'wrapper', CCRC],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' },
+    );
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(r.status).not.toBe(0);
+    expect(out).toContain('could not copy');
+    // no truncated debris at the NEXT free (suffixed, numbered) slot
+    expect(fs.existsSync(path.join(storeDir(), 'same.claude-corp.2.md'))).toBe(false);
+    // the two pre-existing files survive completely untouched
+    expect(fs.readFileSync(path.join(storeDir(), 'same.md'), 'utf8')).toBe('primary');
+    expect(fs.readFileSync(path.join(storeDir(), 'same.claude-corp.md'), 'utf8'))
+      .toBe('already-taken-slot');
   });
 });

@@ -3988,11 +3988,34 @@ _check_fleet() {
 # roster-driven check would report PASS while the homes most likely to fork
 # went unexamined.
 #
+# THE GLOB ITSELF IS STILL A NARROWER PROMISE THAN "every agent home", AND
+# THAT IS A DOCUMENTED LIMIT, NOT FIXED HERE (whole-branch review, Important).
+# It is `"$HOME"/.claude*/`, so a config dir whose suffix does not start with
+# `.claude` — legal by `shared/roster.ts`'s own validator
+# (`/^\.[A-Za-z0-9._-]+$/`, whose own error text suggests `.${id}`, e.g.
+# `.kimi` for account id "kimi") — is invisible to this check exactly as it is
+# invisible to `_mem_homes` (ccd/ccrc), while the hook
+# (`_hook_memory_converge`) takes the home from the transcript path with no
+# name filter at all and WOULD converge such a home regardless. Left alone
+# deliberately: `_mem_homes` and the hook are owned by other work in this same
+# review wave, and widening only THIS copy's glob (say, by reading
+# `~/.ccrc/accounts.json` for `configDirSuffix`, which no other enumerator
+# does) would make doctor report — and hand a `ccrc memory --apply` remedy
+# for — a home the census and `--apply` still cannot see or migrate, which is
+# a worse lie than today's shared blind spot. A real fix has to land in
+# `_mem_homes`, this check and the hook together (D-2181's four-site parity),
+# or not at all.
+#
 # THREE CONDITIONS, NEVER TWO. "Forked" and "unreachable" have different
 # remedies: the first is `ccrc memory --apply`, the second is wiring the home
 # into `install-session-hooks.sh` (whose list is built from CCRC_ACCOUNTS, which
 # is why a non-rostered home can never be hooked). Collapsing them sends the
-# operator to the wrong fix.
+# operator to the wrong fix. Since R33 they also carry different SEVERITIES —
+# forked is a WARN, unreachable stays a FAIL — because a fork is the expected
+# state of every multi-home box before its one-time migration, while an
+# unreachable home is a misconfiguration nothing will ever repair on its own.
+# See the WARN/FAIL calls at the bottom of this function for the full
+# reasoning.
 #
 # THIS RE-DERIVES `_mem_homes`/`_mem_state` (ccrc's own memory functions)
 # RATHER THAN SOURCING THEM — DELIBERATELY (D-92). `cmd_doctor` happens to
@@ -4087,25 +4110,43 @@ _check_fleet() {
 # R21 (Task 4 review round 2): a box can be forked AND carry an unreachable
 # home AND carry an unmeasured one, all at once, and this check now answers
 # in all three classes rather than picking the loudest and discarding the
-# rest — `ccrc-doctor-checks`'s own header rules exactly this ("TWO FAIL
-# LINES from one check is the same rule, not an exception": two distinct hard
-# findings are two distinct operator actions, so they get two FAIL lines,
-# each with its own remedy, and a check may answer in more than two classes
-# at once). The instruction that shipped round 1's early-return ("emit
-# exactly one verdict line or doctor's tallies go inconsistent") was wrong:
-# `cmd_doctor` counts VERDICT LINES, not a fixed arity per check — the
-# counting loop and the comment that rules it are `ccd/ccrc:1990`-`:2007`, and
-# the contract the count then has to satisfy (the return code must be the
-# WORST class the check printed, or the check is failed as a ccrc bug) is
-# `ccd/ccrc:2048`-`:2063` — so a fork on one home
-# and an unreachable finding on an unrelated home are computed independently
-# below and BOTH printed — dropping either one is silence about a real
-# finding, which is the one thing this whole task exists not to do.
+# rest — `ccrc-doctor-checks`'s own header rules exactly this ("ONE CHECK MAY
+# ANSWER IN TWO (OR MORE) CLASSES": distinct findings are distinct operator
+# actions, so each gets its own line and its own remedy). The instruction
+# that shipped round 1's early-return ("emit exactly one verdict line or
+# doctor's tallies go inconsistent") was wrong: `cmd_doctor` counts VERDICT
+# LINES, not a fixed arity per check — the counting loop and the comment that
+# rules it are `ccd/ccrc:1990`-`:2007`, and the contract the count then has to
+# satisfy (the return code must be the WORST class the check printed, or the
+# check is failed as a ccrc bug) is `ccd/ccrc:2048`-`:2063` — so a fork on one
+# home and an unreachable finding on an unrelated home are computed
+# independently below and BOTH printed — dropping either one is silence about
+# a real finding, which is the one thing this whole task exists not to do.
+# SINCE R33 THE TWO ARE NO LONGER BOTH FAIL: a forked-and-unreachable box now
+# prints one WARN line and one FAIL line, and the worst-class cross-check at
+# `ccd/ccrc:2048`-`:2063` still picks FAIL as the return code — `unreachable`
+# alone is what can still fail `ccrc update`.
+#
+# NO `.claude-docserver` SPECIAL CASE, DELIBERATELY (Minor, whole-branch
+# review round 3 — reached independently of `_mem_homes`'s identical guard in
+# ccd/ccrc, which is owned by other work in this wave, but for the same
+# reason). It used to be excluded by name in this loop. Removed because (a)
+# hard-coding one operator's box-local tool's directory name into shipped,
+# public-release-bound source is exactly the residue class the top-level
+# CLAUDE.md bans by name ("no account-name list in ANY shipped source file"),
+# and this tree is not supposed to know `.claude-docserver` exists at all —
+# it is "operator plumbing this tree does not know about", the same phrase
+# that CLAUDE.md uses to keep Tailscale out of this codebase; (b) it excluded
+# nothing measurable: `~/.claude-docserver` carries no `projects/` directory
+# on the box it was written for, so the very next line
+# (`[ -d "${h}projects" ] || continue`) already skips it. If some future box's
+# docserver ever does grow a `projects/` directory, treating it like any other
+# `.claude*` directory is the right answer — a silent blind spot for a name
+# this tool has no business knowing is worse than one more row in the census.
 _check_memory() {
   local h b d slug link store forked="" unreachable="" unmeasured="" line hooked rc=0
   for h in "$HOME"/.claude*/; do
     b="${h%/}"; b="${b##*/}"
-    case "$b" in .claude-docserver) continue ;; esac
     [ -d "${h}projects" ] || continue
     if [ ! -f "${h}settings.json" ]; then
       # R22: never touched by install-session-hooks.sh — the maximal case of
@@ -4132,9 +4173,27 @@ _check_memory() {
     done
   done
   if [ -n "$forked" ]; then
-    _dr_fail memory "memory is forked across agent homes: $forked" \
+    # R33 (controller ruling — implemented, not relitigated): WARN, not FAIL.
+    # `cmd_install` ends with `cmd_doctor` in both role arms, and `cmd_doctor`
+    # returns 1 the moment any check FAILs, so a FAIL here hard-dies
+    # `cmd_update` (`_ccrc_die`) BEFORE `_upd_sweep` ever runs — the fleet's
+    # ~20 `claude-session@*` supervisors keep running the OLD ccd while the
+    # operator reads a message naming doctor, never the sweep it silently
+    # skipped. And this check FAILs on `forked` BY CONSTRUCTION on every box
+    # that has ever run more than one agent home, until the operator runs the
+    # one irreversible `ccrc memory --apply` — so an unrelated verb (`ccrc
+    # update`) was coercing operators into that migration to make itself
+    # succeed. `unreachable` below is not the same kind of finding and stays
+    # FAIL: a fork is the expected PRE-MIGRATION state of every multi-home
+    # box, but an unreachable home is a misconfiguration nothing will ever
+    # repair on its own. The three conditions this check answers in are still
+    # never collapsed to two — they now carry two severities instead of one,
+    # which is what the difference in their remedies actually means. A WARN
+    # still prints with its own remedy, and `cmd_doctor` still counts it —
+    # it just cannot fail `ccrc update`.
+    _dr_warn memory "memory is forked across agent homes: $forked" \
       "one store per project: run \`ccrc memory\` to see the census, then \`ccrc memory --apply\`"
-    rc=1
+    [ "$rc" -eq 1 ] || rc=2
   fi
   if [ -n "$unreachable" ]; then
     _dr_fail memory "agent homes the session hook cannot reach, so they will fork on first use: $unreachable" \

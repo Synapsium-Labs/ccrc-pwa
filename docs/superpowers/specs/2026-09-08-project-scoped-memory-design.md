@@ -116,6 +116,27 @@ this repo is bound for public release and memory carries operational detail.
 `ccd/session-hook.sh` already runs on SessionStart and is an artifact ccrc owns outright. It resolves
 `(CLAUDE_CONFIG_DIR, project dir) → slug` and ensures the link.
 
+**Corrected 2026-09-09 (R32, whole-branch review) — the design's own premise about "project dir" was
+wrong for a git worktree, and this is the one finding that changed a shipped rule rather than adding
+to one.** The implementation shipped first (D-2178) took the shortest path to "resolves … → slug":
+read the slug the harness already computed, off `dirname(transcript_path)`. That is correct only
+because Claude Code's transcript and memory directories are normally the same directory. They are
+not inside a git worktree: the harness files the **transcript** under the session's **cwd** slug and
+the **memory** directory under the **repository's main-checkout** slug. Measured read-only on the
+fleet: 248 worktree-shaped slugs across 8 homes, not one holding a `memory/` entry, sitting beside
+project directories that hold memory files and zero transcripts — every worktree session on this
+fleet was converging the wrong pair. The mechanism minted an empty, permanent store per workspace
+ever created, left the real pair forked forever, and made the census print `converged` for a pair
+that does not exist beside `forked` for the one that does. "Project dir" therefore means the
+**project root** — the parent of `git rev-parse --git-common-dir` (the main checkout's `.git` from
+anywhere inside the repository, worktree or subdirectory alike; `--show-toplevel` would answer the
+worktree instead) — not the transcript's own parent directory, and the slug is now computed from it
+rather than read off the payload. Computing it is safe only because of the existence check already in
+§2's table: `<config dir>/projects/<slug>` must already exist before the hook acts, so a derivation
+that misses names a directory the harness never made, and the pair is skipped — the `remember`
+plugin's own #294 failure mode (D-2178's original reason for reading rather than computing) reduced
+to a silent no-op instead of a junk-store factory.
+
 It acts **only where there is nothing to lose**:
 
 | State of `<HOME>/projects/<slug>/memory` | Action |
@@ -142,9 +163,14 @@ same-named file whose content **differs** between homes is not resolved — **bo
 incoming copy suffixed with its home, so nothing is ever chosen on the operator's behalf. A backup of
 each source directory is taken before it is replaced.
 
-`MEMORY.md` is the one exemption, and it is exempt because it is **derivable**: it is an index of
-one line per memory file, and every memory file carries its own `name` and `description` in
-frontmatter. It is therefore **rebuilt** from the union rather than merged. This also removes the
+`MEMORY.md` is the one exemption, and it is exempt because it is **derivable**: it is an index of one
+line per memory file, derived from each file's own `name`/`description` frontmatter. **Corrected
+2026-09-09 (whole-branch review):** not every memory file carries that frontmatter — measured 6 of
+801 fleet-wide — and "derivable" does not mean "universal": a file with no `name:` line is dropped
+from the index (there is nothing to derive a line from) but is never silently lost from the run's own
+report, and no name is invented for it — the rebuild counts what it dropped and names the count and
+the store in a `NOTE:` line, the same discipline §3's conflict rule already applies to a suffixed
+copy. It is therefore **rebuilt** from the union rather than merged. This also removes the
 steady-state risk that sharing introduces (§6).
 
 Measured against `ccrc-pwa` across the **five** homes that hold it (re-taken 2026-09-09): 66 file
@@ -178,8 +204,18 @@ The check must therefore report three distinct things, never collapsing them:
 | condition | meaning |
 |---|---|
 | home has a correct symlink | converged |
-| home has a plain `memory/` dir | **forked or about to fork** — FAIL, name the home and project |
+| home has a plain `memory/` dir | **forked or about to fork** — name the home and project |
 | home does not reference the session hook | **unreachable by §2** — FAIL, name the home |
+
+**Corrected 2026-09-09 (R33, controller ruling, whole-branch review): the two FAIL rows do not carry
+the same severity.** `cmd_install` ends every role arm with `cmd_doctor`, and `cmd_doctor` returns
+non-zero the moment any check FAILs — so a FAIL on the forked row hard-dies `cmd_update` *before* its
+supervisor sweep runs, on every box that has ever run more than one agent home, until the operator
+runs the one irreversible `ccrc memory --apply`. A fork is that box's expected *pre-migration* state,
+not a misconfiguration; an unreachable home is a misconfiguration nothing repairs on its own. The
+forked row is therefore a **WARN** (remedy: `ccrc memory --apply`) and only the unreachable row stays
+a **FAIL** — the check still reports three conditions and never collapses them, but two severities
+now carry the difference the two remedies always implied.
 
 The third row is what `.claude-glm` and `.claude-kimi` need, and it is a different failure from the
 second: a home can be perfectly converged today and still be unable to *stay* converged.
@@ -261,7 +297,8 @@ Behavioural cases that must be pinned, in fixture HOMEs only — never against t
 - The hook is a no-op in the steady state, and does not fail when `CLAUDE_CONFIG_DIR` is unset.
 - The migration keeps both copies of a differing file and never picks a winner.
 - `MEMORY.md` rebuilt from frontmatter reproduces one line per memory file.
-- The doctor check FAILs on an unconverged pair and PASSes once converged.
+- The doctor check WARNs on a forked pair and FAILs on a home the hook cannot reach (corrected
+  2026-09-09, R33 — see §4), and reports PASS once every pair is converged and reachable.
 
 ## Open questions
 
