@@ -1411,6 +1411,32 @@ export function isAskState(v: unknown): v is AskState {
   return typeof v === 'string' && (ASK_STATES as readonly string[]).includes(v);
 }
 
+/** `answerAsk`'s ten typed refusals, plus the four route-level refusals the
+ *  ask pre-emption routes (server/src/coord, later tasks) emit as their own
+ *  literals — `unknown-ask`, `not-held`, `ask-moved`, `not-parent`. Both
+ *  groups are the same refusal family (reasons an ask answer was refused),
+ *  so they share this one union rather than splitting into two (D-2174, the
+ *  `ReadFailure` precedent of D-1438). Map idiom: a code that leaves
+ *  `AskResult` and is not removed here is a compile error. */
+export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
+  'not-alive': true, 'not-waiting': true, 'stale-ask': true, 'ask-mismatch': true,
+  'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
+  'no-menu': true, 'menu-mismatch': true,
+  'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
+};
+
+export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
+  Object.keys(ASK_REFUSE_CODE_MAP) as AskRefuseCode[];
+
+export type AskRefuseCode =
+  | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
+  | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent';
+
+export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
+  return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
+}
+
 /** The five measured preconditions, without the derived verdict or the stamp. */
 export interface ReadinessFacts {
   readonly worker: SkillState;

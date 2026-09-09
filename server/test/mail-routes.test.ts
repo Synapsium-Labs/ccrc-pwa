@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -560,8 +560,16 @@ describe('the rejection table is total, in both directions', () => {
         // guard rather than NOT_CODES, for the reason the `LifecycleGapReason` note
         // above gives: an allowlist accepts one spelling for ever, a guard accepts a
         // member added later and still rejects a typo'd one.
-        || isReclaimRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle or ReclaimRefuseCode`).toBe(true);
+        || isReclaimRefuseCode(tok)
+        // TASK 3 (D-2174) — the SEVENTH union, checked together and never
+        // merged, on the standing rule `enter-ignored` states above. The ask
+        // pre-emption routes (later tasks) spell four route-level refusals
+        // (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`) as literals
+        // in server/src/coord, alongside `answerAsk`'s own ten — same
+        // refusal family, one union, admitted through its own exported guard
+        // rather than NOT_CODES.
+        || isAskRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
     }
   });
 });

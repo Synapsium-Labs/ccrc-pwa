@@ -1,5 +1,5 @@
 import type { SendDeps } from './send.js';
-import type { HookAsk, HookAskQuestion } from '../../../shared/api.js';
+import type { AskRefuseCode, HookAsk, HookAskQuestion } from '../../../shared/api.js';
 import { askKey } from '../askkey.js';
 import { hasMenu, paneOptionRows } from '../pane/dialog.js';
 import { pairMatches } from '../transcript/ask.js';
@@ -10,14 +10,7 @@ export interface AskDeps extends SendDeps {
   readAsk: (id: string) => Promise<{ ask: HookAsk | null; state: 'working' | 'waiting' | 'done' } | null>;
 }
 
-export type AskResult =
-  | { ok: true }
-  | {
-      ok: false;
-      error:
-        | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
-        | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch';
-    };
+export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
 
 /**
  * Answer a hook-reported AskUserQuestion by option index, without the pane

@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
-  ASK_STATES, isAskState,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode,
 } from '../../shared/api.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -1867,6 +1867,32 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       expect(isAskState('nope')).toBe(false);
       expect(isAskState(null)).toBe(false);
       expect(isAskState(7)).toBe(false);
+    });
+  });
+
+  describe('AskRefuseCode', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_REFUSE_CODE_MAP')).toEqual(['shared/api.ts']);
+    });
+
+    it('leaves no second copy of the literal set in inject/ask.ts', () => {
+      // D-2174: the union used to live here, inline, with no runtime list.
+      expect(read('server/src/inject/ask.ts')).not.toMatch(/'menu-mismatch'\s*;/);
+    });
+
+    it('round-trips every member', () => {
+      // RULING F1: fourteen, not the brief's ten — the four route-level
+      // refusals (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`,
+      // emitted by later tasks' routes in server/src/coord) share this same
+      // refusal family and so join this one union rather than a second.
+      expect(ASK_REFUSE_CODES.length).toBe(14);
+      for (const c of ASK_REFUSE_CODES) expect(isAskRefuseCode(c)).toBe(true);
+      expect(isAskRefuseCode('nope')).toBe(false);
+      expect(isAskRefuseCode(null)).toBe(false);
     });
   });
 });
