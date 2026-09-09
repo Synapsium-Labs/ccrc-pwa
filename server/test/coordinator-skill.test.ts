@@ -122,6 +122,80 @@ describe('the coordinator skill: its contract', () => {
     }
   });
 
+  // ── the COUNT, which the verbatim pin above structurally cannot see ──────
+  //
+  // D-2175: the loop above is a SUBSET check (`toContain`), so a twelfth
+  // clause appended to SKILL.md left every assertion in this file green — the
+  // contract could be extended with no pin at all, which is the one thing
+  // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
+  // carries this guard; this ports it, with two adaptations the worker's
+  // version does not need. First, the coordinator states its count in prose as
+  // "These eleven sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // worker skill says, so the in-file harvest is widened to accept all three.
+  // Second, README.md's own mention line-wraps the count word onto the line
+  // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
+  // marker scan matches across whitespace rather than a single literal space.
+  // Third, unlike the worker skill, the contract is NOT the only ordered list
+  // this file carries (measured — "## The wave lifecycle" numbers its own six
+  // steps), so the in-file harvest is scoped to the "## The contract" section
+  // rather than the whole document.
+
+  /** Number words, index-addressed — the same idiom `worker-skill.test.ts` and
+   *  `box-token-census.test.ts` use, aimed here at the one count this file's
+   *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
+  const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+    'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+    'eighteen', 'nineteen', 'twenty'];
+  const COUNT_WORD = WORDS[CONTRACT.length];
+
+  it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
+    // Scoped to the "## The contract" section alone (see the comment above):
+    // "## The wave lifecycle" numbers a second, unrelated six-step list
+    // further down the same file, and an unscoped `^\d+\. ` harvest would
+    // append its 1..6 onto the contract's own 1..11 and red on every run.
+    const contractStart = skill.indexOf('## The contract');
+    expect(contractStart, 'SKILL.md should have a "## The contract" section').toBeGreaterThanOrEqual(0);
+    const nextHeading = skill.indexOf('\n## ', contractStart + 1);
+    const contractSection = skill.slice(contractStart, nextHeading === -1 ? undefined : nextHeading);
+    const numbered = [...contractSection.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbered, 'SKILL.md numbers a different set of clauses than the CONTRACT pins')
+      .toEqual(CONTRACT.map((_, i) => i + 1));
+  });
+
+  it('spells that same count, as one derived word, everywhere prose states it', () => {
+    expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
+      .toBeTruthy();
+    // SKILL.md states it once in its own words ("These eleven sentences").
+    // HARVESTED, never matched literally, so a revert to "ten" fails with the
+    // wrong word named rather than with a missing string. The filter against
+    // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
+    // 5 discussion) from counting as a hit.
+    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines|sentences)\b/g)]
+      .map((m) => m[1]!).filter((w) => WORDS.includes(w));
+    expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
+      .toBeGreaterThanOrEqual(1);
+    for (const w of stated) {
+      expect(w, `SKILL.md says ${w} where the CONTRACT pins ${CONTRACT.length}`).toBe(COUNT_WORD);
+    }
+    // README.md and CLAUDE.md each describe this skill BY PATH, with the count
+    // in the same sentence. The sites are derived from that path rather than
+    // listed by line number, so a moved paragraph does not silently stop being
+    // checked.
+    const marker = 'ccd/coordinator-skill/SKILL.md';
+    for (const rel of ['README.md', 'CLAUDE.md']) {
+      const text = readFileSync(path.join(root, rel), 'utf8');
+      let hits = 0;
+      for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
+        const m = /\b([a-z]+)\s+clauses\b/.exec(text.slice(i, i + 160));
+        expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
+        expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
+          .toBe(COUNT_WORD);
+        hits++;
+      }
+      expect(hits, `${rel} no longer names ${marker} at all`).toBeGreaterThan(0);
+    }
+  });
+
   it('names the three destructive verbs ONLY inside the clause that forbids them', () => {
     // A skill that mentions `ws-reap` anywhere else has given a model a reason
     // to consider it. The forbidding clause is the one licensed mention.
