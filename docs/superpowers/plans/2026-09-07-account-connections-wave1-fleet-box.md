@@ -16092,6 +16092,24 @@ the idiom at `ccd/ccrc:2474`, which is a truncation `_ccrc_die`. The idiom is at
 sweep: **re-measure every entry before repairing it.** This list has now been wrong in three different
 ways — a target that moved, a target that was never right, and a citer that no longer exists.
 
+**A systematic blind spot, found at Task 26's review and worth more than the four sites it produced.**
+The task's own sweep missed exactly four tokens, and all four have one shape: they are the TEST FILE's
+second copy of a citation `ccd/ccrc` also carries, and in each case the `ccd/ccrc` copy was swept and the
+test copy was not — `ccrc-account.test.ts:105` (`:5101`→`:5255`, whose partner one line above WAS
+shifted), `:874` (`:5166`→`:5320`), `:1539` (`:4829-4839`→`:4983-4993`), `:1541`
+(`:4840-4843`→`:4994-4997`). A sweep that walks the file it edited finds every citation in that file and
+none of the duplicates elsewhere. **Sweep by CLAIM across the tree, never by file.**
+
+The same shape, one level up, in what is still deferred: the D-1244 mode ruling is spelled in THREE
+places, and Task 26 correctly shifted two of them to `:6684-6690` while the third
+(`deploy/account-op.mjs:848`) stayed at a value that was already wrong — so the tree now spells one
+reference both rightly and wrongly, which is worse than spelling it wrongly everywhere, because the
+correct copies make the incorrect one look deliberate.
+
+And a fifth pre-existing site the task's count of four missed:
+`server/test/ccrc-install-graphify.test.ts:1155` cites `ccd/ccrc:6356-6357` for `lb`'s start marker;
+that range is "TWO HALVES PER SKILL". **Twenty sites plus four displaced pointers.**
+
 ### D-2120 — Task 25's step makes eight existing tests red, and the plan does not mention it
 
 `_acct_provision` refuses when `$HOME/.cc-sessions/<installer>` is missing or not executable. Every one
@@ -16438,3 +16456,117 @@ Together with D-2123 this is the second task whose Step 1 needed correcting befo
 anything, which upgrades a habit into a rule: **run the plan's test snippet before trusting it to
 describe the tree, and run the WHOLE package at least once per work item** — defect 1 is invisible to
 the task's own suite.
+
+### D-2133 — two mechanisms shipped in `4333bf74` measured nothing, and one of them is the kill switch
+
+Both were found by mutation, both were **GREEN at 113/113**, and both had a correct implementation
+standing behind a test that could not tell whether it was there.
+
+**The kill switch (M14).** Neuter the `: >` arm's refusal and `add` answers
+`{"ok":true,"id":"lab-dev0","disabled":true,…}` with **no marker on disk** — measured. The shipped code
+refuses correctly on all three real failures (`~/.cc-sessions` is a regular file → the `mkdir -p` arm;
+the directory is 0500 → the `: >` arm; the marker name is a directory → the `: >` arm), so nothing was
+ever wrong on a box. What was wrong is that **the one field this whole task exists to make true —
+`disabled:true` — could be published about a switch that was not thrown, and no suite would notice.**
+A table testing only "the directory is a file" leaves the `: >` arm untested, because `mkdir -p` is a
+no-op on an existing directory and that is the arm every successful `add` actually runs.
+
+**The `ACCT_SETTINGS_WRITTEN` reset (M10).** Delete the entry initialiser and a login lane reports
+`settings-env` — D-2127 face 1 reopened by deleting one line, with the suite still green. The existing
+"two runs in one shell" case cannot see it because **both of its runs are the same kind of home**: a
+reset only shows up when consecutive runs would produce DIFFERENT values, and a fixture that repeats
+one shape cannot produce the disagreement.
+
+Both are now red. The class is worth stating as a check rather than a lament: **for every mechanism
+shipped in a commit, ask which single line you could delete to make it stop working, and whether a
+suite reds when you do.** That is the mutation table's whole purpose, and both of these had mutation
+rows written for neighbouring lines — M3 deleted the marker WRITE (red), nobody deleted the marker
+REFUSAL; M6 deleted the token's WRITER (red), nobody deleted its RESET.
+
+**A related limit, honest rather than fixed.** In `account-op.mjs`, `add-entry` calls `renameSync`
+before `out()`. A process killed between them lands the roster entry and produces an empty body — and
+`_acct_no_answer`'s `rc > 128` branch is precisely the branch that says "killed", while the caller's
+clause still says "Nothing was written." Narrow (a signal in a two-statement window) and only closable
+by re-measuring the roster at the refusal site — a second node fork on the path where node just died.
+Recorded, not changed.
+
+### D-2134 — the window is closed inside `_acct_add` and open across processes, and the fix is one line earlier
+
+Review round 1 enumerated every statement between the roster write (`ccd/ccrc:4798`) and the marker
+write (`:4809`): zero `||` arms, zero refusals, zero early returns, zero calls. **There is no path
+through `_acct_add` to "rostered + wrapper + no marker."** D-2129 is closed as stated.
+
+A narrower window survives, and it is not reachable by anything `_acct_add` does. `_account_ok` is
+satisfied by **any** executable at `$WRAPPER_DIR/<id>` — not only one ccrc wrote — and `check-add`
+measures `duplicate-id` and `suffix-collision` against the **roster**, never the filesystem. So on a box
+that already carries a hand-written `~/.local/bin/lab-dev0`, the interval between the roster write and
+the marker write is a genuine cross-process window in which `_ws_least_loaded` can pick an unmeasured
+lane. Microseconds, and requiring a pre-existing executable at exactly the new id's name.
+
+**RULING: move the marker write in front of `add-entry`.** Three reasons, and the third is the one that
+decides it.
+
+1. It closes the window completely rather than narrowing it, and this is a safety mechanism — the
+   conservative order is the correct one even when the race is improbable.
+2. A marker for an id no roster names is **inert in the safe direction**. `_acct_add`'s own header
+   already argues this shape for the 0600 secret ("a file no roster names is inert"); a marker is
+   strictly weaker still, because the only thing it can do is make a lane more off. If `add-entry` then
+   refuses, the leftover is one empty file that disables nothing, and the retry rewrites it.
+3. **The cost of being wrong is asymmetric.** Marker-too-early costs an inert file; marker-too-late
+   costs real work handed to a lane whose credential nobody has measured. When a race is improbable but
+   its two failure modes differ this much, order for the expensive one.
+
+### D-2135 — the situational clause is baked a fifth time, in the commit that implements the ruling against it
+
+`_acct_disable_new`'s two refusals end *"The roster entry was written; … run: `ccrc account disable
+--id $1`"*. That is D-2126 and D-2128's ruling — the caller owns the situational clause — violated one
+function away, in the same commit that implements it for `_acct_settings_env` and `_acct_provision`. It
+would have cost a `$2`.
+
+It matters more here than anywhere it has appeared before, because **this function was written for a
+caller that does not exist yet**: Task 27's `declare`. When `declare` calls it, "The roster entry was
+written" will be true, but the rest of the sentence is `add`'s, and a second caller inheriting the first
+caller's remedy is the exact failure this pattern keeps producing. The plan schedules a rename at Task
+31 (`_acct_mark_off`) — a rename is not the repair, and deferring the repair to a task whose job is a
+rename is how it gets lost.
+
+**RULING: fix it now, take the clause as `$2`, and do NOT rename anything** — Task 31's mutation row is
+deliberately written against the CALL rather than the name (D-2129's own note), and renaming early
+would strand it.
+
+**Second half, same function:** the remedy names `ccrc account disable`, which wave 1 does not ship —
+measured, it answers `unknown-subcommand` at exit 2. Task 24's `credential-required` names an unshipped
+verb too and carries an explicit paragraph saying so is deliberate and why; this one carries none. Give
+it the same paragraph or a shipped remedy. A remedy that fails when typed is worse than no remedy,
+because the operator concludes the tool is broken rather than that the step is manual.
+
+**Five instances now** — D-2024, D-2051, D-2126, D-2130, this. The prediction in D-2126 has now been
+confirmed twice. Standing rule, promoted out of the per-instance entries: **a helper whose sentence
+mentions what else happened is taking a parameter, whether or not it has one yet.**
+
+### D-2136 — `provisioned` becomes API here as a `string[]`, and it already carries three grades of claim
+
+The array ships as `["settings-env"|"settings-env-none", "session-hooks", "coordinator-skill",
+"worker-skill", "graphify-skill"]`. Three different kinds of statement in one flat vocabulary:
+
+- **`settings-env`** — this verb wrote these bytes. It can say so because the merge is its own write.
+- **`settings-env-none`** — this verb ran the step and correctly wrote nothing. Review round 1 found
+  this covers **two** on-disk states, not the one the comment named: the login lane (no endpoint, no
+  models) **and** a home whose `settings.json` already carries the block, which is reachable because a
+  config directory may pre-date the roster entry naming it. Both are honest under "wrote no bytes"; the
+  paragraph claiming only the login case was not, and has been rewritten with the converged state
+  pinned by its own case.
+- **the four installer tokens** — "ran and returned 0", a weaker *epistemic* claim. Each is a separate
+  process converging a home, so this verb genuinely cannot see what it wrote. That is not an adapter
+  narrowing a distinction; it is the honest limit of what the caller measured.
+
+**RULING: `string[]` stands for wave 1.** The tokens are exact-match distinct, the length is invariant
+at five, and a caller can act on every one of them. Redesigning the answer shape at the close of a work
+item, against a third outcome nobody has named, would be speculation.
+
+**And the exact moment to revisit it, written down so it is not rediscovered:** `string[]` →
+`{step, outcome}[]` is a **breaking** change, not an additive one, and this field's first real consumer
+is wave 2's PWA. So the decision belongs **before** the PWA renders it and not after — if a third
+outcome for the merge is conceivable by then (a step that ran, wrote, and warned, say), the shape is far
+cheaper to change while the only reader is a test. Wave 2 must make that call explicitly rather than
+inherit it.
