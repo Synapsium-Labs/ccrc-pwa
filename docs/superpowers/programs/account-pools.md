@@ -1734,3 +1734,67 @@ SAFE under `--apply` and stopped there. **Safe is not converged.** Their review 
 resolving correctly but naming another home would have read `converged` for ever, with doctor printing
 PASS over one account being master for six projects; they added a NORMALISE arm. My "both orders are
 safe" conclusion would have shipped that, because I only asked one of the two questions.
+
+---
+
+## 2026-09-09 22:3x — PR #69 round 5 gated: MERGE after two one-line fixes (worker mail 366 → my 377)
+
+Head `6f27554b`, MERGEABLE, **all five CI checks SUCCESS including `test-macos`**. Review: 8 lenses on
+opus over `c3e69b41..6f27554b` (two commits), one adversarial refute pass on sonnet per finding.
+**46 agents, 0 errors, 38 raised, 8 refuted, 30 survived — deduplicating to ~12 defects.** Six lenses
+independently found the same tautology; five found the same "four sites" miscount. Report:
+`pr69-round5-gate.md` (mail 377's artifact).
+
+**All six gate items closed. I re-measured the two must-haves myself, with a control:** mutating the
+`swapblocked` clear → RED; dropping `cmd_prefer`'s `! _pool_untaggable` → RED; `cmd_swap`'s identical
+gate → RED (control, still pinned); `cmd_start`'s new warn gate → RED. Each names its own case.
+**Item 1 came back better than I asked for:** the false "Pinned in both directions" sentence was KEPT and
+corrected *with its own history* — "and that sentence was itself a false claim about a mechanism until
+round 5". Deleting it would have erased the lesson; that is the right way to retire a false claim, and it
+supersedes my own delete-or-point framing for this case.
+
+Item 4 verified by enumeration, not by reading the fix: `.tickstuck` can carry wrapper / project / home /
+crosspool / pool / rc$n, and `_undecidable_cause` now has an arm for each plus `*`. Complete coverage, no
+dead arm, no word without a sentence. Full server suite on the PR head: **278 files / 7709 passed / 56
+skipped** — matching the worker digit for digit, after they took the tree lesson from D-2309.
+
+**THE FINDING IS THE PATTERN, not any item in it.** Round 4's gate found 6. Round 5 closed them, and the
+worker's own nine-lens refute pass found **7 defects inside the commit that closed them**. My round-5
+gate finds **~12 inside the commit that closed those 7**. Of those 12: **zero behavioural, zero touching
+a guard, eleven citations** — most introduced or left standing by the very commit whose stated purpose
+was sweeping that class. **The prose-correction loop has gone negative-yield: each round fixes citations
+at roughly the rate it creates them.** Another round finds ten more and makes ten more. That is a
+treadmill, not diligence.
+
+**The structural cause is in the delta's own proportions: 272 lines of `ccd/ccd` against 340 lines of
+plan.** The prose describing the change is now larger and far more fragile than the change, and every
+count in it is a claim about a tree the next commit moves. **A citation swept in the same commit as other
+work is stale before the commit lands** — which is the mechanism, not the symptom. The only shape in
+which this class converges is ONE follow-up whose sole content is a citation sweep, against a frozen
+tree, with nothing else in the commit.
+
+**The two fixes asked for before merge**, both one line, neither carrying a design: (1) the tautology at
+`ccd-reg-get-census.test.ts:156-159`, `expect(bare - filtered, …).toBe(bare - filtered)` — cannot red on
+any tree, carries a message claiming a check it does not perform, in the commit whose subject is
+assertions that pass for the wrong reason; proved both ways (RHS `+1` reds, so the line executes; a
+content mutation moving the real delta 1→2 leaves all three green). (2) `ccd/ccd:13005`, a prose
+REGRESSION — round 4 correctly said round 3's mkdir spelling "matched only its own citation"; `6f27554b`
+overwrote it with "matched nothing at all … zero hits", which is false (measured 1 on round 3's own tree)
+and self-refuting on the shipped tree, since the sentence re-quotes the spelling and `grep -cnF` at HEAD
+returns 1 — the very line asserting zero.
+
+**A correction to my own reviewer, recorded because it is the same class:** one lens reported the
+`ccd+pools 68 / 1954` figure as being at `plan:988`; it is not in the plan at all, it is in the commit
+message. **My reviewer misattributed a misattribution finding.** And I did NOT report the figure as
+wrong: I measured `ccd-*`+`pools*` at 63 / 1762 / 12, and 68/1954/12 is consistent with a five-file
+superset — **the skip count matches exactly, which is what a real superset looks like.** I could not
+determine their glob, so there is no finding. Same discipline as round 4's "65 files". The rule that
+keeps earning its place: *two count discrepancies with the same cause is a finding; one with an unknown
+cause is a guess.*
+
+**Carried to the wave-4 CLOSE, not the merge:** `ws/clear-meadow` (`274984e3`) and `fix/c1-rescue-lane`
+(`6f27554b`) are fully diverged — neither contains the other, 96 files apart, the workspace branch still
+on `644aea41` (#68) while the PR sits on `ee1d6228` (#71). That is the right shape for the PR, but the
+done-fingerprint re-measures the WORKSPACE branch, so the close will read `stale-tip` unless that branch
+is brought to the merged commit first. This is CLAUDE.md's documented "a feature branch wedges every
+close" hazard, live, and it needs handling before wave 4 closes.
