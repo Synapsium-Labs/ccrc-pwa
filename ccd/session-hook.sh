@@ -558,16 +558,40 @@ _hook_ccrc_card() {
 # home. `$CLAUDE_CONFIG_DIR/projects/<slug>/memory` is per-home, so a session
 # that swaps accounts mid-run keeps its transcript, workspace, hold and branch
 # and silently changes memory stores — the one continuity ccrc exists to
-# provide, missing. Measured 2026-09-08: 40 real memory directories across 8
-# homes, and a session that read its own superseded record after a swap.
+# provide, missing. Measured 2026-09-09 (re-taken by the whole-branch review's
+# fix wave): 66 real memory directories across 8 homes — the figure was 40 four
+# days earlier, so it is a QUOTE, not a constant — and a session that read its
+# own superseded record after a swap.
 #
-# THE SLUG IS READ, NEVER COMPUTED. `<slug>` is a pure function of the project
-# path, and a second implementation of it disagrees SILENTLY: a slug that
-# misses names a directory that does not exist, so the caller finds nothing,
-# exits 0, and converges nothing (the `remember` plugin's own #294). The
-# harness has already told us the answer — `transcript_path` is
-# `<config dir>/projects/<slug>/<uuid>.jsonl` — so its DIRECTORY is the pair
-# being converged. Match, never derive.
+# THE SLUG IS COMPUTED FROM THE PROJECT ROOT, AND THE PROJECT DIRECTORY MUST
+# ALREADY EXIST. This REVERSES D-2178, whose headline rule was "THE SLUG IS
+# READ, NEVER COMPUTED" — measured false (R32, whole-branch review) for the
+# modality this fleet actually runs in.
+#
+# The harness files the TRANSCRIPT under the session's CWD slug and the MEMORY
+# directory under the REPOSITORY MAIN CHECKOUT's slug. Inside a git worktree
+# those are two different directories, and reading the slug off
+# `transcript_path` converged the wrong one. Measured read-only on this box
+# 2026-09-09: 248 worktree-shaped slugs across 8 homes, not ONE of them
+# carrying a `memory/` entry, beside project directories holding memory files
+# and zero `.jsonl`. So reading the slug minted an empty store per workspace ever
+# created, left the real pair forked forever, and made the census print
+# `converged` for a pair that does not exist beside `forked` for the one that
+# does.
+#
+# The root is the parent of `git rev-parse --git-common-dir` — the MAIN
+# checkout's `.git` from anywhere inside the repository, worktree or
+# subdirectory alike, where `--show-toplevel` would answer the worktree —
+# and the cwd itself for a tree that is no git repository at all.
+#
+# THE EXISTENCE CHECK IS WHAT MAKES COMPUTING IT SAFE. `<config dir>/projects/
+# <slug>` must ALREADY EXIST before this function acts. A derivation that
+# misses then names a directory the harness never made, so the pair is skipped
+# and nothing is created — the `remember` plugin's own #294 failure mode
+# (D-2178's reason for reading the slug) reduced to a silent no-op instead of
+# a junk-store factory. It is the same "acts only where there is nothing to
+# lose" contract as the rest of this function: a wrong answer writes nothing,
+# anywhere.
 #
 # THIS FUNCTION NEVER MERGES. It acts only where there is nothing to lose: an
 # absent link, or a plain directory that is EMPTY. A directory with content and
@@ -578,25 +602,65 @@ _hook_ccrc_card() {
 #
 # `rmdir` IS the emptiness test: it succeeds only on an empty directory, so its
 # own failure is the answer and there is no check-then-act window between
-# asking and acting.
+# asking and acting. The CREATE step has a window of its own and closes it a
+# different way — see `ln -sn` at the end of this function.
 #
 # Silent and total: every failure path returns 0. A box where this cannot work
 # still gets its cards, its hookstate and its nudges.
 _hook_memory_converge() {   # -> converge this (home, project) pair; prints nothing; always 0
-  local tp d slug link store
+  local tp d projects cwd gcd root slug link store
+  # THE SLUG ALPHABET IS SPELLED OUT, NOT WRITTEN AS A RANGE. `[!A-Za-z0-9-]`
+  # is a COLLATION range: under a UTF-8 locale glibc folds characters into
+  # `A-Z`/`a-z` that are not ASCII letters, so one path would slugify two ways
+  # on two boxes. This branch has already shipped one locale-dependent claim
+  # as a general rule (the `.claude` sort order); an explicit set cannot drift.
+  local ok='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   [ -n "$tp" ] || return 0
   d=$(dirname -- "$tp") || return 0
   [ -d "$d" ] || return 0
-  slug=$(basename -- "$d") || return 0
+  projects=$(dirname -- "$d") || return 0
+  # The harness's layout, ASSERTED rather than assumed: a transcript lives at
+  # `<config dir>/projects/<slug>/<uuid>.jsonl`, so its grandparent is the
+  # `projects` directory this home files every pair under. A payload shaped
+  # any other way (a relative `transcript_path`, say) is one this function
+  # does not understand, and the answer to that is to do nothing.
+  case "$projects" in */projects) ;; *) return 0 ;; esac
+  cwd=$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null) || cwd=""
+  # Same fallback `_hook_graph_card` uses, for the same reason: a harness whose
+  # payload carries no cwd at all still told ccd where the session works.
+  [ -n "$cwd" ] || cwd=$(cat "${REG:-}/${id:-}.workdir" 2>/dev/null) || cwd=""
+  [ -n "$cwd" ] || return 0
+  [ -d "$cwd" ] || return 0
+  # `--git-common-dir` answers relative to the cwd when the answer is inside
+  # it (`.git` at the top, `../.git` from a subdirectory) and ABSOLUTE from a
+  # worktree, so both spellings are resolved the same way, through `cd`.
+  # `pwd -P` because the harness slugifies the PHYSICAL path: measured, 30 of
+  # 30 live session workdirs slugify to a project directory that exists only
+  # once `/data` (a symlink) is resolved to `/mnt/...`.
+  gcd=$(git -C "$cwd" rev-parse --git-common-dir 2>/dev/null) || gcd=""
+  case "$gcd" in
+    '') root=$(cd -- "$cwd"          >/dev/null 2>&1 && pwd -P) || root="" ;;
+    /*) root=$(cd -- "$gcd/.."       >/dev/null 2>&1 && pwd -P) || root="" ;;
+    *)  root=$(cd -- "$cwd/$gcd/.."  >/dev/null 2>&1 && pwd -P) || root="" ;;
+  esac
+  [ -n "$root" ] || return 0
+  slug=${root//[!$ok]/-}
   # A scratch cwd accumulates no durable memory. The harness mints a slug for
-  # every directory a session is started in, including throwaway temp dirs
+  # every project root a session is started in, including throwaway temp dirs
   # (measured: a dozen `-tmp-*` slugs in one home), and converging those would
   # fill the store with empty directories nobody will ever read.
   case "$slug" in -tmp*) return 0 ;; esac
-  link="$d/memory"
+  # THE EXISTENCE CHECK. See the block above: this is the whole reason
+  # computing the slug is safe.
+  [ -d "$projects/$slug" ] || return 0
+  link="$projects/$slug/memory"
   store="$HOME/.ccrc/memory/$slug"
-  # Steady state first, and it is the whole cost on a converged box.
+  # Steady state first. It is NOT the whole cost of this function and this
+  # comment claimed it was for one round: `jq` (twice), `git rev-parse` and
+  # the `cd`/`pwd -P` subshell all fork BEFORE this region is reached, on
+  # every SessionStart, converged or not. What the region below is, is the
+  # cheapest ANSWER once we know which pair to ask about.
   if [ -L "$link" ]; then
     # R20 (Task 4 review round 2): `-ef` + `-d` is the SAME definition of
     # "converged" `_mem_state` and `_check_memory` now both use — a link that
@@ -604,23 +668,20 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
     # `readlink` needed) and whose store is genuinely a DIRECTORY. When it
     # holds, there is nothing to do, full stop.
     #
-    # IT SAVES TIME, IT DOES NOT COST IT — this comment said the opposite for
-    # one round ("this fast path costs one `-ef` and one `-d`"), which had the
-    # sign backwards on the change's one genuinely observable effect. Both
-    # `-ef` and `-d` are bash BUILTINS; the arm they skip runs
-    # `$(readlink -- "$link")`, a command substitution that forks a subshell
-    # and execs a binary. Measured over 300 iterations of the converged common
-    # case: 9ms through this fast path against 763ms through the `readlink`
-    # arm — about 2.5ms saved per call, on a hook that fires at every
-    # SessionStart across ~20 live sessions.
+    # IT SAVES TIME WITHIN THIS BLOCK, which is a smaller claim than the one
+    # that stood here. Both `-ef` and `-d` are bash BUILTINS; the arm they
+    # skip runs `$(readlink -- "$link")`, a command substitution that forks a
+    # subshell and execs a binary. Measured over 300 iterations of the
+    # converged common case: 9ms through this fast path against 763ms through
+    # the `readlink` arm — about 2.5ms saved per call.
     #
     # BEHAVIOURALLY it is still a no-op, and that is a separate claim from the
     # timing one: both arms `return 0` unconditionally and the only side
     # effect in the region, `mkdir -p`, was already gated on `[ -d "$store" ]`,
     # so no test can go red on deleting these three lines (measured: the whole
-    # 146-test session-hook suite stays green without them). Its correctness
-    # value is that this hook, `_mem_state` and `_check_memory` now name the
-    # exact same fact rather than three descriptions that happen to agree.
+    # session-hook suite stays green without them). Its correctness value is
+    # that this hook, `_mem_state` and `_check_memory` now name the exact same
+    # fact rather than three descriptions that happen to agree.
     if [ "$link" -ef "$store" ] && [ -d "$store" ]; then
       return 0
     fi
@@ -649,7 +710,19 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
     rmdir -- "$link" 2>/dev/null || return 0   # non-empty: leave it, doctor reports it
   fi
   mkdir -p -- "$store" 2>/dev/null || return 0
-  ln -s -- "$store" "$link" 2>/dev/null || return 0
+  # `ln -sn`, NOT a bare `ln -s`: without `-n`, `ln` DEREFERENCES a `$link`
+  # that is ALREADY a symlink-to-a-directory and creates the new link INSIDE
+  # the store (`$store/<slug>`, pointing at the store itself) — silently,
+  # exit 0. That is reachable here: ~20 SessionStarts race across this box,
+  # and a concurrent hook run for the same (home, project) pair that wins the
+  # `rmdir`/`ln` window leaves this one looking at a fresh symlink. Measured:
+  # 4 concurrent runs of the unmutated hook over 40 rounds planted a
+  # self-referential loop in the shared store in 31 of them, and both new
+  # detectors then reported `0 forked` / `PASS`. `-n` makes the loser's `ln`
+  # fail with rc 1 instead, which the `|| return 0` below already swallows —
+  # the winner's link is correct and there is nothing left to do. The same
+  # rule and the same reasoning are written at `ccd/ccrc`'s two `ln` sites.
+  ln -sn -- "$store" "$link" 2>/dev/null || return 0
   return 0
 }
 

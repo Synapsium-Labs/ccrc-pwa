@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 
@@ -2139,28 +2140,83 @@ describe('the R7 counters', () => {
   });
 });
 
+// R32 (whole-branch review): the harness files the TRANSCRIPT under the
+// session's CWD slug and the MEMORY directory under the REPOSITORY MAIN
+// CHECKOUT's slug, so inside a git worktree — which on this fleet is nearly
+// every session — they name two DIFFERENT project directories. The hook now
+// derives the project root (`git rev-parse --git-common-dir`'s parent, else
+// the cwd) and slugifies it, and refuses to act unless that project directory
+// already exists.
+//
+// EVERY FIXTURE PROJECT ROOT IS A REAL DIRECTORY OUTSIDE `/tmp`, and both
+// halves of that are load-bearing. Real, because the hook `cd`s into it and
+// asks git about it, so a fabricated path is skipped. Outside `/tmp`, because
+// the slug now comes from the project root and all four mechanisms skip a slug
+// beginning `-tmp` (D-2181): a project root under `os.tmpdir()` — `/tmp` on
+// this fleet — would be skipped by the very rule these tests are not testing,
+// and every assertion below would pass for the wrong reason.
 describe('memory convergence (spec 2026-09-08 §2)', () => {
-  const SLUG = '-mnt-projects-demo';
+  /** The harness's own slug rule, measured against 30 live session workdirs:
+   *  every character outside `[A-Za-z0-9-]` becomes `-`, over the PHYSICAL
+   *  path (`/data` is a symlink on this box and no `-data-…` slug exists). */
+  const slugOf = (p: string): string => p.replace(/[^A-Za-z0-9-]/g, '-');
+
+  const madeRoots: string[] = [];
+  /** A scratch tree for project roots. `/var/tmp` is POSIX, exists on Linux
+   *  and macOS, and slugifies to `-var-tmp-…` — see the block comment above
+   *  for why `os.tmpdir()` cannot be used for THIS directory (the fixture
+   *  HOME is unaffected: a home path is never slugified). */
+  const mkProjBase = (): string => {
+    const base = fs.existsSync('/var/tmp') ? '/var/tmp' : os.tmpdir();
+    const d = fs.realpathSync(fs.mkdtempSync(path.join(base, 'ccrc-hookproj-')));
+    madeRoots.push(d);
+    return d;
+  };
+  afterEach(() => {
+    for (const d of madeRoots.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  const git = (cwd: string, ...args: string[]): void => {
+    execFileSync('git', ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
+      '-c', 'init.defaultBranch=main', ...args], { cwd, stdio: 'pipe' });
+  };
+  const gitInit = (dir: string): void => {
+    git(dir, 'init', '-q');
+    git(dir, 'commit', '--allow-empty', '-q', '-m', 'seed');
+  };
+  /** A REAL git worktree of `main`, returned resolved. This is the fixture
+   *  nobody wrote, and the only one that can tell the transcript's slug apart
+   *  from the repository's. */
+  const mkWorktree = (main: string, name = 'wt'): string => {
+    gitInit(main);
+    const wt = path.join(path.dirname(main), name);
+    git(main, 'worktree', 'add', '-q', '-b', name, wt);
+    return fs.realpathSync(wt);
+  };
+
+  let pbase: string;
+  let root: string;   // the repository main checkout — the project root
+  let SLUG: string;
   const projDir = (): string => path.join(home, '.claude-x', 'projects', SLUG);
   const link = (): string => path.join(projDir(), 'memory');
   const store = (): string => path.join(home, '.ccrc', 'memory', SLUG);
-  // NOTE (task-1 ruling, deviating from the brief verbatim): `cwd` is set to
-  // `/mnt/projects/other` — deliberately DIFFERENT from the project directory
-  // named by `SLUG`/`transcript_path` (`/mnt/projects/demo`). A slug derived
-  // from `cwd` would otherwise coincide with the slug read from
-  // `transcript_path`, so M4 (computing the slug from `.cwd`) could not be
-  // measured to red — the two derivations would silently agree. Nothing else
-  // in the hook reads `.cwd` in a way this affects for these tests: the graph
-  // card returns early for a cwd that is not a git tree, and neither
-  // `/mnt/projects/demo` nor `/mnt/projects/other` is one.
-  const payload = (): object => ({
+  const storeRoot = (): string => path.join(home, '.ccrc', 'memory');
+  const payload = (over: Record<string, unknown> = {}): object => ({
     hook_event_name: 'SessionStart',
     source: 'startup',
-    cwd: '/mnt/projects/other',
+    cwd: root,
     transcript_path: path.join(projDir(), 'abc-123.jsonl'),
+    ...over,
   });
 
-  beforeEach(() => { fs.mkdirSync(projDir(), { recursive: true }); });
+  beforeEach(() => {
+    pbase = mkProjBase();
+    root = path.join(pbase, 'main');
+    fs.mkdirSync(root, { recursive: true });
+    SLUG = slugOf(root);
+    expect(SLUG.startsWith('-tmp')).toBe(false);   // the fixture is the shape it claims
+    fs.mkdirSync(projDir(), { recursive: true });
+  });
 
   it('creates the store and the symlink when no memory directory exists', () => {
     run(payload());
@@ -2194,10 +2250,13 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
 
   it('is a no-op once converged — the steady state costs one test', () => {
     run(payload());
-    const before = fs.lstatSync(link()).mtimeMs;
+    const before = fs.lstatSync(link()).ino;
     run(payload());
     expect(fs.readlinkSync(link())).toBe(store());
-    expect(fs.lstatSync(link()).mtimeMs).toBe(before);
+    // `.ino`, not `mtimeMs`: a link relaid inside one filesystem timestamp
+    // tick carries the same mtime, so mtime can false-pass. The inode is
+    // decisive for the same cost (deferred Task-1 minor, closed here).
+    expect(fs.lstatSync(link()).ino).toBe(before);
   });
 
   // R12 (review round 2, extended here from Task 2's `_mem_state` to this
@@ -2228,11 +2287,133 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
   });
 
   it('skips a scratch slug — /tmp work accumulates no durable memory', () => {
-    const tmpSlug = '-tmp-scratch';
+    // The slug now comes from the project ROOT, so the scratch shape is a
+    // scratch project root — which is exactly what `os.tmpdir()` gives.
+    const tmpRoot = mkTmp('ccrc-hookscratch-');
+    const tmpSlug = slugOf(tmpRoot);
+    expect(tmpSlug.startsWith('-tmp')).toBe(true);   // the fixture is the shape it claims
     const d = path.join(home, '.claude-x', 'projects', tmpSlug);
     fs.mkdirSync(d, { recursive: true });
-    run({ hook_event_name: 'SessionStart', source: 'startup',
-          transcript_path: path.join(d, 'x.jsonl') });
+    run(payload({ cwd: tmpRoot, transcript_path: path.join(d, 'x.jsonl') }));
     expect(fs.existsSync(path.join(d, 'memory'))).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  // ── R32: the worktree fixtures ──────────────────────────────────────────
+  it('converges the MAIN CHECKOUT pair, not the transcript pair, from inside a git worktree (R32)', () => {
+    const wt = mkWorktree(root);
+    const wtSlug = slugOf(wt);
+    expect(wtSlug).not.toBe(SLUG);                  // the fixture is the shape it claims
+    const wtProj = path.join(home, '.claude-x', 'projects', wtSlug);
+    fs.mkdirSync(wtProj, { recursive: true });      // where the harness files the transcript
+
+    run(payload({ cwd: wt, transcript_path: path.join(wtProj, 'wt-1.jsonl') }));
+
+    // the pair that really holds this project's memory converged...
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link())).toBe(store());
+    // ...and no junk store was minted for the workspace.
+    expect(fs.existsSync(path.join(wtProj, 'memory'))).toBe(false);
+    expect(fs.readdirSync(storeRoot())).toEqual([SLUG]);
+  });
+
+  it('converges the main pair from a SUBDIRECTORY of a worktree — `--git-common-dir` is absolute there (R32)', () => {
+    const wt = mkWorktree(root);
+    const sub = path.join(wt, 'server');
+    fs.mkdirSync(sub, { recursive: true });
+    const subProj = path.join(home, '.claude-x', 'projects', slugOf(sub));
+    fs.mkdirSync(subProj, { recursive: true });
+    run(payload({ cwd: sub, transcript_path: path.join(subProj, 'wt-2.jsonl') }));
+    expect(fs.readlinkSync(link())).toBe(store());
+    expect(fs.readdirSync(storeRoot())).toEqual([SLUG]);
+  });
+
+  it('converges the main pair from a SUBDIRECTORY of the main checkout — `--git-common-dir` is RELATIVE there (R32)', () => {
+    gitInit(root);
+    const sub = path.join(root, 'server');
+    fs.mkdirSync(sub, { recursive: true });
+    const subProj = path.join(home, '.claude-x', 'projects', slugOf(sub));
+    fs.mkdirSync(subProj, { recursive: true });
+    run(payload({ cwd: sub, transcript_path: path.join(subProj, 'sub-1.jsonl') }));
+    expect(fs.readlinkSync(link())).toBe(store());
+    expect(fs.readdirSync(storeRoot())).toEqual([SLUG]);
+  });
+
+  it('converges an ordinary NON-GIT project root — the cwd is the root there', () => {
+    // `root` carries no `.git` in this fixture, and the pair still converges:
+    // the git arm is an addition to the cwd rule, not a replacement for it.
+    run(payload());
+    expect(fs.readlinkSync(link())).toBe(store());
+  });
+
+  // THE EXISTENCE CHECK is what makes deriving the slug safe: a derivation
+  // that misses names a directory the harness never made, and the answer to
+  // that is to create NOTHING — not one empty store, not one symlink.
+  it('does nothing when the derived project directory does not exist — no junk store (R32)', () => {
+    const stray = path.join(pbase, 'stray-tree');
+    fs.mkdirSync(stray, { recursive: true });       // a real cwd with no project dir
+    expect(slugOf(stray).startsWith('-tmp')).toBe(false);
+    run(payload({ cwd: stray }));
+    expect(fs.existsSync(link())).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  it('does nothing when the payload cwd names a directory that is gone (R32)', () => {
+    run(payload({ cwd: path.join(pbase, 'no-such-dir') }));
+    expect(fs.existsSync(link())).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  // A relative `transcript_path` was measured to plant a `memory` symlink in
+  // the session's own working directory, outside every agent home. Asserting
+  // the harness's layout — the transcript's grandparent IS the `projects`
+  // directory — refuses that payload outright.
+  it('refuses a transcript_path whose grandparent is not a `projects` directory (R32)', () => {
+    const odd = path.join(home, 'odd', 'notprojects', SLUG);
+    fs.mkdirSync(odd, { recursive: true });
+    run(payload({ transcript_path: path.join(odd, 'x.jsonl') }));
+    expect(fs.existsSync(path.join(odd, 'memory'))).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  // The `prints nothing` clause of this function's own interface. It is the
+  // first code ever added to the SessionStart arm that has one, and this file
+  // spends a paragraph on what a second stdout line costs: the harness's
+  // parser throws, the caller returns `{answer:{}}`, and BOTH cards are
+  // deleted fleet-wide. Every other memory test here reads the filesystem, so
+  // a stray `echo` on the converge path was invisible to all of them.
+  it('prints nothing on the converge path — a second stdout line deletes both cards fleet-wide', () => {
+    expect(run(payload())).toBe('');
+  });
+
+  // The call site sits ABOVE the `source == compact` early return, and the
+  // comment there says it must. Nothing held it: every other test here uses
+  // `source: 'startup'`, so a refactor tidying the call down beside the card
+  // builders would silently drop convergence for compacted sessions.
+  it('converges on a COMPACT start too — the call site is above the compact early return', () => {
+    run(payload({ source: 'compact' }));
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link())).toBe(store());
+  });
+
+  // `ln -sn`, not `ln -s`: a concurrent SessionStart that wins the
+  // `rmdir`/`ln` race leaves this run's `$link` already a symlink to the
+  // store, and a bare `ln -s` DEREFERENCES it — planting `<store>/<slug>`, a
+  // self-referential loop inside the one artefact this branch exists to keep
+  // clean, silently and with exit 0. Measured on the unmutated hook: 4
+  // concurrent runs over 40 rounds planted the loop in 31 of them.
+  //
+  // THE RACE IS MADE DETERMINISTIC by a `mkdir` stub that fires only for the
+  // store path — the one fork between the hook's `[ -e "$link" ]` test and
+  // its `ln`. That is precisely the window the concurrent run wins.
+  it('never writes inside the store when the link appears mid-run — the SessionStart race (ln -sn)', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'mkdir'),
+      '#!/bin/sh\n/bin/mkdir "$@"; rc=$?\n'
+      + 'for a in "$@"; do [ "$a" = "$RACE_STORE" ] && ln -s "$RACE_STORE" "$RACE_LINK" 2>/dev/null; done\n'
+      + 'exit $rc\n', { mode: 0o755 });
+    run(payload(), { RACE_STORE: store(), RACE_LINK: link() });
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link())).toBe(store());
+    expect(fs.readdirSync(store())).toEqual([]);    // nothing planted INSIDE the store
   });
 });
