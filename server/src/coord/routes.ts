@@ -985,6 +985,21 @@ export function registerCoordRoutes(
     }
     const waveOfVal = (waveOf ?? null) as number | null;
 
+    // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
+    // repository, and reusing it for a wave in another is the one crossing this
+    // build refuses. Measured from this store's own history, no I/O at all.
+    //
+    // HERE, AND NOT INSIDE `openRun`: the refusal must leave no `planned`
+    // orphan, so it runs after body validation and BEFORE the row exists. A
+    // null answer refuses nothing — absence permits, and `sessionProject`'s own
+    // docstring says which population that is.
+    if (typeof sessionId === 'string') {
+      const bound = coord.sessionProject(sessionId);
+      if (bound !== null && bound !== project) {
+        return reply.code(409).send({ ok: false, refused: 'project-mismatch', by: bound });
+      }
+    }
+
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,

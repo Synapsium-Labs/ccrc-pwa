@@ -4149,8 +4149,20 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Thirteen codes exist below today; the next new one would be the
- * fourteenth, not the ninth.
+ * Fourteen codes exist below today; the next new one would be the
+ * fifteenth, not the ninth.
+ *
+ * `project-mismatch` is cross-repo programmes' first guard (design
+ * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
+ * SESSION's workspace is a git worktree in exactly one repository, and until
+ * this code existed the "same `sessionId`, same workspace" idiom crossed
+ * repos with nothing to stop it — the mismatch surfaced one advance later as
+ * a `tip-unmeasurable` naming a branch and a project the coordinator did not
+ * expect. It is emitted at TWO sites for the same fact measured two ways:
+ * `POST /api/runs` reads this store's own history (`sessionProject`), and
+ * `POST /api/runs/:id/dispatch`'s resume arm reads the live registry record.
+ * Its body carries `by`, the project the session actually belongs to, so the
+ * coordinator's report names the repo rather than the surprise.
  *
  * `hookstate-unmeasurable` is `worker-busy`'s twin at the same gate and the
  * distinction between them is the whole of D-115: `worker-busy` asserts a
@@ -4173,13 +4185,15 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
-  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal';
+  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
+  | 'project-mismatch';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
   'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
+  'project-mismatch': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

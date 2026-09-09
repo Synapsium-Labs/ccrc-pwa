@@ -190,6 +190,53 @@ describe('POST /api/runs', () => {
     expect(res.json()).toMatchObject({ ok: false, refused: 'claimed-by-another', by: CLAIMED_BY });
   });
 
+  it('refuses a reused sessionId bound to another project — before anything is opened', async () => {
+    // F1. The coordinator's own idiom ("same sessionId, same workspace") caught
+    // by the coordinator's own history: wave 1 in `demo` is the only record that
+    // this workspace lives in `demo`, and until this check nothing read it.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    expect(first.statusCode).toBe(200);
+    const runsBefore = w.coord.runs().length;
+    const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
+
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Another repo',
+      project: 'other-project', wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two',
+      sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: PROJECT });
+    // BEFORE `coord.openRun`, so a refusal leaves no `planned` orphan…
+    expect(w.coord.runs().length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    // …and no hold was placed on a workspace this run was never going to get.
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('permits a reused sessionId that stays in the same project', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' })).statusCode).toBe(200);
+    const res = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses nothing for a session no run has ever named — absence permits', async () => {
+    // The wave-1 open that adopts an operator-made workspace. `sessionProject`
+    // answers null, and a null answer is not evidence of a crossing; the
+    // registry backstop at dispatch (Task 2) is the other rung.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, project: 'other-project',
+      sessionId: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('places the hold immediately when sessionId names an existing workspace, and persists it onto the row', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');

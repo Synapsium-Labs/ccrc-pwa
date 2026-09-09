@@ -2374,3 +2374,25 @@ describe('CoordStore: openCoordinatorIds', () => {
     expect(store().openCoordinatorIds()).toEqual([]);
   });
 });
+
+describe('sessionProject — which repo a reused session belongs to', () => {
+  it('answers the project of the FIRST run that ever named the session, and null for one no run has', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const a = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator' });
+    if ('refused' in a) throw new Error('open refused');
+    s.setSession(a.id, 'demo-existing');
+    expect(s.sessionProject('demo-existing')).toBe('demo');
+    // ORDER BY id LIMIT 1 and not "the newest": the question is which repo the
+    // WORKSPACE was created in, and that is a fact about the session's first
+    // run. A later row naming the same session cannot re-home a worktree.
+    const b = s.openRun({ program: 'build5', title: 'U', project: 'other-project',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two' });
+    if ('refused' in b) throw new Error('open refused');
+    s.setSession(b.id, 'demo-existing');
+    expect(s.sessionProject('demo-existing')).toBe('demo');
+    // ABSENCE PERMITS, and it is a real answer rather than a failure: every
+    // wave-1 open that adopts an operator-made workspace lands here.
+    expect(s.sessionProject('demo-never-run')).toBeNull();
+  });
+});

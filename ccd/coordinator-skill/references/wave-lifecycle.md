@@ -17,9 +17,21 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
    uncommitted ledger is not a handoff.
 2. `POST /api/runs`
    `{"program":"<slug>","title":"<title>","project":"<project>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
-   → `{"ok":true,"id":<run id>,…}`, or
-   `{"ok":false,"refused":"claimed-by-another","by":"<other coordinator id>"}`
-   if another coordinator holds this program (clause 8 — stop).
+   → `{"ok":true,"id":<run id>,…}`, or one of the refusals below.
+
+| refused | what it means | what you do |
+|---|---|---|
+| `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
+| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
+
+**Why `project-mismatch` exists.** A session's workspace is a git worktree in
+exactly one repository. Reusing its id for a wave in another project queues the
+brief onto a workspace bound to the wrong repo, and the mismatch used to surface
+one advance later as a `tip-unmeasurable` naming a branch you did not expect.
+The server measures it two ways — here, from the run history, and again at
+dispatch from the live registry row (§2) — and refuses both times. A session no
+run has ever named refuses nothing: absence permits, which is exactly the
+wave-1 open that adopts a workspace the operator made by hand.
 
    For wave ≥ 2, reclaiming the workspace wave 1 held, add
    `"sessionId":"<the held session id>"` to the same call — it tells the open

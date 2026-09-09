@@ -611,6 +611,33 @@ export class CoordStore {
   }
 
   /**
+   * WHICH PROJECT A REUSED SESSION BELONGS TO, measured from this store's own
+   * history: the project of the FIRST run that ever named it.
+   *
+   * `ORDER BY id LIMIT 1` and not "the newest row", deliberately. The question
+   * is which repository this session's WORKSPACE is a worktree of, and a ccd
+   * workspace is created once, in one project, by the `ws-add` that minted it
+   * (`dispatch.ts`'s `CCD_ARGV.wsAddWorker(run.project, …)`). No later run can
+   * re-home it — the whitelisted verbs cannot re-point a workspace and will not
+   * learn to (design §6) — so the earliest claim is the true one and a later
+   * disagreeing row is the very defect the caller refuses.
+   *
+   * NULL IS AN ANSWER, NOT A FAILURE, and the caller must treat it as one: a
+   * session no run has ever named is every wave-1 open that adopts an
+   * operator-made workspace. Absence permits. There is no third condition here
+   * to collapse — this is one indexed read of one local table
+   * (`runs_by_session`, migration 2), never an I/O that can fail halfway; the
+   * registry-backed rung that CAN fail lives at the dispatch resume arm and
+   * answers `registry-unmeasurable` in its own words.
+   */
+  sessionProject(sessionId: string): string | null {
+    const row = this.db.prepare(
+      'SELECT project FROM runs WHERE sessionId = ? ORDER BY id LIMIT 1',
+    ).get(sessionId) as { project: string } | undefined;
+    return row?.project ?? null;
+  }
+
+  /**
    * The whole reclaim commit, as ONE transaction — `dispatchRun`/`closeRun`'s
    * shape (D-277's argument applied to a batch instead of a sequence). It is
    * ONE `tx()` and it calls no public method that opens its own:
