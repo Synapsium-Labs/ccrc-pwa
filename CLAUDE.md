@@ -211,10 +211,13 @@ pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-writ
 two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
 that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
 `markDelivered`, `markIngested`, `backOff`, `noteGate`, `rejectDelivery` and `parkSupersededDeliveries`.
-The last is Task 6 of the crossrepo-programmes wave-1-server plan (D-2059's worker-arm park), split into
-its own single-line-signature method rather than inlined in the method that calls it — a write inlined
-there would have this file's own writer census walk back past that caller's DECLARED multi-line-signature
-exemption and mis-attribute it, the failure mode that exemption's own comment warns about. Their guard is
+The last is Task 6 of the crossrepo-programmes wave-1-server plan, carrying D-2059's worker-arm park —
+but its EXTRACTION into its own method is a separate departure from the brief's own text (which put this
+`UPDATE` inline), recorded as its own number, **D-2338**, because D-2059 argues the park's role-generalised
+SQL and says nothing about this method's existence. Split into its own single-line-signature method rather
+than inlined in the method that calls it — a write inlined there would have this file's own writer census
+walk back past that caller's DECLARED multi-line-signature exemption and mis-attribute it, the failure mode
+that exemption's own comment warns about. Their guard is
 invisible to the caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered`
 as the archetype of,
 and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its

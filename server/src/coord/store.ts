@@ -1053,10 +1053,13 @@ export class CoordStore {
    *     this same method body, so the derived scan still reports ONE holder
    *     for it, not two.
    *   `parkSupersededDeliveries` — the worker arm's park, split into its own
-   *     single-line-signature method (see `requeueAbandonedMail`'s call site)
-   *     rather than inlined, and therefore a THIRD, separate holder: its own
-   *     `WHERE state IN` guards exactly which outstanding rows the predecessor
-   *     loses.
+   *     single-line-signature method (D-2338; see `requeueAbandonedMail`'s
+   *     call site) rather than inlined, and therefore a THIRD, separate
+   *     holder: its own `WHERE state IN` guards exactly which outstanding
+   *     rows the predecessor loses. This whole bullet, and the "ten holders"
+   *     count above, is itself a consequence of D-2338 — the brief's own
+   *     verbatim replacement text for this docstring (Step 7) named nine and
+   *     said nothing about this method, because it assumed the inline shape.
    *   `cancelOutstandingDeliveries` — reached, and correctly. A new row belongs
    *     to a mail with a run, so when that run closes the row is parked like any
    *     other outstanding delivery, with `MAIL_RUN_CLOSED_ERROR` — a DELIBERATE
@@ -1186,7 +1189,10 @@ export class CoordStore {
     // been sent a fresh copy of. Scoped to the mails this call actually
     // re-issued, so a row it declined to move (the `NOT EXISTS` dedupe) is not
     // parked by a statement that did nothing for it. Split into its own
-    // single-line-signature method (below) rather than inlined here: this
+    // single-line-signature method (below) rather than inlined here — a
+    // departure from the brief's own text, which put this `UPDATE` inline;
+    // recorded as **D-2338**, because D-1425/D-2059 (above) argue the SQL and
+    // the role-generalisation, not this method's existence: this
     // method's own signature is a DECLARED multi-line exemption on the
     // premise that it reaches delivery rows only through `queueDelivery` and
     // `setDeliveryEnvelope` — an `UPDATE mail_deliveries` inlined here would
@@ -1204,6 +1210,9 @@ export class CoordStore {
   /** `requeueAbandonedMail`'s worker-arm park, split out so it carries its OWN
    *  single-line signature (Task 24's rule for delivery-row writers) — see the
    *  comment at its one call site above for why inlining it there is unsafe.
+   *  This EXTRACTION itself is **D-2338** — Task 6's brief put this `UPDATE`
+   *  inline in `requeueAbandonedMail`'s own body; the split is a departure
+   *  from that verbatim text, not from anything the plan's D-2059 decided.
    *  `mailIds` is always `rows.map(r => r.mailId)` from that call's own
    *  re-queue, so a row the `NOT EXISTS` dedupe declined to move is never
    *  reached by this statement either. */
