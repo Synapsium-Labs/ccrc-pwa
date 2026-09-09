@@ -194,6 +194,7 @@ CCRC_DOCTOR_CHECKS=(
   graphify-path
   build
   fleet
+  memory
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -3973,4 +3974,115 @@ _check_fleet() {
     return "$rc"
   fi
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
+}
+
+# ── memory convergence ────────────────────────────────────────────────────
+# THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
+# reported that two homes disagreed about a project's memory, so a session read
+# its own superseded record after an account swap and acted on it. A
+# convergence mechanism without a detector only moves the silence one layer
+# down: the next unconverged home forks exactly as `.claude-dev0` did.
+#
+# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-glm` and
+# `.claude-kimi` are on disk, hold memory, and are in no roster entry — a
+# roster-driven check would report PASS while the homes most likely to fork
+# went unexamined.
+#
+# THREE CONDITIONS, NEVER TWO. "Forked" and "unreachable" have different
+# remedies: the first is `ccrc memory --apply`, the second is wiring the home
+# into `install-session-hooks.sh` (whose list is built from CCRC_ACCOUNTS, which
+# is why a non-rostered home can never be hooked). Collapsing them sends the
+# operator to the wrong fix.
+#
+# THIS RE-DERIVES `_mem_homes`/`_mem_state` (ccrc's own memory functions)
+# RATHER THAN SOURCING THEM — DELIBERATELY (D-92). `cmd_doctor` happens to
+# source this file into the same shell where `ccrc` already defines those two
+# functions, so calling them would technically work today. But this file is
+# ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
+# (this suite's own test harness does exactly that to read
+# `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
+# ccrc-install.test.ts:2547-2556) is this repo's standing ruling that
+# ccrc-doctor-checks must hold its own second spelling of anything it needs,
+# rather than lean on a scope accident. Don't "fix" this duplication by
+# reaching across a boundary that does not reliably exist.
+#
+# THE HOME GLOB ON A BOX WITH NO `.claude*` AT ALL: nullglob is not set in
+# this file (as nowhere else here), so `"$HOME"/.claude*/` expands to its own
+# literal text when nothing matches. The `[ -d "${h}projects" ]` guard right
+# below is what makes that harmless — a literal, unexpanded glob pattern is
+# never a directory, so the loop body simply never runs and this check PASSes
+# having measured a box with no agent homes at all. That PASS is vacuous, not
+# a lie: there is nothing here that could have forked.
+#
+# NO EXTERNAL BINARY THAT IS NOT THE SUBJECT BEING MEASURED — the same rule
+# `_check_scopes` states outright (`read unit _rest`, not `awk`) and
+# `_check_wrappers` already leans on for exactly this reason (`-ef`, next
+# paragraph). This is not a style preference here: `ccrc-doctor.test.ts`'s own
+# harness runs every check against a PATH containing only its own stub
+# binaries (measured: neither `basename`, `grep` nor `readlink` resolve
+# there), so a check built from them would pass by hand and fail, silently
+# and unmeasurably, under the very fixture this task's tests run in.
+# `${x%/}` then `${x##*/}` is `basename` in pure parameter expansion (the
+# same idiom `_check_wrappers` already uses at `name="${f##*/}"`), and the
+# settings.json scan below is a `read` loop rather than `grep`.
+#
+# CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE EXISTS* — the
+# same rule `_mem_state` uses (Task 2, R12) — and `[ "$link" -ef "$store" ]`
+# gets BOTH halves at once, for free, with no `readlink` at all: `-ef`
+# compares device+inode THROUGH the symlink (exactly `_check_wrappers`'s own
+# comment on its alias-detection use of the same operator), and `stat()`ing a
+# path that does not exist simply answers false. So a link whose text names
+# the store correctly but whose store directory is gone or was never created
+# — the pair Task 2's R12 ruled must NOT read as converged — fails `-ef` on
+# that fact alone, with no separate `[ -d "$store" ]` conjunct needed: there
+# is nothing to be `-ef` the same file AS, so it cannot appear equal.
+#
+# `[ -e "$link" ] || [ -L "$link" ] || continue`, NOT `[ -e "$link" ] ||
+# continue`: `-e` DEREFERENCES, so it is false for a dangling symlink —
+# exactly the pair the rule above calls forked, because its target text is
+# right but nothing is behind it. Skipping past it here would let doctor PASS
+# a box the census (`ccrc memory`) calls forked (R10 — the same defect Task 2
+# and Task 3 each hit once already on this branch).
+_check_memory() {
+  local h b d slug link store forked="" unreachable="" line hooked
+  for h in "$HOME"/.claude*/; do
+    b="${h%/}"; b="${b##*/}"
+    case "$b" in .claude-docserver) continue ;; esac
+    [ -d "${h}projects" ] || continue
+    if [ -f "${h}settings.json" ]; then
+      hooked=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in *session-hook.sh*) hooked=1; break ;; esac
+      done < "${h}settings.json" 2>/dev/null
+      [ "$hooked" -eq 1 ] || unreachable="${unreachable:+$unreachable }$b"
+    fi
+    for d in "${h}projects"/*/; do
+      [ -d "$d" ] || continue
+      slug="${d%/}"; slug="${slug##*/}"
+      case "$slug" in -tmp*) continue ;; esac
+      link="${d}memory"
+      [ -e "$link" ] || [ -L "$link" ] || continue
+      store="$HOME/.ccrc/memory/$slug"
+      [ "$link" -ef "$store" ] && continue
+      forked="${forked:+$forked }$b:$slug"
+    done
+  done
+  # ONE VERDICT LINE PER RUN, ALWAYS — and a box can be BOTH forked and
+  # unreachable at once (a pair that already diverged, and an unrelated home
+  # the hook can never wire). FORKED is checked first and wins deliberately:
+  # it names a defect that has already happened, where "unreachable" only
+  # predicts one that has not. Fixing the fork first loses nothing — the
+  # unreachable finding is orthogonal (wiring the hook, not the union) and
+  # the next run still reports it once the fork is cleared.
+  if [ -n "$forked" ]; then
+    _dr_fail memory "memory is forked across agent homes: $forked" \
+      "one store per project: run \`ccrc memory\` to see the census, then \`ccrc memory --apply\`"
+    return 1
+  fi
+  if [ -n "$unreachable" ]; then
+    _dr_fail memory "agent homes the session hook cannot reach, so they will fork on first use: $unreachable" \
+      "add the account to the roster so install-session-hooks.sh wires it, or register session-hook.sh in that home's settings.json by hand"
+    return 1
+  fi
+  _dr_pass memory "one memory store per project; every agent home converged"
 }

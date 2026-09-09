@@ -2200,6 +2200,26 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     expect(fs.lstatSync(link()).mtimeMs).toBe(before);
   });
 
+  // R12 (review round 2, extended here from Task 2's `_mem_state` to this
+  // hook in Task 4): a link whose TEXT already names the canonical store, but
+  // whose store directory is gone or was never created, is NOT converged —
+  // `ccrc doctor`/`_check_memory` and `ccrc memory`/`_mem_state` both call
+  // that pair FORKED. Leaving the hook's steady-state arm to return 0 without
+  // creating the store would make the hook run forever on a project without
+  // ever repairing the one thing standing between it and converged — the
+  // same silence this whole task exists to remove, one layer down. Creating
+  // the missing directory loses nothing (there is nothing behind the
+  // dangling link to lose), so this stays inside the hook's "acts only where
+  // there is nothing to lose" contract.
+  it('creates the missing store when the link already points at it — the correct-target-no-store case (R12)', () => {
+    fs.symlinkSync(store(), link());
+    expect(fs.existsSync(store())).toBe(false);
+    run(payload());
+    expect(fs.lstatSync(link()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link())).toBe(store());
+    expect(fs.statSync(store()).isDirectory()).toBe(true);
+  });
+
   it('does nothing at all when the payload carries no transcript_path', () => {
     const p: Record<string, unknown> = { ...payload() };
     delete p['transcript_path'];

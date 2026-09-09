@@ -598,7 +598,20 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   store="$HOME/.ccrc/memory/$slug"
   # Steady state first, and it is the whole cost on a converged box.
   if [ -L "$link" ]; then
-    [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && return 0
+    if [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ]; then
+      # R12 (review round 2, extended here from Task 2's `_mem_state` to this
+      # hook, Task 4): a link whose TEXT already names the canonical store,
+      # but whose store directory is gone or was never created, is NOT
+      # converged — `_mem_state` and `_check_memory` both call that pair
+      # forked. Returning 0 here without creating it would leave the hook
+      # firing on this project forever without ever closing the one gap
+      # standing between it and converged. Creating the missing directory
+      # loses nothing — there is nothing behind a dangling link to lose — so
+      # this stays inside this function's own "acts only where there is
+      # nothing to lose" contract, and the failure stays silent either way.
+      [ -d "$store" ] || mkdir -p -- "$store" 2>/dev/null
+      return 0
+    fi
     return 0   # points elsewhere: its target holds data — doctor reports it
   fi
   if [ -e "$link" ]; then
