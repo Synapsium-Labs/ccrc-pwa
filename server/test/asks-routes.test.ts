@@ -248,10 +248,16 @@ describe('POST /api/asks/:id/answer', () => {
    * CAS source is `'held'` — it can never reach a row `takeAskForAnswer`
    * already moved to `'answering'`, so `releaseAsk` returns `false` and
    * every refused press strands the row forever. `untakeAsk` (`'answering'`
-   * -> `'held'`) is the correct rollback: every one of `answerAsk`'s guards
-   * returns BEFORE its `sendKey` loop, so a refusal here means no digit was
-   * pressed and the question is still live. This proves the row survives a
-   * refused press and is still pre-emptible afterwards.
+   * -> `'held'`) is the correct rollback: a refusal here means no digit was
+   * pressed and the question is still live — not because every one of
+   * `answerAsk`'s guards returns before its `sendKey` loop (since D-2177 a
+   * failed `sendKey` refuses too), but because a HELD row only ever exists
+   * for a single-select ask (`askActions` returns null on `multiSelect`,
+   * the sole eligibility gate `hold` checks before minting one — D-2173),
+   * which makes exactly one `sendKey` call and no Enter — and this test's
+   * own refusal (`range`) fires before `answerAsk` ever reads the pane,
+   * let alone sends a key, so it is unaffected either way. This proves the
+   * row survives a refused press and is still pre-emptible afterwards.
    */
   it('a refused press leaves the row held, not stranded in answering', async () => {
     const { coord, id, calls } = await setup(Date.now());

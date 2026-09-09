@@ -3923,15 +3923,29 @@ export class CoordStore {
 
   /** answering -> held, CAS (fix round 1, finding 3).
    *  The rollback `takeAskForAnswer`'s caller reaches for when the take
-   *  succeeded but the press itself was refused — every one of `answerAsk`'s
-   *  guards returns BEFORE its `sendKey` loop, so a refusal there means no
-   *  digit was pressed and the question is still live. A DISTINCT verb from
-   *  `releaseAsk` on purpose: "I abandoned my attempt" (still pre-emptible,
-   *  no push) and "the window is over" (push fires) are different facts a
-   *  reader of `state` needs to tell apart, and `releaseAsk`'s CAS source is
-   *  `'held'` — it cannot even reach a row this call finds, which sat in
-   *  `'answering'`. Returns whether THIS call moved it, the same "I did it"
-   *  vs. "someone else already did" shape as `releaseAsk`/`staleAsk`. */
+   *  succeeded but the press itself was refused — a refusal there means no
+   *  digit was pressed and the question is still live. CORRECTED (D-2177
+   *  fix round 1): NOT because every one of `answerAsk`'s guards precedes
+   *  its `sendKey` loop — since D-2177 a failed `sendKey` refuses too
+   *  (`inject/ask.ts:136`, `:151`), so a refusal CAN now happen mid-send.
+   *  The real reason the conclusion still holds HERE: a row only ever
+   *  exists for a SINGLE-SELECT ask. `askActions` returns null whenever
+   *  `multiSelect === true` (`askkey.ts:83`), and `actions !== null` is the
+   *  sole eligibility gate `hold` checks before minting a row at all
+   *  (`watch.ts:3452`, D-2173) — a multi-select ask never gets a row to roll
+   *  back in the first place. A single-select answer makes exactly ONE
+   *  `sendKey` call and no Enter, so its `false` — send-keys exiting
+   *  nonzero — IS "the digit did not land," with no partial-send case a row
+   *  here could ever observe. `takeAskForAnswer`'s `askAt` CAS (above) pins
+   *  the live envelope to the mint-time one, so the question cannot have
+   *  turned multi-select between mint and this rollback either. A DISTINCT
+   *  verb from `releaseAsk` on purpose: "I abandoned my attempt" (still
+   *  pre-emptible, no push) and "the window is over" (push fires) are
+   *  different facts a reader of `state` needs to tell apart, and
+   *  `releaseAsk`'s CAS source is `'held'` — it cannot even reach a row
+   *  this call finds, which sat in `'answering'`. Returns whether THIS call
+   *  moved it, the same "I did it" vs. "someone else already did" shape as
+   *  `releaseAsk`/`staleAsk`. */
   untakeAsk(id: number): boolean {
     const res = this.db.prepare(
       "UPDATE asks SET state = 'held' WHERE id = ? AND state = 'answering'",

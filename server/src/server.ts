@@ -1662,8 +1662,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * is the authority this row exists to protect against being locked out
    * of, not a third party mediated by it, so losing the CAS only means this
    * request cannot claim the record; the press still goes through on its
-   * own merits (`answerAsk`'s own twelve guards are the only refusal that
-   * still applies).
+   * own merits (`answerAsk`'s own twelve pre-send guards plus its two
+   * post-send `sendKey` checks, D-2177, are the only refusal that still
+   * applies).
    */
   app.post('/api/sessions/:id/ask', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -1707,10 +1708,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
 
     if (!res.ok) {
-      // Refused before any keystroke — every `answerAsk` guard returns
-      // before its send loop, so no digit landed. Roll the row back to
-      // `held`, not stranded `answering`: the same rollback verb
-      // `/api/asks/:id/answer` uses on its own refused press.
+      // No digit landed here either — not because every `answerAsk` guard
+      // returns before its send loop (since D-2177 a failed `sendKey`
+      // refuses too), but because a HELD row only ever exists for a
+      // single-select ask (`askActions` returns null on `multiSelect`, the
+      // sole eligibility gate `hold` checks before minting one — D-2173),
+      // which makes exactly one `sendKey` call and no Enter. Roll the row
+      // back to `held`, not stranded `answering`: the same rollback verb
+      // `/api/asks/:id/answer` uses on its own refused press; see
+      // `untakeAsk`'s own docstring (`store.ts`) for the full argument.
       if (!coord.untakeAsk(held.id)) {
         console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
           "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
@@ -2009,10 +2015,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // -destroying operation that was NOT routed through the per-session
     // `KeyedQueue` every other write (`sendPrompt`, `answerDialog`,
     // `answerAsk`) already shares via `sendDeps`/`askDeps` above. Unserialized,
-    // a swap could land between `answerAsk`'s pane capture and its keystroke
-    // and tear the pane down mid-answer. Through the SAME queue key (`id`),
-    // it now cannot run until any in-flight write for this session has
-    // finished, exactly like the PR-open route below.
+    // a swap reaching THIS route could land between `answerAsk`'s pane
+    // capture and its keystroke and tear the pane down mid-answer. Through
+    // the SAME queue key (`id`), it now cannot run until any in-flight write
+    // for this session has finished, exactly like the PR-open route below —
+    // deterministically, for a swap that arrives here.
+    //
+    // That closes only the IN-PROCESS path. `cmd_swap` also fires from
+    // `_auto_swap_check` (`ccd/ccd:12510`) on `cmd_supervise`'s 5-second
+    // tick, on the fleet box, entirely outside this server and this queue —
+    // the HTTP chokepoint this queue lives behind is a contract the PWA
+    // honours, not an OS wall around the tmux pane (CLAUDE.md's own words
+    // for the exec whitelist apply here just as much). Nothing server-side
+    // can queue a swap that never asks the server. `answerAsk`'s own
+    // `sendKey` return check (`inject/ask.ts`, same commit) is what actually
+    // covers that box-local case: it is what turns the auto-swap's keystroke
+    // loss into a refusal instead of a false ok:true, and it is the only one
+    // of the two halves that reaches it.
     const wrapper = body.wrapper;
     const res = await sendDeps.queue.run(id, () => deps.runCcd(CCD_ARGV.swap(id, wrapper)));
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });

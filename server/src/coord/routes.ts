@@ -2333,13 +2333,18 @@ export function registerCoordRoutes(
    * its own mutex, re-proving the INSTANCE (`freshAskAt`, D-2170) and taking
    * exclusive ownership of the row (`not-held`, D-2171) before `answerAsk`
    * ever touches the pane. A refused press (`answerAsk` returning
-   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: every one of
-   * `answerAsk`'s twelve guards returns BEFORE its `sendKey` loop, so a
-   * refusal here means no digit was pressed and the question is still live
-   * and still pre-emptible — `releaseAsk`'s CAS source is `'held'`, and this
-   * row sits in `'answering'`, so it cannot even reach it (it would silently
-   * strand the row forever, `changes: 0` and all). `untakeAsk` is the exact
-   * CAS built for this rollback (`store.ts`'s own docstring on it).
+   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
+   * here means no digit was pressed and the question is still live and
+   * still pre-emptible — not because every one of `answerAsk`'s twelve
+   * pre-send guards plus its two post-send `sendKey` checks (D-2177)
+   * precedes the loop, but because a row here only ever exists for a
+   * SINGLE-SELECT ask (`askActions` returns null on `multiSelect`, the sole
+   * eligibility gate `hold` checks before minting one — D-2173), which
+   * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
+   * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
+   * is `'held'`, and this row sits in `'answering'`, so it cannot even
+   * reach it (it would silently strand the row forever, `changes: 0` and
+   * all). `untakeAsk` is the exact CAS built for this rollback.
    */
   app.post('/api/asks/:id/answer', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);

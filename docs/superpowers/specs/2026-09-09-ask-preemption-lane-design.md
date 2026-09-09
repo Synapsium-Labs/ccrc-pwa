@@ -43,7 +43,8 @@ race shape is structurally immune: the same function refuses on `grep -q "❯" |
 `[[ "$st" == "idle" ]]`, and a session showing a dialog satisfies neither.
 
 **A fourth fact makes the race possible.** `answerAsk` (`server/src/inject/ask.ts:33-38`) carries
-twelve guards and nine typed fail-shut refusals, re-reads hookstate through `AskDeps.readAsk` rather
+twelve pre-send guards plus two post-send `sendKey` checks (D-2177) and nine typed fail-shut
+refusals, re-reads hookstate through `AskDeps.readAsk` rather
 than trusting any caller's copy, and — the load-bearing part — **re-captures the pane at send time**
 and refuses `no-menu` / `menu-mismatch` before pressing anything. Every call for one session
 serializes through a shared per-session `KeyedQueue` (`server.ts:1404-1406`). A race between two
