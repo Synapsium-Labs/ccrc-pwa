@@ -45,8 +45,10 @@
  *  the single-source ruling above keeps on the TypeScript side, because the
  *  `as const` literal is what lets `ModelClass` be derived as a real union
  *  TYPE (`(typeof CLASSES)[number]`) — a job only `.ts` can do. `models.mjs`
- *  keeps its own private, unexported copy for its own runtime walk; the two
- *  are pinned to agree element-for-element by `server/test/models.test.ts`. */
+ *  exports its own copy for its own runtime walk — the `.mjs` cannot import
+ *  the `.ts`'s exported `CLASSES` (that would be an import cycle), so it is a
+ *  second EXPORT, not a private one; the two are pinned to agree
+ *  element-for-element by `server/test/models.test.ts`. */
 export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 export type ModelClass = (typeof CLASSES)[number];
 
@@ -123,10 +125,10 @@ export interface CatalogueModel {
  *  takes `Catalogue | null` rather than defaulting one. `stale: true` means the
  *  last probe failed and this is the previous catalogue (§11).
  *
- *  `probe`, not `provider`: spec §4.2's example predates round-2 ruling 10,
- *  and `openai` is an account-connections `ProviderId` this branch has no
- *  access to. The field records WHICH PROBE PRODUCED THIS FILE (deviation
- *  B-2), which is the only thing any reader here asks of it. */
+ *  `probe`, not `provider`: spec §4.2's own example already uses `probe`
+ *  (round-2 ruling 10), and `openai` is an account-connections `ProviderId`
+ *  this branch has no access to. The field records WHICH PROBE PRODUCED THIS
+ *  FILE (deviation B-2), which is the only thing any reader here asks of it. */
 export interface Catalogue {
   probe: ProbeKind;
   fetchedAt: number;

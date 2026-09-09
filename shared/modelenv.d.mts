@@ -24,11 +24,18 @@ export type ModelEnv = {
   ANTHROPIC_SMALL_FAST_MODEL: string;
   CLAUDE_CODE_SUBAGENT_MODEL: string;
   // §6.1, amended 2026-09-08: present only when `catalogue` is non-null, not
-  // stale, and names ANTHROPIC_MODEL's resolved model with a numeric context.
+  // stale, and names ANTHROPIC_MODEL's resolved model with a POSITIVE
+  // INTEGER context (modelenv.mjs: `typeof row.context === 'number' &&
+  // Number.isInteger(row.context) && row.context > 0`, pinned by
+  // modelenv.test.ts over 0, -1 and a fraction) — not merely "a numeric
+  // context", which admits all three.
   CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
 };
 export declare class ModelEnvInvalid extends Error {}
 export declare const MODEL_ENV_KEYS: readonly string[];
+/** The client's default window for a model id it does not know (spec §6.1).
+ *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` never exceeds this. */
+export declare const CLIENT_DEFAULT_CONTEXT_TOKENS: number;
 export declare function modelEnvBlock(registry: Registry, catalogue: Catalogue | null): ModelEnv;
 export declare function mergeSettingsEnv(
   settingsPath: string, block: Record<string, string>,

@@ -220,12 +220,13 @@ describe('the Codex arm (§5)', () => {
     const cat = parseCatalogue(JSON.parse(fs.readFileSync(link, 'utf8')));
     expect(cat.probe).toBe('codex');
     expect(fs.readdirSync(target), 'the directory the link pointed at must stay untouched').toEqual([]);
-    // The header's ATOMIC claim, checked on this branch specifically: one
-    // `rename(2)` call means there is no window in which $OUT names nothing
-    // (a remove-then-rename pair would open exactly that window). What that
-    // leaves to measure post-hoc is the END state — no `$OUT.tmp.$$` staging
-    // file surviving beside the destination, and exactly one entry at the
-    // destination's own name.
+    // This is an END-STATE check, not a race-window witness: a live poll of
+    // "does $OUT ever name nothing mid-write" needs syscall-grade timing this
+    // suite does not carry (the sibling minor on the bash:425/security:427
+    // test above makes the same call). What it CAN measure post-hoc is the
+    // end state a `rename(2)` and a remove-then-rename pair leave differently
+    // — no `$OUT.tmp.$$` staging file surviving beside the destination, and
+    // exactly one entry at the destination's own name.
     expect(fs.readdirSync(home).filter((n) => n.startsWith('out-link')),
       'no .tmp staging file may survive beside the destination, and nothing but the destination itself may be there')
       .toEqual(['out-link']);

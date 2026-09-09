@@ -36,10 +36,13 @@ export class LitellmTemplateInvalid extends Error {
 /** A model id safe to write as an UNQUOTED YAML scalar. `: ` opens a mapping,
  *  ` #` opens a comment and a leading `-` opens a sequence item — a catalogue
  *  carrying any of them would produce a config LiteLLM parses into something
- *  else, silently. Narrower than `shared/models.ts`'s MODEL_ID_RE, which every
- *  id in a catalogue already satisfies; this is the second gate, on the
- *  writer's side, because the catalogue is a generated file and a probe bug
- *  must not become a config bug. */
+ *  else, silently. Narrower than `shared/models.ts`'s MODEL_ID_RE — but the
+ *  catalogue does NOT enforce MODEL_ID_RE on its own ids (`parseCatalogue`'s
+ *  only check is "has an id"; the probe's normaliser only checks
+ *  `isinstance(mid, str) and mid`), so this is not a second gate behind a
+ *  first one. It is the ONLY thing standing between a probe bug and a
+ *  silently-misparsed LiteLLM config, on the writer's side, because the
+ *  catalogue is a generated file. */
 const YAML_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}$/;
 
 /**

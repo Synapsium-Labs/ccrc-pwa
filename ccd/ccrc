@@ -825,8 +825,9 @@ _svc_run_detached() {   # <cmd> [args...]
 # `deploy/models-op.mjs` is this design's node half — a NEW file, because
 # `main` has no node helper for account state to add ops to (`deploy/
 # account-op.mjs` is the account-connections branch's and is not here).
-# `$CCRC_HERE/..` is `cmd_wrappers`' idiom (:2276): true in a checkout and at
-# ~/ccrc on a deployed box, because both deploy lanes land `deploy/` there.
+# `$CCRC_HERE/..` is `cmd_wrappers`' own idiom (its `local gen=`): true in a
+# checkout and at ~/ccrc on a deployed box, because both deploy lanes land
+# `deploy/` there.
 #
 # NOTHING IS RE-WORDED HERE: stdout is the caller's answer and stderr is the
 # caller's remedy.
@@ -3778,9 +3779,9 @@ _exp_status() {
 # `$MODELS_RESERVED` is what makes that decidable; an account whose id is one of
 # those words is refused by name rather than silently unreachable.
 _models_deps() {
-  # `cmd_install`'s guard (:3734), for this verb: node runs the JSON emitter, so
-  # its absence is the ONE refusal this verb cannot phrase as JSON. jq is
-  # checked second, with node already proven present.
+  # `cmd_install`'s own `command -v node` guard, for this verb: node runs the
+  # JSON emitter, so its absence is the ONE refusal this verb cannot phrase as
+  # JSON. jq is checked second, with node already proven present.
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc models' — it runs ${CCRC_HERE%/*}/deploy/models-op.mjs, the only thing on this box that writes this verb's JSON — but is not on PATH. Install Node (this repo's floor is in server/package.json's \"engines\") or put it on PATH, then re-run. Nothing on this box was written or changed, and this is the one refusal this verb cannot phrase as JSON."
   command -v jq >/dev/null 2>&1 \
@@ -3788,10 +3789,11 @@ _models_deps() {
 }
 
 # `$HOME/.ccrc/accounts.json`, spelled the way every other reader in this file
-# spells it (`cmd_wrappers` at :2362, `cmd_install` at :3960) — a helper rather
-# than eleven copies, because five functions below need it and `models-op.mjs`
-# is handed it as `--file`. No override: this file has no `CCRC_ROSTER` idiom,
-# and inventing one here would be a second way to name the roster.
+# spells it (`cmd_wrappers`' own manifest-generator call; `cmd_install`'s
+# `_inst_roster`/`_inst_accounts_sh`) — a helper rather than eleven copies,
+# because five functions below need it and `models-op.mjs` is handed it as
+# `--file`. No override: this file has no `CCRC_ROSTER` idiom, and inventing
+# one here would be a second way to name the roster.
 _models_roster_path() { printf '%s' "$HOME/.ccrc/accounts.json"; }
 
 _models_summary() {   # <json body> — the human sentences, on STDERR
@@ -4096,8 +4098,10 @@ _models_litellm_path()     { printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm
 _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
 
 # "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
-# starts it with (`infra/handoff/ccgpt:95`: `litellm --config "$CONFIG" …`).
-# NOT a port check: the port answering says something is listening, not that it
+# starts it with (`infra/handoff/ccgpt`'s own launch line: `litellm --config
+# "$CONFIG" …` — cited by shape, not by line number, because it lives in the
+# monorepo branch and drifts independently of this one). NOT a port check:
+# the port answering says something is listening, not that it
 # is listening on THESE bytes, and the question here is exactly whether the
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
@@ -4329,9 +4333,10 @@ cmd_models() {
   esac
   _models_deps
   # The shape contract, sourced rather than restated — `cmd_wrappers`' own
-  # idiom (:2331-2336), for the same reason: `_models_id_ok` needs
-  # `WRAPPER_ID_RE`, and a second, hand-typed copy of `shared/roster.ts`'s
-  # ID_RE is how a validator drifts from the rule it is supposed to enforce.
+  # idiom (its `local shape=`/`. "$shape"` sourcing), for the same reason:
+  # `_models_id_ok` needs `WRAPPER_ID_RE`, and a second, hand-typed copy of
+  # `shared/roster.ts`'s ID_RE is how a validator drifts from the rule it is
+  # supposed to enforce.
   # Sourced ONCE, here, rather than inside `_models_id_ok` itself: the file
   # defines `_wrap_*`/`WRAPPER_*` names (its own header — no path lookups, no
   # namespace collision with `_models_*`/`MODELS_*`), and re-sourcing it on

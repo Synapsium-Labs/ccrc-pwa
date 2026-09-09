@@ -17,8 +17,8 @@
 // everything from `'../../shared/models.js'` ONCE and drives `modelCases`
 // over it ONCE — there is no second implementation left to disagree with the
 // first. What remains genuinely duplicated — `CLASSES` and `PROBE_KINDS`,
-// kept on the `.ts` side only for their `as const`-derived TYPES, with a
-// private unexported copy in `.mjs` because `.mjs` cannot import `.ts` back
+// kept on the `.ts` side only for their `as const`-derived TYPES, with its
+// own EXPORTED copy in `.mjs` because `.mjs` cannot import `.ts` back
 // — is still pinned element-for-element below, `shared/wrapper.mjs` /
 // `shared/generate.mjs`'s arrangement in this tree and its reason.
 import { describe, it, expect } from 'vitest';
@@ -492,7 +492,7 @@ describe('shared/models.ts is TypeScript-facing over the single models.mjs imple
   it('the .mjs carries the class list, and it is CLASSES element for element', () => {
     // Source-derived, `server/test/source-bytes.test.ts:5-15`'s rule: the
     // `.mjs` cannot import the `.ts`'s exported `CLASSES` (that would be an
-    // import cycle), so it keeps a private copy, compared here as TEXT. The
+    // import cycle), so it exports its own copy, compared here as TEXT. The
     // last regex hand-copied between these two languages shipped as raw
     // control bytes with every suite green.
     const src = readFileSync(path.join(REPO, 'shared/models.mjs'), 'utf8');

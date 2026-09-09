@@ -1392,8 +1392,9 @@ describe('the model files, and who reads each one', () => {
       return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*(?<!\.classes)(?<!\.effort)\.json/.test(l);
     };
     // Plan 2 adds `ccd/ccd` as a reader of the models directory — the
-    // `.classes.tsv` projection (spec §7), not the catalogue — when it lands, extend BOTH this write-scan's file list AND the readers' list in
-    // the `it()` just above, not just one; a reader that never writes belongs
+    // `.classes.tsv` projection (spec §7), not the catalogue — when it lands,
+    // extend BOTH this write-scan's file list AND the readers' list in the
+    // `it()` just above, not just one; a reader that never writes belongs
     // only in the second.
     for (const f of ['ccd/ccrc', 'deploy/deploy.sh']) {
       const code = codeLines(path.join(ccrcRoot, f));

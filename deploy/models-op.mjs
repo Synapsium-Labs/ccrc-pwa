@@ -36,7 +36,7 @@
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
-// verbatim" contract (`ccd/ccrc:3955-3962` reads it that way), and
+// verbatim" contract (`ccd/ccrc`'s `_inst_accounts_sh` reads it that way), and
 // `ccd/ccrc-adopt:139-146`'s argument loop, where an unknown flag is exit 2.
 //
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
