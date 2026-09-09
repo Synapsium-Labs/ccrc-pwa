@@ -224,3 +224,37 @@ describe('truncatedBytes', () => {
     expect(res.truncatedBytes).toBe(0);
   });
 });
+
+describe('the harness resume pair is system, not a conversation (D-2228)', () => {
+  const metaPrompt = JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off. Note: ccd restarted this session.' }] },
+    isMeta: true, uuid: 'm1', timestamp: '2026-09-09T11:25:31.906Z',
+  });
+  const synthetic = JSON.stringify({
+    parentUuid: 'm1', isSidechain: false, type: 'assistant', uuid: 'a1', timestamp: '2026-09-09T11:25:31.906Z',
+    message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] },
+  });
+  it('the META resume prompt is a system event with origin resume-prompt, text the prefix only', () => {
+    expect(parseTranscriptLine(metaPrompt)).toEqual([
+      { kind: 'system', uuid: 'm1', ts: '2026-09-09T11:25:31.906Z', text: 'Continue from where you left off.', origin: 'resume-prompt' },
+    ]);
+  });
+  it('the synthetic No response requested. is a system event with origin no-response', () => {
+    expect(parseTranscriptLine(synthetic)).toEqual([
+      { kind: 'system', uuid: 'a1', ts: '2026-09-09T11:25:31.906Z', text: 'No response requested.', origin: 'no-response' },
+    ]);
+  });
+  it('a META user message with other content is still a user event (unchanged)', () => {
+    const other = metaPrompt.replace('Continue from where you left off. Note: ccd restarted this session.', '# Workflow authoring reference');
+    expect(parseTranscriptLine(other).map((e) => e.kind)).toEqual(['user']);
+  });
+  it('a real model saying the same words is still an assistant event (unchanged)', () => {
+    const real = synthetic.replace('"model":"<synthetic>"', '"model":"claude-fable-5-1"');
+    expect(parseTranscriptLine(real).map((e) => e.kind)).toEqual(['assistant']);
+  });
+  it('a human typing the sentence is a user event — isMeta decides, not the words', () => {
+    const human = metaPrompt.replace('"isMeta":true', '"isMeta":false');
+    expect(parseTranscriptLine(human).map((e) => e.kind)).toEqual(['user']);
+  });
+});
