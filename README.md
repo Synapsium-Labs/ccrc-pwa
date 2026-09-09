@@ -73,7 +73,7 @@ account home it finds. The server comes up on `127.0.0.1:7788`.
 Then:
 
 ```bash
-ccrc doctor      # 26 checks: binaries, units, roster, hook registration, auth posture
+ccrc doctor      # binaries, units, roster, hook registration, auth posture
 ccrc status      # what is running, where
 ```
 
@@ -923,6 +923,62 @@ screen appears during an intentional operator login, and evacuating a
 session out from under someone mid-login would be wrong; that screen is the
 one case `_accept_first_run_prompts`'s login check owns instead, by warning
 and stopping rather than swapping.
+
+### One memory store per project: `ccrc memory`
+
+**A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between
+accounts.** Claude Code keeps it at `<config dir>/projects/<slug>/memory` — inside the
+*account's* home, not the project's — so the swap this whole design is bent around carries
+the conversation across and leaves the memory behind. Each home a box carries accumulates its
+own copy of what sessions learned about the same repo, and they drift apart.
+
+The answer is one store per **project**, shared by every home on the box:
+`~/.ccrc/memory/<slug>`, with each home's `projects/<slug>/memory` a symlink into it.
+Nothing has to move on a swap, because nothing was ever the account's to hold.
+
+```bash
+ccrc memory            # the census: one line per (home, project) pair, then a count
+ccrc memory --apply    # the union — the only step in any of this that moves a byte
+```
+
+**The census is read-only.** A pair is a home's `projects/<slug>/memory` that exists at all —
+a project a home has never held is not a pair and is not listed — and it reads either
+`converged` (the link *resolves* to the store and the store is a directory: resolution, never
+the link's spelling) or `forked` (a real directory, or any link that does not resolve to a
+store directory — pointing at another home, dangling, or landing on a plain file).
+**Homes are enumerated from the FILESYSTEM (`~/.claude*/`), never from the roster** — the
+roster describes the accounts ccrc places work on and was never a census of homes, and a box
+can carry config dirs no roster entry names. Slugs beginning `-tmp` are skipped, because the
+harness mints one for every throwaway directory a session was started in.
+
+**`--apply` keeps both sides of a conflict rather than choosing one.** A file unique to one
+home is copied across; a byte-identical collision stays one file; a same-named file whose
+content *differs* keeps **both** copies, the incoming one suffixed with the home it came
+from, for a human to reconcile. `MEMORY.md` is the exception — an index of one line per file,
+derivable from each file's own `name`/`description` frontmatter, so it is rebuilt rather than
+merged. Sub-directories and non-`.md` files are not memory files: they are counted, not
+copied, and where a backup was taken the run names how many stayed behind in it. Only a
+**real directory** is backed up — beside itself as `memory.pre-ccrc-<UTC>`, with the path
+printed on that pair's line; the symlink arms take no backup, because a link holds no data.
+And it **refuses rather than reporting a success it did not achieve**: a union that cannot
+read a source or land a copy exits non-zero with the pair named, leaving the original
+directory exactly where it stood. It also normalises a converged link whose own text is not
+the store — a relative spelling, or a *chain* through another home's link, which would
+quietly make one account's home load-bearing for every other, reintroducing one level up the
+very failure this replaces.
+
+`--apply` is a one-time operator act; two mechanisms keep it honest afterwards. The
+SessionStart hook converges one `(home, project)` pair per start and **never merges data** —
+it acts only where there is nothing to lose (an absent link, or a plain directory that is
+empty, tested by `rmdir`'s own failure so there is no check-then-act window across a live
+fleet), leaving a non-empty directory or a link pointing elsewhere exactly as found.
+`ccrc doctor`'s `memory` check then reports what the hook declined to touch, in three
+conditions it never collapses into one: **forked** pairs (remedy: `ccrc memory --apply`);
+homes the hook **cannot reach at all**, because `install-session-hooks.sh` builds its list
+from the roster (remedy: add the account to the roster, or register `session-hook.sh` in
+that home's `settings.json` by hand); and a `settings.json` that exists but **cannot be
+read**, which earns a WARN and its own remedy — "I could not measure it" is not "it is
+definitely not wired".
 
 ## Attention, notifications and answering
 
