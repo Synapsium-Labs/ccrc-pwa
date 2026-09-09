@@ -1,0 +1,551 @@
+#!/usr/bin/env bash
+# ccrc-models-probe — fetch one lane's model catalogue and write it to
+# ~/.ccrc/models/<accountId>.json (spec §5).
+#
+# KEYED BY PROBE KIND, NOT BY PROVIDER. Round-2 ruling 10: `codex`,
+# `openrouter`, `compatible` — exactly the `probe` field of that lane's
+# ~/.ccrc/models/<accountId>.classes.json. `openai` is the account-connections
+# branch's ProviderId, that branch is not on main, and this tool refuses the
+# spelling by name so a stale caller fails loudly rather than writing a
+# catalogue nothing here can parse.
+#
+# ONE EXECUTABLE, ONE ARM PER KIND, because the three fetches have nothing in
+# common but their answer: Codex needs the lane's OAuth through LiteLLM's own
+# `Authenticator` (the token refresh lives there, and `ccgpt-usage` already
+# reaches it exactly this way — read that file, it is the model this arm
+# copies); OpenRouter's list needs no credential at all; a `compatible`
+# endpoint needs the lane's token and may not answer at all. What they share is
+# the NORMALISER and the WRITE, and those are single here.
+#
+# ── THE WRITE IS ATOMIC AND THE FAILURE IS NOT DESTRUCTIVE ────────────────
+# The catalogue is read by another process (the server's fleet poll, ccd, the
+# verbs), so it lands tmp + `_probe_mv_notdir` (rename, refusing a directory
+# destination), staged BESIDE the destination as `$OUT.tmp.$$` (spec §4.2: tmp
+# and mv in the SAME directory — a cross-filesystem `mv` degrades to
+# copy+unlink, which a reader can observe mid-write). And a failed probe NEVER
+# deletes a catalogue: it rewrites the previous one with
+# `stale: true` and the error text in `lastError` (§11), because "the network
+# was down for an hour" must not read on every surface as "every model this lane
+# had is retired".
+#
+# IT NEVER TOUCHES <accountId>.classes.json. That file is the operator's
+# registry, written only by the verbs (§4.1).
+#
+# ── THE ONE TEST SEAM ─────────────────────────────────────────────────────
+# `CCRC_MODELS_PROBE_FIXTURE`, when set, replaces the FETCH — and only the
+# fetch — with a read of the named file. It exists so the suite can drive every
+# arm, the normaliser and both failure paths without a packet leaving the box;
+# a missing file through it is exactly a failed fetch, which is how the stale
+# path is driven. It is read in ONE place, and `server/test/models-probe.test.ts`
+# asserts that: a seam in two branches would be a second implementation of
+# "fetch" and the network arm would stop being the thing under test.
+set -uo pipefail
+
+PROG="ccrc-models-probe"
+# The client version the Codex catalogue endpoint is asked for. A CONSTANT,
+# bumped deliberately (§5): OpenAI's backend keys what it advertises on it, so
+# tracking it automatically would change this box's model set without anybody
+# deciding to.
+CODEX_CLIENT_VERSION="0.160.0"
+# `shared/roster.ts`'s ID_RE, in bash. An account id becomes a filename here.
+ID_RE='^[a-z][a-z0-9-]{0,31}$'
+
+die() { echo "$PROG: $*" >&2; exit 1; }
+usage() {
+  echo "usage: $PROG <accountId> <probe> [--base-url <url>] [--endpoints <modelId>] [--out <path>]" >&2
+  echo "       <probe> is codex, openrouter or compatible — the registry file's own probe kind" >&2
+}
+usage_die() { echo "$PROG: $*" >&2; usage; exit 2; }
+
+# This probe is a standalone executable — it ships beside ccd, not sourced
+# into it (see the file header's "ONE EXECUTABLE" note) — so it cannot reach
+# `_plat_mv_notdir` inside ccd's platform block, and `macos-platform.test.ts`'s
+# GNU-only scan forbids a bare `mv -fT` at any call site outside that block.
+# GNU `-T`'s point was never "fail whenever $2 exists", it was "never move the
+# tmp INTO a directory sitting at $OUT" — a plain `mv -f` "succeeds" there by
+# dropping the file inside it instead of onto it. `[ -d "$2" ]` alone follows
+# symlinks, so it refused a SYMLINK to a directory too. Measured: a plain
+# `mv -f "$1" symlink-to-dir` (no `-T` available here) FOLLOWS the link and
+# drops the file INSIDE the target directory — the exact wrong-place write
+# this helper exists to refuse, silent instead of refused; `mv -fT` replaces
+# the link instead, in one step. `os.rename(2)`, called through python3 (this
+# file already requires it — see the normaliser and `_mark_stale` below),
+# gives that same one-step replacement for ANY non-directory destination,
+# symlink or not: measured `os.rename(src, symlink-to-dir)` -> rc 0, the link
+# becomes the staged file, the target directory untouched; measured
+# `os.rename(src, real-directory)` -> `IsADirectoryError`, rc 1 — which the
+# explicit `-d` guard below refuses before python ever runs, so that path
+# stays a clean exit 1 rather than a traceback. One syscall for the actual
+# write keeps the header's ATOMIC claim true on the symlink branch too: unlike
+# a remove-then-rename pair, there is no instant at which $2 names nothing.
+# ccd/ccd's darwin arm guards the same `! -L "$2"`/`-d "$2"` shape before its
+# own bare `mv -f`; whether THAT `mv -f` also follows a symlink-to-dir on BSD
+# the way GNU's does is not measured here.
+_probe_mv_notdir() {
+  [ ! -L "$2" ] && [ -d "$2" ] && return 1
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2"
+}
+
+ACCOUNT=""; PROBE_KIND=""; BASE_URL=""; OUT=""; ENDPOINTS=""
+[ $# -ge 1 ] || usage_die "an account id is required"
+ACCOUNT="$1"; shift
+[ $# -ge 1 ] || usage_die "a probe kind is required"
+PROBE_KIND="$1"; shift
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base-url) [ $# -ge 2 ] || usage_die "--base-url needs a value"; BASE_URL="$2"; shift 2 ;;
+    --out)      [ $# -ge 2 ] || usage_die "--out needs a value";      OUT="$2";      shift 2 ;;
+    --endpoints) [ $# -ge 2 ] || usage_die "--endpoints needs a model id"; ENDPOINTS="$2"; shift 2 ;;
+    -h|--help)  usage; exit 0 ;;
+    *) usage_die "unknown argument: $1" ;;
+  esac
+done
+
+[[ "$ACCOUNT" =~ $ID_RE ]] \
+  || usage_die "\"$ACCOUNT\" is not an account id: a lowercase letter followed by up to 31 of letters, digits and \"-\". The id becomes a filename under ~/.ccrc/models, which is why the charset is narrow."
+
+case "$PROBE_KIND" in
+  codex|openrouter|compatible) : ;;
+  openai) usage_die "the Codex probe kind is spelled \"codex\", not \"openai\": this tool is keyed by the registry file's probe kind and not by an account's provider (spec §4.1). Nothing was written." ;;
+  anthropic) usage_die "anthropic lanes have no catalogue to probe — their four classes are Claude Code's own defaults and they carry no registry file (spec §5). Nothing was written." ;;
+  *) usage_die "unknown probe kind \"$PROBE_KIND\": it must be one of codex, openrouter, compatible" ;;
+esac
+
+# `compatible` ships NO default endpoint — only the operator can know one, which
+# is why the registry file carries `baseUrl` for it (round-2 ruling 10) — so an
+# absent base URL is a refusal rather than a fall-through. `openrouter` has a
+# default and takes none.
+[ "$PROBE_KIND" != "compatible" ] || [ -n "$BASE_URL" ] \
+  || usage_die "probe kind \"compatible\" needs --base-url: it ships no default endpoint, so only the lane's registry file can say where it talks to"
+
+# `--endpoints` is a DIFFERENT QUESTION and gets a different answer shape: not
+# "what does this lane advertise" but "which providers serve this one model",
+# which is what the ownership whitelist is checked against at discovery-add
+# (§5). It writes the provider's raw body and never a catalogue, so it must
+# name its own destination and must never be able to touch a lane's file.
+if [ -n "$ENDPOINTS" ]; then
+  [ "$PROBE_KIND" = "openrouter" ] \
+    || usage_die "--endpoints is an OpenRouter question: only its /models/{author}/{slug}/endpoints route answers which providers serve a model"
+  [ -n "$OUT" ] \
+    || usage_die "--endpoints needs --out: the body is the answer to one question, not this lane's catalogue, and writing it to ~/.ccrc/models/$ACCOUNT.json would destroy one"
+fi
+
+MODELS_DIR="$HOME/.ccrc/models"
+[ -n "$OUT" ] || OUT="$MODELS_DIR/$ACCOUNT.json"
+
+TMPD="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-models-probe.XXXXXX")" || die "could not make a temp directory"
+# NORM stages the CATALOGUE write beside its destination, `$OUT.tmp.$$`, not
+# inside $TMPD — spec §4.2 is tmp + mv in the SAME directory, and $TMPD can be
+# a different filesystem from $HOME/.ccrc/models: a cross-filesystem `mv`
+# degrades to copy+unlink, which is exactly the torn-file window the readers
+# named above (the fleet poll, ccd, the verbs) cannot tolerate. $TMPD is still
+# fine for RAW: that file is only ever read by the normaliser, never renamed
+# into place, so it carries none of that risk. `_mark_stale` reuses this same
+# $NORM path for its own rewrite, for the same reason.
+RAW="$TMPD/raw.json"
+NORM="$OUT.tmp.$$"
+trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
+
+# ── the fetch ────────────────────────────────────────────────────────────
+# Each arm writes the provider's RAW body to $RAW and returns non-zero when it
+# could not. Nothing here interprets the body; that is the normaliser's job, in
+# one place, for all three.
+_fetch_codex() {
+  # `ccgpt-usage`'s own preamble, verbatim in intent: the venv python beside the
+  # litellm binary, falling back to the system one, and the token directory the
+  # wrapper exports. `Authenticator().get_access_token()` REFRESHES an expired
+  # token, which is the whole reason this arm goes through LiteLLM rather than
+  # reading auth.json itself.
+  local venv_py token_dir
+  venv_py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"
+  [ -x "$venv_py" ] || venv_py="python3"
+  token_dir="${CHATGPT_TOKEN_DIR:-$HOME/.handoff/chatgpt-auth}"
+  [ -f "$token_dir/auth.json" ] || { echo "$PROG: not logged in ($token_dir)" >&2; return 1; }
+  CHATGPT_TOKEN_DIR="$token_dir" CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" \
+    "$venv_py" - > "$RAW" <<'PY'
+import json, os, sys, urllib.request
+from litellm.llms.chatgpt.authenticator import Authenticator
+
+token_dir = os.environ["CHATGPT_TOKEN_DIR"]
+account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
+token = Authenticator().get_access_token()
+# The header block is `ccgpt-usage`'s, verbatim (read-only reference; never
+# run it): originator/user-agent/session_id are what the backend expects from
+# a real Codex CLI caller, alongside Authorization and ChatGPT-Account-Id.
+headers = {
+    "Authorization": f"Bearer {token}",
+    "originator": "codex_cli_rs",
+    "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
+    "session_id": "00000000-0000-0000-0000-000000000000",
+}
+if account_id:
+    headers["ChatGPT-Account-Id"] = account_id
+url = ("https://chatgpt.com/backend-api/codex/models?client_version="
+       + os.environ["CODEX_CLIENT_VERSION"])
+req = urllib.request.Request(url, headers=headers)
+sys.stdout.write(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
+PY
+}
+
+# C13: the compatible arm's only legitimate http:// case. `shared/models.mjs`'s
+# `parseRegistry` already refuses a non-loopback http:// baseUrl at write time
+# (§ the registry gate this file cannot import), but this file reads the
+# baseUrl straight off disk with no re-validation of its own, so it re-derives
+# a loopback check of its own rather than trusting a hand-edited file — a
+# STRICT SUBSET of parseRegistry's: this is a raw text compare against
+# 127.0.0.1 / localhost / [::1], so the spellings Node canonicalises
+# (127.1, 2130706433, 0177.0.0.1, LOCALHOST) read as non-loopback here and
+# keep `--proto '=https'` — the divergence fails safe (measured 2026-09-09,
+# server/test/models-probe.test.ts's loopback describe). Bracket-aware:
+# `http://[::1]:8080/…` carries the bracketed host, not the bare address.
+_models_probe_base_is_loopback() {   # <baseUrl> -> 0 iff its host is loopback
+  local rest="${1#*://}"
+  local host="${rest%%/*}"
+  # Userinfo comes off BEFORE the port strip below, or a URL like
+  # `http://127.0.0.1:8080@evil.com/` reads as loopback: the port strip takes
+  # the FIRST `:` it finds, which is the one inside the userinfo
+  # (`127.0.0.1:8080`), not the one (absent here) between a real host and its
+  # port — so `evil.com` is dropped entirely and `127.0.0.1` is what remains.
+  # `new URL('http://127.0.0.1:8080@evil.com/').hostname` gives `evil.com`;
+  # this must agree.
+  host="${host##*@}"
+  if [[ "$host" == \[*\]* ]]; then
+    host="${host%%]*}]"
+  else
+    host="${host%%:*}"
+  fi
+  case "$host" in
+    127.0.0.1|localhost|'[::1]') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_fetch() {
+  # THE ONE READ OF THE SEAM. Everything below it is the real network.
+  if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW"; return; fi
+  case "$PROBE_KIND" in
+    codex) _fetch_codex ;;
+    openrouter)
+      # The whole-catalogue LIST needs no credential (§5) — it is public. The
+      # ENDPOINTS route is different: "which providers serve this model" is
+      # account-scoped (§5), so it sends the same lane token the `compatible`
+      # arm below reads, not a second variable, and refuses outright when that
+      # token is unset rather than sending an unauthenticated request that
+      # OpenRouter would answer with less than the ownership check needs.
+      # `--fail` so a 4xx/5xx is a non-zero exit rather than an error page
+      # written into $RAW as if it were a catalogue; `-sS` so the transcript
+      # carries the reason and not a progress bar. C13: the header goes in via
+      # `curl -K -` on stdin, exactly as `ccd/ccd-account-health:211-213` sends
+      # the identical credential — never on argv, where /proc/<pid>/cmdline
+      # would make it world-readable for the whole request window.
+      if [ -n "$ENDPOINTS" ]; then
+        [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] \
+          || { echo "$PROG: the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN" >&2; return 1; }
+        printf 'header = "Authorization: Bearer %s"\n' "$ANTHROPIC_AUTH_TOKEN" \
+          | curl -sS -K - --fail --max-time 30 --proto '=https' \
+              "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
+      else
+        curl -sS --fail --max-time 30 --proto '=https' 'https://openrouter.ai/api/v1/models' > "$RAW"
+      fi
+      ;;
+    compatible)
+      # The lane's own token, when the box has one. Best effort by design: a
+      # 404 leaves "never probed" and the discovery list has to be explicit
+      # (§5). C13, same shape as the endpoints arm above: the header (when
+      # there is one) goes in via `curl -K -` on stdin, never argv.
+      # `parseRegistry` (shared/models.mjs) already refuses a non-loopback
+      # http:// baseUrl before this file ever sees one written through the
+      # verbs — `--proto` widens to allow http here ONLY for a loopback host,
+      # matching that gate rather than trusting a hand-edited registry file.
+      local proto='=https'
+      _models_probe_base_is_loopback "$BASE_URL" && proto='=https,http'
+      if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$ANTHROPIC_AUTH_TOKEN" \
+          | curl -sS -K - --fail --max-time 30 --proto "$proto" "${BASE_URL%/}/v1/models" > "$RAW"
+      else
+        curl -sS --fail --max-time 30 --proto "$proto" "${BASE_URL%/}/v1/models" > "$RAW"
+      fi
+      ;;
+    *) echo "$PROG: probe kind \"$PROBE_KIND\" has no fetch arm in this build" >&2; return 1 ;;
+  esac
+}
+
+# ── the normaliser ───────────────────────────────────────────────────────
+# ONE python program for every arm: it reads the raw body on stdin, the probe
+# kind on argv, and writes `Catalogue` JSON (shared/models.ts) on stdout. It
+# REFUSES THE WHOLE RESPONSE on a model with no id (§11) — writing the good
+# rows would retire the bad one on every surface, which is a warning about a
+# model that answers fine.
+_normalise() {
+  # `python3 /dev/fd/3 … 3<<'PY'`, not `python3 - … <<'PY'`: the latter reads
+  # the PROGRAM from stdin, so the heredoc and `< "$RAW"` both target fd 0 and
+  # the heredoc wins — `json.load(sys.stdin)` sees EOF on every input.
+  # Measured directly against this exact line; `ccd`'s `_pr_py` documents and
+  # fixes the identical conflict the same way (see its comment there).
+  python3 /dev/fd/3 "$PROBE_KIND" < "$RAW" > "$NORM" 3<<'PY'
+import json, sys, time
+
+probe = sys.argv[1]
+
+def fail(msg):
+    sys.stderr.write(msg + "\n")
+    raise SystemExit(3)
+
+try:
+    raw = json.load(sys.stdin)
+except ValueError as e:
+    fail("the provider's response is not JSON: %s" % e)
+
+def num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+def codex_models(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
+        fail("the Codex catalogue has no `models` array — the endpoint's shape has drifted")
+    out = []
+    for i, m in enumerate(raw["models"]):
+        if not isinstance(m, dict):
+            fail("Codex models[%d] is not an object" % i)
+        mid = m.get("slug") or m.get("id")
+        if not isinstance(mid, str) or not mid:
+            fail("Codex models[%d] has no slug" % i)
+        levels = m.get("supported_reasoning_levels") or m.get("reasoning_levels") or []
+        efforts = []
+        for e in levels if isinstance(levels, list) else []:
+            name = e.get("effort") if isinstance(e, dict) else e
+            if isinstance(name, str) and name:
+                efforts.append(name)
+        label = m.get("display_name") or m.get("name") or mid
+        out.append({
+            "id": mid, "label": label,
+            "context": num(m.get("context_window")),
+            "maxContext": num(m.get("max_context_window")),
+            "efforts": efforts,
+            "hidden": m.get("visibility") == "hide",
+            "priceIn": None, "priceOut": None,
+        })
+    return out
+
+def _price(v):
+    # OpenRouter prices are decimal STRINGS ("0.000005", "0"). A zero price is
+    # a fact — a free model — and must survive as 0 rather than becoming None,
+    # which every surface renders as "price unknown".
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None
+
+def openrouter_models(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
+        fail("the OpenRouter catalogue has no `data` array — the endpoint's shape has drifted")
+    out = []
+    for i, m in enumerate(raw["data"]):
+        if not isinstance(m, dict):
+            fail("OpenRouter data[%d] is not an object" % i)
+        mid = m.get("id")
+        if not isinstance(mid, str) or not mid:
+            fail("OpenRouter data[%d] has no id" % i)
+        top = m.get("top_provider") if isinstance(m.get("top_provider"), dict) else {}
+        pricing = m.get("pricing") if isinstance(m.get("pricing"), dict) else {}
+        out.append({
+            "id": mid, "label": m.get("name") or mid,
+            "context": num(m.get("context_length")),
+            "maxContext": num(top.get("max_completion_tokens")),
+            # OpenRouter advertises no reasoning levels: EMPTY is "unknown",
+            # which `effortFile` reads as "leave the operator's level alone".
+            "efforts": [],
+            "hidden": False,
+            "priceIn": _price(pricing.get("prompt")),
+            "priceOut": _price(pricing.get("completion")),
+        })
+    return out
+
+def compatible_models(raw):
+    if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
+        fail("the /v1/models response has no `data` array")
+    out = []
+    for i, m in enumerate(raw["data"]):
+        if not isinstance(m, dict):
+            fail("/v1/models data[%d] is not an object" % i)
+        mid = m.get("id")
+        if not isinstance(mid, str) or not mid:
+            fail("/v1/models data[%d] has no id" % i)
+        # A bare /v1/models says the id and nothing more. Everything else is
+        # null rather than guessed: a fabricated context window would be sized
+        # against by Claude Code's auto-compaction, which is exactly the class
+        # of lie the [1m] suffix incident was (infra/handoff/ccgpt:108-113).
+        out.append({
+            "id": mid, "label": mid, "context": None, "maxContext": None,
+            "efforts": [], "hidden": False, "priceIn": None, "priceOut": None,
+        })
+    return out
+
+ARMS = {
+    "codex": codex_models,
+    "openrouter": openrouter_models,
+    "compatible": compatible_models,
+}
+if probe not in ARMS:
+    fail("no normaliser arm for probe kind %r in this build" % probe)
+
+json.dump({
+    "probe": probe,
+    "fetchedAt": int(time.time()),
+    "stale": False,
+    "models": ARMS[probe](raw),
+}, sys.stdout)
+PY
+}
+
+# ── stale-on-failure ─────────────────────────────────────────────────────
+# Rewrites the EXISTING catalogue with `stale: true` and `lastError`, keeping
+# its models and its `fetchedAt` — the reader needs to know how old the data it
+# is looking at really is, so the timestamp must not be refreshed by a run that
+# fetched nothing.
+_mark_stale() {   # <reason>
+  [ -f "$OUT" ] || {
+    echo "$PROG: $1 — and this lane has no previous catalogue, so nothing was written." >&2
+    return 1
+  }
+  local why="$1"
+  # C4: both guards below used to `return 1` silently on failure — one on a
+  # bare `except ValueError` with no message, the other by falling straight
+  # through `_probe_mv_notdir`'s own non-`$PROG:` stderr. `_models_refresh_one`
+  # (ccd/ccrc) reads this function's first stderr line as the refresh row's
+  # `reason`, so a silent guard here became a `reason:""` row, and a
+  # valid-but-non-dict previous catalogue (`[1,2,3]`) escaped the
+  # `except ValueError` entirely and raised an unhandled `TypeError` — a raw
+  # Python traceback on stderr, no `$PROG:` prefix, becoming `reason` verbatim.
+  # Five distinct ways this heredoc can fail — $OUT unreadable, $OUT not JSON,
+  # $OUT valid JSON but not an object, $NORM unwritable, the chmod itself
+  # failing — each print their OWN one-line `$PROG:`-prefixed reason, and a
+  # catch-all around the whole body turns any OTHER exception into the same
+  # shape instead of a bare traceback. Nothing here is `2>/dev/null`'d any
+  # more: the line captured below IS what the operator reads as the refresh
+  # row's reason, not a guess.
+  local mark_err
+  if ! mark_err="$(CCRC_STALE_WHY="$why" PROG="$PROG" python3 - "$OUT" "$NORM" <<'PY' 2>&1
+import json, os, sys
+
+prog = os.environ["PROG"]
+src, dst = sys.argv[1], sys.argv[2]
+
+
+def fail(msg):
+    print(f"{prog}: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    try:
+        raw = open(src).read()
+    except OSError as e:
+        fail(f"\"{src}\" could not be read: {e.strerror or e}")
+    try:
+        cat = json.loads(raw)
+    except ValueError as e:
+        fail(f"\"{src}\" is not valid JSON: {e}")
+    if not isinstance(cat, dict):
+        fail(f"\"{src}\" is valid JSON but not an object")
+    cat["stale"] = True
+    cat["lastError"] = os.environ["CCRC_STALE_WHY"]
+    try:
+        with open(dst, "w") as f:
+            json.dump(cat, f)
+    except OSError as e:
+        fail(f"\"{dst}\" could not be written: {e.strerror or e}")
+    try:
+        # The mode must survive a failure too: without this, the rewritten
+        # file comes out at whatever `open(dst, "w")`'s umask gives it —
+        # measured 0644/0664, not the 0600 a successful probe writes, and an
+        # OpenRouter catalogue carries the lane's price list.
+        os.chmod(dst, 0o600)
+    except OSError as e:
+        fail(f"\"{dst}\" could not be chmod'd to 0600: {e.strerror or e}")
+except SystemExit:
+    raise
+except Exception as e:
+    fail(f"could not mark the catalogue stale: {type(e).__name__}: {e}")
+PY
+  )"; then
+    echo "$PROG: $why — and the previous catalogue at \"$OUT\" could not be marked stale: ${mark_err#*: }; nothing was changed." >&2
+    return 1
+  fi
+  _probe_mv_notdir "$NORM" "$OUT" || {
+    echo "$PROG: $why — the stale rewrite was prepared but could not be moved into place at \"$OUT\"; nothing was changed." >&2
+    return 1
+  }
+  echo "$PROG: $why — keeping the previous catalogue, marked stale." >&2
+  return 1
+}
+
+mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
+# the staging-mode fix: $NORM used to come into existence via
+# whichever writer got to it first — the normaliser's `> "$NORM"` redirect, or
+# `_mark_stale`'s python `open(dst, "w")` — at the ambient umask (measured
+# 0664 on this box), inside `~/.ccrc/models`, which `mkdir -p` leaves 0775. A
+# `chmod 600` AFTER that write closes nothing: the file already existed,
+# readable, for the whole write it exists to protect. Pre-creating it here, at
+# 0600, means every later writer TRUNCATES an already-0600 file — `>` and
+# `open(..., "w")` both preserve an existing file's mode, they only set one at
+# CREATION — so there is no instant, catalogue or endpoints arm, where $NORM
+# is readable by anyone but its owner.
+install -m 600 /dev/null "$NORM" || die "could not stage $NORM"
+
+if ! _fetch 2>"$TMPD/fetch.err"; then
+  # `--endpoints` NEVER marks a catalogue stale: it did not ask about the
+  # catalogue, and a whitelist question that could not be answered must not
+  # change what the surfaces say about a lane's models.
+  if [ -n "$ENDPOINTS" ]; then
+    echo "$PROG: the OpenRouter endpoints call for \"$ENDPOINTS\" failed: $(tr '\n' ' ' < "$TMPD/fetch.err" | cut -c1-300)" >&2
+    exit 1
+  fi
+  _mark_stale "the $PROBE_KIND catalogue fetch for \"$ACCOUNT\" failed: $(tr '\n' ' ' < "$TMPD/fetch.err" | cut -c1-300)"
+  exit 1
+fi
+
+if [ -n "$ENDPOINTS" ]; then
+  # The RAW endpoints body IS the answer — no normaliser, no catalogue shape —
+  # but it still lands the same way the catalogue does: staged through $NORM
+  # (already `$OUT.tmp.$$`, already in the EXIT trap) beside the destination,
+  # then renamed onto it through `_probe_mv_notdir`. `$RAW`'s directory can be
+  # a different filesystem from $OUT's, so the first move below can be a
+  # copy+unlink — that is fine, nothing reads $NORM until the final rename.
+  # `_probe_mv_notdir`'s `-d` check on that final rename REFUSES when --out
+  # names an existing directory, instead of "succeeding" by dropping the
+  # answer inside it under $RAW's own basename, which is what moving straight
+  # onto $OUT did before this fix.
+  #
+  # `mv -f "$RAW" "$NORM"` is a RENAME, so it replaces $NORM's pre-touched
+  # 0600 inode with $RAW's own — the catalogue arm's fix above does not cover
+  # this arm. $RAW sits inside $TMPD (mktemp -d's default 0700), so it is
+  # unreadable to anyone else there; chmod it 600 BEFORE the move, not after,
+  # so the shared `~/.ccrc/models` directory never holds it at any other mode.
+  chmod 600 "$RAW" || die "could not set the mode on the endpoints answer"
+  mv -f "$RAW" "$NORM" || die "could not stage the endpoints answer"
+  _probe_mv_notdir "$NORM" "$OUT" || die "could not move the endpoints answer into place at $OUT"
+  exit 0
+fi
+
+if ! _normalise 2>"$TMPD/norm.err"; then
+  _mark_stale "the $PROBE_KIND response for \"$ACCOUNT\" was refused: $(tr '\n' ' ' < "$TMPD/norm.err" | cut -c1-300)"
+  exit 1
+fi
+
+# $NORM has been 0600 since it was pre-created above, and the normaliser's
+# `> "$NORM"` redirect truncates that existing file rather than recreating it
+# at the ambient umask — so this chmod is a redundant belt-and-braces, not
+# what makes the write safe. An OpenRouter catalogue carries the lane's price
+# list, which is why this file does not settle for "eventually 0600".
+chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
+# `_probe_mv_notdir`: rename, and REFUSE when $OUT is a directory, rather than
+# moving $NORM INSIDE it — a bare `mv -f` would "succeed" into the wrong place
+# instead of failing (the same reasoning `ccd`'s `_plat_mv_notdir` and
+# `ccrc-adopt`'s `$OUT.tmp.$$` staging record for this repo's other tmp+mv
+# writers).
+_probe_mv_notdir "$NORM" "$OUT" || die "could not move the new catalogue into place at $OUT"
+exit 0

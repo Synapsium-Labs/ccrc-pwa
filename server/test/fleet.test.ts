@@ -295,6 +295,51 @@ describe('branch precedence', () => {
   });
 });
 
+// D-2011: the pane's `▓ ctx` reading, carried straight onto the wire. Same
+// setup idiom as "branch precedence" above (no other source ever supplies
+// this field, so there is no fallback arm to test — only present-vs-absent).
+describe('ctxPct on the wire (D-2011)', () => {
+  const setup = (): { home: string; run: Runner } => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-quiet-mesa', 'claude', {
+      project: 'demo', workspace: 'quiet-mesa', branch: 'ws/quiet-mesa',
+    });
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    return { home, run };
+  };
+
+  it('is null before any pane capture has landed — nothing else on the record ever measures it', async () => {
+    const { home, run } = setup();
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBeNull();
+  });
+
+  it('carries the statusline reading straight through', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { ultracode: false, workflowActive: false, ctxPct: 82 }],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(82);
+  });
+
+  it('carries a measured 0% as 0, not null — a session Claude Code reports freshly compacted', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { ultracode: false, workflowActive: false, ctxPct: 0 }],
+    ]);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(0);
+  });
+});
+
 describe('derived session handles', () => {
   const build = async (live: Record<string, unknown>) => {
     const home = mkTmp('ccrc-');

@@ -3295,14 +3295,60 @@ export class FleetWatcher {
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);
-      // Same capture feeds the statusline read — no extra tmux call. A tick
-      // whose pane has no statusline (a dialog/permission overlay covers it, or
-      // the session is mid-render) must NOT blank the last-known model/branch —
-      // only update when we actually parsed something; drop only on a dead pane.
-      if (pane === null) this.statuslines.delete(r.id);
-      else {
+      // Same capture feeds the statusline read — no extra tmux call. FOUR
+      // conditions, four outcomes (D-2012, corrected by Finding 3 of the
+      // fix round below — the three-outcome version this replaced treated
+      // "measured identity OR measured ctx" as one outcome, a whole-object
+      // replace, which is right when identity is present and WRONG when
+      // only ctx is: it blanked the last-known model/branch/effort on any
+      // tick that read the ctx segment alone):
+      //
+      //  1. dead pane (`pane === null`) — delete the whole entry. Unchanged.
+      //  2. a tick that measured IDENTITY (model/branch/effort — one
+      //     statusline row paints all three together, or none) — the whole
+      //     entry becomes this tick's fresh parse. A ctxPct this tick did
+      //     not find (the ▓ segment scrolled off, or a permission prompt
+      //     covers just that cell) is simply absent from `sl`, so it is
+      //     dropped by the same replace that lands everything else — no
+      //     separate carry needed.
+      //  3. a tick that measured ctxPct ALONE — no model/branch/effort at
+      //     all. The 🤖/⎇ segments are independently conditional
+      //     (ccd/statusline-command.sh:134-149: model on
+      //     `.model.display_name`, branch on being inside a repo), so a
+      //     ctx-only tick is a real, distinct shape, not a "nothing
+      //     measured" tick wearing a stray ctxPct. MERGE the fresh ctxPct
+      //     onto whatever identity was last known, rather than either
+      //     replacing the whole entry with `sl` (which would blank
+      //     model/branch/effort to `undefined` — the exact regression a
+      //     naive `sl.model || sl.branch || sl.effort` guard alone would
+      //     reintroduce, MEASURED: reverting to that guard with this merge
+      //     branch removed left all three touched suites green) or
+      //     dropping the fresh reading on the floor.
+      //  4. a tick that measured NOTHING AT ALL (a dialog/permission overlay
+      //     covers the whole statusline row, or the session is mid-render) —
+      //     keep the row rather than blank it, same as before, EXCEPT for
+      //     ctxPct: a stale high reading surviving a tick where the console
+      //     could not even see the statusline is worse than showing no
+      //     reading, so it is explicitly cleared while model/branch/effort
+      //     ride through untouched.
+      if (pane === null) {
+        this.statuslines.delete(r.id);
+      } else {
         const sl = parseStatusline(pane);
-        if (sl.model || sl.branch || sl.effort) this.statuslines.set(r.id, sl);
+        // NOT named `measuredIdentity`: that is a module-level import from
+        // ./registry.js meaning something else entirely (a registry record
+        // whose identity triple is measurable), used at nine other sites in
+        // this file. A local of that name shadows it inside this block.
+        const sawStatuslineIdentity = sl.model || sl.branch || sl.effort;
+        if (sawStatuslineIdentity) {
+          this.statuslines.set(r.id, sl);
+        } else if (sl.ctxPct !== undefined) {
+          const prev = this.statuslines.get(r.id);
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct } : sl);
+        } else {
+          const prev = this.statuslines.get(r.id);
+          if (prev && prev.ctxPct !== undefined) this.statuslines.set(r.id, { ...prev, ctxPct: undefined });
+        }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
       // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
