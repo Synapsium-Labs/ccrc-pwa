@@ -4644,54 +4644,54 @@ _acct_operator_steps() {   # <id> — appends the two steps
   ACCT_OPERATOR_STEPS+=("$(printf "$ACCT_OPERATOR_STEP_2" "$1")")
 }
 
-_acct_disable_new() {   # <id> — the marker `ccd`'s `_lane_enabled` reads
+_acct_disable_new() {   # <id> <what-still-stands> — the marker `ccd`'s `_lane_enabled` reads
   # Spec §5: both connect verbs leave the new lane SWITCHED OFF, so a lane whose
   # credential nobody has measured cannot be picked by `_ws_least_loaded` the
-  # moment it is rostered. The mechanism already exists and this only uses it:
+  # moment it is rostered. This only uses ccd's existing mechanism:
   # `_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }` (ccd/ccd:1024) and
   # `_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }` (:1028).
-  # `$_SVC_REG` is ccrc's spelling of ccd's `$REG` (:96 and ccd/ccd:765) — one
-  # path with two names by necessity, pinned equal by `macos-platform.test.ts`.
+  # `$_SVC_REG` is ccrc's `$REG` (:96, ccd/ccd:765), pinned by `macos-platform.test.ts`.
   #
-  # NOT `homeAble: false`. That field declares what KIND of account this is;
-  # this file is an operator switch. Collapsing them would make a measured,
-  # working lane permanently unplaceable rather than merely off, and would turn
-  # the UI's Enable control into a roster write.
+  # NOT `homeAble: false`. That field declares what KIND of account this is; this
+  # file is an operator switch. Collapsing them would make a measured, working lane
+  # permanently unplaceable, and would turn the UI's Enable control into a roster write.
   #
-  # CALLED BEFORE `_acct_converge`, WHICH IS EARLIER THAN THE PLAN'S SNIPPET PUT
-  # IT, and the plan's own sentence is the argument: "the lane becomes pickable
-  # the instant the roster entry and the wrapper exist". `_account_ok` reads BOTH
-  # halves, and the wrapper is written by `cmd_wrappers` inside `_acct_converge`
-  # — so a marker written after that converge leaves a window in which the lane
-  # is pickable and unmeasured, and a converge that refuses AFTER writing this
-  # lane's wrapper leaves that state permanently. Written here, the marker is on
-  # disk before the wrapper can be, and every refusal from here on ends with a
-  # lane that is rostered, unprovisioned and OFF — the safe state, and the one
-  # `provision-failed`'s remedy converges from.
+  # $2 IS THE CALLER'S "WHAT STILL STANDS" CLAUSE (D-2135), `_acct_settings_env`'s $3
+  # at a second address, and BOUND BELOW so `set -u` reds a caller that forgot it even
+  # on the path where the write succeeds. Task 27's `declare` is that second caller.
+  #
+  # THE REMEDY IS `touch`, NOT the unshipped `ccrc account disable` (measured:
+  # `unknown-subcommand`, exit 2). Task 24's `auth-start` names an unshipped door
+  # because signing in has no hand form; this switch IS ccd:1024's own file.
+  local id="$1" stands="$2"
   mkdir -p "$_SVC_REG" \
-    || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. The roster entry was written; create that directory and run: ccrc account disable --id $1"
-  : > "$_SVC_REG/$1-disabled" \
-    || _acct_refuse 1 disable-marker "cannot write $_SVC_REG/$1-disabled, so this lane cannot be left switched off. The roster entry was written; fix that path and run: ccrc account disable --id $1"
+    || _acct_refuse 1 disable-marker "cannot create $_SVC_REG, so this lane cannot be left switched off — and a lane nobody has measured must not be pickable. Create that directory, then: touch $_SVC_REG/$id-disabled. $stands"
+  : > "$_SVC_REG/$id-disabled" \
+    || _acct_refuse 1 disable-marker "cannot write $_SVC_REG/$id-disabled, so this lane cannot be left switched off. Fix that path, then: touch $_SVC_REG/$id-disabled. $stands"
 }
 
 
 # ── THE ORDERED WRITE ──────────────────────────────────────────────────────
 # Spec §5's order, and the two properties it buys.
 #
-# THE SECRET GOES FIRST AND THE ROSTER ENTRY SECOND. A roster entry naming a
-# `secretsFile` that does not exist is a lane every reader believes in and
-# nothing can run; a 0600 file no roster names is inert — invisible to
-# `_lane_enabled`, `_account_ok` and `cmd_wrappers` alike — and a retry
-# overwrites it byte for byte. Task 23 already put `duplicate-id` and
-# `suffix-collision` in front of both, so the file this ordering can leave
-# behind is always one nothing else owns.
+# THE ROSTER ENTRY IS LAST OF THE THREE — secret, marker, entry (D-2134). A roster
+# entry naming a `secretsFile` that does not exist is a lane every reader believes
+# in and nothing can run; a 0600 file no roster names is inert — invisible to
+# `_lane_enabled`, `_account_ok` and `cmd_wrappers` alike — and a retry overwrites
+# it byte for byte. THE MARKER IS INERT BY THAT SAME TEST and weaker still: all it
+# can do is make a lane more off. It goes in front of `add-entry` because
+# `_account_ok` takes ANY executable at `$WRAPPER_DIR/<id>`, not only one ccrc wrote,
+# while `check-add` measures `duplicate-id` and `suffix-collision` against the ROSTER
+# and never the filesystem — so those two still fire before all three writes (no
+# leftover is ever another lane's), and the only thing then left between the entry
+# and a pickable lane is the `accounts.sh` regeneration any concurrent converge
+# supplies. The costs are asymmetric: one inert file against unmeasured work.
 #
-# NOTHING AFTER THE ROSTER ENTRY ROLLS BACK. `_inst_accounts_sh`,
-# `cmd_wrappers`, the config dir and the four installers are roster-driven
-# CONVERGERS — they are `ccrc install`'s own spine — so a failure among them
-# leaves a lane rostered and not yet converged, and the cure is to converge
-# again. Un-writing an operator's roster entry to tidy up a failed chmod would
-# be the destructive act, on the one file this CLI otherwise treats as theirs.
+# NOTHING AFTER THE ROSTER ENTRY ROLLS BACK. `_inst_accounts_sh`, `cmd_wrappers`, the
+# config dir and the four installers are roster-driven CONVERGERS — `ccrc install`'s
+# own spine — so a failure among them leaves a lane rostered and not yet converged,
+# and the cure is to converge again. Un-writing an operator's roster entry to tidy up
+# a failed chmod would be the destructive act, on the one file this CLI calls theirs.
 ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
 _acct_add() {
   _acct_add_parse "$@"
@@ -4785,28 +4785,28 @@ _acct_add() {
       || _acct_refuse 2 credential-not-managed "provider \"$ACCT_PROVIDER\" with method \"${ACCT_METHOD:-login}\" keeps its credential in the config directory Claude Code writes, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method login' after this. Nothing was written."
   fi
 
-  # ── 2. THE ROSTER ENTRY ─────────────────────────────────────────────────
+  # ── 2. THE SWITCH, OFF ──────────────────────────────────────────────────
+  # Before the roster entry, not after it (D-2134) — THE ORDERED WRITE above carries
+  # the argument. The CLAUSE is this caller's: at this line only the 0600 file exists.
+  local added rc2=0 stands="Nothing was written."
+  [ -n "$ACCT_SECRET_WRITTEN" ] && stands="The 0600 credential file $ACCT_SECRET_WRITTEN WAS written before this step and nothing rolls it back: no roster entry names it yet, so nothing on this box can run it, and re-running this same command overwrites it."
+  _acct_disable_new "$ACCT_ID" "$stands"
+
+  # ── 3. THE ROSTER ENTRY ─────────────────────────────────────────────────
   # CAPTURED, NOT DISCARDED. `>/dev/null` would throw away the refusal envelope
-  # as well as the success body, and the caller would get a bare exit code for
-  # `roster-write` — the empty seam this verb exists to close. On success the
-  # body is dropped here because Task 26's `added` op composes the final answer
-  # from the file; on failure it is re-emitted verbatim, the same shape the
-  # `check-add` call above uses. AN EMPTY capture is NEITHER (D-2051), and here
-  # alone the refusal may not say "Nothing was written." — something was.
-  local added rc2=0 wrote="Nothing was written."
-  [ -n "$ACCT_SECRET_WRITTEN" ] && wrote="The 0600 credential file $ACCT_SECRET_WRITTEN WAS written before this step and nothing rolls it back: no roster entry names it yet, so nothing on this box can run it, and re-running this same command overwrites it."
+  # as well as the success body, leaving `roster-write` a bare exit code — the
+  # empty seam this verb exists to close. On success the body is dropped (Task
+  # 26's `added` op composes the answer from the file); on failure it is re-emitted
+  # verbatim. AN EMPTY capture is NEITHER (D-2051), and here alone the clause may
+  # not say "Nothing was written" — since D-2134 the marker is on disk on EVERY lane
+  # by now, so it is named here beside the credential rather than left to be found.
+  local wrote="$stands The kill-switch marker $_SVC_REG/$ACCT_ID-disabled was written before this step, for the reason THE ORDERED WRITE gives, and is inert for the reason the credential file is: no roster entry names that id, so it switches nothing off, and re-running this same command rewrites it."
   added="$(_acct_node add-entry --file "$(_acct_roster_path)" --plan "$plan")" || rc2=$?
   if [ "$rc2" -ne 0 ]; then
     [ -n "$added" ] || _acct_no_answer "$rc2" add-entry "$wrote"
     printf '%s\n' "$added"
     exit "$rc2"
   fi
-
-  # ── 3. THE SWITCH, OFF ──────────────────────────────────────────────────
-  # Before the converge below, not after it — `_acct_disable_new`'s header
-  # carries the argument: `cmd_wrappers` is what makes this lane pickable, so
-  # the marker has to be on disk before it runs.
-  _acct_disable_new "$ACCT_ID"
 
   # ── 4. THE PROJECTION, and 5. THE WRAPPERS ──────────────────────────────
   _acct_converge

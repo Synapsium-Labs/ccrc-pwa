@@ -1959,31 +1959,42 @@ describe('ccrc account add: an empty body is a refusal, never a blank line (D-20
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
   });
 
-  it('the add-entry call answers at exit 1 with a body, and names the file it DID write', () => {
-    const home = staleAtBox('ccrc-account-add-stale-entry-', 'add-entry');
-    seedBoxRoster(home, FIXTURE_ROSTER);
-    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
-    const r = run(home, addArgs(), `${CANARY}\n`);
-    expect(r.code, r.stderr).toBe(1);
-    const j = oneObject(r);
-    expect(j['error']).toBe('no-answer');
-    expect(String(j['detail'])).toContain('answer to \'add-entry\'');
-    expect(String(j['detail'])).toContain('exited 2');
+  it('the add-entry call answers at exit 1 with a body, and names the TWO files it DID write',
+    () => {
+      const home = staleAtBox('ccrc-account-add-stale-entry-', 'add-entry');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+      const r = run(home, addArgs(), `${CANARY}\n`);
+      expect(r.code, r.stderr).toBe(1);
+      const j = oneObject(r);
+      expect(j['error']).toBe('no-answer');
+      expect(String(j['detail'])).toContain('answer to \'add-entry\'');
+      expect(String(j['detail'])).toContain('exited 2');
 
-    const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
-    expect(String(j['detail']),
-      'the shared sentence flattened this path\'s truth: the secret IS on disk')
-      .not.toContain('Nothing was written');
-    expect(String(j['detail']), 'the operator is not told which file to expect')
-      .toContain(secret);
-    expect(String(j['detail'])).toContain('overwrites it');
-    // A PATH, NEVER CONTENTS (CLAUDE.md): existence facts only.
-    expect(String(j['detail'])).not.toContain(CANARY);
-    // AND BOTH HALVES OF THAT SENTENCE ARE TRUE.
-    expect(existsSync(secret), 'the sentence names a file that is not there').toBe(true);
-    expect(lstatSync(secret).mode & 0o777).toBe(0o600);
-    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
-  });
+      // TWO, NOT ONE, SINCE D-2134 — and that is this case's whole load now. The
+      // marker moved in FRONT of `add-entry`, so at this refusal there are two
+      // files on disk that were not there before the run, and a clause naming
+      // only the credential is the same silence D-2051 closed for the roster
+      // entry. Both are inert by the same argument (no roster entry names this
+      // id) and both are rewritten by the retry — which is exactly why the
+      // operator has to be told they exist rather than left to find them.
+      const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+      const marker = join(home, '.cc-sessions', 'lab-dev0-disabled');
+      expect(String(j['detail']),
+        'the shared sentence flattened this path\'s truth: two files ARE on disk')
+        .not.toContain('Nothing was written');
+      for (const claim of [secret, marker]) {
+        expect(String(j['detail']), 'the operator is not told which file to expect')
+          .toContain(claim);
+        expect(existsSync(claim), `the sentence names ${claim}, which is not there`).toBe(true);
+      }
+      expect(String(j['detail'])).toContain('overwrites it');
+      expect(String(j['detail'])).toContain('rewrites it');
+      // A PATH, NEVER CONTENTS (CLAUDE.md): existence facts only.
+      expect(String(j['detail'])).not.toContain(CANARY);
+      expect(lstatSync(secret).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+    });
 
   it('the added call answers at exit 1 with a body, and says the lane is fully written', () => {
     // THE PATH `_acct_answer` COULD NOT SERVE. That helper hard-codes
@@ -2845,18 +2856,168 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
           // AND THE LANE IS NOT PICKABLE ANYWAY, which is the property the
           // refusal exists to preserve: `_account_ok` reads the WRAPPER too, and
           // this refusal lands before `_acct_converge` writes one. So the box a
-          // failed marker write leaves behind is rostered, wrapperless and off —
-          // not rostered, wrappered and unmeasured.
+          // failed marker write leaves behind is wrapperless and off — not
+          // wrappered and unmeasured.
           expect(existsSync(join(home, '.local', 'bin', 'lab-dev0')),
             `${what}: a lane with no marker got a wrapper`).toBe(false);
-          // The roster entry stands and the refusal says so — nothing after it
-          // rolls back, so the remedy is to converge, not to re-add.
-          expect(String(j['detail']), what).toContain('The roster entry was written');
+          // AND THE ROSTER ENTRY IS NOT THERE, which is what changed under
+          // D-2134 and the reason these two refusals could not keep saying "The
+          // roster entry was written": the marker now goes in FRONT of
+          // `add-entry`, so at this refusal nothing has been rostered. The old
+          // sentence would have sent the operator to `ccrc install` to converge
+          // a lane that does not exist; the clause below sends them back into
+          // `add`, which is the act that now completes.
           expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
-            .accounts.map((x: { id: string }) => x.id)).toContain('lab-dev0');
+            .accounts.map((x: { id: string }) => x.id), what).not.toContain('lab-dev0');
+          // THE CLAUSE IS THE CALLER'S AND IT ENDS THE SENTENCE (D-2135) — the
+          // same `endsWith` property `_acct_settings_env`'s rows measure. What
+          // `add` passes here is what IS on disk at that line: the 0600 file and
+          // nothing else, which this row's fixture wrote because `addArgs()` is a
+          // token lane.
+          const secret = join(home, '.cc-secrets', 'lab-dev0-compatible.env');
+          expect(String(j['detail']).endsWith(
+            `The 0600 credential file ${secret} WAS written before this step and nothing `
+            + 'rolls it back: no roster entry names it yet, so nothing on this box can run '
+            + 'it, and re-running this same command overwrites it.'),
+          `${what} did not end in the caller's clause:\n    ${String(j['detail'])}`).toBe(true);
+          expect(existsSync(secret), `${what}: the clause names a file that is not there`)
+            .toBe(true);
+          // AND THE REMEDY IS ONE THE OPERATOR CAN TYPE TODAY (D-2135). Wave 1
+          // ships no `ccrc account disable` — measured below — and this switch is
+          // a file ccd itself documents as `touch/rm $REG/<w>-disabled`, so the
+          // remedy is that `touch`, naming the exact path. A remedy that answers
+          // `unknown-subcommand` teaches the operator the tool is broken.
+          expect(String(j['detail']), what)
+            .toContain(`touch ${join(home, '.cc-sessions', 'lab-dev0-disabled')}`);
+          expect(String(j['detail']), `${what}: names a verb wave 1 does not ship`)
+            .not.toContain('ccrc account disable');
         } finally {
           undo(home);
         }
+      }
+    });
+
+  it('the marker is on disk BEFORE the roster entry — a refusing add-entry leaves an inert file',
+    () => {
+      // THE ORDER D-2134 RULED ON, MEASURED IN THE ONE DIRECTION THAT CAN SEE IT.
+      // Every green `add` writes both files, so no successful case can tell the
+      // two orders apart; only a run that refuses BETWEEN them can, and this is
+      // that run. `add-entry` is made to refuse by taking write permission off
+      // `~/.ccrc` — its tmp+rename lands in that directory — so the verb stops
+      // with the marker written and the roster untouched. Under the order this
+      // review replaced the marker did not exist here at all — put the call back
+      // between `add-entry` and `_acct_converge` and this row reds on exactly the
+      // assertion below, which is what makes it a measurement of the ORDER and
+      // not just of the marker.
+      //
+      // WHY THE ORDER IS THE SAFE ONE, measured rather than asserted. `ccd` never
+      // consults `_lane_enabled` for an id the roster does not have: every
+      // `_account_ok` caller iterates `CCRC_HOME_ABLE` or `_pool_for`, and
+      // `CCRC_HOME_ABLE` is emitted FROM the roster (`shared/generate.mjs:209`)
+      // into `accounts.sh`. And the one place in the whole tree that ENUMERATES
+      // `<name>-disabled` markers rather than testing one by name —
+      // `server/src/limits.ts:120` — filters every id it finds through `inRoster`
+      // (:183) before it can become an accounts row. So a marker for an
+      // unrostered id is read by nothing.
+      const home = box('ccrc-account-off-order-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantUpstream(home);
+      plantInstallers(home);
+      const marker = join(home, '.cc-sessions', 'lab-dev0-disabled');
+      try {
+        chmodSync(join(home, '.ccrc'), 0o500);
+        const r = run(home, addArgs(), `${CANARY}\n`);
+        expect(r.code, r.stderr).toBe(1);
+        expect(oneObject(r)['error']).toBe('roster-write');
+        expect(existsSync(marker),
+          'add-entry refused and the marker was not written — the old order').toBe(true);
+        expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+          .accounts.map((x: { id: string }) => x.id),
+        'the roster took the entry after all').not.toContain('lab-dev0');
+      } finally {
+        // RESTORED BEFORE `afterAll`, the reason the row above this one states:
+        // `tmpHelpers`' `rmSync` cannot unlink a child of a 0500 directory.
+        chmodSync(join(home, '.ccrc'), 0o700);
+      }
+      // AND THE RETRY REWRITES IT, so the leftover costs one inert file and not a
+      // second state to reason about. `: >` truncates an existing file, which is
+      // why re-running is the whole remedy — measured by doing it.
+      writeFileSync(marker, 'stale bytes from the refused run\n');
+      const r2 = run(home, addArgs(), `${CANARY}\n`);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(readFileSync(marker, 'utf8'), 'the retry did not rewrite the marker').toBe('');
+      expect(oneObject(r2)['disabled']).toBe(true);
+    });
+
+  it('duplicate-id refuses before any write, so a failed add cannot switch an EXISTING lane off',
+    () => {
+      // THE ONE RISK MOVING THE MARKER EARLIER COULD HAVE CREATED, refused
+      // structurally rather than by ordering luck: if `add` reached the marker
+      // write for an id the roster already has, it would switch off a working
+      // lane in order to say no. It cannot, because `check-add` is the FIRST
+      // thing `_acct_add` calls, it is side-effect-free, and `duplicate-id` is
+      // among its refusals — so the run exits before the credential read, before
+      // the marker and before `add-entry`. `claude-a` is a live lane in the
+      // fixture roster, and `.cc-sessions` exists (plantInstallers), so an absent
+      // marker here is the verb declining to write one, not a missing directory.
+      const home = box('ccrc-account-off-dup-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantUpstream(home);
+      plantInstallers(home);
+      const r = run(home, addArgs({ '--id': 'claude-a' }), `${CANARY}\n`);
+      // THE HAZARD FIRST, THE ERROR CODE SECOND, and the order is the point:
+      // asserting the code first makes this row red on the WRONG sentence when
+      // the guard goes (measured — with `duplicate-id` mutated out, `add-entry`
+      // still refuses, as `roster-invalid`, but only AFTER the marker has landed
+      // on a live lane). The property this row exists for is the file, so the
+      // file is what it asks about first.
+      expect(existsSync(join(home, '.cc-sessions', 'claude-a-disabled')),
+        'a failed add switched an existing lane off').toBe(false);
+      expect(existsSync(join(home, '.cc-secrets')), 'a credential was written').toBe(false);
+      expect(r.code, r.stderr).toBe(1);
+      expect(oneObject(r)['error']).toBe('duplicate-id');
+    });
+
+  it('_acct_disable_new takes the clause as $2, and reds without one even when the write works',
+    () => {
+      // D-2135, and D-2133's check applied to it: the mechanism is the ONE LINE
+      // `local id="$1" stands="$2"`. Binding there rather than expanding `$2`
+      // only inside the two refusal strings is what makes `set -u` reach a caller
+      // that forgot the clause on the path where the marker write SUCCEEDS —
+      // which is every path but the three where it does not. Soften that binding
+      // to `${2:-}`, the shape `_acct_settings_env`'s header forbids in the same
+      // words, and this is the ONLY row in the file that reds: measured, because
+      // no other case calls this function with the wrong arity.
+      const home = box('ccrc-account-off-clause-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const bad = sourceCall(home, '_acct_disable_new lab-dev0');
+      expect(bad.code, 'a caller with no clause was served').not.toBe(0);
+      expect(bad.stderr).toMatch(/\$2: unbound variable/);
+      expect(existsSync(join(home, '.cc-sessions', 'lab-dev0-disabled')),
+        'the marker was written for a caller that named no clause').toBe(false);
+
+      // AND $2 ARRIVES VERBATIM AT THE END OF BOTH REFUSAL CLASSES — the same
+      // property `_acct_settings_env`'s `endsWith` rows measure, at the second
+      // address the ruling now has. Two rows because the two arms fail on
+      // different errors: `mkdir -p` is a no-op on an existing directory, so an
+      // unwritable `$REG` reaches the `: >` arm and never the first.
+      const rows: [string, string, (h: string) => void][] = [
+        ['$REG is a regular file', 'cannot create',
+          (h) => writeFileSync(join(h, '.cc-sessions'), 'not a directory\n')],
+        ['the marker name is a directory', 'cannot write',
+          (h) => mkdirSync(join(h, '.cc-sessions', 'lab-dev0-disabled'), { recursive: true })],
+      ];
+      for (const [what, opening, breakIt] of rows) {
+        const h = box('ccrc-account-off-clause-row-');
+        seedBoxRoster(h, FIXTURE_ROSTER);
+        breakIt(h);
+        const r = sourceCall(h, `_acct_disable_new lab-dev0 "${STANDS}"`);
+        expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+        const j = oneObject(r);
+        expect(j['error'], what).toBe('disable-marker');
+        expect(String(j['detail']), what).toContain(opening);
+        expect(String(j['detail']).endsWith(STANDS),
+          `${what} did not end in the caller's clause:\n    ${String(j['detail'])}`).toBe(true);
       }
     });
 
