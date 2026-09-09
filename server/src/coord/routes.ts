@@ -2503,12 +2503,18 @@ export function registerCoordRoutes(
    * `'stale'` refuses `not-held` rather than pretending to succeed — a
    * decline that finds nothing held must not lie about what it did.
    *
-   * `watcher?.releaseHeldAsk` is the ONLY way this route touches the
+   * `watcher.releaseHeldAsk` is the ONLY way this route touches the
    * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
    * `heldAsks`): the map is watcher-private state, so this route names the
    * child id and nothing about the map's shape. It runs AFTER the CAS
    * succeeds, never before — the store row is the fact, the in-memory hold
    * is only ever a cache of the push `sweepAsks` would otherwise send later.
+   * A `watcher === undefined` server (every non-test `buildServer` caller
+   * always supplies one today, `src/index.ts`'s only construction) still
+   * releases the row and answers `{ok:true}` — that part is genuinely true —
+   * but has no hold to drop and no snapshotted push to fire, so it warns
+   * instead of silently dropping the operator's notification on the floor
+   * (fix round 1, item 1).
    */
   app.post('/api/asks/:id/release', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -2549,7 +2555,23 @@ export function registerCoordRoutes(
     if (!coord.releaseAsk(id, Date.now())) {
       return reply.code(409).send({ ok: false, error: 'not-held' });
     }
-    watcher?.releaseHeldAsk(ask.childId);
+    // Fix round 1, item 1: `watcher` is undefined for every non-test caller
+    // of `buildServer` today (`src/index.ts` always builds one) — but the
+    // row above has ALREADY moved `'held' -> 'released'` by the time this
+    // line runs, and the response below is unconditionally `{ok:true}`.
+    // With no watcher there is no `heldAsks` entry to drop and no snapshotted
+    // push to fire, so the decline is real (the row genuinely released) but
+    // the operator's buzz — the entire reason this lane exists — silently
+    // never happens. Warning, not refusing: refusing here would tell the
+    // parent its decline failed when the store row says otherwise, which is
+    // a worse lie than a log line nobody reads until they go looking.
+    if (watcher === undefined) {
+      console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
+        `${ask.childId}) with no watcher configured — the row is released but the operator's ` +
+        'push was never fired');
+    } else {
+      watcher.releaseHeldAsk(ask.childId);
+    }
     return { ok: true };
   });
 }

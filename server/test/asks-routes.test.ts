@@ -14,7 +14,7 @@
 // constructed first, sharing ONE `deps` object with `buildServer`) so the
 // decline case can prove the deferred push actually fires — the thing
 // `/answer`'s tests above have no need to set up at all.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -388,5 +388,45 @@ describe('POST /api/asks/:id/release', () => {
     expect(coord.askById(id)!.state).toBe('released');
     // No double push: the second decline never reached `releaseHeldAsk`.
     expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
+  });
+
+  /**
+   * Fix round 1, item 1: with NO watcher configured (`buildServer`'s own
+   * third argument, defaulted — every non-test caller in the tree always
+   * supplies one, but nothing enforced that here), `watcher.releaseHeldAsk`
+   * was previously reached through a bare `?.`, so the CAS above still moved
+   * the row `'held' -> 'released'` and the route still answered `{ok:true}`
+   * with NOTHING telling anyone the operator's push never fired — exactly
+   * the failure this whole lane exists to prevent, silent. Uses the
+   * `describe('POST /api/asks/:id/answer', ...)` block's own top-level
+   * `openApp` (NOT this block's `openAppWithWatcher`), which calls
+   * `buildServer({...})` with no second/third argument at all — the
+   * watcher-less shape.
+   */
+  it('warns instead of silently dropping the push when no watcher is configured', async () => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    const now = Date.now();
+    const built = await openApp(home, tmuxRunner([]).run);
+    app = built.app;
+    const id = built.coord.insertAsk({
+      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    // The decline is genuinely real — the row released — even with no
+    // watcher to notify anyone about it.
+    expect(built.coord.askById(id)!.state).toBe('released');
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [msg] = warn.mock.calls[0]!;
+    expect(msg).toContain(String(id));
+    expect(msg).toContain(CHILD);
+    warn.mockRestore();
   });
 });
