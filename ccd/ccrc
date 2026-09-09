@@ -5761,21 +5761,130 @@ _acct_credential() {
 # (:1082-1084).
 ACCT_HEALTH=""
 ACCT_NOTES=()
+
+# ── the knob is validated where it is used, and `0` is REFUSED (D-2221) ────
+# `CCRC_ACCOUNT_AUTH_TIMEOUT` is passed straight to `_plat_timeout`, and the two
+# implementations behind that shim read a bad value in OPPOSITE directions —
+# measured on this box, GNU coreutils 9.4:
+#
+#   value    GNU `timeout`                         the bash fallback
+#   0        NO TIMEOUT — `timeout 0 sleep 2` ran   `sleep 0` returns at once, the
+#            the full 2s and exited 0               watcher stamps and kills: 124
+#                                                   IMMEDIATELY
+#   -1/abc/  exit 125 WITHOUT EXEC'ING the          `sleep abc` fails, `|| exit 0`
+#   5x/''    launcher; `invalid time interval`      fires, and the call gets NO
+#            swallowed by the caller's 2>/dev/null  DEADLINE AT ALL
+#   1e20     ACCEPTED and clamped — `timeout        `sleep 1e20` is accepted too:
+#            99999999999999999999 sleep 1` took     no deadline in practice
+#            1005ms and exited 0
+#
+# So the ONE value an operator types to mean "do not wait" means "wait forever"
+# on the box that has coreutils and "give up instantly" on the box that does
+# not, and an enormous value is a second spelling of unbounded. None of that is
+# a fact about the launcher, but every one of them USED to be reported as one:
+# 125 reaches `_acct_auth_status`'s exit-3 arm and gets D-2220's sentence about
+# a launcher that "gave no parseable answer", about a launcher that was never
+# run. Refusing the value is the only answer that names what actually happened.
+#
+# `0` IS REFUSED RATHER THAN GIVEN A MEANING. The two candidate meanings are the
+# two the platforms already disagree about, so ANY ruling here makes one box's
+# behaviour the standard and the other box's a bug to emulate in shell. And
+# neither meaning is wanted: "unbounded" defeats the knob's entire purpose (its
+# own header calls it "a deadline against a hung binary"), while "skip the cheap
+# question" is a different request that would deserve a different spelling than
+# a duration of zero. An operator who wants no auth-status call has one: a lane
+# whose provider is not `anthropic` is never asked at all.
+#
+# THE CAP IS 3600 AND IT IS NOT DECORATION. Above it the knob stops bounding
+# anything a human waits for, and the values that GNU accepts and clamps are
+# `0`'s defect wearing more digits. The length gate comes FIRST because it has
+# to: `[ 99999999999999999999 -gt 3600 ]` is not false, it is
+# `integer expression expected` on stderr and a non-zero `[` — a guard that
+# fails OPEN on precisely the input it exists to catch.
+#
+# AN OUT-PARAMETER, NOT A `$( )`, and the reason is a trap rather than a
+# preference: `_acct_refuse` prints its envelope on STDOUT, so a validator
+# called as `d="$(_acct_auth_deadline)"` would capture its own refusal into `d`
+# and `exit 2` would leave only the SUBSHELL. The operator would see nothing.
+# This file's `ACCT_*`/`BOX_*` out-parameter idiom is what a refusing helper has
+# to use, and it is declared at file scope for `set -u` like its siblings.
+ACCT_AUTH_DEADLINE=""
+_acct_auth_deadline() {   # -> ACCT_AUTH_DEADLINE (whole seconds), or refuses at 2
+  local v="$CCRC_ACCOUNT_AUTH_TIMEOUT" n=""
+  # EXIT 2, the USAGE class (:29-33). An env knob is part of how the verb was
+  # invoked and the mistake is the caller's, decidable before anything runs —
+  # the same class `--id ''` is refused in, one function down.
+  case "$v" in
+    ''|*[!0-9]*)
+      _acct_refuse 2 bad-timeout "CCRC_ACCOUNT_AUTH_TIMEOUT is \"$v\", which is not a whole number of seconds. This verb passes it to timeout(1), which refuses a value like this by exiting 125 without ever running the launcher - and a box with no coreutils would instead run the launcher with no deadline at all. Give it a positive whole number of seconds, or leave it unset for the default of 15. Nothing was written." ;;
+  esac
+  # Leading zeros stripped by pattern rather than by `$(( 10#$v ))`, which
+  # OVERFLOWS SILENTLY on a 20-digit value and would hand the comparisons below
+  # a wrapped negative number.
+  n="${v#"${v%%[!0]*}"}"; [ -n "$n" ] || n=0
+  [ "$n" = 0 ] \
+    && _acct_refuse 2 bad-timeout "CCRC_ACCOUNT_AUTH_TIMEOUT is \"$v\", and zero is refused rather than given a meaning: GNU timeout(1) reads a duration of zero as NO deadline at all - measured on this fleet, a zero-second call sat through a two-second sleep in full - while a box with no coreutils falls back to a shell sleep that returns at once and reports the deadline as already expired. One value cannot mean both. If you want to bound this call, give it a positive whole number of seconds; if you want it not to run at all, that is a property of the lane's provider, not a duration. Nothing was written."
+  { [ "${#n}" -gt 4 ] || [ "$n" -gt 3600 ]; } \
+    && _acct_refuse 2 bad-timeout "CCRC_ACCOUNT_AUTH_TIMEOUT is \"$v\", which is above the 3600-second ceiling this verb will honour. 'claude auth status' is a local credential read, so this is a deadline against a hung binary rather than a budget, and a value this large does not bound one: timeout(1) accepts it and clamps it, which is the same unbounded call zero asks for. Give it a positive whole number of seconds up to 3600. Nothing was written."
+  ACCT_AUTH_DEADLINE="$n"
+}
+
+# ── one sentence per reason the cheap question produced no verdict (D-2220) ──
+# `--exit "$rc"` was passed to the classifier and read by nothing, so five
+# conditions arrived at the operator as one sentence — "auth status gave no
+# parseable answer on this box" — and four of them were FALSE. The worst is the
+# one an operator acts on: a lane that was never asked reported as a lane that
+# answered badly, which sends them to look at a launcher instead of at the fact
+# that there is no launcher.
+#
+# THE TRIAGE IS `_acct_no_answer`'S, NOT A SECOND ONE. That function is this
+# file's convention for exactly this shape (:3916-3927) — an if/elif chain on
+# `$rc`, one `cause` sentence per branch, a residual `else` that says plainly
+# that the tree cannot name a cause — and the codes it already triages are the
+# codes `timeout(1)` and bash hand back here. 124 is NOT in this table: it never
+# reaches this function, because `_acct_auth_status` branches on it one caller
+# up and gives it a `timeout` VERDICT rather than a note.
+#
+# EVERY BRANCH STILL ENDS IN THE PROBE. None of these is evidence about the
+# credential, so none of them is a verdict; what changes is the sentence, not
+# the routing, and each says so in its own words so the note is never mistaken
+# for the answer.
+_acct_auth_why() {   # <rc> <id> -> the one note explaining why there is no verdict
+  local rc="$1" id="$2"
+  if [ "$rc" -eq 127 ]; then
+    printf '%s' "auth status was never asked: there is no launcher at $WRAPPER_BIN_DIR/$id to run, so nothing about account $id's credential was measured and the verdict below is the probe's. Run 'ccrc wrappers' to write the missing launcher."
+  elif [ "$rc" -eq 126 ]; then
+    printf '%s' "auth status was never asked: $WRAPPER_BIN_DIR/$id exists but could not be executed, so nothing about account $id's credential was measured and the verdict below is the probe's. Check its mode bits and that its interpreter line names a shell this box has."
+  elif [ "$rc" -eq 125 ]; then
+    printf '%s' "auth status was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. The verdict below is the probe's."
+  elif [ "$rc" -gt 128 ]; then
+    printf '%s' "auth status did not answer because it was KILLED rather than because it replied badly: exit $rc is signal $((rc - 128)). Look for an OOM kill on this box, not for a broken launcher. The verdict below is the probe's."
+  else
+    printf '%s' "auth status gave no parseable answer on this box, so the verdict below is the probe's"
+  fi
+}
+
 _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to ACCT_NOTES
   local id="$1" out="" rc=0 row="" crc=0
   ACCT_HEALTH=""
-  out="$(_plat_timeout "$CCRC_ACCOUNT_AUTH_TIMEOUT" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
+  _acct_auth_deadline
+  out="$(_plat_timeout "$ACCT_AUTH_DEADLINE" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
   if [ "$rc" -eq 124 ]; then
     # rc 124 is `_plat_timeout`'s own report of expiry (:406-411), and it is a
     # THIRD thing again: neither an answer nor a parse failure. The body is
     # whatever the killed launcher had flushed, so it is not offered at all.
     row="$(printf '' | _acct_node classify --source auth-status --exit 124 \
-      --timed-out true --deadline "$CCRC_ACCOUNT_AUTH_TIMEOUT")" || crc=$?
+      --timed-out true --deadline "$ACCT_AUTH_DEADLINE")" || crc=$?
   else
     row="$(printf '%s' "$out" | _acct_node classify --source auth-status --exit "$rc")" || crc=$?
   fi
   if [ "$crc" -eq 3 ]; then
-    ACCT_NOTES+=("auth status gave no parseable answer on this box, so the verdict below is the probe's")
+    # THE LAUNCHER'S OWN EXIT CODE, READ AT LAST (D-2220). `$rc` was already
+    # being handed to the classifier as `--exit` and discarded there; the
+    # sentence belongs on this side because `_acct_no_answer`'s triage — the
+    # convention this follows — is this file's, and because 127 and 126 are
+    # facts about a PATH lookup that node never saw.
+    ACCT_NOTES+=("$(_acct_auth_why "$rc" "$id")")
     return 0
   fi
   if [ "$crc" -eq 4 ]; then
@@ -5809,6 +5918,38 @@ _acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
     || _acct_refuse 1 classify-failed "the health classifier could not run, so this box measured nothing about account $1 - read the account-op: line above. Nothing was written."
 }
 
+# ── a note is bounded before it reaches argv (D-2222) ─────────────────────
+# `classify` reads the auth-status BODY from stdin on purpose — the body is a
+# launcher's output and a launcher's output has no size this tree controls. The
+# NOTE derived from that body then went out on argv as `--note "$n"`, where the
+# only bound was the kernel's. Measured: an `authMethod` of 100 000 bytes rides
+# through and produces a 100 KB note; 200 000 bytes hits `Argument list too
+# long` (MAX_ARG_STRLEN, 131 072 bytes for one argument) and node exits 126, at
+# which point the verb answers `no-answer` with "Nothing in this tree is known
+# to exit 126 with an empty body" — a shrug about a lane it had measured
+# perfectly. The reasoning that put the body on stdin applies unchanged here.
+#
+# THE CAP IS ON THE ARGV BOUNDARY, NOT ON THE FIELD. `classify`'s own
+# `shapeOf` already keeps launcher text out of the sentence it writes (D-2223's
+# fix), so today nothing unbounded is left — but this is the choke point EVERY
+# note passes through, including the ones Task 30 adds, and a cap that has to be
+# re-applied per note-writer is a cap that will be missed by one of them.
+#
+# 1024 CHARACTERS, AND THE NUMBER IS STATED IN THE TRUNCATED NOTE ITSELF so an
+# operator reading a clipped sentence knows it was clipped by ccrc and by how
+# much. `${#n}` counts characters rather than bytes, so the byte bound is at
+# worst 4 KB in UTF-8 — two orders of magnitude under MAX_ARG_STRLEN, which is
+# the margin that makes this a cap rather than a second guess at the limit. The
+# longest sentence this file writes is under 400 characters, so no note ccrc
+# composes is truncated: what the cap bounds is what a LAUNCHER put there.
+ACCT_NOTE_MAX=1024
+_acct_note_cap() {   # <note> -> the note, or its first $ACCT_NOTE_MAX characters plus a marker
+  local n="$1"
+  if [ "${#n}" -le "$ACCT_NOTE_MAX" ]; then printf '%s' "$n"; return 0; fi
+  printf '%s… (this note was truncated by ccrc at %s characters)' \
+    "${n:0:$ACCT_NOTE_MAX}" "$ACCT_NOTE_MAX"
+}
+
 _acct_check() {
   local id="" v="" flag=""
   while [ $# -gt 0 ]; do
@@ -5838,6 +5979,14 @@ _acct_check() {
   _acct_lane "$id"
   ACCT_HEALTH=""
   ACCT_NOTES=()
+  # THE THIRD OUT-PARAMETER, RESET WHERE ITS TWO SIBLINGS ARE (D-2223 F8). It
+  # used to be reset only inside `_acct_probe`, so on the SHORT-CIRCUIT path —
+  # a verdict from `auth status`, no probe — the value shipped on the wire came
+  # from file scope rather than from this run. Harmless in a process that runs
+  # `check` once and exits, wrong the moment anything loops it over a roster,
+  # and `limitsTouched` becomes API in Task 30. D-2127's unreset array, two
+  # tasks later, at the address that carries the same three-value contract.
+  ACCT_LIMITS_TOUCHED=false
 
   # ANTHROPIC ONLY, AND GATED ON THE PROVIDER, NOT THE KIND. An OpenRouter or
   # `compatible` lane authenticates through the settings.json env block and the
@@ -5860,7 +6009,7 @@ _acct_check() {
 
   local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")
   local n=""
-  for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$n"); done
+  for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$(_acct_note_cap "$n")"); done
   # `_acct_answer`, NOT BARE `_acct_node` — a DEVIATION from this task's plan
   # snippet, and D-2051's defect at a new address. `_acct_add`'s own tail states
   # the general case (:4917-4919): a half-updated box, one whose

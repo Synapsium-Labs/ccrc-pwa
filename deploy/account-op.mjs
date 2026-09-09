@@ -633,6 +633,17 @@ const OPS = {
  *  overloaded seam this cluster objects to everywhere else. */
 const defer = (note) => ({ deferred: true, note });
 
+/** The JSON shape of a value, as one of six fixed words — never the value
+ *  itself. It exists so the `loggedIn` deferral below can say what arrived
+ *  without echoing a launcher-controlled string into a sentence that ends up on
+ *  argv (D-2222's class, closed at the source rather than only at the cap). */
+function shapeOf(v) {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'an array';
+  const t = typeof v;
+  return t === 'object' ? 'an object' : `a ${t}`;
+}
+
 function classify(source, body, exit, timedOut, deadline) {
   const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const row = (verdict, detail) => ({ verdict, measuredAt: at, detail, source });
@@ -659,6 +670,25 @@ function classify(source, body, exit, timedOut, deadline) {
       // The one human line `auth status --text` prints, quoted because the card
       // quotes it.
       return row('auth-dead', 'Not logged in. Run claude auth login to authenticate.');
+    }
+    // NAMED-BUT-NOT-BOOLEAN IS A THIRD CONDITION, AND IT DEFERS (D-2223 F5).
+    // `{"loggedIn":"true"}`, `{"loggedIn":1}` and `{"loggedIn":null}` used to
+    // fall into the row below, which says the field was not named — it was, and
+    // the sentence was simply false. The ROUTING was the worse half: a row is a
+    // verdict, so a launcher CLAIMING to be signed in in a shape this classifier
+    // does not accept short-circuited and never reached the probe, which is the
+    // exact opposite of the one-sided design the `loggedIn === true` arm above
+    // exists to state. A shape that cannot be read is not evidence about the
+    // credential, so it defers like the signed-in arm does and the probe runs.
+    //
+    // THE SENTENCE NAMES THE SHAPE AND NEVER THE VALUE. `shapeOf` returns one of
+    // six fixed words, so this note's length does not depend on anything the
+    // launcher wrote — the D-2222 concern closed at its source rather than only
+    // at the argv cap that bounds it downstream.
+    if (Object.prototype.hasOwnProperty.call(j, 'loggedIn')) {
+      return defer(`auth status named loggedIn as ${shapeOf(j.loggedIn)} rather than as `
+        + 'true or false, so this run cannot read it as a verdict; the verdict below '
+        + 'is the probe\'s');
     }
     // Parseable JSON that says nothing about login IS a verdict: something
     // answered and had no opinion, which is not the same as nothing answering.

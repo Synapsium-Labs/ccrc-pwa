@@ -5836,3 +5836,362 @@ describe('ccrc account check: auth status', () => {
     }
   });
 });
+
+// ── REVIEW ROUND 2: the four seams the round-1 measurements left open ──────
+// D-2220 (the discarded exit code), D-2221 (the knob that disables its own
+// deadline), D-2222 (the unbounded note on argv) and D-2223 F5-F8. Every case
+// below drives the SHIPPED verb end to end; the two that cannot be reached
+// through argv say so and name the road they take instead.
+
+/** A recursive listing of the fixture HOME: relative path, kind, and for a file
+ *  its exact bytes. It does NOT descend through a symlink, which is not a
+ *  detail — `box()` symlinks `<home>/ccrc/deploy` and `<home>/ccrc/shared` at
+ *  the real repository, so a walker that followed them would hash this whole
+ *  tree and time out. Symlinks are recorded by TARGET, so a run that retargeted
+ *  one is still caught. */
+function snapshotHome(home: string): string[] {
+  const rows: string[] = [];
+  const walk = (dir: string, rel: string): void => {
+    for (const d of readdirSync(dir, { withFileTypes: true }).sort(
+      (a, b) => (a.name < b.name ? -1 : 1))) {
+      const p = join(dir, d.name);
+      const r = rel ? `${rel}/${d.name}` : d.name;
+      if (d.isSymbolicLink()) { rows.push(`L ${r} -> ${lstatSync(p).size}`); continue; }
+      if (d.isDirectory()) { rows.push(`D ${r}`); walk(p, r); continue; }
+      rows.push(`F ${r} ${readFileSync(p).toString('base64')}`);
+    }
+  };
+  walk(home, '');
+  return rows;
+}
+
+/** `ccd/ccrc` SOURCED rather than run, so a helper can be called twice in one
+ *  process. Its last block is guarded by
+ *  `[[ "${BASH_SOURCE[0]}" == "${0}" ]]` (ccd/ccrc:8991), so sourcing defines
+ *  every function and parses no argv — the only way to reach a defect whose
+ *  whole shape is "the second call sees the first call's variable", which one
+ *  process per invocation can never show. */
+function sourceRun(home: string, script: string,
+  extraEnv: NodeJS.ProcessEnv = {}): Result {
+  const r = spawnSync(BASH, ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`],
+    { env: { ...env(home), ...extraEnv }, encoding: 'utf8', input: '' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+describe('ccrc account check: why there was no verdict, and what bounds the answer', () => {
+  it('names each reason auth status produced no verdict, and never blames a launcher that never ran (D-2220)', () => {
+    // FIVE CONDITIONS SHARED ONE SENTENCE and four of them were false. `--exit
+    // "$rc"` was already on the classifier's argv and read by nothing; the
+    // triage is `_acct_no_answer`'s (ccd/ccrc:3916-3927), one `cause` per
+    // branch, because these codes are the ones timeout(1) and bash hand back.
+    //
+    // EVERY ROW STILL ENDS AT THE PROBE — the routing did not change, the
+    // sentence did — so each asserts `source: 'probe'` as well as its own words.
+    const cases: Array<[string, (home: string) => void, string, string]> = [
+      ['absent', () => { /* no launcher at all: timeout(1) exits 127 */ },
+        'there is no launcher at', 'ccrc wrappers'],
+      ['not-executable', (home) => {
+        mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+        writeFileSync(join(home, '.local', 'bin', 'claude'),
+          '#!/bin/sh\necho \'{"loggedIn":false}\'\n', { mode: 0o644 });
+      }, 'could not be executed', 'mode bits'],
+      ['killed', (home) => {
+        mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+        writeFileSync(join(home, '.local', 'bin', 'claude'),
+          '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
+      }, 'was KILLED rather than', 'signal 9'],
+      ['timeout-refused', (home) => {
+        plantClaude(home, 'claude');
+        authFixture(home, SIGNED_OUT, 1);
+        // The knob can no longer produce this: D-2221's validator refuses a
+        // value timeout(1) would reject, BEFORE the call. What is left is
+        // timeout(1) failing for one of its OWN reasons, which is the condition
+        // GNU documents 125 for — stood in for by a shim on the fixture PATH,
+        // which `ghContainedEnv` PREPENDS (ccdWsHelpers.ts:185) so it wins over
+        // the box's real coreutils. Without this the branch would ship
+        // unmeasured, which is the thing this wave is counting.
+        writeFileSync(join(home, '.local', 'bin', 'timeout'),
+          '#!/bin/sh\nexit 125\n', { mode: 0o755 });
+      }, 'timeout(1) refused to run', 'its own arguments are wrong'],
+    ];
+    for (const [name, plant, says, alsoSays] of cases) {
+      const home = box(`ccrc-account-check-why-${name}-`);
+      seedRosterJson(home, [UPSTREAM]);
+      plant(home);
+      const r = run(home, ['account', 'check', '--id', 'claude']);
+      expect(r.code, `${name}: ${r.stderr}`).toBe(0);
+      const j = oneObject(r);
+      expect((j['health'] as Record<string, unknown>)['source'], name).toBe('probe');
+      const notes = (j['notes'] as string[]).join(' ');
+      expect(notes, name).toContain(says);
+      expect(notes, name).toContain(alsoSays);
+      // THE FALSE SENTENCE, ABSENT. This is the half that bites: a lane nobody
+      // could ask reported as a lane that answered badly sends an operator to
+      // read a launcher that is not there.
+      expect(notes, `${name} still says the launcher answered badly`)
+        .not.toContain('no parseable answer');
+    }
+    // …and the ONE condition the old sentence was true about keeps it: a
+    // launcher that ran, answered, and said something unparseable.
+    const ok = box('ccrc-account-check-why-usage-');
+    seedRosterJson(ok, [UPSTREAM]);
+    plantClaude(ok, 'claude');
+    authFixture(ok, 'error: unknown command "auth"\n', 1);
+    expect((oneObject(run(ok, ['account', 'check', '--id', 'claude']))['notes'] as string[])
+      .join(' ')).toContain('no parseable answer');
+  });
+
+  it('refuses a deadline it cannot honour, rather than reporting the consequence as a fact about the launcher (D-2221)', () => {
+    // MEASURED ON THIS BOX (GNU coreutils 9.4): `timeout 0 sleep 2` waits the
+    // full two seconds and exits 0 — the single value an operator types to mean
+    // "do not wait" means "wait forever" — while `_plat_timeout`'s bash
+    // fallback runs `sleep 0`, stamps and kills, i.e. 124 instantly. `abc`,
+    // `-1`, `5x` and `''` exit 125 without ever exec'ing the launcher, and
+    // `99999999999999999999` is ACCEPTED and clamped (`timeout 1e20 sleep 1`
+    // took 1005ms), which is zero's defect wearing more digits.
+    const home = box('ccrc-account-check-knob-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    const REFUSED: Array<[string, string]> = [
+      ['0', 'zero is refused rather than given a meaning'],
+      ['00', 'zero is refused rather than given a meaning'],
+      ['-1', 'not a whole number of seconds'],
+      ['abc', 'not a whole number of seconds'],
+      ['5x', 'not a whole number of seconds'],
+      ['5s', 'not a whole number of seconds'],
+      ['0.5', 'not a whole number of seconds'],
+      ['1e9', 'not a whole number of seconds'],
+      ['3601', 'above the 3600-second ceiling'],
+      // THE VALUE THAT MAKES THE LENGTH GATE LOAD-BEARING. `[
+      // 99999999999999999999 -gt 3600 ]` is not false — it is `integer
+      // expression expected` and a non-zero `[`, so a cap written as the
+      // comparison alone fails OPEN on exactly the input it exists to catch.
+      ['99999999999999999999', 'above the 3600-second ceiling'],
+    ];
+    for (const [v, says] of REFUSED) {
+      const r = run(home, ['account', 'check', '--id', 'claude'], '',
+        { CCRC_ACCOUNT_AUTH_TIMEOUT: v });
+      expect(r.code, `${JSON.stringify(v)}: ${r.stderr}`).toBe(2);
+      const j = oneObject(r);
+      expect(j['error'], JSON.stringify(v)).toBe('bad-timeout');
+      expect(String(j['detail']), JSON.stringify(v)).toContain(says);
+      expect(String(j['detail']), JSON.stringify(v)).toMatch(/Nothing was written\.$/);
+      // AND IT REFUSED BEFORE ASKING. The whole point is that no fact about the
+      // launcher is invented from a knob the operator typed wrong.
+      expect(claudeArgv(home), `${v} ran the launcher anyway`).toEqual([]);
+    }
+    // …and every honourable spelling still answers, leading zeros included:
+    // `${v#"${v%%[!0]*}"}` normalises them rather than `$(( 10#$v ))`, which
+    // overflows silently on a 20-digit value.
+    for (const v of ['1', '15', '0015', '3600']) {
+      const r = run(home, ['account', 'check', '--id', 'claude'], '',
+        { CCRC_ACCOUNT_AUTH_TIMEOUT: v });
+      expect(r.code, `${v}: ${r.stderr}`).toBe(0);
+      expect((oneObject(r)['health'] as Record<string, unknown>)['verdict'], v)
+        .toBe('auth-dead');
+    }
+    // THE EMPTY KNOB IS THE DEFAULT, NOT A REFUSAL — and this corrects D-2221,
+    // which listed `''` beside `abc` as a value that makes timeout(1) exit 125.
+    // It does, but the knob never arrives empty: `: "${CCRC_ACCOUNT_AUTH_
+    // TIMEOUT:=15}"` (ccd/ccrc:1074) is the `:=` form, which substitutes when
+    // the variable is unset OR NULL, so `CCRC_ACCOUNT_AUTH_TIMEOUT=` in the
+    // environment is already 15 by the time the validator can look at it.
+    // Measured through the sourced file because that is the only way to read
+    // the resolved deadline without waiting one out.
+    const empty = sourceRun(home,
+      '_acct_auth_deadline\nprintf %s "$ACCT_AUTH_DEADLINE"',
+      { CCRC_ACCOUNT_AUTH_TIMEOUT: '' });
+    expect(empty.code, empty.stderr).toBe(0);
+    expect(empty.stdout, 'an empty knob did not fall back to the default').toBe('15');
+
+    // …and the normalised value is what the operator is shown on expiry, so
+    // `0015` never reaches a sentence as "within 0015s".
+    const slow = box('ccrc-account-check-knob-slow-');
+    seedRosterJson(slow, [UPSTREAM]);
+    mkdirSync(join(slow, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(slow, '.local', 'bin', 'claude'), '#!/bin/sh\nsleep 30\n',
+      { mode: 0o755 });
+    const h = oneObject(run(slow, ['account', 'check', '--id', 'claude'], '',
+      { CCRC_ACCOUNT_AUTH_TIMEOUT: '01' }))['health'] as Record<string, unknown>;
+    expect(h['verdict']).toBe('timeout');
+    expect(String(h['detail'])).toContain('within 1s');
+  });
+
+  it('bounds a launcher-controlled note before it reaches argv (D-2222)', () => {
+    // `classify` reads the auth-status BODY from stdin on purpose. The NOTE
+    // derived from it went out as `--note "$n"` with no bound but the kernel's:
+    // 100 000 bytes of `authMethod` rode through, 200 000 hit `Argument list
+    // too long` (MAX_ARG_STRLEN = 131 072 for ONE argument), node exited 126,
+    // and the verb answered `no-answer` with "Nothing in this tree is known to
+    // exit 126 with an empty body" — a shrug about a lane it had measured.
+    //
+    // BOTH SIDES OF THE BOUNDARY ARE MEASURED, because a cap asserted only on
+    // the huge input is a cap that could be `${n:0:0}`.
+    const home = box('ccrc-account-check-notecap-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, `${JSON.stringify({ loggedIn: true, authMethod: 'x'.repeat(200000) })}\n`, 0);
+    const r = run(home, ['account', 'check', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    const notes = j['notes'] as string[];
+    expect(notes.length).toBe(1);
+    const note = notes[0]!;
+    expect(note, 'the note was not truncated at all').toContain(
+      'this note was truncated by ccrc at 1024 characters');
+    // 1024 kept + the marker, and nothing between. The exact length is the
+    // assertion because "shorter than 200000" would pass for any cap at all.
+    expect(note.length).toBe(1024 + '… (this note was truncated by ccrc at 1024 characters)'.length);
+    expect(note.startsWith('the lane reports itself signed in (')).toBe(true);
+    // The routing is untouched: a signed-in claim is still only the
+    // precondition for the probe.
+    expect((j['health'] as Record<string, unknown>)['source']).toBe('probe');
+
+    // THE OTHER SIDE: a note that fits is carried byte for byte, marker absent.
+    const small = box('ccrc-account-check-notefits-');
+    seedRosterJson(small, [UPSTREAM]);
+    plantClaude(small, 'claude');
+    authFixture(small, `${JSON.stringify({ loggedIn: true, authMethod: 'y'.repeat(500) })}\n`, 0);
+    const kept = (oneObject(run(small, ['account', 'check', '--id', 'claude']))['notes'] as string[])[0]!;
+    expect(kept).toContain('y'.repeat(500));
+    expect(kept).not.toContain('truncated by ccrc');
+    expect(kept.length).toBeLessThanOrEqual(1024);
+  });
+
+  it('a loggedIn field in a shape it cannot read is NOT a verdict, and says which shape arrived (D-2223 F5)', () => {
+    // TWO DEFECTS IN ONE LINE. `{"loggedIn":"true"}` answered `auth status
+    // named no loggedIn field` — the field IS named — and, worse, it answered
+    // it as a ROW. A row is a verdict, so a launcher CLAIMING to be signed in
+    // in a shape the classifier does not accept short-circuited and never
+    // reached the probe, which is the exact opposite of the one-sided design
+    // (spec:684-686). The sentence and the routing are one fix.
+    //
+    // THE SHAPE, NEVER THE VALUE: `shapeOf` returns one of six fixed words, so
+    // this note's length does not depend on anything the launcher wrote.
+    const SHAPES: Array<[string, string]> = [
+      ['"true"', 'a string'], ['1', 'a number'], ['null', 'null'],
+      ['[]', 'an array'], ['{}', 'an object'],
+    ];
+    for (const [lit, shape] of SHAPES) {
+      const home = box(`ccrc-account-check-f5-${shape.replace(/\W/g, '')}-`);
+      seedRosterJson(home, [UPSTREAM]);
+      plantClaude(home, 'claude');
+      authFixture(home, `{"loggedIn":${lit}}\n`, 0);
+      const r = run(home, ['account', 'check', '--id', 'claude']);
+      expect(r.code, `${lit}: ${r.stderr}`).toBe(0);
+      const j = oneObject(r);
+      expect((j['health'] as Record<string, unknown>)['source'],
+        `${lit} short-circuited the probe`).toBe('probe');
+      const notes = (j['notes'] as string[]).join(' ');
+      expect(notes, lit).toContain(`named loggedIn as ${shape} rather than as true or false`);
+      expect(notes, `${lit} still claims the field was not named`)
+        .not.toContain('no loggedIn field');
+    }
+    // …and the ABSENT field keeps the sentence that is true of it, and keeps
+    // being a verdict: something answered and had no opinion.
+    const gone = box('ccrc-account-check-f5-absent-');
+    seedRosterJson(gone, [UPSTREAM]);
+    plantClaude(gone, 'claude');
+    authFixture(gone, '{"apiProvider":"firstParty"}\n', 0);
+    const g = oneObject(run(gone, ['account', 'check', '--id', 'claude']));
+    expect((g['health'] as Record<string, unknown>)['detail']).toBe(
+      'auth status named no loggedIn field');
+    expect((g['health'] as Record<string, unknown>)['source']).toBe('auth-status');
+    expect(g['notes']).toEqual([]);
+  });
+
+  it('writes nothing at all: the whole box, byte for byte, across a check (D-2223 F6)', () => {
+    // `_acct_answer`'s hard-coded "Nothing was written." is the reason it is the
+    // right re-emit for THIS verb and the wrong one for `added` — a claim the
+    // shipped comment makes and no test measured. D-2163 applies to a claim you
+    // keep, and the claim covers the SUBPROCESS too: on a real box `claude auth
+    // status` writing into its own config dir would falsify it here, at Task 29.
+    //
+    // A SILENT LAUNCHER, NOT `plantClaude`. That one appends every argv to
+    // `$HOME/claude-argv`, so the fixture's own instrumentation would be the
+    // whole diff and the bracket would have to whitelist it — a whitelist that
+    // would also hide the thing being looked for. This launcher writes nothing,
+    // so the assertion is EQUALITY and not a subset.
+    const home = box('ccrc-account-check-inert-');
+    seedRosterJson(home, [UPSTREAM]);
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, '.local', 'bin', 'claude'),
+      `#!/bin/sh\nprintf '%s' ${JSON.stringify(SIGNED_OUT.trim())}\nexit 1\n`, { mode: 0o755 });
+    // NO WARM-UP RUN, AND THAT IS THE WHOLE MECHANISM. The first draft took the
+    // baseline AFTER a throwaway `check`, reasoning that `env()`'s poison files
+    // had to arrive before it. They already have: `box()` calls `env(home)` at
+    // construction for exactly this, and its own header says so. The warm-up
+    // bought nothing and cost everything — MEASURED, because a mutation that
+    // made `_acct_check` write `~/.ccrc/leaked`, and a second that made the
+    // LAUNCHER write into its config dir, both SURVIVED it: the throwaway run
+    // created the same file, so it was in the baseline and the diff was empty.
+    // A bracket whose warm-up performs the write it is looking for measures
+    // nothing at all.
+    const before = snapshotHome(home);
+    const r = run(home, ['account', 'check', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    expect((oneObject(r)['health'] as Record<string, unknown>)['verdict']).toBe('auth-dead');
+    expect(snapshotHome(home), 'ccrc account check wrote to the box').toEqual(before);
+    // …and the listing is not vacuously empty: it saw the roster it read.
+    expect(before.some((l) => l.startsWith('F .ccrc/accounts.json '))).toBe(true);
+    expect(before.length).toBeGreaterThan(8);
+  });
+
+  it('carries limitsTouched on BOTH arms, and the wire says which (D-2223 F7)', () => {
+    // Nothing in `server/test` named `limitsTouched` or `--limits-touched`
+    // before this case: neither the shipped `false` nor the `true` arm was
+    // asserted anywhere, and Task 30 makes it a wire field carrying a real fact.
+    // The `true` arm has no bash caller yet — `_acct_probe` is a stub that only
+    // ever sets `false` — so it is driven at the op, which is where the arm
+    // lives (`a['limits-touched'] === 'true'`).
+    const ROW = '{"verdict":"unknown","source":"probe"}';
+    for (const [flag, want] of [['true', true], ['false', false]] as const) {
+      const r = opRun(['health', '--id', 'claude', '--row', ROW, '--limits-touched', flag]);
+      expect(r.code, `${flag}: ${r.stderr}`).toBe(0);
+      expect(JSON.parse(r.stdout)['limitsTouched'], flag).toBe(want);
+    }
+    // ABSENT IS `false`, not undefined: the field is always on the wire, which
+    // is what makes a reader's `=== true` safe in Task 30.
+    const bare = opRun(['health', '--id', 'claude', '--row', ROW]);
+    expect(bare.code, bare.stderr).toBe(0);
+    expect(Object.prototype.hasOwnProperty.call(JSON.parse(bare.stdout), 'limitsTouched'))
+      .toBe(true);
+    expect(JSON.parse(bare.stdout)['limitsTouched']).toBe(false);
+    // …and the whole verb ships the `false` arm today, on the path that never
+    // runs the probe at all.
+    const home = box('ccrc-account-check-limits-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    expect(oneObject(run(home, ['account', 'check', '--id', 'claude']))['limitsTouched'])
+      .toBe(false);
+  });
+
+  it('resets ACCT_LIMITS_TOUCHED before every check, not only inside the probe (D-2223 F8)', () => {
+    // THE ONE DEFECT IN THIS ROUND THAT ONE PROCESS PER INVOCATION CANNOT SHOW.
+    // `_acct_check` reset `ACCT_HEALTH` and `ACCT_NOTES` and not this, so on the
+    // SHORT-CIRCUIT path — a verdict from `auth status`, no probe, and
+    // `_acct_probe` is the only other resetter — the value on the wire came from
+    // whatever the variable held before. A fresh process always holds the file
+    // scope's `false`, which is why no `run()` can red it; sourcing can, and
+    // that is the shape the moment anything loops `check` over a roster.
+    const home = box('ccrc-account-check-reset-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantClaude(home, 'claude');
+    authFixture(home, SIGNED_OUT, 1);
+    const r = sourceRun(home, 'ACCT_LIMITS_TOUCHED=true\n_acct_check --id claude');
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect((j['health'] as Record<string, unknown>)['verdict'],
+      'the sourced call did not reach the short-circuit path').toBe('auth-dead');
+    expect(j['limitsTouched'],
+      'a stale ACCT_LIMITS_TOUCHED reached the wire').toBe(false);
+    // AND THE HARNESS IS NOT VACUOUS: the same source, without the reset under
+    // test, is what a second `check` in one process sees — proved by driving
+    // the variable through the ONE resetter that did exist.
+    const p = sourceRun(home, 'ACCT_LIMITS_TOUCHED=true\n_acct_probe claude\n'
+      + 'printf %s "$ACCT_LIMITS_TOUCHED"');
+    expect(p.stdout.endsWith('false'), p.stderr).toBe(true);
+  });
+});
