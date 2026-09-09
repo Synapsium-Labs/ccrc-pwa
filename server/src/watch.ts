@@ -27,7 +27,9 @@ import { JournalMirror } from './coord/mirror.js';
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
-import { COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, isAskNudgeMail, queueSystemMail } from './coord/rundefs.js';
+import {
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueSystemMail,
+} from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
@@ -3341,8 +3343,24 @@ export class FleetWatcher {
           // dialog, because the OLD one is gone from the pane either way.
           const orphaned = this.heldAsks.get(r.id);
           if (orphaned !== undefined && last !== undefined) {
+            // The map entry is dropped unconditionally, BEFORE the guarded
+            // write below — fix round 2, item 1: a failing `staleAsk` must
+            // not leave the entry to be retried (and re-warned about) forever
+            // on every subsequent tick; the in-memory hold is over either
+            // way, since the dialog it was minted under is already gone.
             this.heldAsks.delete(r.id);
-            this.deps.coord?.staleAsk(last, r.id, Date.now());
+            // Guarded (fix round 2, item 1): this is a synchronous
+            // `node:sqlite` UPDATE sitting directly on the 2 s poll, run
+            // BEFORE the `notify` gate below — i.e. on every tick shape, not
+            // just the mint edge — so an unguarded throw here would kill the
+            // whole process exactly as the neighbouring `hold()` guard a few
+            // lines down exists to prevent, and this write sat outside that
+            // guard's reach.
+            try {
+              this.deps.coord?.staleAsk(last, r.id, Date.now());
+            } catch (err) {
+              console.warn(`ccrc-server: settling an orphaned ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a held row may remain orphaned in coord.db`);
+            }
           }
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
@@ -3393,6 +3411,24 @@ export class FleetWatcher {
                 }
               } catch (err) {
                 console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
+                // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are
+                // SEPARATE transactions inside `hold()` — a throw after the
+                // first commits (inside `queueSystemMail`'s own `tx()`, or in
+                // `pushOne`/`heldAsks.set` below it) would otherwise leave an
+                // ask row `held` with NO `heldAsks` entry: unreachable by
+                // Task 7's map-keyed sweep and Task 8's dialog-keyed
+                // `staleAsk`, while the `raise()` below means the operator
+                // gets the push AND a nudged parent may still act on the
+                // very question that push just escalated. Settle whatever
+                // may have committed — a no-op (0 rows changed) in the
+                // common case where nothing did — wrapped so the
+                // compensation itself cannot throw OUT of this catch and
+                // undo the fallback to `raise()` it exists to protect.
+                try {
+                  this.deps.coord?.staleAsk(dialog.id, r.id, Date.now());
+                } catch (compErr) {
+                  console.warn(`ccrc-server: ask hold compensation failed for ${r.id} (${compErr instanceof Error ? compErr.message : String(compErr)}) — a held row may remain orphaned`);
+                }
               }
             }
             if (!held) raise();
@@ -3470,9 +3506,13 @@ export class FleetWatcher {
     // (bounded by its own quota) rather than a run's lifecycle, and
     // `renderEnvelope` skips the program/wave/waveOf fields whenever `runId`
     // is null, so nothing is lost by not attaching the run we just derived.
+    // `askNudgeSubject` (fix round 2, item 3), not a hand-spelled `` `ask:` ``
+    // literal: `isAskNudgeMail` in the same module must recognise exactly
+    // this shape, and a queue/reader pair spelling one convention twice is
+    // the kind of thing that drifts.
     queueSystemMail(this.deps.coord!, null, {
       fromId: 'operator', toId: parent, runId: null, kind: 'question',
-      subject: `ask:${askId}`, body: renderAskBrief(askId, r.id, q.question, options),
+      subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
     });
     return { until: now + ASK_GRACE_MS, askId, ev };
   }

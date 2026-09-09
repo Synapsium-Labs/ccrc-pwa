@@ -409,4 +409,78 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     expect(f.coord.askById(firstAskId)!.state).toBe('stale');   // the orphan, settled
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);   // still deferred, both times
   });
+
+  // Fix round 2, item 1 (Important). The orphan-settle write
+  // (`staleAsk(last, r.id, ...)`, run BEFORE the `notify` gate on every tick
+  // that sees a new dialog id) was unguarded — eleven lines above the try
+  // that already guards `hold()` itself. This proves the guard: a throwing
+  // `staleAsk` must not kill the tick, and the lane must keep working —
+  // ask #2 still mints normally even though settling ask #1's orphan failed.
+  it('survives a throwing staleAsk while settling an orphaned hold, and the lane continues', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();                                          // priming
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();                                          // mints ask #1, held
+    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(1);
+
+    f.coord.staleAsk = () => { throw new Error('boom — simulated coord.db failure'); };
+
+    // A second, genuinely different question replaces the first with no
+    // clear tick — the same shape the orphan-settle test above drives.
+    f.writeAsk('cc-a', {
+      questions: [{ question: 'Continue?', header: 'Confirm', multiSelect: false,
+        options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    f.showMenu('cc-a', 'Continue?\n❯ 1. Yes\n  2. No\nEnter to select\n');
+    await expect(f.tick()).resolves.toBeUndefined();          // the tick itself does not throw
+
+    // The lane continues: ask #2 still mints and holds normally despite the
+    // failed settle of ask #1's orphan (which is left `held`, undead, in
+    // coord.db — the acknowledged cost of a guard whose job is surviving the
+    // tick, not full correctness under a coord.db fault).
+    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(2);
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+  });
+
+  // Fix round 2, item 2 (Minor). `insertAsk` and `queueSystemMail` are
+  // SEPARATE transactions inside `hold()` — a throw strictly AFTER
+  // `insertAsk` already committed (here: `queueSystemMail`'s own `tx()`
+  // fails on its first write, `insertMail`) must not leave the just-minted
+  // row stuck in `held` with no `heldAsks` entry to ever reach it again.
+  // The catch's own compensating `staleAsk` settles it.
+  it('compensates a committed ask row when hold fails after insertAsk but before queueSystemMail', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    f.coord.insertMail = () => { throw new Error('boom — simulated coord.db failure'); };
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await expect(f.tick()).resolves.toBeUndefined();
+
+    // The fallback push still fires...
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    // ...and the row `insertAsk` committed before the failure is NOT left
+    // orphaned in `held` — it was settled to `stale` by the compensation.
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+    const rows = f.coord.db.prepare("SELECT id, state FROM asks WHERE childId = 'cc-a'").all() as
+      { id: number; state: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe('stale');
+  });
 });

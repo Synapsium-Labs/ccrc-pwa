@@ -227,6 +227,18 @@ export function queueSystemMail(
   return out;
 }
 
+/** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source
+ *  `askNudgeSubject` (the queue side) and `isAskNudgeMail` (the reader side)
+ *  both derive from (fix round 2, item 3), so the two can no longer spell
+ *  `ask:` as two independent literals that a future edit drifts apart. */
+const ASK_NUDGE_SUBJECT_PREFIX = 'ask:';
+
+/** Build the ask pre-emption lane's nudge-mail subject for one ask id —
+ * `FleetWatcher.hold`'s own construction, moved here so `isAskNudgeMail`
+ * below has one definition to agree with instead of a second hand-spelled
+ * copy of the same shape. */
+export const askNudgeSubject = (askId: number): string => `${ASK_NUDGE_SUBJECT_PREFIX}${askId}`;
+
 /**
  * Is this mail row the ask pre-emption lane's own nudge to a parent
  * (`FleetWatcher.hold`, `server/src/watch.ts`) — the message that exists
@@ -246,12 +258,15 @@ export function queueSystemMail(
  * broaden to every `'operator'` mail. What singles out an ask nudge is the
  * full triple: the sender, `runId === null` (deliberate — `hold`'s own
  * reasoning: this rides the run-less peer-mail lane, never a run's
- * lifecycle), and a subject shaped exactly `ask:<n>` (`hold`'s own
- * construction, `` `ask:${askId}` ``). Exported and used from BOTH sides —
- * `hold`'s own `queueSystemMail` call constructs a subject this predicate
- * must recognise, and `pushNewMail` reads it back — so the mail QUEUE and
- * the mail PUSH lane share one definition instead of two that can drift.
+ * lifecycle), and a subject shaped exactly `ASK_NUDGE_SUBJECT_PREFIX<n>` —
+ * matched against the SAME prefix `askNudgeSubject` builds from, not a
+ * second copy of the literal. Exported and used from BOTH sides — `hold`
+ * calls `askNudgeSubject` to construct the subject this predicate must
+ * recognise, and `pushNewMail` reads it back — so the mail QUEUE and the
+ * mail PUSH lane share one definition instead of two that can drift.
  */
 export function isAskNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {
-  return m.fromId === 'operator' && m.runId === null && /^ask:\d+$/.test(m.subject);
+  return m.fromId === 'operator' && m.runId === null &&
+    m.subject.startsWith(ASK_NUDGE_SUBJECT_PREFIX) &&
+    /^\d+$/.test(m.subject.slice(ASK_NUDGE_SUBJECT_PREFIX.length));
 }
