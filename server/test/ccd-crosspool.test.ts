@@ -1826,6 +1826,52 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
   });
 });
 
+describe('R2b — the thirteenth read, found only after the #70 merge sweep', () => {
+  it('`_lc_err` answers instead of blocking — the counter that reports a broken journal', () => {
+    // THE ONE A CENSUS HAD ALREADY CLEARED. An earlier sweep walked the tick
+    // closure, reached `_lc_emit`, cleared it on `_lc_live`'s `[[ -f ]]` guard
+    // over the JOURNAL GLOB — and never looked at the failure arm of the very
+    // append it was clearing. Five arms of `_lc_emit` call `_lc_err`, one of
+    // them that append's own `|| { _lc_err; return 0; }`, and `_lc_err` opened
+    // `$_LC_DIR/errors` with a bare `cat` and no type test of any kind.
+    //
+    // It is on the 5-second tick: `_auto_swap_check`'s `_lc_done rehome` ->
+    // `_lc_emit` -> `_lc_err`. `timeout` in a child shell is the assertion, and
+    // rc 124 is what a wedged supervisor looks like.
+    seedRow();
+    const lc = reg('.lifecycle');
+    fs.mkdirSync(lc, { recursive: true });
+    const errs = path.join(lc, 'errors');
+
+    execFileSync('mkfifo', [errs]);
+    expect(h.sh(`timeout 5 bash -c 'source "${CCD}"; _lc_err'; echo "rc=$?"`),
+      'a FIFO with no writer: answered, and rc 124 would mean it hung').toBe('rc=0');
+
+    // ...and through the caller, on the arm that fires when the journal itself
+    // could not be written — the state this counter exists for.
+    fs.chmodSync(lc, 0o555);
+    expect(h.sh(`timeout 5 bash -c 'source "${CCD}"; _lc_emit swap ok ${ID} tx1'; echo "rc=$?"`),
+      'and through `_lc_emit` with the journal directory unwritable').toBe('rc=0');
+    fs.chmodSync(lc, 0o755);
+    fs.rmSync(errs);
+
+    // Every input that answered before answers the same: the counter is a
+    // FLOOR, and the regex below the read already restarts it on anything that
+    // is not digits, so a non-regular file lands in the arm a garbage one does.
+    const count = (): string => h.sh(`_lc_err; printf '[%s]' "$(cat "${errs}" 2>/dev/null)"`);
+    expect(count(), 'absent: the counter starts at 1').toBe('[1]');
+    expect(count(), 'and increments').toBe('[2]');
+    fs.writeFileSync(errs, 'garbage');
+    expect(count(), 'a torn counter restarts at 1, as it always did').toBe('[1]');
+    fs.rmSync(errs); fs.mkdirSync(errs);
+    expect(count(), 'a directory: the READ answers empty and the WRITE cannot land — '
+      + 'the counter is simply lost, which is what a floor being a floor means')
+      .toBe('[]');
+    expect(fs.statSync(errs).isDirectory(), 'and nothing clobbered it').toBe(true);
+    fs.rmSync(errs, { recursive: true });
+  });
+});
+
 describe('R3 — an unreadable `.project` stops the tick, but ONLY where a pool could exist', () => {
   it('a tagged box stands still and says so, instead of relocating across pools', () => {
     // THE CONSTRAINT LIFT ROUND 2 OPENED. `_reg_get` folds UNREADABLE into

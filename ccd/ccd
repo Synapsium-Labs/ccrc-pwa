@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2683b8825a12d08f9e656b5413f93695b64e60c849cc1f7a613c31cb32076eb2
-# ccrc:generated 1 sha256=PLACEHOLDER
+# ccrc:generated 1 sha256=ccf66de7a3cea1341677bd921b09ad97757672bbee34bde77e924deb74218963
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1724,8 +1723,10 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # alone reaches it for `project`, `lastswap` and `swapblocked`" — three fields,
 # and the supervise loop runs `_auto_swap_check` AND `_auto_compact_check` on
 # the same tick (`grep -n '_auto_compact_check "\$id"' ccd/ccd`). The compact
-# lane adds `lastcompact`, `lastswap` and `wrapper`; `_strand_mark`, itself on
-# the tick, adds `strandnotify`. So the pre-fix surface was at least six fields
+# lane adds `lastcompact`, `lastswap` and `wrapper` — and, since the #70 merge,
+# `compactskip` and `compactnote`, which `_compact_note` reads on every tick the
+# compactor DECLINES, i.e. the steady state of a healthy busy row;
+# `_strand_mark`, itself on the tick, adds `strandnotify`. So the pre-fix surface was at least six fields
 # rather than three — and it included `wrapper`, the very field the strand arm
 # exists to report on. `project` has since left this list entirely: it reads
 # through `_reg_read` now, because there the fold decided something (R3).
@@ -1779,7 +1780,7 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: 133 invocations across 110
+# and the reason is a count rather than a preference: 135 invocations across 110
 # lines, by `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l`
 # (measured 2026-09-09 — re-measure it; the figure is not the point, the order
 # of magnitude is). CORRECTED (#69 review round 3): the round-2 sentence said
@@ -1787,8 +1788,12 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # function does not exist in C1's commit at all — it was added by this PR's own
 # pre-review commit — so the site was this branch's, not C1's, and the stale
 # 134 stood for the span of this PR rather than of C1. The figure is 133 now
-# because round 3 converted the two `.project` reads to `_reg_read`, which is
-# the answer to what a count is FOR: it moves when the code moves. Two spellings that do NOT answer this question, both tried
+# because round 3 converted the two `.project` reads to `_reg_read` — and 135
+# again after the #70 merge, whose `_compact_note` reads `compactskip` and
+# `compactnote` on every declining tick. Which is the answer to what a count is
+# FOR: it moves when the code moves, including when someone ELSE's code moves
+# it. The merge reconciled `_reg_purge`'s cardinal in the same commit and left
+# this one standing — exactly what the "re-measure it" above exists to catch. Two spellings that do NOT answer this question, both tried
 # while writing this comment: the bare `grep -o '_reg_get "' ccd/ccd` counts
 # prose too, including this line's own quoting of it, and `grep -c` counts
 # LINES rather than occurrences — the same trap `grep -n 'counts LINES' ccd/ccd`
@@ -2699,7 +2704,22 @@ _lc_err() {   # bump the counted errors file. Prints nothing. Always 0.
   # mistake this comment exists to stop before it is made.
   local n tmp
   mkdir -p -- "$_LC_DIR" 2>/dev/null || return 0
-  n=$(cat "$_LC_DIR/errors" 2>/dev/null)
+  # `-f` BEFORE THE OPEN — the thirteenth read on the tick closure, and the one
+  # a census that had already cleared this function missed (#69 review round 3,
+  # post-merge sweep). `cat` opens whatever is here with no regard for TYPE, and
+  # this function is reachable from the 5-second tick: `_auto_swap_check`'s
+  # `_lc_done rehome` -> `_lc_emit` -> five arms that call `_lc_err`, one of them
+  # the failure arm of the journal append itself. MEASURED under `timeout`: a
+  # FIFO at `$_LC_DIR/errors` returns rc 124 from `_lc_err` alone, and rc 124
+  # through `_lc_emit` with `$_LC_DIR` unwritable — a wedged supervisor, from the
+  # counter that exists to report that the journal could not be written.
+  #
+  # THE FOLD IS ALREADY HERE AND IS THE ONE THIS FUNCTION WANTS. The regex below
+  # answers 0 for anything that is not digits, so an unreadable counter already
+  # restarts the count — and `errors` is documented above as a FLOOR, never an
+  # exact count. A non-regular file answering `""` lands in exactly that arm,
+  # byte-identical to a garbage one. Nothing is narrowed.
+  n=""; [[ -f "$_LC_DIR/errors" ]] && n=$(cat "$_LC_DIR/errors" 2>/dev/null)
   # THE REGEX IS THE GUARD, not a tidiness check: the next line is an
   # ARITHMETIC context over bytes off disk, and bash evaluates a variable's
   # contents there — a command substitution inside an array subscript EXECUTES.
@@ -13231,8 +13251,16 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
 #     moment the reason CHANGES so the registry always names the CURRENT refusal, and REMOVED by
 #     `_compact_note_clear` the moment the compactor stops declining. It is a fixed-size file
 #     that is overwritten, never appended, so following the truth costs nothing that grows.
-#     Its `<epoch>` is WHEN THIS REASON BECAME CURRENT (`stranded`'s own meaning) — not when it
-#     was last logged, which is what swap.log's line carries its own timestamp for.
+#     Its `<epoch>` is WHEN THIS REASON BECAME CURRENT — not when it was last logged, which is
+#     what swap.log's line carries its own timestamp for. THE `stranded` CITATION THIS CARRIED IS
+#     NOW FALSE, and in the opposite direction from a normal drift (#69 review round 3, found at
+#     the merge): when this was written `_strand_mark` wrote its marker only when ABSENT, so "when
+#     the episode began" and "when this reason became current" were one sentence and `stranded`
+#     fairly stood for both. R4 then added the rewrite arm that replaces a CHANGED cause while
+#     PRESERVING the original epoch, because `stranded.at` is shipped as "since when" and
+#     re-stamping it would make a four-hour strand read as new on every tick. `compactskip` has no
+#     such reader and wants the opposite. Two markers, one shape, two epoch contracts — said here
+#     because the shape is what invites a third one to copy the wrong half.
 #   • THE ANCHOR OUTLIVES THE MARKER. `$REG/<id>.compactnote` is a bare epoch: WHEN WE LAST SAID
 #     IT OUT LOUD in `$REG/swap.log`, and nothing else. `_compact_note_clear` must not touch it.
 #
@@ -15642,19 +15670,44 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # uses, asked the same way; it needs only `_tmux "$1"`, never the field that
   # could not be read.
   # THE CAPTURE'S COST, DISCLOSED (#69 review round 1 S7, ruled NO FIX as
-  # D-2162 and RE-MEASURED in round 3). This `capture-pane` is unconditional and
-  # sits above `_auto_swap_check`'s two cooldown gates, so on an affected row it
-  # is a fork the gates cannot stop. Measured with a counting `tmux` first on
-  # PATH over ten trip shapes: the lane is a strict +1 per tick per affected
-  # row, and the affected ceiling is 2 — exactly what a HEALTHY row costs in its
-  # ordinary steady state, and one below the 3 it costs on a tick that compacts.
-  # No affected row rises above the ordinary per-row cost, which is the whole
-  # argument; the earlier one — that `_auto_compact_check` already captures on
-  # such a row, so this only doubles it — is true of the registry-level shapes
-  # and FALSE of the six `.wrapper`-only ones, where this is the tick's only
-  # capture (0 -> 1). Three remedies were measured and all three are defects;
-  # the nearest one, replicating the cooldown tests here, leaves every case
-  # green while un-stranding a hard-blocked row and stranding a healthy one.
+  # D-2162, re-measured in round 3, and re-measured AGAIN on the #70 merge —
+  # which moved it). This `capture-pane` is unconditional and sits above
+  # `_auto_swap_check`'s two cooldown gates, so on an affected row it is a fork
+  # the gates cannot stop. Measured with a counting `tmux` first on PATH, over
+  # every trip shape crossed with both cooldown states and six pane states:
+  #
+  #   • THE DELTA IS +1 per tick per affected row, in every affected cell on
+  #     both trees. Never a doubling as such — that framing died twice.
+  #   • A WRAPPER-GUARD row (the call at the tick's `wrapper` guard) tops out at
+  #     2, which is what a HEALTHY row costs in its ordinary steady state and
+  #     one below the 3 a compacting tick costs. It cannot reach a third: an
+  #     unreadable `.wrapper` empties `_cfg_dir`, so `$sf` fails its `-e`/`-L`
+  #     pair and the compact lane returns at `status-unreadable` two gates
+  #     earlier.
+  #   • THE PROJECT-GUARD CALL SITE IS NOT THAT SHAPE, and this is the half the
+  #     round-3 measurement missed by measuring one call site and generalising.
+  #     That row's `.wrapper` reads FINE, so `_cfg_dir` resolves, `$sf` exists,
+  #     the quiet gate passes, and the compact lane reaches its SECOND capture.
+  #     Measured 3 captures per tick in 7 of 36 gate/pane states — EQUAL to the
+  #     healthy ceiling, not below it — and those ticks compact for real. This
+  #     class is also the one place the trip table's independence claims fail:
+  #     it is neither pane-independent nor `lastswap`-independent.
+  #     SAY THE CALL SITE WHENEVER YOU SAY THE CEILING; they are different
+  #     numbers, and the sentence that stood here said only the smaller one.
+  #   • IT CANNOT TRIP ON A BOX WITH NO POOLS. `$POOLS_DIR` has one `mkdir` in
+  #     the tree, and the project guard is gated on `_pool_untaggable`, so the 3
+  #     is one `ccd project-pool` away rather than live.
+  #
+  # WHAT THE #70 MERGE MOVED: its `_auto_compact_check` `lastswap` arm went from
+  # `return 0` to `fromswap=1` — the lane no longer ends there, it falls through
+  # to its own capture. So the states where THIS capture is the tick's only one
+  # (0 -> 1) shrank from 30 of 36 to 18 of 36, and the gate for them is now
+  # `lastcompact` fresh ALONE rather than either cooldown. Every cost figure
+  # taken before that merge understates the in-cooldown compact tick.
+  # Three remedies were measured and all three are defects; the nearest one,
+  # replicating the cooldown tests here, now removes only 6 of those 18 cells —
+  # 12 survive — while un-stranding a hard-blocked row and stranding a healthy
+  # one, with every case green.
   local pane
   pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
   # AN UNMEASURABLE PANE CLEARS NOTHING, and this line stays a BARE return
