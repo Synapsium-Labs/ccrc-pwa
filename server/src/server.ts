@@ -12,6 +12,8 @@ import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
 import { poolFor, poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
+import { poolRostered } from './poolrule.js';
+import { POOL_NAME_RE } from '../../shared/roster.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -1761,6 +1763,59 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
     return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+  });
+
+  /**
+   * The project's pool tag (account pools, spec §5.4.2). `{ pool: string }`
+   * tags, `{ pool: null }` clears.
+   *
+   * THE TERNARY PICKS THE ENTRY, not a verb interpolated into an array —
+   * `start`/`enable`'s rule (`ccdargv.ts:180`), so both spellings are
+   * enumerated by `whitelist-subset.test.ts`.
+   *
+   * `:project` GOES THROUGH UNVALIDATED, exactly as `/workspaces` above sends
+   * it: `_ws_project_valid` on the box is the grammar and the authority, and
+   * this server's own reader never joins a request-supplied name into a path
+   * (`poolFor` is a Map lookup against names a LISTING returned), so nothing
+   * here can escape `pools/`. `isSafeProjectSegment`'s stricter grammar
+   * deliberately does not enter — it refuses a leading `-`/`_` that ccd
+   * accepts, and applying it would make some taggable projects untaggable from
+   * the phone.
+   *
+   * THE 200 IS MEASURED, NOT ECHOED. Unlike `$REG/coordinator-paused`, this
+   * file IS under the agent's read roots, so the truthful answer is available
+   * before the reply leaves — and `requested` would report a tag the box may
+   * have declined to write. The re-read is a fresh `readdir` + one read, on a
+   * route a human taps.
+   *
+   * NOT in `auth/gate.ts`'s EXEMPT table — session-gated when armed, open dark,
+   * like `/workspaces` and `/swap`. NO BOX TOKEN: this is fleet control, not a
+   * coordination write.
+   */
+  app.post('/api/projects/:project/pool', async (req, reply) => {
+    const { project } = req.params as { project: string };
+    const body = (req.body ?? {}) as { pool?: unknown };
+    if (body.pool !== null && typeof body.pool !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (body.pool !== null && !POOL_NAME_RE.test(body.pool)) {
+      return reply.code(400).send({ ok: false, error: 'bad-pool-name' });
+    }
+    const argv = body.pool === null
+      ? CCD_ARGV.projectPoolClear(project)
+      : CCD_ARGV.projectPoolSet(project, body.pool);
+    if (!verbSupported(deps.fleetState, argv)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await deps.runCcd(argv);
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
+    const measured = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), project);
+    // A WARNING, never a refusal (O4): this box's `accounts.json` is one of two
+    // hand-owned copies and can lag the fleet's, so "no account carries that
+    // name" is a thing worth saying and not a thing worth blocking on.
+    const warn = body.pool !== null && !poolRostered(deps.cfg.roster, body.pool);
+    return { ok: true, pool: measured, ...(warn ? { warning: 'unknown-pool' as const } : {}) };
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {

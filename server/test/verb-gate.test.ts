@@ -305,7 +305,11 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // derived) because these six are the finding, and a derivation from
     // UNGATED_BY_DECISION would let a mistaken addition to that set silently
     // excuse one of them.
-    const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap'];
+        // `project-pool` joins the six: it is the newest skew-exposed verb, and
+    // `verbSupported`'s permit-on-no-evidence default means a route that forgets
+    // the gate sends it to a box that answers `die "usage: ..."` -> 502 "the tag
+    // failed", which reads as a broken feature rather than an old fleet host.
+const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

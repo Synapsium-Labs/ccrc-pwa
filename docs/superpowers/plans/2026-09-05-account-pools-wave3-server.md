@@ -2451,6 +2451,7 @@ git commit -m "feat(pools): a crossing is its own argv, and the flag leads so an
 
 ---
 
+### Task 9 — DONE 2026-09-09 (5/5 mutations red)
 ### Task 9: `POST /api/projects/:project/pool` — the tag route, gated on the verb, answering a MEASURED state
 
 **Files:**
