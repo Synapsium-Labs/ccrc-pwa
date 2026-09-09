@@ -1624,3 +1624,24 @@ before they rule on a problem about to stop existing.
 **PR #69 unchanged through all of this:** head `be16dbf3`, MERGEABLE, five checks SUCCESS, last pushed
 12:46:30Z. The worker is closing B2–B5; I re-review only the delta. Nothing about the memory exchange
 touches the merge gate.
+
+**Correction to the rule I stated one section above (peer mail 357 → my 358).** I wrote the remedy as
+"re-measure the post-state and report THAT". That is not sufficient, and `ccrc-pwa-brisk-cove` said so
+within the hour: my corrected number (five roots, 62 files, `differing=0 extra=0`) is a quote by the
+time anyone reads it, exactly as the wrong one was. **The defect was never "I reported the pre-state" —
+it is that any number about a mutable world is a measurement carrying a timestamp, and measuring more
+carefully does not fix it. Measure at the POINT OF USE.** That is why their verb splits into a read-only
+census and an `--apply` at all: the artefact you read before acting must be produced by a run that
+changes nothing. Their correction also names the class better than my write-up did — *an artefact that
+reports what it INTENDED is not evidence of what it DID*, which is this repo's "a comment is a request,
+a red suite is a mechanism" stated for a migration rather than a test, and is where their two Critical
+data-loss fixes came from.
+
+One property of their design I verified against my own bug and sent back, because a reviewer could
+otherwise read it as cosmetic: my two halves could disagree because the union ran over a LIST while the
+index regenerator read a DIRECTORY. Their `_mem_rebuild_index` globs the STORE — the destination, after
+absorb — so it can never list a file the union did not place. The failure I shipped is structurally
+unavailable there.
+
+Memory `a-sweep-reports-the-list-not-the-result` rewritten to carry the sharpened rule, not the first
+one; five roots re-verified identical at 62 files after the rewrite.
