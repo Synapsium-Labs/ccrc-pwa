@@ -397,4 +397,136 @@ describe('ccrc memory --apply — the union', () => {
     expect(r.code).toBe(0);
     expect(fs.readFileSync(path.join(storeDir(), 'shared.md'), 'utf8')).toBe('S');
   });
+
+  // R17 (review round 2, Important — new, introduced by the round-1 rewrite):
+  // the glob in `_mem_absorb` expands to NOTHING when the source directory
+  // cannot be READ, not just when it is empty — `readdir` needs read
+  // permission. Measured: a mode-0300 source (writable, searchable, NOT
+  // readable) produced `left=0`, `err=0`, a `converged` line, and an EMPTY
+  // store, with the real file reachable only through the backup. This is
+  // C1's own defect in the one condition C1's `cp` check can never see,
+  // because the loop that would catch it never runs.
+  //
+  // Cleanup is deliberately defensive: on a REGRESSION of this fix,
+  // `_mem_apply` renames the still-unreadable directory into a
+  // `memory.pre-ccrc-*` backup before this test ever gets a chance to
+  // restore its mode, and `afterEach`'s recursive `rmSync` cannot delete an
+  // unreadable directory's contents — chmod every entry under `parent`, not
+  // just the original path, so a future regression fails its OWN assertion
+  // instead of also wedging this file's fixture cleanup.
+  it('R17: an unreadable source directory is refused, not treated as empty', () => {
+    const parent = path.join(home, '.claude', 'projects', '-p-demo');
+    const dir = path.join(parent, 'memory');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a.md'), 'A');
+    fs.chmodSync(dir, 0o300);
+    let r: { code: number; out: string };
+    try {
+      r = run(['memory', '--apply']);
+    } finally {
+      for (const n of fs.readdirSync(parent)) {
+        const p = path.join(parent, n);
+        if (fs.lstatSync(p).isDirectory()) fs.chmodSync(p, 0o700);
+      }
+    }
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain('cannot read');
+    // refuse to move the source away, or to claim an empty store converged
+    expect(fs.lstatSync(dir).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(path.join(storeDir(), 'a.md'))).toBe(false);
+  });
+
+  // R18 (review round 2): the `bk=""` reset added in round 1 to stop a
+  // symlink pair from printing the PREVIOUS pair's backup path ships with no
+  // test that goes red on its own deletion — exactly the gap this branch's
+  // mutation-table discipline exists to forbid. Two cases, both needing a
+  // symlink pair to sit in the SAME `_mem_apply` run as another pair (or as
+  // the pair reached first), which is why they live here rather than as one
+  // test: slugs sort ASCII-betically within one home's `projects/*/` glob,
+  // so `-p-aaa` (a plain directory — sets `bk`) is reached before `-p-zzz`
+  // (a symlink to a genuinely foreign directory — never sets `bk`).
+  it('R18a: a symlink pair after a plain-directory pair does not inherit its backup path', () => {
+    seed('.claude', '-p-aaa', { 'a.md': 'A' });
+    const foreignTarget = path.join(home, 'foreign-memory');
+    fs.mkdirSync(foreignTarget, { recursive: true });
+    fs.writeFileSync(path.join(foreignTarget, 'z.md'), 'Z');
+    const zDir = path.join(home, '.claude', 'projects', '-p-zzz');
+    fs.mkdirSync(zDir, { recursive: true });
+    fs.symlinkSync(foreignTarget, path.join(zDir, 'memory'));
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    const lines = r.out.split('\n');
+    const aLine = lines.find((l) => l.includes('converged .claude -p-aaa'));
+    const zLine = lines.find((l) => l.includes('converged .claude -p-zzz'));
+    expect(aLine).toContain('(backup:');
+    expect(zLine).toBeDefined();
+    expect(zLine).not.toContain('(backup:');
+  });
+
+  // R18b: the re-reviewer's measurement was worse than cosmetic — with
+  // `bk=""` deleted, a symlink pair reached FIRST (so `bk` was never
+  // assigned even once) with `left > 0` hits `[ -n "$bk" ]` on a genuinely
+  // UNSET local variable under `set -u`, and the whole script aborts
+  // mid-fleet rather than merely mislabeling a line. `left > 0` matters:
+  // `[ "$left" -gt 0 ] && [ -n "$bk" ]` short-circuits before ever reading
+  // `$bk` when `left` is 0, so this needs a foreign directory holding both a
+  // memory file (to converge) and a non-memory entry (to make `left` 1).
+  it('R18b: a symlink pair reached first, with something left behind, does not crash on an unset $bk', () => {
+    const foreignTarget = path.join(home, 'foreign-memory');
+    fs.mkdirSync(foreignTarget, { recursive: true });
+    fs.writeFileSync(path.join(foreignTarget, 'z.md'), 'Z');
+    fs.writeFileSync(path.join(foreignTarget, 'scratch.txt'), 'left behind');
+    const d = path.join(home, '.claude', 'projects', '-p-only');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(foreignTarget, path.join(d, 'memory'));
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain('unbound variable');
+    expect(fs.readFileSync(path.join(home, '.ccrc', 'memory', '-p-only', 'z.md'), 'utf8')).toBe('Z');
+  });
+
+  // R19a (review round 2, Minor promoted): `[ -e "$f" ]` alone dereferences,
+  // so a dangling entry (a broken symlink) inside the source was invisible
+  // to the `left` counter — measured: `dangling.md` and `dangling.txt` both
+  // landed only in the backup with no NOTE at all. `dangling.txt` (not
+  // `.md`) should now fall into `left`; `dangling.md` reaches the `cp`
+  // instead, which fails cleanly on a broken symlink and is refused via
+  // `err` (C1's mechanism) rather than silently vanishing either way.
+  it('R19a: a dangling entry in the source is counted, never silently dropped', () => {
+    const dir = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a.md'), 'A');
+    fs.symlinkSync(path.join(dir, 'nowhere'), path.join(dir, 'dangling.txt'));
+    const r = run(['memory', '--apply']);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
+    expect(r.out).toMatch(/NOTE: 1 entry not migrated, left in (\S+)/);
+  });
+
+  // R19b (review round 2, Minor promoted): a `cp` that fails PARTWAY
+  // (ENOSPC/EIO) can still have created `$dest` with truncated bytes before
+  // dying — left in place, that debris becomes the canonical `a.md`, and a
+  // re-run would file the REAL content in behind it under a suffixed name.
+  // `ulimit -f` reliably reproduces a genuine truncating failure: the
+  // process (and every child it `exec`s or forks, `cp` included) is capped
+  // to a tiny max file size, so writing a multi-KB source is interrupted by
+  // SIGXFSZ partway through, leaving a real partial file — not merely an
+  // instant, empty-handed failure the way an unwritable directory would.
+  it('R19b: a failed copy does not leave debris that becomes canonical', () => {
+    seed('.claude', '-p-demo', { 'a.md': 'x'.repeat(5000) });
+    const link = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
+    const r = spawnSync(
+      'bash',
+      ['-c', 'ulimit -c 0; ulimit -f 1; exec bash "$1" memory --apply', 'wrapper', CCRC],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' },
+    );
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(r.status).not.toBe(0);
+    expect(out).toContain('could not copy');
+    // no truncated debris at the canonical destination name
+    expect(fs.existsSync(path.join(storeDir(), 'a.md'))).toBe(false);
+    // absorb failed, so the source was refused a move — still there, whole
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(link, 'a.md'), 'utf8')).toBe('x'.repeat(5000));
+  });
 });

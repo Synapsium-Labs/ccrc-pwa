@@ -3024,8 +3024,45 @@ _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
   # differently onto one value, which is the overloaded-null defect this
   # branch's own conventions forbid.
   local src="$1" store="$2" tag="${3#.}" f base dest sdest n left=0 err=0
+  # R17 (review round 2): the glob below expands to NOTHING when `$src`
+  # cannot be READ — not just when it is empty. `readdir` needs read
+  # permission on the directory; a mode-0300 source (writable, searchable,
+  # unreadable) makes the glob silently see zero entries, so `left=0`,
+  # `err=0`, and the caller goes on to back it up and print `converged` over
+  # a store that never received anything. That is C1's own defect —
+  # `converged` claimed over a union that did not land — in the one
+  # condition C1's own `cp` check cannot see, because the loop that would
+  # have caught the failure never runs at all. An unreadable directory is
+  # not an empty one; refuse the pair the same way a failed `cp` already is.
+  if [ ! -r "$src" ]; then
+    echo "ccrc memory: cannot read $src" >&2
+    return 1
+  fi
   for f in "$src"/*; do
-    [ -e "$f" ] || continue
+    # R19a (review round 2): `[ -e "$f" ]` alone DEREFERENCES, so a DANGLING
+    # entry (a broken symlink sitting in the source) was invisible here —
+    # the same defect class already ruled on twice on this branch
+    # (`cmd_memory`'s R10, `_mem_state`'s R12), and `_mem_apply` itself
+    # already writes the correct idiom a few lines below. Measured:
+    # `dangling.md` and `dangling.txt` both landed only in the backup,
+    # uncounted, with no NOTE at all. Letting a dangling entry through the
+    # gate is enough: a dangling NON-`.md` name falls out through the `left`
+    # counter below like any other non-memory entry, and a dangling `.md`
+    # name reaches the `cp`, which fails cleanly on a broken symlink and is
+    # counted through `err` (C1's mechanism) — either way it is now counted,
+    # never silent.
+    #
+    # DOTFILES ARE A SEPARATE, PRE-EXISTING GAP, LEFT OPEN HERE ON PURPOSE:
+    # this glob has never matched a leading `.` (no `dotglob`; the original
+    # brief's `*.md` glob before this branch touched it had the same
+    # property), so `.hidden.md` and `.DS_Store` stay invisible to BOTH
+    # absorption and the `left` counter — not a new gap this round opened.
+    # Turning dotglob on would change what counts as a top-level memory file
+    # (a dotfile `.md` would start being ABSORBED, not merely counted),
+    # which is a bigger decision than closing the dangling-entry gate this
+    # fix targets, so it is left for the final whole-branch review rather
+    # than folded in here silently.
+    [ -e "$f" ] || [ -L "$f" ] || continue
     base=$(basename -- "$f")
     if [ -d "$f" ]; then left=$((left+1)); continue; fi
     case "$base" in
@@ -3035,8 +3072,15 @@ _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
     esac
     dest="$store/$base"
     if [ ! -e "$dest" ]; then
+      # R19b (review round 2): a `cp` that fails PARTWAY (ENOSPC/EIO, or a
+      # file-size limit) can still have CREATED `$dest` with truncated bytes
+      # in it before dying. Left in place, that debris becomes the canonical
+      # `$base` — a re-run sees a DIFFERING file at the primary name and
+      # suffixes the real content in behind it, so the wrong bytes end up
+      # filed under the name every reader trusts. `rm -f` it on failure so a
+      # retry starts clean instead of finding false "already there" content.
       cp -p -- "$f" "$dest" \
-        || { echo "ccrc memory: could not copy $f to $dest" >&2; err=$((err+1)); }
+        || { echo "ccrc memory: could not copy $f to $dest" >&2; rm -f -- "$dest"; err=$((err+1)); }
       continue
     fi
     cmp -s -- "$f" "$dest" && continue      # byte-identical: one file
@@ -3054,8 +3098,10 @@ _mem_absorb() {   # <src-dir> <store> <home-basename> -> prints "<left>\n" on
       sdest="$store/${base%.md}.$tag.$n.md"
     done
     [ -e "$sdest" ] && continue             # identical to what's already at that slot
+    # R19b applies here too, for the same reason: a partial write at a fresh
+    # numbered slot is still debris a future run would trip over.
     cp -p -- "$f" "$sdest" \
-      || { echo "ccrc memory: could not copy $f to $sdest" >&2; err=$((err+1)); }
+      || { echo "ccrc memory: could not copy $f to $sdest" >&2; rm -f -- "$sdest"; err=$((err+1)); }
   done
   printf '%s\n' "$left"
   [ "$err" -eq 0 ]
