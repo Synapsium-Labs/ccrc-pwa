@@ -32,6 +32,21 @@ describe('reviveNotifyEvents', () => {
     expect(dropped).toBe(0);
   });
 
+  it('revives an event with no `runId` key at all as `runId: null`, dropping nothing (review finding 1)', () => {
+    // The exact shape an older server's frame takes — the field is additive,
+    // so its absence must degrade, never reject the whole event.
+    const raw = { seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b' };
+    const { events, dropped } = reviveNotifyEvents([raw]);
+    expect(dropped).toBe(0);
+    expect(events[0]!.runId).toBeNull();
+  });
+
+  it('keeps a numeric `runId` exactly as it arrived (review finding 1)', () => {
+    const { events, dropped } = reviveNotifyEvents([e({ runId: 42 })]);
+    expect(dropped).toBe(0);
+    expect(events[0]!.runId).toBe(42);
+  });
+
   it('lands a kind from a NEWER build on `unknown` rather than typing it as something it is not', () => {
     // shared/api.ts's isNotifyKind: a kind this build does not recognise
     // becomes the client-side we-do-not-know member, not a fourth event
