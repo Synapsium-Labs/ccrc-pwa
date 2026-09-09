@@ -917,6 +917,10 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(w.coord!.feedEvents(10).map((e) => e.title)).toEqual([
         '▸ dispatched › ccrc-pwa', '▸ closing › ccrc-pwa', '▸ done › ccrc-pwa',
       ]);
+      // review finding 1 (fix round 2): the run lane's own feed rows must
+      // carry the run they are about — every one of the three, since
+      // `recordAlways` records the suppressed `closing` push too.
+      expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id, run.id, run.id]);
     });
 
     it('never pushes or records a NON-transition row on a bound run', async () => {
