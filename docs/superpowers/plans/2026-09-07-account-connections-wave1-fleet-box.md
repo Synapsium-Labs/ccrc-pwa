@@ -16078,9 +16078,22 @@ SKILL"); and `:1188` cites `:5411` for `_inst_graph_hooks_off` (that line is `tm
 worth noting: a pointer can be displaced AND have been wrong before it moved, and repairing only the
 displacement certifies the older error — D-2007 exactly.
 
-**Corrected at Task 26: the six displaced pointers are FOUR.** Two of them no longer exist in the tree
-at all — `deploy/account-op.mjs`'s `:4926-4928` and `ccrc-install-graphify.test.ts:1139`'s
-`:6311-6312`. A deferred sweep list is itself a document that goes stale, and a sweep executed off this
+**Corrected at Task 26, and that correction was itself WRONG — corrected again at Task 27.** The
+Task-26 note said two of the six pointers "no longer exist in the tree at all":
+`deploy/account-op.mjs`'s `:4926-4928` and `ccrc-install-graphify.test.ts:1139`'s `:6311-6312`. **Both
+exist.** They are written in the BARE form — `(:4926-4928)`, with no `ccd/ccrc` prefix — which is
+precisely the citation form this entry had itself named as a blind spot two paragraphs earlier, and a
+`grep` for the prefixed form does not find them. Measured at Task 27: `account-op.mjs:842` and
+`ccrc-install-graphify.test.ts:1139` carry them today.
+
+**The entry that named the bare-form blind spot fell into it, in the very correction that named it.**
+That is not irony worth enjoying, it is the strongest evidence in this ledger for the rule it keeps
+restating: a census is only as good as its pattern, and knowing about a form does not mean your next
+grep includes it. The sweep must enumerate forms explicitly and search for each, every time — including
+the forms it has already found once.
+
+So the count returns to **six displaced pointers**, and both restored entries get measured targets
+below. A deferred sweep list is itself a document that goes stale, and a sweep executed off this
 list without re-measuring would have chased two pointers that are not there. The four live ones, with
 targets measured after Task 26's +154 lines: `deploy/account-op.mjs:220` → `:5237-5241`; `:819` →
 `:5208-5213`; `:848` → `:6684-6690`; `ccrc-install-graphify.test.ts:1155` → `:6682-6683`.
@@ -16625,3 +16638,112 @@ mutation that deletes the marker half.
 The check this earns, and it is cheap: **after moving a write, grep the enclosing function for every
 sentence that says what was or was not written, and re-read each one against the new order.** The
 sentences are the thing a reordering breaks silently, because nothing compiles them.
+
+### D-2139 — every remaining task's snippets carry the PRE-FIX version of defects this wave has already closed
+
+Task 27's plan text was written before Tasks 24–26 shipped, so its code snippets reintroduce, verbatim,
+**five defects this wave has already found, argued and fixed**:
+
+| the snippet writes | which closed defect it reintroduces |
+|---|---|
+| `_acct_read_op`'s `helper-silent` at the **callee's** exit class, no triage | **D-2051** — an empty body answered with the wrong class and no cause |
+| `declare-entry`'s `writeFileSync(tmp, …, { mode: 0o644 })` | **D-2052** (itself **D-1244**) — the operator's roster mode discarded |
+| `declared`'s `disabled: a['disabled'] === 'true'` | **D-2131** — a partial boolean publishing "this lane is ON" about a lane that is off |
+| the closing `_acct_node declared … \|\| exit $?` | **D-2130** — the bare pass-through, of which that entry says "neither the plan's line nor the shipped line was right" |
+| `_acct_projection`'s baked situational clause | **D-2135**, sixth instance — in a helper written for six callers of which one exists, and false for `remove` |
+
+None of this is the plan's fault; it is what a long plan IS. But it changes how the remaining eleven
+tasks must be read, so it is recorded as a standing instruction rather than as five notes:
+
+**Every remaining snippet in this plan is a draft written against a tree that no longer exists.** Before
+transcribing any of it, check it against the deviation ledger for the surfaces it touches — a node call
+(D-2024, D-2051, D-2130, D-2133), a file write (D-2052, D-2125), a boolean off the wire (D-2131), a
+helper sentence that mentions what else happened (D-2135's five instances and this sixth), an ordering
+around the kill switch (D-2129, D-2134, D-2137, D-2138).
+
+**And the counts were wrong a fourth time.** RULING 4 asked which of the plan's two contradictory
+numbers was right for the id-gate lift; measured, `_acct_add_parse` carries **three** inline refusals
+(`missing-value`, `bad-id`, `reserved-id`), so the Files list and Step 3 are right and the "One id gate"
+prose is wrong. Fourth instance of D-2003/D-2018/D-2129, and the fourth time the half that REASONS was
+right while the half that RECALLS was wrong. The plan's own case omitted the `missing-value` assertion;
+it was added.
+
+Two plan claims were also already false at BASE: `rmSync` **is** imported (`ccrc-account.test.ts:23`),
+contradicting a "measured: the token appears nowhere in Tasks 20–26"; and `single-definition.test.ts`'s
+roots are `:34-37` with the `/\.tsx?$/` filter at `:54`, not `:32-37`/`:53`.
+
+### D-2140 — `declare`'s window is weaker than the ruling claimed, and the ruling still stands
+
+RULING 1 applied D-2134's ordering to `declare` and argued the hazard was *larger* there, because the
+launcher already exists and is already executable. Measured: it is **smaller**.
+
+A declared entry carries `homeAble: false` (`deploy/account-op.mjs:998`), and `_ws_least_loaded`
+iterates `CCRC_HOME_ABLE` — so the placer **never** enumerates a declared lane, and the roster entry
+does not stand between that launcher and the placement loop at all. The reachable path is
+`_swap_target`'s pool, which admits a non-home-able id only when a session's registry `home` already
+names it. So `declare`'s window needs *more* coincidences than `add`'s, not fewer.
+
+**The ruling is unchanged and the marker still goes first**, on ground 3 alone: the cost asymmetry.
+Marker-too-early costs one inert file; marker-too-late costs a launcher reachable by a path nobody
+re-derived. That ground never depended on the size of the window.
+
+This is the second time in two tasks that a ruling of mine overstated a hazard and was corrected by
+the measurement — D-2134 first, now its own application. The rule those two produce is worth stating
+plainly: **argue an ordering from the asymmetry of its failure modes, not from the probability of the
+race.** The asymmetry is stable and measurable; the probability is neither, and every attempt to state
+it has been wrong.
+
+**RULING 5 also does not hold here, for a good reason.** `duplicate-id` is not the sole guard on
+`declare`'s kill switch: `_acct_declarable` refuses every rostered id independently — a launcher is
+always `-ef` itself, and an absent one is `launcher-absent`. Measured with the guard mutated out, both
+paths refuse (`launcher-absent` with no launcher, `launcher-alias` with one) and no marker is written.
+So the prescribed pin cannot red on the file, only on the code. The assertion order was kept anyway as
+free insurance, and the source says the honest thing: **doubly guarded**, which is a different claim
+from `add`'s and must not be copied as if it were the same.
+
+### D-2141 — the projection discards the transcript the converge redirects, and both are right
+
+`_acct_converge` sends `_inst_accounts_sh`'s stdout to `>&2`; `_acct_projection` sends it to
+`/dev/null`. Two spellings of one decision, one task apart, with five more subcommands about to inherit
+whichever they see first.
+
+**RULING: both stand, and the difference is written down at both sites.** They are not one decision
+spelled twice — they have different inputs:
+
+- `_acct_converge` runs the **whole** converge, including `cmd_wrappers`, whose transcript names *other
+  accounts' drifted wrappers*. D-1862 accepted exactly that as a feature: "a drifted wrapper an operator
+  is told about while adding a lane is better than one they are not." That is actionable information
+  about the box, and `_acct_node`'s rule puts it on stderr with the other remedies.
+- `_acct_projection` runs **only** `_inst_accounts_sh`, whose success line is `install: accounts.sh:
+  converged`. That is chatter: not an answer, not a remedy, nothing to act on. The whole error path
+  (`gen-accounts: remedy:` and `_ccrc_die`) reaches stderr either way — measured — so `/dev/null`
+  discards nothing an operator could use.
+
+What was actually wrong is that the distinction existed and was written nowhere, which is how the next
+five subcommands would have got it by coin-flip. Each site now states its own reason and points at the
+other. **A difference between two neighbouring calls is a decision or a bug; if nobody can tell which by
+reading, it is already a bug.**
+
+### D-2142 — `declare` takes `--suffix`, which spec §5's row does not list
+
+Spec `:418` gives `declare`'s flags as `--id [--provider] [--base-url] --label --hue`. The plan adds
+`--suffix` and the implementation keeps it. **RULING: keep, and record it as a spec deviation rather
+than letting it look like an oversight.**
+
+The reason is the read root, and it is the same argument `_acct_add_parse` already makes for `add`:
+`underClaudeGlob` (`agent/src/whitelist.ts`) admits only `$HOME/.claude*`, and every server read of a
+lane's transcripts and statusline goes through `configDirFor`. Without `--suffix`, an operator declaring
+an external launcher has **no way** to put that lane's config dir where the agent can read it — the lane
+would be one ccrc could roster and never show.
+
+The default differs from `add`'s deliberately and this is the part worth stating: it is `.<id>`,
+**ungated**. For `add`, the default `.claude-<id>` is inside the read root by construction and the two
+suffix gates enforce that. For `declare`, the config dir belongs to somebody else's launcher and **may
+not hold Claude Code transcripts at all**, so requiring it inside `$HOME/.claude*` would refuse
+legitimate lanes for the sake of a read that has nothing to read. An operator who wants the agent to see
+it passes `--suffix`; one who does not, does not. That asymmetry is now argued in source.
+
+**One residual, accepted rather than hidden:** on the `roster-invalid` path the operator is not told the
+marker stands, because that refusal is node's and is re-emitted verbatim — one refusal, one owner, which
+is the stronger principle. `add` has the identical property today. The marker is inert, the retry
+rewrites it, and a test now pins that it is there.
