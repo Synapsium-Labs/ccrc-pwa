@@ -166,6 +166,50 @@ const PROVIDER_DEPLOY = Object.fromEntries(
   }]),
 );
 
+/** ── ONE `roster-invalid` REFUSAL, FIVE VERBS THAT RAISE IT (D-2154) ──────
+ *  The formatting below was spelled FIVE times — `readRoster`, `check-add`,
+ *  `add-entry`, `check-declare`, `declare-entry` — five copies of one ternary
+ *  that had to keep agreeing about two things a reader cannot see from any one
+ *  of them: that the validator's own `remedy` reaches the operator VERBATIM,
+ *  and that a throw from outside the validator's vocabulary (no `remedy`, or a
+ *  `remedy` that is not a string) still produces the message ALONE rather than
+ *  an `undefined` glued onto an operator's sentence.
+ *
+ *  WHY IT IS EXTRACTED HERE RATHER THAN LEFT TO THE TREE TO NOTICE. D-1860:
+ *  `single-definition.test.ts` filters `/\.tsx?$/`, so a `.mjs` file is
+ *  STRUCTURALLY INVISIBLE to the one mechanism that reds a second hand copy of
+ *  a rule. Four of those five could have drifted from the fifth and every suite
+ *  in this repository would have stayed green — the drift nothing in this tree
+ *  can see, in the one file where nothing can see it.
+ *
+ *  EACH VERB KEEPS ITS OWN SENTENCE, which is why this takes an `opening`
+ *  rather than an id: `readRoster` is talking about a file the box ALREADY has
+ *  and an operator who must fix that file; the two `add` arms about an entry
+ *  that would be appended; the two `declare` arms about a declaration. Three
+ *  different next moves, and folding them into one sentence would be an adapter
+ *  narrowing a distinction it received. The two PAIRS are spelled word for word
+ *  alike on purpose (`check-add` with `add-entry`, `check-declare` with
+ *  `declare-entry`): one request must not describe itself two ways depending on
+ *  which of the two gates caught it.
+ *
+ *  IT RETURNS A CLASS, `hueAndLabelClass`'s convention (`ccd/ccrc:24-33`): 0
+ *  when the roster admits the candidate, 1 when it does not — "legal on its
+ *  face and the box said no". Every one of the five sites answered exit 1
+ *  before this extraction and answers exit 1 after it, which is D-2153's
+ *  measurement and the reason `roster-invalid` still has ONE class. */
+function rosterAdmits(candidate, opening) {
+  try {
+    rosterFromJson(candidate);
+  } catch (e) {
+    // The validator's own `remedy` reaches the caller VERBATIM —
+    // `_inst_accounts_sh`'s rule (ccd/ccrc:4911-4915; D-2007 moved this cite).
+    const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+    refuse('roster-invalid', `${opening}${e.message}${remedy}`);
+    return 1;
+  }
+  return 0;
+}
+
 /** THE ONE ROSTER READ IN THIS FILE. Every op that needs the roster calls this
  *  and returns 1 on `null`, so no op grows its own try/catch and no two ops can
  *  come to disagree about which failure is which. `check-add` (23),
@@ -213,15 +257,12 @@ function readRoster(file) {
     refuse('roster-invalid', `${file} is not valid JSON: ${e.message}`);
     return null;
   }
-  try {
-    rosterFromJson(json);
-  } catch (e) {
-    // The validator's own `remedy` reaches the caller VERBATIM —
-    // `_inst_accounts_sh`'s rule (ccd/ccrc:4911-4915; D-2007 moved this cite).
-    const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
-    refuse('roster-invalid', `${file}: ${e.message}${remedy}`);
-    return null;
-  }
+  // THIS SITE'S SENTENCE IS THE FILE'S OWN NAME AND NOTHING ELSE, and that is
+  // the distinction the extraction had to keep: the roster the box ALREADY has
+  // does not validate, so the operator's next move is to fix that file — not a
+  // flag, and not an entry nobody has proposed yet. The other four openings all
+  // name a candidate entry, because at those four addresses one exists.
+  if (rosterAdmits(json, `${file}: `) !== 0) return null;
   return json;
 }
 
@@ -295,6 +336,68 @@ function hueAndLabelClass(a) {
       + 'of display text: it reaches a one-line terminal status bar that a tab or a newline '
       + 'splits, and an escape byte recolours everything printed after it. Give a label with no '
       + 'control characters in it.');
+    return 2;
+  }
+  return 0;
+}
+
+/** ── A FLAG PRESENT WITH NOTHING IN IT IS INVALID, NOT ABSENT ────────────
+ *  ONE LOOP, TWO CALLERS (D-2148 wrote it for `check-add`; D-2154 gave
+ *  `check-declare` the same one rather than a second spelling of it).
+ *
+ *  THE RULING, said here because the two readings give different answers and a
+ *  reader must not have to infer which one this loop took: an empty `--suffix`
+ *  is REFUSED, it is not defaulted the way a missing one is. Absent already
+ *  MEANS something at both call sites ("use the default"), so giving
+ *  present-but-empty the same meaning collapses two conditions a caller handles
+ *  differently — D-2144's rule, cited rather than restated. The dual argument is
+ *  the pre-pass contract: a pre-pass that ACCEPTS a request its verb refuses
+ *  tells a caller the request is good and then watches the verb turn it down,
+ *  and since D-2148 closed this hole in `_acct_add_parse` and `_acct_declare`,
+ *  bash answers `missing-value` at exit 2 for every one of these.
+ *
+ *  IT IS AN ARGV QUESTION AND NOT A FIELD-VALIDITY ONE, and that boundary is
+ *  the reason this gate does not overturn D-2142/D-2150 (the ruling that
+ *  `declare`'s FIELD vocabulary — `baseUrl`, and the roster's own shape rules —
+ *  belongs to `rosterFromJson` and reaches the operator verbatim). Those two
+ *  rulings are about a value the validator owns end to end; an empty flag is
+ *  about a request that is not legal on its face, which no validator of a
+ *  roster can name, because by the time it reads the entry the flag is gone.
+ *  The two do not conflict — the earlier ruling simply did not reach this case
+ *  — and a later reader must not "simplify" one into the other: doing so would
+ *  answer `--suffix ''` with a sentence about `accounts[3]`, which is the
+ *  overloaded seam this whole cluster keeps closing (D-2154).
+ *
+ *  THESE THREE KEYS, AND THE LIST IS A MEASUREMENT RE-RUN PER VERB rather than
+ *  one verb's list borrowed by the other. Every key EACH op reads was driven
+ *  empty, and on both ops exactly `--id`, `--label` and `--suffix` reached a
+ *  refusal that names a ROSTER FIELD and an entry INDEX instead of the flag the
+ *  operator typed; every other key already answers with the code that names its
+ *  OWN condition, and folding those into this generic sentence would replace a
+ *  specific answer with a vaguer one — an adapter narrowing a distinction it
+ *  received. Each call site carries its own table of what its other keys
+ *  answer, and `ccrc-account.test.ts` drives both tables in both directions, so
+ *  a third verb whose measured set differs reds rather than inherits.
+ *
+ *  A KEY AN OP DOES NOT TAKE COSTS NOTHING: it is `undefined` here, not `''`,
+ *  so this loop is total over both callers' key sets and neither had to be
+ *  told which of the three its own row is about.
+ *
+ *  IT RETURNS A CLASS (`ccd/ccrc:24-33`): 0 when it said nothing, 2 when the
+ *  request was not legal on its face. The caller's own `return` is what
+ *  leaves. */
+function emptyFlagClass(a) {
+  for (const k of ['id', 'label', 'suffix']) {
+    if (a[k] !== '') continue;
+    // THE NOUN IS "the entry it proposes" AND NOT "the plan" (D-2154): both
+    // callers propose an entry — `check-add` through `addedEntry(plan)`,
+    // `check-declare` through `declaredEntry(a)` — while only one of them
+    // answers with a `plan`, so the sentence `check-add` shipped alone would
+    // have named a thing `check-declare` does not have.
+    refuse('bad-argv',
+      `--${k} was given an empty value. A flag present with nothing in it is not the same as a `
+      + 'flag nobody passed, so it is refused rather than defaulted or carried into the entry it '
+      + 'proposes: give it a value, or leave it off.');
     return 2;
   }
   return 0;
@@ -588,32 +691,19 @@ function main(argv) {
       if (a[k] === undefined) { refuse('bad-argv', `check-add needs --${k}`); return 2; }
     }
     // ── A FLAG PRESENT WITH NOTHING IN IT IS INVALID, NOT ABSENT (D-2148) ───
-    // THE RULING, said here because the two readings give different answers
-    // and a reader must not have to infer which one this line took: an empty
-    // `--suffix` is REFUSED, it is not defaulted the way a missing one is.
+    // The ruling, the sentence and the three keys are `emptyFlagClass`' above,
+    // shared with `check-declare` since D-2154 — one loop rather than a second
+    // spelling of it in the arm that got it next.
     //
-    // The argument is `check-add`'s own contract, read in the other direction.
-    // The paragraph below says a `check-add` that REFUSED a request `add`
-    // accepts would be a pre-pass that does not pre-check the request actually
-    // made. Its dual is worse: a `check-add` that ACCEPTS a request `add`
-    // refuses tells a caller the request is good and then watches the verb turn
-    // it down — and since D-2148 closed the same hole in `_acct_add_parse`,
-    // `add --suffix ''` answers `missing-value` at exit 2. Defaulting here
-    // would put the pre-pass and the verb on opposite answers for one input.
-    // The second argument is D-2144's, which is why that entry's rule is cited
-    // rather than restated: absent already MEANS something here ("use the
-    // default"), so giving present-but-empty the same meaning collapses two
-    // conditions a caller handles differently.
-    //
-    // THESE THREE KEYS AND NOT THE OTHER SIX, and the list is a MEASUREMENT
-    // rather than a taste: every key this op reads was driven empty, and only
-    // `--id`, `--label` and `--suffix` reached `ok: true`. The rest already
-    // refuse an empty value with the code that names their own condition —
-    // `--file` `roster-absent`, `--provider` `unknown-provider`, `--hue`
-    // `unknown-hue`, `--method` `method-not-supported`, `--models`
-    // `models-invalid`, `--base-url` `base-url-unparseable` — and folding them
-    // into this generic sentence would REPLACE a specific answer with a vaguer
-    // one, which is an adapter narrowing a distinction it received.
+    // THREE OF THIS OP'S NINE KEYS, and the list is a MEASUREMENT: every key
+    // this arm reads was driven empty and only `--id`, `--label` and `--suffix`
+    // reached `ok: true`. The other six already refuse an empty value with the
+    // code that names their own condition — `--file` `roster-absent`,
+    // `--provider` `unknown-provider`, `--hue` `unknown-hue`, `--method`
+    // `method-not-supported`, `--models` `models-invalid`, `--base-url`
+    // `base-url-unparseable` — and two of those six answer DIFFERENTLY on a
+    // login lane (`models-not-supported`, `base-url-not-supported`), which is
+    // why the test's table for this arm drives both lane shapes (D-2151).
     //
     // WHAT IT IS WORTH, on a path bash can no longer reach: all three used to
     // travel into the plan and be refused by `add-entry`'s `rosterFromJson`
@@ -625,10 +715,10 @@ function main(argv) {
     //
     // ── AND THEY SURVIVE THE PRE-PASS BELOW, MEASURED RATHER THAN ASSUMED ───
     // D-2152 gave this arm a closing `rosterFromJson`, which reaches all three
-    // of these keys, so the honest question is whether this loop is now an
-    // unreachable gate — the shape that rots. It is not, and the reason is the
-    // three sentences it replaces. With this loop deleted (measured on both a
-    // compatible and a login lane, identical on each), the answers become:
+    // of these keys, so the honest question is whether this gate is now an
+    // unreachable one — the shape that rots. It is not, and the reason is the
+    // three sentences it replaces. With the call below deleted (measured on both
+    // a compatible and a login lane, identical on each), the answers become:
     //
     //   --id ''      1  accounts[3] has an invalid id "". Rename it to match …
     //   --label ''   1  account "lab-dev0" has no label. Add a non-empty "label" …
@@ -639,16 +729,10 @@ function main(argv) {
     // prescribes editing an account that does not exist, when the fix is to give
     // one flag a value. They are also class 1, "the request was legal on its face
     // and the box said no" (ccd/ccrc:24-33), and an empty flag is precisely a
-    // request that is NOT legal on its face. So the loop keeps its place: the
+    // request that is NOT legal on its face. So the gate keeps its place: the
     // pre-pass catches what no gate NAMES, and these three are named.
-    for (const k of ['id', 'label', 'suffix']) {
-      if (a[k] !== '') continue;
-      refuse('bad-argv',
-        `--${k} was given an empty value. A flag present with nothing in it is not the same as a `
-        + 'flag nobody passed, so it is refused rather than defaulted or carried into the plan: '
-        + 'give it a value, or leave it off.');
-      return 2;
-    }
+    const empty = emptyFlagClass(a);
+    if (empty !== 0) return empty;
     const id = a['id'];
     const provider = a['provider'];
 
@@ -1036,17 +1120,15 @@ function main(argv) {
     // gate. Two gates, two callers, ONE validator — which is not two spellings
     // of a rule, because the rule is spelled in `shared/roster-json.mjs` and
     // neither of them re-states it.
-    try {
-      rosterFromJson({ ...json, accounts: [...accounts, addedEntry(plan)] });
-    } catch (e) {
-      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
-      // THE WRITER'S SENTENCE, WORD FOR WORD (`add-entry`, below). One request
-      // must not describe itself two ways depending on which of the two gates
-      // caught it, and the operator's fix is the same flag either way.
-      refuse('roster-invalid',
-        `the entry for "${id}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
-      return 1;
-    }
+    //
+    // THE FORMATTING IS `rosterAdmits`' ONE COPY (D-2154); the SENTENCE below
+    // is this verb's own, and it is THE WRITER'S, WORD FOR WORD (`add-entry`,
+    // below). One request must not describe itself two ways depending on which
+    // of the two gates caught it, and the operator's fix is the same flag
+    // either way.
+    const admits = rosterAdmits({ ...json, accounts: [...accounts, addedEntry(plan)] },
+      `the entry for "${id}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
     out({ ok: true, plan });
     return 0;
   }
@@ -1118,14 +1200,11 @@ function main(argv) {
     // hand-written `--plan` that no pre-pass ever saw, and it is the writer's own
     // last gate. What the pre-pass changed is which of the two an operator
     // following the documented sequence MEETS — the one with nothing on disk.
-    try {
-      rosterFromJson(next);
-    } catch (e) {
-      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
-      refuse('roster-invalid',
-        `the entry for "${plan.id}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
-      return 1;
-    }
+    // THE PRE-PASS'S SENTENCE, WORD FOR WORD (`check-add`, above), through the
+    // one formatter (D-2154).
+    const admits = rosterAdmits(next,
+      `the entry for "${plan.id}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
 
     // tmp + rename in the same directory, `_inst_accounts_sh`'s discipline
     // (:4926-4928). The file is USER-OWNED and this verb is its first writer in
@@ -1247,6 +1326,43 @@ function main(argv) {
     for (const k of ['file', 'id', 'label', 'hue']) {
       if (a[k] === undefined) { refuse('bad-argv', `check-declare needs --${k}`); return 2; }
     }
+    // ── AN EMPTY FLAG IS AN ARGV FAULT HERE TOO (D-2154) ────────────────────
+    // `check-add`'s gate at this arm's own address, and it is `emptyFlagClass`'
+    // ONE loop rather than a second spelling: the ruling, the sentence and the
+    // argument that this does not overturn D-2142/D-2150's field-vocabulary
+    // ruling all live on that function.
+    //
+    // THREE OF THIS OP'S SEVEN KEYS, and the list is this verb's OWN
+    // measurement, not `check-add`'s borrowed. Every key this arm reads was
+    // driven empty at 1dc39a6f; `--id`, `--label` and `--suffix` each answered
+    // `roster-invalid` at exit 1 with the validator's sentence about a roster
+    // FIELD and an entry INDEX —
+    //
+    //   --id ''      1  accounts[3] has an invalid id "". Rename it to match …
+    //   --label ''   1  account "lab-dev0" has no label. Add a non-empty "label" …
+    //   --suffix ''  1  account "lab-dev0" has an invalid configDirSuffix "". Set it …
+    //
+    // — the identical three sentences round 4 rejected for `check-add`, at
+    // class 1 for a request that is not legal on its face. The other four keep
+    // their own codes and stay out of the loop: `--file` `roster-absent` (1),
+    // `--hue` `unknown-hue` (2), `--provider` `unknown-provider` (2), and
+    // `--base-url` `roster-invalid` (1) — which is the base-url residual
+    // D-2150 ACCEPTED for wave 1 and NOT an oversight of this loop. Its
+    // sentence names `exec.baseUrl`, the very field `--base-url` sets, and
+    // carries the validator's own `base-url-unparseable` tag; the fix wave 2
+    // will make is an export from `shared/roster-json.mjs`, not a fourth key
+    // here.
+    //
+    // ONE LANE SHAPE AND NOT TWO, and that is a measurement rather than a
+    // saving (D-2151 applied where it bites, D-2153's own correction): all
+    // seven keys were driven empty on BOTH an undeclared request and a
+    // `--provider compatible --base-url …` one, and every answer was identical
+    // — this arm has no `envVar`/generatable branch, so no flag is refused here
+    // as a flag that cannot mean anything on this lane. The rule earns its
+    // place in `check-add`'s table, where two codes do change, and not in this
+    // one.
+    const empty = emptyFlagClass(a);
+    if (empty !== 0) return empty;
     const identity = hueAndLabelClass(a);
     if (identity !== 0) return identity;
     // OPTIONAL, SO THE GATE IS CONDITIONAL AND THE ABSENCE IS NOT A FAULT: an
@@ -1278,14 +1394,9 @@ function main(argv) {
     // the endpoint and the config directory belong to somebody else's launcher,
     // `declare` defaults neither, and one field with two vocabularies is the
     // seam this cluster keeps closing. One refusal, one owner.
-    try {
-      rosterFromJson({ ...json, accounts: [...json['accounts'], entry] });
-    } catch (e) {
-      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
-      refuse('roster-invalid',
-        `declaring "${a['id']}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
-      return 1;
-    }
+    const admits = rosterAdmits({ ...json, accounts: [...json['accounts'], entry] },
+      `declaring "${a['id']}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
     // THE ENTRY IT JUDGED, so a hand caller can read what would be written and
     // `_acct_read_op` has a body to measure. `declare-entry` does NOT take it
     // back as a `--plan` the way `add-entry` does, and that is not an
@@ -1330,14 +1441,11 @@ function main(argv) {
     // writer's own last gate. Two gates, two callers, ONE validator.
     const entry = declaredEntry(a);
     const next = { ...json, accounts: [...json['accounts'], entry] };
-    try {
-      rosterFromJson(next);
-    } catch (e) {
-      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
-      refuse('roster-invalid',
-        `declaring "${a['id']}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
-      return 1;
-    }
+    // THE PRE-PASS'S SENTENCE, WORD FOR WORD (`check-declare`, above), through
+    // the one formatter (D-2154).
+    const admits = rosterAdmits(next,
+      `declaring "${a['id']}" would make ${a['file']} unparseable: `);
+    if (admits !== 0) return admits;
     // tmp + rename in the same directory, `_inst_accounts_sh`'s discipline: an
     // operator's roster must never be observable half-written. AND THE MODE IS
     // THE FILE'S OWN, NOT A LITERAL (D-2052, a DEVIATION from this task's plan

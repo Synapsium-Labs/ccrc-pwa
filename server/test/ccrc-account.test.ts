@@ -3517,6 +3517,57 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
 const seedRosterJson = (home: string, accounts: unknown[]): void =>
   seedBoxRoster(home, { version: 1, accounts });
 
+/** ONE DRIVER FOR THE TWO DECLARE OPS, which take the SAME keys by
+ *  construction: `OPS`' two rows are identical and deliberately so — one argv
+ *  is built by `_acct_declare` and passed to both, because "a key the judge
+ *  cannot see is a key nobody judged". Two wrappers, one body, for the reason
+ *  the file they drive extracted `rosterAdmits` (D-2154).
+ *
+ *  IT IS THE ONLY WAY TO REACH EITHER OP'S OWN REFUSALS: bash always passes
+ *  `--file`, `--id`, `--label` and `--hue`, and refuses an empty value before
+ *  node is spawned at all. The path is not dead — it is the hand-caller one
+ *  both arms document. */
+function declareOp(op: string, file: string, over: Record<string, string | null> = {}): Result {
+  const merged: Record<string, string | null> = {
+    '--file': file, '--id': 'lab-dev0', '--label': 'lab·dev0', '--hue': 'violet', ...over,
+  };
+  const args = [op];
+  for (const [k, v] of Object.entries(merged)) {
+    if (v === null) continue;
+    args.push(k, v);
+  }
+  const p = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
+    { encoding: 'utf8' });
+  return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+}
+
+/** THE PRE-PASS — `checkAdd`'s driver at the declare address. */
+const checkDeclare = (file: string, over: Record<string, string | null> = {}): Result =>
+  declareOp('check-declare', file, over);
+
+/** THE WRITER, with no pre-pass in front of it — `addEntry`'s shape at this
+ *  verb's address and its own documented one (`_acct_declare` runs
+ *  `check-declare` first; a hand caller need not). It is the only way to reach
+ *  this arm's own `rosterFromJson`, which its source calls the writer's last
+ *  gate and which MEASURED at eb86b830 had nothing standing over it (D-2154). */
+const declareEntry = (file: string, over: Record<string, string | null> = {}): Result =>
+  declareOp('declare-entry', file, over);
+
+/** THE TWO SHAPES A DECLARED REQUEST COMES IN, `CHECK_ADD_LANES` at this op's
+ *  address — and the measurement that says where the rule bites (D-2151,
+ *  D-2153). On `check-add` two of nine flags answer a DIFFERENT code per lane,
+ *  because a login lane refuses `--base-url` and `--models` as flags that
+ *  cannot mean anything there. This arm has no such branch: it reads
+ *  `--provider` only through `providerKnownClass` and copies `--base-url`
+ *  straight onto the entry. Measured at 1dc39a6f, all seven keys driven empty
+ *  on both shapes: every answer identical. The pair is kept — and asserted
+ *  equal below — because that sameness is a CLAIM, and D-2150's eventual
+ *  `baseUrlRequired` export is exactly the change that would break it. */
+const CHECK_DECLARE_LANES: [string, Record<string, string | null>][] = [
+  ['undeclared', {}],
+  ['declared', { '--provider': 'compatible', '--base-url': 'https://orchard-api/v1' }],
+];
+
 const UPSTREAM = {
   id: 'claude', label: 'team·max', hue: 'cyan', configDirSuffix: '.claude',
   homeAble: true, telemetry: 'anthropic', exec: { kind: 'upstream' },
@@ -4292,19 +4343,8 @@ describe('ccrc account declare: the pre-pass, and the class a field fault answer
       seedRosterJson(home, [UPSTREAM]);
       const file = join(home, '.ccrc', 'accounts.json');
       const before = readFileSync(file, 'utf8');
-      const call = (over: Record<string, string | null> = {}): Result => {
-        const merged: Record<string, string | null> = {
-          '--file': file, '--id': 'lab-dev0', '--label': 'lab·dev0', '--hue': 'violet', ...over,
-        };
-        const args = ['check-declare'];
-        for (const [k, v] of Object.entries(merged)) {
-          if (v === null) continue;
-          args.push(k, v);
-        }
-        const p = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
-          { encoding: 'utf8' });
-        return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
-      };
+      const call = (over: Record<string, string | null> = {}): Result =>
+        checkDeclare(file, over);
       // THE FOUR REQUIRED KEYS, each named by the refusal rather than folded
       // into one "bad request".
       for (const k of ['--file', '--id', '--label', '--hue']) {
@@ -4339,4 +4379,202 @@ describe('ccrc account declare: the pre-pass, and the class a field fault answer
       // property the whole ruling rests on, measured rather than argued.
       expect(readFileSync(file, 'utf8')).toBe(before);
     });
+
+  it('… and an EMPTY --id, --label or --suffix is an argv fault here too (D-2154)', () => {
+    // THE MIRROR OF `check-add`'s ROW, at the address that still had the hole.
+    // MEASURED at 1dc39a6f, each answering `roster-invalid` at exit 1 with the
+    // validator's own sentence:
+    //
+    //   --id ''      1  accounts[3] has an invalid id "". Rename it to match …
+    //   --label ''   1  account "lab-dev0" has no label. Add a non-empty "label" …
+    //   --suffix ''  1  account "lab-dev0" has an invalid configDirSuffix "". Set it …
+    //
+    // Every one names a ROSTER FIELD (`configDirSuffix` is not a flag anybody
+    // typed) and an entry INDEX, and prescribes editing an account that does
+    // not exist — at class 1, "legal on its face and the box said no", for a
+    // request that is not legal on its face. They are the identical three
+    // sentences round 4 rejected for `check-add`.
+    //
+    // WHAT THIS ROW DOES *NOT* SAY, because a later reader will be tempted to
+    // widen it: D-2142 and D-2150 rule that `declare`'s FIELD vocabulary is
+    // `rosterFromJson`'s and reaches the operator verbatim — that is about
+    // `baseUrl` and the roster's own shape rules, and it stands. An empty flag
+    // is an ARGV question, which no roster validator can name because by the
+    // time it reads the entry the flag is gone. The row below and the row after
+    // it are the two halves of that boundary.
+    const home = box('ccrc-account-checkdeclare-empty-');
+    seedRosterJson(home, [UPSTREAM]);
+    const file = join(home, '.ccrc', 'accounts.json');
+    const before = readFileSync(file, 'utf8');
+    for (const flag of ['--id', '--label', '--suffix']) {
+      const r = checkDeclare(file, { [flag]: '' });
+      expect(r.code, `${flag} '': ${r.stderr}`).toBe(2);
+      const j = oneObject(r);
+      expect(j['ok'], flag).toBe(false);
+      expect(j['error'], flag).toBe('bad-argv');
+      expect(String(j['detail']), flag).toContain(flag);
+    }
+    // ONE SHAPE AND NOT TWO FOR THESE THREE (D-2153's own correction applied):
+    // the gate sits above every line that reads `--provider` or `--base-url`,
+    // so no lane can reach it differently — and the row below MEASURES that
+    // sameness across both shapes rather than leaving it to this sentence.
+    expect(readFileSync(file, 'utf8'), 'a pre-pass wrote to the roster').toBe(before);
+  });
+
+  it('the four keys check-declare\'s empty gate leaves alone keep their own codes', () => {
+    // THE OTHER HALF OF THE SAME LINE, and the reason the loop names three of
+    // this op's seven keys rather than seven. Each of these four already
+    // refuses an empty value with the code that names its OWN condition, and
+    // widening the loop would replace four specific answers with one generic
+    // sentence — an adapter narrowing a distinction it received. This row is
+    // what goes red if a later reader "finishes the job".
+    //
+    // `--base-url` IS THE ONE TO READ TWICE. Its answer is `roster-invalid` at
+    // exit 1 — the same class the three above used to give — and it stays out
+    // of the loop deliberately: that is the base-url residual D-2150 ACCEPTED
+    // for wave 1, whose sentence names `exec.baseUrl`, the very field the flag
+    // sets, and carries the validator's own `base-url-unparseable` tag. The fix
+    // wave 2 will make is an export from `shared/roster-json.mjs`, not a fourth
+    // key in the loop; this row is what will red when that export lands, which
+    // is the reminder D-2150 asked for.
+    const home = box('ccrc-account-checkdeclare-emptyrest-');
+    seedRosterJson(home, [UPSTREAM]);
+    const file = join(home, '.ccrc', 'accounts.json');
+    const rows: [string, string, number][] = [
+      ['--file', 'roster-absent', 1],
+      ['--hue', 'unknown-hue', 2],
+      ['--provider', 'unknown-provider', 2],
+      ['--base-url', 'roster-invalid', 1],
+    ];
+    // ONE VERDICT PER ROW, MEASURED FIRST AND ASSERTED ONCE, so a regression
+    // names every row it broke rather than throwing at the first.
+    const got: Record<string, string> = {};
+    const want: Record<string, string> = {};
+    for (const [lane, over] of CHECK_DECLARE_LANES) {
+      for (const [flag, code, exit] of rows) {
+        const r = checkDeclare(file, { ...over, [flag]: '' });
+        const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+        expect(String(j['error']), `${lane} ${flag} answered the generic argv sentence`)
+          .not.toBe('bad-argv');
+        got[`${lane} ${flag}`] = `${String(j['error'])} at ${r.code}`;
+        want[`${lane} ${flag}`] = `${code} at ${exit}`;
+      }
+    }
+    expect(got).toEqual(want);
+    // AND THE TWO SHAPES AGREE, which is the claim `CHECK_DECLARE_LANES` is
+    // kept for: this arm has no flag it refuses as a flag that cannot mean
+    // anything on this lane, so accidental cover — the shape that hid the
+    // `check-add` defect for two rounds — cannot be what these four rows are
+    // measuring.
+    expect(rows.map(([flag]) => got[`undeclared ${flag}`]))
+      .toEqual(rows.map(([flag]) => got[`declared ${flag}`]));
+  });
+
+  it('one loop, two callers: check-add and check-declare refuse an empty flag in the same words',
+    () => {
+      // THE MECHANISM UNDER "REUSE, DO NOT RE-SPELL" (D-2154). Both arms call
+      // `emptyFlagClass`, so one request must not describe itself two ways
+      // depending on which verb the operator typed. Re-spell the loop in either
+      // arm — the drift `single-definition.test.ts` cannot see, because it
+      // filters `/\.tsx?$/` and this rule lives in a `.mjs` (D-1860) — and the
+      // two sentences part company here.
+      const home = box('ccrc-account-emptyflag-shared-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const file = join(home, '.ccrc', 'accounts.json');
+      for (const flag of ['--id', '--label', '--suffix']) {
+        const fromAdd = oneObject(checkAdd(home, { [flag]: '' }));
+        const fromDeclare = oneObject(checkDeclare(file, { [flag]: '' }));
+        expect(fromDeclare['error'], flag).toBe(fromAdd['error']);
+        expect(String(fromDeclare['detail']), `${flag}: the two arms disagree`)
+          .toBe(String(fromAdd['detail']));
+      }
+      // AND THE SENTENCE NAMES NEITHER VERB'S OWN VOCABULARY: `check-add`
+      // answers with a `plan` and `check-declare` with an `entry`, so the noun
+      // is "the entry it proposes" — true of both, since both propose one
+      // (`addedEntry(plan)`, `declaredEntry(a)`). A sentence naming "the plan"
+      // would be `check-add`'s alone (D-2154).
+      const d = String(oneObject(checkDeclare(file, { '--suffix': '' }))['detail']);
+      expect(d).toContain('carried into the entry it proposes');
+      expect(d).not.toContain('the plan');
+    });
+
+  it('one formatter, five verbs: each roster-invalid keeps its OWN opening (D-2154)', () => {
+    // THE MECHANISM UNDER THE EXTRACTION. `rosterAdmits` replaced five hand
+    // copies of one `instanceof RosterInvalid` block — `readRoster`,
+    // `check-add`, `add-entry`, `check-declare`, `declare-entry` — and the one
+    // thing that extraction could have narrowed is the SENTENCE each verb
+    // opens with, because that is the only part that differed. Three openings
+    // for five sites, and each says a different next move:
+    //
+    //   readRoster    "<file>: …"                         fix the file you have
+    //   the add pair  "the entry for \"x\" would make …"    change a flag
+    //   the declare   "declaring \"x\" would make …"        change a flag
+    //
+    // MEASURED BEFORE THIS ROW EXISTED: mutating `readRoster`'s opening to the
+    // declare sentence, and BOTH declare openings to the add sentence, left
+    // this file green at 167/167 — three unmeasured mechanisms sitting beside
+    // one measured neighbour (the add pair, pinned by D-2152's "one sentence"
+    // row). That is D-2145's pattern for the third time in this wave, so the
+    // gap is closed rather than noted.
+    const home = box('ccrc-account-openings-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const file = join(home, '.ccrc', 'accounts.json');
+    const detail = (r: Result): string => String(oneObject(r)['detail']);
+
+    // 1. `readRoster` — the roster the box ALREADY has does not validate, and
+    // the operator's next move is that file. No candidate entry exists at this
+    // address, so no sentence about one may appear.
+    const badRoster = box('ccrc-account-openings-bad-');
+    mkdirSync(join(badRoster, '.ccrc'), { recursive: true });
+    const badFile = join(badRoster, '.ccrc', 'accounts.json');
+    writeFileSync(badFile, `${JSON.stringify({ version: 1, accounts: [{ ...UPSTREAM, hue: 'puce' }] }, null, 2)}\n`);
+    const read = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), 'roster', '--file', badFile],
+      { encoding: 'utf8' });
+    const readDetail = String((JSON.parse(read.stdout.split('\n')[0]!) as Record<string, unknown>)['detail']);
+    expect(read.status).toBe(1);
+    expect(readDetail.startsWith(`${badFile}: `), `readRoster's opening moved:\n    ${readDetail}`)
+      .toBe(true);
+    expect(readDetail).not.toContain('would make');
+
+    // 2/3. THE ADD PAIR, word for word alike — the property D-2152 argued and
+    // this row re-measures through the extracted formatter.
+    const addOpening = `the entry for "lab dev0" would make ${file} unparseable: `;
+    const fromCheckAdd = detail(checkAdd(home, { '--id': 'lab dev0' }));
+    expect(fromCheckAdd.startsWith(addOpening), `check-add's opening moved:\n    ${fromCheckAdd}`)
+      .toBe(true);
+    const fromAddEntry = detail(addEntry(home, {
+      plan: {
+        id: 'lab dev0', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-lab-dev0',
+        provider: 'compatible', baseUrl: 'https://orchard-api/v1',
+        secretsFile: '.cc-secrets/lab-dev0-token.env', models: null,
+      },
+    }));
+    expect(fromAddEntry.startsWith(addOpening), `add-entry's opening moved:\n    ${fromAddEntry}`)
+      .toBe(true);
+
+    // 4/5. THE DECLARE PAIR, the same claim at the other address. `declare`
+    // says "declaring", not "the entry for": this verb records somebody else's
+    // launcher and never writes one, and the two verbs are typed
+    // interchangeably by an operator who must be able to tell which answered.
+    const decOpening = `declaring "lab-dev0" would make ${file} unparseable: `;
+    const insecure = { '--provider': 'compatible', '--base-url': 'http://orchard-api/v1' };
+    const pre = detail(checkDeclare(file, insecure));
+    expect(pre.startsWith(decOpening), `check-declare's opening moved:\n    ${pre}`).toBe(true);
+    const before = readFileSync(file, 'utf8');
+    const wrote = declareEntry(file, insecure);
+    // AND THE WRITER'S OWN GATE IS WHAT THIS LAST ROW MEASURES. `declare-entry`
+    // is callable by hand with no `check-declare` in front of it — its source
+    // says so and calls itself "the writer's own last gate" — and MEASURED at
+    // eb86b830 that gate could be deleted with this file green at 167/167,
+    // exactly the shape D-2153 found in `add-entry` one round earlier: a ruling
+    // naming a mechanism load-bearing while the mechanism measured nothing.
+    // Without it this request answers exit 0 and appends an entry the roster's
+    // own validator refuses — a box poisoned by the verb that was asked to
+    // record one launcher.
+    expect(wrote.code, `declare-entry accepted an entry rosterFromJson refuses: ${wrote.stdout}`)
+      .toBe(1);
+    expect(readFileSync(file, 'utf8'), 'declare-entry wrote a roster it had refused').toBe(before);
+    expect(detail(wrote).startsWith(decOpening), `declare-entry's opening moved:\n    ${detail(wrote)}`)
+      .toBe(true);
+  });
 });
