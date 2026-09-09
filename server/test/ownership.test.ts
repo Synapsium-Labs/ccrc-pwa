@@ -164,8 +164,12 @@ describe('the committed ccd carries a marker that matches its own bytes', () => 
   //
   // WHY THIS FILE AND NO OTHER, measured rather than assumed. The recurrence
   // mechanism is a merge conflict on the marker line — every edit to `ccd`
-  // changes line 2, so every merge of a ccd-touching branch conflicts exactly
-  // there — which needs a generated file that is COMMITTED. `grep -rn
+  // changes line 2, so a merge whose BOTH sides edited `ccd` conflicts exactly
+  // there. (Not "every merge of a ccd-touching branch": a merge where only one
+  // side touched `ccd` takes that side's line and merges clean — measured at
+  // round 5's refute pass, and the looser sentence is the kind of overstatement
+  // this round is otherwise spent removing.) It needs a generated file that is
+  // COMMITTED. `grep -rn
   // '^# ccrc:generated' .`, outside `node_modules/`, `graphify-out/` and the
   // two `docs/` lines that quote the format, returns line 2 of `ccd/ccd` and
   // nothing else. `~/.ccrc/accounts.sh` and the wrappers are generated at
@@ -174,9 +178,11 @@ describe('the committed ccd carries a marker that matches its own bytes', () => 
   it('carries exactly ONE line claiming provenance — a second one is hashed in and verifies clean', () => {
     const claiming = ccd.split('\n').filter((l) => l.startsWith('# ccrc:generated'));
     expect(claiming,
-      'ccd/ccd carries more than one provenance line. A merge that keeps both sides of the '
-      + 'line-2 conflict, or that re-stamps over a placeholder, leaves the extra one INSIDE the '
-      + 'hashed body — where verifyMarker cannot see it and every suite stays green.')
+      'ccd/ccd carries more than one line beginning "# ccrc:generated". Three ways to get here: '
+      + 'a merge that keeps both sides of the line-2 conflict; a re-stamp over a placeholder, '
+      + 'which leaves the extra line INSIDE the hashed body where verifyMarker cannot see it and '
+      + 'every suite stays green; or a COMMENT quoting the marker format at column 0 — if that '
+      + 'is what this is, indent the example by one space and it stops being a claim.')
       .toHaveLength(1);
   });
 

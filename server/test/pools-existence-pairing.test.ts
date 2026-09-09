@@ -539,7 +539,10 @@ const DOCTOR_SITES: string[] = [
 // census; a count restated in prose beside them is a second copy that can only
 // drift. The difference this paragraph exists to make is still the one it
 // made: between "the scan found two things" and "the scan read every one of
-// these functions and all but two hold no existence test at all".
+// these functions, and the ones holding an existence test are exactly the ones
+// `CCD_SITES` names". (The first cut of this correction wrote "all but two",
+// which is a restated cardinal two lines after the sentence forbidding one —
+// #69 review round 5, its own refute pass.)
 //
 // `_auto_swap_check` JOINED THE LIST 2026-09-09 (#69 review, D-2155), and the
 // way it joined is the point of this pin. It gained `$POOLS_DIR/$project` in

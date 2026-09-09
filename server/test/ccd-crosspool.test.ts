@@ -1279,7 +1279,7 @@ describe('R1 — an unmeasurable input costs the CROSSING, never the rescue', ()
     tick(BLOCKED);
     expect(String(h.reg(ID, 'stranded')),
       'the row carries a strand the server can put on the phone')
-      .toMatch(/^\d{10} the row's own account field could not be read/);
+      .toMatch(/^\d{10} the row's own account field could not be measured/);
     expect(noticeLines().join('\n'), 'and a banner fires').toContain('STRANDED');
     expect(swapLog(), 'and the swap.log line is still there for the box')
       .toContain('tick-undecidable');
@@ -1520,7 +1520,7 @@ describe('S2 — the marker follows the truth, from BOTH of the tick’s exits',
     unreadable('wrapper');
     tick(BLOCKED);
     expect(String(h.reg(ID, 'stranded')), 'precondition: it stranded')
-      .toMatch(/^\d{10} the row's own account field could not be read/);
+      .toMatch(/^\d{10} the row's own account field could not be measured/);
     tick(QUIET, 5);
     expect(h.reg(ID, 'stranded'), 'a recovered pane must not still claim STRANDED').toBeNull();
     expect(logLines('unstranded'), 'and it is said ONCE, not once per tick').toHaveLength(1);
@@ -1555,7 +1555,7 @@ describe('S2 — the marker follows the truth, from BOTH of the tick’s exits',
     tick(BLOCKED);
     expect(logLines('stranded'), 'two episodes, two lines').toHaveLength(2);
     expect(String(h.reg(ID, 'stranded')), 'and the marker names the CURRENT cause')
-      .not.toContain('account field could not be read');
+      .not.toContain('account field could not be measured');
   });
 });
 
@@ -1713,8 +1713,8 @@ describe('R1 — the tick takes ONE verdict, once every read has answered', () =
       .toHaveLength(1);
     expect(logLines('tick-undecidable')[0], 'and it names the POOL, not the crossing')
       .toContain('pool could not be measured');
-    expect(String(h.reg(ID, 'tickstuck')), 'the stamp names the field it is about')
-      .toContain('pool');
+    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1], 'the stamp names the field it is about')
+      .toBe('pool');
     expect(noticeLines(), 'a quiet pane is announced to nobody').toHaveLength(0);
   });
 
@@ -1741,8 +1741,8 @@ describe('R1 — the tick takes ONE verdict, once every read has answered', () =
       .toHaveLength(2);
     expect(said[0], 'first the home').toContain('home could not be measured');
     expect(said[1], 'then the pool — not a repeat of the home').toContain('pool could not be measured');
-    expect(String(h.reg(ID, 'tickstuck')), 'and the stamp follows the truth')
-      .toContain('pool');
+    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1], 'and the stamp follows the truth')
+      .toBe('pool');
   });
 
   it('the clear is gated on the verdict, not on `_swap_target` having answered', () => {
@@ -2077,16 +2077,16 @@ describe('B2 — the stamp must not stick ON either', () => {
     seedRow(); plantNotify();
     undecidablePoolTag();
     tick(QUIET, 1);
-    expect(String(h.reg(ID, 'tickstuck'))).toContain('pool');
+    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1]).toBe('pool');
 
     // the tag is fixed — but the pane goes dark before any tick can decide, so
     // nothing about this row is measured from here on.
     fs.rmSync(path.join(reg('pools'), 'demo'), { recursive: true });
     fs.writeFileSync(path.join(reg('pools'), 'demo'), 'pool-a');
     tick(NOPANE, 3);
-    expect(String(h.reg(ID, 'tickstuck')),
+    expect(String(h.reg(ID, 'tickstuck')).split(' ')[1],
       'a pane nobody could read decides nothing — including that the row recovered')
-      .toContain('pool');
+      .toBe('pool');
     expect(logLines('tick-undecidable'), 'and nothing is re-said').toHaveLength(1);
 
     // and once the pane IS readable the ordinary clear does its job.
@@ -2249,7 +2249,7 @@ describe('R3 — an unreadable `.project` stops the tick, but ONLY where a pool 
     tick(BLOCKED);
     expect(calls(), 'no relocation off a tag nobody measured').not.toContain('dispatch');
     expect(logLines('tick-undecidable')[0], 'and the standing still is SAID')
-      .toContain('project');
+      .toContain('project could not be measured');
     expect(String(h.reg(ID, 'stranded')), 'the strand names the condition, not a pool census')
       .toContain("the project's own registry field could not be read");
     expect(notices(), 'and the banner names the account that WAS measured')
@@ -2465,9 +2465,59 @@ describe('B6 — the round-4 guards nothing could red, and the sentences nothing
     tick(BLOCKED);
     const said = String(h.reg(ID, 'stranded'));
     fs.rmSync(w, { recursive: true });
-    expect(said, 'the account field is named').toContain('account field could not be read');
+    expect(said, 'the account field is named').toContain('account field could not be measured');
     expect(said, 'and so is its path').toContain(`${ID}.wrapper`);
     expect(said, 'never the unknown-condition arm').not.toContain('does not name');
+  });
+
+  it('and it says COULD NOT BE MEASURED, because that guard fires on three conditions', () => {
+    // THE VERB HAS TO BE TRUE OF ALL THREE (#69 review round 5, its own refute
+    // pass). The wrapper guard is `[[ "$wrc" -ne 0 || -z "$wrapper" ]]`, and its
+    // own comment two lines up says why: "Read failure and read-nothing are
+    // different conditions with the same remedy here." The first cut of the
+    // folded sentence said "could not be READ", which is true of the directory
+    // fixture the case above plants and false of the other two — a zero-byte
+    // field is read successfully, and an absent one is not there to read. The
+    // marker would then have asserted a read failure that did not happen while
+    // swap.log, on the same tick, still said the true thing.
+    for (const [label, plant] of [
+      ['zero-byte', (f: string): void => { fs.writeFileSync(f, ''); }],
+      ['absent', (f: string): void => { fs.rmSync(f, { force: true }); }],
+    ] as const) {
+      seedRow(); plantNotify();
+      const f = reg(`${ID}.wrapper`);
+      fs.rmSync(f, { force: true }); plant(f);
+      tick(BLOCKED);
+      const said = String(h.reg(ID, 'stranded'));
+      expect(said, `${label}: the account field is named`).toContain('account field');
+      expect(said, `${label}: and the verb is one that is true of it`)
+        .toContain('could not be measured');
+      expect(said, `${label}: never a read that never happened`)
+        .not.toContain('could not be read');
+      fs.rmSync(reg(`${ID}.stranded`), { force: true });
+      fs.rmSync(reg('swap.log'), { force: true });
+    }
+  });
+
+  it('a TORN epoch in the marker degrades to now — the guard its own comment asserts', () => {
+    // A GUARD WITH NO MECHANISM, FOUND IN THIS ROUND'S OWN REFUTE PASS, and the
+    // exact shape the round-4 gate refused to merge: `_strand_mark`'s rewrite
+    // arm carries `[[ "$pat" =~ ^[0-9]+$ ]] || pat="$now"` and the paragraph
+    // above it asserts "a torn stamp degrades to `$now` rather than writing a
+    // non-numeric field the wire would have to fail shut on" — measured,
+    // deleting the fallback left the whole ccd+pools set green. Round 5 rewrote
+    // that very paragraph without measuring the sentence it left standing.
+    seedRow(); tagPool('demo', 'pool-a'); plantNotify();
+    for (const w of ['claude', 'claude-a', 'claude-b', 'claude-d']) writeLimits(w, 99, 99);
+    // A hand-edited or half-written first token, with a cause that differs from
+    // what the tick will measure — the rewrite arm is the only one that reads it.
+    h.sh(`_reg_set ${ID} stranded "TORN wrapper could not be measured"`);
+    tick(BLOCKED);
+    const mark = String(h.reg(ID, 'stranded'));
+    expect(mark, 'the cause was rewritten, so the rewrite arm is what ran')
+      .toContain('claude-a');
+    expect(mark.split(' ')[0], 'and the torn epoch became a number rather than being carried')
+      .toMatch(/^\d{10}$/);
   });
 
   it('`_undecidable_cause` reads its arguments in the order its header states', () => {

@@ -33,18 +33,27 @@ import { CCD } from './ccdWsHelpers.js';
  * lines would be green for the wrong reason — the exact defect the `_pool_ok`
  * pin booked against itself as M-1.
  */
+const CENSUS_RE = /this file makes (\d+)\n?#? ?invocations across (\d+) non-comment lines/;
+
+/** The two numbers the census sentence states, parsed once. Both cases derive
+ *  from this — an earlier cut hard-coded `['132', '108']` in the second case,
+ *  so the SANCTIONED re-measure (add a call site, correct the sentence — which
+ *  is exactly what the first case's failure message orders) left the first case
+ *  green and redded the second with advice that would have deleted the census.
+ *  A pin that punishes its own remedy is not a pin. (#69 review round 5, its
+ *  own refute pass.) */
+function statedCensus(src: string): { calls: number; lines: number } {
+  const m = src.match(CENSUS_RE);
+  if (!m) throw new Error('the census sentence no longer states its two counts in the expected shape');
+  return { calls: Number(m[1]), lines: Number(m[2]) };
+}
+
 describe('the `_reg_get` header states a census that stays honest', () => {
   it('both numbers the header claims match what its own cited commands count', () => {
     const src = fs.readFileSync(CCD, 'utf8');
-    const from = src.indexOf('THE FOLD `_reg_get` KEEPS');
-    expect(from, 'the `_reg_get` census header could not be found').toBeGreaterThan(-1);
-    const block = src.slice(from, from + 600);
-    const claimed = block.match(/this file makes (\d+)\n?#? ?invocations across (\d+) non-comment lines/);
-    expect(claimed,
-      'the census sentence no longer states its two counts in the expected shape')
-      .not.toBeNull();
-    const statedCalls = Number(claimed![1]);
-    const statedLines = Number(claimed![2]);
+    expect(src.indexOf('THE FOLD `_reg_get` KEEPS'),
+      'the `_reg_get` census header could not be found').toBeGreaterThan(-1);
+    const { calls: statedCalls, lines: statedLines } = statedCensus(src);
 
     // The classifier is the header's own: a WHOLE-LINE comment is not a call
     // site. It is exact for `ccd/ccd` today — no code line carries a trailing
@@ -80,10 +89,73 @@ describe('the `_reg_get` header states a census that stays honest', () => {
     expect(history, 'the dated history clause could not be found').toBeGreaterThan(-1);
     const outsideHistory = block.slice(0, history)
       + block.slice(block.indexOf('\n', block.indexOf('converted the three verb readers')));
-    const cardinals = outsideHistory.match(/\b1[0-9]{2}\b/g) ?? [];
+    // WHAT THIS REFUSES, STATED NARROWLY ENOUGH TO BE TRUE. An earlier cut
+    // matched `/\b1[0-9]{2}\b/` and its failure message claimed to refuse "any
+    // new three-digit cardinal" — measured, a restated 98 or 260 sailed
+    // straight through. Widening to every 2–4 digit token is no better: the
+    // block legitimately contains `chmod 000` and "~20 supervisors", which are
+    // not counts of anything this sentence owns.
+    //
+    // The defect is specifically a RESTATEMENT of this census, and every time
+    // it has happened the stale copy sat within a handful of the live figure
+    // (133/134/135 against 132; 109/110 against 108). So the band is what is
+    // refused, and it is what the failure message says. A number far from the
+    // census is a different claim and this pin does not police it.
+    const { calls, lines } = statedCensus(src);
+    const near = (n: number): boolean =>
+      Math.abs(n - calls) <= 25 || Math.abs(n - lines) <= 25;
+    const cardinals = (outsideHistory.match(/(?:D-|#|ccd:)?\d{2,4}\b/g) ?? [])
+      .filter((t) => !/^(?:D-|#|ccd:)/.test(t))
+      .filter((t) => near(Number(t)));
     expect(cardinals,
-      `the census block restates a three-digit figure outside the one sentence that owns it `
+      `the census block restates a figure within 25 of the one sentence that owns it `
       + `(${cardinals.join(', ')}) — say "every call site" and let the pin above hold the number`)
-      .toEqual(['132', '108']);
+      .toEqual([String(calls), String(lines)]);
+  });
+});
+
+/**
+ * The SAME shape for the other census this branch keeps falsifying. `cmd_prefer`
+ * carries a sentence counting the measured `.project` readers, and round 5
+ * converted a third one at `cmd_start` in the very commit whose message books
+ * "an enumeration falsified by the entry added directly below it" — leaving that
+ * sentence one function away asserting two verbs where there are now three.
+ * A comment saying "re-measure this" is how that happens; a case is how it stops.
+ */
+describe('the `_reg_read "$id" project` census one function over stays honest too', () => {
+  it('both numbers `cmd_prefer` claims match its own cited command, filtered and bare', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('THE CENSUS, SPELLED SO IT DOES NOT COUNT ITSELF');
+    expect(from, "cmd_prefer's `.project` census header could not be found").toBeGreaterThan(-1);
+    const block = src.slice(from, from + 700);
+    const m = block.match(/answers (\w+) — the two tick reads and the three verbs[\s\S]*?bare grep answers (\w+)/);
+    expect(m, 'the census sentence no longer states its counts in the expected shape').not.toBeNull();
+
+    // The sentence spells its numbers as WORDS, which is how it has always read
+    // and is why no scanner ever caught it going stale.
+    const WORDS: Record<string, number> = {
+      two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    };
+    const statedFiltered = WORDS[m![1]!.toLowerCase()];
+    const statedBare = WORDS[m![2]!.toLowerCase()];
+    expect(statedFiltered, `unrecognised number word "${m![1]}"`).toBeDefined();
+    expect(statedBare, `unrecognised number word "${m![2]}"`).toBeDefined();
+
+    const lines = src.split('\n');
+    const bare = lines.filter((l) => l.includes('_reg_read "$id" project')).length;
+    const filtered = lines.filter(
+      (l) => l.includes('_reg_read "$id" project') && !/^\s*#/.test(l)).length;
+
+    expect(filtered,
+      `the filtered census answers ${filtered} now, but cmd_prefer's sentence still claims `
+      + `${statedFiltered}. A converted reader moves this number; correct the sentence.`)
+      .toBe(statedFiltered);
+    expect(bare,
+      `the bare grep answers ${bare} now, but the sentence still claims ${statedBare}.`)
+      .toBe(statedBare);
+    expect(bare - filtered,
+      'the sentence\'s whole point is that the bare spelling counts its own citation, '
+      + 'so the two numbers must differ by exactly the comment lines quoting the pattern')
+      .toBe(bare - filtered);
   });
 });

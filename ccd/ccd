@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8be2eb173884ba855d41819bfa991f2dd30b43aa1e61c8c74e5cc35507a72a48
+# ccrc:generated 1 sha256=36738cbcd66b808a9110cfb34bf7296eab04868d706ba3ec88cf20f52761531b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1789,10 +1789,13 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # invocations across 108 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
-# review round 4 gate). It has moved four times in five rounds — 133 at C1, 135
-# once this branch and then the #70 merge had added sites, 133 when round 3
-# converted the two tick `.project` reads to `_reg_read`, 132 when rounds 4 and
-# 5 converted the three verb readers — and every move left a stale cardinal
+# review round 4 gate). It has moved four times in five rounds — **134** at C1
+# (`db580771`; this said 133, and 133 is what C1's own sentence claimed, so the
+# figure was inherited rather than measured — corrected at round 5's refute
+# pass), 135 once this branch and then the #70 merge had added sites, 133 when
+# round 3 converted the two tick `.project` reads to `_reg_read`, 132 when
+# rounds 4 and 5 converted the three verb readers — and every move left a stale
+# cardinal
 # somewhere in this block. Four of them stood in the paragraphs directly above,
 # where a reader hits them first, and they read as the live figure. "Re-measure
 # it" was a REQUEST; `ccd-reg-get-census.test.ts` reads this sentence's own two
@@ -12860,8 +12863,24 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 # one condition, an unreadable `.project`, wrote two different `.stranded`
 # sentences depending on which guard caught it, and the common path was the one
 # that named no file. It derives from this function now, which is what makes
-# "cannot drift apart" a mechanism; `grep -n 'could not be computed' ccd/ccd`
-# is the census, and every hit outside this case block is a caller quoting it.
+# "cannot drift apart" a mechanism.
+#
+# THE CENSUS IS THE CALL, NOT THE SENTENCE, and the first spelling of this
+# paragraph got that wrong in the way this file books twice elsewhere (#69
+# review round 5, caught by its own refute pass). It cited
+# `grep -n 'could not be computed' ccd/ccd`, which returns exactly ONE line —
+# itself — because every arm below ends "so no destination could BE computed",
+# never "could NOT be". A self-counting anchor offered as proof, 118 lines from
+# the entry that corrects one. The census that measures is
+# `grep -n '_undecidable_cause "' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`,
+# which answers TWO: the tick's late arm and `_tick_strand_undecidable`.
+#
+# AND THE SCOPE IS UNDECIDABLE-CONDITION SENTENCES, not every `.stranded` line.
+# Two other `_strand_mark` call sites exist and neither is a drift: the tick's
+# no-target arm passes NO cause and lets `_strand_why` build the pool census,
+# and `cmd_swap`'s auto arm writes its own refusal sentence for a condition
+# that was DECIDED rather than undecidable. Different questions, different
+# answers; this function owns the one where the tick could not say.
 # That fold is what the `wrapper` arm exists for — it is the word only the
 # early return passes, and without an arm of its own it would have landed in
 # `*` and told the operator this build does not name a condition it names.
@@ -12869,7 +12888,7 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 _undecidable_cause() {   # word id project -> the operator-facing sentence for that field
   case "$1" in
     home)      printf '%s' "the home account could not be measured, so no destination could be computed" ;;
-    wrapper)   printf '%s' "the row's own account field could not be read ($REG/$2.wrapper), so no destination could be computed" ;;
+    wrapper)   printf '%s' "the row's own account field could not be measured ($REG/$2.wrapper), so no destination could be computed" ;;
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
@@ -12982,10 +13001,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # — the `-v` filter is what stops this citation counting itself, and naming
   # `$POOLS_DIR` is what stops the bare `mkdir -p --` spelling this comment
   # carried until round 5 from also matching the two `_LC_DIR` mkdirs, which are
-  # not pools paths at all: four hits for a claim about one. The real call
-  # carries `--`, and the
-  # spelling round 3 cited here matched only its own citation), inside
-  # `cmd_project_pool`, so
+  # not pools paths at all: four hits for a claim about one. Round 3's spelling
+  # before that — `mkdir -p "$POOLS_DIR"`, with no `--` — matched nothing at
+  # all, so this one anchor has now been wrong in three different ways: zero
+  # hits, four hits, and counting itself), inside `cmd_project_pool`, so
   # on every box that has never tagged a project the directory does not exist
   # and `_project_pool_state` answers `untagged` for EVERY project name — the
   # unmeasured field cannot change the answer, no constraint is being lifted,
@@ -14482,13 +14501,22 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   #
   # WHICH HALF IS ACTUALLY REACHABLE, and the gate's own finding overstates it
   # by half — corrected here rather than carried. The gate says "both the die
-  # and the warn go silent". The die is CREATION-ONLY (`-z "$regw"`), and this
-  # read runs only on the ID form, where `regw` empty has already died four
-  # lines up at `no wrapper recorded for '$id' and none given`. So on every path
-  # that reaches this read, `regw` is non-empty and the die is unreachable: what
-  # the fold silenced is the WARNING, and the remedy below is a warning for the
+  # and the warn go silent". The die sits on the `-z "$regw"` arm, and `regw` is
+  # NON-EMPTY on every path that reaches this read: this read runs only on the
+  # ID form, where an empty `regw` has already died four lines up at `no wrapper
+  # recorded for '$id' and none given`. So the die is unreachable from here and
+  # what the fold silenced is the WARNING. The remedy below is a warning for the
   # same reason ruling 5 gives the mismatch one — a revival must not be refused
   # for a placement the auto-swapper moves at the next idle boundary.
+  #
+  # AND `-z "$regw"` IS NOT A FORM TEST, which the paragraph below calls it and
+  # this one used to (#69 review round 5, its own refute pass). `regw` comes
+  # from `_reg_get`, so it is EMPTY for a row whose `.wrapper` is absent,
+  # unreadable OR blank — the overloaded null this whole PR is about. Saying
+  # "creation-only" turns a measured claim about ONE path into a false claim
+  # about the branch. The narrow statement above is the one that holds, and
+  # `.wrapper`'s own fold is B3's FOURTH verb reader, pre-existing on
+  # `origin/main` and booked as its own follow-up rather than fixed here.
   local prjrc=0
   if [[ -n "$project" ]]; then
     [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
@@ -14501,8 +14529,10 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
 
   # ── POOL POLICY (§5.5.5), CREATION ONLY ──────────────────────────────────
   # Placed here rather than at the registry-wins block above because `project`
-  # is only resolved on BOTH forms by the block above it; `regw` is what makes
-  # it creation-only, and that is the whole correctness argument. With a
+  # is only resolved on BOTH forms by the block above it; `regw` non-empty is
+  # what selects the warn arm, and that is the whole correctness argument. It is
+  # a proxy for "this row already exists" and NOT a form test — see the
+  # correction above; an unreadable `.wrapper` empties it on an existing row. With a
   # registry row the registry's account has already WON (the block above), and
   # `wrapper` is no longer the caller's argument, so a refusal here would
   # refuse a REVIVAL of a session a retag put in the wrong pool — which
@@ -15502,7 +15532,7 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$SWAPBLOCK_COOLDOWN" ]] && banner=""
   if [[ -n "$banner" ]]; then
     _reg_set "$id" strandnotify "$now"
-    # DELIBERATELY NOT `cc swap: <id> moved …`: server/src/server.ts:1305 parses
+    # DELIBERATELY NOT `cc swap: <id> moved …`: `grep -n 'cc swap: ' server/src/server.ts` parses
     # that exact prefix into a per-session chat line about an account CHANGE,
     # and nothing changed here.
     [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "$msg" >/dev/null 2>&1
@@ -16307,11 +16337,22 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   # pool rather than merely moving it once. Measured: with `.project` a FIFO it
   # printed `home for <id> set to claude-b` where the readable control refuses.
   # THE CENSUS, SPELLED SO IT DOES NOT COUNT ITSELF:
-  # `grep -n '_reg_read "$id" project' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`
-  # answers FOUR — the two tick reads and these two verbs. The bare grep answers
-  # five, because this sentence quotes the pattern; that trap is booked twice
-  # already in this file (`_pool_ok`'s census and `_reg_get`'s), and writing the
-  # self-counting spelling here would have been the third.
+  # `grep -nF '_reg_read "$id" project' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`
+  # answers FIVE — the two tick reads and the three verbs (`cmd_start`,
+  # `cmd_swap`, this one). The bare grep answers six, because this sentence
+  # quotes the pattern; that trap is booked twice already in this file
+  # (`_pool_ok`'s census and `_reg_get`'s), and writing the self-counting
+  # spelling here would have been the third.
+  #
+  # IT SAID FOUR AND TWO VERBS UNTIL ROUND 5, WHICH IS THE POINT (#69 review
+  # round 5, its own refute pass): the same commit that converted `cmd_start`'s
+  # reader left this enumeration one function away asserting the old count —
+  # a census falsified by its own round, exactly the shape that round books
+  # against the `_reg_get` header and against `CCD_BLOCKS`. It is pinned now,
+  # by `ccd-reg-get-census.test.ts`, for the reason a comment cannot be: a
+  # request goes stale silently and a red suite does not. `-F` because the
+  # pattern is a literal — an unescaped `$id` is a regex quantifier's worth of
+  # trouble under any grep that anchors `$` mid-pattern.
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable \
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"

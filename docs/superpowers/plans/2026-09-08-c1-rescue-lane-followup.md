@@ -38,8 +38,8 @@ band, one tick of permission trouble. A five-second tick lives in the transient.
 
 **Deviations DEFINED here:** D-2026–D-2035 (the original round), D-2155–D-2162 (the #69 review, round
 2), D-2194–D-2207 (round 3), D-2212–D-2219 (round 3's #70 merge pass) and
-D-2254–D-2261 (round 4) and D-2283–D-2309 (round 5, the coordinator's round-4 gate). Every number is
-defined here and nowhere else. **CORRECTED twice:** this
+D-2254–D-2261 (round 4), D-2283–D-2309 (round 5, the coordinator's round-4 gate) and
+D-2312–D-2326 (round 5's own refute pass). Every number is defined here and nowhere else. **CORRECTED twice:** this
 sentence claimed only the first band for two rounds while the file went on defining two more below it —
 the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
 contents by eight, then by twenty-two.
@@ -475,7 +475,7 @@ one of the survivors was itself caught by an existing test while being written (
   `swap.log` line, the box's own forensic trail; the banner recomputes its sentence from a fresh
   reason on every firing and already tells the truth. WHEN wave 3 lands its reader the marker becomes
   `SessionRecord.stranded.reason`, carried VERBATIM to every ccrc surface — measured:
-  `git grep -c stranded server/src/registry.ts` is **0** on `origin/main` and on this PR branch, **17**
+  `git grep -c stranded server/src/registry.ts` is **0** on `origin/main` and on this PR branch, **12**
   on `ws/clear-meadow`. The fix earns its place on the first half alone. **The marker is a
   CURRENT-STATE claim and now follows the truth; the swap.log line keeps its per-episode floor, the
   banner keeps its `SWAPBLOCK_COOLDOWN` floor, and the episode keeps its own epoch** — `stranded.at` is
@@ -818,8 +818,8 @@ guard, unreachable line, or a mutation that never applied — and the control is
   holding for the whole `SWAPBLOCK_COOLDOWN` — the unpinned half was the one carrying the refusal case,
   which is the case the pair exists for. Measured: replacing that clear with `:` left 11 files / 354
   green. Now RED, and the paragraph says which case pins which half instead of asserting both.
-- **D-2284 (2026-09-09)** — **the same guard at two verbs, one measured and one not.** Four sites carry
-  ` && ! _pool_untaggable`. `cmd_prefer`'s was unpinned because the case that names `cmd_prefer` tags
+- **D-2284 (2026-09-09)** — **the same guard at two verbs, one measured and one not.** Every site that
+  carries ` && ! _pool_untaggable` carries it identically. `cmd_prefer`'s was unpinned because the case that names `cmd_prefer` tags
   the pool, so `_pool_untaggable` is false there and the gate cannot change its verdict. The new case
   is `cmd_swap`'s, on a box with no `pools/` at all.
 - **D-2285 (2026-09-09)** — **B3's third verb reader, and the gate's own finding corrected by half.**
@@ -862,7 +862,8 @@ guard, unreachable line, or a mutation that never applied — and the control is
   reason: `chmod 000` is a no-op for root, so that half is measured wherever the suite is not root.
 - **D-2292 (2026-09-09)** — **an assertion that passed under the collapse its own case forbids.**
   `expect(tickstuck).toContain('pool')` is satisfied by `crosspool` — the exact confusion the case
-  exists to refuse. The field is `<epoch> <word>`; the word is what is compared now, at both sites.
+  exists to refuse. The field is `<epoch> <word>`; the word is what is compared now, at every site —
+  **corrected at the refute pass**, which found the first cut had swept two of six (D-2321).
 - **D-2293 (2026-09-09)** — **a test for a hang that could hang.** The compact-lane FIFO pin planted the
   same fixture as its sibling 50 lines up and drove it with a bare `h.sh`, with no `timeout`. Measured
   by the gate: deleting the guard produced no summary line after 600 s and two live
@@ -878,7 +879,8 @@ guard, unreachable line, or a mutation that never applied — and the control is
   file that carried the defect. Measured: replanting the shape and re-stamping gives `markers=2`,
   `verdict=ccrc-unmodified`, and reds exactly one case of fourteen — the new one.
 - **D-2295 (2026-09-09)** — **`ccd/ccd` is the only file this can happen to, and that is measured, not
-  assumed.** The recurrence mechanism is a merge conflict on the marker line, which needs a generated
+  assumed.** The recurrence mechanism is a merge conflict on the marker line — one whose BOTH sides
+  edited `ccd`, corrected at the refute pass (D-2322) — which needs a generated
   file that is COMMITTED. `grep -rn '^# ccrc:generated' .` returns line 2 of `ccd/ccd` and two `docs/`
   lines quoting the format. `~/.ccrc/accounts.sh` and the wrappers are generated at deploy time from
   bodies that never contain the prefix and are never merged.
@@ -987,8 +989,10 @@ guard, unreachable line, or a mutation that never applied — and the control is
 
 ### Mutation table — round 5
 
-Every guard this round shipped, mutated one at a time against the ccd+pools set (11 files / 362 at the
-head). The two GREEN rows are the findings; the RED control on the byte-identical sibling is what makes
+Every guard this round shipped, mutated one at a time against the ccd+pools set — 11 files / 362 at
+the head for M1–M11, and `ccd-crosspool.test.ts` + `ccd-reg-get-census.test.ts` (120 at the head) for
+M13–M17, which are about files that set does not contain. Stated because the first cut of this table
+quoted one set for rows measured on two (#69 review round 5, its own refute pass). The two GREEN rows are the findings; the RED control on the byte-identical sibling is what makes
 the first one a finding rather than "nothing covers this area".
 
 | # | mutation | measured |
@@ -1006,4 +1010,110 @@ the first one a finding rather than "nothing covers this area".
 | M11 | the compact lane's status guard deleted | 600 s no output + SIGKILL before → **RED in 5.3 s** |
 | M12 | a second `# ccrc:generated` line replanted and re-stamped | `markers=2 verdict=ccrc-unmodified`, 13/13 green before → **RED**, 1 of 14 |
 | M13 | the census sentence's stated number changed | **RED** — both census cases |
-| M14 | a three-digit cardinal restated in the census block | **RED** `one number, one place` |
+| M14 | a cardinal restated in the census block | **RED** `one number, one place` |
+| M15 | the `wrapper` arm's verb reverted to "could not be read" | **RED ×4** — incl. the three-condition case |
+| M16 | `_strand_mark`'s torn-epoch fallback deleted | GREEN before → **RED** `a TORN epoch … degrades to now` |
+| M17 | `cmd_prefer`'s `.project` census set back to FOUR | GREEN before → **RED** `both numbers cmd_prefer claims` |
+
+---
+
+## Deviations found — round 5's own refute pass
+
+Nine independent lenses were pointed at the round-5 commit with one instruction: kill it. **Seven
+refuted.** Two of the fifteen findings below are guards this round claimed and did not measure; four are
+false claims in comments this round wrote; three are claims falsified by *this round's own other
+changes*; and one is a pin that punished its own remedy. The pattern is now measured six rounds running
+and it is the reason the pass exists: **the fix introduces a defect at a seam adjacent to the one it
+repairs**, and the only thing that has ever caught it is somebody trying to break it.
+
+Two of the nine could not be killed: the `swapblocked` pin (D-2283) and the six test-quality pins
+(D-2288–D-2293) survived every mutation aimed at them, including controls that deleted the *other* two
+`_tick_decided` call sites to prove which clear the new case actually rides.
+
+- **D-2312 (2026-09-09)** — **a self-counting anchor, in the paragraph that exists to stop one, 118
+  lines from the entry correcting one.** The fold's new header offered
+  `grep -n 'could not be computed' ccd/ccd` as "the census" proving every sentence producer routes
+  through `_undecidable_cause`. It returns exactly ONE line — its own citation — because every arm ends
+  "so no destination could **be** computed", never "could **not** be". Zero real hits for a claim about
+  six. The census that measures is the CALL, not the sentence:
+  `grep -n '_undecidable_cause "' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`, which answers two.
+  This is D-2297's own defect recommitted in the same commit, which is the finding.
+- **D-2313 (2026-09-09)** — **and the claim it was offered to prove was too wide.** Two other
+  `_strand_mark` call sites exist: the tick's no-target arm passes NO cause and lets `_strand_why`
+  build the pool census, and `cmd_swap`'s auto arm writes its own refusal sentence. Neither is a
+  drift — they answer different questions — but "EVERY SENTENCE PRODUCER GOES THROUGH HERE" says
+  otherwise. Scoped to undecidable-condition sentences, with the two exceptions named.
+- **D-2314 (2026-09-09)** — **the new `wrapper` arm asserted a read that did not happen.** Its caller
+  fires on `[[ "$wrc" -ne 0 || -z "$wrapper" ]]` — unreadable, absent, AND read-successfully-empty —
+  and the guard's own comment four lines up says why: "Read failure and read-nothing are different
+  conditions with the same remedy here." The arm said "could not be **read**", which is true only of
+  the directory fixture the shipped case planted. So the marker and the banner would have claimed a
+  read failure while swap.log, on the same tick, still said the true thing. The verb is "could not be
+  **measured**" now — what `_tick_undecidable` already writes — and a new case plants a ZERO-BYTE and
+  an ABSENT `.wrapper`, the two conditions nothing could red.
+- **D-2315 (2026-09-09)** — **`_strand_mark`'s torn-epoch fallback is a guard with no mechanism, and
+  round 5 rewrote the paragraph asserting it without measuring it.** `[[ "$pat" =~ ^[0-9]+$ ]] ||
+  pat="$now"` sits under a comment claiming "a torn stamp degrades to `$now` rather than writing a
+  non-numeric field the wire would have to fail shut on". Deleting the fallback left the whole
+  ccd+pools set green. **That is byte-for-byte the shape the round-4 gate refused to merge** — a guard
+  with no mechanism next to a comment asserting the mechanism — introduced by the commit closing two
+  others. Pinned now; the mutation reds one case.
+- **D-2316 (2026-09-09)** — **round 5 falsified `cmd_prefer`'s `.project` census in the same commit
+  that converted the reader.** That sentence said the cited command "answers FOUR — the two tick reads
+  and these two verbs"; after D-2285 it answers FIVE across three verbs, and the bare grep six. The
+  enumeration went stale one function away from the change that moved it, in the commit whose own
+  message books D-2299 for exactly that. It is pinned now by a second case in
+  `ccd-reg-get-census.test.ts` rather than restated — a request goes stale silently and a red suite
+  does not. Its spelling is `grep -nF` because the pattern is a literal.
+- **D-2317 (2026-09-09)** — **"CREATION-ONLY" is the wrong name for an overloaded-null test.** The
+  correction to the gate's finding labelled the die's `-z "$regw"` arm creation-only. `regw` comes from
+  `_reg_get`, so it is empty for a row whose `.wrapper` is absent, unreadable OR blank — the very fold
+  this PR is about. The narrow claim survives and is what the comment says now: `regw` is non-empty on
+  every path that reaches this read, so the die is unreachable from HERE. The pre-existing sentence
+  three lines below, which called the same test creation-only, is corrected in the same edit rather
+  than left sitting under its own correction.
+- **D-2318 (2026-09-09)** — **and `.wrapper`'s own fold is B3's FOURTH verb reader.** `regw=$(_reg_get
+  "$id" wrapper)` folds absent/unreadable/empty, and on an existing row an unreadable `.wrapper` today
+  either refuses a revival with `pool-mismatch` or silently reverses "the registry wins" and rewrites
+  the row to the argument's account. Pre-existing on `origin/main`, so its own PR — booked here because
+  the round-5 comment cited that read as a correctness argument, which is the one thing it must not do.
+- **D-2319 (2026-09-09)** — **a pin that punished its own remedy.** The census suite's second case
+  hard-coded `toEqual(['132', '108'])`, so the SANCTIONED re-measure — add a call site, correct the
+  sentence, which is exactly what the first case's failure message orders — left case 1 green and
+  redded case 2 with advice that would have deleted the census. Both cases derive from the sentence now.
+- **D-2320 (2026-09-09)** — **and its failure message claimed a range it did not have.** The cardinal
+  scan matched `/\b1[0-9]{2}\b/` while claiming to refuse "any new three-digit cardinal": a restated 98
+  or 260 sailed through. Widening to every 2–4 digit token is no better — the block legitimately
+  contains `chmod 000` and "~20 supervisors". What is refused is now what the defect has always looked
+  like: a figure within 25 of the census. A narrower claim that is true beats a wider one that is not.
+- **D-2321 (2026-09-09)** — **the substring class was swept at two sites of six.** Four
+  `.toContain('pool')` assertions on `.tickstuck` were left standing, each still satisfied by
+  `crosspool`, and two of them sit in cases whose own titles are about naming the pool and not the
+  crossing. D-2292's entry said "at both sites". Correcting the instance is not correcting the claim —
+  which is this project's own rule, and the reason the sweep is a `grep`, not a memory.
+- **D-2322 (2026-09-09)** — **"every merge of a ccd-touching branch conflicts exactly there" is
+  false.** A merge where only ONE side edited `ccd` takes that side's line and merges clean; the
+  conflict needs both. Measured. The overstatement sat inside the case whose whole subject is a claim
+  that is stronger than its evidence.
+- **D-2323 (2026-09-09)** — **and that case has a benign false positive worth naming rather than
+  fixing.** A documentation comment quoting the marker format at column 0 reds it — which is the shape
+  this repo's own spec doc uses twice. The assertion is right to fire (a line claiming provenance is a
+  line claiming provenance), so the message now names all three causes and tells the author to indent
+  the example by one space.
+- **D-2324 (2026-09-09)** — **an assertion weakened without being booked, in a commit about assertions
+  that pass for the wrong reason.** The fold changed `.stranded`, not swap.log, and
+  `_tick_undecidable` still writes "project could not be measured" — so R3's
+  `logLines('tick-undecidable')[0]` assertion did not need weakening to `.toContain('project')`, and it
+  got it anyway with no comment and no number. Restored. Net coverage loss was zero because three
+  sibling cases still pin that sentence, which is exactly why nothing caught it.
+- **D-2325 (2026-09-09)** — **`grep -c` counts LINES, in the plan that supplies D-2201's evidence.**
+  It read "`git grep -c stranded server/src/registry.ts` … **17** on `ws/clear-meadow`", prefixed
+  "measured:". The cited command answers **12**; 17 is the case-INSENSITIVE count. Same family this PR
+  books twice inside `ccd/ccd`, standing in the document that supplies the evidence for two of its own
+  entries.
+- **D-2326 (2026-09-09)** — **three smaller ones, each the same shape.** (a) The round-5 mutation table
+  said every row was measured "against the ccd+pools set (11 files / 362)", while M13–M17 were measured
+  on a file that set does not contain; the preamble now says which rows used which set. (b)
+  `pools-existence-pairing.test.ts`'s corrected paragraph wrote "all but two", a restated cardinal two
+  lines after the sentence forbidding one. (c) `ccd/ccd` cited `server/src/server.ts:1305` for a regex
+  that is at 1306 on both refs — replaced with the anchor this file's own convention requires.
