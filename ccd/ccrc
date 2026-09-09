@@ -950,7 +950,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates roster"
+ACCT_SUBS="add candidates declare roster"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -3706,7 +3706,7 @@ _exp_status() {
 #    refusal goes through `_acct_refuse` like any other box-said-no.
 #
 #    THE RULE BINDS WHAT THIS VERB CALLS, NOT ONLY WHAT IT PRINTS.
-#    `_inst_accounts_sh` (:5249, :5255) and `cmd_wrappers` (:2904) both write
+#    `_inst_accounts_sh` (:5569, :5575) and `cmd_wrappers` (:2904) both write
 #    their transcript to STDOUT, which is right for `install` and wrong here, so
 #    `_acct_converge` (Task 24) redirects them and contains their `_ccrc_die`.
 #
@@ -3717,13 +3717,13 @@ _exp_status() {
 #    hand-rolled envelope into a body nobody can parse. So bash owns argv,
 #    refusal classes, tty rules and side effects; `deploy/account-op.mjs` owns
 #    every byte of stdout. That is the split `deploy/gen-accounts.mjs:4-11` and
-#    `_inst_accounts_sh` (:5228-5256) already draw, applied to an answer instead
+#    `_inst_accounts_sh` (:5548-5576) already draw, applied to an answer instead
 #    of a generated file.
 #
 #  - ONE EXIT-CODE TABLE, TWO DECIDERS. Whoever decides owns the code, on this
 #    file's own table (:24-33): 2 when the request was not legal on its face —
 #    decidable from argv alone, which is `cmd_install`'s "the operator typed the
-#    right flag and the wrong value" class (:4977-4981, refused at :4996) —
+#    right flag and the wrong value" class (:5297-5301, refused at :5316) —
 #    and 1 when the request was legal and the BOX said no (an id already in the
 #    roster, a suffix another account holds). Nothing translates at the seam,
 #    which is exactly `cmd_adopt`'s argument for `exec "$BASH"` (:2929-2930).
@@ -3785,7 +3785,7 @@ _acct_refuse() {   # <class> <code> <detail> — prints the envelope, exits <cla
   # PARAGRAPH DID NOT (corrected at review round 1). Task 21 added NINE call
   # sites, not four: `_acct_answer` x1, `_acct_shape` x3, `_acct_candidates`
   # x3, and `cmd_account` x2 — the two `unknown-argument` refusals at the
-  # `roster` and `candidates` arms (:4902, :4907 — this pair read :4040, :4045
+  # `roster` and `candidates` arms (:5213, :5218 — this pair read :4040, :4045
   # until review round 1, which is the citation Task 22's own insertion broke;
   # :4040 had by then landed inside the comment block that insertion added).
   # Those last two are the ones
@@ -3980,7 +3980,7 @@ _acct_candidates() {
   local sh="$HOME/.ccrc/accounts.sh"
   [ -f "$sh" ] \
     || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which launchers are already DECLARED — run 'ccrc install' to generate it from ~/.ccrc/accounts.json. Nothing was written."
-  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:6295-6306): the projection
+  # SOURCED IN A SUBSHELL — `_inst_dirs`' rule (:6615-6626): the projection
   # declares `_ccrc_cfg_dir`, `_ccrc_label`, `_ccrc_hue` in the SAME `_ccrc_*`
   # namespace as `_ccrc_die`, and sourcing it here would let a generator change
   # redefine a refusal helper mid-verb. Only the id list crosses back.
@@ -4072,7 +4072,7 @@ _acct_candidates() {
 #
 #  2. THE TTY GATE INVERTS HERE, and nowhere else in this file. All three of
 #     this file's other `[ -t 0 ]` gates — `cmd_passwd` (:3026), `cmd_expose`
-#     (:3221) and `_inst_agent_env` (:5320) — refuse a PIPE, because
+#     (:3221) and `_inst_agent_env` (:5640) — refuse a PIPE, because
 #     under `curl … | bash` stdin is the installer script and a `read` would
 #     take a line of shell as the operator's answer. This flag exists for the
 #     machine caller and requires a pipe, so it refuses a TERMINAL — a human
@@ -4190,7 +4190,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   #
   # The temp name carries a leading dot, `cmd_wrappers`' spelling for a
   # roster-derived destination (the rule is stated in the negative at
-  # :5547-5552). Nothing below distinguishes it from `<dest>.tmp.$$`, because
+  # :5867-5872). Nothing below distinguishes it from `<dest>.tmp.$$`, because
   # `.env` already puts both outside `WRAPPER_ID_RE`; it is the consistent
   # spelling, not a measured guard.
   # The same shell-option bound `_acct_read_credential` states above, for the
@@ -4263,10 +4263,10 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
 }
 
 # ── THE `add` FLAG LOOP ────────────────────────────────────────────────────
-# `cmd_install`'s loop (:4983-4993) widened: BOTH spellings for every
+# `cmd_install`'s loop (:5303-5313) widened: BOTH spellings for every
 # value-taking flag, a missing value with its own message at exit 2, and a WRONG
 # VALUE for a right flag getting its own sentence rather than "unknown argument"
-# (:4994-4997) — the operator typed the right flag and the wrong value, which
+# (:5314-5317) — the operator typed the right flag and the wrong value, which
 # are two different mistakes to fix.
 #
 # THE FLAG NAME IS CAPTURED BEFORE THE SHIFT, and that is the whole reason
@@ -4313,19 +4313,19 @@ _acct_add_parse() {
     shift
   done
 
-  # THE ID IS ABOUT TO BECOME A FILENAME under $HOME/.local/bin, a path segment
-  # under $HOME/.cc-secrets and a bash `case` pattern. The gate is on the ID,
-  # before any path is built from it — `cmd_wrappers`' rule (:2504-2510), which
-  # is what makes it hold for a traversing id as well as a merely illegal one.
-  [ -n "$ACCT_ID" ] \
-    || _acct_refuse 2 missing-value "an account id is required: pass --id. Nothing was written."
-  [[ "$ACCT_ID" =~ $WRAPPER_ID_RE ]] \
-    || _acct_refuse 2 bad-id "\"$ACCT_ID\" is not a legal account id: lowercase letters, digits and hyphens, starting with a letter, at most 32 characters. It becomes a filename under \$HOME/.local/bin. Nothing was written."
-  # §4.4. `cc-auth-<id>` is the auth pane's tmux session name, and for the id
-  # "auth" that is `cc-auth-auth` — indistinguishable from the pane of a session
-  # running on a wrapper called `auth`.
-  [ "$ACCT_ID" != auth ] \
-    || _acct_refuse 2 reserved-id "\"auth\" is reserved: the auth pane's tmux session is named cc-auth-<id>, which for this id would collide with the pane of a session running on it. Pick another id. Nothing was written."
+  # THE ONE ID GATE, SHARED (Task 27). These three refusals — `missing-value`,
+  # `bad-id`, `reserved-id`, in that order — were spelled inline here until
+  # `declare` needed the same three, and six more subcommands after it do too.
+  # They live in `_acct_id_or_refuse` below and the sentences are unchanged: a
+  # lift that reworded an answer would be a behaviour change wearing a
+  # refactor's clothes, which is why Task 23's own `bad-id` and `reserved-id`
+  # rows are the mechanism that proves this one did not.
+  #
+  # THE GATE IS STILL BEFORE ANY PATH IS BUILT FROM THE ID, which is why the call
+  # sits here: the id is about to become a filename under $HOME/.local/bin, a
+  # path segment under $HOME/.cc-secrets and a bash `case` pattern
+  # (`cmd_wrappers`' rule, :2504-2510) — and that holds for a traversing id.
+  _acct_id_or_refuse "$ACCT_ID"
 
   [ -n "$ACCT_LABEL" ] || _acct_refuse 2 missing-value "a human label is required: pass --label. Nothing was written."
   [ -n "$ACCT_HUE" ]   || _acct_refuse 2 missing-value "a hue is required: pass --hue. Nothing was written."
@@ -4365,8 +4365,8 @@ _acct_add_parse() {
 # at the seam, and neither is cosmetic.
 #
 #  1. THEY PRINT ON STDOUT. `_inst_accounts_sh` echoes "install: accounts.sh:
-#     converged" (:5249) or "… generated from $HOME/.ccrc/accounts.json"
-#     (:5255); `cmd_wrappers` prints a line per written account and a
+#     converged" (:5569) or "… generated from $HOME/.ccrc/accounts.json"
+#     (:5575); `cmd_wrappers` prints a line per written account and a
 #     `summary: …` line (:2904). Read that off the SOURCE, not off a suite:
 #     `ccrc-install.test.ts:2818-2819` pins only `cmd_wrappers`' summary onto
 #     `install`'s stdout, and nothing in server/test/ pins the accounts.sh
@@ -4379,7 +4379,7 @@ _acct_add_parse() {
 #     The subshell contains the exit; the `||` arm gives the refusal a class.
 #
 # NO FLAGS ON `cmd_wrappers`, deliberately, `_inst_wrappers`' choice
-# (:6810-6813): the two flags that decide what may be overwritten are the two an
+# (:7130-7133): the two flags that decide what may be overwritten are the two an
 # install must never pass, "an install that passed either would be an install
 # that can destroy a hand-written launcher without anybody typing the flag that
 # authorises it". D-1862: there is no per-id mode and this verb does not add one
@@ -4505,14 +4505,14 @@ _acct_settings_env() {   # <cfgdir> <set|clear> <what-still-stands> [<base-url>]
   if [ -f "$f" ]; then
     # THE FILE'S OWN MODE RIDES THE SWAP, which that installer does NOT do: `mv`
     # replaces the inode, so an operator's 0600 came back at the umask — 664,
-    # measured. D-1244's remedy, fallback and macOS reason verbatim, :6684-6690.
+    # measured. D-1244's remedy, fallback and macOS reason verbatim, :7004-7010.
     local stamp bdir; fmode="$(_plat_mode "$f" 2>/dev/null || true)"
     # `date +%Y%m%d-%H%M%S`, NOT THE PLAN SNIPPET'S `date -u +%Y%m%dT%H%M%SZ`:
     # `BOX_BACKUP_ROOT`'s own note (:1034-1042) makes the shape contractual — "a backup
     # named outside that shape is a backup the pruner can never reclaim" — and the glob
-    # (deploy.sh:224-228, :7333's loop) is `[0-9]{8}-[0-9]{6}`, which `T…Z` matches
+    # (deploy.sh:224-228, :7653's loop) is `[0-9]{8}-[0-9]{6}`, which `T…Z` matches
     # nowhere: every backup here accumulates. EIGHT writers share this root and spell it
-    # so — :3591, :6635, :6777, :7032, `TS=` in all four, install-session-hooks.sh:38.
+    # so — :3591, :6955, :7097, :7352, `TS=` in all four, install-session-hooks.sh:38.
     stamp="$(date +%Y%m%d-%H%M%S)" \
       || _acct_refuse 1 settings-merge "cannot read the clock (date failed), and a backup needs a name — $f is exactly as it was. $stands"
     bdir="$BOX_BACKUP_ROOT/$stamp"
@@ -4538,8 +4538,8 @@ _acct_settings_env() {   # <cfgdir> <set|clear> <what-still-stands> [<base-url>]
 # subshell, so a refusal ends the verb.
 ACCT_PROVISIONED=()
 _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PROVISIONED
-  # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs` (:6293),
-  # `_inst_hooks` (:6492), `_inst_skills` (:6530) and `_inst_graphify_skill` (:6545) take
+  # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs` (:6613),
+  # `_inst_hooks` (:6812), `_inst_skills` (:6850) and `_inst_graphify_skill` (:6865) take
   # no arguments by contract and converge EVERY rostered home; this verb has one home to
   # provision, and the four standalone scripts all take `--homes <dir>…`
   # (install-session-hooks.sh:63, and the identical line at
@@ -4591,9 +4591,9 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
     ACCT_PROVISIONED+=(settings-env-none)
   fi
   # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's — `_inst_hooks`'
-  # rule (:6479-6484): "the INSTALLED copy, never the one in the tree … It is also the
+  # rule (:6799-6804): "the INSTALLED copy, never the one in the tree … It is also the
   # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER:
-  # the worker skill points at ../ccrc-coordinator/references/… (`_inst_skills`, :6521-6524).
+  # the worker skill points at ../ccrc-coordinator/references/… (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
            install-worker-skill.sh install-graphify-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
@@ -4856,6 +4856,317 @@ _acct_add() {
   [ "$rc3" -eq 0 ] || exit "$rc3"
 }
 
+# ── THE HELPERS EVERY SUBCOMMAND AFTER `add` SHARES ───────────────────────
+# NONE OF THESE MAY BE CALLED INSIDE $( ). `_acct_refuse` ends in `exit`, and an
+# `exit` inside a command substitution kills only that subshell: the caller would
+# carry on with an empty string while a JSON refusal envelope sat unprinted
+# inside a variable nobody prints. Everything here answers in a NAMED GLOBAL for
+# that reason — `ACCT_OUT`, `ACCT_ROSTER_IDS`, `ACCT_ALIAS_OF` — and the one
+# function that DOES run a substitution runs it on `node`, which cannot exit
+# this shell.
+#
+# WHY THREE FUNCTIONS AND NOT THE TWO THIS TASK'S PLAN NAMED. A node op that
+# WRITES is silent on success; one that READS is not. So "the captured body was
+# empty" is a REFUSAL for the second and the NORMAL ANSWER for the first — two
+# conditions a caller handles differently, which must not share one guard.
+# `_acct_run_op` carries the half they agree on and each wrapper adds its own
+# half. One function with a "silent" flag would put the distinction on a boolean
+# argument; two functions each capturing would give one refusal two authors.
+ACCT_OUT=""
+_acct_run_op() {   # <what-still-stands> <op> [--<key> <value>]… — the shared half
+  # ONE REFUSAL, ONE OWNER, ONE SET OF BYTES. On a non-zero exit the op has
+  # ALREADY written its envelope to the stdout this captured, so it is re-emitted
+  # verbatim and the verb leaves with node's own class — `_acct_add`'s handling of
+  # `check-add` and `add-entry`, lifted because five more callers need it.
+  # Re-wording it here would give one refusal two authors.
+  #
+  # AN EMPTY BODY IS `_acct_no_answer`'S, NOT A SECOND CODE OF ITS OWN, and that
+  # is a DEVIATION from this task's plan snippet — which spelled a new
+  # `helper-silent` refusal at the CALLEE's exit class. That would have
+  # reintroduced all three of D-2051's defects inside the very function written
+  # to prevent them: the triage (half-updated box / killed process / unknown)
+  # is lost, the class becomes node's 2 where this file's table (:24-33) says 1,
+  # and a third vocabulary appears for a condition that already has an owner.
+  #
+  # `$1` IS THE CALLER'S CLAUSE, for the reason `_acct_no_answer` takes one
+  # (D-2126, D-2135): what still stands differs by call site — nothing at all at
+  # `declare`'s first write, a kill-switch marker at its second — and one helper
+  # ending every path with one sentence would flatten two true statements into
+  # one false one. Bound below, so `set -u` reds a caller that forgot it.
+  local stands="$1" op="$2" rc=0
+  shift
+  ACCT_OUT="$(_acct_node "$@")" || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  [ -n "$ACCT_OUT" ] || _acct_no_answer "$rc" "$op" "$stands"
+  printf '%s\n' "$ACCT_OUT"
+  exit "$rc"
+}
+
+_acct_read_op() {   # <what-still-stands> <op> … — the ANSWER lands in ACCT_OUT
+  # A READ OP THAT EXITED 0 AND PRINTED NOTHING HAS ANSWERED NOTHING, and there
+  # is no exit code to read that by — which is exactly the third branch of
+  # `_acct_no_answer`'s own triage ("nothing in this tree is known to exit $rc
+  # with an empty body"), so `0` is passed to it rather than translated away.
+  _acct_run_op "$@"
+  [ -n "$ACCT_OUT" ] || _acct_no_answer 0 "$2" "$1"
+}
+
+_acct_write_op() {   # <what-still-stands> <op> … — a node op silent on success
+  # THE MIRROR CONDITION, AND IT IS NOT `no-answer`. `no-answer` is an empty body
+  # where one was owed; this is a body where none was. Same measurement, opposite
+  # directions, two codes — collapsing them would be the overloaded seam this
+  # cluster keeps closing, because the operator's next move differs: `no-answer`
+  # is a box to re-install, and this is a build to fix. The class is 1, this
+  # file's "the tool ran and the answer was bad" (:24-33), because a write op
+  # that printed would have handed the caller two JSON objects where its whole
+  # contract is one.
+  _acct_run_op "$@"
+  [ -z "$ACCT_OUT" ] \
+    || _acct_refuse 1 helper-noisy "the account helper printed on a path that must be silent, so this verb would have handed back two JSON objects where its contract is one. This is a bug in ccrc, not a fact about your box: ccrc and deploy/account-op.mjs ship together and must be one build. $1"
+}
+
+# THE ONE ID GATE. Task 23 spelled THREE refusals inline inside `_acct_add_parse`
+# — `missing-value`, `bad-id`, `reserved-id`, measured against that function and
+# not the two this task's own prose recalls. `declare`, `credential`, `check`,
+# `enable`, `disable` and `remove` all need the same three, and a seventh copy of
+# a refusal sentence in bash is drift nothing in this tree can see:
+# `server/test/single-definition.test.ts` scans four TypeScript roots (its own
+# `:34-37`) and filters `/\.tsx?$/` (its `:54`), so `ccd/` is invisible to it.
+#
+# THE GATE GOES ON THE ID, BEFORE ANY PATH IS BUILT FROM IT — `cmd_wrappers`'
+# rule (:2504-2510). The id is about to become a filename under
+# $HOME/.local/bin, a path segment under $HOME/.cc-secrets and a bash `case`
+# pattern, and a check on the resulting PATH would have to enumerate the ways a
+# path can escape.
+_acct_id_or_refuse() {   # <id> — refuses, or returns 0
+  # `${1:-}`, not `$1`: this runs under `set -u` and a caller may legitimately
+  # have parsed no --id at all, which is the first refusal below and not a crash.
+  local id="${1:-}"
+  _acct_shape
+  [ -n "$id" ] \
+    || _acct_refuse 2 missing-value "an account id is required: pass --id. Nothing was written."
+  [[ "$id" =~ $WRAPPER_ID_RE ]] \
+    || _acct_refuse 2 bad-id "\"$id\" is not a legal account id: lowercase letters, digits and hyphens, starting with a letter, at most 32 characters. It becomes a filename under \$HOME/.local/bin. Nothing was written."
+  # §4.4. `cc-auth-<id>` is the auth pane's tmux session name, and for the id
+  # "auth" that is `cc-auth-auth` — indistinguishable from the pane of a session
+  # running on a wrapper called `auth`.
+  [ "$id" != auth ] \
+    || _acct_refuse 2 reserved-id "\"auth\" is reserved: the auth pane's tmux session is named cc-auth-<id>, which for this id would collide with the pane of a session running on it. Pick another id. Nothing was written."
+}
+
+# THE ROSTERED IDS, from a SUBSHELL source of the projection — `_inst_dirs`' rule
+# and `_acct_candidates`' shape, one function up: `~/.ccrc/accounts.sh` declares
+# `_ccrc_cfg_dir`, `_ccrc_label` and `_ccrc_hue` in the SAME `_ccrc_*` namespace
+# as `_ccrc_die`, so sourcing it in THIS shell would let a generator change
+# redefine a refusal helper mid-verb. Only the ids cross back.
+#
+# `projection-*`, NOT `roster-*` (D-1923), and this function is one of the two
+# sites that ruling names. Two files, two remedies: this one is `ccrc install`'s
+# GENERATED projection of `~/.ccrc/accounts.json`, and its fix is to regenerate
+# it, while `readRoster`'s three `roster-*` codes are about the JSON an operator
+# wrote by hand and their fix is to edit it. The pair (subcommand, code) does not
+# rescue the overload here, which is what makes it a defect rather than a
+# wrinkle: `declare` reads BOTH files in ONE subcommand.
+ACCT_ROSTER_IDS=()
+_acct_roster_ids() {   # -> fills ACCT_ROSTER_IDS
+  local sh="$HOME/.ccrc/accounts.sh" listed a
+  ACCT_ROSTER_IDS=()
+  [ -f "$sh" ] \
+    || _acct_refuse 1 projection-absent "$sh does not exist, so this box cannot say which accounts are already declared — run 'ccrc install' to generate it from \$HOME/.ccrc/accounts.json. Nothing was written."
+  listed="$(
+    # shellcheck source=/dev/null
+    . "$sh" || exit 1
+    for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\n' "$a"; done
+  )" || _acct_refuse 1 projection-invalid "$sh could not be sourced, so this box cannot say which accounts are already declared. Nothing was written."
+  while IFS= read -r a; do [ -n "$a" ] && ACCT_ROSTER_IDS+=("$a"); done <<<"$listed"
+}
+
+# `_inst_accounts_sh` PRINTS ("install: accounts.sh: …") and refuses through
+# `_ccrc_die`, which writes nothing to stdout. Both are wrong for a verb whose
+# entire stdout is one JSON object, and neither can be fixed in that function —
+# it is `cmd_install`'s own step and `ccrc-install.test.ts` pins the spine that
+# calls it. So: stdout to /dev/null, and the call in a SUBSHELL so `_ccrc_die`'s
+# `exit 1` ends the subshell rather than this verb, leaving the `||` to phrase
+# the refusal as JSON. stderr is NOT redirected — the generator's own
+# `gen-accounts: remedy: …` line is the whole error path for a roster an operator
+# broke by hand, and re-wording a fix into a shrug helps nobody.
+#
+# `$1` IS THE CALLER'S "WHAT STILL STANDS" CLAUSE, and it is a parameter from its
+# first line rather than a sentence baked in for the first caller. That is
+# D-2135's standing rule — a helper whose sentence mentions what else happened is
+# taking a parameter, whether or not it has one yet — and this helper is written
+# for six callers of which one exists: after `declare` a roster entry and a
+# kill-switch marker stand, after `remove` an entry has just gone, and one shared
+# sentence would be false for one of them.
+_acct_projection() {   # <what-still-stands>
+  ( _inst_accounts_sh >/dev/null ) \
+    || _acct_refuse 1 projection-failed "\$HOME/.ccrc/accounts.sh could not be regenerated from the roster, so ccd does not know about this change yet — read the gen-accounts: line above, then run: ccrc install. $1"
+}
+
+# ── declare — adopt a launcher ccrc did not write, and never writes ───────
+# TWO OF THE DOCTOR'S FIVE CANDIDATE PREDICATES, AND THAT IS DELIBERATE.
+# `ccrc-doctor-checks:2388-2401` builds `wr_cands` from `[ -f ]`, `[ -x ]`, the
+# id shape, `_wrap_is_script` and `_wrap_declares_config_dir`. The last two must
+# NOT be applied here, and that file says why in its own words at :2427-2432: an
+# EXTERNAL account is excluded from the shape comparison "because its shape is
+# nobody's business: it may be compiled, and it may spell its config dir in a way
+# no `export` line matches" — a rule that once FAILED a box whose external
+# launcher was perfectly good. A `declare` that copied all five would refuse
+# exactly the class of launcher it exists for.
+#
+# What it keeps is the id shape (a launcher's FILENAME is its account id — ccd
+# execs `$HOME/.local/bin/<id>` directly) and the `-ef` alias collapse, which is
+# load-bearing rather than tidy: `gpt -> ccgpt` is ONE file under two names on
+# this fleet (`ccrc-doctor-checks:2403-2408`), and declaring both would put two
+# accounts on one CLAUDE_CONFIG_DIR. `-ef` is a bash builtin comparing
+# device+inode THROUGH the symlink, so it needs no `readlink` and it catches a
+# hard link too.
+#
+# FOUR CODES, AND THEY STAY FOUR. `launcher-absent` and `launcher-not-a-file` are
+# two conditions an operator acts on differently (put a launcher there / look at
+# what is there), and so are `launcher-not-executable` (chmod +x) and
+# `launcher-alias` (pick a different id, or declare the one that already exists).
+# Collapsing any pair is the overloaded seam CLAUDE.md forbids.
+#
+# NO SELF-SKIP, unlike `_acct_candidates`' loop, and the difference is that this
+# function is asked about an id that is NOT supposed to be rostered yet: the
+# duplicate-id gate in `_acct_declare` has already refused every rostered id
+# before this runs, so a name reaching here can only match a DIFFERENT account's
+# launcher. It is also a second guard over the same door — with the duplicate-id
+# gate mutated out, a rostered id still refuses here, because a launcher is
+# always `-ef` itself.
+ACCT_ALIAS_OF=""
+_acct_declarable() {   # <id> — refuses, or returns 0 with ACCT_ALIAS_OF empty
+  local id="$1" f="$WRAPPER_BIN_DIR/$id" other
+  ACCT_ALIAS_OF=""
+  [ -e "$f" ] \
+    || _acct_refuse 1 launcher-absent "there is no $f on this box, so there is no launcher to declare — put the launcher there first, or use 'ccrc account add' to have ccrc write one. Nothing was written."
+  [ -f "$f" ] \
+    || _acct_refuse 1 launcher-not-a-file "the path $f exists and is not a regular file, and ccd execs it directly — look at what is there: ls -ld $f. Nothing was written."
+  [ -x "$f" ] \
+    || _acct_refuse 1 launcher-not-executable "the launcher $f is not executable, and ccd runs it directly — chmod +x $f, then re-run. Nothing was written."
+  for other in ${ACCT_ROSTER_IDS[@]+"${ACCT_ROSTER_IDS[@]}"}; do
+    [ -e "$WRAPPER_BIN_DIR/$other" ] || continue
+    if [ "$f" -ef "$WRAPPER_BIN_DIR/$other" ]; then ACCT_ALIAS_OF="$other"; break; fi
+  done
+  [ -z "$ACCT_ALIAS_OF" ] \
+    || _acct_refuse 1 launcher-alias "the launcher $f is the same file as $WRAPPER_BIN_DIR/$ACCT_ALIAS_OF, which is already rostered as account $ACCT_ALIAS_OF — two accounts sharing one launcher would fight over one CLAUDE_CONFIG_DIR. Nothing was written."
+}
+
+# THE FLAG NAME IS TAKEN BEFORE THE SHIFT, which is why `flag="${1%%=*}"` is the
+# first line INSIDE the loop and not inside either `case`. Both spellings have to
+# land in one place: `--id=X` is one token whose name is `${1%%=*}`, and `--id X`
+# is two tokens whose first arm runs `shift` to consume the value — so a second
+# `case` that re-read `$1` would be matching against `X` for the two-token form,
+# every arm would miss, and the value would be silently dropped while the `=`
+# spelling kept working. This is `_acct_add_parse`'s shape, repeated rather than
+# factored out because the two parsers accept different flag sets and a shared
+# one would have to be told which.
+#
+# ── THE ORDERED WRITE, AND WHY THE MARKER IS FIRST ────────────────────────
+# Identity, then disk, then the switch, then the roster, then the projection.
+#
+# THE MARKER GOES IN FRONT OF THE ROSTER ENTRY (D-2134's ruling, applied here).
+# The WEAKEST TRUE version of the hazard, because an entry that overstates its
+# mechanism invites its own reversal: a roster entry alone does NOT hand this
+# launcher to `_ws_least_loaded`. That loop iterates `CCRC_HOME_ABLE`
+# (ccd/ccd:3641), a declared entry is `homeAble: false` and never enters it, and
+# `~/.ccrc/accounts.sh` has not been regenerated at that point either. The path
+# that CAN reach a declared lane is `_swap_target`'s pool, which admits a
+# non-home-able account when a session's registry `home` field already names that
+# id (`_default_pool`, ccd/ccd:11042-11046) — so the window needs the projection
+# regenerated by a concurrent converge AND a session already homed on this exact
+# id. Narrower than `add`'s, and the ordering is not decided on its width: the
+# COSTS ARE ASYMMETRIC. Marker-too-early leaves one file that disables nothing —
+# no roster entry names the id, and the retry rewrites it — while marker-too-late
+# hands real work to a lane nobody has probed. Order for the expensive one.
+#
+# `_acct_declarable` IS STILL BEFORE THE MARKER, and that is the same rule read
+# forwards: a refusal an operator can act on must not leave a file behind, and
+# all four launcher refusals are that kind.
+_acct_declare() {
+  local id="" provider="" baseurl="" label="" hue="" suffix="" v="" flag="" other=""
+  _acct_shape
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --id|--provider|--base-url|--label|--hue|--suffix)
+        [ $# -ge 2 ] \
+          || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
+        v="$2"; shift ;;
+      --id=*|--provider=*|--base-url=*|--label=*|--hue=*|--suffix=*)
+        v="${1#*=}" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account declare has no argument \"$1\"" ;;
+    esac
+    case "$flag" in
+      --id)       id="$v" ;;
+      --provider) provider="$v" ;;
+      --base-url) baseurl="$v" ;;
+      --label)    label="$v" ;;
+      --hue)      hue="$v" ;;
+      --suffix)   suffix="$v" ;;
+    esac
+    shift
+  done
+
+  # IDENTITY FIRST, DISK SECOND. A duplicate id answered `launcher-absent` in the
+  # first draft, which sends the operator to install a launcher for an account
+  # that already exists. And since D-2134 this guard has a SECOND dependent
+  # (D-2137): under the new order a `duplicate-id` that did not fire would let
+  # the kill-switch marker be written for a LIVE lane. It is not the only thing
+  # standing there — `_acct_declarable` refuses a rostered id again, because a
+  # launcher is always `-ef` itself — but it is the one that names the condition.
+  _acct_id_or_refuse "$id"
+  [ -n "$label" ] || _acct_refuse 2 missing-value "declare needs a human label: pass --label. The roster carries one for every account. Nothing was written."
+  [ -n "$hue" ]   || _acct_refuse 2 missing-value "declare needs a hue: pass --hue. The roster carries one for every account. Nothing was written."
+  _acct_roster_ids
+  for other in ${ACCT_ROSTER_IDS[@]+"${ACCT_ROSTER_IDS[@]}"}; do
+    [ "$other" = "$id" ] \
+      && _acct_refuse 1 duplicate-id "the id $id is already an account in \$HOME/.ccrc/accounts.json — 'ccrc account roster' lists what is there. Nothing was written."
+  done
+  _acct_declarable "$id"
+
+  # ── 1. THE SWITCH, OFF ──────────────────────────────────────────────────
+  # The clause is this caller's and it is the honest one at THIS line: nothing
+  # has been written yet, and — unlike `add` — nothing ever writes the launcher.
+  _acct_disable_new "$id" "Nothing else was written: no roster entry names \"$id\" yet, so this box does not have that account, and the launcher $WRAPPER_BIN_DIR/$id is somebody else's file that ccrc never writes. Re-run this same command once the cause is fixed."
+
+  # ── 2. THE ROSTER ENTRY ─────────────────────────────────────────────────
+  # ONE VALIDATOR. The endpoint gate is `BASE_URL_OK`, called by the roster
+  # parser and — through `shared/base-url.mjs` — by its .mjs mirror, never a
+  # second copy here: the sibling refuses the WHOLE proposed roster and its
+  # message reaches the operator verbatim, exactly as `_inst_accounts_sh` passes
+  # the generator's through. One validator, one message, and no second URL gate
+  # spelled in bash.
+  #
+  # `_acct_write_op`, NOT `_acct_node`: this op is silent on success, so a bare
+  # call could not tell a refusal from an answer, and a half-updated box answers
+  # an op it does not have with exit 2 and an EMPTY body.
+  local stands="the $_SVC_REG/$id-disabled kill-switch marker WAS written before this step, and it is inert: no roster entry names \"$id\", so it switches nothing off, and re-running this same command rewrites it."
+  _acct_write_op "$stands" declare-entry --file "$(_acct_roster_path)" \
+    --id "$id" --label "$label" --hue "$hue" \
+    ${suffix:+--suffix "$suffix"} \
+    ${provider:+--provider "$provider"} \
+    ${baseurl:+--base-url "$baseurl"}
+
+  # ── 3. THE PROJECTION ───────────────────────────────────────────────────
+  # `_inst_accounts_sh` ALONE, never `_acct_converge`: that function also runs
+  # `cmd_wrappers`, and a wrapper converge over a declared account is precisely
+  # the data loss decision 22(c) rules out — `ccrc wrappers` would rewrite
+  # somebody else's launcher into the four-line generated shape.
+  stands="the roster entry for \"$id\" WAS written and nothing rolls back, and so was the $_SVC_REG/$id-disabled marker that keeps the lane switched off. The launcher itself was never touched."
+  _acct_projection "$stands"
+
+  # ── 4. THE ANSWER ───────────────────────────────────────────────────────
+  # Captured with this site's own clause rather than passed straight through
+  # (D-2130): by this line the entry, the projection and the marker all stand, so
+  # a shared "Nothing was written." would state the opposite of what happened.
+  _acct_read_op "This lane is fully declared and nothing rolls back: the roster entry for \"$id\", \$HOME/.ccrc/accounts.sh and the $_SVC_REG/$id-disabled marker that keeps it switched off all stand, and the launcher was never touched. Only this report failed: run 'ccrc account roster' to read the entry back." \
+    declared --file "$(_acct_roster_path)" --id "$id" --disabled true
+  printf '%s\n' "$ACCT_OUT"
+}
+
 cmd_account() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
@@ -4865,7 +5176,7 @@ cmd_account() {
   esac
 
   # BY NAME, ONCE, AND BEFORE THE FIRST REFUSAL IS PRINTED — `cmd_install`'s
-  # guard (stated :5003-5015, probed :5017) in its own shape. Without it a box
+  # guard (stated :5323-5335, probed :5337) in its own shape. Without it a box
   # with no node cannot
   # even hear "that id is taken": the refusal would arrive as `_acct_node`
   # failing, i.e. as a missing dependency wearing a bad request's clothes. THIS
@@ -4912,6 +5223,15 @@ cmd_account() {
       # path that RETURNS non-zero instead of exiting would otherwise be
       # swallowed here and answered as exit 0 over whatever stdout carried.
       _acct_candidates || exit $?
+      return 0
+      ;;
+    declare)
+      # NO `[ $# -eq 0 ]` GATE, `add`'s reason at this second address: this
+      # subcommand TAKES arguments and `_acct_declare` owns every refusal about
+      # them. `exit` rather than `return` is what every failure path inside it
+      # uses, so the `return 0` below is reached only when the whole ordered
+      # write landed.
+      _acct_declare "$@"
       return 0
       ;;
     *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;

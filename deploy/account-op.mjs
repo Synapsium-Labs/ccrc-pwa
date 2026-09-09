@@ -261,6 +261,16 @@ const OPS = {
     keys: ['file', 'id', 'disabled', 'provisioned', 'operator-step'],
     repeat: ['provisioned', 'operator-step'],
   },
+  // `declare` HAS NO PRE-PASS OP, and that is not an omission. `add`'s
+  // `check-add` exists because `add` writes a 0600 credential BEFORE the roster
+  // entry, so the request has to be judged while nothing is on disk; `declare`
+  // writes no secret and creates no launcher, so its only writer can also be its
+  // only judge. `suffix` is optional and `provider`/`base-url` are the two
+  // declarative fields §5 names.
+  'declare-entry': {
+    keys: ['file', 'id', 'label', 'hue', 'suffix', 'provider', 'base-url'], repeat: [],
+  },
+  declared: { keys: ['file', 'id', 'disabled'], repeat: [] },
 };
 
 function out(o) {
@@ -934,6 +944,131 @@ function main(argv) {
       disabled: a['disabled'] === 'true',
       provisioned: a['provisioned'] ?? [],
       'operator-steps': a['operator-step'] ?? [],
+      roster: json,
+    });
+    return 0;
+  }
+
+  if (op === 'declare-entry') {
+    for (const k of ['file', 'id', 'label', 'hue']) {
+      if (a[k] === undefined) { refuse('bad-argv', `declare-entry needs --${k}`); return 2; }
+    }
+    // THROUGH `readRoster`, THE MODULE'S ONE READER. It is not a convenience: it
+    // is the only place that tells this file's three read conditions apart —
+    // `roster-absent` (ENOENT), `roster-unreadable` (there and unopenable, a
+    // permissions fix rather than a regeneration) and `roster-invalid` (there and
+    // not a roster, carrying the validator's own remedy verbatim) — and a second
+    // reader here would collapse them into one code that tells the operator to do
+    // the wrong thing twice out of three times. It also validates, which is the
+    // FIRST of the two refusals below.
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // TWO REFUSALS, NOT ONE, and the difference is the operator's next move:
+    // "the roster you already had does not validate" is a file to fix — that is
+    // `readRoster`'s `roster-invalid`, above — and "the entry you asked for would
+    // break it" is a flag to change, which is the check after the append.
+    //
+    // `external` IS THE DECLARED KIND: ccrc records where somebody else's
+    // launcher points and never writes that launcher (decision 22(c)).
+    // `provider` is optional on it — an entry with none is `undeclared` on the
+    // wire and offers no provider operation but enable/disable and remove (§4.1)
+    // — and `baseUrl` is declarative for exactly the reason `secretsFile` is.
+    const exec = { kind: 'external' };
+    if (a['provider'] !== undefined) exec.provider = a['provider'];
+    if (a['base-url'] !== undefined) exec.baseUrl = a['base-url'];
+    // `homeAble: false` and `telemetry: 'none'`, and neither is a placeholder.
+    // A declared launcher is not a lane ccd may LAND a session on unasked: its
+    // config dir is its own business, which is the same sentence
+    // `ccd/ccrc-doctor-checks` uses to explain why doctor asks only whether the
+    // file exists. `telemetry: 'none'` is what keeps a metered lane out of
+    // `CCRC_MEASURED`, which is what §4.6's `_ws_least_loaded` fix reads. The
+    // operator turns either on by editing the roster; the verb does not guess.
+    //
+    // AND THE SUFFIX DEFAULT IS `.<id>`, NOT `add`'s `.claude-<id>`, which is
+    // the validator's own worked example for a fresh entry
+    // (shared/roster-json.mjs's duplicate-suffix remedy). It is deliberately
+    // NOT gated against $HOME/.claude* the way `add`'s is: `add` creates and
+    // provisions that directory, so a suffix the agent could never read is a
+    // lane this box could roster and never show; a declared launcher's config
+    // dir is somebody else's, may not hold Claude Code transcripts at all, and
+    // an operator who wants it readable passes --suffix .claude-<id>.
+    const entry = {
+      id: a['id'], label: a['label'], hue: a['hue'],
+      configDirSuffix: a['suffix'] ?? `.${a['id']}`,
+      homeAble: false, telemetry: 'none', exec,
+    };
+    const next = { ...json, accounts: [...json['accounts'], entry] };
+    try {
+      rosterFromJson(next);
+    } catch (e) {
+      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+      refuse('roster-invalid',
+        `declaring "${a['id']}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
+      return 1;
+    }
+    // tmp + rename in the same directory, `_inst_accounts_sh`'s discipline: an
+    // operator's roster must never be observable half-written. AND THE MODE IS
+    // THE FILE'S OWN, NOT A LITERAL (D-2052, a DEVIATION from this task's plan
+    // snippet, which spelled `0o644`): `renameSync` replaces the inode, so a
+    // literal would silently widen a roster its operator had chmod-ed 0600.
+    // `statSync` is unguarded for `add-entry`'s reason — `readRoster` above read
+    // this same path a few lines ago.
+    const tmp = `${a['file']}.tmp.${process.pid}`;
+    try {
+      writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`,
+        { mode: statSync(a['file']).mode & 0o777 });
+      renameSync(tmp, a['file']);
+    } catch (e) {
+      try { unlinkSync(tmp); } catch { /* the failure above is the one to report */ }
+      refuse('roster-write', `writing ${a['file']} failed: ${e.message} — nothing was changed`);
+      return 1;
+    }
+    // SILENT ON SUCCESS, which is a CONTRACT and not a shrug: `_acct_write_op`
+    // refuses `helper-noisy` if this path ever prints, because the answer is
+    // `declared`'s and two JSON objects on one stdout is the seam bash closes.
+    return 0;
+  }
+
+  if (op === 'declared') {
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `declared needs --${k}`); return 2; }
+    }
+    // A BOOLEAN ON THE WIRE, not the string bash handed over, and the conversion
+    // is TOTAL — `added`'s rule (D-2131) at a second address. `=== 'true'` alone
+    // maps every other value, a typo included, to `false`, which publishes "this
+    // lane is ON" about a lane that is off.
+    if (a['disabled'] !== 'true' && a['disabled'] !== 'false') {
+      refuse('bad-argv',
+        `declared needs --disabled true or --disabled false, and got ${JSON.stringify(a['disabled'] ?? null)}`
+        + ' — this field says whether the new lane is switched off, so a value this file '
+        + 'would have to guess at is refused rather than read as "on"');
+      return 2;
+    }
+    // `readRoster` again, for the reason above: one reader, three conditions,
+    // and the validator's remedy reaching the operator verbatim.
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    // THE KIND IS MEASURED OFF THE ENTRY, NOT SPELLED AS A CONSTANT — a
+    // DEVIATION from this task's plan snippet (`kind: 'external'`). The same
+    // answer carries the whole roster, so a literal beside it would be two
+    // spellings of one value, free to disagree the day this op answers for an
+    // entry it did not write. That leaves exactly one condition to name rather
+    // than guess, and it is a bug in ccrc rather than a fact about the box:
+    // `_acct_declare` calls this immediately after `declare-entry` landed the
+    // entry, so an id the roster does not carry means the two disagree.
+    const entry = json['accounts'].find((x) => x !== null && typeof x === 'object' && x['id'] === a['id']);
+    if (entry === undefined) {
+      refuse('internal-no-entry',
+        `${a['file']} carries no account "${a['id']}", so this run cannot report what was `
+        + 'declared — this is a bug in ccrc, not a fact about your box. Read the roster back '
+        + "with 'ccrc account roster'.");
+      return 1;
+    }
+    out({
+      ok: true,
+      id: a['id'],
+      kind: entry['exec']['kind'],
+      disabled: a['disabled'] === 'true',
       roster: json,
     });
     return 0;
