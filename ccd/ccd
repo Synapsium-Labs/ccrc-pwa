@@ -13263,8 +13263,10 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
     # --slice IS NOT OPTIONAL, and it is the correction to this mechanism's
     # own first version (D-307 (was D-B8-11)). A user scope with no `--slice` defaults to
     # `app.slice`; the fleet's aggregate memory ceiling
-    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryHigh=20G /
-    # MemoryMax=24G) hangs one level in, on `app-claude\x2dsession.slice`.
+    # (deploy/systemd/app-claude-session.slice.d/limits.conf, MemoryMax=24G;
+    # MemoryHigh deliberately `infinity` since 2026-09-09 — an aggregate
+    # MemoryHigh throttles the whole slice instead of killing one task)
+    # hangs one level in, on `app-claude\x2dsession.slice`.
     # Ubuntu's tmux is built with systemd support: it mints a transient
     # `tmux-spawn-<uuid>.scope` per pane and DERIVES that scope's slice from
     # its own, so placing the server placed all seventeen panes with it. This
