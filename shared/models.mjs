@@ -58,6 +58,12 @@ export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
 
+/** The hostnames `parseRegistry`'s `baseUrl` scheme gate (C13) treats as a
+ *  local proxy, and so the one case http:// is legal for. `URL#hostname`
+ *  keeps the brackets on an IPv6 literal (`new URL('http://[::1]/').hostname`
+ *  is `'[::1]'`, measured), so that is the form matched here. */
+const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
+
 /** Thrown by `parseRegistry`. Carries the offending FIELD as data, not only in
  *  the sentence: the verbs' contract is "refuses, with the field named" (§10),
  *  and Plan 3a's PATCH route points a UI control at it. Defined here and
@@ -246,6 +252,23 @@ export function parseRegistry(json, catalogue) {
   if (baseUrlRaw !== undefined) {
     if (typeof baseUrlRaw !== 'string' || baseUrlRaw.length === 0) {
       throw new RegistryInvalid('baseUrl', 'baseUrl must be a non-empty string when it is present.');
+    }
+    // C13: this URL carries the lane's bearer token on every request the
+    // probe makes (`ccrc-models-probe`'s `compatible` arm). http:// sends
+    // that key in cleartext, so it is refused — except for a loopback host
+    // (127.0.0.1, localhost, [::1]), the one legitimate local-proxy case.
+    let parsed;
+    try {
+      parsed = new URL(baseUrlRaw);
+    } catch {
+      throw new RegistryInvalid('baseUrl', `baseUrl ${JSON.stringify(baseUrlRaw)} is not a valid URL.`);
+    }
+    const isLoopbackHost = LOOPBACK_HOSTS.includes(parsed.hostname);
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopbackHost)) {
+      throw new RegistryInvalid('baseUrl',
+        `baseUrl ${JSON.stringify(baseUrlRaw)} must be https:// — the lane's key goes out on every `
+        + 'request this probe makes. http:// is accepted only for a loopback host (127.0.0.1, '
+        + 'localhost, [::1]), the one legitimate local-proxy case.');
     }
     baseUrl = baseUrlRaw;
   }

@@ -173,6 +173,28 @@ describe('parseRegistry (§4.1)', () => {
     expect(parseRegistry(good()).baseUrl).toBeUndefined();
   });
 
+  // C13: baseUrl carries the lane's bearer token on every request the probe
+  // makes, so http:// is a cleartext leak of that key — refused, except for
+  // a loopback host, the one legitimate local-proxy case.
+  it('refuses a non-https baseUrl unless the host is loopback (C13)', () => {
+    const r = good(); r['probe'] = 'compatible';
+    r['baseUrl'] = 'http://vendor.example.com';
+    expect(() => parseRegistry(r)).toThrow(/https/);
+    try { parseRegistry(r); } catch (e) { expect((e as { field: string }).field).toBe('baseUrl'); }
+    r['baseUrl'] = 'not a url at all';
+    expect(() => parseRegistry(r)).toThrow(/baseUrl/);
+  });
+
+  it('accepts an http baseUrl when the host is loopback — the local-proxy case (C13)', () => {
+    const r = good(); r['probe'] = 'compatible';
+    for (const u of ['http://127.0.0.1:4000', 'http://localhost:4000', 'http://[::1]:4000']) {
+      r['baseUrl'] = u;
+      expect(parseRegistry(r).baseUrl).toBe(u);
+    }
+    r['baseUrl'] = 'https://vendor.example.com';
+    expect(parseRegistry(r).baseUrl).toBe('https://vendor.example.com');
+  });
+
   it('refuses a subagent that is not a class', () => {
     const r = good(); r['subagent'] = 'sonnet-class';
     expect(() => parseRegistry(r)).toThrow(/subagent/);

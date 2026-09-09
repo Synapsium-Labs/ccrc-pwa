@@ -133,6 +133,10 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const poison = (name: string, says: string): void =>
     fs.writeFileSync(join(h, '.local', 'bin', name),
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
+      // C13: the header goes in via `curl -K -` on stdin now, never argv —
+      // captured separately so a test can assert BOTH halves: argv never
+      // carries the token, and stdin is where it actually went.
+      + (name === 'curl' ? `cat >> "$HOME/${name}-stdin-poison" 2>/dev/null\n` : '')
       + `echo "${says}" >&2\nexit 97\n`, { mode: 0o755 });
   poison('curl', 'ccrc tests must never reach a real server');
   poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
@@ -158,6 +162,14 @@ function oneObject(r: Result): Record<string, unknown> {
 const poisonLog = (name: string): string[] => {
   const p = join(home, `${name}-poison`);
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
+
+/** C13: what `curl` read on STDIN — where `-K -` now carries the
+ *  Authorization header, so a caller can assert the token landed here and
+ *  nowhere in {@link poisonLog}'s argv capture. */
+const poisonStdin = (name: string): string => {
+  const p = join(home, `${name}-stdin-poison`);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
 };
 
 const registryOf = (id: string): Record<string, unknown> =>
@@ -692,30 +704,40 @@ describe('ccrc models <id> discovery', () => {
     // No CCRC_MODELS_PROBE_FIXTURE here — the fixture seam bypasses the token
     // check entirely, so it cannot prove the token flowed anywhere. Instead
     // this drives the REAL openrouter fetch arm, whose `curl` the harness
-    // poisons: the poison log records curl's own argv (never ccrc's stdout
-    // or stderr), so a `Bearer lane-token` there proves the secrets file's
-    // token reached the probe's request — and never reached ccrc's own
-    // environment or output. Measured: dropping `export` from the secrets
-    // file (`writeSecrets(false)`) leaves the subshell's ANTHROPIC_AUTH_TOKEN
-    // unexported, so `exec`ing the probe does not inherit it, the probe's own
-    // token gate refuses BEFORE curl runs, and this case reds.
+    // poisons: the poison harness records curl's own argv AND its stdin
+    // separately (C13: the header travels on stdin via `curl -K -`, never
+    // argv), so a `Bearer lane-token` on STDIN proves the secrets file's
+    // token reached the probe's request while argv stays clean — and neither
+    // reaches ccrc's own environment or output. Measured: dropping `export`
+    // from the secrets file (`writeSecrets(false)`) leaves the subshell's
+    // ANTHROPIC_AUTH_TOKEN unexported, so `exec`ing the probe does not
+    // inherit it, the probe's own token gate refuses BEFORE curl runs, and
+    // this case reds.
     it('sources the lane\'s secrets file for the probe; the token never reaches ccrc\'s own output', () => {
       const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2']);
       expect(r.code).toBe(1);
       expect(oneObject(r)['error']).toBe('endpoints-unreachable');
-      expect(poisonLog('curl').join('\n')).toContain('Bearer lane-token');
+      expect(poisonStdin('curl')).toContain('Bearer lane-token');
+      expect(poisonLog('curl').join('\n')).not.toContain('lane-token');
+      expect(poisonLog('curl').join('\n')).not.toContain('Authorization');
       expect(r.stdout).not.toContain('lane-token');
       expect(r.stderr).not.toContain('lane-token');
     });
   });
 
-  // Fix round 1, Finding 2: `_models_endpoints`'s `else` (ambient-environment)
-  // branch — taken when the roster row has NO `exec.secretsFile` at all — was
-  // executed by zero tests. `router`'s "no secrets file" case only deletes the
-  // FILE while the row still declares one, which stops at the `[ -r ]` guard
-  // inside the `if` branch. `router2` carries no `secretsFile` in the roster
-  // at all, so `secrets` is empty and this describe's cases are the ones that
-  // actually reach the `else`.
+  // Fix round 1, Finding 2 (superseded by the final wave's C3 fix):
+  // `_models_endpoints`'s `else` (ambient-environment) branch — taken when the
+  // roster row has NO `exec.secretsFile` at all — was executed by zero tests.
+  // `router`'s "no secrets file" case only deletes the FILE while the row
+  // still declares one, which stops at the `[ -r ]` guard inside the `if`
+  // branch. `router2` carries no `secretsFile` in the roster at all, so
+  // `secrets` is empty and this describe's cases are the ones that actually
+  // reach the `else`. C3 (final wave): `_models_run_probe` now unsets the
+  // credential names the probe honours in BOTH branches before running it, so
+  // there is no longer an "ambient environment" for a secrets-file-less lane
+  // to inherit — a lane with no secrets file gets NO token, full stop, and
+  // always surfaces the probe's own refusal, whatever the calling shell
+  // happens to be carrying.
   describe('the ambient-environment branch, on a lane with no exec.secretsFile (§5)', () => {
     beforeEach(() => { run(['models', 'router2', 'init', 'openrouter']); });
 
@@ -726,15 +748,39 @@ describe('ccrc models <id> discovery', () => {
       expect(String(oneObject(r)['detail'])).toContain('needs the lane\'s key: set ANTHROPIC_AUTH_TOKEN');
     });
 
-    it('with an ambient token, the probe runs and the token reaches curl — never ccrc\'s own output', () => {
+    // C3: the ambient token here stands in for another lane's key already
+    // sitting in the calling shell's environment — exactly what
+    // `shared/wrapper.mjs`'s generated wrapper sources before exec'ing
+    // `claude`. MEASURED before the fix: this reached curl as `Bearer
+    // ambient-token`, i.e. a lane with no secrets file forwarded whatever key
+    // the calling session happened to carry. After the fix, `_models_run_
+    // probe` unsets it before the probe ever runs, so router2 never sees it
+    // and the probe refuses before curl is invoked at all.
+    it('with an ambient token, still refuses — a lane with no secrets file never sees the calling shell\'s own key', () => {
       const r = run(['models', 'router2', 'discovery', 'add', 'z-ai/glm-5.2'],
         { ANTHROPIC_AUTH_TOKEN: 'ambient-token' });
       expect(r.code).toBe(1);
       expect(oneObject(r)['error']).toBe('endpoints-unreachable');
-      expect(poisonLog('curl').join('\n')).toContain('Bearer ambient-token');
+      expect(String(oneObject(r)['detail'])).toContain('needs the lane\'s key: set ANTHROPIC_AUTH_TOKEN');
+      expect(poisonLog('curl')).toEqual([]);
       expect(r.stdout).not.toContain('ambient-token');
       expect(r.stderr).not.toContain('ambient-token');
     });
+  });
+
+  // C3: the `compatible` arm is the one the finding's own repro exercises —
+  // an ambient `ANTHROPIC_AUTH_TOKEN` (another lane's key, already in the
+  // calling shell) reaching THIS lane's `baseUrl`, a host that key was never
+  // issued for. Same fix, same shape as the openrouter case above: no secrets
+  // file means no token reaches curl, whatever the calling shell carries.
+  it('C3: a compatible lane with no secrets file never forwards an ambient token to its own baseUrl either', () => {
+    run(['models', 'router2', 'init', 'compatible', '--base-url', 'https://vendor.example.com']);
+    const r = run(['models', 'refresh', 'router2'], { ANTHROPIC_AUTH_TOKEN: 'ambient-token' });
+    expect(r.code).toBe(1);
+    expect(poisonLog('curl').join('\n')).not.toContain('ambient-token');
+    expect(poisonLog('curl').join('\n')).not.toContain('Authorization');
+    expect(r.stdout).not.toContain('ambient-token');
+    expect(r.stderr).not.toContain('ambient-token');
   });
 });
 
@@ -941,13 +987,14 @@ describe('ccrc models refresh', () => {
   // the fetch (and so the header) entirely, so it cannot prove the token
   // flowed anywhere; this drives the REAL `compatible` fetch arm, whose
   // `curl` the harness poisons, exactly as the discovery describe block's own
-  // served-by test does for `_models_endpoints`. The poison log records
-  // curl's own argv — never ccrc's stdout or stderr — so a `Bearer
-  // lane-token` there proves the secrets file's token reached the probe's
-  // request, and the failing curl (poison exits 97) is what "refresh" being
-  // wired straight through the real fetch arm looks like on this box: the
-  // catalogue fetch fails, the lane's previous (nonexistent) catalogue stays
-  // absent, and the run reports that one lane failed.
+  // served-by test does for `_models_endpoints`. The poison harness records
+  // curl's own argv AND its stdin separately (C13: the header travels on
+  // stdin via `curl -K -`, never argv) — a `Bearer lane-token` on STDIN
+  // proves the secrets file's token reached the probe's request while argv
+  // stays clean, and the failing curl (poison exits 97) is what "refresh"
+  // being wired straight through the real fetch arm looks like on this box:
+  // the catalogue fetch fails, the lane's previous (nonexistent) catalogue
+  // stays absent, and the run reports that one lane failed.
   it('sources the lane\'s secrets file for the compatible probe too; the token never reaches ccrc\'s own output', () => {
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
     fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
@@ -960,7 +1007,9 @@ describe('ccrc models refresh', () => {
     const refreshed = oneObject(r)['refreshed'] as { id: string; probe: string; ok: boolean; reason: string }[];
     expect(refreshed).toEqual([{ id: 'router', probe: 'compatible', ok: false, reason: expect.any(String) }]);
     expect(refreshed[0]!.reason.length).toBeGreaterThan(0);
-    expect(poisonLog('curl').join('\n')).toContain('Bearer lane-token');
+    expect(poisonStdin('curl')).toContain('Bearer lane-token');
+    expect(poisonLog('curl').join('\n')).not.toContain('lane-token');
+    expect(poisonLog('curl').join('\n')).not.toContain('Authorization');
     expect(r.stdout).not.toContain('lane-token');
     expect(r.stderr).not.toContain('lane-token');
   });

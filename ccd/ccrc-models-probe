@@ -187,6 +187,26 @@ sys.stdout.write(urllib.request.urlopen(req, timeout=30).read().decode("utf-8"))
 PY
 }
 
+# C13: the compatible arm's only legitimate http:// case. `shared/models.mjs`'s
+# `parseRegistry` already refuses a non-loopback http:// baseUrl at write time
+# (§ the registry gate this file cannot import), but this file reads the
+# baseUrl straight off disk with no re-validation of its own, so it re-derives
+# the same loopback set rather than trusting a hand-edited file. Bracket-aware:
+# `http://[::1]:8080/…` carries the bracketed host, not the bare address.
+_models_probe_base_is_loopback() {   # <baseUrl> -> 0 iff its host is loopback
+  local rest="${1#*://}"
+  local host="${rest%%/*}"
+  if [[ "$host" == \[*\]* ]]; then
+    host="${host%%]*}]"
+  else
+    host="${host%%:*}"
+  fi
+  case "$host" in
+    127.0.0.1|localhost|'[::1]') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 _fetch() {
   # THE ONE READ OF THE SEAM. Everything below it is the real network.
   if [ -n "${CCRC_MODELS_PROBE_FIXTURE:-}" ]; then cat "$CCRC_MODELS_PROBE_FIXTURE" > "$RAW"; return; fi
@@ -201,22 +221,37 @@ _fetch() {
       # OpenRouter would answer with less than the ownership check needs.
       # `--fail` so a 4xx/5xx is a non-zero exit rather than an error page
       # written into $RAW as if it were a catalogue; `-sS` so the transcript
-      # carries the reason and not a progress bar.
+      # carries the reason and not a progress bar. C13: the header goes in via
+      # `curl -K -` on stdin, exactly as `ccd/ccd-account-health:211-213` sends
+      # the identical credential — never on argv, where /proc/<pid>/cmdline
+      # would make it world-readable for the whole request window.
       if [ -n "$ENDPOINTS" ]; then
         [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] \
           || { echo "$PROG: the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN" >&2; return 1; }
-        curl -sS --fail --max-time 30 -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
-          "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
+        printf 'header = "Authorization: Bearer %s"\n' "$ANTHROPIC_AUTH_TOKEN" \
+          | curl -sS -K - --fail --max-time 30 --proto '=https' \
+              "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
       else
-        curl -sS --fail --max-time 30 'https://openrouter.ai/api/v1/models' > "$RAW"
+        curl -sS --fail --max-time 30 --proto '=https' 'https://openrouter.ai/api/v1/models' > "$RAW"
       fi
       ;;
     compatible)
       # The lane's own token, when the box has one. Best effort by design: a
-      # 404 leaves "never probed" and the discovery list has to be explicit (§5).
-      local auth=()
-      [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ] || auth=(-H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN")
-      curl -sS --fail --max-time 30 ${auth[@]+"${auth[@]}"} "${BASE_URL%/}/v1/models" > "$RAW"
+      # 404 leaves "never probed" and the discovery list has to be explicit
+      # (§5). C13, same shape as the endpoints arm above: the header (when
+      # there is one) goes in via `curl -K -` on stdin, never argv.
+      # `parseRegistry` (shared/models.mjs) already refuses a non-loopback
+      # http:// baseUrl before this file ever sees one written through the
+      # verbs — `--proto` widens to allow http here ONLY for a loopback host,
+      # matching that gate rather than trusting a hand-edited registry file.
+      local proto='=https'
+      _models_probe_base_is_loopback "$BASE_URL" && proto='=https,http'
+      if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$ANTHROPIC_AUTH_TOKEN" \
+          | curl -sS -K - --fail --max-time 30 --proto "$proto" "${BASE_URL%/}/v1/models" > "$RAW"
+      else
+        curl -sS --fail --max-time 30 --proto "$proto" "${BASE_URL%/}/v1/models" > "$RAW"
+      fi
       ;;
     *) echo "$PROG: probe kind \"$PROBE_KIND\" has no fetch arm in this build" >&2; return 1 ;;
   esac
@@ -387,6 +422,17 @@ PY
 }
 
 mkdir -p "$(dirname "$OUT")" || die "could not create $(dirname "$OUT")"
+# bash:425 / security:427 minors: $NORM used to come into existence via
+# whichever writer got to it first — the normaliser's `> "$NORM"` redirect, or
+# `_mark_stale`'s python `open(dst, "w")` — at the ambient umask (measured
+# 0664 on this box), inside `~/.ccrc/models`, which `mkdir -p` leaves 0775. A
+# `chmod 600` AFTER that write closes nothing: the file already existed,
+# readable, for the whole write it exists to protect. Pre-creating it here, at
+# 0600, means every later writer TRUNCATES an already-0600 file — `>` and
+# `open(..., "w")` both preserve an existing file's mode, they only set one at
+# CREATION — so there is no instant, catalogue or endpoints arm, where $NORM
+# is readable by anyone but its owner.
+install -m 600 /dev/null "$NORM" || die "could not stage $NORM"
 
 if ! _fetch 2>"$TMPD/fetch.err"; then
   # `--endpoints` NEVER marks a catalogue stale: it did not ask about the
@@ -411,8 +457,14 @@ if [ -n "$ENDPOINTS" ]; then
   # names an existing directory, instead of "succeeding" by dropping the
   # answer inside it under $RAW's own basename, which is what moving straight
   # onto $OUT did before this fix.
+  #
+  # `mv -f "$RAW" "$NORM"` is a RENAME, so it replaces $NORM's pre-touched
+  # 0600 inode with $RAW's own — the catalogue arm's fix above does not cover
+  # this arm. $RAW sits inside $TMPD (mktemp -d's default 0700), so it is
+  # unreadable to anyone else there; chmod it 600 BEFORE the move, not after,
+  # so the shared `~/.ccrc/models` directory never holds it at any other mode.
+  chmod 600 "$RAW" || die "could not set the mode on the endpoints answer"
   mv -f "$RAW" "$NORM" || die "could not stage the endpoints answer"
-  chmod 600 "$NORM" || die "could not set the mode on the endpoints answer"
   _probe_mv_notdir "$NORM" "$OUT" || die "could not move the endpoints answer into place at $OUT"
   exit 0
 fi
@@ -422,8 +474,11 @@ if ! _normalise 2>"$TMPD/norm.err"; then
   exit 1
 fi
 
-# 0600 before the rename, not after: the file is world-readable for the width of
-# an fchmod otherwise, and an OpenRouter catalogue carries the lane's price list.
+# $NORM has been 0600 since it was pre-created above, and the normaliser's
+# `> "$NORM"` redirect truncates that existing file rather than recreating it
+# at the ambient umask — so this chmod is a redundant belt-and-braces, not
+# what makes the write safe. An OpenRouter catalogue carries the lane's price
+# list, which is why this file does not settle for "eventually 0600".
 chmod 600 "$NORM" || die "could not set the mode on the new catalogue"
 # `_probe_mv_notdir`: rename, and REFUSE when $OUT is a directory, rather than
 # moving $NORM INSIDE it — a bare `mv -f` would "succeed" into the wrong place

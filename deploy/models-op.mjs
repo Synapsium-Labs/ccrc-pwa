@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // models-op — the node half of the `ccrc models` verb group (spec §10). It owns
 // the REGISTRY FILE's read, the mutation, the RE-VALIDATION, the atomic write
-// and the re-materialisation; `ccd/ccrc` above it is a dispatcher and nothing
-// else.
+// and the re-materialisation. `ccd/ccrc` above it dispatches AND gates ids at
+// the usage level (`_models_id_ok`, before this file is ever reached) — but
+// this file does not depend on that gate holding (C6): every op re-validates
+// its own `--id` against `ACCOUNT_ID_RE` here, first, before any path is
+// built or the roster is even read.
 //
 // ── WHAT IT DOES NOT TOUCH ───────────────────────────────────────────────
 // The roster. Ruling 280 (2026-09-08): the class registry is its own
@@ -52,6 +55,15 @@ import {
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
+
+/** The account-id shape (C6), spelled once, here — the same shape as
+ *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
+ *  account id becomes a path segment below, in FOUR places (`registryPath`,
+ *  `cataloguePath`, `classesTsvPath`, `effortPath`), so this file validates
+ *  its own `--id` at op entry rather than depending on `ccd/ccrc`'s
+ *  `_models_id_ok` — a usage-level gate one layer up, not this file's own —
+ *  to have run first. */
+export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** What `init` plants per probe kind.
  *
@@ -452,6 +464,15 @@ function main(argv) {
   const pairs = readPairs(argv, spec);
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
+
+  // C6: at op entry, before any of the four per-account paths are built and
+  // before the roster is even read — `rm`'s own unlink loop runs before the
+  // no-such-account gate (an orphan is the expected case there), which used
+  // to mean it ran before ANY id validation. A `..`-bearing id built a path
+  // outside ~/.ccrc/models and this op deleted it, at exit 0.
+  if (a.id !== undefined && !ACCOUNT_ID_RE.test(a.id)) {
+    return refuse(1, 'bad-account-id', `"${a.id}" is not an account id.`);
+  }
 
   const r = readRoster(a.file);
   if (r.err !== undefined) return refuse(1, r.err[0], r.err[1]);

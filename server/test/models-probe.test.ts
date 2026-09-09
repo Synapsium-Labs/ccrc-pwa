@@ -138,6 +138,23 @@ describe('the Codex arm (§5)', () => {
     expect(mode).toBe(0o600);
   });
 
+  // bash:425 / security:427 minors: `$NORM` used to be CREATED by a plain
+  // `> "$NORM"` redirect (the normaliser's python) or `open(dst, "w")`
+  // (`_mark_stale`'s rewrite) — at the ambient umask, in `~/.ccrc/models`,
+  // which `mkdir -p` leaves 0775 — so the staged file was world-readable for
+  // the WHOLE write, not "the width of an fchmod" as the old comment claimed.
+  // A live poll of the mid-write mode needs a slow/large fixture and syscall-
+  // grade timing this suite does not carry (the sibling minor on the symlink
+  // test makes the same call: an end-state/source check here, not a race-
+  // window witness). `install -m 600` at CREATION is what closes the window —
+  // a later `chmod` cannot, because by the time it runs the file has already
+  // existed, readable, for the whole write. This pins the mechanism: reds if
+  // the pre-create is removed and the file goes back to being created bare.
+  it('stages the catalogue write at 0600 from the moment it exists, not chmod-after (bash:425/security:427)', () => {
+    const src = fs.readFileSync(PROBE, 'utf8');
+    expect(src).toMatch(/install -m 600 \/dev\/null "\$NORM"/);
+  });
+
   it('stages the catalogue write beside its destination, not in a shared temp dir (§4.2)', () => {
     // spec §4.2 is tmp + mv in the SAME directory as the destination: a
     // cross-filesystem `mv` (staging under `$TMPDIR`/`mktemp -d`, then moving
@@ -333,6 +350,24 @@ describe('the test seam is a seam and not a second code path', () => {
     const src = fs.readFileSync(PROBE, 'utf8');
     const code = src.split('\n').filter((l) => !l.trim().startsWith('#'));
     expect(code.filter((l) => l.includes('CCRC_MODELS_PROBE_FIXTURE'))).toHaveLength(1);
+  });
+
+  // C13: `curl -H "Authorization: Bearer $tok"` lands the key on
+  // /proc/<pid>/cmdline, world-readable for the whole request window —
+  // measured directly against this exact shape before the fix.
+  // `ccd/ccd-account-health:211-213` already solved this for the identical
+  // credential with `-K -` on stdin; both arms here that send the header
+  // (openrouter --endpoints, compatible) must follow the same shape. A live
+  // curl-argv assertion cannot drive this file (every case here runs through
+  // `CCRC_MODELS_PROBE_FIXTURE`, which bypasses the fetch entirely, per this
+  // describe's own header) — `server/test/ccrc-models.test.ts` measures the
+  // live argv/stdin split through the real fetch arms; this is the static
+  // pin on the source shape.
+  it('never puts the bearer token on curl\'s argv — the header goes in via -K - on stdin (C13)', () => {
+    const src = fs.readFileSync(PROBE, 'utf8');
+    const code = src.split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(code.filter((l) => /-H\s+"?Authorization/.test(l))).toEqual([]);
+    expect(code.filter((l) => l.includes('curl') && l.includes('-K -')).length).toBeGreaterThanOrEqual(2);
   });
 
   it('the probe is executable and has a bash shebang', () => {

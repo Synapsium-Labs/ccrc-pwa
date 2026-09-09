@@ -3860,11 +3860,18 @@ _models_class_ok() {   # <class>
 # a SUBSHELL that runs the probe and nothing else, never the verb's own shell,
 # which must never carry the lane's key past this one call. The line is
 # `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
-# `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. A lane with no secrets
-# file runs the probe against the AMBIENT environment and its own refusal
-# ("needs the lane's key: set ANTHROPIC_AUTH_TOKEN") is what surfaces —
-# captured here, not reworded, and never containing the key's VALUE, only its
-# name.
+# `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
+# credential names the probe honours (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY)
+# before doing anything else — measured fix, C3 of the final wave: without
+# this, a lane with no secrets file ran the probe against whatever this shell
+# already had, which on this fleet is ordinarily the CALLING lane's own key
+# (every wrapper-started session sources it before exec'ing `claude`), so
+# `ccrc models refresh --all` could ship that key to a `compatible` lane's
+# third-party `baseUrl`. Scrubbed first, a lane with a secrets file gets only
+# what that file sets, and a lane with none gets NO token, ever, regardless of
+# what the calling session is carrying — and its own refusal ("needs the
+# lane's key: set ANTHROPIC_AUTH_TOKEN") is what surfaces — captured here, not
+# reworded, and never containing the key's VALUE, only its name.
 #
 # ONE SEAM, TWO CALLERS: `_models_endpoints` (the ownership-whitelist
 # question, on a single model) and `_models_refresh_one` (a lane's whole
@@ -3877,10 +3884,12 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
   local secrets
   secrets="$(jq -r --arg id "$id" '(.accounts // [])[] | select(.id==$id) | .exec.secretsFile // empty' "$(_models_roster_path)" 2>/dev/null)"
   if [ -n "$secrets" ]; then
-    ( [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+      [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
       exec "$@" )
   else
-    "$@"
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+      exec "$@" )
   fi
 }
 

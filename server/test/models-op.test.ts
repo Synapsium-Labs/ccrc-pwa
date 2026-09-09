@@ -931,4 +931,51 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     op('rm', '--file', rosterPath(), '--id', 'gpt');
     expect(fs.readFileSync(rosterPath(), 'utf8')).toBe(before);
   });
+
+  // C6: `rm`'s unlink loop runs BEFORE the no-such-account gate (an orphan is
+  // the expected case), which used to mean it ran before ANY id validation —
+  // a `..`-bearing id built a path outside ~/.ccrc/models and deleted it,
+  // reporting ok:true. Measured before the fix: this removed
+  // $HOME/.claude/settings.json (via `cataloguePath`'s plain `${id}.json`
+  // suffix) and answered ok:true. The account-id guard now runs at op entry,
+  // before any of the four paths are built, on every op — not just `rm`.
+  it('refuses a bad account id before any path is built, and deletes nothing (C6)', () => {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"marker":true}\n');
+    const r = op('rm', '--file', rosterPath(), '--id', '../../.claude/settings');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-account-id');
+    expect(fs.existsSync(path.join(home, '.claude', 'settings.json'))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')))
+      .toEqual({ marker: true });
+  });
+});
+
+// C6: the guard is at OP ENTRY, so every op that takes an `--id` refuses a
+// bad one before touching the roster or any path — not just `rm`, which is
+// the one the finding's own repro happened to exploit.
+describe('the account-id guard applies to every op, not just rm (C6)', () => {
+  it.each([
+    ['show', []],
+    ['set-subagent', ['--class', 'opus']],
+    ['materialise', []],
+    ['discovery', ['--action', 'catalogue']],
+  ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
+    const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-account-id');
+  });
+
+  it('accepts every id shape the roster itself uses, and an orphan reap id', () => {
+    for (const id of ['gpt', 'claude-a', 'a', 'a'.repeat(32), 'ghost']) {
+      const r = op('show', '--file', rosterPath(), '--id', id);
+      expect(r.body['error']).not.toBe('bad-account-id');
+    }
+  });
+
+  it('refuses an id one character over the 32-character cap', () => {
+    const r = op('show', '--file', rosterPath(), '--id', 'a'.repeat(33));
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-account-id');
+  });
 });
