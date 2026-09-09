@@ -441,8 +441,15 @@ one of the survivors was itself caught by an existing test while being written (
   one.** It retracts a stale strand only through a HEALTHY pane. When the unreadable field recovers
   while the pane stays blocked — a 429 banner standing for a five-hour window — no healthy tick ever
   intervenes, and `_strand_mark`'s `-e` debounce swallows the genuine strand that follows: the row wears
-  "wrapper could not be measured" for the whole window while the truth is a pool census. That text is
-  not internal; `SessionRecord.stranded.reason` carries it VERBATIM to every surface. **The marker is a
+  "wrapper could not be measured" for the whole window while the truth is a pool census. **Said in two
+  halves, because only one is true on the tree this merges into** — and getting that split wrong is
+  what #69's S4 finding was about, so writing it wrong again here would be the fourth instance of the
+  very pattern this round is convened over. TODAY the cost is the marker file and the missing
+  `swap.log` line, the box's own forensic trail; the banner recomputes its sentence from a fresh
+  reason on every firing and already tells the truth. WHEN wave 3 lands its reader the marker becomes
+  `SessionRecord.stranded.reason`, carried VERBATIM to every ccrc surface — measured:
+  `git grep -c stranded server/src/registry.ts` is **0** on `origin/main` and on this PR branch, **17**
+  on `ws/clear-meadow`. The fix earns its place on the first half alone. **The marker is a
   CURRENT-STATE claim and now follows the truth; the swap.log line keeps its per-episode floor, the
   banner keeps its `SWAPBLOCK_COOLDOWN` floor, and the episode keeps its own epoch** — `stranded.at` is
   "since when", and re-stamping it would make a four-hour strand read as new on every tick. A marker
@@ -453,8 +460,10 @@ one of the survivors was itself caught by an existing test while being written (
   mode 000 into the same `""` an EMPTY one gives — so the branch would commit a WRITE to a path it had
   proved only `-e` for. Measured: one unsuppressed `mv: cannot overwrite directory` per stranded row
   per tick, for ever, from the two `_strand_mark` call sites in `_auto_swap_check` that carry no
-  redirect group. `_reg_read` stands still on rc ≠ 0, and `registry.ts` already fail-shuts an
-  unreadable marker to `STRANDED_UNREADABLE`, so nothing is lost by not repairing it.
+  redirect group. `_reg_read` stands still on rc ≠ 0 — and nothing is lost by not repairing the
+  marker, because wave 3's reader fail-shuts an unreadable one to `STRANDED_UNREADABLE` rather than
+  trusting it. (That reader is on `ws/clear-meadow`, not on this branch; stated as the future half
+  deliberately, per D-2201.)
 - **D-2203 (2026-09-09)** — **D-2161's stderr group was the one change of eight that was never
   mutated, and nothing in the tree could red it.** With the group deleted the whole ccd sweep is green;
   the only red is `ownership.test.ts`'s provenance stamp, which reds on ANY byte change and so is a red
