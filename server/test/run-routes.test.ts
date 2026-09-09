@@ -755,6 +755,28 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(w.coord.run(id)?.state).toBe('dispatched');
   });
 
+  it('permits a session whose .project reads back whitespace-only — trimmed empty is not a crossing', async () => {
+    // Review finding, fix round (task-2-fix-brief.md): the guard's
+    // `projectRead.content !== ''` clause had no test writing an empty or
+    // whitespace-only `.project`, so deleting it reds nothing even though
+    // `fieldMeasured` trims INSIDE its `ok` arm (`registry.ts`) — a
+    // whitespace-only file reads back as `content: ''`, the same "field with
+    // no name in it" case absence already permits. Without the clause this
+    // would compare `''` against the run's real project and refuse
+    // `project-mismatch` with `by: ''`, the exact empty-`by` collapse the
+    // `DispatchOutcome` docstring and this wave's design forbid.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: '   \n' });
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
   it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
     // `record === undefined` on a LISTABLE registry is the tolerated case
     // (`DoneRun`'s own docstring): the run falls back to its own workspace and
