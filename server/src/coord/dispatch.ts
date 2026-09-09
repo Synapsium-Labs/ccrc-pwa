@@ -114,11 +114,30 @@ export type DispatchOutcome =
       limit?: number; running?: number; used?: number; candidates?: number;
       /** WHICH project the measured party belongs to — `project-mismatch`'s
        *  own field, and the only refusal on this union that carries a string.
-       *  PRESENT exactly when there is a measured project to name; absent
-       *  otherwise, never `''`, because presence is the distinction and an
-       *  empty string would collapse "no project was measured" into "the
-       *  project is nothing". The open route's own refusal already carries a
-       *  `by` (`routes.ts`), so the two sites of one code answer one shape. */
+       *  PRESENT exactly when a registry record was found and its project
+       *  differs from the run's; absent otherwise, never `''`, because
+       *  presence is the distinction and an empty string would collapse "no
+       *  comparison was made" into "the project is nothing". The open
+       *  route's own refusal already carries a `by` (`routes.ts`), so the
+       *  two sites of one code answer one shape.
+       *
+       *  CAVEAT (review finding, fix round 1): "a registry record was found"
+       *  is not the same fact as "the project was measured". `record.project`
+       *  is `registry.ts`'s `field()`-backed value, `project ?? id` — an
+       *  ABSENT or UNREADABLE `.project` file (every pre-2026-07-28 row,
+       *  `ccd/ccd:1191`) reads back as the session id, never as "unmeasured".
+       *  So `by` can name a session id that was never a real project, and the
+       *  guard below can refuse `project-mismatch` on a fact that was never
+       *  actually measured. `measuredIdentity` does not catch it — it gates
+       *  on the uuid/wrapper/workdir triple only, not `project`. The correct
+       *  fix routes `project` through `fieldMeasured` (as `wrapper`/
+       *  `workdir`/`uuid` already are) so a genuinely-unmeasured project
+       *  answers `registry-unmeasurable` instead of this refusal — a change
+       *  beyond this task's four files (every other `SessionRecord.project`
+       *  consumer — `fleet.ts`, `watch.ts`, `lifecycle.ts`, `divergence.ts`,
+       *  `routes.ts`'s project listing — would need its own ruling on the
+       *  fallback), left for coordinator/spec ratification rather than made
+       *  unilaterally here. */
       by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
@@ -514,6 +533,14 @@ export async function dispatchRun(
     // — `readRegistryMeasured` refused it four lines up with its own code.
     // Refusing on a fact not measured would be the same error in the other
     // direction.
+    //
+    // CAVEAT (review finding, fix round 1) — see `by`'s own docstring above
+    // (`DispatchOutcome`'s refused member): `record.project` collapses an
+    // absent/unreadable `.project` file to the session id (`registry.ts`'s
+    // `project ?? id`), so this comparison can refuse `project-mismatch` on
+    // a project that was never actually measured. Left as the brief and the
+    // design spec (§3 F1) both specify verbatim — the fix is a change beyond
+    // this task's scope and needs coordinator/spec ratification.
     if (record !== undefined && record.project !== run.project) {
       return { ok: false, kind: 'refused', code: 'project-mismatch', by: record.project };
     }
