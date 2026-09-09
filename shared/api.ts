@@ -2934,6 +2934,19 @@ export interface SlashCommand {
   kind: 'builtin' | 'skill';
 }
 
+/** D-2228 — WHO WROTE A `system` ROW. Claude Code's `--resume` writes a META
+ *  user "Continue from where you left off." and pads it with a synthetic
+ *  assistant "No response requested." (`message.model === '<synthetic>'`);
+ *  without CLAUDE_CODE_RESUME_INTERRUPTED_TURN it submits nothing. Rendered as
+ *  a user bubble and a reply, that stall read as "someone sent resume and it
+ *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
+ *  ignores it, an older writer omits it. */
+export type SystemOrigin = 'resume-prompt' | 'no-response';
+/** The sentence Claude Code's default resume prompt is, and every variant —
+ *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
+export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
+export const NO_RESPONSE_TEXT = 'No response requested.';
+export const SYNTHETIC_MODEL = '<synthetic>';
 /**
  * `truncatedBytes` — THREE DOCUMENTED STATES, and the third is why the field
  * is optional (Build 4, spec §2.2/§2.4):
@@ -2956,19 +2969,6 @@ export interface SlashCommand {
  * An optional field on an existing member is the additive shape old readers
  * simply ignore.
  */
-/** D-2228 — WHO WROTE A `system` ROW. Claude Code's `--resume` writes a META
- *  user "Continue from where you left off." and pads it with a synthetic
- *  assistant "No response requested." (`message.model === '<synthetic>'`);
- *  without CLAUDE_CODE_RESUME_INTERRUPTED_TURN it submits nothing. Rendered as
- *  a user bubble and a reply, that stall read as "someone sent resume and it
- *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
- *  ignores it, an older writer omits it. */
-export type SystemOrigin = 'resume-prompt' | 'no-response';
-/** The sentence Claude Code's default resume prompt is, and every variant —
- *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
-export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
-export const NO_RESPONSE_TEXT = 'No response requested.';
-export const SYNTHETIC_MODEL = '<synthetic>';
 export type ChatEvent =
   | { kind: 'user'; uuid: string; ts: string; text: string }
   | { kind: 'assistant'; uuid: string; ts: string; text: string }

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import fs from 'node:fs';
+import { RESUME_PROMPT_PREFIX } from '../../shared/api.js';
+import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
 // D-2227 — Claude Code's interrupted-turn resume is env-gated
 // (CLAUDE_CODE_RESUME_INTERRUPTED_TURN); ccd never set it, so every `--resume`
@@ -39,6 +41,22 @@ const seed = (): void => {
         _reg_set myid uuid deadbeef-0000-4000-8000-000000000000`);
 };
 
+/** D-2228 — the fourth of the four independent copies of the resume sentence
+ *  (finding: shared↔ccd↔detector↔this-test each held their own literal, so
+ *  editing `RESUME_PROMPT_PREFIX` alone left every one of them green). Read
+ *  `_transcript_stalled_pair`'s own glob literal FROM SOURCE — never retype
+ *  it — so this test tracks ccd's copy instead of silently drifting from it.
+ *  The line is found by its STRUCTURAL markers (the `"isMeta":true` glob
+ *  clause and the `state=1` transition), not by the sentence itself. */
+const detectorLiteral = (): string => {
+  const src = fs.readFileSync(CCD, 'utf8');
+  const line = src.split('\n').find((l) => l.includes(`*'"isMeta":true'*`) && l.includes('then state=1; continue; fi'));
+  if (!line) throw new Error('_transcript_stalled_pair detector line not found in ccd/ccd');
+  const literals = [...line.matchAll(/\*'([^']*)'\*/g)].map((m) => m[1]!);
+  if (literals.length !== 2) throw new Error(`expected 2 glob literals ("isMeta":true, the sentence) on the detector line, found ${literals.length}`);
+  return literals[1]!;
+};
+
 describe('the resume flag (D-2227)', () => {
   it('a resume spawn carries CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1 and the prompt, before the wrapper', () => {
     seed();
@@ -71,10 +89,17 @@ describe('the resume flag (D-2227)', () => {
     expect(newSessions()[0]).toContain('CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=3600000');
   });
 
-  it('the prompt has no single quote (it is single-quoted into the tmux command) and starts with the sentence Claude Code matches', () => {
+  it('the prompt has no single quote (it is single-quoted into the tmux command) and starts with RESUME_PROMPT_PREFIX — what the PWA parser matches (D-2228)', () => {
     const p = h.sh(`printf '%s' "$RESUME_PROMPT"`);
     expect(p).not.toContain("'");
-    expect(p.startsWith('Continue from where you left off.')).toBe(true);
+    expect(p.startsWith(RESUME_PROMPT_PREFIX)).toBe(true);
     expect(p).toContain('ccd restarted this session');
+  });
+
+  it("the stall detector's own copy of the sentence (ccd/ccd, `_transcript_stalled_pair`) is a prefix of both RESUME_PROMPT_PREFIX and RESUME_PROMPT — closing the coupling's fourth literal (D-2228)", () => {
+    const literal = detectorLiteral();
+    expect(RESUME_PROMPT_PREFIX.startsWith(literal)).toBe(true);
+    const p = h.sh(`printf '%s' "$RESUME_PROMPT"`);
+    expect(p.startsWith(literal)).toBe(true);
   });
 });
