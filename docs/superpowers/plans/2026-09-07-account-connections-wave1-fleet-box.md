@@ -16747,3 +16747,119 @@ it passes `--suffix`; one who does not, does not. That asymmetry is now argued i
 marker stands, because that refusal is node's and is re-emitted verbatim — one refusal, one owner, which
 is the stronger principle. `add` has the identical property today. The marker is inert, the retry
 rewrites it, and a test now pins that it is there.
+
+### D-2143 — `declare`'s "no pre-pass needed" premise was falsified by an ordering shipped in the same commit
+
+`account-op.mjs` argues `declare` needs no `check-*` op: *"`add`'s `check-add` exists because `add`
+writes a 0600 credential BEFORE the roster entry, so the request has to be judged while nothing is on
+disk; `declare` writes no secret and creates no launcher, so its only writer can also be its only
+judge."*
+
+Sound when written. **False for the code shipped beside it**, because RULING 1 (D-2134's ordering,
+applied at D-2140) makes `declare` write the kill-switch marker before the roster entry. Something IS on
+disk when the judge runs.
+
+The consequence is operator-visible and asymmetric between two verbs an operator uses interchangeably:
+
+| operator types | `add` | `declare` |
+|---|---|---|
+| `--hue puce` | `unknown-hue`, **exit 2**, nothing written | `roster-invalid`, **exit 1**, marker on disk |
+| `--provider not-a-provider` | `unknown-provider`, exit 2 | `roster-invalid`, exit 1, marker on disk |
+| a colliding suffix | `suffix-collision`, exit 1 | `roster-invalid`, exit 1, marker on disk |
+
+An unknown hue is decidable from argv alone against a constant set, which `ccd/ccrc:24-33` defines as
+class **2**. `declare` answers **1**. And Task 23's title — *every identity refusal happens before the
+first byte is written* — is the invariant this whole cluster is built on; `declare` violates it while
+`add` honours it.
+
+**RULING: `declare` gets `check-declare`**, side-effect-free, mirroring `check-add`: it assembles the
+proposed entry, runs it through the same `rosterFromJson`, and refuses operator-input faults at exit 2
+before anything is written. `declare` calls it before the marker.
+
+Two cheaper options were considered and rejected. Moving the marker back after the roster write reverses
+D-2134/D-2140 and trades a stray inert file for a launcher reachable by `_default_pool` — the asymmetry
+argument decides it the same way it did before. A `--dry-run` flag on `declare-entry` puts a
+does-it-write switch on a write op, when this architecture already answers that question with a separate
+op; `check-add`/`add-entry` is the pattern and a second spelling of it would be the drift.
+
+**D-2142's "one residual, accepted" understated its own scope** and is corrected by this entry: it was
+argued for the base-URL case, and it actually covers *every* field-validity refusal. Accepting one
+narrow residual is fine; accepting a class while describing it as an instance is not.
+
+### D-2144 — three shapes `declare`'s four refusals do not distinguish, and each is the seam those four exist to avoid
+
+The four codes were chosen because "put a launcher there" and "look at what is there" are different
+operator actions. Three shapes defeat that:
+
+1. **An empty 0755 file is DECLARED — exit 0, marker written, `ccd` will exec a zero-byte file.** No code
+   catches it. Decision 22(c)'s "its shape is nobody's business" defends a compiled binary that spells
+   its config dir in a way no `export` matches; **it does not describe zero bytes**, which cannot be any
+   launcher at all. `[ -s ]` is a fifth code, not a shape judgement, and it does not reintroduce either
+   predicate the doctor's rule excludes.
+2. **A dangling symlink earns `launcher-absent`, whose remedy is wrong for it.** Measured: `[ -e ]`
+   follows the link, so a dangling one is "absent" and the operator is told *"there is no `<path>` on
+   this box … put the launcher there first"* — but something IS at that path, so `ln -s` fails
+   `EEXIST`, and `ls -ld`, offered only by `launcher-not-a-file`, is what they actually need. **Two
+   conditions with different remedies collapsed into one code**, which is precisely the overloaded seam
+   the four-code set exists to avoid.
+3. **`--provider ''`, `--base-url ''` and `--suffix ''` are silently dropped** by `${x:+…}` — exit 0, a
+   lane with no provider, no message. `add` refuses the same input with `missing-value` at exit 2. Flag
+   absent and flag present-but-empty are two conditions a caller handles differently.
+
+All three are the same defect wearing different clothes, and it is the defect `CLAUDE.md` names first:
+**two conditions a caller handles differently must not collapse to the same value.** Fix all three, each
+with its own code, sentence and mutation.
+
+### D-2145 — the "name the line whose deletion breaks it" check has now been run three times and found six unmeasured mechanisms
+
+D-2133 introduced the check after two shipped mechanisms turned out to measure nothing. Applied to
+Task 27 it found **four more**, two of which I had not named:
+
+| mechanism | mutation | before |
+|---|---|---|
+| `-ef`'s **hard-link** half | `-ef` → `readlink -f` comparison | GREEN 135/135 |
+| `declared`'s total boolean (the D-2131 re-close) | delete the `if` | GREEN 135/135 |
+| `telemetry: 'none'` on a declared entry | → `'anthropic'` | GREEN 135/135 |
+| `--suffix` and its `.<id>` default (D-2142's subject) | ignore the flag / hard-code the default | GREEN 135/135, **both** |
+
+The pattern across all six is worth more than the count: **every one of them was a mechanism whose
+NEIGHBOUR was measured.** `-ef` was pinned for symlinks and not hard links; the boolean was pinned on
+`added` and copied unpinned to `declared`; the mode was pinned and the telemetry beside it was not; the
+marker's WRITE was pinned and its REFUSAL was not; the token's WRITER was pinned and its RESET was not.
+
+So the check needs sharpening, and this is the form to carry into the remaining tasks: **it is not
+enough to ask whether a mechanism is tested. Ask which line of it is tested, and whether the line beside
+it — the second half of the same guard, the copy of it in the sibling op, the default beside the flag —
+is tested too.** A guard tested in one of its two directions reads exactly like a guard tested in both.
+
+One process note from the same round: a mutator over-deleted a closing brace and produced 40 red tests.
+The reviewer discarded that run as **invalid** rather than reading it as a result. That is the correct
+handling and the opposite of the tempting one — a mutation that reds enormously is usually broken, not
+informative.
+
+### D-2146 — a citation form pointing INTO `deploy/account-op.mjs`, and the sentence that predicted it
+
+Every sweep in this wave has modelled `ccd/ccrc`'s insertion. `deploy/account-op.mjs` also grew — `+10`
+at its `:264` and `+125` at its `:952` in this commit — and **no sweep has ever modelled it**. Four live
+pointers, each wrong at BASE as well as displaced now:
+
+| citer | cites | claim | true target |
+|---|---|---|---|
+| `ccd/ccrc:3850` | `deploy/account-op.mjs:262-265` | `refuse()` writes to stderr as well as stdout | **`:283-286`** |
+| `ccrc-account.test.ts:1501` | `:302-308` | `readPairs`' M6 guard | **`:323-329`** |
+| `ccrc-account.test.ts:2059` | bare `(:302-308)` | same | **`:323-329`** |
+| `ccrc-account.test.ts:1118` | `:347-350` | "EVERY REFUSAL IN THIS ARM…" | **`:368`** |
+
+**The last one's own comment says it.** It reads: *"the sweep that re-measured this commit's `ccd/ccrc`
+citations modelled one file's insertion and not the other's."* It was written as a note about a past
+sweep, and it happened again — in the commit that quotes it.
+
+That is the second time in two tasks a citation entry has been falsified by the thing it describes
+(D-2053's bare-form correction was the first). Both times the knowledge was present in prose and absent
+from the procedure. The procedural form, which is what actually helps: **a sweep's unit is the pair
+(citer form × cited file), and both halves must be enumerated.** Every sweep so far enumerated citer
+forms and assumed one cited file.
+
+Added to `D-2053`'s deferred list as four new sites — **twenty-four sites plus six displaced pointers**
+— with the standing instruction unchanged and now doubly earned: re-measure every entry before repairing
+it, and enumerate both halves of the pair before trusting the census.
