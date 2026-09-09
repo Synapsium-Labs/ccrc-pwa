@@ -4574,13 +4574,13 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   mkdir -p "$dir" \
     || _acct_refuse 1 provision-failed "cannot create the config directory $dir — the session hooks would have nowhere to be installed, and this lane's transcripts nowhere to live. $stands"
   _acct_settings_env "$dir" set "$stands" "$burl" "$models"
-  # TWO TOKENS, BECAUSE THEY ARE TWO OUTCOMES (D-2127). A `login` lane has no endpoint
-  # and no model map, so the merge correctly writes nothing. Reporting `settings-env`
-  # there would publish "the env block was written" about a home that has no
-  # settings.json; moving the append inside the wrote-something branch instead would
-  # make a successful login lane indistinguishable from a run that SKIPPED the step,
-  # and "ran and correctly did nothing" is a real outcome an operator should see. So
-  # the key's vocabulary carries both words and the array's length never changes.
+  # TWO TOKENS, BECAUSE THEY ARE TWO OUTCOMES (D-2127). `settings-env-none` says THIS VERB
+  # WROTE NO BYTES, and it covers TWO on-disk states, both correct: a `login` lane, which
+  # has no endpoint and no model map so the merge produces no file, and a home whose
+  # settings.json already carries this block — reachable from `add`, measured, because a
+  # config directory may pre-date the roster entry naming it. Reporting `settings-env` for
+  # either would publish a write that did not happen; appending nothing would hide a step
+  # that RAN. So the key's vocabulary carries both words and the array's length never changes.
   #
   # The four installer tokens below mean something weaker on purpose — "ran and
   # returned 0" — because each is a separate process converging a home and this verb

@@ -102,7 +102,7 @@ function run(home: string, args: string[], stdin = ''): Result {
  *  that used `.split('\n')[0]`. It is also what catches the failure this
  *  cluster is most exposed to: `add` calls two of `ccrc install`'s own
  *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:5249,
- *  :5101, :2904). Every `add` case below runs through here. */
+ *  :5255, :2904). Every `add` case below runs through here. */
 function oneObject(r: Result): Record<string, unknown> {
   const lines = r.stdout.split('\n');
   expect(lines[lines.length - 1], 'stdout is not newline-terminated').toBe('');
@@ -871,7 +871,7 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
 
   it('refuses a TERMINAL — the one place in this file the tty gate inverts', async () => {
     // `cmd_passwd` (ccd/ccrc:3026), `cmd_expose` (:3221) and `_inst_agent_env`
-    // (:5166) all REQUIRE a terminal, because under `curl … | bash` stdin is
+    // (:5320) all REQUIRE a terminal, because under `curl … | bash` stdin is
     // the installer script. This flag is driven by the server and requires a
     // pipe, so it refuses the terminal instead — three conditions, three codes,
     // and this is the third.
@@ -1536,9 +1536,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
   });
 
   it('both flag spellings work, and a flag with no value is exit 2', () => {
-    // `cmd_install`'s rule (:4829-4839): BOTH `--flag VALUE` and `--flag=VALUE`
+    // `cmd_install`'s rule (:4983-4993): BOTH `--flag VALUE` and `--flag=VALUE`
     // for every value-taking flag, a missing value with its own message, and a
-    // wrong VALUE for a right flag getting its own sentence (:4840-4843).
+    // wrong VALUE for a right flag getting its own sentence (:4994-4997).
     //
     // THE SPACE FORM IS THE ONE THAT BREAKS SILENTLY. A loop that shifts inside
     // its first `case` and then switches on `$1` again is switching on the
@@ -2797,4 +2797,125 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     expect(oneObject(call('false'))['disabled']).toBe(false);
     expect(oneObject(call('true'))['disabled']).toBe(true);
   });
+
+  it('a marker it could not write is a refusal, never an ok:true about a switch it did not throw',
+    () => {
+      // THE ONE SEAM IN THIS TASK NOTHING MEASURED (review round 1). Every other
+      // case here runs on a box where the marker write SUCCEEDS, so all of them
+      // stay green when `_acct_disable_new`'s two `||` arms are deleted — and
+      // deleted, the verb answers `{"ok":true,"disabled":true,…}` for a lane with
+      // no file on disk. Measured on row 2 before this case existed: exit 0,
+      // `disabled:true`, `existsSync(marker) === false`. A verb that publishes a
+      // kill-switch it did not write is worse than one that never claimed to, and
+      // this is the mechanism rather than the paragraph.
+      //
+      // THREE ROWS, BECAUSE THE TWO ARMS FAIL ON DIFFERENT ERRORS. `mkdir -p` is a
+      // no-op on an existing directory, so an UNWRITABLE `$REG` reaches the
+      // second arm, not the first — a table with only "the directory is a file"
+      // in it would leave the `: >` arm unmeasured, which is the arm that runs on
+      // every successful add.
+      const rows: [string, string, (h: string) => void, (h: string) => void][] = [
+        ['$REG is a regular file', 'cannot create', (h) => {
+          rmSync(join(h, '.cc-sessions'), { recursive: true });
+          writeFileSync(join(h, '.cc-sessions'), 'not a directory\n');
+        }, () => { /* nothing to undo */ }],
+        ['$REG is unwritable', 'cannot write',
+          (h) => chmodSync(join(h, '.cc-sessions'), 0o500),
+          // RESTORED BEFORE `afterAll`: `tmpHelpers`' `rmSync` cannot unlink a
+          // child of a 0500 directory, so a case that leaves one there fails the
+          // file's cleanup rather than its own assertion.
+          (h) => chmodSync(join(h, '.cc-sessions'), 0o700)],
+        ['the marker name is a directory', 'cannot write',
+          (h) => mkdirSync(join(h, '.cc-sessions', 'lab-dev0-disabled')),
+          () => { /* nothing to undo */ }],
+      ];
+      for (const [what, opening, breakIt, undo] of rows) {
+        const home = box('ccrc-account-off-nomarker-');
+        seedBoxRoster(home, FIXTURE_ROSTER);
+        plantUpstream(home);
+        plantInstallers(home);
+        try {
+          breakIt(home);
+          const r = run(home, addArgs(), `${CANARY}\n`);
+          expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+          const j = oneObject(r);
+          expect(j['ok'], `${what}: answered ok about a lane it did not switch off`).toBe(false);
+          expect(j['error'], what).toBe('disable-marker');
+          expect(String(j['detail']), what).toContain(opening);
+          // AND THE LANE IS NOT PICKABLE ANYWAY, which is the property the
+          // refusal exists to preserve: `_account_ok` reads the WRAPPER too, and
+          // this refusal lands before `_acct_converge` writes one. So the box a
+          // failed marker write leaves behind is rostered, wrapperless and off —
+          // not rostered, wrappered and unmeasured.
+          expect(existsSync(join(home, '.local', 'bin', 'lab-dev0')),
+            `${what}: a lane with no marker got a wrapper`).toBe(false);
+          // The roster entry stands and the refusal says so — nothing after it
+          // rolls back, so the remedy is to converge, not to re-add.
+          expect(String(j['detail']), what).toContain('The roster entry was written');
+          expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+            .accounts.map((x: { id: string }) => x.id)).toContain('lab-dev0');
+        } finally {
+          undo(home);
+        }
+      }
+    });
+
+  it('a second provision in one shell does not inherit the first\'s settings measurement (D-2127)',
+    () => {
+      // THE THIRD RESET, AND THE ONLY ONE WHOSE STALENESS CHANGES A TOKEN rather
+      // than an array's length. `ACCT_SETTINGS_WRITTEN=""` at `_acct_settings_env`'s
+      // head is what the case above cannot see: both of ITS runs are the same kind
+      // of home, so deleting that line leaves it green — measured — while a token
+      // lane followed by a login lane reports `settings-env` for a home that has
+      // no settings.json. That is D-2127 face 1 exactly, re-opened by deleting the
+      // variable that closes it.
+      const home = box('ccrc-account-off-carry-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantUpstream(home);
+      plantInstallers(home);
+      const r = sourceCall(home,
+        'mkdir -p "$HOME/.claude-tok" "$HOME/.claude-login"\n'
+        + '_acct_provision "$HOME/.claude-tok" "https://orchard-api/v1" "{}" >/dev/null\n'
+        + 'first="${ACCT_PROVISIONED[0]}"\n'
+        + '_acct_provision "$HOME/.claude-login" "" "{}" >/dev/null\n'
+        + 'printf \'%s %s\\n\' "$first" "${ACCT_PROVISIONED[0]}"');
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout.trim()).toBe('settings-env settings-env-none');
+      expect(existsSync(join(home, '.claude-tok', 'settings.json'))).toBe(true);
+      expect(existsSync(join(home, '.claude-login', 'settings.json'))).toBe(false);
+    });
+
+  it('says settings-env-none for a home whose block is ALREADY there — the token is a measurement',
+    () => {
+      // THE SECOND STATE THE `none` TOKEN COVERS, and the one its source comment
+      // did not name until review round 1. A config directory may pre-date the
+      // roster entry that names it — `check-add` measures `duplicate-id` and
+      // `suffix-collision` against the ROSTER, not against the filesystem — so an
+      // `add` into a home that already carries exactly this env block converges,
+      // writes no bytes, and must not claim it wrote. Measured: this row answers
+      // `settings-env-none` while the block IS on disk, which is why the token
+      // reads "this verb wrote no bytes" and not "this home has no env block".
+      //
+      // It is also what keeps `ACCT_SETTINGS_WRITTEN` a MEASUREMENT: a build that
+      // inferred the token from `[ -f "$f" ]` after the merge would answer
+      // `settings-env` here and stay green on the login case above.
+      const home = box('ccrc-account-off-converged-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantUpstream(home);
+      plantInstallers(home);
+      const cfg = join(home, '.claude-lab-dev0');
+      mkdirSync(cfg, { recursive: true });
+      const already = `${JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: 'https://orchard-api/v1', ANTHROPIC_API_KEY: '' },
+      }, null, 2)}\n`;
+      writeFileSync(join(cfg, 'settings.json'), already);
+      const r = run(home, addArgs(), `${CANARY}\n`);
+      expect(r.code, r.stderr).toBe(0);
+      expect(oneObject(r)['provisioned']).toEqual([
+        'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+      ]);
+      // The bytes are untouched — the converge arm returns before the backup, so
+      // this is also the idempotence claim `_acct_settings_env` makes for itself.
+      expect(readFileSync(join(cfg, 'settings.json'), 'utf8')).toBe(already);
+    });
 });
