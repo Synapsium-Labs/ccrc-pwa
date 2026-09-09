@@ -231,25 +231,35 @@ const ASK_GRACE_MS = 120_000;
 const ASK_SWEEP_MS = 10_000;
 
 /** Ceiling on how long a row may sit `'answering'` before `sweepAsks` gives up
- *  on the principal that took it (fix round 1, item 1 — the reviewer's own
- *  reasoning, verbatim): `sweepAsks` is the ONLY garbage collector `heldAsks`
- *  has. `detectDialogs`'s orphan-settle fires only on a NEW dialog id, and a
- *  session blocked on `AskUserQuestion` does not repaint — so a row stuck at
- *  `'answering'` (the press refused, `answerAsk` threw, the request
- *  abandoned, the server restarted mid-call — `untakeAsk`'s own rollback
- *  never ran) would otherwise be kept forever: `releaseAsk` fails every
- *  sweep because the state is not `'held'`, and nothing ever pushes. That is
- *  the exact harm this lane exists to prevent, inverted.
+ *  on the principal that took it and never came back (fix round 1, item 1 —
+ *  the reviewer's own reasoning, verbatim): `sweepAsks` is the ONLY garbage
+ *  collector `heldAsks` has. `detectDialogs`'s orphan-settle fires only on a
+ *  NEW dialog id, and a session blocked on `AskUserQuestion` does not
+ *  repaint — so a row stuck at `'answering'` (the press refused, `answerAsk`
+ *  threw, the request abandoned — `untakeAsk`'s own rollback never ran)
+ *  would otherwise be kept forever, WITHIN THIS SERVER'S OWN LIFETIME:
+ *  `releaseAsk` fails every sweep because the state is not `'held'`, and
+ *  nothing ever pushes. That is the exact harm this lane exists to prevent,
+ *  inverted.
+ *
+ *  NOT a restart bound (fix round 1, item 4 — a prior draft of this comment
+ *  claimed it was, falsely): `heldAsks` is an in-memory `Map`, never
+ *  reconstructed from the `asks` table at boot, so a row `'answering'` at
+ *  restart time has no map entry the moment the process comes back —
+ *  invisible to `sweepAsks` by construction, not merely slow to reach. A
+ *  restart mid-hold loses the push outright, a pre-existing, accepted
+ *  residual the design already names elsewhere; this ceiling has no way to
+ *  bound a process that is no longer running to enforce it.
  *
  *  Sixty seconds is generous, not tight: `answerAsk`'s whole job — take the
  *  row, press a digit, settle — happens well inside one `ASK_SWEEP_MS`
  *  interval in every normal case, so a row still `'answering'` a full minute
- *  later means the principal that took it is gone, not merely slow. Past
- *  this bound `sweepAsks` pushes the snapshotted payload and drops the
- *  entry — F9's own justification for the missing-row arm, verbatim: the
- *  ask's loss is free by design and must degrade to today's immediate
- *  notification. A principal that took the row and never came back is that
- *  same case. */
+ *  later, IN A SERVER THAT NEVER RESTARTED, means the principal that took it
+ *  is gone, not merely slow. Past this bound `sweepAsks` pushes the
+ *  snapshotted payload and drops the entry — F9's own justification for the
+ *  missing-row arm, verbatim: the ask's loss is free by design and must
+ *  degrade to today's immediate notification. A principal that took the row
+ *  and never came back, within one server lifetime, is that same case. */
 const ASK_ANSWERING_MAX_MS = 60_000;
 
 /** No session gets two injections inside this window, however much mail is

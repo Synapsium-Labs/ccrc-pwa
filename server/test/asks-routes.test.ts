@@ -155,6 +155,40 @@ describe('POST /api/asks/:id/answer', () => {
     expect(w.coord.askById(id)!.state).toBe('held');
   });
 
+  /**
+   * `freshAskAt`'s fail-shut arm (fix round 1, item 2): an UNREADABLE
+   * hookstate — no `.hookstate.json` at all, distinct from the "moved" case
+   * above, which has a real, fresher one — must refuse rather than proceed.
+   * `freshAskAt` returns `-1` for this arm, which can never equal a stored
+   * `askAt`, so it rides the SAME `ask-moved` mismatch `takeAskForAnswer`
+   * already has — no new error code, just the fail-shut direction proven for
+   * "unmeasurable", not only "measured and different".
+   */
+  it('409s ask-moved when the child\'s hookstate is unreadable (freshAskAt fail-shut)', async () => {
+    const now = Date.now();
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    // Deliberately NOT seeding a hookstate file for the child — `readHookState`
+    // reads a proven-absent file as `null`, `freshAskAt`'s third fail-shut arm.
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const { run, calls } = tmuxRunner([ASK_PANE]);
+    const w = await openApp(home, run, { notifyLog });
+    app = w.app;
+    const id = w.coord.insertAsk({
+      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+
+    const res = await answer(app, id, { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'ask-moved' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+    expect(w.coord.askById(id)!.state).toBe('held');
+  });
+
   it('409s not-held when a second principal is already answering (D-2171)', async () => {
     const { coord, id, now } = await setup(Date.now());
     const taken = coord.takeAskForAnswer(id, now);

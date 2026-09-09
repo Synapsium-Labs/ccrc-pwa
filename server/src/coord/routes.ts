@@ -339,14 +339,24 @@ export function registerCoordRoutes(
    * nothing, so there is no delivery lane needing a recorded rejection to
    * explain itself — the claims table itself is the record of every
    * acquisition that happened.
+   *
+   * `uuidField` (Task 9 fix round 1) names the body field THIS CALLER's
+   * request actually carries — `'byUuid'` for the claim lanes, `'fromUuid'`
+   * for `POST /api/asks/:id/answer` — so the `stale-uuid` detail can tell a
+   * caller which of ITS OWN fields to re-read. Before this, the prose was a
+   * literal `'byUuid does not match...'` no matter who called it: an ask
+   * caller, whose body has no `byUuid` field at all, was told to fix a field
+   * it never sent. The wording is ALSO caller-agnostic now ("sender", not
+   * "claimant") — this gate has two callers with two different verbs for
+   * what they are doing, and "claimant" is only true of one of them.
    */
   const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string,
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
   ): Promise<boolean> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
       reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: 'the registry directory could not be listed — transient, not a fact about the claimant' });
+        detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
       return false;
     }
     const registry = await readRegistry(deps.io, deps.cfg);
@@ -354,7 +364,7 @@ export function registerCoordRoutes(
     if (!row) {
       if (names.includes(`${whoId}.uuid`)) {
         reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the claimant` });
+          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` });
         return false;
       }
       reply.code(403).send({ ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` });
@@ -368,7 +378,7 @@ export function registerCoordRoutes(
     }
     if (identity.uuid !== whoUuid) {
       reply.code(403).send({ ok: false, error: 'stale-uuid',
-        detail: 'byUuid does not match the registry — stale claimant; re-read your own .uuid' });
+        detail: `${uuidField} does not match the registry — stale sender; re-read your own .uuid` });
       return false;
     }
     return true;
@@ -1920,7 +1930,7 @@ export function registerCoordRoutes(
         detail: `intent exceeds ${CLAIM_INTENT_MAX_BYTES} bytes — it renders on PeerSummary, it is not a spec` });
     }
 
-    if (!(await requireAttribution(reply, byId, byUuid))) return;
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
     if (runId !== null && coord.run(runId) === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
@@ -2008,7 +2018,7 @@ export function registerCoordRoutes(
     const id = Number(idParam);
     if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    if (!(await requireAttribution(reply, body.byId, body.byUuid))) return;
+    if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
     // terminal row falls through to the store, whose answer is the honest
     // `claim-terminal`/`unknown-claim` — `not-owner` is only ever said about
@@ -2353,7 +2363,7 @@ export function registerCoordRoutes(
     // identical for every session on the fleet host — it cannot prove "this
     // ask's parent". The registry pair is what attributes the specific
     // session, exactly as the mail ingress and the claims lanes do.
-    if (!(await requireAttribution(reply, fromId, fromUuid))) return;
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
     // The same `Number.isInteger` shape guard every other `:id` route in
     // this file uses (dispatch/close/advance/claims/ledger above) — a
@@ -2379,16 +2389,28 @@ export function registerCoordRoutes(
       // route's own docstring. `answerAsk` never pressed a digit on this
       // path, so the row goes back to `'held'` rather than being abandoned
       // in `'answering'` with no exit.
-      coord.untakeAsk(id);
+      if (!coord.untakeAsk(id)) {
+        // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
+        // `'answering'`, and THIS request is the one that put the row there
+        // (`takeAskForAnswer` above, this same request). Nothing else should
+        // have moved it in between — `console.warn` on the surprise, the
+        // same idiom `watch.ts`'s `sweepAsks` already uses on its own CAS
+        // calls (e.g. its "unexpectedly still 'held' after a failed
+        // release" warning), rather than a silent discard.
+        console.warn(`ccrc-server: untakeAsk(${id}) returned false after a refused press — ` +
+          "the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
       return reply.code(409).send(res);
     }
-    coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
-
-    // D-2172's SECOND record: the mint-time record (`watch.ts`'s `hold()`)
-    // is the question; this one is the answer, naming the parent and what it
-    // chose — the operator's only durable trace of a decision made in their
-    // name over a question that never reached their phone. Same pattern
-    // `POST /api/coord/caps` uses just above: `deps.notifyLog` and
+    // D-2172's SECOND record — written BEFORE `settleAsk` (fix round 1, item
+    // 3), deliberately: the mint-time record (`watch.ts`'s `hold()`) is the
+    // question; this one is the answer, naming the parent and what it chose
+    // — the operator's only durable trace of a decision made in their name
+    // over a question that never reached their phone. Ordered first so that
+    // if `settleAsk` below then throws, at least ONE durable trace of the
+    // answer survives — the feed record names who chose what even when the
+    // `asks` row's own `answeredBy`/`answer` never gets written. Same
+    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
     // `coord.recordFeedEvent` are independently optional (a box with neither
     // configured still answers the request), `recordFeedEvent` throws
     // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
@@ -2412,6 +2434,27 @@ export function registerCoordRoutes(
       } finally {
         void log.flush();
       }
+    }
+
+    // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
+    // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
+    // must never turn a successful press into a 500. The row is held
+    // EXCLUSIVELY by this request (CAS'd to `'answering'` above; `settleAsk`'s
+    // own docstring is why no caller needs to distinguish "settled" from
+    // "lost the row between take and settle" — that race cannot happen
+    // here), so an unguarded throw would be a genuine infra fault (disk,
+    // `node:sqlite`), not a lost race — but left unguarded it would strand
+    // the row `'answering'` with no exit (`settleAsk` never ran to move it),
+    // 500 a press that actually succeeded, and the parent's natural retry
+    // would get `not-held` — a LIE about who holds it, since the retrying
+    // caller IS the one who holds it. The digit is pressed either way, so
+    // this always returns `{ok:true}`.
+    try {
+      coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
+        "'answering'; the feed record above (if it landed) is the surviving audit trace");
     }
 
     return { ok: true };
