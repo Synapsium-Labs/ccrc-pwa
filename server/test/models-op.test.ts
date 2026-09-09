@@ -838,9 +838,25 @@ describe('the registry write', () => {
     expect(text).toContain('\n  "classes": {');
   });
 
+  // Round 3 re-review, M3: this pin was left out of C8's umask-forcing sweep
+  // (the TSV/effort pin below, and `mergeSettingsEnv`'s/`clearSettingsEnv`'s
+  // in modelenv.test.ts, all got it; `writeRegistry`'s own write did not).
+  // Same vacuousness, same fix: a dropped `{ mode: 0o600 }` at
+  // `writeRegistry` falls back to 0o666 masked by whatever umask the process
+  // has, and under a strict 077 that ALSO comes out 0o600 by coincidence —
+  // measured `(umask 077; …)` against the un-forced version of this test:
+  // it passed with the mode pin dropped. `op` forks a child via `spawnSync`,
+  // which inherits the parent's umask at fork time, so forcing 022 here
+  // reaches the child too: the mutant then lands on 0o644, not 0o600, under
+  // any runner umask.
   it('is 0600 — a compatible lane\'s registry names its endpoint', () => {
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    expect(fs.statSync(regPath('gpt')).mode & 0o777).toBe(0o600);
+    const prevUmask = process.umask(0o022);
+    try {
+      op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+      expect(fs.statSync(regPath('gpt')).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(prevUmask);
+    }
   });
 
   it('re-VALIDATES before writing: a mutation that would break the registry writes nothing', () => {

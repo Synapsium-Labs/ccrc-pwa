@@ -3864,7 +3864,10 @@ _models_class_ok() {   # <class>
 # `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
 # `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
 # credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
-# (every arm that sends a bearer header) and, on the codex arm only,
+# (the two arms that send it — openrouter --endpoints and compatible; the
+# codex arm sends its own bearer header too, but via `_fetch_codex`'s
+# litellm `Authenticator`, driven by CHATGPT_TOKEN_DIR, never this
+# variable) and, on the codex arm only,
 # CHATGPT_TOKEN_DIR (it names the directory `_fetch_codex` reads `auth.json`
 # from) — measured fix, C3 of the final wave: without this, a lane with no
 # secrets file ran the probe against whatever this shell already had,

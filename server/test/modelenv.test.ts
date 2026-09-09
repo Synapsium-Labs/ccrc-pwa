@@ -22,11 +22,19 @@ const MODELENV_MJS_URL = pathToFileURL(
  *  `shared/modelenv.mjs` fresh and calling ONLY the named export with the
  *  given (JSON-serialisable) arguments — no roster parsing, no registry
  *  read, nothing else on the way to the call, so the processes arrive at
- *  the write this is testing as close together in wall-clock time as this
- *  harness can put them, which is what makes a fixed-tmp-name collision
- *  observable at all: a `deploy/models-op.mjs` CLI round trip (roster read,
- *  parse, validate) spreads the six calls out enough that the race almost
- *  never fires in a run short enough for a test suite. */
+ *  the write this is testing closer together in wall-clock time than a
+ *  `deploy/models-op.mjs` CLI round trip (roster read, parse, validate) puts
+ *  them: models-op.test.ts's own concurrency test measures a lower but
+ *  still non-zero collision rate through that CLI (23-27/360 with a fixed
+ *  tmp name), so the CLI does not hide the bug, it just surfaces it less
+ *  often. Even through THIS harness the collision stays a race, not a sure
+ *  thing: reverting a tmp name to a fixed path below and re-running the
+ *  concurrency test it drives (15 rounds x 8 processes) failed only 2 of 12
+ *  separate runs on this box, measured for round 3 of the re-review — most
+ *  runs land green on the exact regression it exists to catch. That test
+ *  stays below as a smoke test (real processes, real disk, genuinely
+ *  concurrent writes), but the deterministic guard is the static source pin
+ *  further down this file, which reds every run. */
 function concurrentCalls(fn: 'mergeSettingsEnv' | 'clearSettingsEnv', args: unknown[], count: number)
   : Promise<{ code: number; err: string }[]> {
   const script = `import { ${fn} } from ${JSON.stringify(MODELENV_MJS_URL)};\n`
@@ -277,12 +285,17 @@ describe('mergeSettingsEnv', () => {
   // survived the whole covering suite (127/127, measured). The settings file
   // this writes carries every model alias a lane routes to.
   //
-  // The mode pin is vacuous under a permissive test-runner umask: dropping
+  // The mode pin is vacuous under a STRICT test-runner umask (round 3
+  // re-review, M4 — the previous wording had this backwards): dropping
   // `{ mode: 0o600 }` falls back to `writeFileSync`'s default (0o666), and
   // 0o666 masked by umask 077 is ALSO 0o600 — the mutant survives with no
-  // change to this assertion. Forcing a known 022 umask around the write
+  // change to this assertion. Under a PERMISSIVE umask (022, or this box's
+  // own default 0002) the un-forced pin already catches the dropped mode —
+  // measured directly against `shared/modelenv.mjs` with `{ mode: 0o600 }`
+  // dropped: `(umask 077; …)` writes 0o600 anyway (vacuous), `(umask 022;
+  // …)` writes 0o644 (caught). Forcing a known 022 umask around the write
   // means the mutant lands on 0o644 (0o666 & ~0o022) instead, so this reds
-  // under any runner umask, not only a permissive one. Measured:
+  // under any runner umask, strict or permissive. Measured:
   // `(umask 077; npx vitest run test/modelenv.test.ts)` against the mutant
   // (the `{ mode: 0o600 }` dropped) passed before this change and fails after.
   it('writes settings.json at 0600 (C8)', () => {
@@ -330,6 +343,38 @@ describe('mergeSettingsEnv', () => {
     fs.mkdirSync(path.join(home, '.claude-gpt'), { recursive: true });
     fs.writeFileSync(settings(), '[]');
     expect(() => mergeSettingsEnv(settings(), modelEnvBlock(SEEDED, null))).toThrow(ModelEnvInvalid);
+  });
+});
+
+// Round 3 re-review, M2/M7: the concurrency test above is a race — measured
+// 2 of 12 separate runs red against a tmp name reverted to a fixed path (see
+// that test's own docstring) — so a regression here would land green on most
+// CI runs. This is the deterministic guard: it reads the actual bytes of the
+// two files that build C7's tmp names — `fs.readFileSync`, never `git show`,
+// so it sees a working-tree edit whether or not it is committed — and checks
+// EVERY site that assembles one of those names for the substring that makes
+// it unique per process, `${process.pid}`. Reverting any one of the five
+// sites (two in shared/modelenv.mjs, three in deploy/models-op.mjs) reds
+// this on every run, because it is a text match, not a timing window.
+describe('C7\'s tmp names are unique per process — a static pin, not a race (round 3, M2/M7)', () => {
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  /** Every `const tmp = \`...\`;` assignment in a file, as raw source lines —
+   *  not the comment at deploy/models-op.mjs:298 that also mentions one of
+   *  these names in prose, which this pattern does not match. */
+  const tmpAssignmentLines = (file: string): string[] =>
+    fs.readFileSync(file, 'utf8').split('\n').filter((l) => /^\s*const tmp = `/.test(l));
+
+  it('both tmp-name sites in shared/modelenv.mjs (mergeSettingsEnv, clearSettingsEnv) carry ${process.pid}', () => {
+    const lines = tmpAssignmentLines(path.join(REPO_ROOT, 'shared', 'modelenv.mjs'));
+    expect(lines.length, `expected 2 tmp-name sites, found: ${JSON.stringify(lines)}`).toBe(2);
+    for (const l of lines) expect(l).toContain('${process.pid}');
+  });
+
+  it('all three tmp-name sites in deploy/models-op.mjs (writeRegistry, materialise, litellm render) carry ${process.pid}', () => {
+    const lines = tmpAssignmentLines(path.join(REPO_ROOT, 'deploy', 'models-op.mjs'));
+    expect(lines.length, `expected 3 tmp-name sites, found: ${JSON.stringify(lines)}`).toBe(3);
+    for (const l of lines) expect(l).toContain('${process.pid}');
   });
 });
 

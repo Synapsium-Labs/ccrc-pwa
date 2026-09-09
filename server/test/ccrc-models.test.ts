@@ -51,6 +51,15 @@ const ROSTER = {
     // branch. This lane is what actually reaches it.
     { id: 'router2', label: 'router2', configDirSuffix: '.claude-router2',
       exec: { kind: 'external' }, homeAble: false, hue: 'green', telemetry: 'none' },
+    // Final wave round 3, M1: a CODEX-shaped lane that also carries
+    // `exec.secretsFile` — every other codex-shaped lane (`gpt`) has none, so
+    // no fixture reached `_models_run_probe`'s secrets-file branch (the `if`
+    // at ccd/ccrc:3893) with a CHATGPT_TOKEN_DIR to scrub. The secrets file
+    // this lane sources sets only ANTHROPIC_AUTH_TOKEN, the normal case: no
+    // fleet secrets file sets CHATGPT_TOKEN_DIR.
+    { id: 'gpt2', label: 'gpt2', configDirSuffix: '.claude-gpt2',
+      exec: { kind: 'external', secretsFile: '.secrets/gpt2.env' }, homeAble: false, hue: 'amber',
+      telemetry: 'none' },
   ],
 };
 
@@ -877,6 +886,59 @@ describe('ccrc models <id> discovery', () => {
     expect(r.stdout).not.toContain('leaked-account-id');
     expect(r.stderr).not.toContain(poisonedDir);
     expect(r.stderr).not.toContain('leaked-account-id');
+  });
+
+  // Round 3 re-review, M1: the test above only ever reaches the `else`
+  // (no-secrets-file) branch of `_models_run_probe` — `gpt` has none. `gpt2`
+  // carries `exec.secretsFile`, sourcing a file that sets ONLY
+  // ANTHROPIC_AUTH_TOKEN, so this drives the `if` branch (ccd/ccrc:3893-3896)
+  // instead: the secrets file it sources never mentions CHATGPT_TOKEN_DIR, so
+  // the only thing that can keep an ambient one out is that branch's own
+  // `unset`. MEASURED: deleting that `unset` (leaving the `[ -r ]`-and-source
+  // line as the branch's first statement) reds this case — the poisoned
+  // `python` runs and records the ambient directory — while the test above
+  // stays green, because it never touches this branch at all.
+  it('a codex lane with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR', () => {
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'gpt2.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
+    const poisonedDir = join(home, 'someone-elses-chatgpt-auth-2');
+    fs.mkdirSync(poisonedDir, { recursive: true });
+    fs.writeFileSync(join(poisonedDir, 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
+    fs.writeFileSync(join(home, '.local', 'bin', 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(join(home, '.local', 'bin', 'python'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$CHATGPT_TOKEN_DIR" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+    run(['models', 'gpt2', 'init', 'codex']);
+    const r = run(['models', 'refresh', 'gpt2'], { CHATGPT_TOKEN_DIR: poisonedDir });
+    expect(r.code).toBe(1);
+    expect(fs.existsSync(join(home, 'python-poison')),
+      'a secrets file that sets a different credential must not leave CHATGPT_TOKEN_DIR for the codex fetch to inherit from the calling shell')
+      .toBe(false);
+    expect(r.stdout).not.toContain(poisonedDir);
+    expect(r.stderr).not.toContain(poisonedDir);
+  });
+
+  // Round 3 re-review, M1's second half: an UNREADABLE secrets file (`[ -r ]`
+  // false) sources nothing, which must not be mistaken for "nothing to
+  // scrub" — the ambient ANTHROPIC_AUTH_TOKEN has to go regardless of
+  // whether the file could be read. MEASURED: deleting the secrets-file
+  // branch's `unset` reds this case too (the ambient token reaches curl's
+  // stdin and a real request is attempted, which the poisoned curl records),
+  // while the existing "no secrets file at all" cases above (`router2`, and
+  // `router` with the file deleted) never exercise this `[ -r ]`-false path.
+  it('with an unreadable secrets file, sourcing nothing still scrubs the ambient token', () => {
+    run(['models', 'router', 'init', 'openrouter']);
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
+    fs.chmodSync(join(home, '.secrets', 'router.env'), 0o000);
+    const r = run(['models', 'router', 'discovery', 'add', 'z-ai/glm-5.2'],
+      { ANTHROPIC_AUTH_TOKEN: 'ambient-token' });
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('endpoints-unreachable');
+    expect(String(oneObject(r)['detail'])).toContain('needs the lane\'s key: set ANTHROPIC_AUTH_TOKEN');
+    expect(poisonLog('curl')).toEqual([]);
+    expect(poisonStdin('curl')).not.toContain('ambient-token');
+    expect(r.stdout).not.toContain('ambient-token');
+    expect(r.stderr).not.toContain('ambient-token');
   });
 });
 

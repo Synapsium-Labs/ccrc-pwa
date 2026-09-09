@@ -528,7 +528,14 @@ describe('the compatible arm (§5)', () => {
   });
 });
 
-describe('_models_probe_base_is_loopback — the same set parseRegistry\'s host check accepts', () => {
+// Round 3 re-review, M6: this block was titled as if the bash helper below
+// accepted "the same set parseRegistry's host check accepts" — false.
+// `parseRegistry` compares `new URL(baseUrl).hostname` against
+// `LOOPBACK_HOSTS` (shared/models.mjs:65,266), and Node's `URL` canonicalises
+// alternate IPv4 forms and case before handing back `.hostname`; this helper
+// is a raw shell text compare against exactly `127.0.0.1`, `localhost` and
+// `[::1]` and does none of that — it is a STRICT SUBSET, not the same set.
+describe('_models_probe_base_is_loopback — a strict SUBSET of parseRegistry\'s host check', () => {
   it('a real loopback host with an explicit port is loopback', () => {
     expect(isLoopback('http://127.0.0.1:8080/v1/models')).toBe(true);
     expect(isLoopback('http://localhost/v1/models')).toBe(true);
@@ -540,10 +547,30 @@ describe('_models_probe_base_is_loopback — the same set parseRegistry\'s host 
     // port strip below takes the FIRST `:` it finds, which — with userinfo
     // still attached — is the one INSIDE `127.0.0.1:8080`, not a real
     // host:port separator, so `evil.com` was dropped and `127.0.0.1` read as
-    // the host. Stripping userinfo first is what makes this agree with
-    // `parseRegistry`'s `new URL(...).hostname` again.
+    // the host. Stripping userinfo first makes this ONE case match
+    // `parseRegistry`'s `new URL(...).hostname` too — both call `evil.com`
+    // not loopback — though the two checks are not the same set in general
+    // (below).
     expect(isLoopback('http://127.0.0.1:8080@evil.com/')).toBe(false);
     expect(isLoopback('http://user:pass@evil.com/')).toBe(false);
+  });
+
+  // Measured: all four forms below parse to a loopback `.hostname` under
+  // Node (`new URL(...).hostname` is `127.0.0.1` for the first three,
+  // `localhost` for the last, once Node lowercases it and folds the
+  // alternate IPv4 forms) — so `parseRegistry` treats every one of them as
+  // loopback — but this shell helper's raw text compare calls all four NOT
+  // loopback. The divergence fails SAFE: a URL this helper misses simply
+  // keeps `--proto '=https'`, so http:// stays refused rather than let
+  // through, never the other way around. Documented here as a known subset,
+  // not fixed by canonicalising the helper — bash has no `new URL()`, and a
+  // from-scratch canonicaliser is its own attack surface for a check whose
+  // only job is loosening one protocol flag.
+  it('four parseRegistry-loopback forms this helper does NOT recognise (documented subset, fails safe)', () => {
+    expect(isLoopback('http://127.1/v1/models')).toBe(false);
+    expect(isLoopback('http://2130706433/v1/models')).toBe(false);
+    expect(isLoopback('http://0177.0.0.1/v1/models')).toBe(false);
+    expect(isLoopback('http://LOCALHOST/v1/models')).toBe(false);
   });
 });
 
