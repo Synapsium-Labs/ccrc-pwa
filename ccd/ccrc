@@ -428,7 +428,19 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # callers had before a shim existed ("a box without coreutils' `timeout`
   # still gets an answer, just without a deadline"). Caught by
   # `ccrc-doctor.test.ts`'s "answers on a box with no coreutils timeout".
-  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) &
+  # BOTH OF THE WATCHER'S OWN STREAMS GO NOWHERE, AND IT IS THE DIFFERENCE
+  # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
+  # substitution the caller reads, this subshell inherits that pipe on fd 1 -
+  # and on fd 2 as well wherever the call site joins the two, which
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
+  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
+  # write end open and the substitution cannot see EOF until the full duration
+  # has run out, long after the command answered. MEASURED on a box with no
+  # coreutils, a 10-second deadline and a command that answers instantly: 10 006
+  # ms before this redirection, 9 ms after. Neither stream carries anything a
+  # caller wants - the watcher exists for its stamp file and its signal - so
+  # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
@@ -5897,30 +5909,70 @@ _acct_probe_deadline() {   # -> ACCT_DEADLINE, or refuses at 2
 # reaches this function, because `_acct_auth_status` branches on it one caller
 # up and gives it a `timeout` VERDICT rather than a note.
 #
-# EVERY BRANCH STILL ENDS IN THE PROBE. None of these is evidence about the
-# credential, so none of them is a verdict; what changes is the sentence, not
-# the routing, and each says so in its own words so the note is never mistaken
-# for the answer.
-_acct_auth_why() {   # <rc> <id> -> the one note explaining why there is no verdict
-  local rc="$1" id="$2"
+# EVERY BRANCH STILL ENDS IN A VERDICT SOMEBODY ELSE WROTE. None of these is
+# evidence about the account, so none of them is a verdict; what changes is the
+# sentence, not the routing, and each says so in its own words so the note is
+# never mistaken for the answer.
+#
+# TWO CALLERS, ONE TRIAGE (D-2268). The probe reached the operator with exactly
+# the defect this function was written to close: 127, 126, 125 and a signal
+# death all arrived as "the probe printed no JSON object (exit N)" with no notes
+# at all - a verdict ABOUT THE LANE for four conditions in which nothing about
+# the lane was measured, and no remedy attached to any of them. The provider
+# gate in `_acct_check` is what had kept this triage anthropic-only, so the
+# lanes that got the sentence were the ones that also had a second question to
+# fall through to, and the lanes with only one question got nothing. The remedy
+# is this file's own stated convention one function up - the triage is one
+# function, not two - so the two caller-specific halves become arguments:
+#
+#   $3, THE QUESTION'S NAME, which opens every branch. Each sentence is about a
+#   launcher that never ran, and which question it was not asked for is the
+#   caller's fact, not this function's.
+#
+#   $4, WHAT THE VERDICT BESIDE THE NOTE IS. `auth status` has a probe below it
+#   and says so; the probe has NOTHING below it, so the same clause there would
+#   be a promise of an answer that is never coming. The two sentences are not
+#   the same sentence with a word changed, which is why this is a parameter and
+#   not a substitution.
+_acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> one note
+  local rc="$1" id="$2" asked="$3" verdict="$4"
   if [ "$rc" -eq 127 ]; then
-    printf '%s' "auth status was never asked: there is no launcher at $WRAPPER_BIN_DIR/$id to run, so nothing about account $id's credential was measured and the verdict below is the probe's. Run 'ccrc wrappers' to write the missing launcher."
+    printf '%s' "$asked was never asked: there is no launcher at $WRAPPER_BIN_DIR/$id to run, so nothing about account $id was measured. $verdict Run 'ccrc wrappers' to write the missing launcher."
   elif [ "$rc" -eq 126 ]; then
-    printf '%s' "auth status was never asked: $WRAPPER_BIN_DIR/$id exists but could not be executed, so nothing about account $id's credential was measured and the verdict below is the probe's. Check its mode bits and that its interpreter line names a shell this box has."
+    printf '%s' "$asked was never asked: $WRAPPER_BIN_DIR/$id exists but could not be executed, so nothing about account $id was measured. $verdict Check its mode bits and that its interpreter line names a shell this box has."
   elif [ "$rc" -eq 125 ]; then
-    printf '%s' "auth status was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. The verdict below is the probe's."
+    printf '%s' "$asked was never asked: timeout(1) refused to run $WRAPPER_BIN_DIR/$id and exited 125, which it does when its own arguments are wrong rather than when the launcher fails. $verdict"
   elif [ "$rc" -gt 128 ]; then
-    printf '%s' "auth status did not answer because it was KILLED rather than because it replied badly: exit $rc is signal $((rc - 128)). Look for an OOM kill on this box, not for a broken launcher. The verdict below is the probe's."
+    printf '%s' "$asked did not answer because it was KILLED rather than because it replied badly: exit $rc is signal $((rc - 128)). Look for an OOM kill on this box, not for a broken launcher. $verdict"
   else
-    printf '%s' "auth status gave no parseable answer on this box, so the verdict below is the probe's"
+    printf '%s' "$asked gave no parseable answer on this box. $verdict"
   fi
 }
 
+# THE TWO CLOSING CLAUSES, SPELLED ONCE EACH. `_acct_auth_status`'s says there
+# is another question; `_acct_probe`'s says there is not, and names what the row
+# beside the note therefore IS - a shrug, not a measurement.
+ACCT_WHY_AUTH="The verdict below is the probe's."
+ACCT_WHY_PROBE="There is nothing below it to ask: the probe is the LAST question about this account, so the unknown verdict beside this note is what a question nobody could put leaves behind rather than anything measured about the lane."
+
 _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to ACCT_NOTES
-  local id="$1" out="" rc=0 row="" crc=0
+  local id="$1" out="" rc=0 row="" crc=0 before="" after=""
   ACCT_HEALTH=""
   _acct_auth_deadline
+  # THE CHEAP QUESTION IS BRACKETED TOO (D-2273). This line runs the LANE'S OWN
+  # launcher with the lane's own config dir - the identical mechanism the probe
+  # brackets, and therefore the identical exposure to a statusline render - and
+  # nothing stamped around it. So the `false` that reached the wire was a
+  # MEASUREMENT on the probe path and a bare ASSERTION on this one, and the
+  # reader could not tell which it was holding. Same two helpers, same
+  # file-scope flag, and the flag is only ever raised here: the reset belongs to
+  # `_acct_check` (D-2223 F8), one for the whole run, because a `check` can ask
+  # both questions and the answer is about the run rather than about either
+  # call.
+  before="$(_acct_limits_stamp "$id")"
   out="$(_plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
+  after="$(_acct_limits_stamp "$id")"
+  [ "$before" = "$after" ] || ACCT_LIMITS_TOUCHED=true
   if [ "$rc" -eq 124 ]; then
     # rc 124 is `_plat_timeout`'s own report of expiry (:406-411), and it is a
     # THIRD thing again: neither an answer nor a parse failure. The body is
@@ -5936,7 +5988,7 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
     # sentence belongs on this side because `_acct_no_answer`'s triage — the
     # convention this follows — is this file's, and because 127 and 126 are
     # facts about a PATH lookup that node never saw.
-    ACCT_NOTES+=("$(_acct_auth_why "$rc" "$id")")
+    ACCT_NOTES+=("$(_acct_auth_why "$rc" "$id" "auth status" "$ACCT_WHY_AUTH")")
     return 0
   fi
   if [ "$crc" -eq 4 ]; then
@@ -5991,14 +6043,32 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
 # honest answer to an unmeasured side effect is to measure it. (`session-hook.sh`
 # needs no such care: `:247` is `[[ -n "${TMUX_PANE:-}" ]] || exit 0` and the
 # probe has no pane.)
+#
+# WHAT THE FLAG MEANS IS "THE FILE CHANGED WHILE WE WERE ASKING", NEVER "WE
+# CHANGED IT" (D-2274), and no amount of measuring harder can strengthen it.
+# `~/.cc-limits` is SHARED, ACCOUNT-SCOPED state - `statusline-command.sh:226-228`
+# says so in its own words: any session's report is valid for the whole account,
+# last writer wins. On a box carrying twenty live sessions, ANY of them
+# rendering a status line for this account inside the deadline moves the stamp,
+# and this bracket cannot tell that apart from the launcher we started. So what
+# is available here is CO-OCCURRENCE and never attribution, and every sentence
+# this file writes about the flag says the weaker thing on purpose. Reported and
+# never used as a guard, for exactly that reason.
 
 # SECOND-GRANULAR, AND SAID SO. `_plat_mtime` is whole seconds on both platforms
 # (:146-148), so this pairs it with the size (:149-151) and STILL cannot see a
 # same-second rewrite of an identical file. That is why `limitsTouched` is a
 # REPORT and never a guard: `false` means "nothing this could see changed", not
-# "the placer's input is untouched". The condition it exists to catch is
-# second-granular in practice anyway, because the statusline writes a fresh `ts`
-# every time (statusline-command.sh:250-252).
+# "the placer's input is untouched".
+#
+# AND THE BOUND IS THE WRITE CADENCE, NOT A FRESHER FIELD SOMEWHERE (D-2276).
+# This banner used to argue the blind spot away by saying the statusline writes
+# a fresh `ts` on every render. It does, and it does not help: `ts` carries the
+# same whole-second resolution as the mtime, and it does not enter the stamp at
+# all - the stamp is the mtime and the byte count, nothing else. A rewrite is
+# invisible to this pair only when it lands in the SAME WHOLE SECOND as the
+# previous one AND leaves the file exactly as long, which is a real window and
+# is stated rather than explained away.
 #
 # It answers on stdout and never refuses, which is what makes it safe inside
 # `$( )` — the rule the rest of this section keeps by answering in globals.
@@ -6018,13 +6088,30 @@ _acct_limits_stamp() {   # <id> -> "<mtime>:<size>", or "absent"
 # one — except in the direction nobody guards, one sentence going stale in two
 # places out of three.
 _acct_probe_stands() {   # -> what still stands after a run that reached the probe
-  printf '%s' "No account state was written: no roster entry, no credential file and no kill-switch marker was touched. The probe HAD already run, so $CCRC_PROBE_DIR exists - this verb creates it to run in - and anything the lane's own launcher wrote while answering is still under that lane's config dir."
+  # THE SITUATIONAL HALF, TRUE AT THE LINE THAT SAYS IT (D-2275, D-2135's
+  # class). The sentence below tells an operator the launcher's writes are
+  # confined to the lane's config dir - and `ACCT_LIMITS_TOUCHED`, which is set
+  # before any refusal is composed and is readable from right here, may already
+  # have measured otherwise. One conditional, and all three refusal sites
+  # inherit it with no caller change. It says CHANGED and never WROTE, because
+  # that is the whole of what the bracket can support (D-2274).
+  local telemetry=""
+  [ "$ACCT_LIMITS_TOUCHED" = true ] \
+    && telemetry=" One thing outside it did change while the question was being asked: $CCRC_LIMITS_DIR moved. That directory is shared account-scoped telemetry any session on this account can rewrite, so this run reports the change without claiming to be what caused it."
+  printf '%s' "No account state was written: no roster entry, no credential file and no kill-switch marker was touched. The probe HAD already run, so $CCRC_PROBE_DIR exists - this verb creates it to run in - and anything the lane's own launcher wrote while answering is still under that lane's config dir.$telemetry"
 }
 
 ACCT_LIMITS_TOUCHED=false
-_acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
+_acct_probe() {   # <id> -> sets ACCT_HEALTH; may raise ACCT_LIMITS_TOUCHED
   local id="$1" out rc=0 before after crc=0
-  ACCT_LIMITS_TOUCHED=false
+  # NO RESET HERE ANY MORE, AND THAT IS THE POINT (D-2273). It used to carry a
+  # second `ACCT_LIMITS_TOUCHED=false`, harmless while this was the only
+  # bracket in the verb. Now that `_acct_auth_status` brackets too, a reset at
+  # this line DISCARDS what the cheap question measured: an anthropic lane whose
+  # `auth status` deferred to the probe would move the stamp, and this line
+  # would erase the fact on the way past. The reset is `_acct_check`'s, once per
+  # run, where D-2223 F8 put it and for the reason it gave; both brackets only
+  # ever raise.
   _acct_probe_deadline
   # `~/.ccrc` FIRST AND IN THE SAME CALL: it is not guaranteed to exist either.
   # The refusal names the CONSEQUENCE rather than the syscall, because what an
@@ -6042,6 +6129,24 @@ _acct_probe() {   # <id> -> sets ACCT_HEALTH and ACCT_LIMITS_TOUCHED
 
   after="$(_acct_limits_stamp "$id")"
   [ "$before" = "$after" ] || ACCT_LIMITS_TOUCHED=true
+
+  # THE LAUNCHER'S OWN EXIT CODE, TRIAGED HERE TOO (D-2268). Four of these codes
+  # are facts about THIS BOX and none of them is a fact about the account: there
+  # is no launcher, there is one that cannot be executed, the deadline shim
+  # refused its own arguments, or something killed the child. Each used to reach
+  # the operator as "the probe printed no JSON object (exit N)" with an empty
+  # notes array - the same defect D-2220 closed at the cheap question, reopened
+  # at the expensive one and, worse, reaching only the lanes that already had
+  # the sentence from their `auth status` sibling.
+  #
+  # 124 IS NOT IN THIS SET and must never be: it is `_plat_timeout`'s report of
+  # expiry, the arm below turns it into a `timeout` VERDICT, and a note beside
+  # it would say the probe was never asked when it was asked and did not finish.
+  # Everything else - 0, 1, and a launcher's own codes - answered, so the row is
+  # about the lane and there is nothing to explain.
+  if [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ] || [ "$rc" -gt 128 ]; then
+    ACCT_NOTES+=("$(_acct_auth_why "$rc" "$id" "the probe" "$ACCT_WHY_PROBE")")
+  fi
 
   if [ "$rc" -eq 124 ]; then
     ACCT_HEALTH="$(printf '' | _acct_node classify --source probe --exit 124 \
@@ -6144,6 +6249,11 @@ _acct_check() {
   # `check` once and exits, wrong the moment anything loops it over a roster,
   # and `limitsTouched` becomes API in Task 30. D-2127's unreset array, two
   # tasks later, at the address that carries the same three-value contract.
+  #
+  # IT IS NOW THE ONLY RESET IN THE VERB (D-2273), which is a stronger claim
+  # than "reset in the right place": both questions bracket their launcher and
+  # both only ever RAISE the flag, so this line is what makes the wire value a
+  # statement about the RUN rather than about whichever call happened last.
   ACCT_LIMITS_TOUCHED=false
 
   # ANTHROPIC ONLY, AND GATED ON THE PROVIDER, NOT THE KIND. An OpenRouter or

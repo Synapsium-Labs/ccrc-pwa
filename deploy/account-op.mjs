@@ -644,9 +644,50 @@ function shapeOf(v) {
   return t === 'object' ? 'an object' : `a ${t}`;
 }
 
+/** EVERY ROW'S `detail` IS BOUNDED HERE, IN THE FACTORY, AND NOT AT THE ARGV
+ *  BOUNDARY IT LATER CROSSES (D-2266, D-2267). `shapeOf` above closed the
+ *  DEFERRAL's exposure to launcher text; the ROW's was left open, and it is
+ *  five slots wide rather than three — the 401 arm, the `unreachable` arm, the
+ *  `api_error` arm (which interpolates `api_error_status`, any JSON value at
+ *  all because the `=== 401` and `=== null` arms both fall through), and the
+ *  RESIDUAL, which is the widest of them because it needs no `api_error` block
+ *  to reach: any non-zero exit carrying any JSON object arrives there.
+ *
+ *  MEASURED, not argued: a 200 000-character `result` yields a 200 089-byte
+ *  row and a 200 000-character `terminal_reason` yields 200 111, and either of
+ *  them passed as ONE argv word answers exit 126, `Argument list too long`
+ *  (MAX_ARG_STRLEN bounds a single argument at 131 072 bytes). The caller then
+ *  throws away a clean `auth-dead` row for a `no-answer` shrug — about a lane
+ *  whose billed request had already been spent and answered.
+ *
+ *  IT CANNOT BE CAPPED AT THE `--row` ARGV INSTEAD, and that is the whole
+ *  ruling. A row is JSON, and the `health` op parses it (`JSON.parse(a['row']
+ *  ?? '')`); a row truncated on its way to argv makes that parse fall to its
+ *  catch and hand the op a NULL row — a silent wrong answer in place of a loud
+ *  E2BIG. Capping the FIELD keeps the row parseable at every length, and one
+ *  edit here closes all five slots plus every arm a later commit adds.
+ *
+ *  1024 CHARACTERS, STATED IN THE TRUNCATED TEXT so an operator reading a
+ *  clipped sentence knows who clipped it and by how much. It is NOT derived
+ *  from `ccd/ccrc`'s note cap and is not a second copy of it: that one bounds a
+ *  NOTE crossing argv in bash, this one bounds a FIELD inside a JSON document
+ *  in node, the two live on opposite sides of a process boundary that cannot
+ *  share a constant, and either may move without the other. What they share is
+ *  a doctrine, not a number. The longest sentence this file composes is under
+ *  400 characters, so nothing the classifier writes is ever clipped: what this
+ *  bounds is what a LAUNCHER put there. */
+const DETAIL_MAX = 1024;
+
+function capDetail(detail) {
+  if (typeof detail !== 'string' || detail.length <= DETAIL_MAX) return detail;
+  return `${detail.slice(0, DETAIL_MAX)}… (this detail was truncated by ${SELF} `
+    + `at ${DETAIL_MAX} characters)`;
+}
+
 function classify(source, body, exit, timedOut, deadline) {
   const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-  const row = (verdict, detail) => ({ verdict, measuredAt: at, detail, source });
+  const row = (verdict, detail) => (
+    { verdict, measuredAt: at, detail: capDetail(detail), source });
   if (timedOut) return row('timeout', `${source} did not answer within ${deadline}s`);
   let j = null;
   try { j = JSON.parse(body); } catch { j = null; }
@@ -720,7 +761,18 @@ function classify(source, body, exit, timedOut, deadline) {
  *  the probe with a dead credential and NO JSON are the non-anthropic ones,
  *  which today answer `unknown` (never `ok`). Recorded, not silently dropped. */
 function classifyProbe(row, j, exit) {
-  if (exit === 0 && j.is_error !== true) return row('ok', 'the lane answered one turn');
+  // `=== false`, NOT `!== true` — A DELIBERATE DEVIATION FROM §8:656, RECORDED
+  // AS D-2270. The spec sentence is written with the negative form, and that
+  // form collapses THREE conditions into `ok`: the body said `false`, the body
+  // said nothing about `is_error` at all, and the body named `is_error` in a
+  // shape this build cannot read. A health verb must not read SILENCE AS
+  // HEALTH — this repo's overloaded-null rule, at a seam whose two sides act on
+  // the answers differently: `ok` ends the question, and everything else sends
+  // an operator to look. Nothing is lost by tightening it, because the residual
+  // at the bottom of this function already answers every other shape and
+  // already names the shape it saw. The same treatment D-2223 F5 gave
+  // `loggedIn` one task ago, for the same reason and in the same wave.
+  if (exit === 0 && j.is_error === false) return row('ok', 'the lane answered one turn');
   if (j.is_error === true && j.terminal_reason === 'api_error') {
     const status = j.api_error_status ?? null;
     const text = typeof j.result === 'string' ? j.result : '';

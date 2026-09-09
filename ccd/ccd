@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=43f538541652b21316e46e2a18862641a2944ba17828ed13f29e18af8cdc7fd4
+# ccrc:generated 1 sha256=d43e8882d53e8a0cce3b755bb3908f765275c7c1e074a890416847dc85fb8c32
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -369,7 +369,19 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # callers had before a shim existed ("a box without coreutils' `timeout`
   # still gets an answer, just without a deadline"). Caught by
   # `ccrc-doctor.test.ts`'s "answers on a box with no coreutils timeout".
-  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) &
+  # BOTH OF THE WATCHER'S OWN STREAMS GO NOWHERE, AND IT IS THE DIFFERENCE
+  # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
+  # substitution the caller reads, this subshell inherits that pipe on fd 1 -
+  # and on fd 2 as well wherever the call site joins the two, which
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
+  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
+  # write end open and the substitution cannot see EOF until the full duration
+  # has run out, long after the command answered. MEASURED on a box with no
+  # coreutils, a 10-second deadline and a command that answers instantly: 10 006
+  # ms before this redirection, 9 ms after. Neither stream carries anything a
+  # caller wants - the watcher exists for its stamp file and its signal - so
+  # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null

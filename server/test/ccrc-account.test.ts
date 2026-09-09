@@ -21,7 +21,7 @@ import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync,
-  realpathSync, rmSync, symlinkSync, writeFileSync,
+  realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6197,6 +6197,77 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       .toBe(false);
   });
 
+  it('measures ~/.cc-limits on BOTH questions, and never attributes the change (D-2273, D-2274, D-2275, D-2276)', () => {
+    // D-2273: `_acct_auth_status` runs the LANE'S OWN launcher with the lane's
+    // own config dir — the identical mechanism the probe brackets, and
+    // therefore the identical exposure to a statusline render — and nothing
+    // stamped around it. The `false` on the wire was a MEASUREMENT on one path
+    // and a bare ASSERTION on the other, and no reader could tell which it was
+    // holding. Driven on the SHORT-CIRCUIT path deliberately: `auth status`
+    // answers, the probe never runs, so anything measured here is the cheap
+    // question's own.
+    const home = box('ccrc-account-check-limits-auth-');
+    seedRosterJson(home, [UPSTREAM]);
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(home, '.local', 'bin', 'claude'), [
+      '#!/bin/sh',
+      'if [ -f "$HOME/fixture-auth-writes-limits" ]; then',
+      '  mkdir -p "$HOME/.cc-limits"',
+      '  printf \'{"five":7,"seven":0,"ts":1}\' > "$HOME/.cc-limits/claude.json"',
+      'fi',
+      `printf '%s' ${JSON.stringify(SIGNED_OUT.trim())}`,
+      'exit 1',
+    ].join('\n') + '\n', { mode: 0o755 });
+
+    const quiet = oneObject(run(home, ['account', 'check', '--id', 'claude']));
+    expect((quiet['health'] as Record<string, unknown>)['source'],
+      'this case is not on the short-circuit path').toBe('auth-status');
+    expect(quiet['limitsTouched'], 'a launcher that moved nothing was reported as moving it')
+      .toBe(false);
+    writeFileSync(join(home, 'fixture-auth-writes-limits'), '');
+    const moved = oneObject(run(home, ['account', 'check', '--id', 'claude']));
+    expect((moved['health'] as Record<string, unknown>)['source']).toBe('auth-status');
+    expect(moved['limitsTouched'],
+      'the cheap question ASSERTS false rather than measuring it').toBe(true);
+
+    // D-2275: the refusal clause tells an operator the launcher's writes are
+    // confined to the lane's config dir, while the flag — set before that
+    // clause is composed and readable from inside it — may already say
+    // otherwise. One conditional, three refusal sites, and both directions
+    // measured because a clause that always says it is not a clause.
+    const stands = (flag: string): string => {
+      const r = sourceRun(home, `ACCT_LIMITS_TOUCHED=${flag}\n_acct_probe_stands`);
+      expect(r.code, `${flag}: ${r.stderr}`).toBe(0);
+      return r.stdout;
+    };
+    for (const flag of ['true', 'false']) {
+      expect(stands(flag), flag).toContain('No account state was written');
+    }
+    expect(stands('false'), 'the clause claims a change nothing measured')
+      .not.toContain('did change');
+    const said = stands('true');
+    expect(said, 'the clause still claims every write was confined to the config dir')
+      .toContain('did change');
+    expect(said).toContain('.cc-limits');
+    // D-2274, at the one place this reaches an operator: `~/.cc-limits` is
+    // SHARED account-scoped state and any of the box's live sessions can move
+    // it inside the window, so the honest claim is CO-OCCURRENCE and never
+    // authorship. No measuring harder can strengthen it.
+    expect(said, 'the clause attributes a shared file\'s change to this run')
+      .toContain('without claiming to be what caused it');
+    expect(said).not.toMatch(/the probe wrote|this verb wrote|the launcher wrote to/);
+
+    // D-2276, the banner that explains the stamp's own blind spot. It used to
+    // argue the spot away with a field the stamp does not read: `ts` carries
+    // the same whole-second resolution as the mtime and never enters the stamp
+    // at all. The real bound is the write cadence, and it is stated instead.
+    const src = readFileSync(CCRC_SRC, 'utf8');
+    expect(src, 'the stamp banner still explains its blind spot with a fresher `ts`')
+      .not.toContain('the statusline writes a fresh `ts`');
+    expect(src, 'the stamp banner no longer states the bound it actually has')
+      .toContain('SAME WHOLE SECOND');
+  });
+
   it('resets ACCT_LIMITS_TOUCHED before every check, not only inside the probe (D-2223 F8)', () => {
     // THE ONE DEFECT IN THIS ROUND THAT ONE PROCESS PER INVOCATION CANNOT SHOW.
     // `_acct_check` reset `ACCT_HEALTH` and `ACCT_NOTES` and not this, so on the
@@ -6216,12 +6287,21 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
       'the sourced call did not reach the short-circuit path').toBe('auth-dead');
     expect(j['limitsTouched'],
       'a stale ACCT_LIMITS_TOUCHED reached the wire').toBe(false);
-    // AND THE HARNESS IS NOT VACUOUS: the same source, without the reset under
-    // test, is what a second `check` in one process sees — proved by driving
-    // the variable through the ONE resetter that did exist.
+    // AND THE HARNESS IS NOT VACUOUS: the assignment the case makes really does
+    // reach the code under test. It is proved in the OPPOSITE direction now,
+    // and the reason is D-2273. `_acct_probe` used to carry a second reset of
+    // its own, and this half drove the variable through it; once
+    // `_acct_auth_status` began bracketing its launcher too, that second reset
+    // became a CLOBBER — an anthropic lane whose cheap question moved the stamp
+    // and then deferred to the probe would have the fact erased on the way
+    // past. So the reset is `_acct_check`'s alone and both brackets only raise,
+    // which makes `_acct_probe` the right place to show the harness working: a
+    // pre-set `true`, a launcher that moves nothing, and the value SURVIVES.
     const p = sourceRun(home, 'ACCT_LIMITS_TOUCHED=true\n_acct_probe claude\n'
       + 'printf %s "$ACCT_LIMITS_TOUCHED"');
-    expect(p.stdout.endsWith('false'), p.stderr).toBe(true);
+    expect(p.stdout.endsWith('true'),
+      `_acct_probe cleared a flag its sibling had raised — stdout ${JSON.stringify(p.stdout)}`
+      + `, stderr ${JSON.stringify(p.stderr)}`).toBe(true);
   });
 });
 
@@ -6265,6 +6345,17 @@ function plantProbe(home: string, id: string): void {
     'if [ -f "$HOME/fixture-probe-writes-limits" ]; then',
     '  mkdir -p "$HOME/.cc-limits"',
     `  printf '{"five":7,"seven":0,"ts":1}' > "$HOME/.cc-limits/${id}.json"`,
+    'fi',
+    // THE SECOND LIMITS ARM EXISTS FOR THE STAMP'S *SIZE* HALF. It rewrites the
+    // file to a different LENGTH and then copies the mtime back off the gate
+    // file, which the caller has already set to the file's own original mtime —
+    // so the whole-second mtime is byte-identical across the probe and the only
+    // thing that moved is the byte count. That is the one shape `_plat_mtime`
+    // alone cannot decide, and it is the shape a same-second rewrite really has.
+    'if [ -f "$HOME/fixture-probe-limits-samesecond" ]; then',
+    '  mkdir -p "$HOME/.cc-limits"',
+    `  printf '{"five":7,"seven":0,"ts":1,"pad":"0123456789"}' > "$HOME/.cc-limits/${id}.json"`,
+    `  touch -r "$HOME/fixture-probe-limits-samesecond" "$HOME/.cc-limits/${id}.json"`,
     'fi',
     'if [ -f "$HOME/fixture-probe-sleep" ]; then exec sleep 30; fi',
     '[ -f "$HOME/fixture-probe-out" ] && cat "$HOME/fixture-probe-out"',
@@ -6341,6 +6432,126 @@ describe('ccrc account check: the probe', () => {
     expect(h['source']).toBe('probe');
   });
 
+  it('triages the launcher\'s own exit code on the probe path too, for every lane (D-2268)', () => {
+    // D-2220's defect, reopened at the expensive question. 127, 126, 125 and a
+    // signal death are facts about THIS BOX; each arrived as
+    // `the probe printed no JSON object (exit N)` with an EMPTY notes array — a
+    // verdict about the lane for four conditions in which nothing about the lane
+    // was measured. The sentence and its remedy already existed and already
+    // reached anthropic lanes through `_acct_auth_status`; the provider gate is
+    // what kept them from every other lane, so the lanes that got the triage
+    // were precisely the ones that also had a second question to inherit it
+    // from. Driven on an OPENROUTER lane for that reason: `auth status` is never
+    // asked there at all, so every note below is the probe's own.
+    const cases: Array<[string, (home: string) => void, string, string]> = [
+      ['absent', () => { /* no launcher at all: the deadline shim reports 127 */ },
+        'there is no launcher at', 'ccrc wrappers'],
+      ['not-executable', (home) => {
+        writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
+          '#!/bin/sh\necho \'{}\'\n', { mode: 0o644 });
+      }, 'could not be executed', 'mode bits'],
+      ['killed', (home) => {
+        writeFileSync(join(home, '.local', 'bin', 'orchard-api'),
+          '#!/bin/sh\nkill -9 $$\n', { mode: 0o755 });
+      }, 'was KILLED rather than', 'signal 9'],
+      ['deadline-refused', (home) => {
+        plantProbe(home, 'orchard-api');
+        probeFixture(home, PROBE_OK, 0);
+        // The knob cannot produce a 125 any more — D-2221's validator refuses
+        // a value the deadline shim would reject, before the launcher runs — so
+        // what is left is the shim failing for one of its OWN reasons, stood in
+        // for by a stub on the fixture PATH, which `ghContainedEnv` PREPENDS.
+        writeFileSync(join(home, '.local', 'bin', 'timeout'),
+          '#!/bin/sh\nexit 125\n', { mode: 0o755 });
+      }, 'refused to run', 'its own arguments are wrong'],
+    ];
+    for (const [name, plant, says, alsoSays] of cases) {
+      const home = box(`ccrc-account-probe-why-${name}-`);
+      seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+      plant(home);
+      const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+      expect(r.code, `${name}: ${r.stderr}`).toBe(0);
+      const j = oneObject(r);
+      expect((j['health'] as Record<string, unknown>)['source'], name).toBe('probe');
+      const notes = (j['notes'] as string[]).join(' ');
+      expect(notes, `${name}: no note at all`).not.toBe('');
+      expect(notes, name).toContain(says);
+      // THE REMEDY, which is the half an operator acts on: a verdict with no
+      // next step is the shrug this deviation is about.
+      expect(notes, `${name} names no remedy`).toContain(alsoSays);
+      expect(notes, name).toContain('the probe');
+      // AND THE CLOSING CLAUSE IS THE PROBE'S, NOT THE CHEAP QUESTION'S. The
+      // probe has nothing below it, so `auth status`'s "the verdict below is
+      // the probe's" would promise an answer that is never coming — which is
+      // why the clause is a parameter and not a substitution.
+      expect(notes, `${name} promises a verdict from below the last question`)
+        .toContain('the LAST question about this account');
+      expect(notes, `${name} carried the auth-status caller's clause`)
+        .not.toContain('The verdict below is the probe\'s.');
+    }
+
+    // THE CONTRAST, AND IT HOLDS BOTH CALL SITES IN ONE RUN. An ANTHROPIC lane
+    // with no launcher fails the cheap question and the expensive one for the
+    // same reason, so the answer carries TWO notes — and each names its own
+    // question and its own closing clause. A triage written twice, or one whose
+    // caller-specific halves were baked in, cannot produce this pair.
+    const both = box('ccrc-account-probe-why-both-');
+    seedRosterJson(both, [UPSTREAM]);
+    const r = run(both, ['account', 'check', '--id', 'claude']);
+    expect(r.code, r.stderr).toBe(0);
+    const notes = oneObject(r)['notes'] as string[];
+    expect(notes.length, notes.join(' | ')).toBe(2);
+    expect(notes[0]!.startsWith('auth status was never asked:'), notes[0]).toBe(true);
+    expect(notes[0]!).toContain('The verdict below is the probe\'s.');
+    expect(notes[1]!.startsWith('the probe was never asked:'), notes[1]).toBe(true);
+    expect(notes[1]!).toContain('the LAST question about this account');
+  });
+
+  it('bounds a launcher-controlled row detail AT THE SOURCE, not at the argv it crosses (D-2266, D-2267)', () => {
+    // D-2222's class at a second address, and five slots wide: the 401 arm, the
+    // `unreachable` arm, the `api_error` arm's interpolated status, and the
+    // residual — which needs no `api_error` block at all, so any non-zero exit
+    // carrying any JSON object reaches it. MEASURED before the fix: a 200 000-
+    // character `result` produced a 200 089-byte row, `--row` hit
+    // `Argument list too long`, node exited 126, and the verb answered
+    // `no-answer` about a lane whose billed request had already been spent and
+    // ANSWERED. The whole point of the cap living in the row factory rather than
+    // beside the note cap in bash is D-2267: a row is JSON the `health` op
+    // parses, so a row clipped on its way to argv would fall to that parse's
+    // catch and hand the op a NULL row — a silent wrong answer replacing a loud
+    // E2BIG. This case therefore asserts the VERDICT survived, not merely that
+    // something short arrived.
+    const home = box('ccrc-account-probe-rowcap-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, { ...PROBE_401, result: 'x'.repeat(200000) }, 1);
+    const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(j['error'], 'the verb shrugged instead of carrying the measurement it had')
+      .toBeUndefined();
+    const h = j['health'] as Record<string, unknown>;
+    expect(h['verdict'], 'a clean auth-dead row was thrown away').toBe('auth-dead');
+    expect(h['source']).toBe('probe');
+    const marker = '… (this detail was truncated by account-op at 1024 characters)';
+    const d = String(h['detail']);
+    expect(d, 'the detail was not truncated at all').toContain(marker);
+    // The EXACT length, because "shorter than 200000" would pass for any cap.
+    expect(d.length).toBe(1024 + marker.length);
+    expect(d.startsWith('x'.repeat(1024))).toBe(true);
+
+    // THE OTHER SIDE OF THE BOUNDARY: a detail that fits is carried byte for
+    // byte and carries no marker — a cap asserted only on the huge input is a
+    // cap that could be `slice(0, 0)`.
+    const small = box('ccrc-account-probe-rowfits-');
+    seedRosterJson(small, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(small, 'orchard-api');
+    probeFixture(small, { ...PROBE_401, result: 'z'.repeat(500) }, 1);
+    const kept = String(((oneObject(run(small, ['account', 'check', '--id', 'orchard-api']))[
+      'health'] as Record<string, unknown>)['detail']));
+    expect(kept).toBe('z'.repeat(500));
+  });
+
   it('never reads a subtype property', () => {
     // Every fixture above carries `subtype: 'success'`, including the failures,
     // so the four cases are the BEHAVIOURAL half of this claim. This is the
@@ -6384,6 +6595,66 @@ describe('ccrc account check: the probe', () => {
     expect(String(h['detail'])).toContain('1s');
   });
 
+  it('refuses when the scratch cwd cannot be created, BEFORE spending the request (D-2277)', () => {
+    // ZERO COVERAGE UNTIL NOW, beside a bracket that measures what the probe
+    // leaves on the box. This guard is what turns a box failure into a refusal
+    // instead of a false verdict about a lane: without a directory of its own
+    // the probe would either run in whatever cwd `ccrc` was invoked from — the
+    // transcript landing in a real project's history, which is the consequence
+    // the refusal names — or answer `unknown` about an account nobody asked.
+    const home = box('ccrc-account-probe-cwd-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    // `~/.ccrc` is already a directory (the roster lives there), so the one
+    // thing that can fail is the leaf — planted as a regular FILE.
+    writeFileSync(join(home, '.ccrc', 'probe'), 'not a directory\n');
+    const r = run(home, ['account', 'check', '--id', 'orchard-api']);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('probe-cwd');
+    expect(String(j['detail'])).toContain('.ccrc/probe');
+    expect(String(j['detail'])).toMatch(/Nothing was written\.$/);
+    // AND THIS IS WHAT MAKES IT A DISCRIMINATION RATHER THAN A STATUS CHECK:
+    // the launcher never ran at all, so no request was billed for an answer the
+    // verb was about to refuse anyway.
+    expect(claudeArgv(home), 'the probe spent a request it then refused to report')
+      .toEqual([]);
+  });
+
+  it('sees a same-second rewrite that changed LENGTH — the stamp is mtime AND size (D-2277)', () => {
+    // THE SIZE HALF WAS UNMEASURED because no fixture had the limits file
+    // present before a probe: every existing case goes from ABSENT to present,
+    // which the mtime alone already decides. `_plat_mtime` is whole seconds on
+    // both platforms, so the shape that needs the second field is a rewrite
+    // inside one second — planted here by giving the file a fixed mtime, having
+    // the launcher rewrite it to a DIFFERENT LENGTH, and copying the mtime
+    // straight back off a reference file.
+    const home = box('ccrc-account-probe-limits-size-');
+    seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
+    plantProbe(home, 'orchard-api');
+    probeFixture(home, PROBE_OK, 0);
+    const limits = join(home, '.cc-limits', 'orchard-api.json');
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(limits, '{"five":7,"seven":0,"ts":1}');
+    const gate = join(home, 'fixture-probe-limits-samesecond');
+    writeFileSync(gate, '');
+    const FIXED = 1600000000;
+    utimesSync(limits, FIXED, FIXED);
+    utimesSync(gate, FIXED, FIXED);
+    const wasSize = statSync(limits).size;
+
+    expect(oneObject(run(home, ['account', 'check', '--id', 'orchard-api']))['limitsTouched'],
+      'a rewrite that only changed the byte count went unseen').toBe(true);
+    // …and the fixture really did produce the shape the claim is about: same
+    // whole second, different length. A case that quietly moved the mtime would
+    // be measuring the half that was already covered.
+    expect(Math.floor(statSync(limits).mtimeMs / 1000),
+      'the fixture moved the mtime, so this measures nothing new').toBe(FIXED);
+    expect(statSync(limits).size, 'the fixture rewrote the same bytes')
+      .not.toBe(wasSize);
+  });
+
   it('reports that the probe moved ~/.cc-limits, instead of moving it silently', () => {
     const home = box('ccrc-account-probe-limits-');
     seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
@@ -6422,16 +6693,30 @@ describe('ccrc account check: the probe', () => {
     seedRosterJson(home, [UPSTREAM, OPENROUTER_LANE]);
     plantProbe(home, 'orchard-api');
     probeFixture(home, PROBE_OK, 0);
-    const REFUSED: Array<[string, string]> = [
-      ['0', 'zero is refused rather than given a meaning'],
-      ['00', 'zero is refused rather than given a meaning'],
-      ['-1', 'not a whole number of seconds'],
-      ['abc', 'not a whole number of seconds'],
-      ['0.5', 'not a whole number of seconds'],
-      ['3601', 'above the 3600-second ceiling'],
-      ['99999999999999999999', 'above the 3600-second ceiling'],
+    //
+    // AND THE OTHER THREE ARGUMENTS OF THE FIVE (D-2277, D-2278). Only the knob
+    // NAME and the value were measured at this call site; `_acct_deadline` takes
+    // five, and the two caller-specific SENTENCES are the whole reason the
+    // shape has five rather than three — they are what stops the cheap
+    // question's wording being handed to the expensive one. The DEFAULT is the
+    // third: `60` is spelled once at the knob's `:=` and a second time as this
+    // caller's `$def`, with nothing keeping the two in agreement (D-2278). Both
+    // copies are held here — the resolved value by the empty-knob assertion at
+    // the bottom of this case, the argument by `default of 60` in the sentence
+    // — so the two agree transitively through one literal in this file.
+    const REFUSED: Array<[string, string, string]> = [
+      ['0', 'zero is refused rather than given a meaning',
+        'There is no spelling that means \'do not probe\''],
+      ['00', 'zero is refused rather than given a meaning',
+        'the cheap credential read in front of it'],
+      ['-1', 'not a whole number of seconds', 'the default of 60'],
+      ['abc', 'not a whole number of seconds', 'the default of 60'],
+      ['0.5', 'not a whole number of seconds', 'the default of 60'],
+      ['3601', 'above the 3600-second ceiling', 'one BILLED request'],
+      ['99999999999999999999', 'above the 3600-second ceiling',
+        'an answer a human is waiting on'],
     ];
-    for (const [v, says] of REFUSED) {
+    for (const [v, says, callerSays] of REFUSED) {
       const r = run(home, ['account', 'check', '--id', 'orchard-api'], '',
         { CCRC_ACCOUNT_PROBE_TIMEOUT: v });
       expect(r.code, `${JSON.stringify(v)}: ${r.stderr}`).toBe(2);
@@ -6439,6 +6724,11 @@ describe('ccrc account check: the probe', () => {
       expect(j['error'], JSON.stringify(v)).toBe('bad-timeout');
       expect(String(j['detail']), JSON.stringify(v)).toContain(says);
       expect(String(j['detail']), JSON.stringify(v)).toContain('CCRC_ACCOUNT_PROBE_TIMEOUT');
+      // THE CALLER'S OWN HALF, which is what the five-argument shape exists to
+      // force: a sentence true of the BILLED question and false of the local
+      // credential read one function up.
+      expect(String(j['detail']), `${JSON.stringify(v)}: the cheap question's wording reached the probe`)
+        .toContain(callerSays);
       // AND IT REFUSED BEFORE SPENDING THE REQUEST. That is the whole point at
       // this knob: the launcher is what bills, so a value that cannot be
       // honoured must stop the run before the launcher is reached.
@@ -6488,6 +6778,97 @@ describe('ccrc account check: the probe', () => {
     const ok = opRun(['classify', '--source', 'probe', '--exit', '0'],
       `${JSON.stringify(PROBE_OK)}\n`);
     expect(JSON.parse(ok.stdout)['verdict']).toBe('ok');
+  });
+
+  it('holds every `unreachable` alternative, and the conjunct that keeps them apart from a status (D-2277)', () => {
+    // TWO OF THE THREE ALTERNATIVES WERE HELD BY NOTHING. Only `Connection
+    // refused` had a fixture; `getaddrinfo` appeared in no test in the tree, and
+    // deleting BOTH the getaddrinfo and 5xx alternatives left 240/240 green. A
+    // row per alternative is the floor, and the third row is the one that earns
+    // its place: the arm is `api_error_status === null` AND the text, so a body
+    // that names a numeric status is `unknown` however its prose reads. That
+    // control goes red the moment someone "fixes" the arm by dropping the
+    // conjunct, which is exactly the change a reader of the regex alone makes.
+    const err = (status: number | null, result: string): unknown => ({
+      type: 'result', subtype: 'success', is_error: true,
+      terminal_reason: 'api_error', api_error_status: status, result, total_cost_usd: 0,
+    });
+    const verdictOf = (body: unknown): Record<string, unknown> => {
+      const r = opRun(['classify', '--source', 'probe', '--exit', '1'],
+        `${JSON.stringify(body)}\n`);
+      expect(r.code, `${JSON.stringify(body)}: ${r.stderr}`).toBe(0);
+      return JSON.parse(r.stdout) as Record<string, unknown>;
+    };
+    const UNREACHABLE: Array<[string, string]> = [
+      ['connection refused', 'API Error: Connection refused'],
+      ['dns', 'API Error: getaddrinfo ENOTFOUND api.example.invalid'],
+      ['5xx', 'API Error: 503 Service Unavailable'],
+    ];
+    for (const [name, text] of UNREACHABLE) {
+      const row = verdictOf(err(null, text));
+      expect(row['verdict'], name).toBe('unreachable');
+      // …and the operator gets the endpoint's own words, not a paraphrase.
+      expect(row['detail'], name).toBe(text);
+    }
+
+    // THE NEGATIVE CONTROL. Same 5xx prose, but the endpoint named a status —
+    // which means something answered, so this is not a lane that could not be
+    // reached. `unknown`, and the sentence says what it saw.
+    const named = verdictOf(err(503, 'API Error: 503 Service Unavailable'));
+    expect(named['verdict'],
+      'a body carrying a numeric status read as unreachable').toBe('unknown');
+    expect(String(named['detail'])).toContain('503');
+
+    // …and the anchor is real: the alternatives are matched at the START of the
+    // text, so a lane that merely mentions one of them mid-sentence is not
+    // reported as unreachable either.
+    expect(verdictOf(err(null, 'the model said getaddrinfo is a C function'))['verdict'])
+      .toBe('unknown');
+  });
+
+  it('never reads SILENCE as health: the ok arm is `is_error === false` (D-2269, D-2270)', () => {
+    // THE ONE CONJUNCT BETWEEN A DEAD LANE AND A FALSE `ok`, AND IT WAS
+    // UNMEASURED. Deleting `&& j.is_error !== true` left 240/240 green, because
+    // the fixture table above pairs EVERY failure body with rc 1 — so no case
+    // ever presented a failure envelope at exit 0, which is the one input the
+    // conjunct exists to judge. It is driven HERE, at the classifier, and not
+    // through the launcher, because the pair is a property of `classifyProbe`
+    // alone: a fixture launcher that exits 0 while printing a failure envelope
+    // is a shape no launcher has to produce for this arm to be wrong.
+    const at0 = (body: unknown): Record<string, unknown> => {
+      const r = opRun(['classify', '--source', 'probe', '--exit', '0'],
+        `${JSON.stringify(body)}\n`);
+      expect(r.code, `${JSON.stringify(body)}: ${r.stderr}`).toBe(0);
+      return JSON.parse(r.stdout) as Record<string, unknown>;
+    };
+    // A 401 AT EXIT 0 IS A DEAD LANE, not a healthy one. This is D-2269's own
+    // reproduction, moved from the review into the suite.
+    expect(at0(PROBE_401)['verdict'], 'a 401 envelope at exit 0 read as healthy')
+      .toBe('auth-dead');
+
+    // …and the two OTHER conditions `!== true` folded into `ok`, which is
+    // D-2270: a body that says NOTHING about is_error, and a body that names it
+    // in a shape this build cannot read. Neither is evidence of health.
+    for (const body of [{ type: 'result', subtype: 'success', result: 'ok' },
+      { type: 'result', is_error: 'false', result: 'ok' },
+      { type: 'result', is_error: null, result: 'ok' },
+      { type: 'result', is_error: 0, result: 'ok' }]) {
+      expect(at0(body)['verdict'], `${JSON.stringify(body)} read as healthy`)
+        .not.toBe('ok');
+      // AND THE RESIDUAL NAMES THE SHAPE IT SAW rather than shrugging — the
+      // reason nothing is lost by tightening the arm.
+      expect(String(at0(body)['detail']), JSON.stringify(body)).toContain('exit 0');
+    }
+
+    // THE POSITIVE HALF, so the assertion above is a discrimination and not a
+    // constant: `is_error: false` at exit 0 is still the one `ok` §8 guards.
+    expect(at0(PROBE_OK)['verdict']).toBe('ok');
+    expect(at0(PROBE_OK)['detail']).toBe('the lane answered one turn');
+    // …and the exit code still carries its half of the pair: the same healthy
+    // body at a non-zero exit is not `ok` either.
+    const nonZero = opRun(['classify', '--source', 'probe', '--exit', '1'],
+      `${JSON.stringify(PROBE_OK)}\n`);
+    expect(JSON.parse(nonZero.stdout)['verdict']).not.toBe('ok');
   });
 
   it('names the classifier\'s own exit code, and carries a deferred line instead of swallowing it', () => {
@@ -6554,6 +6935,67 @@ describe('ccrc account check: the probe', () => {
     authFixture(quick, SIGNED_OUT, 1);
     expect(String(oneObject(run(quick, ['account', 'check', '--id', 'claude']))['detail']))
       .toMatch(/Nothing was written\.$/);
+  });
+
+  it('the deadline shim\'s bash fallback does not hold its caller\'s pipe for the whole deadline (D-2272)', () => {
+    // THE PROBE IS THIS TREE'S FIRST CALLER OF `_plat_timeout` INSIDE `$( )`,
+    // and that is what makes the fallback's orphan reachable. The watcher is a
+    // backgrounded subshell, so it inherits the command substitution's write
+    // end; the shim then signals the SUBSHELL, which dies and orphans the
+    // sleeper it was waiting on — and the orphan keeps that write end open, so
+    // the substitution cannot see EOF until the whole duration has run out,
+    // long after the command answered. MEASURED with a 10-second bound and a
+    // command that answers instantly: 10 006 ms before the redirection, 9 ms
+    // after.
+    //
+    // THE EXISTING NO-COREUTILS CASE CANNOT MAKE THIS ASSERTION, and being
+    // reassured by it is the mistake to avoid: `ccrc-doctor.test.ts` replaces
+    // PATH with a stub bin that has no `sleep` at all, so the `|| exit 0` guard
+    // fires, the watcher exits immediately and no orphan is ever created. It
+    // passes in seconds and proves nothing about this arm. The sleep-PRESENT
+    // shape is the only shape a real BSD or macOS box has — `sleep` is base
+    // system there and the GNU deadline binary is not — so this case builds
+    // that PATH itself: the two real programs the fallback needs, and nothing
+    // else.
+    const home = box('ccrc-account-plat-deadline-orphan-');
+    const bin = join(home, 'no-coreutils-bin');
+    mkdirSync(bin, { recursive: true });
+    for (const name of ['sleep', 'rm', 'echo']) {
+      const real = spawnSync(BASH, ['-c', `command -v ${name}`], { encoding: 'utf8' })
+        .stdout.trim();
+      expect(real, `this box has no ${name} to link`).toBeTruthy();
+      symlinkSync(real, join(bin, name));
+    }
+    // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
+    // coreutils deadline binary still reachable the shim never reaches its
+    // fallback at all, and with no `sleep` the watcher exits before it can
+    // orphan anything. Either way the case would be green about nothing.
+    const guards = [
+      `export PATH=${JSON.stringify(bin)}`,
+      'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then',
+      '  echo "a coreutils deadline binary is still reachable: the fallback never ran" >&2; exit 90',
+      'fi',
+      'command -v sleep >/dev/null 2>&1 || { echo "no sleep: the arm under test never runs" >&2; exit 91; }',
+    ];
+    const t0 = Date.now();
+    const r = sourceRun(home, [...guards,
+      'out="$(_plat_timeout 10 echo hi)"; rc=$?',
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+    const ms = Date.now() - t0;
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
+    expect(ms, `the substitution blocked for ${ms}ms after the command had answered`)
+      .toBeLessThan(5000);
+
+    // …AND THE DEADLINE STILL BITES. Closing the watcher's streams must not
+    // close the watcher: the same arm, on a command that never answers, still
+    // stamps, still signals, and still reports the code every call site here
+    // branches on.
+    const slow = sourceRun(home, [...guards,
+      'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+    expect(slow.code, slow.stderr).toBe(0);
+    expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
   });
 
   it('creates the scratch cwd and nothing else on the box (D-2223 F6, at the probe)', () => {
