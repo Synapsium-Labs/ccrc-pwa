@@ -1466,3 +1466,69 @@ Method: all five stores backed up first; consult mailed to all five running `ccr
 whether any file of theirs is wrong, whether they are writing memory now, and whether they object;
 **union, never overwrite**; a memory measurement has since falsified is DROPPED rather than copied into
 five places; the three divergent files merged on content with every drop evidenced.
+
+## 2026-09-09 — memory reconciled across five roots, and the delete verdicts were half wrong
+
+All five roots now hold the same 59 memories plus a regenerated index, verified byte-identical (one md5
+over every filename and its content, equal in all five). 226 files written; all five stores backed up
+first, after the one peer who was mid-write.
+
+### The result that changes how this is done next time
+
+A classification pass marked 10 of 54 orphaned memories STALE. A separate completeness critic
+re-measured all ten and found **five of those verdicts WRONG** — every one sharing a single failure
+mode: it read the memory's point-in-time STATUS HEADER, found it superseded, and condemned the whole
+file, where each was the sole surviving record of measured facts that still verify. **A 50% error rate
+on the delete direction settles the policy: propagate and correct, never prune, in a pass like this.**
+Nothing was deleted. Pruning stays with whoever owns the file.
+
+**Standing rule: a status header going stale is not the file going stale.** The cheap read is the
+header; the expensive one is the body, and the body is where the measurements live.
+
+### Seven false claims caught BEFORE propagation, each of which would have shipped five times
+
+The sharpest: `ccrc-api-curl-free-client.md` said **"17 rows, not 18"**. Measured, `ROUTES` has 18 and
+`ccrc-api.test.ts:237` asserts 18 — and that suite's own comment at `:224` records a past stale
+`toHaveLength(17)` as the exact bug it exists to catch. **Propagating that memory would have reinstalled
+the defect its own test suite was written to prevent.** Two independent agents caught the same stale row
+count in two different files.
+
+Also corrected: a "still say five" that main says six; `/api/claims/:id/break` as the "third" ungated
+door where the pinned set has four; an embargo recorded as holding when it lifted (and "closed" would
+have been wrong the other way — the scoping fix is still in flight); a `watch.ts` path off by a
+directory and 16 lines; and a sentence about CLAUDE.md's grep guidance that CLAUDE.md no longer carries
+— flagged **independently by its own author and by the critic**, which is the strongest signal in the
+batch.
+
+**And one of mine.** `per-root-memory-is-not-shared.md`, written the day before, carried a four-root
+census with per-root file counts. Copying it into five roots would have changed every number in it — a
+file whose entire subject is staleness, made stale by the act of sharing it. Rewritten to carry the
+wrapper→root MAPPING and an explicit re-measure command, and no counts at all.
+
+### The gap nothing recorded: a live push-blocker
+
+Two memories described the pre-push hook and **both were wrong** — one said `origin` was never
+redirected and the public repo was a second remote; the other said it refuses every non-main ref
+categorically. **Both were also marked stale**, so a pruning pass would have left the fleet with no
+record of a mechanism that blocks pushes today. Measured: v3, gates on the remote URL (so it fires on
+every push to `origin`, not only `main`), `origin` IS the public repo, and it refuses on CONTENT —
+identity residue — with `CCRC_ALLOW_PUBLIC_PUSH=1` as the override. It refused a ledger commit of mine
+the day before for an absolute worktree path in prose. Now recorded.
+
+**Two wrong accounts of one mechanism, both condemned, is how a fact disappears from a fleet** — not by
+anyone deleting the truth, but by every surviving copy of it being wrong at once.
+
+### Confirmed independently by a peer, and it widens the finding
+
+`claude-ccrc-pwa` measured that **`tasks/` follows the config dir exactly as memory does** — its task
+files diverged across two roots after a swap, the post-swap root holding the older snapshot. A second
+artifact class, same mechanism. So this is not a memory bug: **it is what keying anything on
+`CLAUDE_CONFIG_DIR` costs when a session's account can change under it**, which is precisely what this
+program automates.
+
+### Left undone, deliberately
+
+Eleven methodology memories from these review rounds all say a version of *measure the claim you are
+actually making*. Propagated whole that is 55 copies of one overlapping cluster. Consolidating them is a
+judgment call about the fleet's doctrine, not a cleanup, so it goes to the operator rather than being
+taken unilaterally.
