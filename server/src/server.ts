@@ -32,7 +32,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { projectReadiness } from './readiness.js';
@@ -1336,30 +1336,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
   };
 
-  /**
-   * Task 12's own re-measurement, the exact shape `coord/routes.ts`'s
-   * `freshAskAt` uses for `/api/asks/:id/answer` — re-read fresh rather than
-   * trusting the row's own stored `askAt`, because comparing a value to
-   * itself would never catch the child having repainted an identical
-   * question (`askKey` hashes content only, D-2170). `-1` on anything
-   * unmeasurable — no session record, no measured identity, no readable
-   * hookstate — because `-1` can never equal a stored `askAt`
-   * (`insertAsk` always takes it from a real hookstate's `updatedAt`), so
-   * an unmeasurable read fails the CAS shut rather than proceeding on a
-   * guess. Not shared with `coord/routes.ts`'s copy: this task's brief
-   * scopes the change to this file alone, and the two already read through
-   * different `Deps` (`deps.io`/`deps.cfg` here, the coord module's own
-   * `deps` there) — see this route's own comment for why a lost CAS here
-   * never refuses the operator regardless of which unmeasurable arm fired.
-   */
-  const freshAskAtFor = async (childId: string): Promise<number> => {
-    const read = await readSessionRecord(deps.io, deps.cfg, childId);
-    if (!read.found) return -1;
-    const identity = measuredIdentity(read.record);
-    if (identity === null) return -1;
-    const hs = await readHookState(deps.io, deps.cfg.registryDir, childId, identity.uuid, Date.now());
-    return hs === null ? -1 : hs.updatedAt;
-  };
+  // `freshAskAt` (D-2170's fail-shut re-measurement `takeAskForAnswer`'s CAS
+  // is checked against) is `registry.ts`'s export, fix round 1 finding 2 —
+  // this route and `coord/routes.ts`'s `POST /api/asks/:id/answer` both
+  // close over the SAME `Deps` object (`registerCoordRoutes` below is
+  // handed this function's own `deps`, unmodified), so a security-relevant
+  // fail-shut guard had no business existing as two copies that could
+  // silently drift. See `registry.ts`'s own doc comment on it for the full
+  // reasoning, and this route's own comment below for why a lost CAS here
+  // never refuses the operator regardless of which unmeasurable arm fired.
 
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
@@ -1670,7 +1655,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *
    * When a row IS held, it is taken (`takeAskForAnswer`, the identical CAS
    * `/api/asks/:id/answer` uses, guarded by the same fresh re-read —
-   * `freshAskAtFor` above) BEFORE the keystroke: the row is the mutex, so
+   * `registry.ts`'s `freshAskAt`, imported above, shared with that route)
+   * BEFORE the keystroke: the row is the mutex, so
    * taking it after the press would be decorative. Unlike the parent's own
    * route, though, a LOST race here never refuses the caller — the operator
    * is the authority this row exists to protect against being locked out
@@ -1708,7 +1694,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const held = coord.heldAskFor(id);
     if (held === null) return pressPlain();
 
-    const taken = coord.takeAskForAnswer(held.id, await freshAskAtFor(id));
+    const taken = coord.takeAskForAnswer(held.id, await freshAskAt(deps.io, deps.cfg, id));
     const res = await answerAsk(askDeps, id, key, optionIndexes);
 
     if (!taken.ok) {

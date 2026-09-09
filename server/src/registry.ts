@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
+import { readHookState } from './hookstate.js';
 import {
   isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
 } from '../../shared/api.js';
@@ -908,4 +909,43 @@ export async function readSessionRecord(io: FleetIO, cfg: CcrcConfig, id: string
     }
   }
   return { found: true, record: rec };
+}
+
+/**
+ * The ask pre-emption lane's shared fail-shut re-measurement (D-2170, D-2171
+ * fix round 1 finding 2): the child's live hookstate, re-read NOW rather than
+ * trusted from an ask row's own stored `askAt` — `askKey` hashes CONTENT, so
+ * a child looping over N structurally identical questions regenerates the
+ * same key for instance 2 that it did for instance 1, and the grace window
+ * is exactly the gap in which one becomes the other. `updatedAt` is what
+ * actually moves between them, and `takeAskForAnswer`'s CAS refuses
+ * `ask-moved` unless this still matches the row's own `askAt`.
+ *
+ * `-1` on anything unmeasurable — no session record, no measured identity,
+ * no readable hookstate — because `-1` can never equal a stored `askAt`
+ * (`insertAsk` always takes it from a REAL hookstate's `updatedAt`, and
+ * `Date.now()` values are never negative), so an unmeasurable read refuses
+ * rather than proceeds. The same "an unmeasurable answer is not a permissive
+ * one" posture the reclaim guard takes: a spurious refusal costs the caller
+ * one retry, a false pass presses a digit into a question nobody actually
+ * re-read.
+ *
+ * ONE definition for both callers of this guard — `coord/routes.ts`'s
+ * `POST /api/asks/:id/answer` and `server.ts`'s `POST
+ * /api/sessions/:id/ask` — deliberately: both already close over the SAME
+ * `Deps` object (`registerCoordRoutes(app, deps, ...)` passes `buildServer`'s
+ * own `deps` straight through, unmodified), so a security-relevant fail-shut
+ * guard duplicated across the two files could drift silently. It lives here
+ * rather than in either route file because both already import
+ * `readSessionRecord`/`measuredIdentity` from this module, and putting it in
+ * either route file would make the other import a fastify-adjacent module
+ * for a six-line pure-registry+hookstate read.
+ */
+export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<number> {
+  const read = await readSessionRecord(io, cfg, childId);
+  if (!read.found) return -1;
+  const identity = measuredIdentity(read.record);
+  if (identity === null) return -1;
+  const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
+  return hs === null ? -1 : hs.updatedAt;
 }

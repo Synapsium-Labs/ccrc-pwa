@@ -3,8 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from '../registry.js';
-import { readHookState } from '../hookstate.js';
+import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
@@ -2305,32 +2304,14 @@ export function registerCoordRoutes(
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
 
-  /**
-   * The child's live hookstate, re-read NOW rather than trusted from the
-   * mint — `askKey` hashes CONTENT, so a child looping over N structurally
-   * identical questions regenerates the same key for instance 2 that it did
-   * for instance 1, and the grace window is exactly the gap in which one
-   * becomes the other. `updatedAt` is what actually moves between them, and
-   * `takeAskForAnswer`'s CAS refuses `ask-moved` unless this still matches
-   * the row's own `askAt` (D-2170).
-   *
-   * `-1` on anything unmeasurable — no session record, no measured identity,
-   * no readable hookstate — because `-1` can never equal a stored `askAt`
-   * (`insertAsk` always takes it from a REAL hookstate's `updatedAt`, and
-   * `Date.now()` values are never negative), so an unmeasurable read refuses
-   * rather than proceeds. The same "an unmeasurable answer is not a
-   * permissive one" posture the reclaim guard takes: a spurious refusal
-   * costs the parent one retry, a false pass presses a digit into a question
-   * nobody actually re-read.
-   */
-  const freshAskAt = async (childId: string): Promise<number> => {
-    const read = await readSessionRecord(deps.io, deps.cfg, childId);
-    if (!read.found) return -1;
-    const identity = measuredIdentity(read.record);
-    if (identity === null) return -1;
-    const hs = await readHookState(deps.io, deps.cfg.registryDir, childId, identity.uuid, Date.now());
-    return hs === null ? -1 : hs.updatedAt;
-  };
+  // `freshAskAt` (the D-2170 fail-shut re-measurement `takeAskForAnswer`'s
+  // CAS is checked against) is `registry.ts`'s export now, fix round 1
+  // finding 2 — this route and `server.ts`'s `POST /api/sessions/:id/ask`
+  // both close over the SAME `Deps` object (this file's own `deps` param IS
+  // `buildServer`'s, passed straight through by `registerCoordRoutes`), so a
+  // security-relevant fail-shut guard had no business existing as two
+  // copies that could silently drift. See `registry.ts`'s own doc comment
+  // on it for the full reasoning.
 
   /**
    * `POST /api/asks/:id/answer` — the parent presses the digit into its
@@ -2399,7 +2380,7 @@ export function registerCoordRoutes(
 
     // D-2170: re-read the child's hookstate and prove the menu on screen is
     // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
-    const taken = coord.takeAskForAnswer(id, await freshAskAt(ask.childId));
+    const taken = coord.takeAskForAnswer(id, await freshAskAt(deps.io, deps.cfg, ask.childId));
     if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
 
     const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);

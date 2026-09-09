@@ -24,6 +24,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { Runner } from '../src/exec.js';
 import { askKey } from '../src/askkey.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
@@ -699,11 +700,18 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(coord.askById(id!)!.answeredBy).toBeNull();
   });
 
-  it('when the parent already holds the row, the operator is never refused — the press proceeds on its own merits', async () => {
+  it('a row already taken before the request arrives reads as nothing held — same branch as the parentless path', async () => {
     const { coord, id, now, calls } = await setup(Date.now(), true);
-    // The parent got there first: CAS the row to 'answering' directly — the
-    // same state `takeAskForAnswer` leaves it in mid-flight, before this
-    // route ever runs. The operator's own take must then lose the race.
+    // The parent got there first: CAS the row to 'answering' directly,
+    // BEFORE the request below is even sent. `heldAskFor` filters strictly
+    // on `state = 'held'` (store.ts), so by the time the route runs its own
+    // `coord.heldAskFor(id)` it finds NOTHING — `held === null` — and takes
+    // `pressPlain()`, the identical branch the parentless test below
+    // exercises. This proves that branch is safe when a row exists but
+    // isn't `held`; it does NOT reach `takeAskForAnswer` or `taken.ok` at
+    // all (fix round 1, finding 1) — the test below this one is what
+    // exercises that branch, by racing the take into the request's OWN
+    // async window instead of landing it before the request starts.
     const taken = coord.takeAskForAnswer(id!, now);
     expect(taken.ok).toBe(true);
 
@@ -712,9 +720,74 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
 
-    // The operator never took the row — left exactly where the parent's CAS
-    // put it, neither settled nor rolled back out from under the parent.
+    // The row is untouched by this request — left exactly where the
+    // pre-existing take put it, neither settled nor rolled back.
     const row = coord.askById(id!)!;
+    expect(row.state).toBe('answering');
+    expect(row.answeredBy).toBeNull();
+  });
+
+  it('a competing take landing inside this request\'s own CAS window loses the row but never refuses the operator', async () => {
+    // Fix round 1, finding 1: the test above moves the row to `'answering'`
+    // BEFORE the request starts, so the route's own `heldAskFor` finds
+    // nothing and never reaches `takeAskForAnswer` — `taken.ok === false`
+    // was unpinned. This test lands the competing take INSIDE the one
+    // genuine async gap the route has between finding the row held and
+    // taking it: `takeAskForAnswer(held.id, await freshAskAt(deps.io,
+    // deps.cfg, id))`, where `freshAskAt` (`registry.ts`, shared with
+    // `coord/routes.ts`'s own call, fix round 1 finding 2) awaits a real
+    // registry + hookstate read. The
+    // competitor is injected as a side effect of that read (via a wrapped
+    // `io.readFileMeasured`, fired exactly once, on the child's own
+    // `.hookstate.json`) — so by the time this request's own
+    // `takeAskForAnswer` call runs, the row has already moved out from
+    // under it and the CAS genuinely fails `not-held`.
+    const now = Date.now();
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    seedHookstate(home, CHILD, CHILD_UUID, now);
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const { run, calls } = tmuxRunner([ASK_PANE]);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const id = coord.insertAsk({
+      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+
+    let fired = false;
+    const raceIO: FleetIO = {
+      ...localIO,
+      async readFileMeasured(p: string) {
+        if (!fired && p.endsWith(`${CHILD}.hookstate.json`)) {
+          fired = true;
+          // The competing take: same `askAt` the row was minted with, so it
+          // is a genuine, legitimate CAS win — not a fabricated failure.
+          const won = coord.takeAskForAnswer(id, now);
+          expect(won.ok).toBe(true);
+        }
+        return localIO.readFileMeasured(p);
+      },
+    };
+
+    app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord, notifyLog, io: raceIO });
+    const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
+
+    // The injected race actually fired — this is not a no-op fixture.
+    expect(fired).toBe(true);
+
+    // The property under test: a lost CAS never refuses the operator. The
+    // press proceeds on its own merits, and the response is that press's
+    // own result — not shaped by `taken.ok` at all.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+
+    // This request never held the row — left exactly where the competing
+    // take put it, neither settled nor rolled back out from under it.
+    const row = coord.askById(id)!;
     expect(row.state).toBe('answering');
     expect(row.answeredBy).toBeNull();
   });
