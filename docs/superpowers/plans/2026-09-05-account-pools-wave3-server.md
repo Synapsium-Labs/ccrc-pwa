@@ -2800,6 +2800,7 @@ git commit -m "feat(pools): the tag route asks the box and then reads the file, 
 
 ---
 
+### Task 10 — DONE 2026-09-09 (5/5 mutations red)
 ### Task 10: the 409, the 503 and the `crossPool` override on swap and sessions
 
 **Files:**

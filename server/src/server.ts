@@ -12,7 +12,7 @@ import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
 import { poolFor, poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
-import { poolRostered } from './poolrule.js';
+import { poolRostered, poolVerdict } from './poolrule.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
@@ -24,7 +24,7 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
          type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -68,7 +68,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow, type ProjectPoolsWire,
+  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
 } from '../../shared/api.js';
 
 /**
@@ -1431,9 +1431,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `registry.ts`'s "incomplete registry entry" comment), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
-  const knownId = async (id: string): Promise<boolean> => {
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    return names !== null && names.includes(`${id}.uuid`);
+  const knownId = async (id: string, names?: readonly string[] | null): Promise<boolean> => {
+    // `names` PASSED IN by a caller that already listed (the sessions route,
+    // which needs the same listing for `readProjectPools`): one readdir, one
+    // membership test, and the two answers cannot disagree. `undefined` — every
+    // other caller — takes its own, exactly as before.
+    const listed = names === undefined ? await deps.io.readdir(deps.cfg.registryDir) : names;
+    return listed !== null && listed.includes(`${id}.uuid`);
   };
 
   // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
@@ -1678,6 +1682,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `deps.runCcd` is the call, and routes needing another shape (a 200 carrying
   // `phase:unknown`, a parsed WsAudit/ReapResult, a 501 hoisted out of a queued
   // fn) compose from `deps.runCcd` directly rather than reaching for a runner.
+  /**
+   * The pool pre-check every placement route makes (account pools, spec §5.6).
+   * Returns `null` when the caller may proceed, or a REPLY that has already
+   * been sent. The routes call `poolVerdict` through this and never re-derive
+   * the rule — L4 owns fastify and does not DECIDE.
+   *
+   * 409 is "this account is wrong for this project", overridable with
+   * `crossPool`. 503 is "nobody can decide", which is NOT overridable here:
+   * the tag is unreadable or malformed, and `ccd` refuses it too.
+   */
+  const refusePool = (
+    reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
+  ): FastifyReply | null => {
+    const v = poolVerdict(deps.cfg.roster, wrapper, pool);
+    if (v.ok) return null;
+    return v.reason === 'pool-mismatch'
+      ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
+      : reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
+  };
+
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
@@ -1741,15 +1765,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   app.post('/api/sessions', async (req, reply) => {
-    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown };
+    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0
       || typeof body.project !== 'string' || body.project.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
+    // ONE registry listing, two questions: is this a revival, and what is this
+    // project's tag. CREATION-ONLY, mirroring `cmd_start`'s own guard placement
+    // (spec §5.5.5): the two-argument form is a revival path as well as a
+    // creation path, and on a revival THE REGISTRY WINS over the wrapper
+    // argument — so refusing here would refuse a revive of a session already
+    // running wrong-pool, which ruling 5's auto path is what moves.
+    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
+    const revival = await knownId(`${body.wrapper}-${body.project}`, rootNames);
+    if (!revival) {
+      if (body.crossPool === true) {
+        // REFUSE ON NO EVIDENCE — `capSupported`, never `verbSupported`. A flag
+        // an old ccd mis-binds exits 0 and records nothing, which
+        // `runCcdOr502` renders as success.
+        if (!capSupported(deps.fleetState, POOLS_CAP)) {
+          return reply.code(501).send({ ok: false, error: 'unsupported' });
+        }
+        return runCcdOr502(reply, body.enable === false
+          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
+          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
+      }
+      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), body.project);
+      const refused = refusePool(reply, body.wrapper, pool);
+      if (refused) return refused;
+    }
     // enable = start + systemd enable. The ternary picks the ENTRY rather than
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
-    const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
     return runCcdOr502(reply, body.enable === false
       ? CCD_ARGV.start(body.wrapper, body.project, workdir)
       : CCD_ARGV.enable(body.wrapper, body.project, workdir));
@@ -1951,10 +1999,35 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/swap', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = (req.body ?? {}) as { wrapper?: unknown };
+    const body = (req.body ?? {}) as { wrapper?: unknown; crossPool?: unknown };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    if (body.crossPool === true) {
+      // The declared crossing skips the verdict entirely — that IS the
+      // override. It does not skip the SKEW gate: `capSupported` refuses on no
+      // evidence, for the reason spelled out on `CCD_ARGV.swapCross`. An
+      // undecidable tag still stops the swap, one box over: `cmd_swap`'s own
+      // guard dies on it with or without the flag, and that reaches the caller
+      // as a 502 carrying ccd's sentence.
+      if (!capSupported(deps.fleetState, POOLS_CAP)) {
+        return reply.code(501).send({ ok: false, error: 'unsupported' });
+      }
+      return runCcdOr502(reply, CCD_ARGV.swapCross(id, body.wrapper));
+    }
+    // The row, for its `project` — read at REQUEST TIME so the 409 decides on
+    // the same freshness `cmd_swap` will. `readSessionRecord` is one id's ~23
+    // field reads, not the fleet's; the ladder is `/stop`'s, because an
+    // unlistable registry proves nothing about THIS id and 404 would be a lie.
+    const read = await readSessionRecord(deps.io, deps.cfg, id);
+    if (!read.found) {
+      return reply.code(read.reason === 'unlistable' ? 503 : 404)
+        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    }
+    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
+    const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), read.record.project);
+    const refused = refusePool(reply, body.wrapper, pool);
+    if (refused) return refused;
     return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
   });
 
