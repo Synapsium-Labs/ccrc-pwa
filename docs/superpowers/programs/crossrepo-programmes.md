@@ -30,7 +30,14 @@ briefs the next wave — opening wave N+1's run BEFORE closing wave N's.
 Ledger block: **D-2054–D-2070** — seventeen numbers minted in ONE allocator call on 2026-09-08 at plan time
 (floor 2071) and FULLY DEFINED across the three plans' `## Deviations found` sections (wave 1: D-2054–D-2061;
 wave 2: D-2062–D-2065; wave 3: D-2066–D-2070), each ratified by the orchestrator and folded into the spec's
-sentences the same day. It is not a reserve. An execution-time deviation gets its own allocator
+sentences the same day. It is not a reserve. Wave 1 added two execution-time numbers outside the block, both defined in its plan's
+`## Deviations found`: **D-2338** (Task 6, `parkSupersededDeliveries` extracted so mail-hardening's writer
+census keeps its single-line-signature premise — minted by a fix-round subagent under the title "probe - do
+not use", ratified by the coordinator 2026-09-09 23:1x UTC rather than re-pointed, because the number was
+issued, spent and defined; the title stays as the row's history) and **D-2342** (Task 2's dispatch rung reads
+`.project` through `fieldMeasured` — unreadable refuses `registry-unmeasurable`, absent permits, `by` names
+what was read; minted by the coordinator on the worker's `deviation-request`, COUNT 1). An execution-time
+deviation gets its own allocator
 call: the worker writes `D-TBD-<slug>` with a full entry and mails a `deviation-request` naming the count;
 the coordinator mints exactly that many, defines them in the same act, and mails the numbers back.
 
@@ -79,6 +86,12 @@ acceptance list, verbatim.
 
 ## Carried constraints
 
+- **`SessionRecord.project` is not on the measured ladder** (found by wave 1, D-2342): `registry.ts`'s
+  `project ?? id` over `field()` folds absent and unreadable to one null, so every consumer that DECIDES on
+  `record.project` decides on a fold. Wave 1 fixed the one decision it added (the dispatch rung reads the
+  field measured at the decision point). The fuller remedy — `project` inside `readRegistryMeasured`, the
+  `unmeasured` shape carrying it, every consumer in fleet.ts, watch.ts, lifecycle.ts, divergence.ts,
+  routes.ts and store.ts re-read — is its own task under its own ruling, not a later wave of this programme.
 - **account-pools wave 3 is in `server/src/coord/{routes,store}.ts` now** (run 35, dispatched
   2026-09-08). Wave 1's worker rebases over it before opening its PR; a conflict in `openRun` or the
   route's body validation is expected, not a defect.
