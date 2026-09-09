@@ -37,7 +37,8 @@ THROUGH rather than rests in: a row mid-creation before `.wrapper` lands, a `.wr
 band, one tick of permission trouble. A five-second tick lives in the transient.
 
 **Deviations DEFINED here:** D-2026–D-2035 (the original round), D-2155–D-2162 (the #69 review, round
-2), D-2194–D-2207 (round 3) and D-2212–D-2219 (round 3's #70 merge pass). Every number is defined here and nowhere else. **CORRECTED twice:** this
+2), D-2194–D-2207 (round 3), D-2212–D-2219 (round 3's #70 merge pass) and
+D-2254–D-2261 (round 4). Every number is defined here and nowhere else. **CORRECTED twice:** this
 sentence claimed only the first band for two rounds while the file went on defining two more below it —
 the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
 contents by eight, then by twenty-two.
@@ -668,3 +669,121 @@ line that records something — and that sentence is the whole of D-2214.
 between the tick's reads and its verdict, the verdict still sees all four answers, and `tickstuck` has
 three code sites, none of them #70's. R3's `.project` / `_pool_untaggable` path is untouched. R2's
 `_authdead` half is safe: both callers consume it as a bare boolean, with no vocabulary to narrow.
+
+---
+
+## Round 4 — the review of round 3 (2026-09-09)
+
+The coordinator's review of round 3: 7 lenses, 49 findings, **43 CONFIRMED / 6 PARTLY / 0 REFUTED**, 24
+blocking. Its two CRITICALs about the merge and about `SessionRecord.stranded` were already closed by
+the merge pass (D-2214, D-2201) — found independently, hours apart, which is the mechanism working
+rather than a coincidence worth celebrating. What follows is the rest.
+
+**The through-line of this round is that round 3's fixes were correct and incomplete in the same way
+three times over:** each closed a defect at the seam it was looking at and left, or created, the same
+defect one seam over. That is not carelessness. It is what a dense change in a hot loop costs when the
+fix is designed against the site that reported the bug rather than against the whole path.
+
+### Deviations found
+
+- **D-2254 (2026-09-09)** — **an overloaded exit code at a seam, and round 3 added the fourth
+  condition.** `_swap_target` answers rc 2 — "nobody can say" — for FOUR distinct conditions: the
+  crossing record on `cur` and on `home`, `_pool_ok "$cur"`, and the `.project` re-read round 3 added.
+  The caller INFERRED which from `hrc` and `prc`, two measurements of two DIFFERENT moments than the
+  one that refused, and defaulted to `crosspool`. Measured end to end with the field broken between the
+  caller's read and the callee's — the exact TOCTOU race the inner read exists for: the row stranded
+  naming `.crosspool`, a file the fixture never created, and stamped the debounce `crosspool`, so the
+  next genuine crossing episode was swallowed too. **`hrc` is not one of the four at all** — it is
+  tested nowhere inside `_swap_target` — so the comment claiming "measured, not guessed" named a
+  condition the function does not have and omitted the one that had just been added. Round 3 closed
+  this exact shape for `hrc` and opened it for `project` in the same commit.
+  **The exit code now carries the answer** (2 crossing, 3 project, 4 pool). The other two channels were
+  measured and rejected rather than waved away: a well-known variable dies with the command
+  substitution's subshell, and a second stdout token puts a cause word where a destination lives and
+  reds four existing `rc=2` pins. Crossing KEEPS rc 2, so every existing rc-2 assertion stays green by
+  construction; `-ge 2` and an `rc$strc` arm make a future fifth code loud instead of silent.
+- **D-2255 (2026-09-09)** — **two surfaces, two files, one tick.** `_tick_undecidable` writes the WORD
+  and `_strand_mark` writes the SENTENCE, and they were computed separately — so on a row where the
+  crossing record AND the pool tag were both unreadable, the stamp said `crosspool` while the strand
+  sentence said the pool tag. That one is not a race; it is ordinary double-fault state. Both surfaces
+  now derive from one word through `_undecidable_cause`, so they cannot drift. Removing that coupling
+  reds three cases, two of them pre-existing.
+- **D-2256 (2026-09-09)** — **the storm fix inverted the defect.** Round 2 stormed because the clear ran
+  BEFORE the setter; round 3 moved the clear to the bottom of the tick and so left it below four
+  `return 0` gates — a fault that ENDS while a gate holds leaves a stale stamp, and the debounce then
+  swallows the next genuine episode of that field. Measured: tag breaks (one line), tag fixed, row
+  swaps, tag breaks again inside `SWAP_COOLDOWN` — second episode silent. **The two cooldown gates now
+  clear** (a fresh `lastswap` means the row swapped; a fresh `swapblocked` means it tried and was
+  refused — both are decisions), **and the pane gate deliberately does not**: an empty capture is a row
+  nothing was measured about, and it is the one gate here that can hold indefinitely, which is exactly
+  why it must not be the one that clears on a guess. Pinned in both directions — and the first spelling
+  of the pane-direction case was VACUOUS: with the condition still true the verdict re-set `$stuck`
+  every tick, so a wrongly-added clear was gated off anyway and the mutation passed. It had to end the
+  condition first to measure anything.
+- **D-2257 (2026-09-09)** — **round 3 fixed the tick and left the verbs, which are the half a PWA tap
+  reaches.** `cmd_swap` and `cmd_prefer` still read `.project` through `_reg_get`, so an unreadable
+  field folded to `untagged`, `_pool_ok` admitted every account, and both `die` arms were skipped:
+  measured, `demo` tagged `pool-a` with `.project` a FIFO printed `swapped claude-demo: claude ->
+  claude-b`, wrote the new wrapper and recorded no crossing marker. `cmd_prefer` is worse — it rewrites
+  `.home`, so it PINS the session out of pool rather than moving it once. A verb may `die` where the
+  tick must stand still, and the two lines below already `die` on an undecidable pool TAG, so this is
+  the same condition one level down in the same voice. Gated on `_pool_untaggable` in both, with the
+  opposite-direction case pinned: no `pools/` dir, unreadable `.project`, the swap STILL happens.
+- **D-2258 (2026-09-09)** — **and the claim that this branch created that defect is false for three of
+  its five inputs.** Measured on `origin/main` itself, same fixture: `.project` as a DIRECTORY, a
+  DANGLING SYMLINK or `chmod 000` already relocated silently out of pool there. Those were never a
+  hang — they are the round-2 constraint lift reaching the verb, and nobody closed it. What this branch
+  changed is the other two: a FIFO blocked in `open(2)` on main and a symlink to `/dev/zero` in
+  `read(2)`, and the `-f` added to `_reg_get` turned both hangs into the same silent move. **The branch
+  widened the hole from three shapes to five; it did not open it.** Booked separately because the first
+  draft of the fix's own comment asserted the stronger claim, and a fix that overstates what it repairs
+  is how the next reviewer's baseline goes wrong.
+- **D-2259 (2026-09-09)** — **eight guards mutated one at a time; four could not be redded.** "A comment
+  is a request; a red suite is a mechanism", and this round shipped four requests. UNPINNED and now
+  pinned: the SWAP lane's `-f "$sf"` (deleting it measures **rc 124** — a wedged supervisor — with the
+  whole suite green); `_tick_undecidable`'s rc-2 ALREADY-SAID arm (folding "stamp unreadable" into "no
+  stamp" defeats the debounce through the fold instead of through the clear); the verdict's `ctrc` line;
+  and `_pool_untaggable`'s registry-level refusal (without it an UNMEASURABLE box answers "untaggable",
+  re-opening the constraint lift through the gate meant to bound it). Already pinned, measured rather
+  than assumed: `_swap_target`'s project guard, the verdict's `hrc` and `prc` lines, and
+  `_pool_untaggable`'s `-L` half.
+- **D-2260 (2026-09-09)** — **three of this round's own new pins were vacuous until they were mutated,
+  and that is the finding.** The pane-gate case (D-2256) passed under the mutation it names. The `ctrc`
+  verdict case was green because `_swap_target` refuses on the same record and says `crosspool` from
+  its own arm — the two lines only differ for a row inside `SWAP_COOLDOWN`, where the verdict runs
+  ABOVE the gate and the `strc` arm never runs, so the fixture needed a fresh `lastswap` to measure
+  anything. And the swap-lane `$sf` case never reached the read at all: `seedRow` sets home AND wrapper
+  to the same account, so `_swap_target` takes its stay-put shortcut and the tick returns two hundred
+  lines above it. **A pin is not written, it is measured** — all three were caught by running the
+  mutation the case claims to catch, which is the only step that distinguishes a pin from a comment.
+- **D-2261 (2026-09-09)** — **the count sweep, and a scanner's premise this round falsified.** The
+  `_reg_get` census has now moved four times in four commits — 133 → 135 (the #70 merge's
+  `_compact_note`) → 133 (round 4's two verb conversions) — and its line count was stated wrong twice
+  by reusing the occurrence spelling, so both spellings are now written beside the numbers they
+  produce. `_authdead`'s block gave ONE input set two cardinalities two lines apart. The cited anchor
+  `grep -n 'mkdir -p "$POOLS_DIR"'` matched only its own citation, because the real call carries `--`.
+  "`_auto_swap_check` calls `_strand_mark` TWICE on the same tick" is two call SITES, mutually
+  exclusive, at most one firing. And "nothing matches the `<unmeasured>` literal (grepped)" was false in
+  the same comment block that said it — a negative grep proves what was searched, never what was
+  claimed. Separately, `ccd-arith-containment.test.ts` asserted its sites are "all `[[ … ]]` guards";
+  D-2256 made one of them an `if [[ … ]]; then`, so the scan strips a leading `if ` — the assertion it
+  actually makes (the digits guard precedes the arithmetic on the same line) never depended on the
+  statement form, and widening the filter is honest where contorting the code back would not be.
+
+### Mutation table — round 4
+
+| # | mutation | measured |
+|---|---|---|
+| M14 | `_swap_target`'s project refusal back to rc 2 | RED — `the stamp names the project: expected '… crosspool' to contain 'project'` |
+| M15 | the pool refusal back to rc 2 | RED — `expected '… the crossing record could …' to contain 'pool tag could not be read'` |
+| M16 | the two surfaces decoupled again | RED ×3, incl. two pre-existing banner cases |
+| M17 | `cmd_swap`'s guard reverted to `_reg_get` | RED ×5 — `fifo: the verb refuses` |
+| M18 | `cmd_prefer`'s guard reverted | RED — the home was re-pinned out of pool |
+| M19 | the `_pool_untaggable` gate dropped on the verb | RED — `the swap still happens: expected 1 to be +0` |
+| M20 | the cooldown clear removed | RED — `the stamp must not survive the cooldown` |
+| M21 | that clear un-gated from `$stuck` | RED — `episode two is said: … got 3` |
+| M22 | the PANE gate given a clear too | RED — `a pane nobody could read decides nothing` |
+| G3 | the SWAP lane's `-f "$sf"` deleted | RED — **rc 124**, a wedged supervisor |
+| G4 | `_tick_undecidable`'s rc-2 arm deleted | RED — four ticks, four lines |
+| G6 | the verdict's `ctrc` line deleted | RED — `expected 'null' to contain 'crosspool'` |
+| G8 | `_pool_untaggable`'s registry refusal deleted | RED — `expected 'rc=0' to be 'rc=1'` |

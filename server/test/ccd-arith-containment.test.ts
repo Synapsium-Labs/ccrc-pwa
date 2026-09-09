@@ -167,9 +167,18 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
     { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
   ];
+  // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
+  // premise (#69 review round 4). The comment here said "the seven sites are all
+  // `[[ … ]]` guards" — a claim about the tree, and round 4 falsified it: the
+  // `lastswap` cooldown became `if [[ … ]]; then … fi` so it could clear a stale
+  // `tickstuck` stamp before returning. Nothing this file actually asserts
+  // depends on the statement form — the assertion is that the `=~ ^[0-9]` guard
+  // precedes the arithmetic ON THE SAME LINE — so the filter is widened rather
+  // than the code contorted back into a shape a scanner happened to assume.
   const codeLines = readFileSync(CCD, 'utf8').split('\n')
     .map((line) => line.trim())
-    .filter((line) => line.startsWith('[['));   // the seven sites are all `[[ … ]]` guards, never comments
+    .map((line) => (line.startsWith('if [[') ? line.slice(3) : line))
+    .filter((line) => line.startsWith('[['));   // guards only, never comments
 
   for (const site of SITES) {
     it(`${site.fn} carries =~ ^[0-9] before its arithmetic`, () => {
