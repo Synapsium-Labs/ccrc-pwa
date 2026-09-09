@@ -1772,7 +1772,7 @@ MSG
 - Test: `server/test/modelenv.test.ts`, `server/test/settings-aliases.test.ts`, `server/test/modelenv-single-writer.test.ts`
 
 **Interfaces:**
-- Consumes: `UNAVAILABLE_PREFIX`, `deriveModels` from `shared/models.mjs` (Task 2); `CLASSES` mirrored as in that twin.
+- Consumes: `CLASSES`, `UNAVAILABLE_PREFIX`, `deriveModels`, all imported from `shared/models.mjs` (Task 2) — `shared/models.mjs` is the ONE runtime implementation of `CLASSES` every bare-`node` caller imports (fix round 1, finding 3); `shared/models.ts` keeps its own separate `as const` literal, pinned to agree with it element-for-element by `server/test/models.test.ts`, because only `.ts` can derive `ModelClass` as a TYPE from it and `shared/models.mjs` cannot import `shared/models.ts` back without an import cycle.
 - Produces:
   ```js
   export class ModelEnvInvalid extends Error {}
@@ -2222,12 +2222,7 @@ Expected: FAIL with `Failed to resolve import "../../shared/modelenv.mjs"`.
 // hitting the provider's 400 ("input exceeds the context window").
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
-
-/** Mirrors `shared/models.ts`'s `CLASSES`, in the same order — see
- *  `shared/models.mjs`'s copy for why this is duplicated rather than imported
- *  from the TypeScript, and how the two are compared. */
-const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'];
+import { CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
 
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
