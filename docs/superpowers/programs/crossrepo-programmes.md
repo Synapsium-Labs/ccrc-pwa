@@ -4,7 +4,8 @@ Spec: `docs/superpowers/specs/2026-09-08-crossrepo-programmes-design.md` (design
 operator 2026-09-08; inherits every 2026-08-11 ruling from `2026-08-11-crossrepo-programmes-design.md`)
 Plan: three wave plans, written before the program opened —
 `docs/superpowers/plans/2026-09-08-crossrepo-wave{1-server,2-skills-pwa,3-docs-flip}.md`
-Workspace: worker workspace spawned by wave 1's dispatch (recorded in the Waves table once it exists)
+Workspace: `ccrc-pwa-bright-meadow` — spawned fresh by wave 1's dispatch (run 36, 2026-09-09 13:5x UTC); held
+`program:crossrepo-programmes wave:1/3`; waves 2 and 3 reclaim it by `sessionId`.
 Coordinator: `claude-ccrc-pwa`, the live main checkout of ccrc-pwa — designated by the operator's "start
 program" at 13:34 UTC 2026-09-09. This line earlier said a FRESH main checkout opened only after
 account-pools had closed; the operator chose not to wait, and this session is what the run board's Start
@@ -37,7 +38,7 @@ the coordinator mints exactly that many, defines them in the same act, and mails
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | — | not opened |
+| 1 | Server + shared: `project-mismatch` at open and at dispatch resume, `home-mismatch`, the one migration (`programs.homeProject`, `feed_events.runId`), `homeProject` at open with the legacy generation, `RunSummary.homeProject`, the `worker` mail role, `bindSession` and the heir re-issue, the programme filters on mail and feed, `ccrc-api` rows, both refusal codes named in the coordinator skill. AGENT-FIRST (the skill sentence ships via the install lane). | — | **dispatched** 2026-09-09 — run 36, worker `ccrc-pwa-bright-meadow`, 9 items; brief queued, skill present |
 | 2 | Skills + PWA: the coordinator skill's boundary sentences, the worker skill's foreign-plan sentence, the runs-screen badge and crossing marker, the fleet card's marker and abroad line, the mail screen's programme grouping and chip. AGENT-FIRST. | — | not opened |
 | 3 | Docs + the legacy flip: README sections, the Aug 11 spec's status line, this ledger's close, and `HOME_PROJECT_LEGACY_ACCEPTED → false` as its own commit ONLY when the operator's read of `run_events` and `runs` on the server box shows zero `legacy-home-project` events AND at least one run opened over seven consecutive days (D-2066, D-2067) — else deferred with both numbers recorded. NOT agent-first (D-2069). | — | not opened |
 
