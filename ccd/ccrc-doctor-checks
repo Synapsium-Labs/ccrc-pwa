@@ -4019,8 +4019,8 @@ _check_fleet() {
 # lie: there is nothing here that could have forked.
 #
 # EXTERNAL BINARIES ARE NOT BANNED HERE — `_check_caddyfile` calls `readlink`
-# (`:1720`) and `_check_graphify-path` calls `realpath` twice (`:3577`-
-# `:3578`), so "this file never shells out" would overstate its own practice.
+# (`:1720`) and `_check_graphify-path` calls `realpath` twice (`:3575`-
+# `:3576`), so "this file never shells out" would overstate its own practice.
 # The real doctrine is D-1350 (`:3555`-`:3572`): a tool is fine to use, but
 # its ABSENCE must become an unmeasured/SKIP outcome, never a narrowed or
 # wrong verdict — an adapter may not narrow a distinction it received. This
@@ -4093,8 +4093,11 @@ _check_fleet() {
 # each with its own remedy, and a check may answer in more than two classes
 # at once). The instruction that shipped round 1's early-return ("emit
 # exactly one verdict line or doctor's tallies go inconsistent") was wrong:
-# `cmd_doctor` counts VERDICT LINES, not a fixed arity per check
-# (`ccd/ccrc:1995`-`:2007`, header at `:2060`-`:2071`), so a fork on one home
+# `cmd_doctor` counts VERDICT LINES, not a fixed arity per check — the
+# counting loop and the comment that rules it are `ccd/ccrc:1990`-`:2007`, and
+# the contract the count then has to satisfy (the return code must be the
+# WORST class the check printed, or the check is failed as a ccrc bug) is
+# `ccd/ccrc:2048`-`:2063` — so a fork on one home
 # and an unreachable finding on an unrelated home are computed independently
 # below and BOTH printed — dropping either one is silence about a real
 # finding, which is the one thing this whole task exists not to do.
