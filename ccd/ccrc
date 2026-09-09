@@ -5521,10 +5521,43 @@ _acct_credential() {
   _acct_id_or_refuse "$id"
   _acct_lane "$id"
 
+  # THE LANE KIND IS THE FIRST QUESTION, because spec:419's sentence asks it
+  # first: "Refuse unless X is generated or upstream-with-declared-secretsFile".
+  # Everything below this line is about a lane ccrc may write; this line is
+  # about whether it may write the lane at all.
+  #
+  # `external` IS THE ONE KIND THAT CAN NEVER BE ROTATED, and the warrant is not
+  # only the spec. Decision 22(c)'s whole argument for `declare` is that ccrc
+  # RECORDS an external launcher and NEVER TOUCHES IT, so putting a 0600 file on
+  # disk for one contradicts the sentence that makes `declare` safe. It is also
+  # this verb's own stated safety property — "a lane ccrc cannot prove it owns
+  # is told so" — and an external lane is by definition such a lane: its
+  # launcher is somebody else's program and reads whatever credential that
+  # program was written to read.
+  #
+  # IT IS A CODE OF ITS OWN, NOT A THIRD `not-managed` (review round 1). That
+  # code already carries two conditions three lines down, and a third meaning on
+  # it would be the overloaded seam this cluster keeps closing. It is also why
+  # this gate is FIRST rather than tucked in beside them: an external lane is an
+  # external lane whether or not it happens to name a `secretsFile`, and routing
+  # one fact to two codes on a field that has nothing to do with it is the same
+  # defect wearing the other hat. `rosterFromJson` admits `secretsFile` on all
+  # three exec kinds (shared/roster-json.mjs:231-250), so before this gate a
+  # HAND-WRITTEN `external` entry naming provider `openrouter` and a matching
+  # secretsFile was ACCEPTED AND ROTATED — measured, exit 0, `{"ok":true,…}`,
+  # a live token in a 0600 file ccrc had promised never to write.
+  #
+  # THIS IS `ACCT_KIND`'S FIRST AND ONLY READER. `_acct_lane` sets seven
+  # globals and three of them — `ACCT_KIND`, `ACCT_BASEURL`, `ACCT_HOMEABLE` —
+  # had no reader in bash at all; Task 32 is written against all seven. Two
+  # still have none, which is a fact about those two and not a licence.
+  [ "$ACCT_KIND" != external ] \
+    || _acct_refuse 1 external-lane "account $id is an external lane: its launcher $WRAPPER_BIN_DIR/$id is somebody else's program, which ccrc records and never writes. Whatever credential that launcher reads is the launcher's to rotate, so this verb will not put a file on disk for it - even when exec.secretsFile names one. Re-auth it the way its own launcher documents. Nothing was written."
+
   # TOKEN LANES ONLY, and `not-managed` names the difference rather than hiding
   # it. A login lane's credential is Claude Code's own `.credentials.json`
-  # inside the config dir; an external lane's is the launcher's. Neither is a
-  # file this verb may replace, and both re-auth some other way.
+  # inside the config dir. That is not a file this verb may replace, and it
+  # re-auths some other way.
   #
   # THE REMEDY NAMES A SUBCOMMAND WAVE 1 DOES NOT SHIP, deliberately, and
   # `_acct_add`'s `credential-not-managed` sentence says the same thing at its
@@ -5538,13 +5571,19 @@ _acct_credential() {
   #
   # TWO GATES, TWO SENTENCES, BECAUSE THEY ARE TWO CONDITIONS. The first is a
   # lane with no secrets file at all; the second is a lane that names one whose
-  # PROVIDER keeps no env var — `rosterFromJson` validates `exec.secretsFile` on
-  # all three exec kinds, so a hand-written `openai` entry can reach the second
-  # while the first passes. One code, because the operator's next move is the
-  # same (re-auth elsewhere); two details, because what they are looking at is
-  # not.
+  # PROVIDER keeps no env var — `rosterFromJson` puts no kind predicate on
+  # `exec.provider` either, so a hand-written `generated` or `upstream` entry
+  # naming `openai` reaches the second while the first passes (measured: the
+  # `lane` op answers `generated / openai / .cc-secrets/… / <empty>`). One code,
+  # because the operator's next move is the same (re-auth elsewhere); two
+  # details, because what they are looking at is not.
+  #
+  # BOTH ARE NOW `generated`-OR-`upstream` ONLY, since the kind gate above runs
+  # first — so this sentence no longer hedges across an external lane it can
+  # never see. A refusal that names a branch it cannot reach is the comment
+  # shaped like a mechanism this wave has twelve examples of.
   [ -n "$ACCT_SECRETS" ] \
-    || _acct_refuse 1 not-managed "account $id declares no secretsFile, so there is no credential file for ccrc to replace - a subscription lane re-auths with: ccrc account auth-start --id $id --method login; an external lane's credential belongs to its own launcher. Nothing was written."
+    || _acct_refuse 1 not-managed "account $id declares no secretsFile, so there is no credential file for ccrc to replace - this is a login lane, whose credential is the .credentials.json Claude Code writes inside its own config directory, and it re-auths with: ccrc account auth-start --id $id --method login. Nothing was written."
   [ -n "$ACCT_SECRET_ENV" ] \
     || _acct_refuse 1 not-managed "account $id's provider keeps its credential outside ccrc, so there is no env file for this verb to write, whatever exec.secretsFile says. Nothing was written."
 
