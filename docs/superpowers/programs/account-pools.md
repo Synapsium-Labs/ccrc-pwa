@@ -1645,3 +1645,68 @@ unavailable there.
 
 Memory `a-sweep-reports-the-list-not-the-result` rewritten to carry the sharpened rule, not the first
 one; five roots re-verified identical at 62 files after the rewrite.
+
+---
+
+## 2026-09-09 17:5x — PR #69 round 4 gated: ONE MORE ROUND (worker mail 359 → my 363)
+
+Head `c3e69b41`, MERGEABLE, CI green on server/agent/pwa/build-pwa. Review: 7 lenses on opus over
+`be16dbf3..c3e69b41`, one adversarial refute pass on sonnet per finding. **35 agents, 0 errors, 28
+findings raised, 7 refuted, 21 survived — collapsing to about 11 distinct defects.** Report:
+`pr69-round4-gate.md` (mail 363's artifact).
+
+**Verdict: one more round. Nothing BLOCKING, nothing dangerous.** But every MAJOR is one shape, and it
+is this PR's own shape — *a guard ships without a mechanism, or a comment claims a mechanism that does
+not exist*. Two I measured myself rather than forwarding, one with a control:
+
+- **`ccd/ccd:13123`** — B2's `swapblocked` half. Replaced the `_tick_decided` clear with `:`: **62 test
+  files / 1749 passed, fully GREEN.** Line `13109` ends the paragraph two lines above with "Pinned in
+  both directions." And because `_swap_refuse` DELETES `.lastswap` and stamps `.swapblocked`, the
+  unpinned half is the one that carries the refusal case for the whole cooldown.
+- **`ccd/ccd:16203`** — `cmd_prefer`'s `! _pool_untaggable`. Dropped: **GREEN**. Dropped the
+  byte-identical text at `15941` (`cmd_swap`): **RED**. Same guard, one verb measured and one not.
+  **The control is what turns this from "nothing covers this area" into a finding** — and it is the
+  general lesson: a green mutation proves nothing until an identical mutation somewhere else reds.
+
+Two more confirmed by reading: `12829-12835`'s "ONE MAPPING … cannot drift apart" is false, because
+`_tick_strand_undecidable:15841` builds its own sentence and never goes through `_undecidable_cause` —
+and its call sites are the EARLY-RETURN paths, so the *common* case is the one naming no file. And B3
+has a THIRD verb reader at `14421` (`cmd_start`/`cmd_enable`) still folding `.project` through
+`_reg_get`, where `""` → `untagged` → `_pool_ok` 0 silences both the die and the out-of-pool warn.
+
+**I corrected my own lens, and it went the worker's way.** The rc-seam lens filed the `$stuck` branch
+as a REGRESSION — "the base commit named the right one". Base `13123-13135` stamped `crosspool` at
+`13065` and then wrote its sentence from a DIFFERENT ladder (hrc/prc, never ctrc) at `13132`,
+unconditionally: base named BOTH, which is D-2255 itself. **Head is better than base in that fixture;
+it is not a regression.** What survives is real and smaller — the headline "WHICH undecidable — READ,
+not inferred" holds only on the `$stuck`-empty path. *A reviewer can measure correctly and still
+over-reach on the inference, and comparing one of two surfaces is how.* Same rule as
+`a-refutation-is-a-claim`, pointed at a finding instead of a refutation.
+
+**Ruling given on the worker's open question — `[pool=-]` goes to its OWN PR, numbered before merge.**
+`_project_pool_state` has a clean four-word contract; of its **eleven** consumers, **ten** distinguish
+properly and `_strand_mark:15351` is the only fold. Worse than filed: on the no-cause branch the banner
+contradicts itself inside one sentence, because `_strand_why:15283` already emits `tag:unreadable` into
+the same line. Why not this PR: B3 earned its place because it is a constraint LIFT; this is a REPORTING
+defect — the placement is right, only the sentence is wrong. Different class, plus the banner is pinned
+VERBATIM by `ccd-auto-swap-pool.test.ts` and the fix carries a small design. **A follow-up that is not
+numbered before the merge does not exist.**
+
+**The worker's suite figure was about a different tree.** They reported server 273/7397; the PR head is
+277/7739. 273 is exactly `ws/clear-meadow`'s count — missing 9 files the head has (#71's models work),
+carrying 5 the head does not (unmerged wave-4 pool tests), based on `644aea41` (#68) one commit behind
+main, and neither PR commit is its ancestor. `ccd/ccd` byte-identity is necessary and not sufficient:
+**a suite result is about a TREE, not a file.** No practical risk — I ran all 277 on the head myself
+and CI agrees. I checked the "65 file" ccd sweep before calling it a second discrepancy and did NOT
+report it: the `ccd-*` set is identical at 61 on both branches, so that figure is a wider glob I do not
+know. *Two count discrepancies with the same cause is a finding; one with an unknown cause is a guess.*
+
+Verified clean and independent of the worker: blob `568bd947` identical on both branches; exactly one
+`ccrc:generated` marker at line 2, verifying; platform block `11-757` sha `e7f0696d` byte-identical to
+`ccd/ccrc` with the delta's lowest change at `12511`; agent 293 and pwa 2192+typecheck matching exactly.
+And the core of B5 is right: one call site, `-ge 2`, a `*` arm that says `rc$strc` loudly, and a cause
+renderer that names an unknown word rather than inventing a sentence for it.
+
+**Asked for before I clear the merge:** pin `13123` or delete the "Pinned in both directions" sentence;
+pin `16203` against `15941`'s template. Items 3-6 (close or number `14421`, fix the ONE MAPPING comment,
+the five-item misattribution cluster, book `[pool=-]`) are wanted but not gating.
