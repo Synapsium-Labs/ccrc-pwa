@@ -2004,7 +2004,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
+    // D-2177: `cmd_swap` stops the supervisor unit and kills the tmux pane
+    // (`remote/runner.ts`'s own comment on its budget) — the one live-pane
+    // -destroying operation that was NOT routed through the per-session
+    // `KeyedQueue` every other write (`sendPrompt`, `answerDialog`,
+    // `answerAsk`) already shares via `sendDeps`/`askDeps` above. Unserialized,
+    // a swap could land between `answerAsk`'s pane capture and its keystroke
+    // and tear the pane down mid-answer. Through the SAME queue key (`id`),
+    // it now cannot run until any in-flight write for this session has
+    // finished, exactly like the PR-open route below.
+    const wrapper = body.wrapper;
+    const res = await sendDeps.queue.run(id, () => deps.runCcd(CCD_ARGV.swap(id, wrapper)));
+    return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   });
 
   // ── PR lifecycle ────────────────────────────────────────────────
