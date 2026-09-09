@@ -5383,39 +5383,85 @@ _acct_lane() {   # <id>
   # honest one at every call site this function has: it runs before any write.
   _acct_read_op "Nothing was written." lane --file "$(_acct_roster_path)" --id "$1"
   mapfile -t f <<<"$ACCT_OUT"
-  # `_box_build_fields`' guard (:1318), verbatim in shape: the count AND the
-  # sentinel, so a helper that grew a field is a refusal rather than seven
-  # values silently shifted by one.
-  [ "${#f[@]}" -eq 8 ] && [ "${f[7]}" = END ] \
+  # `_box_build_fields`' guard (:1318) in shape, but TWO PREDICATES AND TWO
+  # SENTENCES (D-2184). The count and the sentinel ask different questions, and
+  # one sentence could only describe one of them: driven with a helper whose
+  # eighth line is a data field rather than `END`, the shared sentence read
+  # "described account \"alt-max\" in 8 lines instead of 8" — a number equal to
+  # itself. The count is FIRST because `${f[7]}` below is unbound under `set -u`
+  # until it has passed.
+  [ "${#f[@]}" -eq 8 ] \
     || _acct_refuse 1 lane-unreadable "the account helper described account \"$1\" in ${#f[@]} lines instead of 8 - this is a bug in ccrc, not a fact about your box, and nothing was written"
-  # THE CONTROL-CHARACTER LOOP IS NOT `_box_build_fields`' AND MEASURES NOTHING
-  # TODAY, said out loud rather than left to be credited (D-2145, D-2163). That
-  # function reads a stamp `jq` parsed with no validator in front of it, so a
-  # newline in `ref` really can arrive; every one of the eight fields here comes
-  # back through `readRoster`, whose `rosterFromJson` refuses a `configDirSuffix`
-  # outside `^\.[A-Za-z0-9._-]+$`, a `secretsFile` outside
-  # `^[A-Za-z0-9._/-]+$`, a `kind` and a `provider` outside fixed sets, and a
-  # `baseUrl` `new URL()` has already stripped every raw control byte from — so
-  # no roster this reader can be handed can carry one. It is kept because the
-  # ninth field nobody has thought of yet is the case it is for, and because
-  # these values are interpolated into refusal sentences an operator reads on a
-  # terminal; it is NOT kept because a test reds when it goes.
+  # THE CONTROL-CHARACTER LOOP IS NOT `_box_build_fields`' AND IT IS REACHED —
+  # D-2183, REVERSING D-2166, which confirmed deleting it as unreachable on the
+  # argument that `new URL()` strips control bytes from `baseUrl`. It does not
+  # reach this wire: `rosterFromJson` parses `exec.baseUrl` with `new URL()` to
+  # VALIDATE it and the roster keeps the ORIGINAL string, which the `lane` op
+  # emits verbatim. So a hand-written roster carrying
+  # `https://x.example/<CR>tail` validates and arrives here as eight lines with
+  # `END` in slot 7, and this loop is the only thing that refuses it. The other
+  # seven fields really are refused upstream (`configDirSuffix`, `secretsFile`,
+  # `kind`, `provider` against fixed patterns); `baseUrl` is the hole, and a raw
+  # LF is caught by the count above instead because it splits the field. Six
+  # bytes are driven as a table in `ccrc-account.test.ts`; measured with this
+  # loop deleted, five of them (CR, TAB, VT, SOH, DEL) rotate the credential at
+  # EXIT 0 with the byte intact and only LF still refuses.
   for x in "${f[@]}"; do
     [[ "$x" =~ [[:cntrl:]] ]] \
       && _acct_refuse 1 lane-unreadable "account \"$1\" carries a control character in its roster entry, which this verb will not interpolate - fix \$HOME/.ccrc/accounts.json"
   done
+  # THE SENTINEL, AND IT RUNS AFTER THE LOOP — the one place this reader's
+  # order diverges from `_box_build_fields`, which checks both predicates first
+  # (:1318) and then scans. It can: it returns a bare 6 and interpolates
+  # nothing. This one interpolates a FIELD rather than a count, and that is the
+  # difference: the shape it exists for is a helper that grew a field where
+  # `END` was, and such a field would be roster-derived — the very value the
+  # loop above has just proven carries no control byte, before this sentence
+  # puts it on an operator's terminal. No roster reaches this line today (node
+  # writes the literal `END`), which is why the fixture that measures it stubs
+  # the helper.
+  [ "${f[7]}" = END ] \
+    || _acct_refuse 1 lane-unreadable "the account helper ended account \"$1\" with \"${f[7]}\" where the END sentinel belongs, so the seven fields above it cannot be trusted to be in their own slots - this is a bug in ccrc, not a fact about your box, and nothing was written"
   ACCT_KIND="${f[0]}"; ACCT_PROVIDER="${f[1]}"; ACCT_SECRETS="${f[2]}"
   ACCT_SECRET_ENV="${f[3]}"; ACCT_SUFFIX="${f[4]}"; ACCT_BASEURL="${f[5]}"
   ACCT_HOMEABLE="${f[6]}"
 }
 
 # ── which panes have not seen a rotated token yet ─────────────────────────
-# TWO MEASUREMENTS, AND ONLY THE SECOND ONE CAN FAIL. First the registry: a row
-# is a `<id>.uuid` file (`_box_sessions` counts them the same way, :1775-1788)
-# and its `.wrapper` field says which lane it runs on. If NO row names this
-# lane, nothing could be live and `[]` is a measurement of the registry — so
-# tmux is never asked, and a box with no tmux server can still rotate a
-# credential.
+# TWO MEASUREMENTS, AND EITHER ONE CAN FAIL (D-2185 — until this round only the
+# second could). First the registry: a row is a `<id>.uuid` file (`_box_sessions`
+# counts them the same way, :1775-1788) and its `.wrapper` field says which lane
+# it runs on. If NO row names this lane, nothing could be live and `[]` is a
+# measurement of the registry — so tmux is never asked, and a box with no tmux
+# server can still rotate a credential.
+#
+# BUT AN UNREADABLE REGISTRY IS NOT AN EMPTY ONE, and this function used to
+# answer both with `measured=true, live=[]`. Measured: `~/.cc-sessions` at mode
+# 000 with a row for the lane inside answered `{"ok":true,"live":[]}` without
+# asking tmux at all, and a row whose `.wrapper` was mode 000 was silently
+# `continue`d to the same answer. An operator who has just rotated a credential
+# then reads "no session is running on this lane" and restarts nothing —
+# precisely when they need to know which panes are stale. Three conditions,
+# decided at the read rather than at the seam:
+#
+#   * the registry is ABSENT — a measurement. ccd creates it when it registers
+#     its first session, so no directory means no row has ever existed and
+#     nothing could be live. `[]`, tmux never asked.
+#   * the registry EXISTS and cannot be listed or entered (or is not a
+#     directory at all) — `measured=false`. The rows that would have named this
+#     lane are behind that mode.
+#   * a ROW exists and its `.wrapper` cannot be read — `measured=false` for the
+#     WHOLE answer, not a skipped row. The file that could not be read may say
+#     `<id>`, so a list built from the rows that did answer would be a partial
+#     list presented as a complete one, which is the under-report this entry is
+#     about. The wire has no third state to say it in: `--measured false`
+#     carries no ids by contract (account-op.mjs's `rotated`).
+#
+# AN ABSENT `.wrapper` IS STILL A SKIP, and that is the distinction the old
+# `[ -r … ] || continue` folded away: absence is a positive fact — the registry
+# records no lane for that row — while unreadable is the absence of a fact. It
+# is the same rule `statMeasured` and the agent wire's `absent` marker draw on
+# the server side (D-1396), spelled here in bash.
 #
 # Only when a row does name it is tmux asked, ONCE, bounded, for the whole
 # answer rather than N has-session calls. A tmux that is absent, or whose server
@@ -5444,9 +5490,20 @@ ACCT_LIVE_MEASURED=false
 ACCT_LIVE_IDS=()
 _acct_live() {   # <id>
   local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0
+  local blind=0
   local -a rows=()
   ACCT_LIVE_MEASURED=true
   ACCT_LIVE_IDS=()
+  # `-e` FIRST, and the three arms are the three conditions the header names.
+  # An absent registry falls through both branches with `rows` empty, which is
+  # the measured `[]`; anything that exists but cannot be listed and entered
+  # leaves here with nothing measured. `-r` AND `-x`: listing `*.uuid` needs the
+  # read bit and reaching the `.wrapper` beside it needs the search bit, and a
+  # directory holding one without the other tells us nothing either.
+  if [ -e "$reg" ] && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
+    ACCT_LIVE_MEASURED=false
+    return 0
+  fi
   if [ -d "$reg" ]; then
     shopt -q nullglob && had_nullglob=1
     shopt -s nullglob
@@ -5457,19 +5514,38 @@ _acct_live() {   # <id>
     # truth costs nothing.
     for u in "$reg"/*.uuid; do
       sid="${u##*/}"; sid="${sid%.uuid}"
-      [ -r "$reg/$sid.wrapper" ] || continue
-      # THE RETURN CODE IS NOT THE TEST, THE VALUE IS — `_acct_read_credential`'s
-      # own rule at a second address, and this task's plan snippet had the
-      # opposite: `IFS= read -r w < … || w=""`. `_reg_set` (ccd/ccd:1285-1291)
-      # writes each field with NO trailing newline, so `read` returns 1 at EOF
-      # having ALREADY set the variable — and that `|| w=""` wiped every
-      # wrapper name on the way past, which would have answered `live: []` for
-      # every box on earth while claiming a measurement.
-      w=""
-      IFS= read -r w < "$reg/$sid.wrapper"
-      [ "$w" = "$id" ] && rows+=("$sid")
+      # TWO SKIPS WOULD BE ONE COLLAPSE — the `[ -r … ] || continue` this
+      # replaces answered the same way for a row that records no lane and a row
+      # whose lane could not be read. `-r` before `-e` because the readable case
+      # is the one every row on a working box takes.
+      if [ -r "$reg/$sid.wrapper" ]; then
+        # THE RETURN CODE IS NOT THE TEST, THE VALUE IS — `_acct_read_credential`'s
+        # own rule at a second address, and this task's plan snippet had the
+        # opposite: `IFS= read -r w < … || w=""`. `_reg_set` (ccd/ccd:1285-1291)
+        # writes each field with NO trailing newline, so `read` returns 1 at EOF
+        # having ALREADY set the variable — and that `|| w=""` wiped every
+        # wrapper name on the way past, which would have answered `live: []` for
+        # every box on earth while claiming a measurement.
+        w=""
+        IFS= read -r w < "$reg/$sid.wrapper"
+        [ "$w" = "$id" ] && rows+=("$sid")
+      elif [ -e "$reg/$sid.wrapper" ]; then
+        # It exists and this process cannot read it: the whole answer is
+        # unmeasured, because this row may be the one still holding the old
+        # token. `break` rather than `return`, so the shell option below is
+        # restored on the way out.
+        blind=1
+        break
+      fi
+      # …and an ABSENT `.wrapper` falls through: the registry positively
+      # records no lane for that row, so it is not a row on this lane.
     done
     [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  fi
+  if [ "$blind" -eq 1 ]; then
+    ACCT_LIVE_MEASURED=false
+    ACCT_LIVE_IDS=()
+    return 0
   fi
   [ "${#rows[@]}" -gt 0 ] || return 0
   names="$(_plat_timeout 5 tmux list-sessions -F '#{session_name}' 2>/dev/null)"; rc=$?

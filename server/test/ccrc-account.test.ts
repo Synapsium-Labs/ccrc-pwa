@@ -1089,6 +1089,30 @@ describe('ccrc account: the credential reads from stdin or not at all', () => {
     expect(readFileSync(secret, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
     expect(lstatSync(secret).mode & 0o777).toBe(0o600);
   });
+
+  it('names an OAUTH lane\'s file from the ENV VAR, at this function\'s own address', () => {
+    // THE SECOND BRANCH OF THE LIFTED `_acct_secret_tag`, and until this round
+    // nothing drove it HERE. Every other direct call in this describe passes
+    // `compatible ANTHROPIC_AUTH_TOKEN` and lands on the provider branch; the
+    // `oauth` branch was covered only end-to-end, through `credential`, so the
+    // Task-28 lift out of `_acct_write_secret` was safe by coincidence rather
+    // than by measurement (D-2145: not "is this tested" but which line, on
+    // which input). The third argument is what decides — a lane exporting
+    // `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth token whatever its provider is
+    // called — so the provider passed here is `anthropic` and the file is NOT
+    // `lab-dev0-anthropic.env`.
+    const home = box('ccrc-account-cred-oauthtag-');
+    const r = sourceCall(home,
+      '_acct_read_credential -\n_acct_write_secret lab-dev0 anthropic CLAUDE_CODE_OAUTH_TOKEN',
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    // The listing, not one `existsSync`: a tag rule that answered the provider
+    // would write a second name, and only a listing sees which one landed.
+    expect(readdirSync(join(home, '.cc-secrets'))).toEqual(['lab-dev0-oauth.env']);
+    expect(readFileSync(join(home, '.cc-secrets', 'lab-dev0-oauth.env'), 'utf8'))
+      .toBe(`export CLAUDE_CODE_OAUTH_TOKEN=${CANARY}\n`);
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
 });
 
 /** `ccrc account add` with the given overrides folded onto a legal request. A
@@ -4747,6 +4771,45 @@ describe('deploy/account-op.mjs: lane and rotated, driven by hand', () => {
   });
 });
 
+/** A box whose `account-op.mjs` answers `lane` with EXACTLY these lines and
+ *  nothing else. It is the ONLY way to reach `_acct_lane`'s sentinel check
+ *  (D-2184): node builds slot 7 from a literal `'END'` inside the `.join`, so
+ *  every field a roster can influence is one of the seven above it and no
+ *  roster on earth produces an eighth line that is not the sentinel. Measured
+ *  before this round, that is exactly what it cost: deleting the sentinel test
+ *  alone left the whole file green, and the guard was being credited to its
+ *  neighbour's count.
+ *
+ *  `refuse` is kept REAL — every refusal on either side goes through it, and a
+ *  stub that could not refuse would answer this file's assertions with an empty
+ *  stdout rather than with the envelope under test. Nothing else is
+ *  implemented: an op this stub does not know exits 2 with an empty body, which
+ *  is `no-answer`'s own shape, so a mutation that lets the run past `lane`
+ *  cannot be mistaken for a pass. */
+function laneStubBox(prefix: string, lines: string[]): string {
+  const home = box(prefix);
+  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'),
+    'const a = process.argv;\n'
+    + 'if (a[2] === "refuse") {\n'
+    + '  const g = (k) => a[a.indexOf(`--${k}`) + 1];\n'
+    + '  process.stdout.write(`${JSON.stringify(\n'
+    + '    { ok: false, error: g("code"), detail: g("detail") })}\\n`);\n'
+    + '} else if (a[2] === "lane") {\n'
+    + `  process.stdout.write(${JSON.stringify(lines.join('\n') + '\n')});\n`
+    + '} else {\n'
+    + '  process.stderr.write("lane stub: no such op\\n");\n'
+    + '  process.exitCode = 2;\n'
+    + '}\n');
+  return home;
+}
+
+/** The seven fields a legal `lane` answer carries, in their own slots — the
+ *  body `laneStubBox`'s callers mutate one line of. */
+const LANE_LINES = ['generated', 'anthropic', '.cc-secrets/alt-max-oauth.env',
+  'CLAUDE_CODE_OAUTH_TOKEN', '.claude-alt-max', '', '1'];
+
 describe('ccrc account credential', () => {
   it('writes the secret 0600 into a 0700 directory, and prints nothing of it', () => {
     const home = box('ccrc-account-cred-write-');
@@ -4870,6 +4933,94 @@ describe('ccrc account credential', () => {
     // the argv it recorded is this verb's one tmux call and nothing else.
     expect(readFileSync(join(home, 'tmux-poison'), 'utf8'))
       .toBe('list-sessions -F #{session_name}\n');
+  });
+
+  it('answers live:null when the REGISTRY ITSELF cannot be read (D-2185)', () => {
+    // THE FIRST OF THE THREE REGISTRY CONDITIONS, and until this round it was
+    // folded into the second. Measured before the fix: `~/.cc-sessions` at mode
+    // 000 with a row for this lane inside answered `{"ok":true,…,"live":[]}` —
+    // "no session is running on this lane" — because `[ -d ]` succeeds on a
+    // directory nothing can list and `nullglob` turns the unreadable glob into
+    // no rows at all. An operator who has just rotated a credential reads that
+    // as "nothing to restart", which is the one thing it does not say.
+    const home = box('ccrc-account-cred-regmode-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
+    const reg = join(home, '.cc-sessions');
+    chmodSync(reg, 0o000);
+    try {
+      const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+        `${CANARY}\n`);
+      expect(r.code, r.stderr).toBe(0);
+      const j = oneObject(r);
+      expect(j['live'], 'an unreadable registry was reported as "nobody is running"').toBeNull();
+      expect(j['live']).not.toEqual([]);
+      // The write still happened: an unmeasurable registry is a REPORT gap, not
+      // a refusal — the same polarity the tmux arm takes one branch below.
+      expect(existsSync(join(home, '.cc-secrets', 'alt-max-oauth.env'))).toBe(true);
+      // AND TMUX WAS NEVER ASKED, with the poison armed to prove the claim is
+      // not resting on an absent file (the no-rows case's own lesson).
+      expect(existsSync(join(home, '.local', 'bin', 'tmux')),
+        'the tmux poison is not on PATH, so "it never fired" measures nothing').toBe(true);
+      expect(existsSync(join(home, 'tmux-poison')),
+        'tmux was asked about a registry nothing could read').toBe(false);
+    } finally {
+      // The harness's recursive rm cannot enter a 0o000 directory.
+      chmodSync(reg, 0o700);
+    }
+  });
+
+  it('answers live:null when a ROW exists and its .wrapper cannot be read (D-2185)', () => {
+    // THE SECOND CONDITION, AND THE SHARPER ONE: the unreadable row sits beside
+    // a readable row that IS live on this lane, so before the fix this box
+    // answered `live:["orchard-api"]` — a PARTIAL list presented as a complete
+    // one, which is worse than the empty one above because it reads as an
+    // authoritative "restart exactly this pane". The file that could not be
+    // read may name this same lane, so the whole answer is unmeasured; the wire
+    // has no third state to say it in (`--measured false` carries no ids by
+    // contract, `account-op.mjs`'s `rotated`).
+    const home = box('ccrc-account-cred-rowmode-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
+    plantRow(home, 'lab-dev0', { wrapper: 'alt-max' });
+    plantTmux(home, ['cc-orchard-api', 'cc-lab-dev0']);
+    const wrapper = join(home, '.cc-sessions', 'lab-dev0.wrapper');
+    chmodSync(wrapper, 0o000);
+    try {
+      const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+        `${CANARY}\n`);
+      expect(r.code, r.stderr).toBe(0);
+      const j = oneObject(r);
+      expect(j['live'], 'a row nothing could read was dropped from a list called complete')
+        .toBeNull();
+      expect(j['live']).not.toEqual(['orchard-api']);
+      expect(existsSync(join(home, '.cc-secrets', 'alt-max-oauth.env'))).toBe(true);
+      // The fixture's own tmux is on PATH and answering, and it was still never
+      // asked: nothing measurable is left to ask it about.
+      expect(existsSync(join(home, 'tmux-calls')),
+        'tmux was asked although the registry read had already failed').toBe(false);
+    } finally {
+      chmodSync(wrapper, 0o600);
+    }
+  });
+
+  it('a row that records NO lane is skipped, and the measurement still stands (D-2185)', () => {
+    // THE THIRD CONDITION, and it is the one that keeps the fix from being "any
+    // doubt means unmeasured". An ABSENT `.wrapper` is a positive fact — the
+    // registry records no lane for that row — while an unreadable one is the
+    // absence of a fact, which is the same distinction `statMeasured` and the
+    // agent wire's `absent` marker draw on the server side (D-1396). So this
+    // box still answers a MEASURED list, and the live pane is named in it.
+    const home = box('ccrc-account-cred-rowbare-');
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
+    // A row with a `.uuid` and no `.wrapper` beside it at all.
+    writeFileSync(join(home, '.cc-sessions', 'no-lane.uuid'), 'u-5678');
+    plantTmux(home, ['cc-orchard-api', 'cc-no-lane']);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['live']).toEqual(['orchard-api']);
   });
 
   it('refuses a login lane with not-managed, and writes nothing', () => {
@@ -5055,6 +5206,40 @@ describe('ccrc account credential', () => {
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
   });
 
+  it('binds all SEVEN lane fields to their own slots, including the two nothing reads', () => {
+    // `ACCT_BASEURL` AND `ACCT_HOMEABLE` HAVE NO READER IN BASH, and until this
+    // round nothing measured where they came from either: swapping their two
+    // slots in `_acct_lane`'s reader was 190 green. Task 32 is written against
+    // all seven globals, so it would have inherited a positional binding to an
+    // eight-line format that nothing pins — and a slot swap is the one defect
+    // this format's whole design (one field per line, an `END` sentinel) exists
+    // to make impossible.
+    //
+    // Driven through `sourceCall` because the verb has no path that prints
+    // them: the function IS the interface here, and the values are chosen so no
+    // two slots hold the same bytes — a swap of any pair changes this listing.
+    const home = box('ccrc-account-lane-slots-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'alt-max', label: 'alt·max', hue: 'violet', configDirSuffix: '.claude-alt-max',
+        homeAble: true, telemetry: 'none',
+        exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://x.example/v1',
+          secretsFile: '.cc-secrets/alt-max-compatible.env' } }]);
+    const r = sourceCall(home, '_acct_lane alt-max\n'
+      + 'printf \'%s\\n\' "$ACCT_KIND" "$ACCT_PROVIDER" "$ACCT_SECRETS" "$ACCT_SECRET_ENV" '
+      + '"$ACCT_SUFFIX" "$ACCT_BASEURL" "$ACCT_HOMEABLE"');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toEqual([
+      'generated',                              // f[0] kind
+      'compatible',                             // f[1] provider
+      '.cc-secrets/alt-max-compatible.env',     // f[2] secretsFile
+      'ANTHROPIC_AUTH_TOKEN',                   // f[3] secretEnv, off PROVIDER_DEPLOY
+      '.claude-alt-max',                        // f[4] configDirSuffix
+      'https://x.example/v1',                   // f[5] baseUrl
+      '1',                                      // f[6] homeAble
+      '',
+    ]);
+  });
+
   it('refuses a roster field carrying a control byte — the loop D-2166 called unreachable', () => {
     // THE PREMISE WAS FALSE AND THE MEASUREMENT SAYS SO. `_acct_lane`'s
     // control-character loop was measured as "deletes green, therefore
@@ -5094,6 +5279,93 @@ describe('ccrc account credential', () => {
       // NOTHING WAS WRITTEN, which is the half an exit code does not say.
       expect(existsSync(join(home, '.cc-secrets')), name).toBe(false);
     }
+  });
+
+  it('refuses a GROWN field on the count, in a sentence that names the number (D-2184)', () => {
+    // ONE OF TWO PREDICATES, MEASURED ALONE. The helper answers nine lines with
+    // `END` still last — the shape the count exists for, and the shape the
+    // sentinel cannot see. Delete the count and this box refuses through the
+    // sentinel instead (slot 7 is now `ninth`), which is a different sentence:
+    // the assertion is on the SENTENCE, not on the code, because both
+    // predicates answer `lane-unreadable` by design.
+    const home = laneStubBox('ccrc-account-lane-count-', [...LANE_LINES, 'ninth', 'END']);
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    const j = oneObject(r);
+    expect(r.code, r.stderr).toBe(1);
+    expect(j['error']).toBe('lane-unreadable');
+    expect(String(j['detail'])).toContain('described account "alt-max" in 9 lines instead of 8');
+    expect(String(j['detail'])).not.toContain('END sentinel');
+    expect(existsSync(join(home, '.cc-secrets')), 'a credential was written').toBe(false);
+  });
+
+  it('refuses an eighth line that is NOT the sentinel, and no longer says 8 instead of 8 (D-2184)', () => {
+    // THE OTHER PREDICATE, ON THE ONE SHAPE ONLY IT CATCHES — eight lines with
+    // a data field where `END` belongs. This needs a STUBBED helper and there
+    // is no way around that: `deploy/account-op.mjs` writes slot 7 from a
+    // literal inside its `.join`, so no roster, however hand-written, can move
+    // it. That is why deleting this guard was green in a file of 191 tests, and
+    // it is what D-2184 means by a prescribed mutation that cannot demonstrate
+    // its stated property.
+    //
+    // AND THE SENTENCE IS THE OTHER HALF. Under the shared guard this exact
+    // box answered "described account \"alt-max\" in 8 lines instead of 8" — a
+    // number equal to itself, which fails closed and lies to the next
+    // maintainer. Two predicates, two sentences.
+    const home = laneStubBox('ccrc-account-lane-sentinel-', [...LANE_LINES, 'ninth']);
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    // THE FILE FIRST: what this guard prevents is seven values read out of the
+    // wrong slots and a credential written from them, not a wrong exit code.
+    expect(existsSync(join(home, '.cc-secrets')), 'a credential was written').toBe(false);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('lane-unreadable');
+    expect(String(j['detail']))
+      .toContain('ended account "alt-max" with "ninth" where the END sentinel belongs');
+    expect(String(j['detail'])).not.toContain('in 8 lines instead of 8');
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('scrubs the field before the SENTINEL names it, which is why the loop runs first', () => {
+    // THE ORDER IS A DECISION AND THIS IS ITS MEASUREMENT. The sentinel is the
+    // one guard in `_acct_lane` that interpolates a FIELD, and the shape it
+    // exists for — a helper that grew a field where `END` was — is a field a
+    // roster would fill. So the control-character loop runs BEFORE it, and a
+    // slot-7 value carrying a TAB comes back as the control-character refusal
+    // with no raw byte in the sentence. Reverse the two and this box answers
+    // the sentinel's sentence with the TAB inside it, on an operator's
+    // terminal, which is the hazard that loop's own header states.
+    const home = laneStubBox('ccrc-account-lane-order-', [...LANE_LINES, 'nin\tth']);
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('lane-unreadable');
+    expect(String(j['detail'])).toContain('carries a control character');
+    expect(String(j['detail']), 'the raw byte reached the refusal sentence').not.toContain('\t');
+    expect(existsSync(join(home, '.cc-secrets')), 'a credential was written').toBe(false);
+  });
+
+  it('refuses an rc-0 EMPTY body rather than reading one blank field as a lane (D-2184)', () => {
+    // The fourth protocol shape, and the count is what answers it: `$( )`
+    // strips the trailing newline, `mapfile` still yields one empty element,
+    // and 1 is not 8. Named here because "the helper printed nothing" and "the
+    // helper printed a lane" are the two conditions `_acct_read_op` exists to
+    // keep apart, and an empty body reaches the count guard through it.
+    const home = laneStubBox('ccrc-account-lane-empty-', []);
+    seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    // `no-answer`, not `lane-unreadable`: an empty stdout at rc 0 never reaches
+    // the reader — `_acct_read_op` refuses it first, which is the seam this
+    // cluster closed and the reason the count guard only ever judges a body.
+    expect(oneObject(r)['error']).toBe('no-answer');
+    expect(existsSync(join(home, '.cc-secrets')), 'a credential was written').toBe(false);
   });
 
   it('dies on empty stdin at exit 2, before it opens the destination', () => {
