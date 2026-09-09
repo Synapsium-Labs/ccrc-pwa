@@ -3,7 +3,9 @@
 **Status:** design approved in dialogue 2026-09-08 (operator: cross-repo first of the three open
 roadmap items; the Aug 11 mail proposal adopted in full; dogfood pair custom-tools ↔ data-internal).
 Written for the plan; every file:line below was measured against `main` at `d0064e6e` on
-2026-09-08 by three read-only scouts, not carried over from the earlier draft.
+2026-09-08 by three read-only scouts, not carried over from the earlier draft. Plan-time deviations
+D-2054–D-2070 (the three wave plans' `## Deviations found`) were ratified the same day and are folded
+in below where they change a sentence.
 
 **Supersedes for building purposes, inherits for rulings:**
 `docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md` — the Aug 11 design, whose
@@ -86,7 +88,9 @@ later as a `tip-unmeasurable` naming a branch and a project the coordinator did 
   adapter's `refused` arm spreads only numeric fields (`routes.ts:141-147`), so `DispatchOutcome`'s
   refused member gains `by?: string` and the arm passes it through — pinned, since an adapter may not
   narrow a distinction it received. `by` names the measured project so the coordinator's report can
-  say which repo the session is bound to.
+  say which repo the session is bound to. Each code is declared beside its FIRST emitter —
+  `project-mismatch` with the open check, `home-mismatch` with the home decision (F2) — because
+  `mail-routes.test.ts:421-431`'s forward scan reds a declared code that nothing emits (D-2054).
 - **At open**, immediately after body validation and BEFORE `coord.openRun` (so a refusal leaves no
   `planned` orphan): when `sessionId` is present, `coord.sessionProject(sessionId)` — one new
   read-only store method, `SELECT project FROM runs WHERE sessionId = ? ORDER BY id LIMIT 1` — and if
@@ -129,11 +133,17 @@ whenever every wave shares one project.
   `homeProject` is accepted and recorded as a run event `legacy-home-project`; the programme row's
   home stays **NULL** — nothing is guessed into the column, so a later explicit home backfills it
   rather than colliding with a default. The RESPONSE defaults: `ledgerRepo` and `ledgerAbsPath` are
-  null for a NULL home, and the coordinator keeps the relative `ledgerPath` it has today. The flip to
-  required is a one-constant change (`HOME_PROJECT_LEGACY_ACCEPTED` in `routes.ts`) whose test flips
-  the constant and asserts both branches, shipped as its own PR when `run_events` shows zero
-  `legacy-home-project` events over seven consecutive days — a measurable criterion, not a judgement.
-  The idiom is the box token's own: accepted-and-warned as `'legacy'` for one generation
+  null for a NULL home, and the coordinator keeps the relative `ledgerPath` it has today. The DECISION
+  is a pure exported function, `homeProjectVerdict`, taking `legacyAccepted` as a parameter beside
+  `known` (a programme row exists) and `stored` (its home, NULL or not) — so a test drives both
+  branches for real, and "no row" and "NULL home" never meet at one value (D-2055, D-2056); the route
+  passes `HOME_PROJECT_LEGACY_ACCEPTED` (`routes.ts`) at its one call site, so the flip to required is
+  still a one-constant change. The flip ships as its own COMMIT, named in wave 3's handoff for the
+  coordinator to carry or cherry-pick — a worker opens no second PR (D-2070) — when the operator's own
+  read of `run_events` and `runs` on the server box (no route exposes the event trail, D-2066) shows
+  zero `legacy-home-project` events AND at least one run opened over seven consecutive days: an
+  absence is evidence only in proportion to the traffic behind it (D-2067). The idiom is the box
+  token's own: accepted-and-warned as `'legacy'` for one generation
   (`server/src/coord/token.ts:207,220-222`, `server/src/server.ts:1296-1298`), then removed.
 - **The open response** keeps `ledgerPath` unchanged and gains `ledgerRepo: string | null` (the home
   project) and `ledgerAbsPath: string | null`
@@ -212,11 +222,14 @@ explanation — correct, and silent.
 - **Runs screen:** every row gains a project badge (`run-project`); a row whose `project` differs from
   its programme's `homeProject` gains a crossing marker beside it (glyph plus the word, the board's
   two-cue rule: nothing is read out by colour alone). While `homeProject` is null the marker never
-  shows — absence permits.
+  shows — absence permits. The wave label (`wave n/N`) is spelled once, `waveLabel` in
+  `runWords.ts`, for the two new sites and the runs screen (D-2063).
 - **Fleet board, the worker's card:** the worker stays on its own project's card, because a card is a
   project's sessions and a session's workspace lives in one repo. Its row — the rule-3 orphan —
-  carries the marker text: programme slug, wave of waveOf, "home <project>". `nestFleet` stays pure and
-  its five rules unchanged; the marker is computed in the card from the run it already has.
+  carries the marker text: programme slug and wave of waveOf, with "· home <project>" appended only
+  when a home was measured and differs from the card's own project — never `home undefined` during
+  the legacy generation (D-2064). `nestFleet` stays pure and its five rules unchanged; the marker is
+  computed in the card from the run it already has.
 - **Fleet board, the home card:** the programme line gains one sentence per wave abroad
   ("wave 2 in data-internal"). `FleetScreen` already filters runs per card by `run.project`; it passes
   a second, additive list — runs whose `homeProject` is this card's project and whose `project` is
@@ -256,8 +269,12 @@ mail screen renders the feed and nothing filters either by programme.
   when the run ALREADY names a different session, performs for the `worker` role the act D-1425
   performs for the coordinator's heir: every OUTSTANDING delivery of a `to:'worker'` mail on this run
   addressed to the predecessor is re-issued to the heir as a new delivery row, freshly rendered, its
-  counters zero because they are true of it; the predecessor's row is parked with the vocabulary that
-  already exists. One method, parameterised by role, never two. **Stated honestly: no route re-binds
+  counters zero because they are true of it; the predecessor's row is parked under a third
+  deliberate-cancel constant, `MAIL_REBIND_SUPERSEDED_ERROR` (`'recipient rebound'`), joining
+  `DELIBERATE_CANCEL_ERRORS_SQL` at its documented extension point, because either existing literal
+  would lie about why it parked (D-2058). One method, `requeueAbandonedMail`, parameterised by role,
+  never two — and the role varies the source predicate and the park as well as the `toId` literal and
+  the scope, four facts in one method (D-2059). **Stated honestly: no route re-binds
   a live run today** — the fresh-spawn arm runs only when `run.sessionId` is null (`dispatch.ts:297`)
   and the resume arm reuses the id it finds — so the coordinator's heir (D-1425) is the one live
   instance, and the worker arm is reached only by the store test that drives it directly. The funnel
@@ -266,22 +283,27 @@ mail screen renders the feed and nothing filters either by programme.
   "delivery-time resolution" as observable behaviour — a replacement inherits its predecessor's
   undelivered mail — at the only instant a replacement can exist, without touching the sweep's hot
   path or the verbatim-replay guarantee.
-- **The programme filter.** `GET /api/mail?program=<slug>` (with `to` optional when `program` is
-  given; `all` as today) answers every mail whose `runId` joins to a run of that programme, through
+- **The programme filter.** `GET /api/mail?program=<slug>` (EXACTLY ONE of `to` and `program` — a
+  mailbox and a thread are different questions with different joins, so both at once is a 400,
+  D-2057; `all` as today) answers every mail whose `runId` joins to a run of that programme, through
   the join `resolveCoordinator` already uses. `GET /api/feed?program=<slug>` answers the events of
   that programme — which needs a `runId` the feed row does not carry today (`NotifyEvent` is
   `seq, at, kind, sessionId, title, body` on the wire, and the ring-capped `feed_events` table
   likewise), so the ONE migration of this build (§8) also adds a nullable `feed_events.runId`, the
   recorders that know a run (mail and run events) populate it, and `NotifyEvent.runId: number | null`
-  rides the wire additively with one tolerant reader (the offline snapshot revive included). Events
-  without one are programless and appear only unfiltered.
+  rides the wire additively with one tolerant reader, `reviveNotifyEvent`. The offline snapshot
+  persists sessions and roster only (`pwa/src/lib/offline.ts:23-37`), so there is nothing there to
+  revive; `offline.test.ts` pins that key set so a later persisted run row cannot slip past without a
+  reviver (D-2062). Events without a `runId` are programless and appear only unfiltered.
   `ccrc-api`'s closed table gains `--program` on `mail list` and a `feed list GET /api/feed
   [--program]` row — the table is the client's own contract and grows by a row, never by a URL
   argument — and its prose row count (`ccd/ccrc-api:24`, pinned by `ccrc-api.test.ts:240`) moves
   with it.
 - **The mail screen** groups by programme (header = programme title, from `GET /api/runs`, the read
-  the runs screen already makes; the event's new `runId` is the key) with a filter chip; programless
-  mail sits under its own header. `MailCard` is unchanged.
+  the runs screen already makes; the event's new `runId` is the key) with a filter chip. Three group
+  kinds, not two: programless mail (no `runId`) under its own header, and a record whose `runId` names
+  a run the runs read did not return under `run <n> — programme not measured`, because an unmeasured
+  programme is not the same fact as none (D-2065). `MailCard` is unchanged.
 - **Pinned by:** the send-route refusal test extended for the `worker` role in both directions; a
   store test that binds a run to a second session through `bindSession` and asserts the heir's fresh row, the
   predecessor's park, and the envelope naming the heir; the filter tests on both routes with a
@@ -293,8 +315,10 @@ mail screen renders the feed and nothing filters either by programme.
 ## 5. Caps and safety — unchanged, restated
 
 - Caps stay global (`store.ts:1882`): one row, whole box, no per-programme or per-project cap.
-- A crossing costs two live workspaces, two concurrency slots and two of the daily budget (§3 F3
-  says so in the skill).
+- A crossing costs two live workspaces, two concurrency slots and two of the daily budget. Three
+  corpora say so, each argued: the skill (§3 F3), wave 1's `wave-lifecycle.md` refusal row beside the
+  remedy it explains (D-2061), and README's cross-repo subsection — not its caps paragraph, which a
+  census test keeps number-free (D-2068).
 - `$REG/coordinator-paused` is global and still stops everything.
 - The hold reason still names programme, wave and run id, never a project; the run row carries the
   project.
@@ -333,12 +357,13 @@ mail screen renders the feed and nothing filters either by programme.
 | `project-mismatch` at open | the `sessionProject` check is deleted; the refusal shape or status changes |
 | `project-mismatch` at dispatch resume | the `record.project` comparison is deleted, or moved after the hold |
 | `home-mismatch` | a differing home on a later open is accepted |
-| legacy-generation constant | the test flips `HOME_PROJECT_LEGACY_ACCEPTED` and asserts both branches; either branch deleted is red |
+| legacy-generation constant | `homeProjectVerdict` driven with `legacyAccepted` true and false; either branch deleted is red |
 | migration N+1 | a v-N database boots without the column readable |
 | `RunSummary.homeProject` | the wire literal loses the field (compile error), the reader folds null and non-null |
 | `worker` role at send | the literal is refused, or an undispatched run resolves to anything but `unknown-recipient` |
 | heir re-issue in `bindSession` | the heir gets no fresh row, the predecessor's row is not parked, the envelope names the corpse, or either old writer bypasses the funnel |
 | programme filter | a programless mail or event appears under a filter |
+| mail filter selector | `to` and `program` together answer anything but 400 |
 | runs-screen badge and marker | the badge is absent; the marker shows while `homeProject` is null |
 | home-card abroad line | the second list is dropped |
 | skill pins | any clause sentence drifts from the pinned literal |
@@ -375,8 +400,9 @@ the whole-suite gate, and CI on the quiet box is the arbiter of a load flake.
 - **Wave 2 — skills and PWA:** F3 (both skills, both pins, the installers unchanged), F4 (runs screen,
   both card changes), the mail screen's grouping and chip. Deploys agent-first.
 - **Wave 3 — docs and the flip:** README "Programs, runs and mail — the operator's view" and "Fleet
-  coordination" sections; the coordinator references; the legacy-generation flip PR once every live
-  coordinator has redeployed; the ledger closes.
+  coordination" sections; the Aug 11 spec's status line; the ledger closes; and the legacy flip as its
+  own commit when §3 F2's measured criterion holds, else deferred with the measurement recorded. Not
+  agent-first — the coordinator references belong to waves 1 and 2, not here (D-2069).
 
 **Dogfood, as its own programme after wave 2 is live:** home `custom-tools`, wave 1 there, wave 2 in
 `data-internal` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
@@ -393,5 +419,6 @@ None that block the plan. Two the plan records rather than decides:
 
 - The exact wording of the two new skill clauses is the plan's to write against the pins; the rule
   content is §3 F3.
-- The legacy flip is dated by evidence, not by this file: zero `legacy-home-project` events over
-  seven consecutive days in `run_events` (§3 F2).
+- The legacy flip is dated by evidence, not by this file: zero `legacy-home-project` events and at
+  least one run opened over seven consecutive days, read from `run_events` and `runs` by the operator
+  on the server box (§3 F2; D-2066, D-2067).
