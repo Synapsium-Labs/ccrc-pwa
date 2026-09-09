@@ -687,6 +687,68 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(row?.branch).toBeNull();
   });
 
+  it('refuses a resume whose registry record names another project — before the hold, the /clear and markDispatched', async () => {
+    // F1's second rung. The open route's `sessionProject` cannot see this case:
+    // no run has ever named this session, so it answers null and permits. The
+    // registry row is the other measurement, and it disagrees with the run.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: 'other-project' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const holdsAfterOpen = calls.filter((c) => c[0] === 'ws-hold').length;
+
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'project-mismatch', by: 'other-project' });
+    // THE POSITION IS THE GUARD, not just the comparison: no second hold, no
+    // `/clear` typed into a pane bound to the wrong repo, and the run untouched.
+    expect(calls.filter((c) => c[0] === 'ws-hold'),
+      'the crossing was refused only AFTER the hold was placed').toHaveLength(holdsAfterOpen);
+    expect(calls.some((c) => c[0] === 'send-keys'),
+      'a /clear was typed into a session this dispatch had no business clearing').toBe(false);
+    expect(w.coord.run(id)?.state).toBe('planned');
+    expect(w.coord.run(id)?.dispatchedAt).toBeNull();
+  });
+
+  it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
+    // `record === undefined` on a LISTABLE registry is the tolerated case
+    // (`DoneRun`'s own docstring): the run falls back to its own workspace and
+    // branch, as it always has. Refusing on a fact not measured would be the
+    // same error in the other direction.
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-ghost' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
+  });
+
+  it('still answers registry-unmeasurable when the registry cannot be listed at all', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing', { project: 'other-project' });
+    const { run } = makeRunner(home);
+    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
+    // readdir, before anything is counted) and answers `paused`, never
+    // reaching this arm at all — so this scopes the failure to the SECOND
+    // read, the resumed session's own registry listing, the same idiom the
+    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
+    let n = 0;
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+  });
+
   it('runs ensure — never start — for wave 2 into the same workspace (D-1)', async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');

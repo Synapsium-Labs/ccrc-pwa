@@ -142,7 +142,13 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       if (r.running !== undefined) extra.running = r.running;
       if (r.used !== undefined) extra.used = r.used;
       if (r.candidates !== undefined) extra.candidates = r.candidates;
-      return reply.code(409).send({ ok: false, refused: r.code, ...extra });
+      // The `by` spread, not `by: r.by` — the same discipline the
+      // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
+      // not narrow a distinction it received, and this field distinguishes by
+      // PRESENCE. Its own spread rather than a member of `extra`, whose value
+      // type is `number` and must stay so: `by` is the project's NAME.
+      return reply.code(409).send({ ok: false, refused: r.code, ...extra,
+        ...(r.by === undefined ? {} : { by: r.by }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
     // distinction it received, and this member's `stderr` distinguishes by

@@ -110,8 +110,16 @@ export type DispatchOutcome =
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable'>;
-      limit?: number; running?: number; used?: number; candidates?: number }
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
+      limit?: number; running?: number; used?: number; candidates?: number;
+      /** WHICH project the measured party belongs to — `project-mismatch`'s
+       *  own field, and the only refusal on this union that carries a string.
+       *  PRESENT exactly when there is a measured project to name; absent
+       *  otherwise, never `''`, because presence is the distinction and an
+       *  empty string would collapse "no project was measured" into "the
+       *  project is nothing". The open route's own refusal already carries a
+       *  `by` (`routes.ts`), so the two sites of one code answer one shape. */
+      by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
    *  fresh-spawn path once §1.5 moved the `!res.ok` return PAST the AFTER read —
@@ -487,6 +495,27 @@ export async function dispatchRun(
     const recordIdentity = record !== undefined ? measuredIdentity(record) : null;
     if (record !== undefined && recordIdentity === null) {
       return { ok: false, kind: 'registry-unmeasurable' };
+    }
+    // F1's registry rung (design 2026-09-08 §3 F1). `SessionRecord.project`
+    // already rides the read above; nothing had ever compared it to the run's.
+    //
+    // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
+    // and its identity measured, and BEFORE the hold, the injected `/clear` and
+    // `markDispatched`. Moved past the hold, a crossing costs a claim on a
+    // workspace this run is not going to use; moved past the `/clear`, it costs
+    // a live worker's context. Nothing has been spawned at this point — the
+    // resume arm only ran `ensure` — so the run is untouched and still
+    // `planned`.
+    //
+    // `record !== undefined` is load-bearing and is NOT the same condition as
+    // the refusal above it: an undefined record on a LISTABLE registry is the
+    // tolerated honest-stale case, which keeps falling back to `run.workspace`
+    // below exactly as it always has. An unlistable registry never reaches here
+    // — `readRegistryMeasured` refused it four lines up with its own code.
+    // Refusing on a fact not measured would be the same error in the other
+    // direction.
+    if (record !== undefined && record.project !== run.project) {
+      return { ok: false, kind: 'refused', code: 'project-mismatch', by: record.project };
     }
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;
