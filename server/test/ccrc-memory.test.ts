@@ -296,15 +296,21 @@ describe('ccrc memory --apply — the union', () => {
   // no home's link is load-bearing for another's and retiring `.claude`
   // cannot take the other home's memory with it.
   //
-  // THE THIRD ASSERTION IS THE ONE THAT WOULD CATCH AN ABSORB. Normalising
-  // must MOVE NOTHING: the source already resolves to the store, so calling
-  // `_mem_absorb` on it would copy the store into itself and land `a.md` a
-  // second time in a `<name>.<home>` conflict slot. Pinning the store's EXACT
-  // directory listing is what makes that loud — a re-point that quietly
-  // absorbed would still satisfy both readlinks. The expected listing is bare
-  // `a.md` with no `MEMORY.md`, and that too is a statement about the new
-  // path: `_mem_rebuild_index` runs only on the repair arm, and R27's arm
-  // changes no file in the store, so it correctly does not run here.
+  // THE THIRD ASSERTION PINS THAT NORMALISING MOVES NOTHING — but be precise
+  // about what it does and does not catch, because the first version of this
+  // comment overclaimed and the overclaim was measured false. It does NOT
+  // detect an `_mem_absorb` inserted on the normalise path: the source there
+  // resolves to the store, and `_mem_absorb` dedupes byte-identical files with
+  // `cmp -s`, so a self-absorb adds nothing and this listing is unchanged
+  // (mutation M10: absorb inserted, suite green). What it does catch is any
+  // change that makes the re-point WRITE into the store — a future absorb whose
+  // dedupe rule changed, a stray index rebuild, a copy that lands a conflict
+  // slot. That is worth pinning even though today's absorb slips past it.
+  //
+  // The expected listing is bare `a.md` with NO `MEMORY.md`, and that is its
+  // own statement about the new path: `_mem_rebuild_index` runs only on the
+  // repair arm, and R27's arm changes no file in the store, so it correctly
+  // does not run here.
   it('converts a chain into a star — A -> B\'s link -> store leaves BOTH naming the store (R27)', () => {
     const store = storeDir();
     fs.mkdirSync(store, { recursive: true });

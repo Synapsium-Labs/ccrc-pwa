@@ -3188,14 +3188,36 @@ _mem_apply() {
       # or lose `.claude` and every shared store on the box goes with it. That is
       # the whole failure this branch exists to end, reintroduced one level up.
       #
-      # NO `_mem_absorb` ON THIS PATH, DELIBERATELY — it is what makes the
-      # re-point safe. The source here RESOLVES TO THE STORE; absorbing it would
-      # copy the store into itself and land every file a second time in
-      # `<name>.from-<home>` conflict slots, because `_mem_absorb`'s whole job is
-      # to treat its source as foreign data. There is nothing to move: the bytes
-      # are already in the one place. So this arm re-points and does nothing
-      # else, and that asymmetry against the forked arm below is the point, not
-      # an omission.
+      # NO `_mem_absorb` ON THIS PATH, DELIBERATELY — and the reason is NOT the
+      # one first written here, which was measured false and is recorded so
+      # nobody re-derives it. The claim was: absorbing a source that resolves to
+      # the store "would copy the store into itself and land every file a second
+      # time in conflict slots". It would not. `_mem_absorb` compares every
+      # candidate against what is already at `$dest` with `cmp -s` and treats
+      # byte-identical as one file, so a self-absorb dedupes everything and adds
+      # nothing. Measured directly: `_mem_absorb <store> <store> corp` over a
+      # store holding `a.md`, `scratch.txt` and `sub/` returned rc 0 and left the
+      # listing exactly `a.md scratch.txt sub`. Inserting the call on this path
+      # and re-running the suite is green (mutation M10).
+      #
+      # WHAT IS ACTUALLY WRONG WITH IT is that it computes a LIE and pays for
+      # the privilege. That same measured call returned `left=2` — it counted the
+      # store's OWN `scratch.txt` and `sub/` as entries "not migrated, left
+      # behind", which is exactly backwards: they are not stranded in a source,
+      # they are already in the destination. Today that number is invisible only
+      # because the NOTE that prints it is gated on `$bk`, which this arm never
+      # sets; the falsehood is latent, not absent, and the first change that
+      # prints `left` unconditionally would ship it. Against that it walks the
+      # whole store doing one `cmp` per file for a guaranteed no-op, and inherits
+      # `_mem_absorb`'s `return 1` on an unreadable source — a way for a re-point
+      # with nothing to do to fail.
+      #
+      # THE POSITIVE REASON stands on its own and is the one to keep: there is
+      # nothing to move. `_mem_state` has just said this link resolves to the
+      # store, so the bytes are already in the one place and the ONLY thing wrong
+      # with the pair is how the link spells its way there. A re-point is the
+      # whole repair. That asymmetry against the forked arm below is the point,
+      # not an omission.
       #
       # `ln -sfn`, NOT `ln -sf`: without `-n`, `ln` DEREFERENCES an existing
       # symlink-to-a-directory and creates the new link INSIDE the store
