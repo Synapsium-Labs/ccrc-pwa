@@ -26,7 +26,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -101,7 +101,7 @@ function run(home: string, args: string[], stdin = ''): Result {
  *  printed a progress line before its answer would still parse at a call site
  *  that used `.split('\n')[0]`. It is also what catches the failure this
  *  cluster is most exposed to: `add` calls two of `ccrc install`'s own
- *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:5095,
+ *  convergers, and BOTH of them print human lines on stdout (ccd/ccrc:5249,
  *  :5101, :2904). Every `add` case below runs through here. */
 function oneObject(r: Result): Record<string, unknown> {
   const lines = r.stdout.split('\n');
@@ -367,7 +367,7 @@ describe('ccrc account roster: the file, gated by the validator', () => {
     // `shared/roster-json.mjs:374` phrases the message and `:375` the remedy.
     expect(String(j['detail'])).toContain('unknown hue');
     // The remedy reaches the operator VERBATIM — `_inst_accounts_sh`'s rule
-    // (ccd/ccrc:5085-5087): re-wording a fix into a shrug helps nobody.
+    // (ccd/ccrc:5239-5241): re-wording a fix into a shrug helps nobody.
     expect(String(j['detail'])).toContain('cyan, violet, blue, magenta, amber, green');
   });
 
@@ -803,7 +803,7 @@ function filesUnder(dir: string, out: string[] = []): string[] {
 }
 
 /** Sources `ccd/ccrc` and calls one function — the `BASH_SOURCE` guard at
- *  ccd/ccrc:7646 exists for exactly this, and `ccd-clip.test.ts:32` /
+ *  ccd/ccrc:7800 exists for exactly this, and `ccd-clip.test.ts:32` /
  *  `ccd-workspaces.test.ts:487` already do it to `ccd`. Task 24 gives these two
  *  helpers a caller; proving them before that caller exists is what stops a
  *  defect in either from hiding inside `add`'s longer transcript. */
@@ -1667,10 +1667,10 @@ describe('ccrc account add: the ordered write', () => {
 
   it('the convergers\' transcript goes to stderr, so stdout stays one object', () => {
     // The half `oneObject` alone cannot prove: that the two convergers' lines
-    // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5101)
+    // were REDIRECTED and not discarded. `_inst_accounts_sh` (ccd/ccrc:5255)
     // and `cmd_wrappers` (:2904) both write these on stdout for `ccrc install`.
     // Only the second is pinned there (ccrc-install.test.ts:2818-2819, the
-    // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:6674, and
+    // `summary:` regex; :2820 is `_inst_wrappers`' own line, ccd/ccrc:6828, and
     // nothing in server/test/ mentions `install: accounts.sh` at all) — so this
     // assertion is also the first one in the tree to measure the accounts.sh
     // line, from the stream this verb moves it to. Here they are the remedy,
@@ -1863,7 +1863,7 @@ describe('ccrc account add: the ordered write', () => {
     // The ruling, pinned in the source rather than asserted in prose: `add`
     // reaches `cmd_wrappers` the way `_inst_wrappers` does — as a function, with
     // no flags — so no `--force`/`--adopt` can destroy a hand-written launcher
-    // without an operator typing the flag that authorises it (ccd/ccrc:6656-6659).
+    // without an operator typing the flag that authorises it (ccd/ccrc:6810-6813).
     // Comment lines are stripped first: this asserts about CODE, and the
     // paragraph above the code names the flags it does not pass.
     const src = readFileSync(CCRC_SRC, 'utf8');
@@ -1896,6 +1896,15 @@ function staleAtBox(prefix: string, missingOp: string): string {
   const home = box(prefix);
   rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
   mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  // AND THE REST OF `deploy/` IS STILL THERE. A box with one stale file is what
+  // this fixture stands in for; a box MISSING `gen-accounts.mjs` is a different
+  // one, and it refuses at `accounts-sh` long before the op under test — which
+  // is what the third case below measured the first time it ran. The two cases
+  // above never reach `_acct_converge`, so this changes nothing for them.
+  for (const f of readdirSync(join(REPO, 'deploy'))) {
+    if (f === 'account-op.mjs') continue;
+    symlinkSync(join(REPO, 'deploy', f), join(home, 'ccrc', 'deploy', f));
+  }
   const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
   writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
     `if (process.argv[2] === ${JSON.stringify(missingOp)}) {`,
@@ -1910,20 +1919,22 @@ function staleAtBox(prefix: string, missingOp: string): string {
   return home;
 }
 
-// ── THE SEAM ON `add`'s TWO RE-EMIT PATHS (D-2051) ────────────────────────
-// `_acct_add` captures the callee's stdout twice and, on a non-zero status,
-// re-emits it. When that capture is EMPTY the two sites used to print a blank
+// ── THE SEAM ON `add`'s THREE RE-EMIT PATHS (D-2051) ──────────────────────
+// `_acct_add` captures the callee's stdout three times — `check-add`,
+// `add-entry`, and, from Task 26, the `added` op that composes the whole answer
+// — and, on a non-zero status, re-emits it. When that capture is EMPTY the two sites used to print a blank
 // line and exit with the callee's code — `JSON.parse('')` for the server, at an
 // exit class that says the request was illegal when it was not. Measured on the
 // half-updated box below, before the fix, on both paths: exit 2, stdout one byte
 // (a newline), a `usage:` line on stderr.
 //
-// THE TWO CASES DIFFER IN THE ONE THING A SHARED HELPER MUST NOT FLATTEN. The
-// triage and the `no-answer` wording are identical on both; the clause that says
-// what was written is not, because on the second path the 0600 credential file
-// IS on disk and the retry that overwrites it is this verb's headline ordering
-// property. So the first case asserts the sentence ENDS "Nothing was written."
-// and the second asserts it does not.
+// THE CASES DIFFER IN THE ONE THING A SHARED HELPER MUST NOT FLATTEN. The
+// triage and the `no-answer` wording are identical on all three; the clause that
+// says what was written is not, because on the second path the 0600 credential
+// file IS on disk and the retry that overwrites it is this verb's headline
+// ordering property — and on the THIRD the whole verb has already succeeded. So
+// the first case asserts the sentence ENDS "Nothing was written.", and the other
+// two assert it does not.
 describe('ccrc account add: an empty body is a refusal, never a blank line (D-2051)', () => {
   it('the check-add call answers at exit 1 with a body, and nothing was written', () => {
     const home = staleAtBox('ccrc-account-add-stale-check-', 'check-add');
@@ -1972,6 +1983,37 @@ describe('ccrc account add: an empty body is a refusal, never a blank line (D-20
     expect(existsSync(secret), 'the sentence names a file that is not there').toBe(true);
     expect(lstatSync(secret).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+  });
+
+  it('the added call answers at exit 1 with a body, and says the lane is fully written', () => {
+    // THE PATH `_acct_answer` COULD NOT SERVE. That helper hard-codes
+    // "Nothing was written." as its no-answer clause, and this call sits after
+    // every write the verb makes: the shipped `_acct_answer roster` on this line
+    // told a completed run that nothing had been written, which is this
+    // describe's own defect on the one path D-2051 did not reach.
+    const home = staleAtBox('ccrc-account-add-stale-added-', 'added');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('no-answer');
+    const detail = String(j['detail']);
+    expect(detail).toContain("answer to 'added'");
+    expect(detail).toContain('exited 2');
+    expect(detail, 'the shared sentence flattened a run that wrote everything')
+      .not.toContain('Nothing was written');
+    // AND EVERY NOUN IN THAT SENTENCE IS ON DISK — the half no wording
+    // assertion carries, and the half that makes the clause a measurement.
+    for (const claim of [join(home, '.cc-secrets', 'lab-dev0-compatible.env'),
+      join(home, '.cc-sessions', 'lab-dev0-disabled'), join(home, '.claude-lab-dev0')]) {
+      expect(detail, 'the clause does not name it').toContain(claim);
+      expect(existsSync(claim), `the clause names ${claim}, which is not there`).toBe(true);
+    }
+    expect(detail).not.toContain(CANARY);
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'))
+      .accounts.map((x: { id: string }) => x.id)).toContain('lab-dev0');
   });
 });
 
@@ -2337,7 +2379,7 @@ describe('ccrc account: _acct_settings_env keeps what it did not come to change'
   const modeOf = (p: string): string => (lstatSync(p).mode & 0o777).toString(8);
 
   it('the operator\'s file keeps its own mode across the swap', () => {
-    // D-1244's ruling (ccd/ccrc:6530-6536, "forcing 644 would widen a CLAUDE.md
+    // D-1244's ruling (ccd/ccrc:6684-6690, "forcing 644 would widen a CLAUDE.md
     // an operator had restricted") and D-2052's, one commit earlier, at the
     // roster. `mv -f` replaces the INODE, so without `_plat_mode` + `chmod` the
     // new file carries this process's umask and the operator's decision is
@@ -2521,5 +2563,238 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
       expect((j['detail'] as string).endsWith(STANDS),
         `${err} did not end in the caller's clause:\n    ${j['detail'] as string}`).toBe(true);
     }
+  });
+});
+
+/** The clause `_acct_provision` hands down and, from Task 26 on, ends its own
+ *  three refusals with (D-2128). Spelled here in FULL rather than probed by
+ *  fragments: the property is that FOUR refusal sites in one function say the
+ *  same bytes, and a `toContain` on a phrase would stay green while three of
+ *  them said their own version of it. `lab-dev0-compatible.env` is the 0600
+ *  file `ACCT_SECRET_WRITTEN` measured, so the clause is a measurement and not
+ *  a constant — the login row below is the same function saying less. */
+const provisionStands = (home: string): string =>
+  'The roster entry was written and nothing rolls back, and so was the 0600 credential file '
+  + `${join(home, '.cc-secrets', 'lab-dev0-compatible.env')} that it names, so 'ccrc account add' `
+  + "refuses this id as a duplicate now: fix the cause and run 'ccrc install', which converges "
+  + 'this home.';
+
+describe('ccrc account add: the lane is off, and the verb says what it did not do', () => {
+  it('writes the marker _lane_enabled reads, at the path ccd reads it from', () => {
+    const home = box('ccrc-account-off-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.cc-sessions', 'lab-dev0-disabled'))).toBe(true);
+    expect(oneObject(r)['disabled']).toBe(true);
+
+    // BOTH SIDES OF THE NAME, pinned together. ccd is the reader and this verb
+    // is the writer; a rename on either side is a lane that silently takes
+    // placement the moment it is rostered, and nothing else in the tree
+    // compares the two spellings.
+    // `CCD`, NOT a second `join(REPO, …)` of that script's path. The plan's
+    // snippet spelled the path here and `single-definition.test.ts` refuses it:
+    // "is spelled in exactly one file, and that file is ccdWsHelpers.ts" went
+    // red on this file. Measured, not remembered — and apt, given this case is
+    // itself about two spellings of one name drifting apart.
+    const ccd = readFileSync(CCD, 'utf8');
+    expect(ccd).toContain('_lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }');
+    expect(ccd).toContain('_account_ok() { [[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"; }');
+  });
+
+  it('leaves homeAble TRUE — the switch is a file, not a roster edit', () => {
+    // Two different questions: `homeAble` says what kind of account this is,
+    // the marker says whether the operator has turned it on. Collapsing them
+    // would make a measured, working lane permanently unplaceable, and would
+    // make the UI's Enable control a roster write.
+    const home = box('ccrc-account-off-homeable-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    run(home, addArgs(), `${CANARY}\n`);
+    const roster = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
+    expect(roster.accounts.find((x: { id: string }) => x.id === 'lab-dev0').homeAble).toBe(true);
+    // AND THE MARKER IS STILL THERE. Without this line the case above is the
+    // only thing standing between `homeAble: false` and the marker, and it
+    // passes for a build that wrote neither — measured, mutation 4.
+    expect(existsSync(join(home, '.cc-sessions', 'lab-dev0-disabled'))).toBe(true);
+  });
+
+  it('names the out-of-tree plumbing it did not do', () => {
+    const home = box('ccrc-account-off-steps-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const steps = oneObject(run(home, addArgs(), `${CANARY}\n`))['operator-steps'] as string[];
+    expect(steps.length).toBe(2);
+    expect(steps.join('\n')).toContain('claude-usage.timer');
+    expect(steps.join('\n')).toContain('claude-prune-versions');
+    // Each step names the LANE it is about, so a list rendered on a phone is
+    // actionable without the reader remembering which add it belongs to. And
+    // each is ONE element: a step split on a space would arrive as five.
+    for (const s of steps) expect(s).toContain('lab-dev0');
+    for (const s of steps) expect(s.length).toBeGreaterThan(40);
+  });
+
+  it('the answer is one object carrying everything a caller needs to draw the done step', () => {
+    const home = box('ccrc-account-off-answer-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const j = oneObject(run(home, addArgs(), `${CANARY}\n`));
+    expect(Object.keys(j).sort()).toEqual(
+      ['disabled', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
+    expect(j['id']).toBe('lab-dev0');
+    expect((j['roster'] as { accounts: unknown[] }).accounts.length).toBe(4);
+    // Task 25's step list, now an answer key — the four installers plus the env
+    // merge, in the order `_acct_provision` ran them. `settings-env` is the
+    // WROTE token: this lane has an endpoint, so the merge produced a file.
+    expect(j['provisioned']).toEqual([
+      'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+    ]);
+  });
+
+  it('the marker is written before the home is provisioned — a failure there leaves the lane off', () => {
+    // The ordering that matters for this one: a lane that got rostered and then
+    // failed to provision must still be unpickable. Injected by leaving the
+    // installers out so `_acct_provision` refuses.
+    const home = box('ccrc-account-off-provfail-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('provision-failed');
+    expect(existsSync(join(home, '.cc-sessions', 'lab-dev0-disabled')),
+      'a rostered lane that failed to provision is pickable').toBe(true);
+  });
+
+  it('the key says the env step RAN and wrote nothing, which is not the same as writing (D-2127)', () => {
+    // A login lane has no endpoint and no model map, so the merge correctly
+    // writes no file. Reporting `settings-env` there would publish "the env
+    // block was written" about a home that has no settings.json — and moving
+    // the append inside the wrote-something branch would hide a step that ran
+    // and correctly did nothing, which is a real outcome an operator reads.
+    // So the KEY carries both words and the array length never changes.
+    const home = box('ccrc-account-off-ran-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+      '--label', 'lab·dev0', '--hue', 'amber']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
+    expect(oneObject(r)['provisioned']).toEqual([
+      'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill', 'graphify-skill',
+    ]);
+  });
+
+  it('two runs in one shell do not double the key (D-2127)', () => {
+    // Latent at this commit — `add` runs once per process — and API from this
+    // commit on, which is why it is closed before the array is published. Both
+    // accumulating arrays reset at their function's entry, so a caller that
+    // loops gets one run's answer rather than every run's concatenated.
+    const home = box('ccrc-account-off-reset-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = sourceCall(home,
+      '_acct_provision "$HOME/.claude-lab-dev0" "" "{}" >/dev/null\n'
+      + '_acct_provision "$HOME/.claude-lab-dev0" "" "{}" >/dev/null\n'
+      + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
+      + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('5 2');
+  });
+
+  it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
+    // One run, one account of what stands. Three of these are
+    // `_acct_provision`'s own and the fourth is the one it hands to
+    // `_acct_settings_env` — same function, same state on disk, and before
+    // this commit two different stories about it: the first three said only
+    // "the roster entry was written", which reads as "no credential was", and
+    // that is the inference an operator makes when the sentence beside it
+    // names one. The clause is the CALLER's (D-2126's ruling), and this
+    // function is the caller for all four sites.
+    const rows: [string, string, (h: string) => void][] = [
+      ['no installer to run', 'provision-failed', () => { /* plantInstallers omitted */ }],
+      ['an installer that refuses', 'provision-failed', (h) => {
+        plantInstallers(h);
+        writeFileSync(join(h, '.cc-sessions', 'install-session-hooks.sh'),
+          '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      }],
+      ['a config dir that cannot be created', 'provision-failed', (h) => {
+        plantInstallers(h);
+        writeFileSync(join(h, '.claude-lab-dev0'), 'not a directory\n');
+      }],
+      ['a settings.json the merge cannot take', 'settings-invalid', (h) => {
+        plantInstallers(h);
+        mkdirSync(join(h, '.claude-lab-dev0'), { recursive: true });
+        writeFileSync(join(h, '.claude-lab-dev0', 'settings.json'), '{"env":["a"]}');
+      }],
+    ];
+    for (const [what, err, plant] of rows) {
+      const home = box('ccrc-account-off-stands-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantUpstream(home);
+      plant(home);
+      const r = run(home, addArgs(), `${CANARY}\n`);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+      const j = oneObject(r);
+      expect(j['error'], what).toBe(err);
+      expect((j['detail'] as string).endsWith(provisionStands(home)),
+        `${what} did not end in the caller's clause:\n    ${j['detail'] as string}`).toBe(true);
+    }
+  });
+
+  it('a converge that refuses AFTER the roster entry still leaves the lane off', () => {
+    // WHERE THE MARKER GOES, MEASURED. `_account_ok` is `[[ -x
+    // "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"` — both halves — so the moment
+    // a lane becomes pickable is the moment `cmd_wrappers` writes its wrapper,
+    // inside `_acct_converge`. A marker written after that converge (which is
+    // where the plan's snippet put it) leaves a window, and a converge that
+    // refuses leaves that window open for good — and the remedy those refusals
+    // print ("re-run `ccrc wrappers`") is what then WRITES the wrapper, so an
+    // unmarked lane becomes pickable by following the instructions. Injected
+    // with an unreadable id-shaped file, which makes `cmd_wrappers` refuse every
+    // generated write because it cannot tell what execs what.
+    const home = box('ccrc-account-off-converge-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    chmodSync(plantLauncher(home, 'zz-blind', '#!/bin/sh\nexit 0\n'), 0o000);
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('wrapper-converge');
+    expect(existsSync(join(home, '.cc-sessions', 'lab-dev0-disabled')),
+      'the converge refused and left a rostered lane with no marker').toBe(true);
+    // AND THE WINDOW IS REAL: no wrapper was written, so the lane is not
+    // pickable yet — it becomes pickable when the operator follows the remedy.
+    expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
+  });
+
+  it('the `added` op refuses a --disabled that is not a boolean, rather than reading it as off', () => {
+    // The wire field is a BOOLEAN because `"false"` is truthy in every language
+    // that will read this — and a total conversion is the whole of that
+    // argument: `a['disabled'] === 'true'` alone maps a typo to `false`, which
+    // publishes "this lane is ON" about a lane that is off. One caller, and it
+    // always passes one of the two words, so the shape is refusable.
+    const call = (v: string | null): Result => {
+      const args = ['added', '--file', join(REPO, 'deploy', 'accounts.default.json'),
+        '--id', 'lab-dev0'];
+      if (v !== null) args.push('--disabled', v);
+      const p = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
+        { encoding: 'utf8' });
+      return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    };
+    for (const bad of ['tru', 'True', '1', '']) {
+      const r = call(bad);
+      expect(r.code, `--disabled ${JSON.stringify(bad)} was accepted`).toBe(2);
+      expect(oneObject(r)['error']).toBe('bad-argv');
+    }
+    expect(oneObject(call(null))['error']).toBe('bad-argv');
+    expect(oneObject(call('false'))['disabled']).toBe(false);
+    expect(oneObject(call('true'))['disabled']).toBe(true);
   });
 });

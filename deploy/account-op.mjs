@@ -250,6 +250,17 @@ const OPS = {
   // business of re-deciding what the pre-pass decided, which is the seam Task 23
   // exists to remove.
   'add-entry': { keys: ['file', 'plan'], repeat: [] },
+  // THE WHOLE ANSWER OF `ccrc account add`, COMPOSED HERE rather than in bash,
+  // for the reason this file exists: `ccd/ccrc` has no JSON emitter, and a step
+  // sentence with a quote in it assembled by `printf` would be the one place
+  // this verb's contract could be broken by punctuation. `provisioned` and
+  // `operator-step` REPEAT — parallel to `candidates`' pair, and for the same
+  // argument: one JSON blob on argv would put a value bash built with `printf`
+  // back into the JSON-shaped position this file owns.
+  added: {
+    keys: ['file', 'id', 'disabled', 'provisioned', 'operator-step'],
+    repeat: ['provisioned', 'operator-step'],
+  },
 };
 
 function out(o) {
@@ -887,6 +898,44 @@ function main(argv) {
       list.push({ name: names[i], bytes: Number(bytes[i]) });
     }
     out({ ok: true, candidates: list });
+    return 0;
+  }
+
+  if (op === 'added') {
+    // `--file` and `--id` are the request; `--provisioned` and `--operator-step`
+    // are lists that may legitimately be empty, so their absence is not a fault.
+    for (const k of ['file', 'id']) {
+      if (a[k] === undefined) { refuse('bad-argv', `added needs --${k}`); return 2; }
+    }
+    // A BOOLEAN ON THE WIRE, not the string bash handed over: the caller renders
+    // a switch from it, and `"false"` is truthy in every language that will read
+    // this.
+    //
+    // AND THE CONVERSION IS TOTAL, which is a DEVIATION from this task's plan
+    // snippet (`disabled: a['disabled'] === 'true'`) and is the same argument
+    // carried one step further. That expression maps every value that is not the
+    // exact word `true` — a typo, a missing flag, `False`, `1` — to `false`,
+    // which publishes "this lane is ON" about a lane that is off: an overloaded
+    // seam of exactly the class this cluster keeps closing, in the one field an
+    // operator acts on. There is one caller and it always passes one of the two
+    // words, so the shape is refusable rather than guessable.
+    if (a['disabled'] !== 'true' && a['disabled'] !== 'false') {
+      refuse('bad-argv',
+        `added needs --disabled true or --disabled false, and got ${JSON.stringify(a['disabled'] ?? null)}`
+        + ' — this field says whether the new lane is switched off, so a value this file '
+        + 'would have to guess at is refused rather than read as "on"');
+      return 2;
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    out({
+      ok: true,
+      id: a['id'],
+      disabled: a['disabled'] === 'true',
+      provisioned: a['provisioned'] ?? [],
+      'operator-steps': a['operator-step'] ?? [],
+      roster: json,
+    });
     return 0;
   }
 
