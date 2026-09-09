@@ -991,6 +991,54 @@ both. Expect the two known content conflicts to appear as kept-both pairs needin
 
 ---
 
+## Before the operator runs `ccrc memory --apply`
+
+`--apply` runs ONCE against prose sessions wrote once. This section is the pre-flight, and it exists
+because the whole-branch review found two defects that only appear at fleet scale.
+
+**Re-take the census immediately before, and quote nothing from this document.** Every figure below is
+a dated measurement of a moving fleet, not a constant — this branch was burned three times by exactly
+that, most sharply by a count that summed census rows across homes. `ccrc memory` with no flags is the
+read-only census and changes nothing on disk; that is why the verb is split.
+
+**A census row is `(home, project)`, and rows MUST NOT be summed into a file count.** A census that
+walks homes and dereferences symlinks sees one file once per home that can reach it. Measured
+2026-09-09: **812 file instances but only 581 distinct files**, and of the files that cannot be indexed,
+**6 instances but only 2 distinct**. Counting pairs and calling them pairs is honest; a file total
+summed over homes is inflated by the symlink factor for exactly the projects most likely to be shared.
+Audited: nothing this branch prints does that.
+
+1. **Take a backup that neither `--purge` nor the migration can reach.** `ccrc backup` now includes the
+   memory store, but that snapshot lands under `~/ccrc-backups`, which `ccrc uninstall --purge` still
+   removes. Put a copy somewhere that is neither `~/.ccrc` nor `~/ccrc-backups`.
+
+2. **Re-take the four measurements the spec orders.** Homes with `projects/`; pairs; distinct projects;
+   and the union's shape — distinct names, and the same-name-different-content collisions, which are the
+   only files `--apply` will ever suffix.
+
+3. **Predict, then compare.** Write down what the census says BEFORE running, and what `--apply` should
+   therefore print: one `converged` line per un-converged pair, one `normalised` line per pair whose link
+   resolved correctly but named another home, a `NOTE:` only where entries were not migrated, and a
+   store count equal to the number of distinct project slugs. **Any suffixed file you did not predict,
+   any NOTE you did not predict, or a store count that is not the distinct-project count means something
+   happened that was not predicted — stop and look.**
+
+4. **Decide the quiescence question and write the answer down.** Nothing in the spec or this plan says
+   whether `--apply` may run while ~20 sessions are live. There is a real window per pair between the
+   copy loop and the backup `mv`: a memory file written in that window is moved into the backup, is not
+   counted by `left` (computed before the write), and so is never mentioned. Either accept that
+   explicitly or run against a paused fleet.
+
+5. **Verify afterwards by bytes, not by name.** For every `memory.pre-ccrc-*` backup, every `*.md` in it
+   must be byte-identical to a file in the store or named in that pair's NOTE. `--apply` prints
+   `converged` per pair; that line is a claim, and this is the check that makes it a fact.
+
+**One-shot blast radius, by design:** an index-rebuild failure aborts the whole run, so one project's
+bad `MEMORY.md` stops every later home converging. Nothing is lost — the source is not moved when the
+absorb failed — but re-running is required. Run it attended.
+
+---
+
 ## Deviations found
 
 Numbers are allocated by `ccrc-api ledger allocate` and defined here in the same act. Do not look a

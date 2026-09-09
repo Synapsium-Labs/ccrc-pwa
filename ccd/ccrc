@@ -3022,14 +3022,21 @@ cmd_memory() {
 # union rather than merged. That framing used to claim every memory file
 # carries `name`/`description` frontmatter and that a clobbered index
 # "regenerates instead of silently losing a line" — both measured false by
-# this branch's own review: 2 of 577 file instances on this box carry no
-# `name:` line, and the index does not self-heal for them. It DROPS them from
-# the rebuild every time, which is why `_mem_rebuild_index` COUNTS them and
-# `--apply` reports the count in a NOTE (R30) rather than claiming the file is
-# covered. A clobbered/lost index does regenerate on the next `--apply` for
-# every file THAT HAS a name — the self-healing property still holds for that
-# case — but a name-less file is a standing, permanent gap in the index, not
-# a transient write race, and this comment must not blur the two again.
+# this branch's own review: SOME memory files carry no `name:` line, and the
+# index does not self-heal for them. It DROPS them from the rebuild every
+# time, which is why `_mem_rebuild_index` COUNTS them and `--apply` reports
+# the count in a NOTE (R30) rather than claiming the file is covered. A
+# clobbered/lost index does regenerate on the next `--apply` for every file
+# THAT HAS a name — the self-healing property still holds for that case —
+# but a name-less file is a standing, permanent gap in the index, not a
+# transient write race, and this comment must not blur the two again.
+# (Illustrative count, measured 2026-09-09 — a moving fleet fact, not a
+# contract, and stated as a quote per this repo's own "any number about
+# mutable state is a quote" rule: 2 DISTINCT name-less files existed on
+# this box, reached through pre-existing symlinks as 6 file INSTANCES
+# across homes. Distinct-file and instance-flavoured counts are different
+# denominators — they differ here by exactly that symlink factor — so never
+# collapse "N distinct files" and "M instances" into one figure again.)
 _mem_index_line() {   # <file> -> "- [name](file) — description" on stdout,
                       # rc 0; or nothing on stdout, rc 1, when the file
                       # carries no `name:` frontmatter (R30 — the caller
