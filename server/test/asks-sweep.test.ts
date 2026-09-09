@@ -448,3 +448,89 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(warn).toHaveBeenCalled();
   });
 });
+
+// Task 8: staleness off `dialog_cleared`. A held ask's dialog can go away
+// with NOTHING to answer it — the operator hit escape at the terminal, the
+// session was interrupted, cleared, swapped, or died. `detectDialogs`'s own
+// `else if (last !== undefined)` clear branch is the only place this can be
+// caught: the pane is the one signal a `cmd_swap` (which does not rotate the
+// session uuid) cannot lie to, where hookstate's identity gate would stay
+// blind and keep reading `waiting` behind a pane that's gone.
+describe('detectDialogs — staleness off dialog_cleared (Task 8)', () => {
+  it('marks a held ask stale when its dialog goes away unanswered, no push', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    expect(heldMap(f.w).has('cc-a')).toBe(true);
+
+    f.showMenu('cc-a', BARE_PROMPT);                      // operator hit escape
+    await f.tick();
+
+    expect(f.coord.askById(askId)!.state).toBe('stale');
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
+    // Nothing to notify about — a cleared dialog is a question that no
+    // longer exists.
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+  });
+
+  // The clear-then-remint overwrite path (recorded against this task in
+  // earlier reviews): Task 6's orphan-settle in the `last !== dialog.id`
+  // branch is gated on `last !== undefined`, so when a dialog CLEARS first
+  // (dropping `last` from `dialogIds`) and only later does a DIFFERENT
+  // dialog appear on the same session, that guard never fires — unless the
+  // clear branch itself already settled the row on its way out, which is
+  // exactly what this test pins.
+  it('settles the stale row on clear so a later, different dialog does not orphan it (clear-then-remint)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const staleId = await mintHold(f, 'cc-a', 'coord-1');
+
+    f.showMenu('cc-a', BARE_PROMPT);                      // the first dialog clears
+    await f.tick();
+    expect(f.coord.askById(staleId)!.state).toBe('stale');
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
+
+    // A DIFFERENT dialog appears later, on the same session — no shared
+    // dialog id with the one that just cleared.
+    const otherQuestion = { questions: [{ question: 'Which size?', header: 'Size', multiSelect: false,
+      options: [{ label: 'Small' }, { label: 'Large' }] }] };
+    const OTHER_MENU_PANE = 'Which size?\n❯ 1. Small\n  2. Large\nEnter to select\n';
+    f.writeAsk('cc-a', otherQuestion);
+    f.showMenu('cc-a', OTHER_MENU_PANE);
+    await f.tick();
+
+    const held = f.coord.asksForParent('coord-1', 'held');
+    expect(held).toHaveLength(1);                          // exactly one held row survives
+    expect(held[0]!.id).not.toBe(staleId);
+    expect(f.coord.askById(staleId)!.state).toBe('stale');  // the old row, untouched since
+  });
+
+  // Mutation-table guard: the `staleAsk` call on this path is a synchronous
+  // `node:sqlite` write sitting directly on the 2 s poll, and `detectDialogs`
+  // is awaited by `tick()`, which has no catch of its own (`void this.tick()`
+  // in the timer) — so an unguarded throw here would kill the whole server
+  // process. Stubbing `staleAsk` to throw proves the guard: the tick still
+  // resolves, a warning is logged, and the in-memory hold is dropped anyway
+  // (never retried forever on a settle that keeps failing).
+  it('does not let a throwing staleAsk escape the clear branch and kill the tick', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+
+    f.coord.staleAsk = () => { throw new Error('boom'); };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    f.showMenu('cc-a', BARE_PROMPT);
+    await f.tick();                                        // must not throw
+
+    expect(warn).toHaveBeenCalled();
+    expect(heldMap(f.w).has('cc-a')).toBe(false);           // dropped unconditionally, despite the throw
+    expect(f.coord.askById(askId)!.state).toBe('held');     // the CAS never actually ran
+  });
+});

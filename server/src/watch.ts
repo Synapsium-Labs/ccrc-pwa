@@ -406,8 +406,16 @@ export class FleetWatcher {
    *  `dialogIds` suppresses the second, so a restart during any live dialog
    *  re-pushes nothing today either.
    *
-   *  Cleared in the same `else if (last !== undefined)` branch that clears
-   *  `dialogIds` — the dialog going away is the end of the hold.
+   *  Cleared in TWO places, both keyed off the dialog leaving the pane: the
+   *  orphan-settle in the `last !== dialog.id` branch above, when a NEW
+   *  dialog silently replaces an old one with no intervening clear tick; and
+   *  (Task 8) the `else if (last !== undefined)` branch below, when the
+   *  dialog goes away with nothing to replace it — an unanswered
+   *  `AskUserQuestion` the operator escaped, or the session interrupted,
+   *  cleared, swapped, or killed out from under it. Either way the dialog's
+   *  own departure from the pane is the end of the hold; the second case
+   *  settles the row `stale` and pushes nothing, since a cleared dialog is a
+   *  question that no longer exists.
    *
    *  `answeringSince` (fix round 1, item 1): `null` until `sweepAsks` first
    *  observes this row `'answering'`, then the sweep's own `now` at that
@@ -3498,6 +3506,43 @@ export class FleetWatcher {
       } else if (last !== undefined) {
         this.dialogIds.delete(r.id);
         this.actionlessAsks.delete(r.id);
+        // Task 8: the dialog went away with nothing to replace it — the
+        // operator hit escape at the terminal, or the session was
+        // interrupted, cleared, swapped, or died. The pane is the only
+        // signal that cannot lie here: `cmd_swap` does not rotate the
+        // session uuid, so hookstate's identity gate is blind to a swap and
+        // the file still reads `waiting` behind a pane that is gone.
+        // `detectDialogs` reads only what is painted, which is why
+        // staleness rides THIS branch and not the hookstate.
+        //
+        // Also closes the clear-then-remint gap: the orphan-settle above
+        // (`last !== dialog.id`) only fires when a NEW dialog silently
+        // replaces a live one — it is gated on `last !== undefined` at
+        // REMINT time, so a dialog that clears first (dropping `last` from
+        // `dialogIds`, right here) leaves that guard unable to see a
+        // different dialog minted later on the same session. Settling the
+        // held ask on the way out, in THIS branch, means there is nothing
+        // left for that guard to miss.
+        const held = this.heldAsks.get(r.id);
+        if (held !== undefined) {
+          // Dropped unconditionally, BEFORE the guarded write below — same
+          // shape as the orphan-settle above: a failing `staleAsk` must not
+          // leave the entry to be retried (and re-warned about) forever: the
+          // in-memory hold is over either way, since the dialog it was
+          // minted under is already gone from the pane.
+          this.heldAsks.delete(r.id);
+          // Guarded: a synchronous `node:sqlite` UPDATE sitting directly on
+          // the 2 s poll, and `detectDialogs` is AWAITED by `tick()`, which
+          // has no `catch` of its own (`void this.tick()` in the timer) —
+          // an unguarded throw here would kill the whole process. Never
+          // pushes: a cleared dialog is a question that no longer exists,
+          // so there is nothing to notify the operator about.
+          try {
+            this.deps.coord?.staleAsk(last, r.id, Date.now());
+          } catch (err) {
+            console.warn(`ccrc-server: settling a cleared ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a held row may remain orphaned in coord.db`);
+          }
+        }
         this.bus.emit(`session:${r.id}`, { type: 'dialog_cleared' });
       }
     }
