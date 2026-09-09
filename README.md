@@ -948,8 +948,10 @@ The one thing ccd must never do is cancel Claude Code's armed auto-continue with
 (`compact-skip <id>: auto-continue`), the `/effort` injection, and the fallback re-drive. The rescue
 arm is deliberately **not** gated: a swap that re-drives beats waiting out the window. On the PWA the
 pair renders as two system lines, the second reading "interrupted turn not re-driven — send a
-message to resume"; the server parser maps them by `isMeta` and `message.model === '<synthetic>'`,
-never by their words.
+message to resume"; the server parser keys on the structural markers — `isMeta` for the prompt
+line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
+(`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
+starting with that prefix, and nothing scans for it.
 
 ## Attention, notifications and answering
 
