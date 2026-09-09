@@ -527,14 +527,19 @@ const DOCTOR_SITES: string[] = [
   '_check_pools: -e dir',
   '_check_pools: -e f',
 ];
-// `cmd_ws_add`, `cmd_project_pool`, `_auto_swap_check`, `cmd_start`,
-// `_strand_why`, `cmd_swap` and `cmd_prefer` are pools-relevant and contribute
-// NO hits — the first never tests a pools path, the second decides from
-// `_project_pool_state` instead, and the other five only interpolate
-// `$POOLS_DIR` into an undecidable-tag MESSAGE, with no `-e` test of their own
-// to pair. Naming them here is the difference between "the scan found two
-// things" and "the scan read these eight functions and seven of them hold no
-// existence test at all".
+// EVERY NAME IN `CCD_BLOCKS` BELOW THAT CONTRIBUTES NO ENTRY TO `CCD_SITES` is
+// pools-relevant and holds no existence test of its own: `cmd_ws_add` never
+// tests a pools path, `cmd_project_pool` decides from `_project_pool_state`
+// instead, and the rest only interpolate `$POOLS_DIR` into an undecidable-tag
+// MESSAGE, with nothing to pair. Naming the SET rather than a cardinal is the
+// round-5 correction (#69 review round 4 gate): this paragraph said "these
+// eight functions and seven of them", and adding `_undecidable_cause` to the
+// list directly below falsified both numbers in the same commit that added it —
+// the enumeration going stale one line above the enumeration. The lists are the
+// census; a count restated in prose beside them is a second copy that can only
+// drift. The difference this paragraph exists to make is still the one it
+// made: between "the scan found two things" and "the scan read every one of
+// these functions and all but two hold no existence test at all".
 //
 // `_auto_swap_check` JOINED THE LIST 2026-09-09 (#69 review, D-2155), and the
 // way it joined is the point of this pin. It gained `$POOLS_DIR/$project` in

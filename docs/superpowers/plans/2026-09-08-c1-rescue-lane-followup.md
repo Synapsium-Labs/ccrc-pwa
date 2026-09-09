@@ -38,7 +38,8 @@ band, one tick of permission trouble. A five-second tick lives in the transient.
 
 **Deviations DEFINED here:** D-2026–D-2035 (the original round), D-2155–D-2162 (the #69 review, round
 2), D-2194–D-2207 (round 3), D-2212–D-2219 (round 3's #70 merge pass) and
-D-2254–D-2261 (round 4). Every number is defined here and nowhere else. **CORRECTED twice:** this
+D-2254–D-2261 (round 4) and D-2283–D-2309 (round 5, the coordinator's round-4 gate). Every number is
+defined here and nowhere else. **CORRECTED twice:** this
 sentence claimed only the first band for two rounds while the file went on defining two more below it —
 the header is the index a reader uses to answer "what does this plan own?", and it undercounted its own
 contents by eight, then by twenty-two.
@@ -302,8 +303,15 @@ had their remedies corrected.** Deviations D-2155–D-2162.
   **RE-MEASURED AGAIN ON THE #70 MERGE (D-2212, D-2213), WHICH MOVED IT.** #70 changed
   `_auto_compact_check`'s `lastswap` arm from `… && return 0` to `… && fromswap=1`: the lane no longer
   ends there, it falls through to its own `capture-pane`. So the compact lane now captures on exactly
-  the ticks it used to skip. Measured on the merged tree, every trip shape crossed with 3 `lastcompact`
-  values x 4 `lastswap` values x 6 pane states, lane against lane-neutralised:
+  the ticks it used to skip. Measured on the merged tree, lane against lane-neutralised, over a grid
+  **whose design was never recorded** — corrected here rather than guessed a fourth time (#69 review
+  round 4 gate). This line said "3 `lastcompact` values x 4 `lastswap` values x 6 pane states", which is
+  72; `ccd/ccd` said "both cooldown states and six pane states", which is 12; every result below is
+  "of 36". The results are internally coherent (18 + 18 − 6 = 30, with remedy 3 gating on the swap
+  cooldowns) and were measured — the DESIGN sentence was reconstructed afterwards and is the stale
+  half. Read the cardinals as an order of magnitude, and re-derive the grid before re-deriving any
+  fraction. The NO-FIX ruling does not rest on them: it rests on reachability, measured separately and
+  re-measured independently at the gate.
 
   | quantity | pre-merge | merged |
   |---|---|---|
@@ -732,7 +740,11 @@ fix is designed against the site that reported the bug rather than against the w
 - **D-2258 (2026-09-09)** — **and the claim that this branch created that defect is false for three of
   its five inputs.** Measured on `origin/main` itself, same fixture: `.project` as a DIRECTORY, a
   DANGLING SYMLINK or `chmod 000` already relocated silently out of pool there. Those were never a
-  hang — they are the round-2 constraint lift reaching the verb, and nobody closed it. What this branch
+  hang, and they are not this branch's either: they are on `origin/main`, so whatever put them there
+  predates every commit here, and nobody closed it. **CORRECTED (#69 review round 4 gate):** this
+  read "they are the round-2 constraint lift reaching the verb" — attributing a measured
+  PRE-BRANCH condition to this PR's own round 2, inside the entry written to stop exactly that
+  attribution. The measurement was right and the provenance clause was not. What this branch
   changed is the other two: a FIFO blocked in `open(2)` on main and a symlink to `/dev/zero` in
   `read(2)`, and the `-f` added to `_reg_get` turned both hangs into the same silent move. **The branch
   widened the hole from three shapes to five; it did not open it.** Booked separately because the first
@@ -787,3 +799,211 @@ fix is designed against the site that reported the bug rather than against the w
 | G4 | `_tick_undecidable`'s rc-2 arm deleted | RED — four ticks, four lines |
 | G6 | the verdict's `ctrc` line deleted | RED — `expected 'null' to contain 'crosspool'` |
 | G8 | `_pool_untaggable`'s registry refusal deleted | RED — `expected 'rc=0' to be 'rc=1'` |
+
+---
+
+## Deviations found — round 5 (the coordinator's round-4 gate)
+
+The gate ran 7 lenses / 35 agents and asked for six things before clearing the merge; two of them —
+a guard with no mechanism sitting next to a comment asserting the mechanism — it would not merge
+without. **Both were re-measured here before anything was written, with the control that turns a green
+mutation into a finding:** dropping `cmd_prefer`'s `! _pool_untaggable` left the whole ccd+pools set
+green at 11 files / 354, and dropping the byte-identical text at `cmd_swap` redded
+`but an UNTAGGABLE box still swaps` immediately. A green mutation on its own is ambiguous — unpinned
+guard, unreachable line, or a mutation that never applied — and the control is what tells them apart.
+
+- **D-2283 (2026-09-09)** — **the `swapblocked` cooldown clear was unpinned, two lines below a comment
+  claiming it was pinned.** Round 4 shipped two clears and one measurement. `_swap_refuse` DELETES
+  `.lastswap` and stamps `.swapblocked`, so after a refusal the swapblocked gate is the ONLY gate
+  holding for the whole `SWAPBLOCK_COOLDOWN` — the unpinned half was the one carrying the refusal case,
+  which is the case the pair exists for. Measured: replacing that clear with `:` left 11 files / 354
+  green. Now RED, and the paragraph says which case pins which half instead of asserting both.
+- **D-2284 (2026-09-09)** — **the same guard at two verbs, one measured and one not.** Four sites carry
+  ` && ! _pool_untaggable`. `cmd_prefer`'s was unpinned because the case that names `cmd_prefer` tags
+  the pool, so `_pool_untaggable` is false there and the gate cannot change its verdict. The new case
+  is `cmd_swap`'s, on a box with no `pools/` at all.
+- **D-2285 (2026-09-09)** — **B3's third verb reader, and the gate's own finding corrected by half.**
+  `cmd_start`/`cmd_enable` still read `.project` through `_reg_get`; an unreadable field folds to `""`,
+  `_project_pool_state ""` answers `untagged` at its first line, and `untagged` permits everything — so
+  the pool block decided "in pool" and said nothing. The gate says "both the die and the warn go
+  silent". **The die is unreachable from that read:** it is creation-only (`-z "$regw"`), and this read
+  runs only on the id form, where an empty `regw` has already died at `no wrapper recorded for '$id'
+  and none given`. What the fold silenced is the WARNING. The remedy is therefore a warning, for the
+  same reason ruling 5 gives the mismatch one — a revival must not be refused for a placement the
+  auto-swapper moves at the next idle boundary — and it carries `! _pool_untaggable` like the two dies.
+- **D-2286 (2026-09-09)** — **"ONE MAPPING … cannot drift apart" was a claim written above the drift.**
+  `_tick_strand_undecidable` built its own sentence, `"<word> could not be measured…"`, while the late
+  path rendered the same condition through `_undecidable_cause`. Its two call sites are the tick's
+  EARLY RETURNS, so one condition — an unreadable `.project` — produced two different `.stranded`
+  sentences depending on which guard caught it, and the COMMON path was the one that named no file. It
+  derives from `_undecidable_cause` now, which is what makes "cannot drift apart" a mechanism.
+- **D-2287 (2026-09-09)** — **the fold needed a `wrapper` arm, and a fold that makes the sentence worse
+  is not a fold.** `wrapper` is the word only the early return passes; without an arm of its own it
+  would have landed in `*` and told the operator this build does not name a condition it names.
+- **D-2288 (2026-09-09)** — **`_undecidable_cause`'s positional arguments were unpinned at the CALL
+  SITE, and my first pin measured the arms instead.** Swapping `$2`/`$3` where the tick passes them
+  renders `$POOLS_DIR/<row id>` and `$REG/<project>.project` — files that do not exist — on the exact
+  surface round 4 added to stop that. 213 tests passed under that swap; so did the first cut of the new
+  case, which drove `_undecidable_cause` directly with literal arguments and therefore measured the
+  arms while claiming to measure the caller. **The mutation is what caught it, not the reading** — the
+  same lesson as D-2260, one round later and on the fix for D-2260's own finding.
+- **D-2289 (2026-09-09)** — **the `home` arm is reachable and had no test.** Reachable through
+  `stuck=home`, never through `$strc` — `_swap_target` has no home rc — so removing the `hrc` arm from
+  the caller's `case` was right and the sentence still had nothing measuring it.
+- **D-2290 (2026-09-09)** — **a two-condition guard measured by a fixture that could not say which
+  half caught it.** `_pool_untaggable`'s `[[ -d "$REG" && -x "$REG" ]]` fails for a non-directory AND
+  for a directory nobody may enter. The fixture wrote a 0644 regular file, which fails `-x` as well as
+  `-d`: measured, dropping `-d` left the whole set green. The file is 0755 now, so only `-d` can refuse
+  it, and both halves red on their own mutation. Root-safe by construction — `-x` on a 0755 file is
+  true at every uid.
+- **D-2291 (2026-09-09)** — **a helper built for the other half and never called.** The same case
+  constructed `runOn`, which `chmod 000`s the registry to measure the `-x` half, and then wrote
+  `void runOn` instead of calling it. It is called now, guarded on `getuid() !== 0` for D-1997's
+  reason: `chmod 000` is a no-op for root, so that half is measured wherever the suite is not root.
+- **D-2292 (2026-09-09)** — **an assertion that passed under the collapse its own case forbids.**
+  `expect(tickstuck).toContain('pool')` is satisfied by `crosspool` — the exact confusion the case
+  exists to refuse. The field is `<epoch> <word>`; the word is what is compared now, at both sites.
+- **D-2293 (2026-09-09)** — **a test for a hang that could hang.** The compact-lane FIFO pin planted the
+  same fixture as its sibling 50 lines up and drove it with a bare `h.sh`, with no `timeout`. Measured
+  by the gate: deleting the guard produced no summary line after 600 s and two live
+  `_auto_compact_check` processes, and the run had to be SIGKILLed. Bounded now — the same mutation
+  reds both FIFO cases in **5.3 s**. The stubs go to a FILE rather than into the nested `bash -c`
+  string, because they carry both quote characters.
+- **D-2294 (2026-09-09)** — **D-2216 was closed with a comment, and this is its mechanism.** A marker
+  check that passes is not a check that the file has ONE marker: `stripMarkerLine` removes only the
+  line at `markerLineIndex`, so a second `# ccrc:generated` line sits INSIDE the hashed body and
+  `verifyMarker` answers `ccrc-unmodified`. It happened twice in this PR's own history. **The count is
+  on the PREFIX, not on `MARKER_RE`** — the line that actually shipped carried `PLACEHOLDER` where the
+  digest goes, so a count of well-formed markers would have found exactly one and passed on the very
+  file that carried the defect. Measured: replanting the shape and re-stamping gives `markers=2`,
+  `verdict=ccrc-unmodified`, and reds exactly one case of fourteen — the new one.
+- **D-2295 (2026-09-09)** — **`ccd/ccd` is the only file this can happen to, and that is measured, not
+  assumed.** The recurrence mechanism is a merge conflict on the marker line, which needs a generated
+  file that is COMMITTED. `grep -rn '^# ccrc:generated' .` returns line 2 of `ccd/ccd` and two `docs/`
+  lines quoting the format. `~/.ccrc/accounts.sh` and the wrappers are generated at deploy time from
+  bodies that never contain the prefix and are never merged.
+- **D-2296 (2026-09-09)** — **the `_reg_get` census: five statements of one number, four of them
+  stale, and the stale ones first.** It has moved four times in five rounds — 133 at C1, 135 once this
+  branch and the #70 merge had added sites, 133 when round 3 converted the two tick `.project` reads,
+  **132** when rounds 4 and 5 converted the three verb readers. Round 4's own delta falsified it in
+  four places while the block was byte-unchanged, which is how a number goes stale without anyone
+  editing it. "Re-measure it" was a REQUEST; `ccd-reg-get-census.test.ts` is the MECHANISM, reading the
+  sentence's own two numbers out of the file and comparing each to what the sentence says it counted —
+  the shape `ccd-pool-ok.test.ts` has carried for the `_pool_ok` header through the same five rounds
+  without going stale once. The four arguments above it now say "every call site"; a second case
+  refuses any new three-digit cardinal in that block. One number, one place, one test.
+- **D-2297 (2026-09-09)** — **the "corrected" `mkdir` anchor was still wrong, in both directions.**
+  Round 4 replaced `grep -n 'mkdir -p "$POOLS_DIR"'` (zero hits) with `grep -n 'mkdir -p --'`, which
+  returns FOUR: the `$POOLS_DIR` call, its own citation, and two `_LC_DIR` mkdirs that are not pools
+  paths at all — a four-hit command offered as proof of a one-site claim. The anchor now names
+  `$POOLS_DIR` and carries the `grep -vE '^[0-9]+:[[:space:]]*#'` filter this file already uses twice
+  for the same trap.
+- **D-2298 (2026-09-09)** — **the third present-tense claim about wave 3's reader, inside the round
+  that removes them.** `_undecidable_cause`'s new header said `SessionRecord.stranded.reason` reaches
+  "every ccrc surface" today; `git grep -c stranded server/src/registry.ts` is **0** on `origin/main`
+  and on the PR branch (17 on `ws/clear-meadow`, which is a different tree). D-2201 removed this exact
+  claim twice. Three more instances went with it: `_strand_mark`'s `STRANDED_UNREADABLE` — a constant
+  `grep -rn` finds nowhere in the tree — its `fleet.ts` ships that number clause, and the compact
+  lane's `stranded.at` is shipped. All four are future tense now, and the fail-shut is stated as a
+  REQUIREMENT this branch places on that reader rather than a measurement of one that exists.
+- **D-2299 (2026-09-09)** — **an enumeration falsified by the entry added directly below it.**
+  `pools-existence-pairing.test.ts`'s paragraph said "these eight functions and seven of them"; round 4
+  added `_undecidable_cause` to `CCD_BLOCKS` in the same commit, making it nine and eight. The
+  paragraph names the SET now — "every name in `CCD_BLOCKS` that contributes no entry to `CCD_SITES`" —
+  because the lists ARE the census and a cardinal restated beside them can only drift.
+- **D-2300 (2026-09-09)** — **D-2258's provenance clause attributed a pre-branch condition to this
+  branch, inside the entry written to stop that.** It read "they are the round-2 constraint lift
+  reaching the verb" about three `.project` shapes measured relocating silently on `origin/main` —
+  which predates every commit here. The measurement was right; the provenance clause was not.
+- **D-2301 (2026-09-09)** — **a hang-surface enumeration that overstated its own surface.**
+  "`_compact_note` reads `compactskip`/`compactnote` on every tick the compactor DECLINES" is false for
+  three decline arms: the kill-switch and the `lastcompact` cooldown return above the pane read, and
+  the below-threshold arm calls `_compact_note_clear`, which reads neither field. The file's own D-2013
+  comment says so twenty lines away. The paragraph exists to bound a hang surface honestly.
+- **D-2302 (2026-09-09)** — **D-2162's grid was never recorded, and three mutually inconsistent
+  designs have been written for one set of results.** `ccd/ccd` said "both cooldown states and six pane
+  states" (12); the plan said "3 `lastcompact` × 4 `lastswap` × 6 pane" (72); every figure either
+  states is "of 36". The RESULTS are internally coherent (18 + 18 − 6 = 30, remedy 3 gating on the swap
+  cooldowns) and were measured — the DESIGN sentence was reconstructed afterwards, three times. It is
+  **deleted rather than guessed a fourth time**, and both copies now say so. Nothing below it depends
+  on the grid: the NO-FIX ruling rests on reachability, measured separately and re-measured
+  independently at the gate.
+- **D-2303 (2026-09-09)** — **"WHICH undecidable — READ, not inferred" is true only on the
+  `$stuck`-empty path.** Whenever `hrc`/`ctrc`/`prc` answered 2 earlier in the tick, `uword` is still
+  INFERRED — from measurements of earlier moments — and neither D-2254 nor D-2255 said so. Disclosed
+  rather than closed: the tail is a STALE word, never a fabricated one (the condition it names WAS
+  measured undecidable on that tick, which is the difference from the pre-#69 behaviour that named a
+  `.crosspool` the fixture did not have), and closing it means the verdict and the refusal exchanging
+  words, which no measured case asks for. **The gate also withdrew its own reviewer's "regression"
+  reading here, and the withdrawal is right:** base `be16dbf3` stamped `crosspool` and then wrote a
+  sentence from a different ladder unconditionally, so it named BOTH — which is D-2255 itself. Head is
+  better than base in that fixture.
+
+### Booked, not taken — each is its own PR, and a follow-up that is not numbered before the merge does not exist
+
+- **D-2304 (2026-09-09)** — **`[pool=-]`: the one `_project_pool_state` consumer of eleven that folds.**
+  Ruled by the coordinator to its own PR, and the reasoning is right: B3 earned its place here because
+  it is a constraint LIFT, and this is a REPORTING defect — the placement is correct, only the sentence
+  about it is wrong. Worse than filed: on the no-cause branch the banner contradicts itself in ONE
+  sentence, because `_strand_why` already emits `tag:unreadable` into the same line; and `[pool=-]`
+  reaches `swap.log` on both branches, where the first-mark debounce makes it permanent. The fix has a
+  design in it — `_strand_mark` should derive from the same four words `_strand_why` already uses
+  (`named <n>` | `untagged` | `unreadable` | `malformed`) rather than invent a second rendering — and
+  the banner is asserted VERBATIM by `ccd-auto-swap-pool.test.ts`. Designs made at merge time ship wrong.
+- **D-2305 (2026-09-09)** — **a `chmod 000` REGULAR session file reports the ABSENT sentence.** The
+  compact lane's guard splits absent from non-regular; a third condition — a regular file that exists
+  and cannot be opened — falls through `-f` to the grep, produces an empty `$st`, and emits
+  `status-unreadable (no status in <path>)`. Three conditions, two sentences, in the block whose own
+  comment says folding them "would be this program's own defect committed inside its own fix".
+- **D-2306 (2026-09-09)** — **and the distinction that IS drawn never reaches the field.** Both
+  conditions get the slug `status-unreadable` and differ only in the DETAIL, which
+  `COMPACT_NOTE_FLOOR` suppresses after the first line and which never enters
+  `$REG/<id>.compactskip` at all. #70's own rule 35 lines above forbids exactly that — "different
+  SLUGS, not one slug with two details". Behavioural, in a lane #70 merged four hours before this
+  branch touched it, so it wants its own PR and its own vocabulary decision. Related to D-2305; one
+  fix closes both.
+- **D-2307 (2026-09-09)** — **the pane gate can hold indefinitely, so a stamp can stick behind it.**
+  B2's residual: four returns sit between the verdict and the clear, not two, and the pane one is not
+  time-bounded. While it holds, a later genuine episode of the SAME field is never said. Mitigated in
+  practice — the compact lane writes `compact-skip <id>: pane-blank` on the same tick — and the gate is
+  deliberately the one that does NOT clear, so closing this is a design change, not a repair.
+- **D-2308 (2026-09-09)** — **two live-fleet behaviours that reproduce identically on `origin/main`.**
+  (a) An unmeasurable or de-rostered `.wrapper` makes the compact lane report
+  `status-unreadable (no status in /sessions/<pid>.json)` — a filesystem-root path that does not exist
+  — when the real condition is "this row's wrapper is not in the roster"; measured identical on
+  `db580771`, `25a3cbb7`, `ee1d6228` and the PR head. (b) On ONE tick `ccd` dispatches an auto-rescue
+  swap and types `/compact` into the same pane, because `lastswap` is stamped at DISPATCH and
+  `_dispatch_swap` only launches a detached `sleep $jitter; ccd swap`. Neither is this PR's, both are
+  worth their own numbers, and (b) tears down a compaction mid-flight on the one path this file treats
+  as its most important behaviour.
+- **D-2309 (2026-09-09)** — **three carries that are not about `ccd` at all.** (a) `ccrc-api.test.ts`
+  throws an unhandled EPIPE under full-suite load and fails a REQUIRED check; pre-existing on `main`,
+  and a one-line `child.stdin.on('error', …)` closes it. (b) `verifyMarker` still cannot see a
+  duplicate marker, so D-2294's scan protects `ccd/ccd` in CI and nothing protects a file on a box —
+  narrow by construction (deploy-time generators never produce the shape) but worth stating. (c) **A
+  suite result is about a TREE, not a file.** Round 4 reported server 273/7397 for a PR whose head is
+  277/7739: 273 is `ws/clear-meadow`'s count, and `ccd/ccd` being byte-identical between the two
+  branches is necessary and not sufficient. Round 5's figures are measured on the PR head.
+
+### Mutation table — round 5
+
+Every guard this round shipped, mutated one at a time against the ccd+pools set (11 files / 362 at the
+head). The two GREEN rows are the findings; the RED control on the byte-identical sibling is what makes
+the first one a finding rather than "nothing covers this area".
+
+| # | mutation | measured |
+|---|---|---|
+| M1 | the `swapblocked` clear replaced with `:` | GREEN 354 before → **RED** `the SWAPBLOCKED cooldown gate clears a stale stamp too` |
+| M2 | `cmd_prefer`'s `! _pool_untaggable` dropped | GREEN 354 before → **RED** `and an UNTAGGABLE box still PREFERS` |
+| M2c | the byte-identical text dropped at `cmd_swap` — the CONTROL | **RED** `but an UNTAGGABLE box still swaps` (already) |
+| M3 | `cmd_start`'s read reverted to `_reg_get` | **RED** `cmd_start on the id form SAYS the project field could not be read` |
+| M4 | `_tick_strand_undecidable` builds its own sentence again | **RED ×5**, incl. three pre-existing cases |
+| M5 | the `wrapper` arm deleted from `_undecidable_cause` | **RED ×3** — the fold lands in `*` |
+| M6 | `$2`/`$3` swapped at the call site | GREEN 213 before → **RED ×2** |
+| M7 | the `home` arm deleted | **RED** `the home arm is reachable` |
+| M8 | `-x "$REG"` dropped from `_pool_untaggable` | **RED** `it never licenses a guess` |
+| M9 | `-d "$REG"` dropped | GREEN with the 0644 fixture → **RED** with 0755 |
+| M11 | the compact lane's status guard deleted | 600 s no output + SIGKILL before → **RED in 5.3 s** |
+| M12 | a second `# ccrc:generated` line replanted and re-stamped | `markers=2 verdict=ccrc-unmodified`, 13/13 green before → **RED**, 1 of 14 |
+| M13 | the census sentence's stated number changed | **RED** — both census cases |
+| M14 | a three-digit cardinal restated in the census block | **RED** `one number, one place` |

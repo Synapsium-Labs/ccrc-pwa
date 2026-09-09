@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=dab602e8919ec5d57ff16bbe71dad5f6e7b10c7ec81b067f7aaf13d3fe1074d6
+# ccrc:generated 1 sha256=8be2eb173884ba855d41819bfa991f2dd30b43aa1e61c8c74e5cc35507a72a48
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1715,7 +1715,7 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # `-f` FIRST, FOR THE SAME REASON `_reg_read` HAS ONE (#69 review, S3). C1
 # closed the FIFO/character-device hang for `_reg_read` and then added a NEW
 # unguarded read to the supervise loop through THIS function — so the class was
-# only half closed, and the half left open is the one with 133 call sites. A
+# only half closed, and the half left open is the one with every call site. A
 # FIFO or a symlink to `/dev/zero` at any of them blocks in `open(2)`/`read(2)`
 # for ever and wedges a supervisor with no exit code and nothing on stdout.
 #
@@ -1724,8 +1724,13 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # and the supervise loop runs `_auto_swap_check` AND `_auto_compact_check` on
 # the same tick (`grep -n '_auto_compact_check "\$id"' ccd/ccd`). The compact
 # lane adds `lastcompact`, `lastswap` and `wrapper` — and, since the #70 merge,
-# `compactskip` and `compactnote`, which `_compact_note` reads on every tick the
-# compactor DECLINES, i.e. the steady state of a healthy busy row;
+# `compactskip` and `compactnote`, which `_compact_note` reads on every decline
+# FROM THE PANE READ DOWN, i.e. the steady state of a healthy busy row. NOT on
+# every decline (#69 review round 4 gate): the kill-switch and the `lastcompact`
+# cooldown return above the pane read and say nothing, and the below-threshold
+# arm calls `_compact_note_clear`, which reads neither field — three arms, and
+# the file's own D-2013 comment says so twenty lines away. The universal
+# overstated a hang surface this paragraph exists to bound honestly;
 # `_strand_mark`, itself on the tick, adds `strandnotify`. So the pre-fix surface was at least six fields
 # rather than three — and it included `wrapper`, the very field the strand arm
 # exists to report on. `project` has since left this list entirely: it reads
@@ -1733,7 +1738,7 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 #
 # THIS IS NOT THE WIDENING THE PARAGRAPH BELOW WARNS ABOUT, and the two must not
 # be confused. That warning is about turning `_reg_get` into a THREE-ANSWER read,
-# which would force all 133 callers to decide what to do with rc 2. A type check
+# which would force EVERY caller to decide what to do with rc 2. A type check
 # adds no distinction and narrows none: every input that answers today answers
 # BYTE-IDENTICALLY — a directory, a `chmod 000` file, a dangling symlink, a
 # missing file and `/dev/null` all yield `""` before and after.
@@ -1746,8 +1751,8 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # refused on content before".
 #
 # WHAT ACTUALLY LICENSES THE CHANGE IS A PROPERTY OF THE CALLERS, and unlike the
-# claim it replaces it is measurable in one command per clause: all 133
-# invocations sit inside `$(_reg_get …)` — none outside a capture, none followed
+# claim it replaces it is measurable in one command per clause: EVERY
+# invocation sits inside `$(_reg_get …)` — none outside a capture, none followed
 # by a read of `$?`, and the twenty-eight lines that carry `||` or `&&` all test
 # the captured STRING inside `[[ ]]` (`-n`, `==`), never the status; no
 # assignment from the capture is followed by `||` or `&&` at all. NO CALL SITE CAN SEE THE
@@ -1768,8 +1773,8 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # io.ts pattern this file cites has the convenience read derive from its
 # measured sibling, and `_reg_get() { _reg_read "$1" "$2"; return 0; }` would
 # read better — but `_reg_read`'s ladder does FOUR extra path syscalls on every
-# MISS, and a miss is the ordinary case for most fields on most rows, 133 call
-# sites deep, every five seconds, across ~20 supervisors. Measured with strace
+# MISS, and a miss is the ordinary case for most fields on most rows, at every
+# call site, every five seconds, across ~20 supervisors. Measured with strace
 # over a healthy `$REG`: after the shared `-f`, `stat($REG)`, `faccessat2($REG,
 # X_OK)`, `stat($f)`, `lstat($f)`. CORRECTED (#69 review round 3) — this said
 # "two extra stats", which understates by half the sole quantitative reason for
@@ -1780,25 +1785,30 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: 135 invocations across 110
-# lines, by `grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l`
-# (measured 2026-09-09 — re-measure it; the figure is not the point, the order
-# of magnitude is). CORRECTED (#69 review round 3): the round-2 sentence said
-# "the 135th is the one C1's own `_tick_strand_undecidable` added". That
-# function does not exist in C1's commit at all — it was added by this PR's own
-# pre-review commit — so the site was this branch's, not C1's, and the stale
-# 134 stood for the span of this PR rather than of C1. The figure is 133 now
-# because round 3 converted the two `.project` reads to `_reg_read` — and 135
-# again after the #70 merge, whose `_compact_note` reads `compactskip` and
-# `compactnote` on every declining tick. Which is the answer to what a count is
-# FOR: it moves when the code moves, including when someone ELSE's code moves
-# it. The merge reconciled `_reg_purge`'s cardinal in the same commit and left
-# this one standing — exactly what the "re-measure it" above exists to catch. Two spellings that do NOT answer this question, both tried
+# and the reason is a count rather than a preference: this file makes 132
+# invocations across 108 non-comment lines.
+#
+# THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
+# review round 4 gate). It has moved four times in five rounds — 133 at C1, 135
+# once this branch and then the #70 merge had added sites, 133 when round 3
+# converted the two tick `.project` reads to `_reg_read`, 132 when rounds 4 and
+# 5 converted the three verb readers — and every move left a stale cardinal
+# somewhere in this block. Four of them stood in the paragraphs directly above,
+# where a reader hits them first, and they read as the live figure. "Re-measure
+# it" was a REQUEST; `ccd-reg-get-census.test.ts` reads this sentence's own two
+# numbers out of the file and compares them to the live count, which is a
+# MECHANISM — the same shape `ccd-pool-ok.test.ts` already carries for the
+# `_pool_ok` header one function away. The paragraphs above carry no cardinal at
+# all now: one number, one place, one test. CORRECTED (#69 review round 3): the
+# round-2 sentence said "the 135th is the one C1's own
+# `_tick_strand_undecidable` added". That function does not exist in C1's commit
+# at all — it was added by this PR's own pre-review commit — so the site was
+# this branch's, not C1's. Two spellings that do NOT answer this question, both tried
 # while writing this comment: the bare `grep -o '_reg_get "' ccd/ccd` counts
 # prose too, including this line's own quoting of it, and `grep -c` counts
 # LINES rather than occurrences — the same trap `grep -n 'counts LINES' ccd/ccd`
 # already books one function away. Widening `_reg_get` is therefore a
-# fleet-wide change. NOTHING is claimed here about what those 135 callers want.
+# fleet-wide change. NOTHING is claimed here about what those callers want.
 #
 # HOW MANY C1 CONVERTED — CORRECTED (#67 review, S6). The sentence that stood
 # here said "exactly ONE of them (the marker record, inside
@@ -12828,19 +12838,38 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
 
 # ONE MAPPING FROM THE UNDECIDABLE FIELD TO THE OPERATOR'S SENTENCE (#69 review
 # round 4, B5). `_tick_undecidable` writes the WORD into `.tickstuck` and into
-# swap.log; `_strand_mark` writes the SENTENCE into `.stranded`, which
-# account-pools wave 3's reader carries verbatim as `SessionRecord.stranded.reason`
-# to every ccrc surface and to a banner. They must name the same file, or the
-# operator is sent to two places and believes the louder one — so both surfaces
-# now derive from ONE word through this function and cannot drift apart.
-# MEASURED, and this is the defect it closes: on a row where the crossing record
-# and the pool tag were both unreadable, the stamp said `crosspool` and the strand
-# sentence said the pool tag. Two surfaces, two files, one tick.
-# `home` and `crosspool` are byte-identical to the sentences that shipped before;
-# only `project` is new, and only the `*` arm is unreachable today.
+# swap.log; `_strand_mark` writes the SENTENCE into `.stranded`, read TODAY by
+# the banner and, once account-pools wave 3 lands its reader, carried verbatim
+# as `SessionRecord.stranded.reason` to every ccrc surface. SAID IN TWO HALVES
+# ON PURPOSE (#69 review round 4 gate): the sentence that stood here put that
+# reader in the PRESENT tense, and `git grep -c stranded server/src/registry.ts`
+# answers 0 on `origin/main` and on this branch — the third instance of exactly
+# the claim D-2201 was written to remove, inside the paragraph that removes it.
+# The banner is what carries it until the reader lands.
+#
+# The two surfaces must name the same file, or the operator is sent to two
+# places and believes the louder one. MEASURED, and this is the defect it
+# closes: on a row where the crossing record and the pool tag were both
+# unreadable, the stamp said `crosspool` and the strand sentence said the pool
+# tag. Two surfaces, two files, one tick.
+#
+# EVERY SENTENCE PRODUCER GOES THROUGH HERE, and round 4 shipped that as a claim
+# rather than a mechanism (#69 review round 4 gate, finding 3). There was a
+# SECOND producer: `_tick_strand_undecidable` built `"<word> could not be
+# measured…"` by hand, and its two call sites are the tick's EARLY RETURNS — so
+# one condition, an unreadable `.project`, wrote two different `.stranded`
+# sentences depending on which guard caught it, and the common path was the one
+# that named no file. It derives from this function now, which is what makes
+# "cannot drift apart" a mechanism; `grep -n 'could not be computed' ccd/ccd`
+# is the census, and every hit outside this case block is a caller quoting it.
+# That fold is what the `wrapper` arm exists for — it is the word only the
+# early return passes, and without an arm of its own it would have landed in
+# `*` and told the operator this build does not name a condition it names.
+# `home` and `crosspool` are byte-identical to the sentences that shipped before.
 _undecidable_cause() {   # word id project -> the operator-facing sentence for that field
   case "$1" in
     home)      printf '%s' "the home account could not be measured, so no destination could be computed" ;;
+    wrapper)   printf '%s' "the row's own account field could not be read ($REG/$2.wrapper), so no destination could be computed" ;;
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
@@ -12949,7 +12978,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #
   # GATED ON `_pool_untaggable`, AND THAT GATE IS THE WHOLE DIFFERENCE BETWEEN
   # THIS AND A REGRESSION. `$POOLS_DIR` has exactly one `mkdir` in the tree
-  # (`grep -n 'mkdir -p --' ccd/ccd` — the real call carries `--`, and the
+  # (`grep -n 'mkdir -p -- "$POOLS_DIR"' ccd/ccd | grep -vE '^[0-9]+:[[:space:]]*#'`
+  # — the `-v` filter is what stops this citation counting itself, and naming
+  # `$POOLS_DIR` is what stops the bare `mkdir -p --` spelling this comment
+  # carried until round 5 from also matching the two `_LC_DIR` mkdirs, which are
+  # not pools paths at all: four hits for a claim about one. The real call
+  # carries `--`, and the
   # spelling round 3 cited here matched only its own citation), inside
   # `cmd_project_pool`, so
   # on every box that has never tagged a project the directory does not exist
@@ -13106,7 +13140,14 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # nobody could read — nothing was measured about that row, so it neither
   # decided nor failed to, and its stamp must stand. It is also the one gate
   # here that can hold indefinitely, which is exactly why it must not be the one
-  # that clears on a guess. Pinned in both directions.
+  # that clears on a guess. Pinned in both directions — and that sentence was
+  # itself a false claim about a mechanism until round 5 (#69 review round 4
+  # gate, finding 1). Of the two clears this paragraph argues for, only the
+  # `lastswap` one had a case: replacing the `swapblocked` clear with `:` left
+  # the whole ccd+pools set green, on the arm that carries the REFUSAL — the one
+  # `_swap_refuse` reaches after DELETING `.lastswap`, so it is the only gate
+  # holding for the whole `SWAPBLOCK_COOLDOWN`. Both clears and the pane gate's
+  # deliberate silence are cases in `ccd-crosspool.test.ts` now.
   now=$(date +%s); last=$(_reg_get "$id" lastswap)
   if [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]]; then
     [[ -z "$stuck" ]] && _tick_decided "$id"
@@ -13153,6 +13194,16 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # which would be flatly false.
     #
     # WHICH undecidable — READ, not inferred, and this is #69 round 4's B5.
+    # TRUE ON THE `$stuck`-EMPTY PATH, AND THE OTHER PATH IS DISCLOSED (#69
+    # review round 4 gate). When the verdict above already named a condition,
+    # `uword` is that word — inferred from `hrc`/`ctrc`/`prc`, measurements of
+    # EARLIER moments in the same tick, not from the refusal that just happened.
+    # The tail is a STALE word, never a fabricated one: the condition it names
+    # was genuinely measured undecidable on this tick, which is the difference
+    # from the pre-#69 behaviour that named a `.crosspool` the fixture did not
+    # have. Two surfaces still agree, which is what B5 was for. Closing the
+    # residue means the verdict and the refusal exchanging their words, and no
+    # measured case asks for that yet.
     # The sentence that stood here said "measured, not guessed" and was false:
     # `_swap_target` refuses for FOUR conditions, not three, it does not test
     # `hrc` at all, and the caller re-derived the word from `hrc` and `prc` —
@@ -13321,8 +13372,11 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
 #     the merge): when this was written `_strand_mark` wrote its marker only when ABSENT, so "when
 #     the episode began" and "when this reason became current" were one sentence and `stranded`
 #     fairly stood for both. R4 then added the rewrite arm that replaces a CHANGED cause while
-#     PRESERVING the original epoch, because `stranded.at` is shipped as "since when" and
-#     re-stamping it would make a four-hour strand read as new on every tick. `compactskip` has no
+#     PRESERVING the original epoch, because that epoch is "since when" — the sense wave 3's
+#     reader will carry as `stranded.at`, which is NOT on this tree (#69 review round 4 gate:
+#     this sentence said "is shipped", the third present-tense claim about that reader in a
+#     file that has corrected the same claim twice) — and re-stamping it would make a
+#     four-hour strand read as new on every tick. `compactskip` has no
 #     such reader and wants the opposite. Two markers, one shape, two epoch contracts — said here
 #     because the shape is what invites a third one to copy the wrong half.
 #   • THE ANCHOR OUTLIVES THE MARKER. `$REG/<id>.compactnote` is a bare epoch: WHEN WE LAST SAID
@@ -14416,10 +14470,31 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # The workdir stays the creating form's third argument to set. An id alone
   # carries no directory, so the id form READS what the row already has and
   # writes nothing back over it.
+  #
+  # B3'S THIRD VERB READER, MEASURED (#69 review round 4 gate, finding 4). This
+  # read was `_reg_get`, which folds ABSENT, UNREADABLE and EMPTY into one `""`
+  # — and `_project_pool_state ""` answers `untagged` at its first line, which
+  # permits every account. So an unreadable `.project` did not merely go
+  # unreported: it made the pool block below decide `in pool` and say nothing.
+  # Round 4 closed the same fold at `cmd_swap` and `cmd_prefer` and reported the
+  # verb readers as done; this was the third, and one of three left is worse
+  # than three, because the next reader inherits "done" as the baseline.
+  #
+  # WHICH HALF IS ACTUALLY REACHABLE, and the gate's own finding overstates it
+  # by half — corrected here rather than carried. The gate says "both the die
+  # and the warn go silent". The die is CREATION-ONLY (`-z "$regw"`), and this
+  # read runs only on the ID form, where `regw` empty has already died four
+  # lines up at `no wrapper recorded for '$id' and none given`. So on every path
+  # that reaches this read, `regw` is non-empty and the die is unreachable: what
+  # the fold silenced is the WARNING, and the remedy below is a warning for the
+  # same reason ruling 5 gives the mismatch one — a revival must not be refused
+  # for a placement the auto-swapper moves at the next idle boundary.
+  local prjrc=0
   if [[ -n "$project" ]]; then
     [[ -z "$workdir" ]] && workdir="$PROJECTS_ROOT/$project"
   else
-    project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
+    project=$(_reg_read "$id" project); prjrc=$?
+    workdir=$(_reg_get "$id" workdir)
   fi
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
@@ -14440,6 +14515,11 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
       && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
     [[ "$prc" -eq 1 && -z "$cross" ]] \
       && die "pool-mismatch: $wrapper is in pool '$(_acct_pool "$wrapper")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd start --cross-pool $wrapper $project"
+  elif [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable; then
+    # SAID, NOT DECIDED. `$pps` is `untagged` here because the field could not be
+    # read, not because the project carries no tag, so the mismatch arm below
+    # cannot fire and its silence would read as "checked, and fine".
+    echo "ccd: warn: the project field for $id could not be read ($REG/$id.project), so its pool was not checked — fix or clear it" >&2
   elif [[ "$prc" -eq 1 ]]; then
     echo "ccd: warn: $id lives on $wrapper, which is not in project '$project''s pool '${pps#named }' — the auto-swapper relocates it at the next idle boundary" >&2
   fi
@@ -15390,14 +15470,23 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # overwrite directory` per stranded row per tick, for ever, from the two
   # `_strand_mark` call sites in `_auto_swap_check` that carry no redirect
   # group. rc != 0 stands still and writes nothing — the same rule the caller
-  # states about `.wrapper` — and `registry.ts` already fail-shuts an unreadable
-  # marker to `STRANDED_UNREADABLE`, so nothing is lost by not repairing it.
+  # states about `.wrapper` — and the SERVER-SIDE reader will fail-shut an
+  # unreadable marker rather than believe it, so nothing is lost by not
+  # repairing it. IN THE FUTURE TENSE ON PURPOSE (#69 review round 4 gate): this
+  # named `registry.ts` and a `STRANDED_UNREADABLE` constant in the present, and
+  # `grep -rn 'STRANDED_UNREADABLE' --include='*.ts' .` finds nothing on this
+  # tree — the reader lands with account-pools wave 3. A reader chasing that
+  # constant to check this argument could not tell whether it was renamed,
+  # deleted, or never existed. Same class as D-2201 and the third instance of
+  # it; the fail-shut is a REQUIREMENT this branch places on that reader, not a
+  # measurement of one that exists.
   #
-  # THE EPISODE'S OWN EPOCH SURVIVES. `stranded.at` is "since when", not "last
+  # THE EPISODE'S OWN EPOCH SURVIVES. The epoch is "since when", not "last
   # touched"; re-stamping it would make a four-hour strand read as new on every
-  # tick, and `fleet.ts` ships that number to the PWA. A torn stamp degrades to
-  # `$now` rather than writing a non-numeric field the wire would have to fail
-  # shut on.
+  # tick, once wave 3's reader ships it to the PWA as `stranded.at` — again in
+  # the future tense, and again because `grep -c stranded server/src/fleet.ts`
+  # is 0 on `origin/main` and on this branch. A torn stamp degrades to `$now`
+  # rather than writing a non-numeric field the wire would have to fail shut on.
   prev=$(_reg_read "$id" stranded); prc=$?
   if [[ ! -e "$REG/$id.stranded" ]]; then
     _reg_set "$id" stranded "$now $why"
@@ -15738,7 +15827,21 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # which moved it). This `capture-pane` is unconditional and sits above
   # `_auto_swap_check`'s two cooldown gates, so on an affected row it is a fork
   # the gates cannot stop. Measured with a counting `tmux` first on PATH, over
-  # every trip shape crossed with both cooldown states and six pane states:
+  # every trip shape crossed with the gate and pane states below.
+  #
+  # THE GRID ITSELF WAS NEVER RECORDED, AND SAYING SO IS THE CORRECTION (#69
+  # review round 4 gate). Three different designs have been written for one set
+  # of results: this line said "both cooldown states and six pane states" (12
+  # cells), the plan says "3 `lastcompact` x 4 `lastswap` x 6 pane" (72), and
+  # every figure either states is "of 36". The RESULTS are internally coherent
+  # (18 + 18 - 6 = 30, and remedy 3 gates on the swap cooldowns) and were
+  # measured; the sentence describing how they were produced was reconstructed
+  # afterwards, three times, and cannot be reproduced from any of the three. It
+  # is deleted rather than guessed at a fourth time. Nothing below depends on
+  # it: the NO-FIX ruling rests on REACHABILITY, which is measured on its own
+  # line at the end of this block and was re-measured independently at the gate.
+  # The cardinals below are quotes from that unrecorded run — read them as an
+  # order of magnitude, and re-derive the grid before re-deriving a fraction:
   #
   #   • THE DELTA IS +1 per tick per affected row, in every affected cell on
   #     both trees. Never a doubling as such — that framing died twice.
@@ -15838,8 +15941,18 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # for an account that WAS measured is a fabricated claim of the same kind this
   # round keeps removing. Nothing in `server/test` or `ccd/` matches the
   # `<unmeasured>` literal (grepped), so no assertion moves.
-  { _strand_mark "$1" "${3:-<unmeasured>}" "$(_reg_get "$1" project)" \
-      "$2 could not be measured, so no destination could be computed"; } 2>/dev/null
+  # THE SENTENCE COMES FROM `_undecidable_cause`, NOT FROM HERE (#69 review
+  # round 4 gate, finding 3). This line built its own string — `"$2 could not be
+  # measured, …"` — while the LATE path, 900 lines down, rendered the same
+  # condition through `_undecidable_cause`. Measured: an unreadable `.project`
+  # caught here said "project could not be measured" and caught there said "the
+  # project's own registry field could not be read ($REG/<id>.project)", and
+  # these two call sites are the EARLY RETURNS, so the common case was the one
+  # that named no file. `_undecidable_cause`'s own header claimed both surfaces
+  # "cannot drift apart" while this line was the drift.
+  local _tsu_prj; _tsu_prj=$(_reg_get "$1" project)
+  { _strand_mark "$1" "${3:-<unmeasured>}" "$_tsu_prj" \
+      "$(_undecidable_cause "$2" "$1" "$_tsu_prj")"; } 2>/dev/null
   return 0
 }
 _tick_decided() { [[ -e "$REG/$1.tickstuck" ]] && rm -f -- "$REG/$1.tickstuck"; return 0; }
