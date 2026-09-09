@@ -421,6 +421,12 @@ export async function assembleFleet(
       // The statusline wins: it is a live pane capture and knows about a manual
       // checkout. The registry fills the gap before the first capture lands.
       ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? r.branch ?? null,
+      // D-2011: the pane's own `▓ ctx` reading, no registry fallback (nothing
+      // else on the record ever measured this). `?? null`, not `?? 0` —
+      // `Statusline.ctxPct` is `undefined` on a session with no fresh
+      // statusline (dead pane, pre-first-capture, or a build with no ▓
+      // segment at all), and a measured 0 must ride through unchanged.
+      ctxPct: sl?.ctxPct ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,

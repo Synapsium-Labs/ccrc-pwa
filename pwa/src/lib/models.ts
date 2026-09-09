@@ -1,7 +1,15 @@
 // Model + effort option lists for the session pickers. Wrapper-aware: the gpt
-// overflow lane maps the Anthropic aliases (opus/sonnet/haiku) onto GPT-5.6
-// Sol/Terra/Luna via the ccgpt env, and has NO Fable — so its list differs.
+// overflow lane maps the Anthropic aliases onto Codex tiers via the ccgpt env —
+// opus/sonnet/haiku onto GPT-5.6 Sol/Terra/Luna, and fable onto GPT-6 Astra.
 // `/model <alias>` and `/effort <level>` set directly (no picker needed).
+//
+// D-2015: the fable alias on that lane used to name a deliberate sentinel
+// (`ccrc-unavailable-fable`) so `/model fable` failed loudly rather than
+// silently landing somewhere — the lane had only three tiers. It has four now.
+// The alias is set in TWO places, `~/.local/bin/ccgpt`'s exports and
+// `~/.claude-gpt/settings.json`'s `env` block, and SETTINGS WINS: Claude Code
+// Object.assigns settings env over the process environment at runtime. Both are
+// box tooling outside this repo; this list only has to agree with them.
 
 export interface PickOption {
   label: string;
@@ -25,7 +33,8 @@ export function modelOptions(wrapper: string, current: string | null): PickOptio
   });
   if (wrapper === 'gpt') {
     return [
-      row('GPT-5.6 Sol', 'opus', 'sol', 'Fable / Opus class'),
+      row('GPT-6 Astra', 'fable', 'astra', 'Fable class'),
+      row('GPT-5.6 Sol', 'opus', 'sol', 'Opus class'),
       row('GPT-5.6 Terra', 'sonnet', 'terra', 'Sonnet class'),
       row('GPT-5.6 Luna', 'haiku', 'luna', 'Haiku class'),
     ];
