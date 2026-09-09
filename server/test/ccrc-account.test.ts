@@ -1468,6 +1468,70 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     expect(JSON.parse(r2.stdout)['plan']['configDirSuffix']).toBe('.claude-orchard-api');
   });
 
+  it('… and an EMPTY --suffix is refused rather than defaulted (D-2148)', () => {
+    // THE ROW THE TEST ABOVE COULD NOT REACH, and the pair is the point: absent
+    // DEFAULTS, empty REFUSES. `??` catches only `undefined`, so before this
+    // gate `check-add --suffix ''` answered `ok: true` with
+    // `"configDirSuffix": ""` in the plan, and `add-entry` then refused that
+    // plan with `roster-invalid` at exit 1 — measured:
+    //
+    //     {"ok":false,"error":"roster-invalid","detail":"the entry for
+    //      \"lab-dev0\" would make …/accounts.json unparseable: account
+    //      \"lab-dev0\" has an invalid configDirSuffix \"\". …"}
+    //
+    // — i.e. AFTER the caller following this file's own documented sequence had
+    // written the 0600 secret and the kill-switch marker. That is D-2004's
+    // class at the address D-2004 did not sweep, on the hand-caller path
+    // `check-add`'s own `--suffix` comment names as the only way in.
+    //
+    // TWO SIBLINGS, MEASURED THE SAME WAY AND CLOSED BY THE SAME LINE. `--id ''`
+    // and `--label ''` also reached `ok: true` and were also refused one step
+    // later by `rosterFromJson` ("has an invalid id \"\"", "has no label"). They
+    // are rows here because the gate is one loop over three keys: delete it and
+    // all three go green at exit 0, and a gate that closed only the flag its
+    // deviation named would be this wave's own neighbour defect (D-2145).
+    //
+    // BASH CANNOT REACH ANY OF THE THREE — `_acct_add_parse`'s `[ -n "$v" ]`
+    // refuses first — which is why every row here drives `account-op.mjs`
+    // directly. The path is not dead: it is the one the arm is documented to
+    // serve.
+    const home = box('ccrc-account-checkadd-empty-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    for (const flag of ['--id', '--label', '--suffix']) {
+      const r = checkAdd(home, { [flag]: '' });
+      expect(r.code, `${flag} '': ${r.stderr}`).toBe(2);
+      const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+      expect(j['ok'], flag).toBe(false);
+      expect(j['error'], flag).toBe('bad-argv');
+      expect(String(j['detail']), flag).toContain(flag);
+    }
+  });
+
+  it('the six keys the empty gate deliberately leaves alone keep their own codes', () => {
+    // THE OTHER HALF OF THE SAME LINE, and the reason the gate names three keys
+    // instead of nine. Every key `check-add` reads was driven empty and only
+    // the three above reached `ok: true`; these six already refuse an empty
+    // value with the code that names their OWN condition. Widening the loop to
+    // cover them would replace six specific answers with one generic sentence —
+    // an adapter narrowing a distinction it received — so this row is what goes
+    // red if a later reader "finishes the job" by adding them.
+    const home = box('ccrc-account-checkadd-emptyrest-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const rows: [string, Record<string, string | null>, string, number][] = [
+      ['--file', { '--file': '' }, 'roster-absent', 1],
+      ['--provider', { '--provider': '' }, 'unknown-provider', 2],
+      ['--hue', { '--hue': '' }, 'unknown-hue', 2],
+      ['--method', { '--method': '' }, 'method-not-supported', 2],
+      ['--models', { '--models': '' }, 'models-invalid', 2],
+      ['--base-url', { '--base-url': '' }, 'base-url-unparseable', 2],
+    ];
+    for (const [flag, over, code, exit] of rows) {
+      const r = checkAdd(home, over);
+      expect(r.code, `${flag}: ${r.stderr}`).toBe(exit);
+      expect(JSON.parse(r.stdout.split('\n')[0]!)['error'], flag).toBe(code);
+    }
+  });
+
   it('`_acct_add_parse` and `check-add` default the config dir to the same string', () => {
     // THE MECHANISM FOR A RULE THIS TASK ENDED UP SPELLING TWICE, and the
     // reason it is a test rather than a paragraph in either file. §4.4's
@@ -1525,14 +1589,24 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // stdout needs both to be true, so both are asserted.
     const home = box('ccrc-account-add-missingflag-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    const partial: [string, string][] = [
-      ['the loop, a flag with nothing after it', '--id'],
-      ['no argv at all', ''],
-      ['--label absent', "--id lab-dev0 --provider compatible"],
-      ['--hue absent', "--id lab-dev0 --provider compatible --label 'lab·dev0'"],
-      ['--provider absent', "--id lab-dev0 --label 'lab·dev0' --hue amber"],
+    //
+    // EACH ROW NAMES THE FLAG ITS ANSWER MUST MENTION, and that third column is
+    // review round 3's correction rather than decoration (D-2145). With only
+    // `toMatch(/--[a-z]/)` here, deleting the `[ -n "$ACCT_LABEL" ]` gate
+    // outright left this file GREEN — measured — because the `--label absent`
+    // row's argv is missing `--hue` as well, so the gate BESIDE it answered
+    // with the same code and a detail that also matched. The hue and provider
+    // gates were measured; the label gate was the neighbour that was not, and
+    // one column closes it: the three downstream gates now differ in what they
+    // SAY, so only the right one can satisfy its own row.
+    const partial: [string, string, string][] = [
+      ['the loop, a flag with nothing after it', '--id', '--id'],
+      ['no argv at all', '', '--id'],
+      ['--label absent', "--id lab-dev0 --provider compatible", '--label'],
+      ['--hue absent', "--id lab-dev0 --provider compatible --label 'lab·dev0'", '--hue'],
+      ['--provider absent', "--id lab-dev0 --label 'lab·dev0' --hue amber", '--provider'],
     ];
-    for (const [what, argv] of partial) {
+    for (const [what, argv, flag] of partial) {
       const r = sourceCall(home, `_acct_add_parse ${argv}`);
       expect(r.code, `${what}: ${r.stderr}`).toBe(2);
       const j = oneObject(r);
@@ -1540,8 +1614,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
       // AND THE FLAG NAME SURVIVES THE REWORDING. Opening with prose is only
       // half the rule: a sentence that dropped the flag entirely would print
       // fine and leave the operator a code with no fix. It is now mid-sentence,
-      // which is exactly where `_acct_refuse`'s header says to put it.
-      expect(String(j['detail']), what).toMatch(/--[a-z]/);
+      // which is exactly where `_acct_refuse`'s header says to put it — and it
+      // is the SPECIFIC flag, for the reason the paragraph above gives.
+      expect(String(j['detail']), what).toContain(flag);
     }
   });
 
@@ -1573,6 +1648,103 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     const unknown = run(home, ['account', 'add', '--nope', 'x']);
     expect(unknown.code).toBe(2);
     expect(oneObject(unknown)['error']).toBe('unknown-argument');
+  });
+
+  it('every flag the loop takes refuses a present-but-EMPTY value (D-2148)', () => {
+    // D-2144 read the empty-flag defect as `declare`'s and recorded that `add`
+    // "refuses the same input with `missing-value` at exit 2". Measured on the
+    // shipped tree at 6ae21f2a that was true of `--provider` and of nothing
+    // else. FIVE of these nine reached EXIT 0 and created the lane:
+    //
+    //     add … --base-url ''    exit 0, lane created   (dropped by ${x:+…})
+    //     add … --suffix ''      exit 0, lane created   (silently defaulted)
+    //     add … --models ''      exit 0, lane created   (dropped by ${x:+…})
+    //     add … --method ''      exit 0, lane created   (dropped by ${x:+…})
+    //     add … --credential ''  exit 0, lane created   (login lane: `-z` is true)
+    //
+    // TWO OF THEM CARRIED ACCIDENTAL COVER, which is why the defect survived
+    // two review rounds and why this table drives the LOGIN lane rather than
+    // the token one for those two: `--base-url ''` answers `base-url-required`
+    // under `compatible` and creates the lane under `anthropic`, and
+    // `--credential ''` answers `credential-required` on a token lane and
+    // creates the lane on a login one. A table written against `addArgs()`'s
+    // compatible base alone would have gone green on both rows without the
+    // gate — the exact shape D-2145 calls a measured neighbour hiding an
+    // unmeasured line.
+    //
+    // ALL NINE ROWS MEASURE ONE LINE, the `[ -n "$v" ]` in `_acct_add_parse`.
+    // Delete it and the four already-covered rows fall back to their downstream
+    // "a value is required" checks and stay green, while these five go to
+    // exit 0 — so only the whole set measures the whole gate, and only the
+    // whole set distinguishes the gate from the four gates beside it.
+    const flags = ['--id', '--provider', '--label', '--hue', '--suffix',
+      '--base-url', '--models', '--method', '--credential'];
+    // ONE VERDICT PER ROW, MEASURED FIRST AND ASSERTED ONCE, so a regression
+    // NAMES every row it broke instead of the first one. A `for` loop of
+    // `expect`s throws at row 1 — under the mutation that deletes the gate it
+    // reported `--suffix` and said nothing at all about the four rows after it,
+    // and those four are exactly the ones D-2148 measured at exit 0. The verdict
+    // folds in the side effects as well as the envelope, so "missing-value" here
+    // means all six of: exit 2, `ok:false`, that code, the flag NAMED in the
+    // sentence, a box byte-identical to its baseline, and no credential sourced.
+    //
+    // A FRESH BOX PER ROW, for the same reason: on the pre-fix tree row 5
+    // CREATED the lane, which would have left every later row running against a
+    // dirty roster and answering `duplicate-id` — a table whose rows depend on
+    // each other cannot say which line it is measuring.
+    const got: Record<string, string> = {};
+    for (const flag of flags) {
+      const home = box('ccrc-account-add-emptyflag-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      plantUpstream(home);
+      plantInstallers(home);
+      const before = JSON.stringify(untouched(home));
+      // THE LOGIN LANE, and `--base-url`/`--credential` say why above. It is
+      // also the lane on which a successful `add` writes NO secret at all, so
+      // "nothing was written" is a claim about the roster, the marker and the
+      // wrapper rather than about one file that was never coming.
+      const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+        '--label', 'lab·dev0', '--hue', 'amber', flag, ''], `${SHELL_SYNTAX}\n`);
+      let v = `exit ${r.code}, stdout ${JSON.stringify(r.stdout.slice(0, 70))}`;
+      try {
+        const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+        // THE FLAG NAME IS IN THE SENTENCE, which is what makes one shared gate
+        // usable: nine flags reach one message, so the message must say which.
+        if (r.code === 2 && j['ok'] === false && String(j['detail']).includes(flag)) {
+          v = String(j['error']);
+        }
+      } catch { /* not an envelope — `v` already says what it was instead */ }
+      if (JSON.stringify(untouched(home)) !== before) v = `${v} + THE BOX CHANGED`;
+      if (existsSync(join(home, '.local', 'bin', 'lab-dev0'))) v = `${v} + A WRAPPER WAS WRITTEN`;
+      if (existsSync(join(home, 'EXECUTED'))) v = `${v} + THE CREDENTIAL WAS SOURCED`;
+      got[flag] = v;
+    }
+    expect(got).toEqual(Object.fromEntries(flags.map((f) => [f, 'missing-value'])));
+    // THE ACCEPTANCE ROW, and it is not decoration: the nine rows above differ
+    // from this request in exactly one empty flag, so without it the table
+    // could be green on a fixture that could never have succeeded — which is
+    // precisely how the pre-fix `--suffix ''` row would have LOOKED correct.
+    const okHome = box('ccrc-account-add-emptyflag-ok-');
+    seedBoxRoster(okHome, FIXTURE_ROSTER);
+    plantUpstream(okHome);
+    plantInstallers(okHome);
+    const ok = run(okHome, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+      '--label', 'lab·dev0', '--hue', 'amber']);
+    expect(ok.code, ok.stderr).toBe(0);
+  });
+
+  it('the `=` spelling reaches the same empty-value gate', () => {
+    // `--suffix=` is one argv word, so it never passes through the `[ $# -ge 2 ]`
+    // arm at all — it lands in `$v` through `${1#*=}` instead. The gate is on
+    // `$v` for exactly that reason (both spellings converge there once), and
+    // this row is what makes "once" a measurement: move the gate up into the
+    // space-form arm and it goes red while the table above stays green.
+    const home = box('ccrc-account-add-emptyflag-eq-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+      '--label', 'lab·dev0', '--hue', 'amber', '--suffix=']);
+    expect(r.code, r.stderr).toBe(2);
+    expect(oneObject(r)['error']).toBe('missing-value');
   });
 });
 

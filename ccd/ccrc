@@ -4286,7 +4286,7 @@ ACCT_ID=""; ACCT_PROVIDER=""; ACCT_LABEL=""; ACCT_HUE=""; ACCT_SUFFIX=""
 ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""
 _acct_add_parse() {
   _acct_shape
-  local flag v
+  local flag="" v=""
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
     case "$1" in
@@ -4299,6 +4299,26 @@ _acct_add_parse() {
         v="${1#*=}" ;;
       *) _acct_refuse 2 unknown-argument "ccrc account add has no argument \"$1\"" ;;
     esac
+    # A FLAG GIVEN AN EMPTY VALUE IS NOT A FLAG NOBODY GAVE (D-2148). D-2144
+    # read this defect as `declare`'s and said `add` "refuses the same input
+    # with missing-value at exit 2" — true of `--provider` and of nothing else.
+    # Measured on the shipped tree, FIVE of this loop's nine flags reached exit
+    # 0: `--suffix ''` silently took the `.claude-$ACCT_ID` default below,
+    # `--base-url ''`, `--models ''` and `--method ''` were dropped by the
+    # `${x:+…}` expansions at the `check-add` call, and `--credential ''` on a
+    # login lane satisfied the `-z` test that means "no credential offered".
+    # Two of those five carry ACCIDENTAL COVER on one provider and none at all
+    # on another — `--base-url ''` answers `base-url-required` under
+    # `compatible` and creates the lane under `anthropic`; `--credential ''`
+    # answers `credential-required` on a token lane and creates the lane on a
+    # login one — which is the shape that hid this for two rounds.
+    #
+    # THE GATE IS HERE, ON `$v`, and not nine times below, for `declare`'s own
+    # reason: both spellings of every flag land in `$v` exactly once. The four
+    # downstream "a value is required" gates stay and now answer one condition
+    # each — flag-ABSENT — instead of two.
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag $flag was given an empty value. A flag present with nothing in it is not the same as a flag nobody passed, so it is refused rather than dropped: give it a value, or leave it off. Nothing was written."
     case "$flag" in
       --id)         ACCT_ID="$v" ;;
       --provider)   ACCT_PROVIDER="$v" ;;

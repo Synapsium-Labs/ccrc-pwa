@@ -538,6 +538,49 @@ function main(argv) {
     for (const k of need) {
       if (a[k] === undefined) { refuse('bad-argv', `check-add needs --${k}`); return 2; }
     }
+    // ── A FLAG PRESENT WITH NOTHING IN IT IS INVALID, NOT ABSENT (D-2148) ───
+    // THE RULING, said here because the two readings give different answers
+    // and a reader must not have to infer which one this line took: an empty
+    // `--suffix` is REFUSED, it is not defaulted the way a missing one is.
+    //
+    // The argument is `check-add`'s own contract, read in the other direction.
+    // The paragraph below says a `check-add` that REFUSED a request `add`
+    // accepts would be a pre-pass that does not pre-check the request actually
+    // made. Its dual is worse: a `check-add` that ACCEPTS a request `add`
+    // refuses tells a caller the request is good and then watches the verb turn
+    // it down — and since D-2148 closed the same hole in `_acct_add_parse`,
+    // `add --suffix ''` answers `missing-value` at exit 2. Defaulting here
+    // would put the pre-pass and the verb on opposite answers for one input.
+    // The second argument is D-2144's, which is why that entry's rule is cited
+    // rather than restated: absent already MEANS something here ("use the
+    // default"), so giving present-but-empty the same meaning collapses two
+    // conditions a caller handles differently.
+    //
+    // THESE THREE KEYS AND NOT THE OTHER SIX, and the list is a MEASUREMENT
+    // rather than a taste: every key this op reads was driven empty, and only
+    // `--id`, `--label` and `--suffix` reached `ok: true`. The rest already
+    // refuse an empty value with the code that names their own condition —
+    // `--file` `roster-absent`, `--provider` `unknown-provider`, `--hue`
+    // `unknown-hue`, `--method` `method-not-supported`, `--models`
+    // `models-invalid`, `--base-url` `base-url-unparseable` — and folding them
+    // into this generic sentence would REPLACE a specific answer with a vaguer
+    // one, which is an adapter narrowing a distinction it received.
+    //
+    // WHAT IT IS WORTH, on a path bash can no longer reach: all three used to
+    // travel into the plan and be refused by `add-entry`'s `rosterFromJson`
+    // with `roster-invalid` at exit 1 — i.e. AFTER a hand caller following this
+    // op's own documented sequence had written the 0600 secret and the
+    // kill-switch marker. That is D-2004's class at the one address D-2004 did
+    // not sweep, and this op exists so that no refusal of a request is reached
+    // with bytes already on disk.
+    for (const k of ['id', 'label', 'suffix']) {
+      if (a[k] !== '') continue;
+      refuse('bad-argv',
+        `--${k} was given an empty value. A flag present with nothing in it is not the same as a `
+        + 'flag nobody passed, so it is refused rather than defaulted or carried into the plan: '
+        + 'give it a value, or leave it off.');
+      return 2;
+    }
     const id = a['id'];
     const provider = a['provider'];
 
@@ -568,6 +611,10 @@ function main(argv) {
     // MECHANISM rather than this paragraph: `ccrc-account.test.ts`'s
     // "`_acct_add_parse` and `check-add` default the config dir to the same
     // string" drives both and compares them, and reds if either moves.
+    // `??` AND NOT `||`, and the empty string is settled ABOVE rather than
+    // here: `??` catches only `undefined`, which is the whole of D-2148's
+    // second half — this line used to emit `"configDirSuffix": ""` into the
+    // plan for `--suffix ''`.
     const suffix = a['suffix'] ?? `.claude-${id}`;
 
     // ── THE PROVIDER, AND WHICH VERB OWNS IT ────────────────────────────────
