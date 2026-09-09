@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
+import type { FleetWatcher } from '../watch.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from '../registry.js';
 import { readHookState } from '../hookstate.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
@@ -280,6 +281,24 @@ export function registerCoordRoutes(
    * this call, for the identical reason.
    */
   askDeps: AskDeps,
+  /**
+   * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
+   * watcher's in-memory hold and fires the deferred push immediately —
+   * `FleetWatcher.releaseHeldAsk` is the ONLY way in, because `heldAsks` is
+   * watcher-private state (that method's own docstring) and this file has no
+   * business reaching into its shape. Threaded in as its own parameter,
+   * the same move `askDeps` just above made for `answerAsk`'s queue: `Deps`
+   * deliberately does not carry the watcher (`buildServer`'s own third
+   * argument, not a `Deps` field — see that function's signature), so a
+   * field added there would be a second place this wiring could come from.
+   * Optional and defaulted to nothing so every existing caller (`buildServer`
+   * with no watcher, or a test that builds these routes on a coord-only
+   * server) is unchanged: a decline still CASes the store row and answers
+   * `{ok:true}`, it just has no in-memory hold to drop early — `sweepAsks`
+   * would have released it anyway once `held.until` lapsed, if this process
+   * had ever held it in memory in the first place.
+   */
+  watcher?: FleetWatcher,
 ): void {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
@@ -2457,6 +2476,80 @@ export function registerCoordRoutes(
         "'answering'; the feed record above (if it landed) is the surviving audit trace");
     }
 
+    return { ok: true };
+  });
+
+  /**
+   * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
+   * child's question. This is the verb that makes the grace window a
+   * CEILING rather than a flat tax on every ask the parent cannot answer
+   * (Task 10, this lane's own reason for existing): a decline fires the
+   * operator's push NOW instead of making them wait out the rest of
+   * `ASK_GRACE_MS` for a question nobody upstream is going to rule on.
+   *
+   * Unlike `/answer` above, this route never touches the pane — no
+   * `answerAsk`, no CAS-then-press-then-rollback dance — so its gate ladder
+   * is the plain box-token + attribution + ownership shape the claims lanes
+   * already use, run in the order the risk falls: box token, then body
+   * shape, then attribution, then `unknown-ask`, then
+   * `ask.parentId === fromId`. Only this child's derived parent may decline
+   * its question — attribution alone would let any live session on the box
+   * decline any other session's ask, exactly the reason `/answer` layers the
+   * same check on top of the box token.
+   *
+   * `releaseAsk`'s CAS is the row acting as its own mutex, the same shape
+   * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
+   * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
+   * `'stale'` refuses `not-held` rather than pretending to succeed — a
+   * decline that finds nothing held must not lie about what it did.
+   *
+   * `watcher?.releaseHeldAsk` is the ONLY way this route touches the
+   * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
+   * `heldAsks`): the map is watcher-private state, so this route names the
+   * child id and nothing about the map's shape. It runs AFTER the CAS
+   * succeeds, never before — the store row is the fact, the in-memory hold
+   * is only ever a cache of the push `sweepAsks` would otherwise send later.
+   */
+  app.post('/api/asks/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    // Literally inline, not through a wrapper: the census derives lanes by
+    // regex-slicing this file between route registrations, so a gate call it
+    // cannot see is a lane it will not count.
+    if (!requireMailToken(req, reply, 'POST /api/asks/:id/release')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid } = body;
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'fromId/fromUuid strings' });
+    }
+
+    // The box token proves "a process on this box", one shared secret
+    // identical for every session on the fleet host — it cannot prove "this
+    // ask's parent". The registry pair is what attributes the specific
+    // session, exactly as `/answer` and the mail ingress do.
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+
+    // The same `Number.isInteger` shape guard every other `:id` route in
+    // this file uses — a non-numeric id must 400 before it ever reaches
+    // `node:sqlite`, not throw a 500 out of a bound `NaN`.
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const ask = coord.askById(id);
+    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== fromId) {
+      return reply.code(403).send({ ok: false, error: 'not-parent',
+        detail: 'only this child\'s derived parent may decline its question' });
+    }
+
+    // A decline is not a failure — it is the parent saying "the operator
+    // should see this now", and it is what makes the grace window a CEILING
+    // rather than a tax on every ask the parent cannot rule on.
+    if (!coord.releaseAsk(id, Date.now())) {
+      return reply.code(409).send({ ok: false, error: 'not-held' });
+    }
+    watcher?.releaseHeldAsk(ask.childId);
     return { ok: true };
   });
 }

@@ -1351,7 +1351,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
   // independent queues would let a parent's pre-emption race a child's own
   // in-flight prompt against the identical tmux pane.
-  registerCoordRoutes(app, deps, bus, sessionAuth, askDeps);
+  //
+  // The 6th argument (Task 10) is this function's own `watcher` parameter,
+  // passed straight through: `POST /api/asks/:id/release` calls
+  // `watcher?.releaseHeldAsk` to drop the in-memory hold and fire the
+  // deferred push the moment a parent declines, rather than making the
+  // operator wait out the rest of the grace window. `Deps` deliberately does
+  // not carry the watcher (this function's own third argument), so there is
+  // no second place this wiring could come from.
+  registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

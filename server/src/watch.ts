@@ -3711,6 +3711,32 @@ export class FleetWatcher {
   }
 
   /**
+   * `POST /api/asks/:id/release` (Task 10, the decline route): a parent has
+   * DECLINED to rule on its child's question, so the grace window ends NOW
+   * rather than at `held.until` — the verb that makes the window a CEILING
+   * rather than a flat tax on every ask the parent cannot rule on. The route
+   * has already CAS'd the store row (`store.releaseAsk`) before calling this
+   * — this method's whole job is the in-memory half `sweepAsks` above would
+   * otherwise wait up to `ASK_SWEEP_MS` to notice on its own: drop the hold
+   * and fire the SNAPSHOTTED push immediately, exactly `sweepAsks`'s own
+   * `released` branch.
+   *
+   * PUBLIC, and the ONLY way a route may touch `heldAsks` — the map is
+   * watcher-private state (see its own docstring above), so a route has no
+   * business reaching into its shape or deleting from it directly. A
+   * `childId` with no entry (the grace window already lapsed and `sweepAsks`
+   * beat this call to it, a server restart forgot the hold, or this ask was
+   * never held by THIS watcher instance) is a no-op: the store row is
+   * released either way, and there is no snapshotted `ev` left to push.
+   */
+  releaseHeldAsk(childId: string): void {
+    const held = this.heldAsks.get(childId);
+    if (held === undefined) return;
+    this.heldAsks.delete(childId);
+    this.pushOne(held.ev, this.activeProjects);
+  }
+
+  /**
    * Mint the ask row, snapshot the push `raise()` would have sent, and queue
    * the mail that wakes the parent. Called ONLY from the eligibility fork
    * above, which has already proven `actions !== null` (so `ask` is a

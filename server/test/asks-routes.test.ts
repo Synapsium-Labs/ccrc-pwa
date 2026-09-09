@@ -5,6 +5,15 @@
 // parent"), then `ask.parentId === fromId`, then the instance guard
 // (D-2170) and the row-CAS (D-2171) — both BEFORE `answerAsk` ever touches
 // the pane.
+//
+// `POST /api/asks/:id/release` (Task 10) is the SAME lane's decline route,
+// below — the verb that makes the grace window a CEILING rather than a
+// flat tax on every ask the parent cannot rule on. Unlike `/answer`, it
+// never touches the pane, so its own describe block below builds a real
+// `FleetWatcher` alongside the server (the `fleetws.test.ts` idiom: watcher
+// constructed first, sharing ONE `deps` object with `buildServer`) so the
+// decline case can prove the deferred push actually fires — the thing
+// `/answer`'s tests above have no need to set up at all.
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -17,6 +26,9 @@ import type { Runner } from '../src/exec.js';
 import { askKey } from '../src/askkey.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import type { PushPayload } from '../src/push.js';
 
 const TOKEN = 'f'.repeat(64);
 const TOK = { 'x-ccrc-mail-token': TOKEN };
@@ -251,5 +263,130 @@ describe('POST /api/asks/:id/answer', () => {
     expect(good.statusCode).toBe(200);
     expect(good.json()).toEqual({ ok: true });
     expect(coord.askById(id)!.state).toBe('answered');
+  });
+});
+
+/**
+ * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
+ * child's question (Task 10). The verb that makes the grace window a
+ * CEILING rather than a flat tax on every ask the parent cannot answer: a
+ * decline fires the operator's push NOW, through `FleetWatcher.releaseHeldAsk`
+ * — the ONLY door a route has into the watcher's in-memory hold, since
+ * `heldAsks` is watcher-private state.
+ *
+ * Its gate ladder is `/answer`'s minus the pane-touching half: box token,
+ * body shape, attribution, `unknown-ask`, `ask.parentId === fromId`, then
+ * the store's own `releaseAsk` CAS (`'held' -> 'released'`) — a decline that
+ * finds nothing held refuses `not-held` rather than pretending to succeed.
+ */
+describe('POST /api/asks/:id/release', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const release = (id: number, body: Record<string, unknown>,
+                   headers: Record<string, string> = TOK) =>
+    app!.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
+
+  /** Same shape as `buildServer`'s own third argument (`fleetws.test.ts`'s
+   *  idiom): the `FleetWatcher` is constructed FIRST, sharing the one `deps`
+   *  object `buildServer` also receives, so both sides see the same
+   *  `heldAsks` map this route reaches through `releaseHeldAsk`. */
+  const openAppWithWatcher = async (home: string, run: Runner, sent: PushPayload[]) => {
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const notify = async (p: PushPayload) => { sent.push(p); };
+    const deps = { ...testDeps(home, run), mailToken: TOKEN, coord, push: { notify } as never };
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 10_000);
+    const built = await buildServer(deps, bus, w);
+    return { app: built, coord, w };
+  };
+
+  /** Reflection idiom `asks-sweep.test.ts`/`hold-gate.test.ts` already use to
+   *  reach the watcher's private, in-memory hold — `heldAsks` deliberately
+   *  has no public read; `releaseHeldAsk` is its only public WRITE. */
+  const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number;
+      ev: unknown; answeringSince: number | null }> =>
+    (w as unknown as { heldAsks: Map<string, { until: number; askId: number;
+      ev: unknown; answeringSince: number | null }> }).heldAsks;
+
+  /** Registry (child + parent + a third, unrelated session), a held ask row,
+   *  and the watcher's own in-memory hold seeded to match it — the shape
+   *  `FleetWatcher`'s private `hold()` would have left behind after a real
+   *  mint. This route never touches the pane, so — unlike `/answer`'s own
+   *  `setup` above — no hookstate or tmux pane is needed; `tmuxRunner([])`
+   *  answers every call with an empty success, and none should ever land. */
+  const setup = async (now: number) => {
+    const home = mkTmp('ccrc-asks-');
+    seed(home, CHILD, CHILD_UUID);
+    seed(home, PARENT, PARENT_UUID);
+    seed(home, OTHER, OTHER_UUID);
+    const sent: PushPayload[] = [];
+    const { run, calls } = tmuxRunner([]);
+    const built = await openAppWithWatcher(home, run, sent);
+    app = built.app;
+    const id = built.coord.insertAsk({
+      childId: CHILD, parentId: PARENT, runId: null, askKey: ASK_KEY,
+      askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
+      options: QUESTION.options.map((o) => o.label), now,
+    });
+    heldMap(built.w).set(CHILD, {
+      until: now + 120_000, askId: id, answeringSince: null,
+      ev: { kind: 'ask', sessionId: CHILD, project: 'demo', title: 'question needs you',
+        body: QUESTION.question, tag: `ask-${CHILD}` },
+    });
+    return { coord: built.coord, w: built.w, id, now, sent, calls };
+  };
+
+  it('401s without the box token', async () => {
+    const { id } = await setup(Date.now());
+    const res = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID }, {});
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+  });
+
+  it('fires the operator push immediately when the parent declines', async () => {
+    const { coord, w, id, sent, calls } = await setup(Date.now());
+    const res = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+
+    expect(coord.askById(id)!.state).toBe('released');
+    // The deferred push fired NOW rather than waiting for `sweepAsks` to
+    // notice the grace window lapse — the whole point of this route.
+    expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
+    // The in-memory hold is gone — `releaseHeldAsk` deleted it, not a route
+    // reaching into the map directly.
+    expect(heldMap(w).has(CHILD)).toBe(false);
+    // Never touches the pane — no `answerAsk`, no keystroke.
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('403s a caller that is not this ask\'s derived parent', async () => {
+    const { coord, w, id, sent } = await setup(Date.now());
+    const res = await release(id, { fromId: OTHER, fromUuid: OTHER_UUID });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ ok: false, error: 'not-parent',
+      detail: 'only this child\'s derived parent may decline its question' });
+    // Untouched: the store row is still held and the in-memory hold survives
+    // for the actual parent to decline (or the grace window to lapse) later.
+    expect(coord.askById(id)!.state).toBe('held');
+    expect(heldMap(w).has(CHILD)).toBe(true);
+    expect(sent).toEqual([]);
+  });
+
+  it('409s not-held on a decline of an already-released ask', async () => {
+    const { coord, id, sent } = await setup(Date.now());
+    const first = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
+    expect(first.statusCode).toBe(200);
+
+    // A decline that finds nothing held must not pretend it succeeded — the
+    // store's own CAS (`releaseAsk`, source state `'held'`) refuses, and the
+    // route must refuse with it rather than reporting `{ok:true}` again.
+    const second = await release(id, { fromId: PARENT, fromUuid: PARENT_UUID });
+    expect(second.statusCode).toBe(409);
+    expect(second.json()).toEqual({ ok: false, error: 'not-held' });
+    expect(coord.askById(id)!.state).toBe('released');
+    // No double push: the second decline never reached `releaseHeldAsk`.
+    expect(sent.filter((p) => p.tag === `ask-${CHILD}`)).toHaveLength(1);
   });
 });
