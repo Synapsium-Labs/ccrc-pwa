@@ -69,4 +69,76 @@ describe('ask store methods', () => {
     // askKey, same labels, new hookstate write.
     expect(s.takeAskForAnswer(id, 2000)).toEqual({ ok: false, why: 'ask-moved' });
   });
+
+  // Fix round 1, finding 1: `parentOfSession` must count a run whose raw
+  // `state` reads the literal `'unknown'` token as OPEN, the same way
+  // `openRunsForSession`/`openCoordinatorIds` already do (`state NOT IN
+  // ('done','failed')`) — never `TERMINAL_RUN_STATES`, which is derived from
+  // `RUN_TRANSITIONS` and therefore calls `'unknown'` terminal. Written
+  // directly at the DB layer, the `coord-store.test.ts` idiom for "a state
+  // token this build does not know" (there it uses an ARBITRARY unrecognised
+  // token, e.g. `'reconciling'`, to prove the HYDRATE side degrades to
+  // `'unknown'` on read; here the raw column is set to the literal word
+  // `'unknown'` itself, because that is the one value whose presence in
+  // `TERMINAL_RUN_STATES` — and absence from the shipped `('done','failed')`
+  // spelling — is the actual divergence between the two predicates).
+  it("counts a raw 'unknown' run state as OPEN, not terminal — copies openCoordinatorIds' ruling (fix round 1, finding 1)", () => {
+    const s = mk();
+    const run = s.openRun({ program: 'prog', title: 'Prog', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(run.id, 'child-1');
+    s.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(run.id);
+    expect(s.parentOfSession('child-1')).toBe('coord-1');
+  });
+
+  // Fix round 1, finding 2: the `ORDER BY id DESC` tie-break was a comment,
+  // not a mechanism — no test pinned it, so deleting it or flipping it to ASC
+  // left the whole suite green. Two DIFFERENT programs (not two waves of one
+  // program): `openRun`'s one-coordinator-per-program guard refuses a second
+  // `claimedBy` for the SAME program unless a `reclaimProgram` ran in
+  // between, and a reclaim rewrites EVERY run of that program to the new
+  // claimant — which would make both rows agree and defeat the point of a
+  // tie-break test. Two independent programs both dispatching to one
+  // `sessionId` is exactly the state `openRunsForSession`'s own docstring
+  // says nothing at this layer prevents.
+  it("answers the newest run's claimant when two runs name one session (fix round 1, finding 2)", () => {
+    const s = mk();
+    const first = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(first.id, 'child-1');
+    const second = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
+    s.setSession(second.id, 'child-1');
+    expect(s.parentOfSession('child-1')).toBe('coord-2');
+  });
+
+  // Fix round 1, finding 3: `untakeAsk` — the rollback for a take whose
+  // subsequent press was refused. `releaseAsk` cannot serve this: its CAS
+  // source is `'held'`, and by the time a caller needs this the row has
+  // already moved to `'answering'`.
+  it('untakeAsk returns a taken row to held, and a second take then succeeds (fix round 1, finding 3)', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+    expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
+    expect(s.untakeAsk(id)).toBe(true);
+    expect(s.askById(id)!.state).toBe('held');
+    expect(s.takeAskForAnswer(id, 1000).ok).toBe(true);
+  });
+
+  // Fix round 1, finding 4: unguarded, `settleAsk` would rewrite a `released`
+  // or `stale` row to `'answered'` with a fabricated answerer — a record
+  // asserting an answer nobody gave, in a table whose whole job is to BE the
+  // record. Guarded to `AND state = 'answering'`, a settle aimed at a row it
+  // does not hold is a silent no-op instead: the row stays exactly as it was.
+  it('settleAsk refuses to rewrite a row it does not hold (fix round 1, finding 4)', () => {
+    const s = mk();
+    const id = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1 });
+    expect(s.releaseAsk(id, 2000)).toBe(true);
+    s.settleAsk(id, 'operator', 'a', 3000);
+    const row = s.askById(id)!;
+    expect(row.state).toBe('released');
+    expect(row.answeredBy).toBeNull();
+  });
 });

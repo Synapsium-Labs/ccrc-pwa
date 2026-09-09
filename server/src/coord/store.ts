@@ -3734,22 +3734,31 @@ export class CoordStore {
    *  derived answer follows a handover for free while a stored id would name
    *  a corpse.
    *
-   *  `state NOT IN (...)` is built from `TERMINAL_RUN_STATES` (module scope,
-   *  derived from `RUN_TRANSITIONS`) the same parameterised way
-   *  `strandedClear` above already builds it — never a second hand-spelled
-   *  list of run states, which `single-definition.test.ts` forbids.
+   *  `state NOT IN ('done','failed')` is COPIED from `openRunsForSession`
+   *  (`:1560`) and `openCoordinatorIds` (`:1575-1581`), never
+   *  `TERMINAL_RUN_STATES`: that constant is derived from `RUN_TRANSITIONS`,
+   *  which gives `'unknown'` an empty outgoing-edge list and so calls it
+   *  terminal — but every shipped session-keyed query in this file counts an
+   *  `'unknown'` row (a token a newer build wrote and this one degrades on
+   *  read) as OPEN. `openCoordinatorIds`'s own docstring rules on exactly this
+   *  divergence and says it "stays latent only while new predicates copy the
+   *  SQL spelling instead of re-deriving one" — this is that copy, not a
+   *  fresh derivation, so it agrees with `close.ts`'s `survivorOf` (built on
+   *  `openRunsForSession`) on which run of a session is open, including on an
+   *  `'unknown'` row.
    *
    *  ORDER BY id DESC is a CONVENTION, not a guarantee: nothing in the schema
    *  forbids two open runs naming one sessionId, and the coordinator protocol
    *  DELIBERATELY creates that state by opening wave N+1 before closing wave
    *  N. The newest run's claimant is the right answer there, and
    *  `close.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
-   *  caveat. */
+   *  caveat. Pinned by a two-wave/two-claimant test, verified red under
+   *  ASC (fix round 1, finding 2). */
   parentOfSession(childId: string): string | null {
     const row = this.db.prepare(
-      'SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ' +
-      `(${TERMINAL_RUN_STATES.map(() => '?').join(', ')}) ORDER BY id DESC LIMIT 1`,
-    ).get(childId, ...TERMINAL_RUN_STATES) as { claimedBy: string | null } | undefined;
+      "SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ('done','failed') " +
+      'ORDER BY id DESC LIMIT 1',
+    ).get(childId) as { claimedBy: string | null } | undefined;
     return row?.claimedBy ?? null;
   }
 
@@ -3846,15 +3855,41 @@ export class CoordStore {
     });
   }
 
-  /** answering -> answered. Called only immediately after a `takeAskForAnswer`
-   *  that already CASed this row exclusively to `'answering'` for the caller
-   *  making this call, so there is no second race here to guard against —
-   *  `void`, like `takeAskForAnswer`'s own `ok: true` arm already told the
-   *  caller it holds the row. */
+  /** answering -> held, CAS (fix round 1, finding 3).
+   *  The rollback `takeAskForAnswer`'s caller reaches for when the take
+   *  succeeded but the press itself was refused — every one of `answerAsk`'s
+   *  guards returns BEFORE its `sendKey` loop, so a refusal there means no
+   *  digit was pressed and the question is still live. A DISTINCT verb from
+   *  `releaseAsk` on purpose: "I abandoned my attempt" (still pre-emptible,
+   *  no push) and "the window is over" (push fires) are different facts a
+   *  reader of `state` needs to tell apart, and `releaseAsk`'s CAS source is
+   *  `'held'` — it cannot even reach a row this call finds, which sat in
+   *  `'answering'`. Returns whether THIS call moved it, the same "I did it"
+   *  vs. "someone else already did" shape as `releaseAsk`/`staleAsk`. */
+  untakeAsk(id: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET state = 'held' WHERE id = ? AND state = 'answering'",
+    ).run(id);
+    return Number(res.changes) > 0;
+  }
+
+  /** answering -> answered, CAS (fix round 1, finding 4: unguarded, a future
+   *  caller that settles without first taking could rewrite a `released` or
+   *  `stale` row to `'answered'` with a fabricated `answeredBy`/`answer`/
+   *  `answeredAt` — a record asserting an answer nobody gave, in a table
+   *  whose whole stated job (schema.ts's own D-2169 comment) is to BE the
+   *  record. That is a silent lie, not a silent no-op, so it gets the same
+   *  `WHERE` guard as every other conditional write here even though every
+   *  path that reaches this method today already holds the row exclusively
+   *  at `'answering'` via a preceding `takeAskForAnswer`. `void` stays: no
+   *  current caller needs to distinguish "settled" from "lost the row
+   *  between take and settle", and inventing that distinction here would be
+   *  answering a question nobody asked rather than closing the one that was
+   *  asked (a wedge, not a race, is the failure this guard closes). */
   settleAsk(id: number, by: string, answer: string, now: number): void {
     this.db.prepare(
       "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ? " +
-      'WHERE id = ?',
+      "WHERE id = ? AND state = 'answering'",
     ).run(by, answer, now, id);
   }
 
