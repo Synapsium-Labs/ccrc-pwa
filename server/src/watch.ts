@@ -230,6 +230,28 @@ const ASK_GRACE_MS = 120_000;
  *  matches that cadence and is ample against a window sized in minutes. */
 const ASK_SWEEP_MS = 10_000;
 
+/** Ceiling on how long a row may sit `'answering'` before `sweepAsks` gives up
+ *  on the principal that took it (fix round 1, item 1 — the reviewer's own
+ *  reasoning, verbatim): `sweepAsks` is the ONLY garbage collector `heldAsks`
+ *  has. `detectDialogs`'s orphan-settle fires only on a NEW dialog id, and a
+ *  session blocked on `AskUserQuestion` does not repaint — so a row stuck at
+ *  `'answering'` (the press refused, `answerAsk` threw, the request
+ *  abandoned, the server restarted mid-call — `untakeAsk`'s own rollback
+ *  never ran) would otherwise be kept forever: `releaseAsk` fails every
+ *  sweep because the state is not `'held'`, and nothing ever pushes. That is
+ *  the exact harm this lane exists to prevent, inverted.
+ *
+ *  Sixty seconds is generous, not tight: `answerAsk`'s whole job — take the
+ *  row, press a digit, settle — happens well inside one `ASK_SWEEP_MS`
+ *  interval in every normal case, so a row still `'answering'` a full minute
+ *  later means the principal that took it is gone, not merely slow. Past
+ *  this bound `sweepAsks` pushes the snapshotted payload and drops the
+ *  entry — F9's own justification for the missing-row arm, verbatim: the
+ *  ask's loss is free by design and must degrade to today's immediate
+ *  notification. A principal that took the row and never came back is that
+ *  same case. */
+const ASK_ANSWERING_MAX_MS = 60_000;
+
 /** No session gets two injections inside this window, however much mail is
  *  queued for it. A fan-out of six findings arriving as six prompts in ninety
  *  seconds is a denial of service dressed as coordination. */
@@ -385,9 +407,15 @@ export class FleetWatcher {
    *  re-pushes nothing today either.
    *
    *  Cleared in the same `else if (last !== undefined)` branch that clears
-   *  `dialogIds` — the dialog going away is the end of the hold. */
+   *  `dialogIds` — the dialog going away is the end of the hold.
+   *
+   *  `answeringSince` (fix round 1, item 1): `null` until `sweepAsks` first
+   *  observes this row `'answering'`, then the sweep's own `now` at that
+   *  observation — never re-derived, and reset to `null` the moment the row
+   *  is observed back at `'held'` (a `sweepAsks` decision, not `hold`'s —
+   *  see `ASK_ANSWERING_MAX_MS`'s own docstring). */
   private heldAsks = new Map<string, { until: number; askId: number;
-    ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+    ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null }>();
   /** Fail-shut kill switch for the hold, `$REG/asks-disabled`. Declared in
    *  Task 6 (RULING F2) so the mint fork below compiled before this method
    *  existed; now SET by `sweepAsks` below, off the same registry listing
@@ -3495,11 +3523,32 @@ export class FleetWatcher {
    *   - `'answering'` — a principal has taken the row and may still submit an
    *     answer. KEEP the map entry so a later sweep can retry once that
    *     resolves; pushing now would buzz the operator over a question someone
-   *     is actively answering.
+   *     is actively answering. BOUNDED (fix round 1, item 1): `sweepAsks` is
+   *     the ONLY collector `heldAsks` has (`detectDialogs`'s orphan-settle
+   *     fires only on a NEW dialog id, and a session blocked on
+   *     `AskUserQuestion` does not repaint), so an unbounded keep here would
+   *     let a principal that took the row and never came back — the press
+   *     refused, `answerAsk` threw, the request abandoned, a restart
+   *     mid-call — strand the question forever, silently. Past
+   *     `ASK_ANSWERING_MAX_MS` since first observed `'answering'`, this
+   *     degrades exactly like the missing-row arm below: push, drop.
    *   - `'answered'` | `'released'` | `'stale'` — somebody already resolved
    *     it (an answer landed, an explicit `POST /api/asks/:id/release`, or
    *     `detectDialogs`'s own orphan-settle). Drop the entry, no push — the
    *     question is already closed.
+   *   - `'held'` — the CAS above just failed against this exact state, so
+   *     under ordinary single-threaded execution this is unreachable; the
+   *     only way to see it is a genuine race with another writer between
+   *     the `releaseAsk` attempt and this read. KEEP (fix round 1, item 2):
+   *     the row is demonstrably still open and unclaimed, so the NEXT
+   *     sweep's `releaseAsk` simply succeeds and pushes on its own — dropping
+   *     here would both lose the question AND orphan the row, since Task 8's
+   *     `staleAsk` (guarded on `heldAsks.get(r.id)`) could then never reach
+   *     it either. Warned, not silent — an unreachable branch that fires is
+   *     worth knowing about even though it is handled safely.
+   *   - `'unknown'` — an out-of-vocabulary state token read back off disk
+   *     (`hydrateAsk`'s own degrade). This IS the "cannot tell" case F9's
+   *     missing-row arm already rules on: push and drop, warned.
    *   - the row itself is gone (`askById` returns `null`, e.g. a lost
    *     coord.db) — its loss is free BY DESIGN (`heldAsks`'s own docstring):
    *     drop the entry and push, degrading to exactly today's ordinary
@@ -3557,28 +3606,50 @@ export class FleetWatcher {
         continue;
       }
       switch (row.state) {
-        case 'answering':
-          continue;                    // still live — retry next sweep, no push
+        case 'answering': {
+          // Bounded (fix round 1, item 1) — see `ASK_ANSWERING_MAX_MS`'s own
+          // docstring and this method's own. `answeringSince` is set on the
+          // sweep that FIRST observes this row `'answering'`, never
+          // re-derived, so the bound is measured from the first sighting,
+          // not from whenever `takeAskForAnswer` actually ran.
+          if (held.answeringSince === null) held.answeringSince = now;
+          if (now - held.answeringSince >= ASK_ANSWERING_MAX_MS) {
+            this.heldAsks.delete(id);
+            this.pushOne(held.ev, this.activeProjects);
+          }
+          continue;                    // still under the bound — retry next sweep, no push
+        }
         case 'answered':
         case 'released':
         case 'stale':
           this.heldAsks.delete(id);    // settled by someone else — no push
           continue;
         case 'held':
+          // Unreachable under ordinary single-threaded execution (see this
+          // method's own docstring) — a genuine race with another writer,
+          // not a defect this sweep can fix. KEEP: the row is demonstrably
+          // still open, so the next sweep's `releaseAsk` simply succeeds and
+          // pushes on its own; dropping here would orphan the row instead.
+          // Reset the answering timer too — a LATER `'answering'` sighting
+          // for this same entry is a fresh episode, not a continuation of
+          // whatever earlier one (if any) left a stale timestamp behind.
+          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) unexpectedly still 'held' after a failed release — keeping the hold for the next sweep to resolve`);
+          held.answeringSince = null;
+          continue;
         case 'unknown':
-          // 'held' should be unreachable here (the CAS above just failed
-          // against exactly this state, and nothing else runs between that
-          // call and this read in a single-threaded process); 'unknown' is a
-          // state token this build cannot interpret (`hydrateAsk`'s own
-          // degrade). Both fall to the safe side: drop the stale hold rather
-          // than push blind or retry forever.
-          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in unexpected state '${row.state}' after a failed release — dropping the hold without a push`);
+          // An out-of-vocabulary state token read back off disk
+          // (`hydrateAsk`'s own degrade) — the "cannot tell" case F9's
+          // missing-row arm already rules on: degrade to notifying the
+          // operator rather than swallowing the question.
+          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state after a failed release — pushing and dropping the hold`);
           this.heldAsks.delete(id);
+          this.pushOne(held.ev, this.activeProjects);
           continue;
         default: {
           const _exhaustive: never = row.state;
-          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state '${String(_exhaustive)}' after a failed release — dropping the hold without a push`);
+          console.warn(`ccrc-server: sweepAsks saw ask ${held.askId} (session ${id}) in an unrecognised state '${String(_exhaustive)}' after a failed release — pushing and dropping the hold`);
           this.heldAsks.delete(id);
+          this.pushOne(held.ev, this.activeProjects);
         }
       }
     }
@@ -3601,7 +3672,7 @@ export class FleetWatcher {
   private hold(
     r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
     hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
-  ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] } {
+  ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null } {
     const q = ask.questions[0]!;
     const key = askKey(ask);
     // `actions !== null` (askActions) already proved a key exists — this
@@ -3646,7 +3717,7 @@ export class FleetWatcher {
       fromId: 'operator', toId: parent, runId: null, kind: 'question',
       subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options),
     });
-    return { until: now + ASK_GRACE_MS, askId, ev };
+    return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
   }
 }
 

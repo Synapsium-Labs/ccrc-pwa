@@ -41,9 +41,17 @@ const at = (ms: number): void => { vi.spyOn(Date, 'now').mockReturnValue(ms); };
 
 const T0 = 1_785_400_000_000;
 // Mirror `watch.ts`'s own (unexported, module-scope) constants rather than
-// importing them — see that file's `ASK_GRACE_MS`/`ASK_SWEEP_MS`.
+// importing them — see that file's `ASK_GRACE_MS`/`ASK_SWEEP_MS`/`ASK_ANSWERING_MAX_MS`.
 const ASK_GRACE_MS = 120_000;
 const ASK_SWEEP_MS = 10_000;
+const ASK_ANSWERING_MAX_MS = 60_000;
+
+/** Private-field read of the `heldAsks` map — `hold-gate.test.ts`'s own
+ *  `(w as unknown as {...})` idiom (`sweepSettled`/`forceDue`), the
+ *  codebase's established way to assert on state a public method
+ *  deliberately does not expose. */
+const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number; answeringSince: number | null }> =>
+  (w as unknown as { heldAsks: Map<string, { until: number; askId: number; answeringSince: number | null }> }).heldAsks;
 
 /** Per-session bookkeeping the registry + live-status files need — verbatim
  *  idiom from `asks-mint.test.ts`'s own `Seeded`/`seedSessions` (itself
@@ -254,7 +262,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     await f.w.sweepAsks();
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
-    expect((f.w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.has('cc-a')).toBe(true);
+    expect(heldMap(f.w).has('cc-a')).toBe(true);
 
     // The principal gives up — `answering -> held` — and the VERY NEXT sweep
     // (own clock, past ASK_SWEEP_MS) fires the still-live hold. This is only
@@ -285,7 +293,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     await f.w.sweepAsks();
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
-    expect((f.w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.has('cc-a')).toBe(false);
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(f.coord.askById(askId)!.state).toBe('released');      // untouched, not rewritten
     // Silent: distinguishes this branch from the exhaustiveness fallback
     // ('held'/'unknown'), which warns.
@@ -308,7 +316,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     await f.w.sweepAsks();
 
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
-    expect((f.w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.has('cc-a')).toBe(false);
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(f.coord.askById(askId)).toBeNull();
 
     // And it does not repeat — the entry is truly gone, not merely silent
@@ -316,5 +324,127 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
     await f.w.sweepAsks();
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+  });
+
+  // Fix round 1, item 1a: still under `ASK_ANSWERING_MAX_MS` since first
+  // observed 'answering' — kept, no push, on repeat sweeps too (not just the
+  // very first observation).
+  it('keeps the "answering" hold under the bound across repeat sweeps, no push (fix round 1, item 1)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    const askAt = f.coord.askById(askId)!.askAt;
+    expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);   // held -> answering
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();                                          // first sighting — starts the timer
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    expect(heldMap(f.w).has('cc-a')).toBe(true);
+    expect(heldMap(f.w).get('cc-a')!.answeringSince).toBe(T0 + ASK_GRACE_MS + 1);
+
+    // A later sweep, still inside the bound (one tick short of it).
+    at(T0 + ASK_GRACE_MS + 1 + ASK_ANSWERING_MAX_MS - 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    expect(heldMap(f.w).has('cc-a')).toBe(true);
+    // The timer does not reset on a re-observation of the SAME episode.
+    expect(heldMap(f.w).get('cc-a')!.answeringSince).toBe(T0 + ASK_GRACE_MS + 1);
+  });
+
+  // Fix round 1, item 1b: past the bound, `sweepAsks` gives up on the
+  // principal — pushes once, drops the entry — the same degrade F9's
+  // missing-row arm uses. The DB row itself is left exactly as it was
+  // ('answering'): this guard bounds the MAP, not the row.
+  it('pushes once and drops the "answering" hold once it has been stuck past the bound (fix round 1, item 1)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    const askAt = f.coord.askById(askId)!.askAt;
+    expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();                                          // first sighting — starts the timer
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+
+    at(T0 + ASK_GRACE_MS + 1 + ASK_ANSWERING_MAX_MS + 1);
+    await f.w.sweepAsks();
+
+    const fired = sent.filter((p) => p.tag === askTag('cc-a'));
+    expect(fired).toHaveLength(1);
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
+    expect(f.coord.askById(askId)!.state).toBe('answering');        // row untouched — the map is what's bounded
+
+    // And it does not repeat.
+    at(T0 + ASK_GRACE_MS + 1 + ASK_ANSWERING_MAX_MS + 1 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+  });
+
+  // Fix round 1, item 2: a `'held'` reading after a failed `releaseAsk` is
+  // unreachable under ordinary single-threaded execution — the only way to
+  // exercise it is to simulate the race directly, stubbing `releaseAsk` to
+  // report "beaten" while the row is genuinely back at `'held'` (via
+  // `untakeAsk`). Proves BOTH halves of the fix: the entry is KEPT (not
+  // dropped — dropping would orphan the row), and `answeringSince` resets so
+  // a later 'answering' episode is not measured against a stale timestamp.
+  it('keeps (does not drop) a "held" reading after a failed release, and resets the answering timer (fix round 1, item 2)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    const askAt = f.coord.askById(askId)!.askAt;
+    expect(f.coord.takeAskForAnswer(askId, askAt).ok).toBe(true);
+
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();                                          // observes 'answering', sets the timer
+    expect(heldMap(f.w).get('cc-a')!.answeringSince).toBe(T0 + ASK_GRACE_MS + 1);
+
+    // The row genuinely returns to 'held' — but THIS sweep's own
+    // `releaseAsk` is stubbed to report a beaten CAS anyway, the only way to
+    // reach the 'held' arm of the switch in a single-threaded process (a
+    // real CAS against a genuinely-held row would simply succeed).
+    f.coord.untakeAsk(askId);
+    const realReleaseAsk = f.coord.releaseAsk.bind(f.coord);
+    f.coord.releaseAsk = () => false;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    expect(heldMap(f.w).has('cc-a')).toBe(true);                    // kept, not dropped
+    expect(heldMap(f.w).get('cc-a')!.answeringSince).toBeNull();     // reset
+    expect(warn).toHaveBeenCalled();                                 // visibility preserved
+
+    // Restore the real CAS and prove the hold still resolves normally.
+    f.coord.releaseAsk = realReleaseAsk;
+    at(T0 + ASK_GRACE_MS + 1 + ASK_SWEEP_MS + 1 + ASK_SWEEP_MS + 1);
+    await f.w.sweepAsks();
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect(f.coord.askById(askId)!.state).toBe('released');
+  });
+
+  // Fix round 1, item 2: an 'unknown' (out-of-vocabulary) state token reads
+  // as "cannot tell" — F9's own missing-row reasoning — and degrades to
+  // pushing, not silently dropping.
+  it('pushes and drops on an unrecognised state token, warned (fix round 1, item 2)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    at(T0);
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const askId = await mintHold(f, 'cc-a', 'coord-1');
+    f.coord.db.prepare("UPDATE asks SET state = 'reconciling' WHERE id = ?").run(askId);   // out-of-vocabulary
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(T0 + ASK_GRACE_MS + 1);
+    await f.w.sweepAsks();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect(heldMap(f.w).has('cc-a')).toBe(false);
+    expect(warn).toHaveBeenCalled();
   });
 });
