@@ -9,9 +9,10 @@ let home: string;
 beforeEach(() => { home = mkTmp('ccrc-memory-'); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
-const run = (args: string[]): { code: number; out: string } => {
+const run = (args: string[], extraEnv: Record<string, string> = {})
+  : { code: number; out: string } => {
   const r = spawnSync('bash', [CCRC, ...args],
-    { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    { env: { ...process.env, HOME: home, ...extraEnv }, encoding: 'utf8' });
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 };
 
@@ -35,6 +36,21 @@ describe('ccrc memory — the census', () => {
     // `.claude-glm` is in no roster entry; it must still be reported.
     seed('.claude-glm', '-p-demo', { 'a.md': 'x' });
     expect(run(['memory']).out).toContain('.claude-glm');
+  });
+
+  // `.claude-docserver` is NO LONGER special-cased (final whole-branch
+  // review): the old named skip in `_mem_homes` hard-coded a single
+  // operator's box-local tool name into shipped, public-release-bound
+  // source — identity residue CLAUDE.md bans — and it was provably dead code
+  // (the very next `[ -d "${d}projects" ]` line already excludes a real
+  // docserver home, which has no `projects/`). The doctor side of this is
+  // pinned by an INVERTED test (`ccrc-doctor.test.ts`, "no longer
+  // special-cases .claude-docserver"); this is the matching census-side pin
+  // — a `.claude-docserver` home with a real `projects/` dir must be
+  // reported like any other home, not silently skipped.
+  it('no longer special-cases .claude-docserver — a projects/ dir there is reported like any other home', () => {
+    seed('.claude-docserver', '-p-demo', { 'a.md': 'x' });
+    expect(run(['memory']).out).toContain('.claude-docserver');
   });
 
   it('reports a converged pair as converged, not as work to do', () => {
@@ -202,6 +218,42 @@ describe('ccrc memory --apply — the union', () => {
     expect(run(['memory', '--apply']).code).toBe(0);
     expect(fs.readFileSync(path.join(storeDir(), 'only-here.md'), 'utf8')).toBe('body');
     expect(fs.lstatSync(linkOf('.claude')).isSymbolicLink()).toBe(true);
+  });
+
+  // The `ln -sfn` guard (NOT bare `ln -s`) at the end of the plain-directory
+  // arm: without `-n`, a concurrent writer (another `--apply`, or the
+  // session hook) that wins a race and lands `$link` as a symlink to the
+  // store BETWEEN this pair's own backup `mv` and the `ln` a few lines below
+  // it makes a bare `ln -s` DEREFERENCE that symlink-to-a-directory and
+  // plant `$store/<slug>` — a symlink INSIDE the shared store pointing at
+  // itself — silently, exit 0.
+  //
+  // THE RACE IS MADE DETERMINISTIC by a one-shot `mv` stub: `mv` is the
+  // external binary sitting in exactly that window (the pair's own backup
+  // `mv` runs, then this stub plants the racing symlink), so this pins the
+  // race in milliseconds rather than needing a flaky concurrent run. Same
+  // technique `server/test/session-hook.test.ts` uses (a `mkdir` stub) for
+  // the sibling guard in the session hook.
+  it('never plants a symlink inside the store when a concurrent writer lands the link mid-race (ln -sfn)', () => {
+    seed('.claude', '-p-demo', { 'only-here.md': 'body' });
+    const link = linkOf('.claude');
+    const store = storeDir();
+    const bin = path.join(home, 'race-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'mv'),
+      '#!/bin/sh\n/bin/mv "$@"; rc=$?\n'
+      + 'for a in "$@"; do [ "$a" = "$RACE_LINK" ] && ln -s "$RACE_STORE" "$RACE_LINK" 2>/dev/null; done\n'
+      + 'exit $rc\n', { mode: 0o755 });
+    const r = run(['memory', '--apply'], {
+      PATH: `${bin}:${process.env['PATH'] ?? ''}`,
+      RACE_LINK: link, RACE_STORE: store,
+    });
+    expect(r.code, r.out).toBe(0);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link)).toBe(store);
+    // nothing planted INSIDE the store — the self-referential loop a bare
+    // `ln -s` would have created there when `$link` resolved to a directory
+    expect(fs.readdirSync(store)).not.toContain(path.basename(store));
   });
 
   it('unions two homes that hold different files', () => {

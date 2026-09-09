@@ -3018,11 +3018,18 @@ cmd_memory() {
 # deduplicating what is provably the same costs the operator nothing to review.
 #
 # `MEMORY.md` IS EXEMPT BECAUSE IT IS DERIVABLE. It is an index of one line per
-# memory file, and every memory file carries `name` and `description` in its
-# own frontmatter — so it is REBUILT from the union rather than merged. That is
-# also what makes the widened write contention self-healing: a clobbered index
-# regenerates instead of silently losing a line, which is the exact failure
-# that produced this design.
+# memory file THAT CARRIES `name:` FRONTMATTER — so it is REBUILT from the
+# union rather than merged. That framing used to claim every memory file
+# carries `name`/`description` frontmatter and that a clobbered index
+# "regenerates instead of silently losing a line" — both measured false by
+# this branch's own review: 2 of 577 file instances on this box carry no
+# `name:` line, and the index does not self-heal for them. It DROPS them from
+# the rebuild every time, which is why `_mem_rebuild_index` COUNTS them and
+# `--apply` reports the count in a NOTE (R30) rather than claiming the file is
+# covered. A clobbered/lost index does regenerate on the next `--apply` for
+# every file THAT HAS a name — the self-healing property still holds for that
+# case — but a name-less file is a standing, permanent gap in the index, not
+# a transient write race, and this comment must not blur the two again.
 _mem_index_line() {   # <file> -> "- [name](file) — description" on stdout,
                       # rc 0; or nothing on stdout, rc 1, when the file
                       # carries no `name:` frontmatter (R30 — the caller
@@ -3051,18 +3058,33 @@ _mem_rebuild_index() {   # <store> -> prints the count of *.md files DROPPED
                          # returns 0. Returns 1 with the tool's own
                          # diagnostic on stderr and nothing on stdout if the
                          # index itself could not be built or written.
-  local store="$1" f tmp="$1/.MEMORY.md.new" dropped=0
-  { { printf '# Memory index\n\n'
-      for f in "$store"/*.md; do
-        [ -f "$f" ] || continue
-        case "$(basename -- "$f")" in MEMORY.md) continue ;; esac
-        _mem_index_line "$f" || dropped=$((dropped+1))
-      done
-      true   # R30: the group's own exit status must not depend on the LAST
-             # file's _mem_index_line result — a name-less last file returns
-             # 1, and without this the group (and so the `||` below) would
-             # read that as "could not build the index" and destroy $tmp,
-             # even though every earlier line built fine.
+  local store="$1" f tmp="$1/.MEMORY.md.new" dropped=0 body line
+  # R30's original fix here was a trailing `true` inside the redirected
+  # group, so the group's own exit status could never depend on the LAST
+  # file's `_mem_index_line` result — a name-less last file returns 1, and
+  # without something like `true` the group (and so the `||` below) would
+  # read that as "could not build the index" and destroy $tmp, even though
+  # every earlier line built fine. That `true` fixed the name-less-last-file
+  # problem and BROKE something else: it also swallowed a genuine WRITE
+  # failure on the redirect below it. Measured against a `$tmp` symlinked to
+  # `/dev/full`: the `true`-terminated group returned rc 0 on a write that
+  # failed outright, so `mv -f` went on to install the (empty/truncated)
+  # result and the pair still printed `converged`, rc 0.
+  #
+  # Fix: decide `dropped` ENTIRELY in this shell, from each
+  # `_mem_index_line` call's own `$?`, before the redirected write ever
+  # happens — so the write is the ONLY command left inside the group, and
+  # its own exit status is what the group (and the `||` below) sees. Both
+  # properties now hold independently: a name-less last file only ever
+  # touches `dropped`, never the group's exit status; a real write failure
+  # only ever touches the group's exit status, never `dropped`.
+  body='# Memory index'$'\n\n'
+  for f in "$store"/*.md; do
+    [ -f "$f" ] || continue
+    case "$(basename -- "$f")" in MEMORY.md) continue ;; esac
+    line=$(_mem_index_line "$f") && body="${body}${line}"$'\n' || dropped=$((dropped+1))
+  done
+  { { printf '%s' "$body"
     } > "$tmp"
   } 2>/dev/null || { rm -f -- "$tmp"; echo "ccrc memory: could not build the index for $store" >&2; return 1; }
   # R30 sibling: `mv -f` SUCCEEDS when the destination is a DIRECTORY — it
@@ -7155,14 +7177,24 @@ _uninst_purge() {
     return 0
   fi
   if [ -d "$HOME/.ccrc" ]; then
-    local e had_nullglob=0
+    local e had_nullglob=0 had_dotglob=0
     shopt -q nullglob && had_nullglob=1
-    shopt -s nullglob
+    shopt -q dotglob && had_dotglob=1
+    # FIX (re-review): `nullglob` alone leaves a DOTFILE under `~/.ccrc`
+    # unmatched by `*` — nothing in this tree writes one, but an operator or
+    # the OS can (a `.DS_Store` on the macOS lane, an editor swap file, a
+    # `.bak`) — so it survived this loop, the `rmdir` below then failed on
+    # ENOTEMPTY, and the close line still unconditionally claimed "~/.ccrc
+    # … removed" regardless. `dotglob` closes that hole for the common case;
+    # the message below now checks what actually happened instead of
+    # asserting it, for whatever rare case still leaves something behind.
+    shopt -s nullglob dotglob
     for e in "$HOME/.ccrc"/*; do
       case "$(basename -- "$e")" in memory) continue ;; esac
       rm -rf -- "$e" || _ccrc_die "purging $e failed"
     done
     [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+    [ "$had_dotglob" -eq 1 ] || shopt -u dotglob
     # Nothing was ever migrated: `~/.ccrc/memory` never existed, so the loop
     # above emptied `~/.ccrc` completely — remove the now-empty directory
     # itself too, so a box that never ran `ccrc memory --apply` still sees
@@ -7172,6 +7204,11 @@ _uninst_purge() {
   rm -rf -- "$BOX_BACKUP_ROOT" || _ccrc_die "purging $BOX_BACKUP_ROOT failed"
   if [ -d "$HOME/.ccrc/memory" ]; then
     echo "uninstall: purge: ~/.ccrc's config and ~/ccrc-backups removed; ~/.ccrc/memory (every project's durable memory — the sole live copy since 'ccrc memory --apply') was PRESERVED. Pass --purge-memory too to remove it as well"
+  elif [ -d "$HOME/.ccrc" ]; then
+    # The `rmdir` above did not empty it out — something this loop does not
+    # own (or does not know to remove) is still inside. Say so rather than
+    # claiming a removal that did not happen (the defect this fix closes).
+    echo "uninstall: purge: ~/.ccrc's config was purged and ~/ccrc-backups removed, but ~/.ccrc itself could not be removed — it is not empty; inspect it by hand"
   else
     echo "uninstall: purge: ~/.ccrc and ~/ccrc-backups removed (worktrees and tmux state are never touched)"
   fi

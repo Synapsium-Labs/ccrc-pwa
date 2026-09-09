@@ -599,6 +599,26 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
+  // Re-review fix: `_uninst_purge`'s preserve-memory arm used to iterate
+  // `"$HOME/.ccrc"/*` under `nullglob` ALONE, so a DOTFILE directly under
+  // `~/.ccrc` (nothing in this tree writes one, but an operator or the OS
+  // can — a `.DS_Store`, an editor swap file, a `.bak`) survived the loop,
+  // the `rmdir` right after it then failed on ENOTEMPTY, and the close line
+  // still unconditionally claimed "~/.ccrc and ~/ccrc-backups removed" —
+  // measured, with the dotfile left behind beside that very message. Seed
+  // one and require BOTH that it is actually gone (the `dotglob` fix) and
+  // that the close line cannot lie about it either way.
+  it('a dotfile under ~/.ccrc does not survive bare --purge, and the close line never claims a removal that did not happen', () => {
+    const home = mkTmp('ccrc-uninst-purge-dotfile-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.ccrc', '.hidden-thing'), 'operator/OS residue, not written by ccrc');
+    const r = runVerb(home, 'uninstall', ['--purge']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', '.hidden-thing'))).toBe(false);
+    expect(r.stdout).toMatch(/~\/\.ccrc and ~\/ccrc-backups removed/);
+  });
+
   // The explicit second flag: an operator who really wants the memory gone
   // too says so, and only then does it go.
   it('--purge --purge-memory removes ~/.ccrc whole, memory store included', () => {
