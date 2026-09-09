@@ -20,8 +20,8 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
-  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync,
-  symlinkSync, writeFileSync,
+  chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync,
+  rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -3130,7 +3130,19 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
     expect(roster.accounts.map((a) => a.id)).toEqual(['claude', 'lab-dev0']);
     const onDisk = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
     expect(onDisk.accounts[1].exec).toEqual({ kind: 'external', provider: 'openai' });
+    // THE THREE FIELDS THE VERB DECIDES RATHER THAN TAKES, each measured, and
+    // `telemetry` because review round 1 flipped it to `'anthropic'` and the
+    // file stayed green: `telemetry: 'none'` is what keeps a declared lane out
+    // of `CCRC_MEASURED`, so a flip puts an external launcher into the metered
+    // pool `_limit_score` reads. `homeAble: false` is what keeps
+    // `_ws_least_loaded` (ccd/ccd:3641) from ever enumerating it.
     expect(onDisk.accounts[1].homeAble).toBe(false);
+    expect(onDisk.accounts[1].telemetry).toBe('none');
+    // AND THE SUFFIX DEFAULT IS `.<id>`, NOT `add`'s `.claude-<id>` (D-2142).
+    // Ungated on purpose: a declared launcher's config dir is somebody else's
+    // and may hold no transcripts at all, so demanding it inside the agent's
+    // `$HOME/.claude*` read root would refuse legitimate lanes.
+    expect(onDisk.accounts[1].configDirSuffix).toBe('.lab-dev0');
     // …and accounts.sh was regenerated from it, or ccd would still not know the id.
     expect(readFileSync(join(home, '.ccrc', 'accounts.sh'), 'utf8')).toContain('lab-dev0');
     // THE LAUNCHER IS UNTOUCHED, which is the whole reason this verb is not
@@ -3139,6 +3151,24 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
     // four-line generated shape and that is data loss.
     expect(readFileSync(join(home, '.local', 'bin', 'lab-dev0'), 'utf8'))
       .toBe('\x7fELF not really, but no shebang and no export\n');
+  });
+
+  it('takes --suffix, which is how a declared lane becomes readable (D-2142)', () => {
+    // THE FLAG THE SPEC'S ROW DOES NOT LIST, and the reason it is kept: the
+    // agent's `underClaudeGlob` admits only `$HOME/.claude*`, so without this
+    // flag an operator declaring an external launcher has no way to put that
+    // lane's config dir where the server can read its transcripts — a lane ccrc
+    // could roster and never show. Measured at review round 1: with the flag
+    // ignored and the default hard-coded, the whole file stayed green, so the
+    // ruling had no mechanism under it.
+    const home = box('ccrc-account-declare-suffix-');
+    seedRosterJson(home, [UPSTREAM]);
+    plantLauncher(home, 'lab-dev0');
+    const r = run(home, ['account', 'declare', '--id', 'lab-dev0', '--suffix', '.claude-lab-dev0',
+      '--label', 'lab·dev0', '--hue', 'violet']);
+    expect(r.code, r.stderr).toBe(0);
+    const onDisk = JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8'));
+    expect(onDisk.accounts[1].configDirSuffix).toBe('.claude-lab-dev0');
   });
 
   it('leaves the new lane switched OFF (decision 20)', () => {
@@ -3193,6 +3223,31 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
     const j = oneObject(r);
     expect(j['error']).toBe('launcher-alias');
     expect(String(j['detail'])).toContain('gpt');
+    expect(existsSync(offMarker(home, 'orchard-api'))).toBe(false);
+  });
+
+  it('collapses a HARD link too, which is the half `-ef` is chosen for', () => {
+    // THE SECOND HALF OF THE SAME LINE, AND IT NEEDS ITS OWN ROW. Doctor states
+    // the reason `-ef` and not `readlink` (`ccrc-doctor-checks:2403-2408`): it
+    // compares device+inode, "and it catches a hard link, which `readlink` would
+    // not." Measured at review round 1: with the symlink row alone, replacing
+    // `-ef` by a `readlink -f` comparison leaves the whole file GREEN — so the
+    // sentence in `_acct_declarable`'s header was a claim with nothing behind
+    // it. A hard link is the shape an operator reaches for when `~/.local/bin`
+    // and the real binary are on one filesystem, and it puts two accounts on one
+    // CLAUDE_CONFIG_DIR exactly as a symlink does.
+    const home = box('ccrc-account-declare-hardlink-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'gpt', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-gpt',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external' } }]);
+    plantLauncher(home, 'gpt');
+    linkSync(join(home, '.local', 'bin', 'gpt'), join(home, '.local', 'bin', 'orchard-api'));
+    // Not a symlink: the two names are one inode with no link to follow.
+    expect(lstatSync(join(home, '.local', 'bin', 'orchard-api')).isSymbolicLink()).toBe(false);
+    const r = run(home, ['account', 'declare', '--id', 'orchard-api',
+      '--label', 'team·shared', '--hue', 'blue']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('launcher-alias');
     expect(existsSync(offMarker(home, 'orchard-api'))).toBe(false);
   });
 
@@ -3446,5 +3501,33 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       const bad = call('lab-dev0');
       expect(bad.code).toBe(1);
       expect(oneObject(bad)['error']).toBe('internal-no-entry');
+    });
+
+  it('the `declared` op refuses a --disabled that is not a boolean, exactly as `added` does',
+    () => {
+      // D-2131 AT ITS SECOND ADDRESS, AND IT WAS UNMEASURED HERE. `added` has
+      // carried this row since Task 26; `declared` copied the guard and no case
+      // drove it, so deleting the whole `if` left the file GREEN — measured at
+      // review round 1. `=== 'true'` alone maps a typo, `'True'` and `''` to
+      // `false`, which publishes "this lane is ON" about a lane that is off, and
+      // `declare`'s single caller always passes one of the two words, so the
+      // shape is refusable rather than guessable.
+      const home = box('ccrc-account-declared-bool-');
+      seedRosterJson(home, [UPSTREAM]);
+      const call = (v: string | null): Result => {
+        const args = ['declared', '--file', join(home, '.ccrc', 'accounts.json'), '--id', 'claude'];
+        if (v !== null) args.push('--disabled', v);
+        const p = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), ...args],
+          { encoding: 'utf8' });
+        return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+      };
+      for (const bad of ['tru', 'True', '1', '']) {
+        const r = call(bad);
+        expect(r.code, `--disabled ${JSON.stringify(bad)} was accepted`).toBe(2);
+        expect(oneObject(r)['error']).toBe('bad-argv');
+      }
+      expect(oneObject(call(null))['error']).toBe('bad-argv');
+      expect(oneObject(call('false'))['disabled']).toBe(false);
+      expect(oneObject(call('true'))['disabled']).toBe(true);
     });
 });
