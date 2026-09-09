@@ -1097,6 +1097,45 @@ function checkAdd(home: string, over: Record<string, string | null> = {}): Resul
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+/** `node deploy/account-op.mjs add-entry --plan …` — THE WRITER, driven with no
+ *  pre-pass in front of it. That is not an artificial shape: it is the arm's own
+ *  documented one (`--plan` is `check-add`'s answer, passed through by a caller
+ *  that may equally have written it by hand), and it is the only way to reach
+ *  the writer's own `rosterFromJson` now that `check-add` runs the same gate
+ *  first (D-2152). */
+function addEntry(home: string, plan: unknown): Result {
+  const r = spawnSync('node', [join(REPO, 'deploy', 'account-op.mjs'), 'add-entry',
+    '--file', join(home, '.ccrc', 'accounts.json'), '--plan', JSON.stringify(plan)],
+  { encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** THE TWO LANE SHAPES EVERY EMPTY-VALUE TABLE IN THIS FILE DRIVES (D-2151),
+ *  as overrides onto `checkAdd`'s own base — which IS the compatible/token lane
+ *  (it carries `--base-url`, and its method defaults to `paste`).
+ *
+ *  A TABLE ON ONE SHAPE MEASURES THE FIXTURE AS MUCH AS THE GUARD. Two of the
+ *  nine flags answer with a DIFFERENT code on each lane — measured:
+ *  `--base-url ''` is `base-url-unparseable` on `compatible` and
+ *  `base-url-not-supported` on `anthropic`; `--models ''` is `models-invalid`
+ *  and `models-not-supported` — because the login lane refuses both flags as
+ *  flags before anything judges their value. So on that lane the value gates are
+ *  covered by a refusal firing for an unrelated reason, which reads exactly like
+ *  coverage and is not. Every table below runs on both. */
+const CHECK_ADD_LANES: [string, Record<string, string | null>][] = [
+  ['compatible/token', {}],
+  ['anthropic/login', { '--provider': 'anthropic', '--base-url': null }],
+];
+
+/** The same pair for the bash verb, as overrides onto `addArgs`' base. The login
+ *  lane drops `--credential` as well: `add --provider anthropic` takes no
+ *  credential at all, and that is the lane on which `--credential ''` used to
+ *  create the account. */
+const ADD_LANES: [string, Record<string, string | null>][] = [
+  ['compatible/token', {}],
+  ['anthropic/login', { '--provider': 'anthropic', '--base-url': null, '--credential': null }],
+];
+
 /** Everything a refusal must not have touched.
  *
  *  `bins` is a DIFFERENCE, not an absolute: the four containment poisons
@@ -1497,13 +1536,30 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // serve.
     const home = box('ccrc-account-checkadd-empty-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    for (const flag of ['--id', '--label', '--suffix']) {
-      const r = checkAdd(home, { [flag]: '' });
-      expect(r.code, `${flag} '': ${r.stderr}`).toBe(2);
-      const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
-      expect(j['ok'], flag).toBe(false);
-      expect(j['error'], flag).toBe('bad-argv');
-      expect(String(j['detail']), flag).toContain(flag);
+    // AND THEY ARE STILL THREE HAND GATES AFTER D-2152 GAVE THIS ARM A CLOSING
+    // `rosterFromJson`, which is a DECISION and was measured before it was made:
+    // with the loop deleted the pre-pass answers all three, so the question was
+    // whether these rows now pin an unreachable gate. They do not. Measured with
+    // the loop removed, identical on both lanes:
+    //
+    //   --id ''      roster-invalid, 1  accounts[3] has an invalid id "". Rename it…
+    //   --label ''   roster-invalid, 1  account "lab-dev0" has no label. Add a non-empty…
+    //   --suffix ''  roster-invalid, 1  …has an invalid configDirSuffix "". Set it to…
+    //
+    // Each names a ROSTER FIELD (`configDirSuffix` is not a flag anyone typed)
+    // and an entry INDEX, and each prescribes editing an account that does not
+    // exist — when the fix is one flag. And each is class 1, "legal on its face
+    // and the box said no", for a request that is not legal on its face. So the
+    // hand gates keep their place and the pre-pass keeps to what no gate names.
+    for (const [lane, over] of CHECK_ADD_LANES) {
+      for (const flag of ['--id', '--label', '--suffix']) {
+        const r = checkAdd(home, { ...over, [flag]: '' });
+        expect(r.code, `${lane} ${flag} '': ${r.stderr}`).toBe(2);
+        const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+        expect(j['ok'], `${lane} ${flag}`).toBe(false);
+        expect(j['error'], `${lane} ${flag}`).toBe('bad-argv');
+        expect(String(j['detail']), `${lane} ${flag}`).toContain(flag);
+      }
     }
   });
 
@@ -1515,21 +1571,193 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // cover them would replace six specific answers with one generic sentence —
     // an adapter narrowing a distinction it received — so this row is what goes
     // red if a later reader "finishes the job" by adding them.
+    // IT IS ALSO THE HALF THAT PINS D-2152'S ORDER, and that is why the exit
+    // code travels with the code here: the pre-pass this arm now closes with
+    // answers `roster-invalid` at 1 and would answer for every one of these six
+    // if it ran first or if a helper were deleted. Each row therefore reds in
+    // both directions — a helper's specific code replaced by the validator's
+    // generic one, and the validator's class replacing the helper's — which is
+    // the mechanism standing over "the new pre-pass does not supersede the
+    // helpers". The explicit `not.toBe('roster-invalid')` below says the same
+    // thing in the words the ruling used, for a reader who changes a code.
+    //
+    // TWO OF THE SIX ANSWER DIFFERENTLY ON THE TWO LANES, and that is the whole
+    // reason this table is per-lane rather than one list (D-2151): on a login
+    // lane `--base-url` and `--models` are refused as FLAGS THAT CANNOT MEAN
+    // ANYTHING THERE, before any line judges their value — so a table on that
+    // lane alone would report both as covered while the value gates beside them
+    // went unmeasured.
     const home = box('ccrc-account-checkadd-emptyrest-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    const rows: [string, Record<string, string | null>, string, number][] = [
-      ['--file', { '--file': '' }, 'roster-absent', 1],
-      ['--provider', { '--provider': '' }, 'unknown-provider', 2],
-      ['--hue', { '--hue': '' }, 'unknown-hue', 2],
-      ['--method', { '--method': '' }, 'method-not-supported', 2],
-      ['--models', { '--models': '' }, 'models-invalid', 2],
-      ['--base-url', { '--base-url': '' }, 'base-url-unparseable', 2],
+    const perLane: [string, Record<string, string | null>, [string, string, number][]][] = [
+      ['compatible/token', {}, [
+        ['--file', 'roster-absent', 1],
+        ['--provider', 'unknown-provider', 2],
+        ['--hue', 'unknown-hue', 2],
+        ['--method', 'method-not-supported', 2],
+        ['--models', 'models-invalid', 2],
+        ['--base-url', 'base-url-unparseable', 2],
+      ]],
+      ['anthropic/login', { '--provider': 'anthropic', '--base-url': null }, [
+        ['--file', 'roster-absent', 1],
+        ['--provider', 'unknown-provider', 2],
+        ['--hue', 'unknown-hue', 2],
+        ['--method', 'method-not-supported', 2],
+        ['--models', 'models-not-supported', 2],
+        ['--base-url', 'base-url-not-supported', 2],
+      ]],
     ];
-    for (const [flag, over, code, exit] of rows) {
-      const r = checkAdd(home, over);
-      expect(r.code, `${flag}: ${r.stderr}`).toBe(exit);
-      expect(JSON.parse(r.stdout.split('\n')[0]!)['error'], flag).toBe(code);
+    // ONE VERDICT PER ROW, MEASURED FIRST AND ASSERTED ONCE, so a regression
+    // names every row it broke rather than throwing at the first.
+    const got: Record<string, string> = {};
+    const want: Record<string, string> = {};
+    for (const [lane, lanes, rows] of perLane) {
+      for (const [flag, code, exit] of rows) {
+        const r = checkAdd(home, { ...lanes, [flag]: '' });
+        const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+        expect(String(j['error']), `${lane} ${flag} answered the validator's generic code`)
+          .not.toBe('roster-invalid');
+        got[`${lane} ${flag}`] = `${String(j['error'])} at ${r.code}`;
+        want[`${lane} ${flag}`] = `${code} at ${exit}`;
+      }
     }
+    expect(got).toEqual(want);
+  });
+
+  it('check-add validates the ENTRY it proposes, before any byte (D-2152)', () => {
+    // THE STRUCTURAL FIX, AND THE FOUR REQUESTS THAT MEASURE IT. Until D-2152
+    // this was the only pre-pass in `account-op.mjs` that returned a plan it
+    // never validated: `check-declare` runs `rosterFromJson` on the entry it
+    // assembles, `check-add` returned nine resolved fields unjudged. So every
+    // field fault no HELPER names travelled into the plan and was refused by
+    // `add-entry`'s own validator — one step AFTER a caller following this op's
+    // documented sequence had written the 0600 credential and the kill-switch
+    // marker. MEASURED at 6d1c75df, each answering `ok: true` here:
+    //
+    //     check-add --id 'lab dev0'     → ok, plan carries id "lab dev0"
+    //     check-add --id 'Lab.Dev'      → ok
+    //     check-add --suffix claude-x   → ok, plan carries "configDirSuffix":"claude-x"
+    //     check-add --suffix ../evil    → ok, plan carries "configDirSuffix":"../evil"
+    //
+    // …and each refused one step later with `roster-invalid` at exit 1, e.g.
+    // `accounts[3] has an invalid id "lab dev0". Rename it to match
+    // ^[a-z][a-z0-9-]{0,31}$ …`.
+    //
+    // NEITHER FIELD HAS A SHAPE GATE IN THAT ARM AT ALL — bash gates both
+    // (`_acct_id_or_refuse`, `_acct_suffix_or_refuse`), and this op was leaning
+    // on a caller it does not have. That is why the rows below are these two
+    // fields: they are the class the pre-pass exists for, live today, rather
+    // than a hypothetical about the fields three later tasks will add.
+    //
+    // BOTH LANES, for D-2151's reason: the fault is in a field neither lane
+    // treats differently, so a difference between the two columns here would
+    // itself be the finding.
+    const rows: [string, Record<string, string | null>][] = [
+      ['an id with a space in it', { '--id': 'lab dev0' }],
+      ['an id the wrapper regex refuses', { '--id': 'Lab.Dev' }],
+      ['a configDirSuffix that is not dot-prefixed', { '--suffix': 'claude-x' }],
+      ['a configDirSuffix carrying a traversal', { '--suffix': '../evil' }],
+    ];
+    const got: Record<string, string> = {};
+    for (const [lane, over] of CHECK_ADD_LANES) {
+      const home = box('ccrc-account-checkadd-prepass-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const before = JSON.stringify(untouched(home));
+      for (const [what, fault] of rows) {
+        const r = checkAdd(home, { ...over, ...fault });
+        const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+        let v = `${String(j['error'])} at ${r.code}`;
+        // THE VALIDATOR'S OWN REMEDY REACHES THE OPERATOR VERBATIM, which is
+        // the whole reason this gate borrows `rosterFromJson`'s sentence rather
+        // than inventing a code per field: the fix is the same words whichever
+        // of the two gates catches it.
+        if (!String(j['detail']).includes('would make') || !String(j['detail']).includes(': ')) {
+          v = `${v} + THE SENTENCE LOST THE VALIDATOR'S WORDS`;
+        }
+        if (JSON.stringify(untouched(home)) !== before) v = `${v} + THE BOX CHANGED`;
+        got[`${lane} ${what}`] = v;
+      }
+      // THE ACCEPTANCE ROW PER LANE. Without it every row above would stay green
+      // on a pre-pass that refused everything — the failure mode a validator
+      // added at the end of an arm actually has.
+      const ok = checkAdd(home, over);
+      got[`${lane} a legal request`] = `ok:${JSON.parse(ok.stdout)['ok']} at ${ok.code}`;
+    }
+    expect(got).toEqual(Object.fromEntries(CHECK_ADD_LANES.flatMap(([lane]) => [
+      ...rows.map(([what]) => [`${lane} ${what}`, 'roster-invalid at 1']),
+      [`${lane} a legal request`, 'ok:true at 0'],
+    ])));
+  });
+
+  it('the pre-pass and the writer judge ONE entry and say ONE sentence (D-2152)', () => {
+    // ONE BUILDER, TWO CALLERS, ONE VALIDATOR — the shape `declaredEntry`
+    // already had and this task gave `addedEntry`. The claim is not "both call
+    // rosterFromJson"; it is that they call it on THE SAME OBJECT, which is the
+    // only version of this that catches a second spelling. A pre-pass judging an
+    // entry built its own way would still validate, still look right, and still
+    // disagree with what lands — so it is measured as an equality of ANSWERS on
+    // one fault: `check-add`'s refusal must be byte-identical to `add-entry`'s
+    // for the plan carrying that same fault.
+    //
+    // THE ROW IS THE SUFFIX, deliberately. `--id` travels into two DERIVED
+    // fields of the plan (`configDirSuffix` and `secretsFile`), so a hand plan
+    // that changed the id alone would differ from `check-add`'s in three places
+    // and the equality would be measuring the fixture; `--suffix` reaches
+    // exactly one field, so the two objects differ in exactly the value under
+    // test.
+    for (const [lane, over] of CHECK_ADD_LANES) {
+      const home = box('ccrc-account-checkadd-agree-');
+      seedBoxRoster(home, FIXTURE_ROSTER);
+      const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+      const legal = JSON.parse(checkAdd(home, over).stdout) as
+        { plan: Record<string, unknown> };
+      for (const bad of ['claude-x', '../evil']) {
+        const pre = checkAdd(home, { ...over, '--suffix': bad });
+        const writer = addEntry(home, { plan: { ...legal.plan, configDirSuffix: bad } });
+        const pj = JSON.parse(pre.stdout.split('\n')[0]!) as Record<string, unknown>;
+        const wj = JSON.parse(writer.stdout.split('\n')[0]!) as Record<string, unknown>;
+        expect(`${String(pj['error'])} at ${pre.code}`, `${lane} ${bad}`)
+          .toBe(`${String(wj['error'])} at ${writer.code}`);
+        expect(String(pj['detail']),
+          `${lane} ${bad}: the pre-pass and the writer describe one request two ways`)
+          .toBe(String(wj['detail']));
+      }
+      // AND THE WRITER'S REFUSALS TOUCHED NOTHING EITHER — the property that
+      // makes the second gate free to exist rather than a second chance to
+      // half-write the file.
+      expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+    }
+  });
+
+  it('`add-entry` is still its own last gate, for a plan no pre-pass saw (D-2152)', () => {
+    // THE HALF OF THE RULING THAT IS EASY TO LOSE. Now that `check-add` runs the
+    // same validator, `add-entry`'s own `rosterFromJson` is unreachable through
+    // the documented sequence — which is exactly the condition under which a
+    // guard gets deleted as redundant by a later reader. It is not redundant:
+    // this arm takes a `--plan` that may have been HAND-WRITTEN (its own header
+    // says so, and `_acct_add` passes bytes through unchanged), so it is the
+    // last thing between an invented plan and the roster.
+    //
+    // MEASURED, not asserted: with that try/catch deleted this case writes the
+    // bad entry into the roster and answers `ok: true`, and it is the only case
+    // in the file that does — no other test reaches this arm with a fault the
+    // pre-pass would have caught first.
+    const home = box('ccrc-account-addentry-lastgate-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    const legal = JSON.parse(checkAdd(home).stdout) as { plan: Record<string, unknown> };
+    const r = addEntry(home, { plan: { ...legal.plan, configDirSuffix: 'claude-x' } });
+    expect(r.code, r.stderr).toBe(1);
+    const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect(j['error']).toBe('roster-invalid');
+    expect(String(j['detail'])).toContain('configDirSuffix');
+    // THE FILE IS UNTOUCHED — the refusal came before the tmp+rename, not after.
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+    // AND THE SAME PLAN WITHOUT THE FAULT LANDS, so the row above is measuring
+    // the gate rather than a writer that refuses everything.
+    const ok = addEntry(home, legal);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toBe(before);
   });
 
   it('`_acct_add_parse` and `check-add` default the config dir to the same string', () => {
@@ -1663,14 +1891,17 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     //     add … --credential ''  exit 0, lane created   (login lane: `-z` is true)
     //
     // TWO OF THEM CARRIED ACCIDENTAL COVER, which is why the defect survived
-    // two review rounds and why this table drives the LOGIN lane rather than
-    // the token one for those two: `--base-url ''` answers `base-url-required`
-    // under `compatible` and creates the lane under `anthropic`, and
-    // `--credential ''` answers `credential-required` on a token lane and
-    // creates the lane on a login one. A table written against `addArgs()`'s
-    // compatible base alone would have gone green on both rows without the
-    // gate — the exact shape D-2145 calls a measured neighbour hiding an
-    // unmeasured line.
+    // two review rounds and why this table drives BOTH LANES rather than one:
+    // `--base-url ''` answers `base-url-required` under `compatible` and
+    // creates the lane under `anthropic`, and `--credential ''` answers
+    // `credential-required` on a token lane and creates the lane on a login
+    // one. A table written against `addArgs()`'s compatible base alone would
+    // have gone green on both rows without the gate — the exact shape D-2145
+    // calls a measured neighbour hiding an unmeasured line. Round 3 answered
+    // that by moving the table to the login lane; round 4 drives the pair,
+    // because a table on the OTHER single shape has the same defect mirrored
+    // (there, `--base-url ''` is covered by `base-url-required` instead), and a
+    // review that swaps one accidental cover for another has measured nothing.
     //
     // ALL NINE ROWS MEASURE ONE LINE, the `[ -n "$v" ]` in `_acct_add_parse`.
     // Delete it and the four already-covered rows fall back to their downstream
@@ -1693,44 +1924,52 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // dirty roster and answering `duplicate-id` — a table whose rows depend on
     // each other cannot say which line it is measuring.
     const got: Record<string, string> = {};
-    for (const flag of flags) {
-      const home = box('ccrc-account-add-emptyflag-');
-      seedBoxRoster(home, FIXTURE_ROSTER);
-      plantUpstream(home);
-      plantInstallers(home);
-      const before = JSON.stringify(untouched(home));
-      // THE LOGIN LANE, and `--base-url`/`--credential` say why above. It is
-      // also the lane on which a successful `add` writes NO secret at all, so
-      // "nothing was written" is a claim about the roster, the marker and the
-      // wrapper rather than about one file that was never coming.
-      const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
-        '--label', 'lab·dev0', '--hue', 'amber', flag, ''], `${SHELL_SYNTAX}\n`);
-      let v = `exit ${r.code}, stdout ${JSON.stringify(r.stdout.slice(0, 70))}`;
-      try {
-        const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
-        // THE FLAG NAME IS IN THE SENTENCE, which is what makes one shared gate
-        // usable: nine flags reach one message, so the message must say which.
-        if (r.code === 2 && j['ok'] === false && String(j['detail']).includes(flag)) {
-          v = String(j['error']);
-        }
-      } catch { /* not an envelope — `v` already says what it was instead */ }
-      if (JSON.stringify(untouched(home)) !== before) v = `${v} + THE BOX CHANGED`;
-      if (existsSync(join(home, '.local', 'bin', 'lab-dev0'))) v = `${v} + A WRAPPER WAS WRITTEN`;
-      if (existsSync(join(home, 'EXECUTED'))) v = `${v} + THE CREDENTIAL WAS SOURCED`;
-      got[flag] = v;
+    for (const [lane, over] of ADD_LANES) {
+      for (const flag of flags) {
+        const home = box('ccrc-account-add-emptyflag-');
+        seedBoxRoster(home, FIXTURE_ROSTER);
+        plantUpstream(home);
+        plantInstallers(home);
+        const before = JSON.stringify(untouched(home));
+        // `addArgs` FOLDS THE EMPTY FLAG ONTO A COMPLETE REQUEST, which is what
+        // makes the two lanes comparable: the row differs from a request that
+        // WOULD have succeeded in exactly one empty flag, on either lane. The
+        // login lane also writes NO secret when it succeeds, so on that lane
+        // "nothing was written" is a claim about the roster, the marker and the
+        // wrapper rather than about a file that was never coming.
+        const r = run(home, addArgs({ ...over, [flag]: '' }), `${SHELL_SYNTAX}\n`);
+        let v = `exit ${r.code}, stdout ${JSON.stringify(r.stdout.slice(0, 70))}`;
+        try {
+          const j = JSON.parse(r.stdout.split('\n')[0]!) as Record<string, unknown>;
+          // THE FLAG NAME IS IN THE SENTENCE, which is what makes one shared gate
+          // usable: nine flags reach one message, so the message must say which.
+          if (r.code === 2 && j['ok'] === false && String(j['detail']).includes(flag)) {
+            v = String(j['error']);
+          }
+        } catch { /* not an envelope — `v` already says what it was instead */ }
+        if (JSON.stringify(untouched(home)) !== before) v = `${v} + THE BOX CHANGED`;
+        if (existsSync(join(home, '.local', 'bin', 'lab-dev0'))) v = `${v} + A WRAPPER WAS WRITTEN`;
+        if (existsSync(join(home, 'EXECUTED'))) v = `${v} + THE CREDENTIAL WAS SOURCED`;
+        got[`${lane} ${flag}`] = v;
+      }
     }
-    expect(got).toEqual(Object.fromEntries(flags.map((f) => [f, 'missing-value'])));
-    // THE ACCEPTANCE ROW, and it is not decoration: the nine rows above differ
-    // from this request in exactly one empty flag, so without it the table
-    // could be green on a fixture that could never have succeeded — which is
-    // precisely how the pre-fix `--suffix ''` row would have LOOKED correct.
-    const okHome = box('ccrc-account-add-emptyflag-ok-');
-    seedBoxRoster(okHome, FIXTURE_ROSTER);
-    plantUpstream(okHome);
-    plantInstallers(okHome);
-    const ok = run(okHome, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
-      '--label', 'lab·dev0', '--hue', 'amber']);
-    expect(ok.code, ok.stderr).toBe(0);
+    expect(got).toEqual(Object.fromEntries(ADD_LANES.flatMap(
+      ([lane]) => flags.map((f) => [`${lane} ${f}`, 'missing-value']))));
+    // THE ACCEPTANCE ROW, ONE PER LANE, and it is not decoration: the eighteen
+    // rows above differ from these requests in exactly one empty flag, so
+    // without them the table could be green on a fixture that could never have
+    // succeeded — which is precisely how the pre-fix `--suffix ''` row would
+    // have LOOKED correct. It is also the row that keeps the login-lane column
+    // honest about `--credential`: that lane takes none, so a request missing it
+    // must still reach exit 0.
+    for (const [lane, over] of ADD_LANES) {
+      const okHome = box('ccrc-account-add-emptyflag-ok-');
+      seedBoxRoster(okHome, FIXTURE_ROSTER);
+      plantUpstream(okHome);
+      plantInstallers(okHome);
+      const ok = run(okHome, addArgs(over), `${SHELL_SYNTAX}\n`);
+      expect(ok.code, `${lane}: ${ok.stderr}`).toBe(0);
+    }
   });
 
   it('the `=` spelling reaches the same empty-value gate', () => {

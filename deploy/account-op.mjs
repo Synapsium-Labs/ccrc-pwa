@@ -327,6 +327,55 @@ function suffixFreeClass(accounts, suffix, file) {
   return 0;
 }
 
+/** THE PROPOSED `generated` ENTRY, ASSEMBLED ONCE — `declaredEntry` below at
+ *  `add`'s address, and for its reason (D-2152). `check-add` judges this object
+ *  and `add-entry` writes it, and they must be the SAME object or the pre-pass
+ *  is judging something other than what lands.
+ *
+ *  IT TAKES THE PLAN, NOT ARGV, and that is the whole difference from
+ *  `declaredEntry`: `check-add` RESOLVES decisions its argv does not carry (a
+ *  materialised endpoint, a secrets-file name, a method default) and hands the
+ *  resolved plan on to a writer that re-derives none of them, so the plan is the
+ *  object both halves share. `declare` resolves nothing, so its builder can read
+ *  argv directly. Two builders, because the two verbs differ in what they
+ *  decide — not in how many spellings of one entry they carry.
+ *
+ *  ITS TWO CALLERS DIFFER IN WHAT THEY MAY ASSUME, which is why nothing here
+ *  asserts a shape. `check-add` calls it on a plan THIS FILE just built, every
+ *  field a string it validated; `add-entry` calls it on a plan that arrived as
+ *  `--plan` and may have been hand-written, where any field may be anything at
+ *  all. So the builder stays total — it copies what it is given and adds the
+ *  three constants below — and the judgement is `rosterFromJson`'s at both
+ *  addresses. A type check here would be a third opinion about a value the
+ *  validator already owns.
+ *
+ *  `homeAble: true` AND `telemetry: 'anthropic'` are facts about a GENERATED
+ *  wrapper, the mirror of `declaredEntry`'s two: it sets CLAUDE_CONFIG_DIR, so
+ *  ccd can land a session on it, and the statusline writes
+ *  ~/.cc-limits/<id>.json for it (statusline-command.sh:244-251). `homeAble` is
+ *  what `_ws_least_loaded` reads and `$REG/<id>-disabled` is what holds the lane
+ *  back until it has been measured (Task 26) — two different questions, and
+ *  collapsing them into `homeAble: false` would make a working lane permanently
+ *  unplaceable rather than merely switched off.
+ *
+ *  `exec` CARRIES EVERY PROVIDER FIELD AND NOTHING ELSE — §4.1's shape, where
+ *  the account-level keys (ACCOUNT_KEYS, shared/roster.ts:310) do not change and
+ *  every new field lives on exec. Absent values are OMITTED rather than written
+ *  null: `parseRoster` is absence-permitting and a null would be a value it must
+ *  then have an opinion about. `plan.models` arrives PARSED — `check-add`
+ *  validated it (Task 23) so that no JSON parse lands in the writer, where a
+ *  throw would exit with a stack trace and an empty stdout. */
+function addedEntry(plan) {
+  const exec = { kind: 'generated', provider: plan.provider };
+  if (plan.baseUrl !== null) exec.baseUrl = plan.baseUrl;
+  if (plan.secretsFile !== null) exec.secretsFile = plan.secretsFile;
+  if (plan.models !== null) exec.models = plan.models;
+  return {
+    id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix, exec,
+    homeAble: true, hue: plan.hue, telemetry: 'anthropic',
+  };
+}
+
 /** THE PROPOSED `external` ENTRY, ASSEMBLED ONCE. `check-declare` judges this
  *  object and `declare-entry` writes it, and they must be the same object or
  *  the pre-pass is judging something other than what lands — the defect a
@@ -573,6 +622,25 @@ function main(argv) {
     // kill-switch marker. That is D-2004's class at the one address D-2004 did
     // not sweep, and this op exists so that no refusal of a request is reached
     // with bytes already on disk.
+    //
+    // ── AND THEY SURVIVE THE PRE-PASS BELOW, MEASURED RATHER THAN ASSUMED ───
+    // D-2152 gave this arm a closing `rosterFromJson`, which reaches all three
+    // of these keys, so the honest question is whether this loop is now an
+    // unreachable gate — the shape that rots. It is not, and the reason is the
+    // three sentences it replaces. With this loop deleted (measured on both a
+    // compatible and a login lane, identical on each), the answers become:
+    //
+    //   --id ''      1  accounts[3] has an invalid id "". Rename it to match …
+    //   --label ''   1  account "lab-dev0" has no label. Add a non-empty "label" …
+    //   --suffix ''  1  account "lab-dev0" has an invalid configDirSuffix "". Set it …
+    //
+    // Every one names a ROSTER FIELD and an entry INDEX rather than the flag the
+    // operator typed — `configDirSuffix` is not a flag at all — and every one
+    // prescribes editing an account that does not exist, when the fix is to give
+    // one flag a value. They are also class 1, "the request was legal on its face
+    // and the box said no" (ccd/ccrc:24-33), and an empty flag is precisely a
+    // request that is NOT legal on its face. So the loop keeps its place: the
+    // pre-pass catches what no gate NAMES, and these three are named.
     for (const k of ['id', 'label', 'suffix']) {
       if (a[k] !== '') continue;
       refuse('bad-argv',
@@ -910,24 +978,76 @@ function main(argv) {
     // token and its file is `<id>-oauth.env`; an api-key lane's file is
     // `<id>-<provider>.env`, which is §4.3's own spelling.
     const secretTag = P.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
-    out({
-      ok: true,
-      plan: {
-        id,
-        provider,
-        label: a['label'],
-        hue: a['hue'],
-        configDirSuffix: suffix,
-        method,
-        baseUrl: resolvedBaseUrl,
-        secretsFile: isToken && P.envVar !== null ? `.cc-secrets/${id}-${secretTag}.env` : null,
-        envVar: isToken ? P.envVar : null,
-        // The PARSED object, not the string bash handed over — `add-entry`
-        // writes it into the roster and Task 25 hands it to jq with
-        // `--argjson`, and neither should be the place a parse failure lands.
-        models,
-      },
-    });
+    const plan = {
+      id,
+      provider,
+      label: a['label'],
+      hue: a['hue'],
+      configDirSuffix: suffix,
+      method,
+      baseUrl: resolvedBaseUrl,
+      secretsFile: isToken && P.envVar !== null ? `.cc-secrets/${id}-${secretTag}.env` : null,
+      envVar: isToken ? P.envVar : null,
+      // The PARSED object, not the string bash handed over — `add-entry`
+      // writes it into the roster and Task 25 hands it to jq with
+      // `--argjson`, and neither should be the place a parse failure lands.
+      models,
+    };
+
+    // ── THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT IT WRITES ────
+    // D-2152, and it is `check-declare`'s closing gate at this arm's address.
+    // Until it shipped, this op was the only pre-pass in the file that returned
+    // a plan it never validated: every field a later task adds to that plan was
+    // another value travelling unjudged into `add-entry`'s `rosterFromJson` —
+    // which refuses AFTER the caller following this op's own documented sequence
+    // has written the 0600 credential and the kill-switch marker. MEASURED at
+    // 6d1c75df, four requests answering `ok: true` here and `roster-invalid` at
+    // exit 1 one step later, with bytes already on disk:
+    //
+    //   --id 'lab dev0'      accounts[3] has an invalid id "lab dev0"
+    //   --id 'Lab.Dev'       accounts[3] has an invalid id "Lab.Dev"
+    //   --suffix claude-x    has an invalid configDirSuffix "claude-x"
+    //   --suffix ../evil     has an invalid configDirSuffix "../evil"
+    //
+    // Neither field had a shape gate in this arm at all: bash gates both
+    // (`_acct_id_or_refuse`, `_acct_suffix_or_refuse`), and this arm was leaning
+    // on a caller it does not have — the hand-caller path its own `--suffix`
+    // comment documents as the only way in.
+    //
+    // IT IS LAST, AND THE ORDER IS THE RULING (D-2152). Every specific refusal
+    // above keeps its own code and its own remedy: `unknown-hue`, `bad-label`,
+    // `unknown-provider`, `method-not-supported`, the five `--models` codes, the
+    // five base-url ones, `duplicate-id`, `suffix-collision`. This gate catches
+    // only what no helper NAMES, so it can never supersede one — a validator
+    // sentence in place of six specific answers would be an adapter narrowing a
+    // distinction it received, and `ccrc-account.test.ts` pins the precedence in
+    // both directions.
+    //
+    // AND IT ANSWERS `roster-invalid` AT EXIT 1, which is the objection D-2021
+    // raised against this shape and the measurement that answers it: every
+    // `roster-invalid` this file raises is exit 1 — `readRoster`'s two,
+    // `add-entry`'s, `check-declare`'s and `declare-entry`'s — so the code still
+    // has ONE class. What changes is WHEN it fires, not what it costs: before
+    // the first byte instead of after the credential. D-2021's worry was a
+    // consequence of validating late, not of validating twice.
+    //
+    // `add-entry`'s OWN `rosterFromJson` STAYS, for `declare-entry`'s reason:
+    // that op is callable by hand with a hand-written plan and is its own last
+    // gate. Two gates, two callers, ONE validator — which is not two spellings
+    // of a rule, because the rule is spelled in `shared/roster-json.mjs` and
+    // neither of them re-states it.
+    try {
+      rosterFromJson({ ...json, accounts: [...accounts, addedEntry(plan)] });
+    } catch (e) {
+      const remedy = e instanceof RosterInvalid && typeof e.remedy === 'string' ? ` ${e.remedy}` : '';
+      // THE WRITER'S SENTENCE, WORD FOR WORD (`add-entry`, below). One request
+      // must not describe itself two ways depending on which of the two gates
+      // caught it, and the operator's fix is the same flag either way.
+      refuse('roster-invalid',
+        `the entry for "${id}" would make ${a['file']} unparseable: ${e.message}${remedy}`);
+      return 1;
+    }
+    out({ ok: true, plan });
     return 0;
   }
 
@@ -976,30 +1096,15 @@ function main(argv) {
     const json = readRoster(a['file']);
     if (json === null) return 1;
 
-    // THE ENTRY. `exec` carries every provider field and NOTHING else — §4.1's
-    // shape, where the account-level keys (ACCOUNT_KEYS, shared/roster.ts:310)
-    // do not change and every new field lives on exec. Absent values are
-    // OMITTED rather than written null: `parseRoster` is absence-permitting and
-    // a null would be a value it must then have an opinion about. `plan.models`
-    // arrives PARSED — `check-add` validated it (Task 23) so that no JSON parse
-    // lands here, where a throw would exit with a stack trace and an empty
-    // stdout.
-    const exec = { kind: 'generated', provider: plan.provider };
-    if (plan.baseUrl !== null) exec.baseUrl = plan.baseUrl;
-    if (plan.secretsFile !== null) exec.secretsFile = plan.secretsFile;
-    if (plan.models !== null) exec.models = plan.models;
-    const entry = {
-      id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix, exec,
-      // A NEW LANE IS HOME-ABLE AND CARRIES ANTHROPIC-SHAPED TELEMETRY. Both are
-      // facts about a generated wrapper: it sets CLAUDE_CONFIG_DIR, so ccd can
-      // land a session on it, and the statusline writes ~/.cc-limits/<id>.json
-      // for it (statusline-command.sh:244-251). `homeAble` is what
-      // `_ws_least_loaded` reads and `$REG/<id>-disabled` is what holds it back
-      // until the lane has been measured (Task 26) — two different questions,
-      // and collapsing them into `homeAble: false` would make a working lane
-      // permanently unplaceable rather than merely switched off.
-      homeAble: true, hue: plan.hue, telemetry: 'anthropic',
-    };
+    // THE ENTRY IS `addedEntry`'S, NOT ASSEMBLED HERE (D-2152) — `declare-entry`'s
+    // rule at this address, and it arrived here for the same reason: `check-add`
+    // judges the same object this writes, and a second spelling of the assembly
+    // would be a pre-pass judging something other than what lands, a
+    // disagreement no parser could see since both shapes would still validate.
+    // Every argument about the three fields this verb DECIDES rather than takes
+    // (`homeAble`, `telemetry`, `exec.kind`) lives on that function, beside the
+    // note that it is called on a plan that may have been hand-written.
+    const entry = addedEntry(plan);
 
     const next = { ...json, accounts: [...json['accounts'], entry] };
 
@@ -1007,6 +1112,12 @@ function main(argv) {
     // reader uses. `_inst_roster`'s rule (ccd/ccrc:4882-4887): seeding a roster
     // a box cannot parse poisons that box, because the rule that makes the file
     // safe to own — never overwritten — is what stops the next run fixing it.
+    //
+    // AND IT IS STILL NOT REDUNDANT NOW THAT `check-add` RUNS THE SAME GATE
+    // (D-2152), for `declare-entry`'s reason: this op is callable by hand with a
+    // hand-written `--plan` that no pre-pass ever saw, and it is the writer's own
+    // last gate. What the pre-pass changed is which of the two an operator
+    // following the documented sequence MEETS — the one with nothing on disk.
     try {
       rosterFromJson(next);
     } catch (e) {
