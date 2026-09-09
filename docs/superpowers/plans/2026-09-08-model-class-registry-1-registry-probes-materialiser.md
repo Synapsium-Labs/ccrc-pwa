@@ -70,7 +70,7 @@ account-connections branch's. So this design's node half is simply a new file. I
 still copies, and cites, the idioms `main` already uses for a node helper `ccrc`
 shells out to: `deploy/gen-accounts.mjs`'s "print the remedy on stderr, exit
 non-zero" contract (`ccd/ccrc:3955-3962` reads it verbatim) and `ccrc-adopt`'s
-`--out PATH` / unknown-flag-is-exit-2 argument loop (`ccd/ccrc-adopt:97-105`).
+`--out PATH` / unknown-flag-is-exit-2 argument loop (`ccd/ccrc-adopt:139-146`).
 
 **B-1 — an UNSEEDED registry is legal on disk.** (owned by Plan 1)
 Spec §10 says `init <probe>` "creates the registry file" for all three probe
@@ -80,10 +80,14 @@ is a non-empty list" as written, so `init openrouter` would have nothing legal t
 write. The two rules are therefore CONDITIONAL on the registry being seeded:
 **when every class is null, `subagent` may name any class and `discovery` may be
 the empty list**; the moment any class is non-null both rules apply in full. An
-unseeded registry materialises to nothing (`modelEnvBlock` still refuses "a lane
-needs at least one class", so no env block is written and `materialise` answers
-`wrote: null`) and reads as "every class unavailable" — which is exactly §13.1's
-migration state. Nothing else in the round-2 validator moves.
+unseeded registry materialises to no ENV BLOCK (`modelEnvBlock` still refuses "a
+lane needs at least one class") but still gets its TSV and effort files — ccd
+reads the TSV on every spawn, and an ABSENT file is a different question from a
+lane with nothing assigned — so Task 6's `materialise` answers `wrote:
+{settings: null, classes: <path>, effort: <path>}`, never a bare `wrote: null`
+(that shape is reserved for "no registry at all"; ruling, Task 6) — and reads as
+"every class unavailable" — which is exactly §13.1's migration state. Nothing
+else in the round-2 validator moves.
 
 **B-2 — the catalogue's provider field is `probe: ProbeKind`.** (owned by Plan 1)
 Spec §4.2's example writes `"provider": "openai"`, but `openai` is an
@@ -5067,7 +5071,7 @@ Expected: FAIL — `spawnSync` cannot find `deploy/models-op.mjs`, so `stdout` i
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
 // verbatim" contract (`ccd/ccrc:3955-3962` reads it that way), and
-// `ccd/ccrc-adopt:97-105`'s argument loop, where an unknown flag is exit 2.
+// `ccd/ccrc-adopt:139-146`'s argument loop, where an unknown flag is exit 2.
 //
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
 // every import below is a `.mjs`.
