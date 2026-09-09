@@ -987,6 +987,110 @@ number up; do not invent one.
   and leaves the target directory itself standing — the home that owns it converges on its own pass.
   Task 3, mutation M5.
 
+### Found during execution, 2026-09-09
+
+The five above were found while writing the plan. These fifteen were found while executing it, each by
+a review that measured the defect rather than argued it. They are recorded here because the shipped
+source carries their `D-N` comments, and because several of them supersede what this plan's own code
+blocks say.
+
+- **D-2238** — **CONVERGED IS REDEFINED, IN ALL FOUR SITES.** This plan compares `readlink`'s TEXT to
+  the store's absolute spelling. Measured: that makes `ccrc doctor` and `ccrc memory` answer
+  DIFFERENTLY about the same pair — a relative link resolving to the canonical store reads `converged`
+  to a `-ef` test and `forked` to a text test, and a "store" that exists as a regular FILE passes a bare
+  existence check while being exactly as unusable as a dangling link. Two mechanisms disagreeing
+  silently about one pair is this branch's own subject, so the definition is now single: **the link
+  RESOLVES to the store (`[ "$link" -ef "$store" ]`) AND the store is a DIRECTORY (`[ -d "$store" ]`)**,
+  spelled identically in `_mem_state`, `_check_memory` and `_hook_memory_converge`, with `_mem_apply`
+  inheriting it. `-ef` is necessary and `-d` is necessary: deleting either is an independently
+  measurable defect. **The accepted cost:** `--apply` skips what `_mem_state` calls converged, so a
+  relative-but-correct link is now left as written rather than normalised to the absolute form. Memory
+  is still shared into one store; only the link's spelling is left alone. Tasks 2, 3 and 4.
+
+- **D-2239** — **`[ -e ]` DEREFERENCES, AND EVERY ENUMERATING SITE HAD IT.** This plan writes
+  `[ -e "$link" ] || continue` in `cmd_memory`, `_mem_apply` and `_check_memory`. For a symlink whose
+  target does not exist `[ -e ]` is FALSE while `[ -L ]` is TRUE, so a dangling `memory` link — one
+  written before its store, or orphaned when its store was deleted — was skipped by all three: absent
+  from the census, un-repaired by `--apply`, and reported PASS by doctor. All now read
+  `[ -e "$link" ] || [ -L "$link" ] || continue`. The same dereference appeared a fourth time in
+  `_mem_absorb`'s leftover counter, where it silently under-counted entries it had not migrated.
+  Tasks 2, 3 and 4.
+
+- **D-2240** — this plan's `cmd_memory` calls `_mem_apply` and then returns a flat 0, discarding its
+  status. `_mem_apply` has failure paths that print to stderr and return 1, so an operator could read
+  exit 0 over a migration that stopped halfway. The status is now propagated. Task 3.
+
+- **D-2241** — **`converged` IS A CLAIM, AND A CLAIM MUST BE MEASURED.** This plan's `_mem_absorb`
+  checks no `cp` status and its return is discarded at both call sites, so `_mem_apply` would back up
+  the source, lay the symlink and print `converged` over a union that never landed. Measured with the
+  store at mode 0500: `cp: Permission denied`, then `converged`, rc 0, an empty store. `_mem_absorb`
+  now counts failures and returns non-zero, both call sites diagnose and refuse, and **the source is
+  not moved away when the absorb failed.** A partially written destination is removed rather than left
+  to become canonical on the re-run. Task 3.
+
+- **D-2242** — the conflict-suffix copy in this plan writes unconditionally, so a home already holding
+  `same.claude-corp.md` loses it when another home's differing `same.md` arrives — the silent winner
+  the whole rule forbids, one filename away, and measured. The suffixed destination now takes the same
+  three-way test as the primary: identical is skipped, differing walks to the next free numbered slot,
+  and nothing is ever copied onto an existing path. Task 3.
+
+- **D-2243** — this plan's absorb loop takes only top-level `*.md`, so a `README`, a `scratch.txt` or a
+  `notes/deep.md` was left behind while the run still printed `converged` and never named the backup
+  it had just made. Entries the union did not take are now counted and reported, and the backup path is
+  printed on the success line regardless. Task 3.
+
+- **D-2244** — `readlink` returns raw target text, so this plan's `_mem_absorb "$(readlink -- "$link")"`
+  resolves a RELATIVE target against the process CWD. Measured: a `memory -> ../../../shared-memory`
+  link holding `shared.md` absorbed nothing, was re-pointed at the empty store, and printed
+  `converged` — leaving `shared.md` referenced by nothing. Now `readlink -f`. Task 3.
+
+- **D-2245** — an unreadable source directory is not an empty one. With the source at mode 0300 the
+  absorb glob cannot expand, so the loop body never runs and the function reported success: measured
+  `converged`, rc 0, an empty store, and the home symlinked to it. `_mem_absorb` now probes `[ -r ]`
+  and refuses the pair the way a failed copy does. Task 3.
+
+- **D-2246** — this plan's Task 4 says to register the check in `ccd/ccrc`. Measured: `cmd_doctor`
+  sources `ccd/ccrc-doctor-checks` and iterates the **`CCRC_DOCTOR_CHECKS` array declared in that
+  file**, so registration belongs there and `ccd/ccrc` needs no edit at all.
+  `ccrc-doctor.test.ts` already reds in both directions on a table/function mismatch. Task 4.
+
+- **D-2247** — this plan asks whether the doctor file can reuse `ccd/ccrc`'s `_mem_homes`/`_mem_state`.
+  Measured: it can at doctor time, and it must not. `ccrc-doctor-checks` is also sourced under `set -u`
+  by callers that are not `ccrc`, and **D-92** is this repo's standing ruling that the check table
+  stands alone, holding its deliberate second spelling with a mechanism instead of a promise.
+  `_check_memory` therefore re-derives the home glob locally and says so. Task 4.
+
+- **D-2248** — `_check_memory` is written in bash builtins (`${x##*/}`, `-ef`) rather than this plan's
+  `basename`/`readlink`/`grep`. Measured: the doctor suite's own harness contains PATH to
+  `<home>/.local/bin:<home>/stub-bin`, where none of those three binaries resolve — so the literal
+  code silently mis-measures under test, producing empty pair names rather than a clean
+  tool-not-found error. The file's real doctrine is narrower than "no external binaries": an external
+  tool is allowed, but its absence must become a SKIP, never a narrowed verdict. Task 4.
+
+- **D-2249** — **TWO FAIL LINES, NOT ONE.** This plan returns 1 after the forked branch, so a box that
+  is both forked and unreachable reports only the fork and silently discards a measured finding.
+  `ccrc-doctor-checks`'s own header rules the opposite: two hard findings with two different operator
+  actions get two FAIL lines, each with its own remedy, rather than one bucket whose remedy is right
+  for only one of the two sentences it joined. `cmd_doctor` counts verdict LINES, not arity, so this
+  costs nothing. Task 4.
+
+- **D-2250** — this plan tests `[ -f "${h}settings.json" ]` before asking whether a home references the
+  hook, so a home carrying `projects/` and NO `settings.json` at all was never reported. That is the
+  maximal case of the condition, not an exemption from it: `install-session-hooks.sh` CREATES a
+  `settings.json` for any rostered home lacking one, so its absence proves the installer has never
+  touched that home. Task 4.
+
+- **D-2251** — an UNREADABLE `settings.json` was reported as "the session hook cannot reach this home",
+  collapsing *I could not measure this* into *I measured it and it is unwired* — the shape **D-1350**
+  rules against. It is now a WARN naming the home and its own remedy, and the check returns 2. The
+  `2>/dev/null` that was meant to hide the read failure never could: redirections apply left to right,
+  so a chmod-000 file leaked a raw shell error to a stderr `cmd_doctor` deliberately does not capture.
+  Task 4.
+
+- **D-2252** — `_mem_absorb`'s conflict tag is a home basename, which begins with a dot, so this plan's
+  `${base%.md}.$tag.md` produces `same..claude-corp.md`. The leading dot is stripped:
+  `same.claude-corp.md`. Cosmetic, and it lands in a file an operator has to read and judge. Task 3.
+
 ---
 
 ## Self-review
