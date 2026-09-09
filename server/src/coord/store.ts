@@ -2862,16 +2862,27 @@ export class CoordStore {
    * mail inside a wave — and are `null` for ad-hoc mail with no run context;
    * the caller degrades both (`workspace ?? toId` for the title, same as
    * `pushOne`'s own fallback chains elsewhere in this file's callers).
+   *
+   * `fromId` and `runId` (fix round 1, item 1) ride beside `kind`/`subject`
+   * for the identical reason: the caller (`FleetWatcher.pushNewMail`) needs
+   * them to run `isAskNudgeMail` (`coord/rundefs.ts`) per row — the ask
+   * pre-emption lane's own nudge mail must record but never push, and that
+   * predicate's shape is exactly `fromId`/`runId`/`subject`. `runId` here is
+   * the RAW column (nullable), never coalesced through the `LEFT JOIN` the
+   * way `project`/`workspace` are — those degrade because they have no
+   * meaning without a run; `runId` itself is the fact the predicate needs
+   * verbatim, null included.
    */
-  mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; kind: string;
-                                       subject: string; project: string | null;
-                                       workspace: string | null }[] {
+  mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; fromId: string;
+                                       runId: number | null; kind: string; subject: string;
+                                       project: string | null; workspace: string | null }[] {
     return this.db.prepare(
-      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.kind, m.subject, r.project, r.workspace ' +
+      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.fromId, m.runId, m.kind, m.subject, ' +
+      'r.project, r.workspace ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
       'WHERE d.id > ? ORDER BY d.id',
-    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; kind: string; subject: string;
-                         project: string | null; workspace: string | null }[];
+    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; runId: number | null;
+                         kind: string; subject: string; project: string | null; workspace: string | null }[];
   }
 
   /** `run_events`'s current high-water id — same priming role as

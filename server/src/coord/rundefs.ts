@@ -206,9 +206,11 @@ export function queueSystemMail(
     // happens, the whole mail is withdrawn rather than accepted with the
     // placeholder envelope, which carries no `ack:` line and so names no
     // delivery id for any recipient to ack against. The throw ESCAPES
-    // `queueSystemMail` — all four of its callers: `close.ts`'s `closeRun`,
+    // `queueSystemMail` — all five of its callers: `close.ts`'s `closeRun`,
     // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
-    // and `routes.ts`'s `POST /api/runs/:id/advance` handler — deliberately:
+    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
+    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
+    // after this file's other four) — deliberately:
     // `{ queued: false }` already means "the dedupe guard suppressed it", a
     // different and true statement this must not borrow.
     //
@@ -223,4 +225,33 @@ export function queueSystemMail(
     out = { queued: true, mailId: inserted.id, deliveryId: delivery.id };
   });
   return out;
+}
+
+/**
+ * Is this mail row the ask pre-emption lane's own nudge to a parent
+ * (`FleetWatcher.hold`, `server/src/watch.ts`) — the message that exists
+ * SOLELY to wake a parent so it can rule before the operator's phone does?
+ *
+ * Fix round 1, item 1 (CRITICAL): before this predicate existed, that nudge's
+ * own delivery fired an ordinary `kind:'mail'` push through
+ * `FleetWatcher.pushNewMail` a tick after `hold()` queued it — buzzing the
+ * operator's phone about the very question the hold exists to keep off it,
+ * with no answer buttons, no tag collapse against the eventual `ask-<child>`
+ * push, and no presence suppression for an operator watching the CHILD's
+ * pane (the mail's presence key is the PARENT, `m.toId`). The lane deferred
+ * nothing.
+ *
+ * `fromId === 'operator'` ALONE is not the shape — `queueProgramKickoff`
+ * also sends from `'operator'`, and ITS push is wanted, so this must not
+ * broaden to every `'operator'` mail. What singles out an ask nudge is the
+ * full triple: the sender, `runId === null` (deliberate — `hold`'s own
+ * reasoning: this rides the run-less peer-mail lane, never a run's
+ * lifecycle), and a subject shaped exactly `ask:<n>` (`hold`'s own
+ * construction, `` `ask:${askId}` ``). Exported and used from BOTH sides —
+ * `hold`'s own `queueSystemMail` call constructs a subject this predicate
+ * must recognise, and `pushNewMail` reads it back — so the mail QUEUE and
+ * the mail PUSH lane share one definition instead of two that can drift.
+ */
+export function isAskNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {
+  return m.fromId === 'operator' && m.runId === null && /^ask:\d+$/.test(m.subject);
 }

@@ -22,6 +22,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { Presence } from '../src/presence.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -90,6 +91,7 @@ const BARE_PROMPT = 'ready\n❯ \n';
 function fixture(opts: {
   push: { notify: (p: PushPayload) => Promise<void> };
   notifyLog?: NotifyLog;
+  presence?: Presence;
   sessions: string[];
 }): {
   coord: CoordStore; home: string;
@@ -112,7 +114,10 @@ function fixture(opts: {
     return { code: 0, stdout: '', stderr: '' };
   };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const deps = { ...testDeps(home, runner), push: opts.push as never, notifyLog: opts.notifyLog, coord };
+  const deps = {
+    ...testDeps(home, runner), push: opts.push as never, notifyLog: opts.notifyLog,
+    presence: opts.presence, coord,
+  };
   const w = new FleetWatcher(deps, new Bus(), 10_000);
   return {
     coord, home,
@@ -148,6 +153,11 @@ describe('the ask mint point (D-2172, D-2173)', () => {
 
     // Deferred: no actual push notification for the ask.
     expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);
+    // Fix round 1, item 1 (CRITICAL): the mail `hold()` queues to WAKE the
+    // parent must not itself buzz the operator's phone — that would defeat
+    // the entire hold. Zero pushes of ANY kind this tick, not just zero
+    // `ask` ones.
+    expect(sent).toEqual([]);
     // But recorded — the operator's only durable trace of the question.
     const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
     expect(recorded).toHaveLength(1);
@@ -237,5 +247,166 @@ describe('the ask mint point (D-2172, D-2173)', () => {
     const subjects = rows.map((r) => r.subject);
     expect(new Set(subjects).size).toBe(2);              // distinct, one per ask id
     for (const row of held) expect(subjects).toContain(`ask:${row.id}`);
+  });
+
+  // Fix round 1, item 1 (CRITICAL), dedicated. The prior test already asserts
+  // `sent` is empty for this exact scenario; this one is the review's own
+  // framing — the ask nudge mail RECORDS (feed) but never PUSHES, verified
+  // by reading the queued mail row directly rather than inferring it from
+  // the absence of a push.
+  it('the parent nudge mail records but never pushes — the hold defers everything', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = fixture({ push, notifyLog: log, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();
+
+    // The nudge mail really was queued...
+    const mailRows = f.coord.db.prepare(
+      "SELECT id FROM mail WHERE fromId = 'operator' AND toId = 'coord-1' AND kind = 'question'",
+    ).all() as { id: number }[];
+    expect(mailRows).toHaveLength(1);
+    // ...it shows up in the durable feed (recorded)...
+    const mailEvents = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'mail');
+    expect(mailEvents).toHaveLength(1);
+    // ...but produced no push of any kind — neither the ask push nor a
+    // `mail-*` one for its own delivery.
+    expect(sent).toEqual([]);
+  });
+
+  // Fix round 1, item 2 (Important). `hold()`'s db work is unguarded no
+  // longer: a throw anywhere inside it (here, `insertAsk` itself, the WRITE)
+  // must fall back to an ordinary immediate push rather than propagate out of
+  // `tick()`, which runs as `void this.tick()` with no `unhandledRejection`
+  // handler anywhere in this tree.
+  it('falls back to an immediate push when hold\'s db work throws, and the process survives', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+    f.coord.insertAsk = () => { throw new Error('boom — simulated coord.db failure'); };
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await expect(f.tick()).resolves.toBeUndefined();      // the tick itself does not throw
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect(f.coord.asksForParent('coord-1', 'held')).toEqual([]);
+  });
+
+  // Fix round 1, item 3a (Important) — proves `recordAlways` on the hold's
+  // own record, the way `push-copy.test.ts` (`:113,132,185-188`) proves every
+  // other `recordAlways` claim: a VISIBLE session with no `recordAlways`
+  // would erase the record entirely (`pushOne`'s `if (visible &&
+  // !e.recordAlways) return;`), so a Presence claim on the CHILD is the only
+  // fixture shape that can tell "recorded because recordAlways" apart from
+  // "recorded because nobody was looking anyway" — this test's own suite ran
+  // with no `presence` at all until this fix, which is exactly why it never
+  // caught the flag's absence.
+  it('records the held ask even while the operator is watching the child\'s pane (recordAlways)', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const presence = new Presence();
+    presence.setVisible(Symbol('t'), 'cc-a');
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const f = fixture({ push, notifyLog: log, presence, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();
+
+    expect(sent).toEqual([]);                              // presence suppresses the push either way
+    const recorded = log.catchUp(log.epoch, 0).events.filter((e) => e.kind === 'ask');
+    expect(recorded).toHaveLength(1);                       // but NOT the record — recordAlways
+    expect(f.coord.asksForParent('coord-1', 'held')).toHaveLength(1);   // the hold itself is unaffected
+  });
+
+  // Fix round 1, item 3b (Important) — pins `parent !== r.id`: a session that
+  // is its own coordinator (it opened a run and claimed it) must not hold its
+  // own question and mail itself; it should push exactly as if it had no
+  // parent at all.
+  it('pushes immediately when the derived parent is the session itself', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'cc-a',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');
+    await f.tick();
+
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toHaveLength(1);
+    expect(f.coord.asksForParent('cc-a', 'held')).toEqual([]);
+  });
+
+  // Fix round 1, item 4 (Important). Two single-question dialogs appear back
+  // to back with NO intervening `dialog_cleared` tick — `parseDialog`'s id
+  // hashes title+labels, so a genuinely different question is a different
+  // dialog id, and `detectDialogs`'s `last !== dialog.id` branch fires again
+  // directly, never routing through the clear branch that would otherwise
+  // settle the first hold. Without the fix, the first held row is silently
+  // overwritten in `heldAsks` and orphaned forever — this proves it is
+  // settled to `stale` instead, and exactly one `held` row survives.
+  it('settles an orphaned hold to stale when a second dialog replaces the first with no clear tick', async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
+    const run = f.coord.openRun({
+      program: 'prog', title: 'Prog', project: 'ccrc-pwa',
+      wave: 1, waveOf: null, claimedBy: 'coord-1',
+    }) as { id: number };
+    f.coord.setSession(run.id, 'cc-a');
+
+    await f.tick();                                        // priming
+    f.writeAsk('cc-a', oneQuestion([{ label: 'Red' }, { label: 'Blue' }]));
+    f.showMenu('cc-a');                                     // dialog 1: "Which colour?"
+    await f.tick();                                         // mints ask #1, held
+
+    const firstHeld = f.coord.asksForParent('coord-1', 'held');
+    expect(firstHeld).toHaveLength(1);
+    const firstAskId = firstHeld[0]!.id;
+
+    // A SECOND, genuinely different question replaces the first — same
+    // session, no clear tick in between.
+    f.writeAsk('cc-a', {
+      questions: [{ question: 'Continue?', header: 'Confirm', multiSelect: false,
+        options: [{ label: 'Yes' }, { label: 'No' }] }],
+    });
+    f.showMenu('cc-a', 'Continue?\n❯ 1. Yes\n  2. No\nEnter to select\n');
+    await f.tick();                                         // mints ask #2, orphans ask #1
+
+    const nowHeld = f.coord.asksForParent('coord-1', 'held');
+    expect(nowHeld).toHaveLength(1);                         // exactly one survives
+    expect(nowHeld[0]!.id).not.toBe(firstAskId);
+    expect(nowHeld[0]!.question).toBe('Continue?');
+    expect(f.coord.askById(firstAskId)!.state).toBe('stale');   // the orphan, settled
+    expect(sent.filter((p) => p.tag === askTag('cc-a'))).toEqual([]);   // still deferred, both times
   });
 });

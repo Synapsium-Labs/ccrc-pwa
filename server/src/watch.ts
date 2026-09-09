@@ -27,7 +27,7 @@ import { JournalMirror } from './coord/mirror.js';
 // (`sweepMail` already uses it), a second `const` of that name in one scope is
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
-import { COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, queueSystemMail } from './coord/rundefs.js';
+import { COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, isAskNudgeMail, queueSystemMail } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
@@ -203,13 +203,22 @@ const MAIL_SWEEP_MS = 10_000;
 const MAIL_QUIET_MS = 60_000;
 
 /** How long an eligible ask is withheld from the operator's phone so its parent
- *  can rule first. FLOOR: a parent that has just gone idle is not mailable for
- *  MAIL_QUIET_MS (60s) — measured from its live-status `statusUpdatedAt` — so a
- *  window under ~70s gives that parent no turn at all and the hold is pure
- *  latency. CEILING: every second here is latency the operator pays on the asks
+ *  can rule first. FLOOR (fix round 1, item 5 — corrected; the spec this was
+ *  transcribed from cited the wrong pair): the parent is BY CONSTRUCTION the
+ *  `claimedBy` of a non-terminal run — exactly `openCoordinatorIds()`'s
+ *  membership test — so `sweepMail` scores it against the COORDINATOR pair
+ *  below, not the worker one: `COORD_QUIET_MS` (15s, measured from
+ *  `statusUpdatedAt`) gates a just-idle parent, and `COORD_COOLDOWN_MS` (30s)
+ *  does not bind it — that gate is measured from the recipient's own LAST
+ *  successful injection, in-memory, so a parent with no prior mail (the
+ *  ordinary case for an ask nudge) clears it for free. Add the same
+ *  sweep-granularity/injection-sleep overhead an already-quiet session pays
+ *  anyway and the real floor is ~25s — not the ~70s a `MAIL_QUIET_MS` reading
+ *  would suggest — so a window under that gives a just-idle parent no turn at
+ *  all. CEILING: every second here is latency the operator pays on the asks
  *  the parent declines, which is why `POST /api/asks/:id/release` exists — a
- *  parent that answers "not mine" fires the push at once, so only a parent that
- *  has genuinely gone quiet ever costs the full window. */
+ *  parent that answers "not mine" fires the push at once, so only a parent
+ *  that has genuinely gone quiet ever costs the full window. */
 const ASK_GRACE_MS = 120_000;
 
 /** No session gets two injections inside this window, however much mail is
@@ -1126,6 +1135,16 @@ export class FleetWatcher {
    * mail case in `push-copy.test.ts` seeded one project). The recipient
    * SESSION's own project, read one scope up in `tick()` from this same
    * tick's fleet assembly, is the honest fallback.
+   *
+   * ONE EXCEPTION to "always pushes" (fix round 1, item 1, CRITICAL):
+   * `isAskNudgeMail` (`coord/rundefs.ts`) rows — the ask pre-emption lane's
+   * own nudge to a parent, queued by `hold()` — still RECORD here
+   * (`recordAlways: true`, unconditionally, below) but never PUSH
+   * (`recordOnly: true` added on top for exactly this row). Without that,
+   * this lane's own delivery buzzed the operator's phone about the very
+   * question the hold exists to keep off it, defeating the deferral it was
+   * built to implement — the watermark still advances for these rows
+   * exactly like every other, so this is a push-only exemption, not a skip.
    */
   private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
@@ -1138,6 +1157,7 @@ export class FleetWatcher {
         body: m.subject,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
+        ...(isAskNudgeMail(m) ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -3304,6 +3324,26 @@ export class FleetWatcher {
           else this.actionlessAsks.set(r.id, dialog.id);
         };
         if (last !== dialog.id) {
+          // Fix round 1, item 4 (Important): a new dialog can replace the old
+          // one with NO intervening `dialog_cleared` tick — `parseDialog`'s id
+          // hashes the menu's title+labels, so two single-question dialogs
+          // back to back both take THIS branch, never the `else if (last !==
+          // undefined)` clear branch below. Left alone, `heldAsks.set` a few
+          // lines down would silently overwrite an OLD held row, orphaning it
+          // forever: Task 7's sweep is keyed by session id (the entry is
+          // gone, so it never fires `releaseAsk`) and Task 8's clear-branch
+          // `staleAsk` is CAS'd on `(dialogId, childId)` for the CURRENT
+          // dialog only, so it can never reach a row minted against a dialog
+          // that left `dialogIds` without a clear edge. Settling it here,
+          // against `last` (the id it was actually minted under, still in
+          // scope), is the only place left that can still name it — done
+          // unconditionally, before eligibility is even asked for the NEW
+          // dialog, because the OLD one is gone from the pane either way.
+          const orphaned = this.heldAsks.get(r.id);
+          if (orphaned !== undefined && last !== undefined) {
+            this.heldAsks.delete(r.id);
+            this.deps.coord?.staleAsk(last, r.id, Date.now());
+          }
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
           if (notify) {
@@ -3322,17 +3362,37 @@ export class FleetWatcher {
             // is safe to read inside `hold`.
             let held = false;
             if (actions !== null && hs !== null && ask !== null && 'questions' in ask) {
-              const parent = this.deps.coord?.parentOfSession(r.id) ?? null;
-              if (parent !== null && parent !== r.id && !this.asksDisabled) {
-                const mint = this.hold(r, dialog, actions, hs, ask, parent);
-                // D-2172: the RECORD is minted now, not at release. `pushOne`
-                // returns before `notifyLog.record` when the operator is
-                // looking, so suppressing the raise without recording would
-                // delete the operator's only durable trace of a question
-                // their parent then answered in their name.
-                this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
-                this.heldAsks.set(r.id, mint);
-                held = true;
+              // Fix round 1, item 2 (Important): `parentOfSession` and
+              // everything `hold` itself does (`openRunsForSession`, the
+              // WRITE `insertAsk`, `queueSystemMail`'s own `tx()`/`BEGIN
+              // IMMEDIATE`, plus `hold`'s own explicit throw on a
+              // key-derivation drift) reach `node:sqlite` directly,
+              // unguarded — and `tick()` is fired as `void this.tick()` with
+              // no `unhandledRejection` handler anywhere in this tree, so an
+              // unguarded throw here would kill the whole process over a
+              // fault every neighbouring coord lane already survives
+              // (`pushNewMail`/`pushNewRuns` above, `recordFeedEvent` inside
+              // `pushOne`, this file's own ruling on exactly this class at
+              // the `pushNewMail`/`pushNewRuns` call site). FALLS BACK TO
+              // `raise()` on any failure — the fail-safe direction: the lane
+              // degrades to today's ordinary immediate push rather than
+              // losing the question or the process.
+              try {
+                const parent = this.deps.coord?.parentOfSession(r.id) ?? null;
+                if (parent !== null && parent !== r.id && !this.asksDisabled) {
+                  const mint = this.hold(r, dialog, actions, hs, ask, parent);
+                  // D-2172: the RECORD is minted now, not at release.
+                  // `pushOne` returns before `notifyLog.record` when the
+                  // operator is looking, so suppressing the raise without
+                  // recording would delete the operator's only durable
+                  // trace of a question their parent then answered in their
+                  // name.
+                  this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
+                  this.heldAsks.set(r.id, mint);
+                  held = true;
+                }
+              } catch (err) {
+                console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
               }
             }
             if (!held) raise();
