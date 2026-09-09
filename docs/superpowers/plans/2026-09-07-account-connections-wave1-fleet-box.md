@@ -17488,3 +17488,102 @@ One is not a line number at all: `OPENROUTER_LANE`'s docstring said *"its base U
 purpose"* — **the fixture has no `exec.baseUrl` at all**, and validates because openrouter is
 `baseUrlRequired: false`. A docstring describing a field the fixture does not have is the same defect as
 a citation pointing at prose that says something else.
+
+### D-2220 — the launcher's exit code is passed and then discarded, and four conditions share one false sentence
+
+`_acct_auth_status` sends `--exit "$rc"`, and `classify`'s auth-status arm **never reads it**. Measured,
+five conditions produce the identical note *"auth status gave no parseable answer on this box"*:
+
+| condition | rc | is the sentence true? |
+|---|---|---|
+| launcher absent | 127 | **no — it never ran** |
+| present, not executable | 126 | **no** |
+| killed by SIGKILL | 137 | **no** |
+| knob invalid, `timeout` refused to exec | 125 | **no** |
+| older binary, usage error | 1 | yes |
+
+Four of five assert something false about the box, and the one operator-facing consequence is the worst
+kind: a lane that was never asked is reported as a lane that answered badly.
+
+This is the overloaded seam **one level down from where this same commit closes it meticulously** — the
+whole four-exit contract exists so `3` and `4` cannot be confused, and directly beneath it five
+conditions collapse to one string. `_acct_no_answer`'s own triage is the shape of the fix and lives in
+the same file: `rc == 2` / `rc > 128` / else, each with its own sentence.
+
+**RULING: triage it.** Absent, not-executable, killed, and refused-to-exec are four different remedies.
+Per D-2163, the fix ships with a mutation per branch.
+
+### D-2221 — `CCRC_ACCOUNT_AUTH_TIMEOUT=0` disables the deadline, and means the opposite on the fallback
+
+GNU `timeout` reads duration `0` as **no timeout**. Measured end to end: knob `0` plus a `sleep 30`
+launcher, and `check` was still running when the reviewer's own outer bound killed it. **The single
+value an operator types to mean "don't wait" means "wait forever."**
+
+Worse, it is not even stable across boxes: `_plat_timeout`'s bash fallback would run `sleep 0` and
+return instantly, i.e. **124 immediately** — so the same knob value means opposite things on a box with
+coreutils and one without. That is a cross-platform divergence in a knob whose entire job is bounding
+cost.
+
+A mistyped value is the same family (**F3**): `abc`, `-1`, `5x` make `timeout` exit **125 without ever
+exec'ing the launcher**, its `invalid time interval` swallowed by the call's own `2>/dev/null`, and the
+verb answers with D-2220's false sentence.
+
+**RULING: validate the knob at the point of use** — refuse a value this verb cannot honour, rather than
+passing it to `timeout` and reporting the consequence as a fact about the launcher. `0` must be refused
+or given an explicit meaning; it must not silently mean "unbounded" on one box and "instant" on another.
+
+### D-2222 — the commit puts the body on stdin on purpose and an unbounded launcher-controlled note on argv
+
+`classify` deliberately reads the auth-status **body** from stdin (`readFileSync(0)`), and then passes
+the launcher-derived **note** on argv as `--note "$n"`.
+
+Measured: `authMethod` of 100 000 bytes succeeds, carrying a 100 KB note. **200 000 bytes → `/usr/bin/node:
+Argument list too long`, exit 126**, and the verb answers `no-answer` with *"Nothing in this tree is
+known to exit 126 with an empty body, so this run cannot name a cause"* — a shrug about a lane that was
+perfectly measurable.
+
+**This commit is the first place a launcher-controlled string reaches argv at all.** The reviewer
+confirmed the string is otherwise safe — carried verbatim, JSON-escaped, no expansion, `/tmp/PWNED`
+absent, and the fixed prose prefix means it can never begin with `--` — so this is a size defect, not an
+injection one. But the reasoning that put the body on stdin applies unchanged to the note.
+
+**RULING: bound it.** A note derived from a field ccrc does not control gets a cap with a stated limit,
+or takes the same door the body does. Both are defensible; silently inheriting `ARG_MAX` is not.
+
+### D-2223 — four smaller seams, all measured, all in the same commit
+
+**A detail that lies (F5).** `{"loggedIn":"true"}`, `{"loggedIn":1}` and `{"loggedIn":null}` all answer
+`detail: "auth status named no loggedIn field"`. The field **is** named. Two conditions, one sentence —
+and the second is worse than cosmetic: a launcher claiming to be signed in *in a shape the classifier
+does not accept* **short-circuits and never reaches the probe**, which is the opposite of what the
+one-sided design wants. Fix the sentence and the routing together.
+
+**A kept claim with no mechanism (F6).** `_acct_answer`'s "Nothing was written." is asserted by nothing —
+no test brackets `check` with a filesystem measurement. **D-2163 applies to a claim you keep**, and
+D-2210's carry was wrong to defer this to Task 30's scratch cwd: the clause is already asserted over a
+real `claude auth status` subprocess *today*, and on a real box that subprocess writing into its config
+dir falsifies it at Task 29. The reviewer measured it passing; it now needs the bracket that keeps it
+passing.
+
+**A field measured by nothing (F7).** No test in `server/test` names `limitsTouched` or
+`--limits-touched`. Neither the shipped `false` nor the `true` arm is asserted anywhere. Fifteenth
+unmeasured mechanism of the wave — and unlike the others it is a **wire field carrying a real fact in
+Task 30**, so it becomes API before it is ever measured. **D-2211's dormancy list is short by one:** it
+named the `-p` argv assertion and missed this.
+
+**A reset asymmetry (F8).** `_acct_check` resets `ACCT_HEALTH` and `ACCT_NOTES` and not
+`ACCT_LIMITS_TOUCHED`, which only `_acct_probe` resets — so on the short-circuit path the value comes
+from file scope. Harmless in one process, wrong the moment anything loops `check` over a roster. Same
+shape as D-2127's unreset array, two tasks later.
+
+**Carry for Task 30 (F9).** `_acct_probe`'s `||` treats *every* non-zero as "could not run" — the exact
+reading `_acct_auth_status` was written to reject. If Task 30's real `classifyProbe` ever defers (3 or
+4), the probe half refuses with "the health classifier could not run" and swallows the exit-4 line. It
+is unreachable today only because the probe arm never defers. **Task 30 must fix it in the same act that
+makes it reachable.**
+
+**Citations for D-2186.** `ccrc-account.test.ts:5818` cites `ccd/ccrc:2000` for the doctor's
+no-arguments gate — correct at BASE, **`:2012` at HEAD**; the same commit used post-commit numbers
+everywhere else, so this is one pre-commit number in a set of post-commit ones. And `:2594`'s cite of
+`:4090-4093` for the prose rule is broken by this commit (now `:4102-4105`). Population for the sweep in
+this file: **97 refs, 61 in the `+12` band and 11 in the `+173` band.**
