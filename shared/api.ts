@@ -108,9 +108,14 @@ export interface FleetSession {
    * `ASK_ANSWERED_CHIP_WINDOW_MS`, fix round 1 item 4 — past that window
    * `answered` folds to `null` too, since the chip stops being a true
    * explanation of why the operator was not asked once "just now" has
-   * become "a while ago"). The design doc's own words (§2.8) give the chip
-   * exactly these two sentences — "held — <parent> may answer" and "ruled
-   * by <parent>" — and no third. `assembleFleet` folds the other four
+   * become "a while ago"; `held` is bounded too, by `askwindow.ts`'s
+   * `ASK_HELD_CHIP_MAX_MS` since the row's own mint — F2(b), correcting a
+   * wave in which this field claimed a held ask is "live by definition").
+   * The design doc's §2.8 gave the chip two sentences — "held — <parent>
+   * may answer" and "ruled by <parent>" — and F1 made the second three,
+   * because the OPERATOR can settle the same row from their own phone: see
+   * `answeredBy` below, and `SessionLine.tsx`'s `askWords` for the wording
+   * of each. `assembleFleet` folds the other four
    * (`answering`, `released`, `stale`, `unknown`) to `null` rather than
    * pass them through raw: `answering` is the between-tick sliver while a
    * digit is in flight, so it is folded onto `held` (still, functionally,
@@ -119,10 +124,29 @@ export interface FleetSession {
    * push has already fired or the dialog itself is gone, so a chip
    * explaining why they were not asked would be explaining something no
    * longer true; `unknown` is an out-of-vocabulary token this build cannot
-   * speak for. `parentId` is always the session that may (or did) answer —
-   * for `answered` this is the same id `answeredBy` carries, since only a
-   * child's own derived parent is ever allowed to press the digit
-   * (`POST /api/asks/:id/answer`'s `ask.parentId !== fromId` guard).
+   * speak for.
+   *
+   * `parentId` is the session the row was ADDRESSED to — the one that may
+   * pre-empt this question — and `answeredBy` is the principal that actually
+   * ruled. THEY ARE NOT THE SAME FIELD, and this docstring said they were
+   * for one wave (whole-branch review F1): it claimed "for `answered` this
+   * is the same id `answeredBy` carries, since only a child's own derived
+   * parent is ever allowed to press the digit". That stopped being true when
+   * Task 12 landed — BEFORE this chip was written — because `server.ts`'s
+   * `POST /api/sessions/:id/ask` takes the held row itself and settles it
+   * with `ASK_OPERATOR_PRINCIPAL`. So an ask the operator answered from
+   * their own phone, inside the grace window, rendered as "ruled by
+   * <parent-session-id>": a false attribution on the one surface this lane
+   * exists to make honest. `answeredBy` is carried through and rendered on
+   * its own terms.
+   *
+   * `answeredBy` is `null` on every `held` chip (nobody has ruled) and —
+   * REACHABLY — on an `answered` one whose row names no principal:
+   * `settleAsk` is guarded on both answer routes precisely because it can
+   * throw after the digit has already landed. `state` is what tells those
+   * two apart, so the pair is not an overloaded null. A reader must NOT fill
+   * a missing `answeredBy` in with `parentId`; that substitution is the
+   * defect this field exists to close.
    *
    * `null` when this session has never raised an ask `CoordStore` still
    * holds a row for, when the relevant row is one of the four folded states
@@ -143,7 +167,7 @@ export interface FleetSession {
    * backwards, and `reviveFleetSessions` rejecting one bad chip would cost
    * the operator their ENTIRE cached snapshot for it).
    */
-  ask: { state: AskState; parentId: string } | null;
+  ask: { state: AskState; parentId: string; answeredBy: string | null } | null;
   /** Subagents the hook last reported running. Null mirrors `hookState`: no
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
@@ -425,13 +449,23 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
  * server-side, now doubled client-side for a server ahead of this build.
  */
 export function sessionAsk(
-  s: { ask?: { state: AskState; parentId: string } | null },
-): { state: AskState; parentId: string } | null {
+  s: { ask?: { state: AskState; parentId: string; answeredBy?: string | null } | null },
+): { state: AskState; parentId: string; answeredBy: string | null } | null {
   const v = s.ask ?? null;
   if (v === null || typeof v !== 'object') return null;
-  const raw = v as { state?: unknown; parentId?: unknown };
+  const raw = v as { state?: unknown; parentId?: unknown; answeredBy?: unknown };
   if (typeof raw.parentId !== 'string' || raw.parentId === '' || !isAskState(raw.state)) return null;
-  return { state: raw.state, parentId: raw.parentId };
+  // `answeredBy` (F1) degrades ON ITS OWN and never rejects the chip: a
+  // server predating that field omits the key entirely, and an unattributed
+  // `answered` row is a real shape (see `FleetSession.ask`'s docstring).
+  // Absent, wrong-typed and blank all read as "the row names no principal";
+  // the one thing a reader must never do is substitute `parentId`.
+  const by = raw.answeredBy;
+  return {
+    state: raw.state,
+    parentId: raw.parentId,
+    answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1499,6 +1533,25 @@ export function isAskState(v: unknown): v is AskState {
   return typeof v === 'string' && (ASK_STATES as readonly string[]).includes(v);
 }
 
+/**
+ * The principal an ask row names when THE OPERATOR answered it themselves —
+ * `server.ts`'s `POST /api/sessions/:id/ask`, the lock-screen path, which
+ * takes the held row and settles it around its own press (Task 12, D-2171).
+ * Every other value `answeredBy` can carry is a registry session id: the
+ * parent's own route settles with `fromId`, guarded to equal the row's
+ * `parentId`.
+ *
+ * L0 and spelled ONCE, because it is a value both sides act on: the server
+ * writes it, and the PWA renders a different sentence for it ("answered by
+ * you" — the operator IS the person reading the fleet card, so a role word
+ * there would be stranger than the second person). Deliberately NOT derived
+ * from `coord/rundefs.ts`'s `SYSTEM_MAIL_SENDER_MAP`, which owns the same
+ * word for the MAIL lane: that map is server-side (the PWA cannot import
+ * it) and its members answer "who sent this message", a different question
+ * from "who pressed the key".
+ */
+export const ASK_OPERATOR_PRINCIPAL = 'operator';
+
 /** `answerAsk`'s ten typed refusals, plus the four route-level refusals the
  *  ask pre-emption routes (server/src/coord, later tasks) emit as their own
  *  literals — `unknown-ask`, `not-held`, `ask-moved`, `not-parent`. Both
@@ -2168,7 +2221,7 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
  *  states for identical input; the two readers now agree where before they
  *  did not (`sessionAsk({ask:{state:'held'}})` always answered `null`,
  *  while this function used to destroy the file on the same shape). */
-const reviveAsk = (o: RawObj, k: string): { state: AskState; parentId: string } | null => {
+const reviveAsk = (o: RawObj, k: string): { state: AskState; parentId: string; answeredBy: string | null } | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;
   if (typeof v !== 'object' || Array.isArray(v)) return null;
@@ -2176,7 +2229,15 @@ const reviveAsk = (o: RawObj, k: string): { state: AskState; parentId: string } 
   const parentId = s['parentId'];
   if (typeof parentId !== 'string' || parentId === '') return null;
   const stateRaw = s['state'];
-  return { state: isAskState(stateRaw) ? stateRaw : 'unknown', parentId };
+  // `answeredBy` (F1) degrades exactly as `sessionAsk`'s does, and for the
+  // same two reasons: a snapshot written before that field existed omits the
+  // key, and a genuinely unattributed `answered` row is a real shape.
+  const by = s['answeredBy'];
+  return {
+    state: isAskState(stateRaw) ? stateRaw : 'unknown',
+    parentId,
+    answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
 };
 
 function revivePr(raw: unknown): PrState {

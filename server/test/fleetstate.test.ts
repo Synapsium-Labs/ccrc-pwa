@@ -542,7 +542,7 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       const cachePath = path.join(tmpDir(), 'state-cache.json');
       const populated: FleetSession = {
         ...session('claude-quiet-basin'),
-        ask: { state: 'held', parentId: 'coord-1' },
+        ask: { state: 'held', parentId: 'coord-1', answeredBy: null },
       };
       await saveSnapshot([populated], cachePath);
       expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
@@ -552,7 +552,7 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       const cachePath = path.join(tmpDir(), 'state-cache.json');
       const populated: FleetSession = {
         ...session('claude-quiet-basin'),
-        ask: { state: 'answered', parentId: 'coord-2' },
+        ask: { state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' },
       };
       await saveSnapshot([populated], cachePath);
       expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
@@ -566,7 +566,7 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       }]);
       const snap = await loadSnapshot(cachePath);
       expect(snap, 'the session must still revive').not.toBeNull();
-      expect(snap?.sessions[0]?.ask).toEqual({ state: 'unknown', parentId: 'coord-1' });
+      expect(snap?.sessions[0]?.ask).toEqual({ state: 'unknown', parentId: 'coord-1', answeredBy: null });
     });
 
     it('degrades a non-object ask to null — the SESSION still revives, unlike stoppedBy/swapBlocked', async () => {
@@ -592,6 +592,39 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       }
     });
 
+    // WHOLE-BRANCH REVIEW, F1 — `answeredBy` is a SECOND field on the same
+    // object, and it degrades on its own terms: a snapshot written before
+    // this field existed omits the key entirely, and an `answered` row that
+    // names no principal is a real shape (`settleAsk` is guarded on both
+    // answer routes precisely because it can throw after the digit lands).
+    // The one thing this reader must never do is fill the gap in with
+    // `parentId` — that substitution IS the defect the field closes.
+    it('degrades a missing, blank or wrong-typed answeredBy to null, keeping the rest of the chip', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      for (const bad of [
+        { state: 'answered', parentId: 'coord-1' },                        // an older snapshot
+        { state: 'answered', parentId: 'coord-1', answeredBy: null },
+        { state: 'answered', parentId: 'coord-1', answeredBy: '' },
+        { state: 'answered', parentId: 'coord-1', answeredBy: 9 },
+      ]) {
+        writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ask: bad }]);
+        const snap = await loadSnapshot(cachePath);
+        expect(snap, JSON.stringify(bad)).not.toBeNull();
+        expect(snap?.sessions[0]?.ask, JSON.stringify(bad))
+          .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
+      }
+    });
+
+    it('carries an operator-answered chip through the cache verbatim', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{
+        ...v1Session('claude-quiet-basin'),
+        ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'operator' },
+      }]);
+      expect((await loadSnapshot(cachePath))?.sessions[0]?.ask)
+        .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'operator' });
+    });
+
     it('a malformed ask on ONE session does not cost the OTHER sessions in the same snapshot', async () => {
       // The blast-radius correction, pinned directly: `reviveFleetSessions`
       // still discards the WHOLE array on the first session it cannot
@@ -601,14 +634,14 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       // single chip field.
       const cachePath = path.join(tmpDir(), 'state-cache.json');
       writeRaw(cachePath, [
-        { ...v1Session('claude-alpha'), ask: { state: 'held', parentId: 'coord-1' } },
+        { ...v1Session('claude-alpha'), ask: { state: 'held', parentId: 'coord-1', answeredBy: null } },
         { ...v1Session('claude-beta'), ask: 'not an object' },
         { ...v1Session('claude-gamma') },
       ]);
       const snap = await loadSnapshot(cachePath);
       expect(snap).not.toBeNull();
       expect(snap?.sessions.map((x) => x.id)).toEqual(['claude-alpha', 'claude-beta', 'claude-gamma']);
-      expect(snap?.sessions[0]?.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+      expect(snap?.sessions[0]?.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
       expect(snap?.sessions[1]?.ask).toBeNull();
       expect(snap?.sessions[2]?.ask).toBeNull();
     });

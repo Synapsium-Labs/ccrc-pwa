@@ -20,6 +20,7 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
+  ASK_OPERATOR_PRINCIPAL,
   graphGateCount, graphReadCount, sessionAsk, substrateFault, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
@@ -73,6 +74,58 @@ function subagentElapsed(startedAt: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * The ask chip's two lines of text — the cell and its `title` — for one
+ * folded ask.
+ *
+ * WHO RULED IS `answeredBy`, NEVER `parentId` (whole-branch review F1). The
+ * chip was built from `parentId` alone for one wave, on a premise
+ * `shared/api.ts` asserted and Task 12 had already falsified: the operator's
+ * own lock-screen answer settles the same row with
+ * `ASK_OPERATOR_PRINCIPAL`, so an ask the operator answered themselves, from
+ * their own phone, inside the grace window, said "ruled by <parent-session-id>"
+ * — a false attribution on the one surface this lane exists to make honest.
+ *
+ * THREE `answered` sentences, because there are three different facts:
+ *   - the operator's own answer -> "answered by you". The person reading this
+ *     card IS that principal, so the second person is truer here than the
+ *     role word the row stores; and the chip's whole job — "why were you not
+ *     buzzed about this?" — is answered by "because you had already answered
+ *     it", which no third-person spelling says as plainly.
+ *   - a parent's answer -> "ruled by <id>", the design doc's own words (§2.8),
+ *     naming `answeredBy` (which the route guarantees equals `parentId` on
+ *     that path — but it is read from the field that MEANS it).
+ *   - a row that names nobody -> "answered", flat. Reachable: `settleAsk` is
+ *     guarded on both routes precisely because it can throw after the digit
+ *     has landed. Saying less is the honest move; substituting `parentId` is
+ *     the defect above, reintroduced.
+ */
+function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
+  { label: string; title: string } {
+  if (ask.state === 'held') {
+    return {
+      label: `held — ${ask.parentId} may answer`,
+      title: `${ask.parentId} may answer this question before the operator is notified`,
+    };
+  }
+  if (ask.answeredBy === ASK_OPERATOR_PRINCIPAL) {
+    return {
+      label: 'answered by you',
+      title: 'you answered this question yourself, before its parent pre-empted it',
+    };
+  }
+  if (ask.answeredBy === null) {
+    return {
+      label: 'answered',
+      title: 'this question was answered before the operator was notified; the row names no principal',
+    };
+  }
+  return {
+    label: `ruled by ${ask.answeredBy}`,
+    title: `${ask.answeredBy} answered this question before the operator was notified`,
+  };
 }
 
 export function SessionLine({
@@ -441,13 +494,9 @@ export function SessionLine({
             <span
               className="sess-ask-state"
               data-ask-state={ask.state}
-              title={
-                ask.state === 'held'
-                  ? `${ask.parentId} may answer this question before the operator is notified`
-                  : `${ask.parentId} answered this question before the operator was notified`
-              }
+              title={askWords(ask).title}
             >
-              {ask.state === 'held' ? `held — ${ask.parentId} may answer` : `ruled by ${ask.parentId}`}
+              {askWords(ask).label}
             </span>
           )}
 

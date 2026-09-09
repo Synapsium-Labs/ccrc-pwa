@@ -1895,6 +1895,31 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       expect(isAskRefuseCode(null)).toBe(false);
     });
   });
+
+  // WHOLE-BRANCH REVIEW, F1: the one principal token BOTH sides act on —
+  // `server.ts` writes it into `asks.answeredBy`, the PWA renders a
+  // different sentence for it ("answered by you"). Two literals would let
+  // the writer and the reader drift into a chip that silently stops
+  // recognising the operator's own answer and falls back to naming the
+  // parent, which is exactly the defect F1 closed.
+  describe('ASK_OPERATOR_PRINCIPAL', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const definers = (): string[] =>
+      ALL.filter((f) => /export const ASK_OPERATOR_PRINCIPAL\b/.test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(definers()).toEqual(['shared/api.ts']);
+    });
+
+    it("leaves no bare 'operator' literal in either file that acts on it", () => {
+      // The writer and the renderer, by name. `coord/rundefs.ts` legitimately
+      // owns the same WORD for the mail lane (`SYSTEM_MAIL_SENDER_MAP`) and is
+      // deliberately not scanned: those members answer "who sent this", a
+      // different question from "who pressed the key".
+      expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
+      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+    });
+  });
 });
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the

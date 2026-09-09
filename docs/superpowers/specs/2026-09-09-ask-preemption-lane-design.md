@@ -202,8 +202,18 @@ are untouched, so a lapsed or declined ask is answered exactly where it is answe
 PWA gains is small and additive:
 
 - **a chip on the child**, rendered from the ask row: *held — <parent> may answer* while the window is
-  open, and *ruled by <parent>* once it is. The child's `attention` bucket is unchanged throughout, so
-  a held ask is never hidden from the fleet view — only from the notification.
+  open, and — once it is ruled — one of *ruled by <parent>*, *answered by you* when the operator
+  settled it themselves from their own phone, or a flat *answered* when the row names no principal at
+  all. **Corrected by F1 (whole-branch review):** this bullet said "*ruled by <parent>*" and nothing
+  else, and the chip was built to match — from `parentId`, never reading `answeredBy`. Task 12 had
+  already made that false BEFORE the chip was written: `POST /api/sessions/:id/ask` takes the held row
+  and settles it as the operator. So the one surface this lane exists to make honest attributed the
+  operator's own answer to a session that did not give it. Both bounds are stated too: the *answered*
+  chip lapses after `ASK_ANSWERED_CHIP_WINDOW_MS`, and the *held* chip after the grace window plus the
+  answering ceiling (F2(b)) — a held row older than that is stale by construction, since the process
+  that would have moved it either is not running any more or has already given up on it. The child's
+  `attention` bucket is unchanged throughout, so a held ask is never hidden from the fleet view — only
+  from the notification.
 - **the feed already carries the record**, because §2.4 mints it with `recordAlways`/`recordOnly` at
   hold time and again on a parent answer. `/mail`'s existing `NotifyEvent` rendering shows both without
   a new component; the second event is what answers "what was decided in my name, and by whom".

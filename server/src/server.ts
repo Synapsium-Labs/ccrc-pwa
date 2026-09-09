@@ -58,7 +58,7 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  FLEET_PROTO, FLEET_PROTO_MIN,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -1794,7 +1794,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // 500 a press that actually succeeded. The digit is pressed either way,
     // so the response below is unconditional.
     try {
-      coord.settleAsk(held.id, 'operator', held.options[optionIndexes[0]!] ?? '', Date.now());
+      coord.settleAsk(held.id, ASK_OPERATOR_PRINCIPAL, held.options[optionIndexes[0]!] ?? '', Date.now());
     } catch (err) {
       console.warn("ccrc-server: settleAsk failed after the operator's digit was already pressed " +
         `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded 'answering'; ` +

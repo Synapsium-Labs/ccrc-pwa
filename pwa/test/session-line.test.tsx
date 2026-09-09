@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { graphGateCount, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
+import { ASK_OPERATOR_PRINCIPAL, graphGateCount, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -554,15 +554,60 @@ describe('held chip', () => {
 // KIND of cell — a short, verbatim fact, informational only.
 describe('ask chip', () => {
   it('shows "held — <parent> may answer" while a parent may still pre-empt', () => {
-    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1' } })}
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('held — coord-1 may answer')).toBeInTheDocument();
   });
 
   it('shows "ruled by <parent>" once a parent has answered', () => {
-    render(<SessionLine session={s({ ask: { state: 'answered', parentId: 'coord-1' } })}
+    render(<SessionLine session={s({ ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' } })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('ruled by coord-1')).toBeInTheDocument();
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — the three `answered` sentences, and the reason
+  // this block was green and blind: every chip test above settles with the
+  // PARENT's id, so a chip that read `parentId` and ignored `answeredBy`
+  // passed all of them. `server.ts`'s `POST /api/sessions/:id/ask` settles
+  // the operator's own answer with `ASK_OPERATOR_PRINCIPAL`, on the same row,
+  // inside the same grace window — and that case rendered "ruled by
+  // <parent-session-id>", naming a session that did not answer.
+  it('shows "answered by you" when the OPERATOR answered their own held ask (F1)', () => {
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: ASK_OPERATOR_PRINCIPAL },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('answered by you')).toBeInTheDocument();
+    // …and NEVER the parent's name: the parent is still on the row (it is who
+    // MAY have answered), and it is not who did.
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+    expect(document.querySelector('[data-ask-state]'))
+      .toHaveAttribute('title', 'you answered this question yourself, before its parent pre-empted it');
+  });
+
+  it('names whoever answeredBy says, even when that is not the parent on the row', () => {
+    // The general property, not the two shipped principals: the cell reads
+    // the field that MEANS "who ruled". A chip built from `parentId` renders
+    // `coord-1` here and passes nothing.
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-2' },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ruled by coord-2')).toBeInTheDocument();
+    expect(screen.queryByText('ruled by coord-1')).toBeNull();
+  });
+
+  it('says only "answered" when the row names no principal — never the parent by default', () => {
+    // Reachable, not hypothetical: `settleAsk` is guarded on BOTH answer
+    // routes precisely because it can throw after the digit has landed,
+    // leaving `answeredBy` null on an `answered` row.
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: null },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('answered')).toBeInTheDocument();
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+    expect(document.querySelector('[data-ask-state]')).toHaveAttribute(
+      'title',
+      'this question was answered before the operator was notified; the row names no principal',
+    );
   });
 
   it('renders neither chip when the session carries no ask — byte-identical to today', () => {
@@ -574,7 +619,7 @@ describe('ask chip', () => {
   });
 
   it('marks the chip data-ask-state for tests, and carries the full sentence as a title', () => {
-    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1' } })}
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
                         onOpen={() => {}} onActions={() => {}} />);
     const chip = document.querySelector('[data-ask-state]');
     expect(chip).not.toBeNull();
@@ -590,7 +635,7 @@ describe('ask chip', () => {
     // once, and neither may shadow the other's class or text.
     render(<SessionLine session={s({
       hookState: 'waiting', askSummary: 'Deploy now?',
-      ask: { state: 'held', parentId: 'coord-1' },
+      ask: { state: 'held', parentId: 'coord-1', answeredBy: null },
     })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('Deploy now?')).toHaveClass('sess-ask');
     expect(screen.getByText('held — coord-1 may answer')).toHaveClass('sess-ask-state');
@@ -605,7 +650,7 @@ describe('ask chip', () => {
   it('renders no chip for a valid-but-unrendered ask state — released/stale/unknown are not held or answered', () => {
     for (const state of ['released', 'stale', 'unknown'] as const) {
       const { container, unmount } = render(
-        <SessionLine session={s({ ask: { state, parentId: 'coord-1' } })}
+        <SessionLine session={s({ ask: { state, parentId: 'coord-1', answeredBy: null } })}
                      onOpen={() => {}} onActions={() => {}} />,
       );
       expect(container.querySelector('.sess-ask-state'), state).not.toBeInTheDocument();
@@ -1113,10 +1158,30 @@ describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned direct
   it('reads absent, explicit null, and a well-formed pair straight through', () => {
     expect(sessionAsk({})).toBeNull();
     expect(sessionAsk({ ask: null })).toBeNull();
-    expect(sessionAsk({ ask: { state: 'held', parentId: 'coord-1' } }))
-      .toEqual({ state: 'held', parentId: 'coord-1' });
-    expect(sessionAsk({ ask: { state: 'answered', parentId: 'coord-2' } }))
-      .toEqual({ state: 'answered', parentId: 'coord-2' });
+    expect(sessionAsk({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+    expect(sessionAsk({ ask: { state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' } }))
+      .toEqual({ state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' });
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — `answeredBy` degrades ON ITS OWN and never
+  // takes the chip down with it. A server predating the field omits the key
+  // entirely (the live frame is CAST, not revived, which is why this reader
+  // exists at all), and blank/wrong-typed values mean the same thing an
+  // absent one does: the row names no principal. What must NEVER happen is
+  // the substitution the chip used to make — filling the gap in with
+  // `parentId`, which names a session that did not answer.
+  it('degrades a missing, blank or wrong-typed answeredBy to null — and never to parentId', () => {
+    for (const raw of [
+      { state: 'answered', parentId: 'coord-1' },
+      { state: 'answered', parentId: 'coord-1', answeredBy: null },
+      { state: 'answered', parentId: 'coord-1', answeredBy: '' },
+      { state: 'answered', parentId: 'coord-1', answeredBy: 5 },
+      { state: 'answered', parentId: 'coord-1', answeredBy: { id: 'coord-1' } },
+    ]) {
+      expect(sessionAsk({ ask: raw as unknown as FleetSession['ask'] }), JSON.stringify(raw))
+        .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
+    }
   });
 
   it('degrades the WHOLE pair to null on any malformed half — the pair only means something together', () => {
@@ -1140,9 +1205,9 @@ describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned direct
     // contract is "read the wire honestly", not "decide what the design
     // doc has words for" — that fold lives where the design doc's two
     // sentences do, in `SessionLine.tsx`.
-    expect(sessionAsk({ ask: { state: 'released', parentId: 'coord-1' } }))
-      .toEqual({ state: 'released', parentId: 'coord-1' });
-    expect(sessionAsk({ ask: { state: 'unknown', parentId: 'coord-1' } }))
-      .toEqual({ state: 'unknown', parentId: 'coord-1' });
+    expect(sessionAsk({ ask: { state: 'released', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'released', parentId: 'coord-1', answeredBy: null });
+    expect(sessionAsk({ ask: { state: 'unknown', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'unknown', parentId: 'coord-1', answeredBy: null });
   });
 });

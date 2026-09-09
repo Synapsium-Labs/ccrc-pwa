@@ -7,10 +7,11 @@ import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
 import type { HookState } from '../src/hookstate.js';
-import type { PrState } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { ASK_HELD_CHIP_MAX_MS } from '../src/askwindow.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
@@ -736,6 +737,15 @@ describe('the ask chip (Task 19)', () => {
 
   const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
 
+  // THE UNITS, ONCE. `assembleFleet`'s `now` is SECONDS; every stamp on an
+  // `asks` row — `at`, `answeredAt` — is MILLISECONDS (`insertAsk`/`settleAsk`'s
+  // real callers all pass `Date.now()`). Both chip bounds are ms arithmetic
+  // against `now * 1000`, so a fixture that mints a row at `now: 1` is not
+  // "a moment ago", it is 1970 — which is why every mint below is expressed
+  // relative to `NOW_MS`.
+  const NOW_S = 1784600000;
+  const NOW_MS = NOW_S * 1000;
+
   it('reads a HELD ask row as the "held" chip, parentId carried verbatim', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -743,13 +753,13 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
   });
 
   it('folds ANSWERING onto "held" — a digit has not landed, so a parent may still (attempt to) answer', async () => {
@@ -759,14 +769,14 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     const id = coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true); // held -> answering
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
   });
 
   // `assembleFleet`'s `now` (1784600000) is SECONDS; `answeredAt` is
@@ -780,15 +790,15 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     const id = coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     coord.takeAskForAnswer(id, 1000);
-    coord.settleAsk(id, 'coord-1', 'a', 1784600000 * 1000 - 60_000); // answering -> answered, 1 min ago
+    coord.settleAsk(id, 'coord-1', 'a', NOW_MS - 60_000); // answering -> answered, 1 min ago
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'answered', parentId: 'coord-1' });
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' });
   });
 
   // Fix round 1, item 4 (coordinator review, RULING): left unbounded, "ruled
@@ -801,11 +811,11 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     const id = coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     coord.takeAskForAnswer(id, 1000);
     // 40 minutes before "now" — past the 30-minute window.
-    coord.settleAsk(id, 'coord-1', 'a', 1784600000 * 1000 - 40 * 60_000);
+    coord.settleAsk(id, 'coord-1', 'a', NOW_MS - 40 * 60_000);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
@@ -813,25 +823,117 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
-  it('the held chip is UNAFFECTED by the window — a held ask is live by definition', async () => {
-    // A held row minted 40 minutes ago (well past the answered-chip window)
-    // must still show "held": the window only bounds `answered`, per the
-    // ruling's own words — nothing about a live, still-open question goes
-    // stale just because the clock has moved.
+  // WHOLE-BRANCH REVIEW, F2(b) — the RULING, replacing the test that used to
+  // sit here asserting the opposite ("a held ask is live by definition", a
+  // row minted 40 minutes ago still wearing the chip). That premise holds
+  // only within ONE PROCESS LIFETIME and only while `staleAsk` can still
+  // reach the row, and neither is guaranteed: `heldAsks` is never rehydrated
+  // at boot (D-2169, deliberately) and `dialogIds` is stamped on the priming
+  // tick BEFORE the notify gate, so every deploy leaves one stuck chip per
+  // session that had a live ask, forever. The bound is DERIVED from the two
+  // constants the lane actually runs on (`askwindow.ts`) — never a third
+  // number — because a `held` row older than the grace window plus the
+  // answering ceiling is stale by construction.
+  const holdMinted = async (home: string, coord: CoordStore, mintedAt: number) => {
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: mintedAt,
+    });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    return fleet.find((x) => x.id === 'claude-demo')!.ask;
+  };
+
+  it('still shows a held chip INSIDE the derived window — the control for the bound below', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    expect(await holdMinted(home, mkCoord(), NOW_MS - (ASK_HELD_CHIP_MAX_MS - 1_000)))
+      .toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+  });
+
+  it('folds a held row OLDER than ASK_GRACE_MS + ASK_ANSWERING_MAX_MS to no chip (F2(b))', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    expect(await holdMinted(home, mkCoord(), NOW_MS - (ASK_HELD_CHIP_MAX_MS + 1_000))).toBeNull();
+  });
+
+  it('bounds a folded-from-ANSWERING row by the same mint time — the stranded case F2(a) could not reach', async () => {
+    // `staleAsk` is called through a try/catch on every path, so a coord.db
+    // that throws leaves an `answering` row exactly where it was. The chip
+    // must not depend on that write having landed.
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
     const coord = mkCoord();
-    coord.insertAsk({
+    const id = coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'],
-      now: 1784600000 - 40 * 60,
+      now: NOW_MS - (ASK_HELD_CHIP_MAX_MS + 1_000),
     });
+    expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true);   // held -> answering, and stranded there
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — the chip used to build its `answered` arm from
+  // `row.parentId` and never read `row.answeredBy`, while `server.ts`'s
+  // `POST /api/sessions/:id/ask` settles the OPERATOR's own answer with
+  // `settleAsk(held.id, 'operator', …)`. So an ask the operator answered
+  // themselves, from their own phone, inside the grace window, rendered as
+  // "ruled by <parent-session-id>" — a false attribution on the one surface
+  // this lane exists to make honest. Every chip test in this block settled
+  // with `'coord-1'` and none with `'operator'`, which is exactly why the
+  // suite was green and blind.
+  it('names the OPERATOR, not the parent, when the operator answered their own held ask (F1)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    coord.settleAsk(id, ASK_OPERATOR_PRINCIPAL, 'a', NOW_MS - 60_000);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    // `parentId` is still carried — it is who MAY have answered, and the chip
+    // has always named it — but `answeredBy` is who DID, and they differ here.
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask)
+      .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'operator' });
+  });
+
+  it('carries a NULL answeredBy on an answered row that names no principal — never the parent by default', async () => {
+    // Reachable: `settleAsk` is guarded on both answer routes precisely
+    // because it can throw after the digit has already landed, leaving the
+    // row unattributed. The chip must say what the row says, not fill the
+    // gap in with `parentId`.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    coord.db.prepare("UPDATE asks SET state = 'answered', answeredAt = ? WHERE id = ?")
+      .run(NOW_MS - 60_000, id);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask)
+      .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
   });
 
   it('folds RELEASED to no chip — the operator\'s own ordinary push already fired', async () => {
@@ -841,7 +943,7 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     const id = coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     expect(coord.releaseAsk(id, 2000)).toBe(true); // held -> released
     const fleet = await assembleFleet(
@@ -858,7 +960,7 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     expect(coord.staleAsk('d', 'claude-demo', 2000)).toBe(true); // held -> stale
     const fleet = await assembleFleet(
@@ -889,7 +991,7 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000);
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
@@ -909,7 +1011,7 @@ describe('the ask chip (Task 19)', () => {
     const coord = mkCoord();
     coord.insertAsk({
       childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
-      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
     });
     coord.db.close();
     const fleet = await assembleFleet(

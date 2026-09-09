@@ -12,6 +12,12 @@ import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions, askKey } from './askkey.js';
+// The ask lane's two WINDOWS moved out of this file (whole-branch review
+// F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
+// module — `watch.ts` imports `assembleFleet` from it — so they now live
+// where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
+// lane's poll cadence, not a window, and this file is still its only reader.
+import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent, PrState,
@@ -204,63 +210,12 @@ const MAIL_SWEEP_MS = 10_000;
  *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:6724-6725`). */
 const MAIL_QUIET_MS = 60_000;
 
-/** How long an eligible ask is withheld from the operator's phone so its parent
- *  can rule first. FLOOR (fix round 1, item 5 — corrected; the spec this was
- *  transcribed from cited the wrong pair): the parent is BY CONSTRUCTION the
- *  `claimedBy` of a non-terminal run — exactly `openCoordinatorIds()`'s
- *  membership test — so `sweepMail` scores it against the COORDINATOR pair
- *  below, not the worker one: `COORD_QUIET_MS` (15s, measured from
- *  `statusUpdatedAt`) gates a just-idle parent, and `COORD_COOLDOWN_MS` (30s)
- *  does not bind it — that gate is measured from the recipient's own LAST
- *  successful injection, in-memory, so a parent with no prior mail (the
- *  ordinary case for an ask nudge) clears it for free. Add the same
- *  sweep-granularity/injection-sleep overhead an already-quiet session pays
- *  anyway and the real floor is ~25s — not the ~70s a `MAIL_QUIET_MS` reading
- *  would suggest — so a window under that gives a just-idle parent no turn at
- *  all. CEILING: every second here is latency the operator pays on the asks
- *  the parent declines, which is why `POST /api/asks/:id/release` exists — a
- *  parent that answers "not mine" fires the push at once, so only a parent
- *  that has genuinely gone quiet ever costs the full window. */
-const ASK_GRACE_MS = 120_000;
-
 /** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
- *  fast a lapsed hold fires — that ceiling is `ASK_GRACE_MS` above, measured
+ *  fast a lapsed hold fires — that ceiling is `ASK_GRACE_MS` (`askwindow.ts`), measured
  *  in minutes — but how often the lane is allowed to ASK, the same relation
  *  `MAIL_SWEEP_MS`'s own docstring states for the mail lane. Ten seconds
  *  matches that cadence and is ample against a window sized in minutes. */
 const ASK_SWEEP_MS = 10_000;
-
-/** Ceiling on how long a row may sit `'answering'` before `sweepAsks` gives up
- *  on the principal that took it and never came back (fix round 1, item 1 —
- *  the reviewer's own reasoning, verbatim): `sweepAsks` is the ONLY garbage
- *  collector `heldAsks` has. `detectDialogs`'s orphan-settle fires only on a
- *  NEW dialog id, and a session blocked on `AskUserQuestion` does not
- *  repaint — so a row stuck at `'answering'` (the press refused, `answerAsk`
- *  threw, the request abandoned — `untakeAsk`'s own rollback never ran)
- *  would otherwise be kept forever, WITHIN THIS SERVER'S OWN LIFETIME:
- *  `releaseAsk` fails every sweep because the state is not `'held'`, and
- *  nothing ever pushes. That is the exact harm this lane exists to prevent,
- *  inverted.
- *
- *  NOT a restart bound (fix round 1, item 4 — a prior draft of this comment
- *  claimed it was, falsely): `heldAsks` is an in-memory `Map`, never
- *  reconstructed from the `asks` table at boot, so a row `'answering'` at
- *  restart time has no map entry the moment the process comes back —
- *  invisible to `sweepAsks` by construction, not merely slow to reach. A
- *  restart mid-hold loses the push outright, a pre-existing, accepted
- *  residual the design already names elsewhere; this ceiling has no way to
- *  bound a process that is no longer running to enforce it.
- *
- *  Sixty seconds is generous, not tight: `answerAsk`'s whole job — take the
- *  row, press a digit, settle — happens well inside one `ASK_SWEEP_MS`
- *  interval in every normal case, so a row still `'answering'` a full minute
- *  later, IN A SERVER THAT NEVER RESTARTED, means the principal that took it
- *  is gone, not merely slow. Past this bound `sweepAsks` pushes the
- *  snapshotted payload and drops the entry — F9's own justification for the
- *  missing-row arm, verbatim: the ask's loss is free by design and must
- *  degrade to today's immediate notification. A principal that took the row
- *  and never came back, within one server lifetime, is that same case. */
-const ASK_ANSWERING_MAX_MS = 60_000;
 
 /** No session gets two injections inside this window, however much mail is
  *  queued for it. A fan-out of six findings arriving as six prompts in ninety

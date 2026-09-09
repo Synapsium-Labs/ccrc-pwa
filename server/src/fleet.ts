@@ -15,6 +15,10 @@ import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
 import type { AskRow, CoordStore } from './coord/store.js';
+// F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
+// windows. It lives in `askwindow.ts` because `watch.ts` (their first
+// reader) imports this module, so the constants could not stay there.
+import { ASK_HELD_CHIP_MAX_MS } from './askwindow.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript. */
 const ASK_SUMMARY_MAX_LEN = 80;
@@ -102,16 +106,41 @@ const ASK_ANSWERED_CHIP_WINDOW_MS = 30 * 60_000;
  * unconditionally — the operator's ordinary push already fired or the
  * dialog is gone, so there is nothing left for this chip to explain.
  *
+ * `answeredBy` is carried through VERBATIM, never inferred from `parentId`
+ * (whole-branch review F1). This function built its `answered` arm from
+ * `parentId` alone for one wave, on a premise `shared/api.ts` asserted
+ * outright and Task 12 had already falsified: `server.ts`'s
+ * `POST /api/sessions/:id/ask` settles the operator's OWN answer with
+ * `ASK_OPERATOR_PRINCIPAL`, so an ask the operator answered from their own
+ * phone inside the grace window rendered as "ruled by <parent>". `held`
+ * carries a `null` — nobody has ruled yet — and an `answered` row whose
+ * column is genuinely empty carries `null` too rather than borrowing the
+ * parent's name (`settleAsk` is guarded on both routes precisely because it
+ * can fail after the digit has landed).
+ *
  * `nowMs` is `assembleFleet`'s own `now` (SECONDS) times 1000, computed once
  * per call and threaded through rather than read again here — one clock per
  * assembly, the same reasoning every other `now`-consuming field in this
- * file already follows.
+ * file already follows. BOTH states are bounded by it: `answered` by
+ * `ASK_ANSWERED_CHIP_WINDOW_MS` since `answeredAt`, and `held` by
+ * `ASK_HELD_CHIP_MAX_MS` since the row's own MINT time (`askwindow.ts`,
+ * F2(b) — the ruling). The `held` bound is the one this function went a
+ * wave without, on the premise that "a held ask is live by definition":
+ * true only within one process lifetime and only while `staleAsk` can still
+ * reach the row, and a restart mid-hold breaks both (`heldAsks` is never
+ * rehydrated, and `dialogIds` is stamped before the notify gate, so no
+ * re-mint ever clears it). See `ASK_HELD_CHIP_MAX_MS`'s own docstring for
+ * why the ceiling is derived from the lane's two windows rather than picked.
  */
 function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
   if (row === null) return null;
-  if (row.state === 'held' || row.state === 'answering') return { state: 'held', parentId: row.parentId };
+  if (row.state === 'held' || row.state === 'answering') {
+    return nowMs - row.at <= ASK_HELD_CHIP_MAX_MS
+      ? { state: 'held', parentId: row.parentId, answeredBy: null }
+      : null;
+  }
   if (row.state === 'answered' && row.answeredAt !== null && nowMs - row.answeredAt <= ASK_ANSWERED_CHIP_WINDOW_MS) {
-    return { state: 'answered', parentId: row.parentId };
+    return { state: 'answered', parentId: row.parentId, answeredBy: row.answeredBy };
   }
   return null;
 }
