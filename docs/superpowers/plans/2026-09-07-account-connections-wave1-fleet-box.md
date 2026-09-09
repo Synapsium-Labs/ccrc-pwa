@@ -16078,6 +16078,20 @@ SKILL"); and `:1188` cites `:5411` for `_inst_graph_hooks_off` (that line is `tm
 worth noting: a pointer can be displaced AND have been wrong before it moved, and repairing only the
 displacement certifies the older error — D-2007 exactly.
 
+**Corrected at Task 26: the six displaced pointers are FOUR.** Two of them no longer exist in the tree
+at all — `deploy/account-op.mjs`'s `:4926-4928` and `ccrc-install-graphify.test.ts:1139`'s
+`:6311-6312`. A deferred sweep list is itself a document that goes stale, and a sweep executed off this
+list without re-measuring would have chased two pointers that are not there. The four live ones, with
+targets measured after Task 26's +154 lines: `deploy/account-op.mjs:220` → `:5237-5241`; `:819` →
+`:5208-5213`; `:848` → `:6684-6690`; `ccrc-install-graphify.test.ts:1155` → `:6682-6683`.
+
+One more site, found in the plan's own prose rather than in source: Task 26 cites `cmd_wrappers`' use of
+the idiom at `ccd/ccrc:2474`, which is a truncation `_ccrc_die`. The idiom is at **`:2519`**.
+
+**Nineteen sites plus four displaced pointers.** And the standing instruction for whoever runs this
+sweep: **re-measure every entry before repairing it.** This list has now been wrong in three different
+ways — a target that moved, a target that was never right, and a citer that no longer exists.
+
 ### D-2120 — Task 25's step makes eight existing tests red, and the plan does not mention it
 
 `_acct_provision` refuses when `$HOME/.cc-sessions/<installer>` is missing or not executable. Every one
@@ -16145,6 +16159,12 @@ merely auditing one afterwards.
 
 Accepted. The plan's Files list is a snapshot; where a constant lives is a property of who reads it.
 
+**Applied again at Task 26, by the same measurement.** Its two `ACCT_OPERATOR_STEP_*` constants are
+also listed for the constants block and also ship beside their one consumer: **120 citation tokens
+shift from the constants block against 44 from here.** The ratio is the argument, and it is now a
+precedent in this file rather than a one-off — `JQ_ACCT_MANAGED`'s placement is cited as the reason,
+which is what a precedent is for.
+
 ### D-2123 — three of Task 25's predicted observations cannot occur, and each fails differently
 
 A plan predicts what you will SEE — a red assertion's text, a mutation's failure. Task 25 predicts three
@@ -16172,6 +16192,16 @@ Face 1 is the same defect as D-2019 (Task 24's mutation 2 took `rm`'s status and
 demonstrate its property) — that is now twice in two tasks, so the standing instruction holds: **every
 prescribed mutation is a thing to VERIFY, and a mutation that cannot red on the assertion it names is a
 finding, not a nuisance.**
+
+**Two more at Task 26, and the first is face 1 again in a new disguise.** Its mutation 5 predicts
+`expected 1 to be 2`: empty the second operator-step constant and the array should be one element
+shorter. Measured — an empty format string still appends an **empty element**, so the array is length 2,
+the length assertion passes, and the case reds on its content assertion instead. **A case that asserted
+only `length` would have been a false green.** That is the third instance of a prescribed observation
+that cannot occur, and the second where the mechanism survived only because someone asserted the
+content as well as the count. Its mutation 7 predicted `expected 30 to be 2` and measures 52 — harmless,
+and worth recording only because it is the fourth predicted number in this plan that was computed rather
+than measured (with D-2020's counts and D-2123 faces 1 and 3).
 
 ### D-2124 — the merge's pre-validation admitted three shapes it cannot merge, and one of them mis-routed a lane in silence
 
@@ -16314,3 +16344,97 @@ One honest limit, recorded because it will not show up as a failure: whether the
 suite green. `_acct_no_answer`'s own `$3` has the identical property. The source says why it is
 required and no assertion defends it; a caller that forgot it would be caught by the sentence
 assertions, not by the signature.
+
+### D-2129 — the plan places the kill-switch after the wrapper its own prose says it must precede
+
+Task 26's "Why" quotes §5: a lane "cannot be picked by `_ws_least_loaded` the moment it is rostered",
+and `_account_ok` reads BOTH halves — `[[ -x "$WRAPPER_DIR/$1" ]] && _lane_enabled "$1"`
+(`ccd/ccd:1028`). So the window opens when the roster entry and the **wrapper** both exist, which is
+inside `_acct_converge`. The plan's snippet puts `_acct_disable_new` **after** `_acct_converge`.
+
+Between those two lines a lane is rostered, has a wrapper, and has no marker. It is not a transient:
+`cmd_wrappers` can refuse *after* writing some wrappers, and its own remedy — run `ccrc wrappers` —
+is the act that completes the very state that makes the lane pickable. The operator is handed an
+instruction whose effect is to arm a lane nobody has measured.
+
+Shipped with the call **before** `_acct_converge`, and the difference is measured rather than argued:
+mutation 3b puts it back where the plan had it and reds with *"the converge refused and left a
+rostered lane with no marker"*, driven by an unreadable id-shaped file that makes `cmd_wrappers` refuse
+every generated write.
+
+Third of the family after D-2003 and D-2018: **two halves of one plan, each defensible alone,
+contradicting each other at the seam** — and again the prose is the half that was right. A plan's
+snippets are drafts of the code; its prose is the argument the code has to satisfy. Where they
+disagree, the prose is the specification.
+
+### D-2130 — the fourth instance of the situational-clause pattern, predicted before it was found
+
+D-2126 closed with: *"Every time, a function's sentence was written for the caller its author had in
+mind... A fourth instance should be assumed rather than discovered."* Task 26 found it, one commit
+later, in the line the task was already replacing.
+
+`_acct_add` ended with `_acct_answer roster …`. `_acct_answer` hard-codes **"Nothing was written."**
+into its no-answer refusal — and by the time that line runs, the credential, the roster entry,
+`accounts.sh`, the wrapper, the kill-switch marker and the provisioned home have all been written. It
+is D-2051's **third re-emit path**, and D-2051 never reached it because D-2024 had just moved that line
+to `_acct_answer` as the *fix* for a different defect on the same line.
+
+So the ledger reads: the plan left the seam open on the success path (D-2024); review round 1 closed
+it there with `_acct_answer` and thereby planted this; D-2051 closed the two re-emit paths and did not
+look at the success path again because it had been "fixed"; and Task 26 found it only because it was
+rewriting the line for an unrelated reason. **A line that has already been corrected once reads as
+settled, and that is precisely when it stops being re-examined.**
+
+The plan's own snippet for this task (`_acct_node added … || exit $?`) reopens the *other* half — a bare
+pass-through with no empty-body guard at all. Neither the plan's line nor the shipped line was right.
+Closed with a capture carrying this site's own clause, the same shape as the `add-entry` call above it,
+and the D-2051 describe now says "three" and has a third case.
+
+**The prediction is the useful part.** It was written as a guess about a pattern and it paid inside one
+task. The standing form: **when a shared helper's sentence is situational, enumerate its call sites
+before declaring it closed — the count, not the ones the report quoted.** (D-2126 was itself corrected
+for exactly that: five quoted, seven actual.)
+
+### D-2131 — `disabled` was a partial conversion, in the one field an operator acts on
+
+The plan's `added` op composes `disabled: a['disabled'] === 'true'`. That maps every value which is not
+the exact word `true` — a typo, a missing flag, `False`, `1` — to **`false`**, and `false` in this field
+means *the lane is on*. Measured: `--disabled tru` answers exit 0 with `disabled:false`, publishing
+"this lane is switched ON" about a lane whose marker is on disk.
+
+It is the overloaded seam this cluster keeps closing, in the field with the shortest path to harm: the
+PWA renders a switch from it, and `_ws_least_loaded` is what a wrongly-on lane gets fed to.
+
+Made total — the two words are accepted and everything else is `bad-argv` — because there is exactly
+one caller and it always passes one of them, so the shape is *refusable* rather than guessable. That is
+the same reasoning `_acct_no_answer` uses about a value it cannot interpret, and the opposite of
+narrowing a distinction on the way through.
+
+Worth naming the general shape, because `=== 'true'` on a stringly-typed flag is idiomatic and looks
+harmless: **a boolean parsed from a string has three inputs, not two, and the third must not silently
+become the safer-sounding one.** Here the "safe" default was the dangerous one.
+
+### D-2132 — Task 26's Step 1 ships three defects of its own, one of which reds an unrelated suite
+
+The plan's test snippet is not a specification here; it is code that was never run. Three findings, in
+descending order of how quietly they would have shipped:
+
+1. **It violates `single-definition.test.ts`.** `readFileSync(join(REPO, 'ccd', 'ccd'), …)` is a second
+   spelling of the ccd script path, which that suite pins to `ccdWsHelpers.ts` alone. So the plan's own
+   snippet turns an unrelated suite red — caught only because Step 5 runs the whole package. Fixed by
+   reading through the exported `CCD`, which is apt: **the case is itself about two spellings of one
+   name drifting apart**, and it was written as a second spelling.
+2. **Its case 2 is green at BASE.** `homeAble` is already `true` in the shipped `add-entry`, so as
+   written the case asserts nothing the tree does not already do — a test that cannot fail is a
+   comment. The marker assertion beside it is what makes mutation 4 red on that case, and without it
+   RULING 4's claim ("the two states are not interchangeable") had no mechanism.
+3. **`staleAtBox` was an incomplete fixture** — it replaced the whole `deploy/` symlink with a
+   one-file directory, so any run reaching `_acct_converge` refused at `accounts-sh` before the op
+   under test was exercised. It happened to be adequate for the two older cases because neither gets
+   that far. A fixture that is correct only for the cases that existed when it was written is a trap
+   for the next case, and this cluster added one.
+
+Together with D-2123 this is the second task whose Step 1 needed correcting before it could measure
+anything, which upgrades a habit into a rule: **run the plan's test snippet before trusting it to
+describe the tree, and run the WHOLE package at least once per work item** — defect 1 is invisible to
+the task's own suite.
