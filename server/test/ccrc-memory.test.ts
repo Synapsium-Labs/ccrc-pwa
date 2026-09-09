@@ -46,6 +46,43 @@ describe('ccrc memory — the census', () => {
     expect(run(['memory']).out).toMatch(/converged/);
   });
 
+  // R20 (fix round 2, Important 1): a RELATIVE link that genuinely resolves
+  // to the canonical store used to read as `forked` under the old `readlink`
+  // raw-text-vs-absolute-store comparison — the memory really is shared into
+  // one store, only the link's own spelling differs. `[ "$link" -ef "$store" ]`
+  // (device+inode, followed through the symlink) answers the real question
+  // regardless of how the target is spelled, closing a Minor deferred from
+  // Task 2.
+  it('reports a RELATIVE symlink that correctly resolves to the canonical store as converged (R20)', () => {
+    const store = path.join(home, '.ccrc', 'memory', '-p-demo');
+    fs.mkdirSync(store, { recursive: true });
+    const d = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(path.relative(d, store), path.join(d, 'memory'));
+    const out = run(['memory']).out;
+    expect(out).toMatch(/-p-demo\s+converged$/m);
+    expect(out).not.toMatch(/-p-demo\s+forked$/m);
+  });
+
+  // R20 (fix round 2, Important 1 — the WORSE of the two measured bugs): a
+  // link resolving to something that EXISTS but is a plain FILE, not a
+  // directory, passed a bare `-ef`/existence check while being just as
+  // unusable a memory store as a dangling link — and unlike a dangling link,
+  // it does not even LOOK broken. `[ -d "$store" ]` is the SEPARATE,
+  // independently mutable conjunct this test pins: deleting it alone
+  // (leaving `-ef` in place) reproduces exactly this false `converged`.
+  it('reports a link to a store that is a regular FILE, not a directory, as forked (R20)', () => {
+    const store = path.join(home, '.ccrc', 'memory', '-p-demo');
+    fs.mkdirSync(path.dirname(store), { recursive: true });
+    fs.writeFileSync(store, '');   // the "store" is a FILE, not a directory
+    const d = path.join(home, '.claude', 'projects', '-p-demo');
+    fs.mkdirSync(d, { recursive: true });
+    fs.symlinkSync(store, path.join(d, 'memory'));
+    const out = run(['memory']).out;
+    expect(out).toMatch(/-p-demo\s+forked$/m);
+    expect(out).not.toMatch(/-p-demo\s+converged$/m);
+  });
+
   // Ruling R4: the brief's mutation M2 ("`_mem_state` returns `converged` for
   // any symlink, ignoring the target") has nothing to go RED on without this
   // case — the test above only ever seeds a CORRECT link. A symlink that
@@ -224,7 +261,22 @@ describe('ccrc memory --apply — the union', () => {
     expect(fs.readFileSync(path.join(parent, backupName!, 'a.md'), 'utf8')).toBe('A');
   });
 
-  it('re-points a symlink that targets another HOME, not the store', () => {
+  // R20 (fix round 2) changed this test's own expectation, deliberately.
+  // `.claude` sorts before `.claude-corp` (a prefix always sorts first), so
+  // its own plain-directory pair converges FIRST — which turns `other`
+  // itself into a symlink to the store. By the time `.claude-corp`'s pair is
+  // examined, its link already RESOLVES to the store TRANSITIVELY (`-ef`
+  // follows the whole chain), so `_mem_state` now correctly calls that pair
+  // `converged` already, and `_mem_apply` skips a pair it calls converged —
+  // by design (`_mem_state`'s own R20 comment states this cost: `--apply`
+  // no longer normalises an indirectly-correct link to the canonical direct
+  // form). Measured: before this fix, `.claude-corp`'s link was re-pointed
+  // straight at the store; after it, `.claude-corp`'s link is left pointing
+  // at `other`, which is now itself a symlink to the store. The invariant
+  // that actually matters — one store, no duplicated data, the same bytes
+  // reachable from both homes — still holds, so this test now asserts THAT,
+  // through `realpathSync`, rather than the exact link shape.
+  it('leaves a symlink that transitively resolves to the store alone once it does (R20)', () => {
     const other = path.join(home, '.claude', 'projects', '-p-demo', 'memory');
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, 'a.md'), 'A');
@@ -232,7 +284,7 @@ describe('ccrc memory --apply — the union', () => {
     fs.mkdirSync(d, { recursive: true });
     fs.symlinkSync(other, path.join(d, 'memory'));
     run(['memory', '--apply']);
-    expect(fs.readlinkSync(path.join(d, 'memory'))).toBe(storeDir());
+    expect(fs.realpathSync(path.join(d, 'memory'))).toBe(fs.realpathSync(storeDir()));
     expect(fs.readFileSync(path.join(storeDir(), 'a.md'), 'utf8')).toBe('A');
   });
 

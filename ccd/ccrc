@@ -2887,20 +2887,45 @@ _mem_homes() {   # -> one agent-home path per line
   done
 }
 
-# CONVERGED MEANS THE LINK POINTS AT THE STORE *AND THE STORE EXISTS* (R12,
-# review round 2) — not just that `readlink`'s text matches. A link written
-# before its store, or orphaned when its store was deleted, has the right
-# target TEXT with nothing behind it; treating that as `converged` would make
-# `--apply` (Task 3) skip exactly the pair it should repair (it skips
-# `converged` pairs by design) and would make `ccrc doctor` (Task 4) call the
-# box PASS — the same silence this whole branch exists to remove, one layer
-# down. So the `[ -d "$store" ]` conjunct below is part of the DEFINITION of
-# `converged`, not a defensive extra: deleting it produces a green suite only
-# if the covering test asserts the row's classification, not the summary line.
+# CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE IS A
+# DIRECTORY* (R20, Task 4 review round 2 — supersedes R12's text-comparison
+# rule below). R12 (review round 2 of Task 2) first ruled that a link whose
+# `readlink` TEXT matched the store's absolute spelling, with nothing behind
+# it, must not read as `converged` — the `[ -d "$store" ]` conjunct was
+# R12's fix. R20 goes one step further on TWO fronts a pure text comparison
+# cannot reach, both measured on this branch's own doctor/census pair:
+#   1. A RELATIVE link that genuinely resolves to the store (e.g.
+#      `../../../.ccrc/memory/<slug>`) never matches `readlink`'s raw text
+#      against the absolute `$store` spelling — `_mem_state` called it
+#      `forked` even though the memory really is shared into the one store.
+#      This was a standing Minor from Task 2, deferred; R20 closes it.
+#   2. A link that resolves to something that EXISTS but is a plain FILE, not
+#      a directory (store corrupted, or created wrong by hand), passed a bare
+#      existence check while being just as unusable as a dangling link — the
+#      worse of the two bugs R20 found, because nothing about it LOOKS
+#      dangling.
+# `[ "$link" -ef "$store" ]` (bash builtin, comparing device+inode THROUGH
+# the symlink — the same operator `ccrc-doctor-checks`'s `_check_wrappers`
+# already uses for exactly this "resolves to the same file" question) answers
+# both: it follows a relative target exactly the way the kernel does, and it
+# needs no `readlink` at all. But `-ef` only proves EQUALITY, not SHAPE —
+# both sides could resolve to the same regular file — so `[ -d "$store" ]`
+# stays a second, independent conjunct: `-ef` is necessary and `-d` is
+# necessary, and dropping either one is a distinct, independently mutable
+# defect (Task 4 fix round 2 measured this: deleting `-d` alone leaves the
+# store-is-a-file case silently `converged`).
+#
+# THE COST, ACCEPTED: `ccrc memory --apply` skips pairs `_mem_state` already
+# calls `converged` (by design — see `_mem_apply` below), so a relative-but-
+# correct link is now LEFT AS WRITTEN rather than normalised to the canonical
+# absolute form `--apply` itself would write. Memory is still correctly
+# shared into one store either way; only the link's own spelling is left
+# alone. This is a real, deliberate narrowing of what `--apply` will ever
+# touch, not an oversight.
 _mem_state() {   # <home> <slug> -> converged | forked | absent
   local link="$1/projects/$2/memory" store="$HOME/.ccrc/memory/$2"
   if [ -L "$link" ]; then
-    [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && [ -d "$store" ] \
+    [ "$link" -ef "$store" ] && [ -d "$store" ] \
       && { printf 'converged'; return 0; }
     printf 'forked'; return 0
   fi

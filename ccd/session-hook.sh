@@ -598,6 +598,20 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   store="$HOME/.ccrc/memory/$slug"
   # Steady state first, and it is the whole cost on a converged box.
   if [ -L "$link" ]; then
+    # R20 (Task 4 review round 2): `-ef` + `-d` is the SAME definition of
+    # "converged" `_mem_state` and `_check_memory` now both use — a link that
+    # RESOLVES to the store (through a relative target too, with no
+    # `readlink` needed) and whose store is genuinely a DIRECTORY. When it
+    # holds, there is nothing to do, full stop; this fast path costs one
+    # `-ef` and one `-d` on the box's own common case. It is provably a
+    # no-op change against the arm below for every case measured so far
+    # (both arms already `return 0` unconditionally, and the only side
+    # effect, `mkdir -p`, was already gated on `[ -d "$store" ]`), but it
+    # keeps this hook, `_mem_state` and `_check_memory` naming the exact same
+    # fact rather than three descriptions that happen to agree today.
+    if [ "$link" -ef "$store" ] && [ -d "$store" ]; then
+      return 0
+    fi
     if [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ]; then
       # R12 (review round 2, extended here from Task 2's `_mem_state` to this
       # hook, Task 4): a link whose TEXT already names the canonical store,
@@ -609,6 +623,11 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
       # loses nothing — there is nothing behind a dangling link to lose — so
       # this stays inside this function's own "acts only where there is
       # nothing to lose" contract, and the failure stays silent either way.
+      # (Left as a raw `readlink` text compare, not `-f`: the target's own
+      # ancestor directories may not exist yet in exactly this dangling
+      # case, and GNU `readlink -f` requires all but the last path component
+      # to exist, so canonicalising here would make a genuinely-dangling
+      # correct link unrecognisable — the opposite of this arm's job.)
       [ -d "$store" ] || mkdir -p -- "$store" 2>/dev/null
       return 0
     fi
