@@ -17620,3 +17620,39 @@ the `BASH_SOURCE` main guard — correct at BASE, `:8991` at HEAD — one pre-co
 post-commit ones, which is verbatim the shape D-2223 had just named. It caught and fixed it in the same
 commit. The class is not a lapse of care; it is what happens when a file moves under a citation being
 written, and only re-measuring at HEAD catches it.
+
+### D-2253 — a defect the task's own suite could not see, and two scans that read prose
+
+Task 30's implementing agent was killed by a session rate limit **during its citation audit**, with the
+work complete. Its own suites were green — `ccrc-account` 240 and `ccrc-cli` 34, 274 passing — and the
+tree was syntax-clean. The full package was not: **`single-definition.test.ts` was red on a second
+spelling of the ccd script path.**
+
+That is **D-2132's defect recurring**, four tasks later, in a task whose brief cited D-2132. The fix
+was one line, because `ccrc-account.test.ts` **already imports the shared `CCD` constant** — Task 26's
+own remedy, sitting unused at the new call site.
+
+**The lesson is about which suite can see what.** A task's own file cannot detect a cross-file
+single-definition violation by construction: the scan lives in another suite and reads the whole test
+tree. Task 26 learned this and D-2132 wrote it down — *"run the WHOLE package at least once per work
+item"* — and it was the full package, not the task's suite, that caught it again here. **The rule earns
+its second instance: the package run is not a formality at the end, it is the only reader of a whole
+class.**
+
+**And then my own fix reintroduced it, inside the comment explaining it.** The first correction spelled
+the forbidden construct in its explanatory prose, and the scan matched — because `NAMES_CCD` reads
+comments like any other bytes. Reworded, green.
+
+This tree now has **two scans that deliberately read prose**: `single-definition`'s `NAMES_CCD`, and
+`macos-platform`'s bare-command scan which caught Task 29's refusal sentence (D-2225). **Both have now
+red on a comment written to explain the rule they enforce.** That is not a coincidence worth shrugging
+at — a comment about a forbidden shape is the single most likely place for that shape to appear, and
+the guards are right not to exempt it. Any remaining task writing prose about either rule must describe
+the shape without spelling it.
+
+**What the interruption did NOT damage**, measured rather than assumed: the three inheritances all
+landed. `CLAUDE_CODE_MAX_RETRIES=0` is set at the call site with its argument in source; `limitsTouched`
+is measured for the first time (eleven references, where D-2223 F7 found none in the whole tree); and
+D-2223 F9's swallowed defer is closed with the right reasoning — a defer on the probe is a **refusal**,
+because the probe is the last question about a lane and has nothing below it to fall through to, which
+is exactly the asymmetry with `auth status` that Task 29 was built on.
