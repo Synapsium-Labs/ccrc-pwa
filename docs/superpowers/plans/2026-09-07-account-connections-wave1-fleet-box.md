@@ -17164,3 +17164,82 @@ The boundary D-2142/D-2150 drew survives and is now argued on the function itsel
 the validator's; an empty flag is an argv question no roster validator can name, because by the time it
 reads the entry the flag is gone.** That sentence is the reason the loop exists and the reason it stops
 where it does.
+
+### D-2165 — the plan's `want` line would have refused every anthropic lane ccrc created
+
+Task 28's snippet builds the expected secrets path as `.cc-secrets/$id-$ACCT_PROVIDER.env`.
+`_acct_write_secret` **derives** `<id>-oauth.env` whenever the env var is `CLAUDE_CODE_OAUTH_TOKEN`, and
+`add` writes that same relative path into the roster. So on the fleet's own shape — where every
+anthropic lane is `-oauth` — the plan's comparison fails against a path ccrc itself wrote, and
+`credential` answers `secrets-path-unmanaged` on a lane it manages perfectly.
+
+Mutation viii measures it: with the plan's line, seven cases red with *"roster entry names
+`$HOME/.cc-secrets/alt-max-oauth.env`, and this verb writes `$HOME/.cc-secrets/alt-max-anthropic.env`"*
+— **and the api-key case stays green**, which is why a fixture on one provider would have shipped it.
+D-2151's rule again: the fixture chooses which half of a branch you measure.
+
+Fixed at the root rather than at the call site: `_acct_secret_tag` is now lifted out of
+`_acct_write_secret` (`ccd/ccrc:4161`) and both derivations call it. That function's own header already
+said **"THE TWO DERIVATIONS MUST STAY ONE RULE"**, so a second bash copy was the drift its own comment
+forbids — the fix is the comment finally getting a mechanism.
+
+This is the third time a Task-2x plan snippet has been internally inconsistent with the code it was
+written against (D-2003, D-2018, D-2129), and the second where the wrong half was the one that
+*recalled* a value rather than the one that reasoned.
+
+### D-2166 — the tmux poison's negative control reached the real fleet, and an unreachable guard was deleted rather than defended
+
+**The containment is real and now measured.** This box carries `/usr/bin/tmux` 3.4 with **21 live
+sessions**. Mutation M0 deleted the poison from the test environment: `_acct_live` reached the **real
+tmux server**, which answered exit 0 with all 21 session names, none matching the fixture's — so the
+case that should have answered `live:null` answered `live:[]` with `measured=true`. That is precisely
+the defect `CLAUDE.md`'s tmux rule exists to prevent, produced on demand and then closed.
+
+Two details worth keeping. The poison logs to its **own** file rather than reusing the existing
+`tmux-calls` log, because that is the file `plantTmux` writes — sharing it would have collapsed "the
+poison answered" and "the fixture's tmux answered" into one signal. And the pristine case asserts the
+log holds **exactly** one call with that exact argv, because `existsSync(poison-log) === false` is
+trivially true when no poison exists — the weaker assertion passes in the very world it is meant to
+exclude.
+
+**D-2163's rule had its first outing and worked.** `_acct_lane`'s control-character loop was deleted to
+see what reds: **187/187 green — it measures nothing.** It is unreachable by construction, and the
+agent proved why rather than asserting it: all eight fields arrive through `readRoster`, and
+`rosterFromJson` refuses a control byte in `configDirSuffix`, `secretsFile`, `kind` and `provider`,
+while `new URL()` strips them from `baseUrl`.
+
+**RULING: confirm the deletion.** A guard that cannot fire is not forward cover — it is a comment
+shaped like a mechanism, and this wave has twelve examples of what those become. If a ninth field
+arrives without validator coverage, the task that adds the field adds the guard **with** its test. The
+rule asked for a measurement instead of an argument and got one on the first try, which is the whole
+point of making it a rule.
+
+### D-2167 — `credential` does not branch on `kind`, which spec §5 requires, plus two carried notes
+
+**The gap.** Spec `:419` says refuse unless the lane is *generated, or upstream with a declared
+`secretsFile`*. The implementation branches on `secretsFile`, `envVar` and the derived path — **never on
+`kind`**. `rosterFromJson` admits `secretsFile` on all three kinds, so a hand-written **`external`**
+entry naming provider `openrouter` and a matching `secretsFile` is **accepted and rotated**.
+
+Unreachable for anything ccrc writes — `declare` never sets `secretsFile` — but reachable by hand,
+which is the path this cluster has now closed four times.
+
+**RULING: add the `kind` branch.** The warrant is not merely that the spec says so: decision 22(c)'s
+whole argument for `declare` is *"ccrc records it and never touches it"*, and writing a 0600 file for an
+external lane contradicts the sentence that makes `declare` safe. `credential`'s own safety property is
+already "a lane ccrc cannot prove it owns is told so" — `external` is by definition such a lane.
+
+Per **D-2163**, this ruling ships with its own measurement: the round that adds the branch must delete
+it and record what reds, in the same act.
+
+**Two notes carried forward rather than fixed.**
+
+`ACCT_PROVIDER` and `ACCT_SUFFIX` now have **two writers with two meanings** — `_acct_add_parse` (what
+the operator asked for) and `_acct_lane` (what the roster says). Nothing calls both today, and the plan
+names them for Task 32, so they stand; but **Task 32's brief must carry this**, because a verb that
+needs both readings gets whichever ran last and no error. That is an overloaded seam waiting for a
+second caller.
+
+`providers.test.ts` is a **seventh load flake** — `trackedFiles()` timed out under a loaded run (that
+trio took 115s of test time against 14s clean) and was green on re-run and in the full package. Like
+`boot` (D-2150) it is a deadline rather than a race. `CLAUDE.md`'s list now understates the set by two.
