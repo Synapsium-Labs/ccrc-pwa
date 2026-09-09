@@ -5,7 +5,7 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
@@ -121,23 +121,14 @@ export type DispatchOutcome =
        *  route's own refusal already carries a `by` (`routes.ts`), so the
        *  two sites of one code answer one shape.
        *
-       *  CAVEAT (review finding, fix round 1): "a registry record was found"
-       *  is not the same fact as "the project was measured". `record.project`
-       *  is `registry.ts`'s `field()`-backed value, `project ?? id` — an
-       *  ABSENT or UNREADABLE `.project` file (every pre-2026-07-28 row,
-       *  `ccd/ccd:1191`) reads back as the session id, never as "unmeasured".
-       *  So `by` can name a session id that was never a real project, and the
-       *  guard below can refuse `project-mismatch` on a fact that was never
-       *  actually measured. `measuredIdentity` does not catch it — it gates
-       *  on the uuid/wrapper/workdir triple only, not `project`. The correct
-       *  fix routes `project` through `fieldMeasured` (as `wrapper`/
-       *  `workdir`/`uuid` already are) so a genuinely-unmeasured project
-       *  answers `registry-unmeasurable` instead of this refusal — a change
-       *  beyond this task's four files (every other `SessionRecord.project`
-       *  consumer — `fleet.ts`, `watch.ts`, `lifecycle.ts`, `divergence.ts`,
-       *  `routes.ts`'s project listing — would need its own ruling on the
-       *  fallback), left for coordinator/spec ratification rather than made
-       *  unilaterally here. */
+       *  THE CONTENT READ, never `record.project`. `SessionRecord.project`
+       *  is `registry.ts`'s `project ?? id` over a collapsing read, so an
+       *  absent or unreadable `.project` would arrive as the session id and
+       *  name a project nobody measured; the guard below therefore reads
+       *  `<id>.project` through `fieldMeasured` itself and `by` is that
+       *  file's content — present exactly when the file was measured with a
+       *  name and it differs from the run's. Unreadable answers
+       *  `registry-unmeasurable` instead; absent answers nothing at all. */
       by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
@@ -515,8 +506,33 @@ export async function dispatchRun(
     if (record !== undefined && recordIdentity === null) {
       return { ok: false, kind: 'registry-unmeasurable' };
     }
-    // F1's registry rung (design 2026-09-08 §3 F1). `SessionRecord.project`
-    // already rides the read above; nothing had ever compared it to the run's.
+    // F1's registry rung (design 2026-09-08 §3 F1) — MEASURED at the decision
+    // point, not read off `record.project`. `SessionRecord.project` is built
+    // `project ?? id` over `field()`'s collapsing read (`registry.ts`), so an
+    // absent or unreadable `.project` file would arrive here as the SESSION
+    // ID and compare unequal to every run's project: a false, non-retryable
+    // `project-mismatch` naming a session id as the offending repository, on
+    // a fact nobody measured. The design's own sentence forbids exactly that
+    // ("refusing on a fact not measured would be the same error in the other
+    // direction"), so this rung reads the one field it decides on through the
+    // D-114 ladder and tells three answers apart:
+    //   unreadable — the registry could not be measured for THIS row, which is
+    //     what `registry-unmeasurable` already means a few lines up: transient,
+    //     retryable, nothing spent.
+    //   absent, or present and empty — a PROVEN ENOENT, or a field with no
+    //     name in it. The row predates the field (ccd writes `.project` at
+    //     `ws-add`; rows from before 2026-07-28 carry none, as ccd's own
+    //     `_project_pool_state` says) and its repository is unknown to the
+    //     registry. Absence PERMITS, exactly as the open route's
+    //     `sessionProject` null does: nothing is measured, nothing is refused,
+    //     and the dispatch proceeds as it did before this wave existed.
+    //   measured — the file's content, compared to the run's project. Unequal
+    //     is the crossing this build refuses, and `by` names what was READ.
+    // `record.project` keeps its `project ?? id` default for every display
+    // consumer; only the DECISION reads measured. Putting `project` on the
+    // measured ladder inside `readRegistryMeasured` itself is the fuller
+    // remedy and reaches every consumer of `SessionRecord.project` — it is
+    // recorded in this wave's deviation ledger as the follow-up, not done here.
     //
     // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
     // and its identity measured, and BEFORE the hold, the injected `/clear` and
@@ -530,19 +546,16 @@ export async function dispatchRun(
     // the refusal above it: an undefined record on a LISTABLE registry is the
     // tolerated honest-stale case, which keeps falling back to `run.workspace`
     // below exactly as it always has. An unlistable registry never reaches here
-    // — `readRegistryMeasured` refused it four lines up with its own code.
-    // Refusing on a fact not measured would be the same error in the other
-    // direction.
-    //
-    // CAVEAT (review finding, fix round 1) — see `by`'s own docstring above
-    // (`DispatchOutcome`'s refused member): `record.project` collapses an
-    // absent/unreadable `.project` file to the session id (`registry.ts`'s
-    // `project ?? id`), so this comparison can refuse `project-mismatch` on
-    // a project that was never actually measured. Left as the brief and the
-    // design spec (§3 F1) both specify verbatim — the fix is a change beyond
-    // this task's scope and needs coordinator/spec ratification.
-    if (record !== undefined && record.project !== run.project) {
-      return { ok: false, kind: 'refused', code: 'project-mismatch', by: record.project };
+    // — `readRegistryMeasured` refused it with its own code. Refusing on a
+    // fact not measured would be the same error in the other direction.
+    if (record !== undefined) {
+      const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sessionId, 'project');
+      if (!projectRead.ok && projectRead.reason === 'unreadable') {
+        return { ok: false, kind: 'registry-unmeasurable' };
+      }
+      if (projectRead.ok && projectRead.content !== '' && projectRead.content !== run.project) {
+        return { ok: false, kind: 'refused', code: 'project-mismatch', by: projectRead.content };
+      }
     }
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;

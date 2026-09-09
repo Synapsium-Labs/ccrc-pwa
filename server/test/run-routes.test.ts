@@ -4,7 +4,7 @@
 // already enumerates; that suite (run unchanged, Step 4) is the proof this
 // task added none.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -711,6 +711,48 @@ describe('POST /api/runs/:id/dispatch', () => {
       'a /clear was typed into a session this dispatch had no business clearing').toBe(false);
     expect(w.coord.run(id)?.state).toBe('planned');
     expect(w.coord.run(id)?.dispatchedAt).toBeNull();
+  });
+
+  it("answers registry-unmeasurable — not project-mismatch — when the session's .project cannot be read", async () => {
+    // The rung measures the ONE field it decides on. `record.project` would
+    // have arrived here as the session id (`registry.ts`'s `project ?? id`
+    // over a collapsing read) and refused a crossing nobody measured, with a
+    // "do not retry" remedy that spends a second workspace. Unreadable is the
+    // registry not being measurable for THIS row — the retryable answer this
+    // arm already gives for an unmeasured identity.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { io: unreadableField('demo-existing', 'project') }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const holdsAfterOpen = calls.filter((c) => c[0] === 'ws-hold').length;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    // Nothing spent: no second hold, no /clear, the run untouched.
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsAfterOpen);
+    expect(calls.some((c) => c[0] === 'send-keys')).toBe(false);
+    expect(w.coord.run(id)?.state).toBe('planned');
+  });
+
+  it('permits a session whose registry row carries no .project at all — absence is not a crossing', async () => {
+    // A row from before the field existed (ccd writes `.project` at ws-add;
+    // older rows have none). Nothing was measured, so nothing is refused: the
+    // dispatch proceeds exactly as it did before this wave, and
+    // `record.project`'s `?? id` default never reaches the decision.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    rmSync(path.join(home, '.cc-sessions', 'demo-existing.project'));
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
+    expect(opened.statusCode).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(w.coord.run(id)?.state).toBe('dispatched');
   });
 
   it('leaves the honest-stale case exactly as it was — a listable registry with no row for the session', async () => {
