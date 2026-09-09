@@ -20,11 +20,13 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  graphGateCount, graphReadCount, substrateFault, unmeasuredFields,
+  ctxPressure, graphGateCount, graphReadCount, substrateFault, turnStall, unmeasuredFields,
   type FleetSession, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
+import { elapsedWords } from '../lib/elapsed';
+import { useNow } from '../lib/useNow';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { sessionLabel } from './sessionLabel';
@@ -34,6 +36,12 @@ import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
 const CRITICAL = 75;
+
+/** Context-pressure chip floor (D-2011). Matches statusline-command.sh's own
+ *  red banding (`pct_int -ge 80`), not ccd's `COMPACT_THRESHOLD` (50): the
+ *  compactor already handles the 50-80 band on every ordinary cycle, so a
+ *  chip firing there would be noise on ordinary mid-cycle rows, not signal. */
+const CTX_PRESSURE = 80;
 
 /** The ROW's state word for every bucket — the mono word beside the dot, and
  *  the only place this particular vocabulary is spelled out. Deliberately not
@@ -135,6 +143,41 @@ export function SessionLine({
   // in `spawnWords.ts` (see the note at the top of this file for why they
   // moved). This row renders the answer; it no longer holds the vocabulary.
   const chip = spawnChip(session);
+
+  // D-2011/D-2016: context-window pressure, and the wedge signature it feeds.
+  // Dead rows stay silent, same reasoning as `critical`'s account limits
+  // below — a live pane reading says nothing once nothing is running.
+  // `useNow` only ticks while this row is actually busy: nothing can go
+  // stale on an idle/dead row, so there is nothing here worth a timer.
+  const now = useNow(30_000, !dead && session.status === 'busy');
+  // `ctxPressure(session)`, not `session.ctxPct` directly (fix round,
+  // Finding 2): the live `fleet` frame is cast, not revived
+  // (`stores/fleet.ts`'s `asFleetMsg`), so a server predating D-2011 omits
+  // the key at runtime — the same seam `substrateFault`/`unmeasuredFields`/
+  // `graphReadCount` already route through a named reader for. It rendered
+  // safely without one only by luck (`undefined >= 80` reads `false`), which
+  // is not the same as being correct by contract — see `ctxPressure`'s own
+  // docstring in shared/api.ts.
+  const ctxPct = dead ? null : ctxPressure(session);
+  const ctxHigh = ctxPct !== null && ctxPct >= CTX_PRESSURE;
+  // The wedge signature (D-2016): high context pressure AND busy AND no turn
+  // boundary for a long time reads louder than any one fact alone — the
+  // incident this predicate exists for climbed to 91.5% context nine minutes
+  // into a turn that then ran 80.7 minutes with no idle boundary at all.
+  // `!session.dialogPending` (Finding 5, fix round): `liveSessionStatus`
+  // collapses Claude Code's `waiting` into this row's `busy` status
+  // (server/src/fleet.ts:316-317) while the SAME read sets `dialogPending`
+  // true (fleet.ts:419) — so without this guard a session sitting on a
+  // permission prompt for hours at high context reads as wedged. D-2016's
+  // own text draws exactly this line: "attention means a human answer
+  // unblocks the session, which is false here" — a dialog-pending row is the
+  // one shape a human answer DOES unblock, so it is excluded rather than
+  // mislabeled. The quiet `ctx NN%` reading (no wedge escalation) still
+  // renders for such a row when ctxHigh is true.
+  const wedged =
+    ctxHigh && !dead && session.status === 'busy' && !session.dialogPending && turnStall(session, now);
+  const turnAge =
+    wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
 
   const swapBlocked = session.swapBlocked ?? null;
   // `?? null` on the object, and a type check on the KEY — the same one-level-
@@ -509,6 +552,31 @@ export function SessionLine({
             >
               ⑂ {subagentList.length}
             </button>
+          )}
+
+          {/* Context-window pressure (D-2011), escalated to the wedge
+              reading (D-2016) — one cell, not two, same idiom `.sess-spawn`
+              already uses for its own variants: a stable className the
+              achromatic-group census can answer, and a `data-wedge`
+              attribute (not a class) carrying the louder state, so a
+              selected+wedged row is answered by ITS OWN higher-specificity
+              rule rather than losing a tie to source order (see the matching
+              `.sess-ctxpressure[data-wedge]` rule in fleet.css). `title`
+              carries the reading's own caveat — this is what CLAUDE CODE
+              believes its window is, not this account's real usable wall —
+              verbatim, never parsed, same contract as `.sess-held`. */}
+          {ctxHigh && (
+            <span
+              className="sess-ctxpressure"
+              data-wedge={wedged || undefined}
+              title={
+                wedged
+                  ? `context ${ctxPct}% · no turn boundary for ${turnAge} — may be wedged in a blocking compaction`
+                  : `context window ${ctxPct}% (Claude Code's own reading of its window, not this account's usable wall)`
+              }
+            >
+              ctx {ctxPct}%{wedged ? ` · stalled ${turnAge}` : ''}
+            </span>
           )}
 
           {critical && (

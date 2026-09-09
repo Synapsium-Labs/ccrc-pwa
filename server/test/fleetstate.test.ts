@@ -14,7 +14,7 @@ const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
   started: true, spawnState: null,
@@ -112,9 +112,12 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.subagents).toBeNull();
     expect(s?.graphQueries).toBeNull();
     expect(s?.graphGateDenials).toBeNull();
+    // D-2011: same degrade as its graph-counter siblings above — an older
+    // snapshot predates the field entirely, never a measured 0.
+    expect(s?.ctxPct).toBeNull();
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
       ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries',
-       'graphGateDenials'],
+       'graphGateDenials', 'ctxPct'],
     ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');
@@ -171,6 +174,32 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), graphGateDenials: 0 }]);
     const s = (await loadSnapshot(cachePath))?.sessions[0];
     expect(s?.graphGateDenials).toBe(0);
+  });
+
+  it('revives an absent ctxPct as null (D-2011) — a snapshot from before this field existed', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.ctxPct).toBeNull();
+    expect(Object.keys(s ?? {})).toContain('ctxPct');
+  });
+
+  it('revives a persisted ctxPct of 0 as 0 — a measured 0% is not an absence (D-2011)', async () => {
+    // THE guard this field exists for: `optNum(…) || null` is the exact
+    // regression D-2011's own docstring warns against — a session Claude
+    // Code reports freshly compacted at 0% would silently read the same as
+    // a session this build never measured at all.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ctxPct: 0 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.ctxPct).toBe(0);
+  });
+
+  it('revives a PRESENT ctxPct as the number the snapshot carried', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ctxPct: 91 }]);
+    const s = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(s?.ctxPct).toBe(91);
   });
 
   it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', async () => {

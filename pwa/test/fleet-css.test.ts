@@ -372,7 +372,11 @@ describe('selection is polarity, status is hue', () => {
                         // (and `--ink-tertiary` on two variants), so it is a
                         // coloured cell exactly like `.sess-warn` above and
                         // strands the same way if it is left out of here.
-                        '.sess-spawn']) {
+                        '.sess-spawn',
+                        // The context-pressure chip (D-2011): its own
+                        // `--status-attention-text` (and `--status-dead-text`
+                        // on the wedge variant, D-2016) strands the same way.
+                        '.sess-ctxpressure']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
   });
@@ -417,6 +421,44 @@ describe('selection is polarity, status is hue', () => {
         `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
         .toBeGreaterThan(spec(sel));
     }
+  });
+
+  it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {
+    // Same shape as the spawn-chip test above, one cell over. Membership in
+    // the achromatic group (asserted in the earlier list test) is necessary
+    // and NOT sufficient here either: `.sess-line--active .sess-ctxpressure`
+    // is (0,2,0) — and so is `.sess-ctxpressure[data-wedge]` itself, which
+    // paints --status-dead-text and is declared LATER in this file. On a
+    // selected+wedged row the tie would go to source order, the standalone
+    // rule would win, and the chip strands --status-dead-text on the
+    // selected slab instead of the achromatic --edge-strong the group
+    // exists to guarantee. The group's OWN
+    // `.sess-line--active .sess-ctxpressure[data-wedge]` member (0,3,0) is
+    // what settles it by specificity instead. Nothing tested that member:
+    // deleting it left the whole pwa suite green (285 passed) — the bare
+    // `.sess-line--active .sess-ctxpressure` member two lines up only pins
+    // the UNwedged chip's colour, not the wedged one's.
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const group = selectorsOf(css, '.sess-line--active .sess-meta > *:not(:first-child)::before')
+      .filter((s) => s.startsWith('.sess-line--active .sess-ctxpressure'));
+    expect(group, 'the ctx-pressure chip left the achromatic group entirely').not.toEqual([]);
+    const scrubbed = stripComments(css);
+    const groupAt = scrubbed.indexOf('.sess-line--active .sess-ctxpressure');
+    const sel = '.sess-ctxpressure[data-wedge]';
+    // The variant really does paint a colour of its own — without that there
+    // is nothing to beat and everything below would be vacuous.
+    expect(declValue(ruleFor(sel), 'color'), `${sel} no longer sets its own colour`)
+      .toBe('var(--status-dead-text)');
+    // …and it is declared AFTER the achromatic rule, which is precisely why
+    // an equal-specificity member cannot settle this.
+    const variantAt = scrubbed.search(/\.sess-ctxpressure\[data-wedge\]/);
+    expect(variantAt, `${sel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(variantAt, `${sel} now precedes the achromatic rule — this test no longer proves anything`)
+      .toBeGreaterThan(groupAt);
+    expect(Math.max(...group.map(spec)),
+      `no member of the achromatic group out-specifies ${sel}, so the selected+wedged row loses the tie to it`)
+      .toBeGreaterThan(spec(sel));
   });
 
   it('gives the spawn chip a flex: none cell so it cannot steal the hold reason\'s room', () => {
