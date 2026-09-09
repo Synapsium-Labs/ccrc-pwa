@@ -1070,7 +1070,7 @@ INST_DEGRADED=()
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|install|update|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|memory|install|update|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1088,6 +1088,11 @@ already running).
             "generated", and REFUSE every file ccrc did not write itself.
             Backs up before any overwrite; never touches an upstream or
             external account. [--dry-run] [--adopt] [--force]
+  memory    census every (home, project) memory pair on this box: one line
+            per pair naming its home, project slug and state — converged,
+            forked or absent — then a summary count. Read-only; homes are
+            enumerated from the filesystem, never the roster. [--apply] is
+            reserved and not yet implemented
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -2858,6 +2863,69 @@ cmd_wrappers() {
   [ "$n_refused" -eq 0 ] || return 1
   return 0
 }
+
+# ── memory ────────────────────────────────────────────────────────────────
+# One memory store per PROJECT, shared by every agent home on the box.
+# `ccrc memory` is the CENSUS; `ccrc memory --apply` (Task 3) is the only thing
+# that moves a byte. The split is deliberate: the union is irreversible in the
+# sense that matters — a memory file is prose a session wrote once — so the
+# operator sees exactly what would happen before it happens.
+#
+# HOMES ARE ENUMERATED FROM THE FILESYSTEM, NOT FROM THE ROSTER. Measured
+# 2026-09-09: `.claude-glm` and `.claude-kimi` are on disk, hold memory, and
+# are in no roster entry. The roster describes accounts ccrc PLACES WORK ON;
+# it was never a census of homes, and using it as one is how the design's own
+# first draft came to list five homes when there were eight.
+_mem_homes() {   # -> one agent-home path per line
+  local d
+  for d in "$HOME"/.claude*/; do
+    case "$(basename -- "${d%/}")" in .claude-docserver) continue ;; esac
+    [ -d "${d}projects" ] || continue
+    printf '%s\n' "${d%/}"
+  done
+}
+
+_mem_state() {   # <home> <slug> -> converged | forked | absent
+  local link="$1/projects/$2/memory" store="$HOME/.ccrc/memory/$2"
+  if [ -L "$link" ]; then
+    [ "$(readlink -- "$link" 2>/dev/null)" = "$store" ] && { printf 'converged'; return 0; }
+    printf 'forked'; return 0
+  fi
+  [ -e "$link" ] && { printf 'forked'; return 0; }
+  printf 'absent'
+}
+
+cmd_memory() {
+  local apply=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1; shift ;;
+      *) _ccrc_usage_die "unknown argument: $1" ;;
+    esac
+  done
+  local h b slug d state n=0 forked=0
+  for h in $(_mem_homes); do
+    b=$(basename -- "$h")
+    for d in "$h"/projects/*/; do
+      [ -d "$d" ] || continue
+      slug=$(basename -- "${d%/}")
+      case "$slug" in -tmp*) continue ;; esac
+      [ -e "${d}memory" ] || continue
+      state=$(_mem_state "$h" "$slug")
+      n=$((n+1))
+      [ "$state" = forked ] && forked=$((forked+1))
+      printf '%-18s %-50s %s\n' "$b" "$slug" "$state"
+    done
+  done
+  printf '\n%s pairs, %s forked\n' "$n" "$forked"
+  [ "$apply" -eq 1 ] && _mem_apply
+  return 0
+}
+
+# `--apply` lands in Task 3; this stub keeps `cmd_memory` callable (and
+# `ccrc memory --apply` a clean exit-1 refusal, not an undefined-function
+# error) until it does.
+_mem_apply() { echo "ccrc memory: --apply is not implemented yet" >&2; return 1; }
 
 # cmd_adopt — rediscover this box's accounts from disk. The work is entirely
 # `ccd/ccrc-adopt`'s, and this verb is how it becomes reachable: adopt is a
@@ -6581,6 +6649,7 @@ case "$VERB" in
   status)  cmd_status "$@" ;;
   adopt)   cmd_adopt "$@" ;;
   wrappers) cmd_wrappers "$@" ;;
+  memory)  cmd_memory "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
