@@ -20,7 +20,7 @@
   `git -C <deploy-clone> worktree add -b feat/model-class-registry-impl <S>/mcr-impl origin/main`.
   **No task in this plan reads or edits `shared/roster.ts`, `shared/roster-json.mjs`, `deploy/account-op.mjs` or `ccd/ccrc`'s `cmd_account`** — those live on the account-connections branch and are not on `main`.
 - **Every path in every task below is RELATIVE TO THAT REPOSITORY ROOT.** Get there with `cd "$(git rev-parse --show-toplevel)"`. Package-relative commands say which package directory to run them from (`server/`, `agent/`).
-- `/home/mfastovets/worktrees/ccrc-pwa/plain-hollow` (account-connections) and `/home/mfastovets/worktrees/ccrc-pwa/clear-meadow` (account-pools wave 2b, PR #62) are **other sessions' live worktrees and are READ ONLY**. Do not edit them, do not check anything out in them, do not run anything in them that writes. `clear-meadow` is named throughout because every post-rebase `ccd/ccd` line quoted below was measured on its **committed tip `9e9ebd1c`** ("Merge origin/main (PR #61, the overflow-lane reversal) into ws/clear-meadow") — read it with `git -C /home/mfastovets/worktrees/ccrc-pwa/clear-meadow show 9e9ebd1c:ccd/ccd`, **not** with `cat` on the worktree: measured 2026-09-08, that worktree's `git status --porcelain` shows ` M ccd/ccd`, ` M ccd/ccrc-doctor-checks` and ` M server/test/ccd-auto-swap-pool.test.ts`, and its uncommitted state shifts every line number by about thirty. That is one more reason every anchor here is re-located by its text. `plain-hollow` is named ONLY as the origin of `MODEL_ID_RE`, which Plan 1 copies into `shared/models.ts` with a comment naming it; this plan neither imports from it nor names any type it defines.
+- `<worktree>/plain-hollow` (account-connections) and `<worktree>/clear-meadow` (account-pools wave 2b, PR #62) are **other sessions' live worktrees and are READ ONLY**. Do not edit them, do not check anything out in them, do not run anything in them that writes. `clear-meadow` is named throughout because every post-rebase `ccd/ccd` line quoted below was measured on its **committed tip `9e9ebd1c`** ("Merge origin/main (PR #61, the overflow-lane reversal) into ws/clear-meadow") — read it with `git -C <worktree>/clear-meadow show 9e9ebd1c:ccd/ccd`, **not** with `cat` on the worktree: measured 2026-09-08, that worktree's `git status --porcelain` shows ` M ccd/ccd`, ` M ccd/ccrc-doctor-checks` and ` M server/test/ccd-auto-swap-pool.test.ts`, and its uncommitted state shifts every line number by about thirty. That is one more reason every anchor here is re-located by its text. `plain-hollow` is named ONLY as the origin of `MODEL_ID_RE`, which Plan 1 copies into `shared/models.ts` with a comment naming it; this plan neither imports from it nor names any type it defines.
 - **THIS PLAN IS GATED. Task 1 is the gate and Task 2 is the rebase.** Account-pools
   PR #62 must be MERGED and DEPLOYED before any task below runs (skeleton, "Rulings
   received after the writers started"; spec §14). After Task 2's rebase the base is no
@@ -183,20 +183,20 @@ carried in the spec at §7 and §14:
    inventory** before any write site exists. **Located and measured 2026-09-08 on
    `ws/clear-meadow`** (READ ONLY), which is what PR #62 merges:
    - the inventory itself is `_reg_purge`'s dot-free inventory comment,
-     **`/home/mfastovets/worktrees/ccrc-pwa/clear-meadow/ccd/ccd:1619-1634`**, opening
+     **`<worktree>/clear-meadow/ccd/ccd:1619-1634`**, opening
      ``  # The dot-free claim, measured against every registry file a session has`` and
      listing today's thirty-one fields — `` `archived` `` through `` `wrapper` `` — with
      wave 2b's own three (`` `crosspool` ``, `` `stranded` ``, `` `strandnotify` ``)
      already in it;
    - its mechanism is
-     **`/home/mfastovets/worktrees/ccrc-pwa/clear-meadow/server/test/ccd-auto-swap-pool.test.ts:659-675`**,
+     **`<worktree>/clear-meadow/server/test/ccd-auto-swap-pool.test.ts:659-675`**,
      ``describe('_reg_purge`s dot-free inventory', …)`` → ``it('names the three per-id
      fields this build adds', …)``, which does
      ``src.indexOf('The dot-free claim, measured against every registry file')``, slices
      1400 characters, and asserts each of
      ``['`crosspool`', '`stranded`', '`strandnotify`']`` appears;
    - the task that produced both is that wave's plan,
-     **`/home/mfastovets/worktrees/ccrc-pwa/clear-meadow/docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md:1880`**,
+     **`<worktree>/clear-meadow/docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md:1880`**,
      "Task 7: the registry field inventory, and the hold rung measured in place".
 
    Plan 2's Task 2 adds `` `class` `` to **both** — the comment and that test's list —
@@ -372,7 +372,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Idioms copied (read these before writing):**
 - The inventory task itself: account-pools wave 2b's plan,
-  `/home/mfastovets/worktrees/ccrc-pwa/clear-meadow/docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md:1880`
+  `<worktree>/clear-meadow/docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md:1880`
   (READ ONLY), "Task 7: the registry field inventory, and the hold rung measured in
   place" — the template this task follows, one field instead of three. Its Step 3 shows
   the comment before and after; its Step 5 re-runs `ccd-auto-swap-hold.test.ts` unedited
@@ -2595,7 +2595,7 @@ MSG
 - `ccd/ccd:12019-12167` — `_swap_target` (measured on `ws/clear-meadow`'s tip `9e9ebd1c`, the post-#62 shape Task 2's rebase brings; locate it by its text after the rebase), including the `force` contract, the composed-rule header quoted in A-8, and the "unmeasured ranks last, not first" note.
 - `ccd/ccd:12178` — `_auto_swap_check` (measured on `ws/clear-meadow`'s tip `9e9ebd1c`, the post-#62 shape Task 2's rebase brings; locate it by its text after the rebase), including its `_avail "$target" || return 0` re-check at `:12292` after `_swap_target` answers.
 - The wave-2b plan's crossing section, "The composed rule: an untagged overflow lane is in every pool (ruled 2026-09-08)"
-  (`/home/mfastovets/worktrees/ccrc-pwa/clear-meadow/docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md`,
+  (`<worktree>/clear-meadow/docs/superpowers/plans/2026-09-05-account-pools-wave2b-ccd-swap-strand-crossing.md`,
   READ ONLY, above its wave map). **Required reading before this task**, by skeleton
   "Rulings round 2" item 8. Two things in it bind the guard below: `_pool_ok` is "a hard
   `continue` ahead of all bracketing", which is why a class filter placed after it covers

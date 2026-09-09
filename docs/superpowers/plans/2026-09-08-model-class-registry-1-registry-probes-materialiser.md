@@ -12,7 +12,7 @@
 
 **Skeleton:** the locked skeleton for the plans is `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-skeleton.md`. Its **"Rulings round 2"** section overrides the "Locked interfaces" above it, and this plan implements the round-2 shape: the `ModelsBlock`-on-the-roster interface is **WITHDRAWN**, `shortlist` is **`discovery`**, `subagent` is an **explicit class name**, the verbs are a **top-level `ccrc models` group**, and the bash projection has a **third column**.
 
-**Base commit:** the implementation branch `feat/model-class-registry-impl` is cut from **`origin/main`** — NOT from `ws/gemini-subscription-account-connection`. Ruling 280 (mail 280, 2026-09-08): that branch has no PR open, 9 of 29 tasks done, a three-file conflict with `main` awaiting an operator decision, and a tip moving under review. This plan therefore touches **none** of `shared/roster.ts`, `shared/roster-json.mjs`, `deploy/account-op.mjs`, `ccd/ccrc`'s `cmd_account`, `shared/providers.ts`, `ApiKeyModels`, `ModelMap`, `MODEL_ALIASES` or `exec.models` — none of which exist on `main`. `/home/mfastovets/worktrees/ccrc-pwa/plain-hollow` is that branch's live worktree: **READ ONLY**, consulted only to keep this design's names distinct from its landed `ApiKeyModels`/`selectable`/`provider`, and to copy `MODEL_ID_RE` verbatim (Task 2 does, with a comment naming its origin).
+**Base commit:** the implementation branch `feat/model-class-registry-impl` is cut from **`origin/main`** — NOT from `ws/gemini-subscription-account-connection`. Ruling 280 (mail 280, 2026-09-08): that branch has no PR open, 9 of 29 tasks done, a three-file conflict with `main` awaiting an operator decision, and a tip moving under review. This plan therefore touches **none** of `shared/roster.ts`, `shared/roster-json.mjs`, `deploy/account-op.mjs`, `ccd/ccrc`'s `cmd_account`, `shared/providers.ts`, `ApiKeyModels`, `ModelMap`, `MODEL_ALIASES` or `exec.models` — none of which exist on `main`. `<worktree>/plain-hollow` is that branch's live worktree: **READ ONLY**, consulted only to keep this design's names distinct from its landed `ApiKeyModels`/`selectable`/`provider`, and to copy `MODEL_ID_RE` verbatim (Task 2 does, with a comment naming its origin).
 
 ---
 
@@ -20,7 +20,7 @@
 
 Every task's requirements implicitly include this section.
 
-- **Paths in every task from Task 2 on are relative to the repo root of the implementation worktree**, which is `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl` — except Tasks 13–16, which are relative to the monorepo root `/mnt/HC_Volume_105751470/projects/OpenClawHetzner` and say so in their own **Files** block. Run every `npx vitest` from the package directory named in the step (`server/`, `agent/`).
+- **Paths in every task from Task 2 on are relative to the repo root of the implementation worktree**, which is `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl` — except Tasks 13–16, which are relative to the monorepo root `<monorepo checkout>` and say so in their own **Files** block. Run every `npx vitest` from the package directory named in the step (`server/`, `agent/`).
 - **The registry is a FILE, not a roster field.** `~/.ccrc/models/<accountId>.classes.json`, created by `ccrc models <id> init <probe>` and edited only by the verbs. Nothing in this plan writes `~/.ccrc/accounts.json`. `deploy/models-op.mjs` READS the roster (for `configDirSuffix`, `telemetry` and "does this id exist") through `shared/roster-json.mjs` and never writes it.
 - **Fixture HOMEs only.** Never run `ccd`, `ccrc`, `ccrc-models-probe`, `deploy.sh`, `systemctl` or a probe against the real `$HOME`. Never touch the live `~/.ccrc`, `~/.cc-limits`, `~/.cc-sessions` or `~/.handoff`. ccrc tests build a throwaway HOME with `mkTmp` and run the tool through `<home>/ccrc/ccd/ccrc` — the `installCcrc()` / `ghContainedEnv` / `runCcrc()` shape at `server/test/ccrc-doctor-graphify.test.ts:70-110`, which is `main`'s idiom for exercising `ccd/ccrc` from a fixture box.
 - **TDD, red first, with a measured mutation check per guard.** Each guard's test is written and shown failing before the code exists, and every guard carries a mutation step: flip the guard, run the named file, observe the named case go red, restore. The repo's idiom for recording a mutation is `server/test/ccd-default-pool.test.ts:20-52` — that file **is on `origin/main`** (measured 2026-09-08: `ls server/test/ccd-default-pool.test.ts` in the `origin/main` checkout lists it), so read it in the worktree, copy its header shape, and do not `import` from it.
@@ -8540,7 +8540,7 @@ MSG
 ---
 ## Task 13: The effort shim — `ccgpt-proxy` maps effort onto Codex (MONOREPO)
 
-**Files — all paths in Tasks 13–16 are relative to the MONOREPO root `/mnt/HC_Volume_105751470/projects/OpenClawHetzner`, not to the ccrc-pwa worktree:**
+**Files — all paths in Tasks 13–16 are relative to the MONOREPO root `<monorepo checkout>`, not to the ccrc-pwa worktree:**
 - Modify: `infra/handoff/ccgpt-proxy`
 - Create: `infra/handoff/test_ccgpt_proxy.py`
 - Branch: `feat/ccgpt-effort-shim`, cut from `main` in that checkout. **Never commit on `main`.**
@@ -8552,7 +8552,7 @@ MSG
 - [ ] **Step 1: Create the branch**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 git status --porcelain
 git checkout -b feat/ccgpt-effort-shim
 git branch --show-current
@@ -8897,7 +8897,7 @@ and replace the body-rewriting block inside `_relay`:
 - [ ] **Step 5: Run the unittest to verify it passes**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 infra/handoff/test_ccgpt_proxy.py -v
+cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py -v
 ```
 Expected: `OK`, with 19 tests run and none skipped (measured from the shown code, not 20: three `unittest.TestCase` classes contribute 7 + 9 + 3 test methods — 65d402f5).
 
@@ -8924,7 +8924,7 @@ Expected: one case red — `test_the_file_is_re_read_when_its_mtime_moves`. Rest
 - [ ] **Step 10: Confirm the shim still parses and starts nothing on import**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 -c "
+cd <monorepo checkout> && python3 -c "
 import importlib.util
 from importlib.machinery import SourceFileLoader
 l = SourceFileLoader('p', 'infra/handoff/ccgpt-proxy')
@@ -8937,7 +8937,7 @@ Expected: `imported, no server started`, and the command returns immediately (it
 - [ ] **Step 11: Commit (monorepo)**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 git add infra/handoff/ccgpt-proxy infra/handoff/test_ccgpt_proxy.py
 git commit -m "$(cat <<'MSG'
 feat(handoff): the shim owns the reasoning effort, so /effort finally does something
@@ -9059,7 +9059,7 @@ class TestWrappersStoppedDecidingModels(unittest.TestCase):
 - [ ] **Step 2: Run to verify it fails**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -20
+cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -20
 ```
 Expected: FAIL — `test_ccgpt_exports_no_model_variable` ("ccgpt still exports ANTHROPIC_MODEL"), `test_ccgpt_exports_the_account_id_the_shim_reads`, `test_ccgpt_no_longer_names_a_concrete_model_in_a_default` and `test_claude_glm_exports_no_model_variable`. `test_ccgpt_usage_is_untouched_by_this_change` and the two "keeps" cases pass already, which is what makes them a control.
 
@@ -9114,14 +9114,14 @@ Leave lines 1–104 and the final `exec "$HOME/.local/bin/claude" "$@"` untouche
 - [ ] **Step 4: Check the wrapper still parses**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && bash -n infra/handoff/ccgpt && echo "ccgpt parses"
+cd <monorepo checkout> && bash -n infra/handoff/ccgpt && echo "ccgpt parses"
 ```
 Expected: `ccgpt parses`. **Do not RUN `ccgpt`** — it would start LiteLLM and a Claude Code session against the real HOME.
 
 - [ ] **Step 5: Run the tests**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -20
+cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -20
 ```
 Expected: every case in `TestWrappersStoppedDecidingModels` passes except `test_claude_glm_exports_no_model_variable`, which is Task 15's.
 
@@ -9133,7 +9133,7 @@ Expected: one case red — `test_ccgpt_exports_no_model_variable`, naming the li
 - [ ] **Step 7: Commit (monorepo)**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 git add infra/handoff/ccgpt infra/handoff/test_ccgpt_proxy.py
 git commit -m "$(cat <<'MSG'
 feat(handoff): ccgpt stops naming models, and says which account it is
@@ -9169,11 +9169,11 @@ MSG
 - [ ] **Step 1: Run the one failing case**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 -m unittest infra.handoff.test_ccgpt_proxy.TestWrappersStoppedDecidingModels.test_claude_glm_exports_no_model_variable -v 2>&1 | tail -5
+cd <monorepo checkout> && python3 -m unittest infra.handoff.test_ccgpt_proxy.TestWrappersStoppedDecidingModels.test_claude_glm_exports_no_model_variable -v 2>&1 | tail -5
 ```
 If the dotted path does not import (the directory is not a package), use:
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 infra/handoff/test_ccgpt_proxy.py TestWrappersStoppedDecidingModels.test_claude_glm_exports_no_model_variable -v 2>&1 | tail -5
+cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py TestWrappersStoppedDecidingModels.test_claude_glm_exports_no_model_variable -v 2>&1 | tail -5
 ```
 Expected: FAIL — "claude-glm still exports ANTHROPIC_MODEL: export ANTHROPIC_MODEL=\"$model\"".
 
@@ -9212,21 +9212,21 @@ Note the `model=`/`small=` assignments inside the `case` (lines 38–46) are NOT
 - [ ] **Step 3: Check it parses and the variables are still assigned**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && bash -n infra/handoff/claude-glm && grep -n 'model=\|small=' infra/handoff/claude-glm
+cd <monorepo checkout> && bash -n infra/handoff/claude-glm && grep -n 'model=\|small=' infra/handoff/claude-glm
 ```
 Expected: no output from `bash -n`, then four assignment lines (two per `case` arm). **Do not RUN `claude-glm`.**
 
 - [ ] **Step 4: Run the tests**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -5
+cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -5
 ```
 Expected: `OK`, all cases.
 
 - [ ] **Step 5: Confirm shellcheck-clean unused variables are intentional**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && command -v shellcheck >/dev/null && shellcheck -S warning infra/handoff/claude-glm || echo "shellcheck not installed — skipping"
+cd <monorepo checkout> && command -v shellcheck >/dev/null && shellcheck -S warning infra/handoff/claude-glm || echo "shellcheck not installed — skipping"
 ```
 Expected: either `shellcheck not installed — skipping`, or SC2034 ("model appears unused") on the four assignments. That warning is EXPECTED and is what the comment added in Step 2 answers: the values document which backend the lane talks to. Do not silence it by deleting the assignments — deleting them would remove the only place a reader learns the provider switch's outcome. If the repo gates on shellcheck, add `# shellcheck disable=SC2034` immediately above each `case` arm with the same one-line reason.
 
@@ -9235,7 +9235,7 @@ Expected: either `shellcheck not installed — skipping`, or SC2034 ("model appe
 Add one export back at the end of the block Step 2 emptied:
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 printf 'export ANTHROPIC_DEFAULT_OPUS_MODEL="$model"\n' >> infra/handoff/claude-glm
 python3 -m unittest infra.handoff.test_ccgpt_proxy -v 2>&1 | tail -5
 ```
@@ -9244,7 +9244,7 @@ Expected: exactly ONE case red — `test_claude_glm_exports_no_model_variable`, 
 Restore, and re-measure:
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 sed -i '$d' infra/handoff/claude-glm
 git diff --stat infra/handoff/claude-glm
 python3 -m unittest infra.handoff.test_ccgpt_proxy -v 2>&1 | tail -5
@@ -9254,7 +9254,7 @@ Expected: the `git diff --stat` shows only Step 2's own deletions, and the run i
 - [ ] **Step 6: Commit (monorepo)**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 git add infra/handoff/claude-glm
 git commit -m "$(cat <<'MSG'
 feat(handoff): claude-glm stops remapping the aliases, and says where the mapping went
@@ -9302,7 +9302,7 @@ MSG
 - [ ] **Step 1: Confirm the deployed copies still match `main`'s bytes**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 for f in ccgpt ccgpt-proxy claude-glm ccgpt-usage; do
   printf '%s: ' "$f"
   if diff -q ~/.local/bin/$f <(git show main:infra/handoff/$f) >/dev/null; then echo "matches main"; else echo "DRIFTED"; fi
@@ -9317,7 +9317,7 @@ Expected (re-measured 2026-09-08, dispatch notes v2, a9a2416): `ccgpt-proxy`, `c
 ```bash
 STAGE=/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/handoff-staging
 mkdir -p "$STAGE"
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 for f in ccgpt ccgpt-proxy claude-glm; do install -m 755 infra/handoff/$f "$STAGE/$f"; done
 ls -l "$STAGE"
 ```
@@ -9326,7 +9326,7 @@ Expected: three files, mode `-rwxr-xr-x`.
 - [ ] **Step 3: Prove the staged bytes ARE the branch's bytes**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 for f in ccgpt ccgpt-proxy claude-glm; do cmp "$STAGE/$f" infra/handoff/$f && echo "$f: identical to the branch"; done
 ```
 Expected: three `identical to the branch` lines, no `cmp` output.
@@ -9334,7 +9334,7 @@ Expected: three `identical to the branch` lines, no `cmp` output.
 - [ ] **Step 4: Record exactly what installing them would change**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 { for f in ccgpt ccgpt-proxy claude-glm; do
     echo "=== ~/.local/bin/$f ==="
     diff -u ~/.local/bin/$f "$STAGE/$f" || true
@@ -9353,7 +9353,7 @@ Expected (re-measured a9a2416): ONE line prints, a false positive — the new `C
 - [ ] **Step 6: Confirm `ccgpt-usage` is untouched, on the branch and on the box**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 git diff main --stat -- infra/handoff/ccgpt-usage
 cmp ~/.local/bin/ccgpt-usage infra/handoff/ccgpt-usage && echo "ccgpt-usage: unchanged, and the box matches"
 ```
@@ -9451,7 +9451,7 @@ an orphaned id skips that last step).
 - [ ] **Step 8: Commit (monorepo)**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner
+cd <monorepo checkout>
 git add infra/handoff/INSTALL-model-class-registry.md
 git commit -m "$(cat <<'MSG'
 docs(handoff): the install order, because the wrappers must go last
@@ -9478,7 +9478,7 @@ commit, review-ruled: `git commit --amend`, not a second commit.
 - [ ] **Step 9: Report the branch state**
 
 ```bash
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && git log --oneline main..feat/ccgpt-effort-shim && git status --porcelain
+cd <monorepo checkout> && git log --oneline main..feat/ccgpt-effort-shim && git status --porcelain
 ```
 Expected (measured 2a17fe5d, not the original four): SEVEN commits, not four — `65d402f` (Task 13), `b3034ff` (Task 14), `5f8815f` (Task 15), `5ece9b5`/`70f1cb4` (Task 13's and Tasks 14+15's fix rounds, review-driven), `e12db20` (Task 16a), `2a17fe5` (this task, amended once after review) — and a clean status. The plan names four because Tasks 13–15 land clean in this telling; a real run's fix rounds and Task 16a's timeout port are additional commits on the same branch, ahead of this one. **Do not push and do not open a PR** — the monorepo branch lands with the ccrc-pwa one, in the order the runbook states.
 
@@ -9570,7 +9570,7 @@ cd "$S/mcr-impl/pwa" && npx vitest run
 # one command that has to leave it. Run it from the monorepo root, the way
 # Task 13 Step 3 and Task 15 Step 1 do; from `mcr-impl/pwa` there is no
 # `infra/handoff/` and the run would pass by finding nothing.
-cd /mnt/HC_Volume_105751470/projects/OpenClawHetzner && python3 -m unittest infra.handoff.test_ccgpt_proxy -v
+cd <monorepo checkout> && python3 -m unittest infra.handoff.test_ccgpt_proxy -v
 ```
 Expected: three green vitest runs and one `OK`. The `pwa` suite is included because `shared/models.ts` is bundled by the PWA; this plan adds no PWA source and touches no existing shared type, so it must be green without edits — if it is red, report what, rather than patching a PWA file this plan does not own.
 

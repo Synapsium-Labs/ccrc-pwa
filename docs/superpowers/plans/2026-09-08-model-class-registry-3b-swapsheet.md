@@ -27,7 +27,7 @@
 
 Copied verbatim from the spec and the skeleton. Every task's requirements implicitly include this section.
 
-- **Repo root.** All paths are relative to the implementation worktree's repo root, `<repo>` — `feat/model-class-registry-impl`, created by Plan 1 Task 1 off `origin/main`. Read-only elsewhere: `/home/mfastovets/worktrees/ccrc-pwa/plain-hollow` and `/home/mfastovets/worktrees/ccrc-pwa/clear-meadow` are other sessions' live worktrees.
+- **Repo root.** All paths are relative to the implementation worktree's repo root, `<repo>` — `feat/model-class-registry-impl`, created by Plan 1 Task 1 off `origin/main`. Read-only elsewhere: `<worktree>/plain-hollow` and `<worktree>/clear-meadow` are other sessions' live worktrees.
 - **Fixture HOMEs only.** Never run `ccd`, `ccrc`, `systemctl` or `deploy/deploy.sh` against the real `$HOME`; never touch the live `~/.ccrc`. Server tests use `testDeps`/`seedRoster`/`seedSession` (`server/test/helpers.ts`) and `mkTmp` (`server/test/tmpHelpers.ts`).
 - **TDD, red first, with a measured mutation check per guard.** The idiom to copy is `server/test/ccd-default-pool.test.ts:20-52`.
 - **Tests are vitest.** Run one file with `npx vitest run <path>` from the package directory (`server/`, `pwa/`).
