@@ -133,10 +133,22 @@ export function SessionLine({
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
   // (see `sessionAsk`'s own docstring), so a server predating this field
-  // can omit the key at runtime despite the type calling it required. Only
-  // `held`/`answered` ever come back — the two states the design doc gives
-  // words to — so no further filtering is needed here.
-  const ask = sessionAsk(session);
+  // can omit the key at runtime despite the type calling it required.
+  //
+  // Fix round 1 (coordinator review, item 2's own finding): `sessionAsk`
+  // reads the wire HONESTLY — it passes `released`/`stale`/`unknown`
+  // through unchanged, same as `held`/`answered`, because deciding which
+  // states the design doc has words for is not that function's job (its own
+  // docstring, `shared/api.ts`). A THIS-BUILD server never sends those four
+  // (`fleet.ts`'s `fleetAsk` folds them server-side before they ever reach
+  // the wire), but `sessionAsk` exists precisely for a server that is NOT
+  // this build — so trusting "only held/answered ever come back" here would
+  // reintroduce, client-side, exactly the gap `sessionAsk` was written to
+  // close. The fold happens here instead: only `held`/`answered` become a
+  // chip; anything else reads as no ask, the same "no chip" a genuinely
+  // absent `ask` gets.
+  const askRaw = sessionAsk(session);
+  const ask = askRaw !== null && (askRaw.state === 'held' || askRaw.state === 'answered') ? askRaw : null;
 
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live

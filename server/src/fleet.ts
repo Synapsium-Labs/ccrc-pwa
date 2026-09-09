@@ -64,48 +64,80 @@ function hookAskText(hs: HookState | null): string | null {
 }
 
 /**
+ * Fix round 1, item 4 (coordinator review): how long the `answered` chip
+ * stays lit past `answeredAt`. `currentAsksFor` below names the newest ask
+ * row for a child in ANY state, with no prune or retention on `asks` at
+ * all — left unbounded, `ruled by <parent>` would sit on a session's row
+ * FOREVER once one ask is answered, through the child going busy, idle,
+ * swapped and dead, until a new ask happens to be minted for the same
+ * child. The chip exists to explain why the operator was NOT asked, and
+ * that explanation is only true while it is recent — past this window the
+ * operator has long since had other reasons to look at the row, and the
+ * chip would be reporting ancient history as if it were live.
+ *
+ * Thirty minutes, a judgement call rather than a measured ceiling (unlike
+ * `ASK_GRACE_MS`/`ASK_ANSWERING_MAX_MS` in `watch.ts`, which are each
+ * argued from a specific failure mode): long enough that an operator who
+ * glances at the fleet view some time after the fact still finds the
+ * explanation waiting, short enough that the chip cannot outlive the
+ * session's next several turns. Deliberately NOT tied to the child's own
+ * hookstate — answering the question writes a hook event, so gating on
+ * that would clear the chip the instant it appeared, defeating the whole
+ * point of "ruled by" (`held` needs no such bound: a held ask is live by
+ * definition, unaffected by this constant). */
+const ASK_ANSWERED_CHIP_WINDOW_MS = 30 * 60_000;
+
+/**
  * `FleetSession.ask`'s server-side fold (Task 19, ruling F5) — the ONE place
  * an `asks` table row becomes the wire's two-state chip. See
  * `FleetSession.ask`'s own docstring (shared/api.ts) for the full reasoning;
  * restated briefly here because this is where the mapping actually happens:
  * `held`/`answering` both fold onto `held` (a digit has not landed, so the
- * design doc's "while a parent may still pre-empt" still holds), `answered`
- * passes through, and `released`/`stale`/`unknown` fold to no chip at all —
- * the operator's ordinary push already fired or the dialog is gone, so
- * there is nothing left for this chip to explain.
+ * design doc's "while a parent may still pre-empt" still holds); `answered`
+ * passes through ONLY within `ASK_ANSWERED_CHIP_WINDOW_MS` of `answeredAt`
+ * (fix round 1, item 4) — past it, or with no `answeredAt` at all (should
+ * never happen for a genuinely `'answered'` row, but a row is data, not a
+ * type, so this reads defensively rather than trusting the column), it
+ * folds to no chip; `released`/`stale`/`unknown` fold to no chip
+ * unconditionally — the operator's ordinary push already fired or the
+ * dialog is gone, so there is nothing left for this chip to explain.
+ *
+ * `nowMs` is `assembleFleet`'s own `now` (SECONDS) times 1000, computed once
+ * per call and threaded through rather than read again here — one clock per
+ * assembly, the same reasoning every other `now`-consuming field in this
+ * file already follows.
  */
-function fleetAsk(row: AskRow | null): FleetSession['ask'] {
+function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
   if (row === null) return null;
   if (row.state === 'held' || row.state === 'answering') return { state: 'held', parentId: row.parentId };
-  if (row.state === 'answered') return { state: 'answered', parentId: row.parentId };
+  if (row.state === 'answered' && row.answeredAt !== null && nowMs - row.answeredAt <= ASK_ANSWERED_CHIP_WINDOW_MS) {
+    return { state: 'answered', parentId: row.parentId };
+  }
   return null;
 }
 
 /**
- * `coord.currentAskFor`'s guarded read (fix round 1, found by the full suite
- * rather than by any Task 19 test: `push-copy.test.ts`'s "a broken coord.db
- * degrades, never crashes the poll" and `fleetws.test.ts`'s matching
- * cold-start case). `assembleFleet` is called UNWRAPPED from both
- * `FleetWatcher.tick()` and the `/ws/fleet` connect handler — neither site
- * wraps the call in a `try`/`catch` of its own, because every OTHER read
- * inside this function already degrades internally (tolerant `io` reads
- * return null, never throw). `node:sqlite` does not: a closed connection or
- * a lock race throws SYNCHRONOUSLY on the next statement, and `tick()`'s own
- * docstring rule is that one bad lane must not kill the others — every
- * neighbouring `CoordStore` call in `watch.ts` already earns that
- * non-throwing property with its own try/catch, and this one was the
- * exception. Warns once PER SESSION on a broken box (this runs inside
- * `recs.map`), which is noisier than the once-per-tick warns elsewhere, but
- * matches every other lane's "one bad read degrades, does not silently
- * vanish" contract.
- */
-function readCurrentAsk(coord: CoordStore | undefined, childId: string): AskRow | null {
-  if (!coord) return null;
+ * `coord.currentAsksFor`'s guarded, WHOLE-FRAME read (fix round 1, item 3 —
+ * collapsing what was one `db.prepare`/`.get` PER registry row into one
+ * query for the whole assembly). Guarded for the identical reason the prior
+ * per-session `readCurrentAsk` was (found by the full suite rather than by
+ * any Task 19 test: `push-copy.test.ts`'s "a broken coord.db degrades,
+ * never crashes the poll" and `fleetws.test.ts`'s matching cold-start
+ * case): `assembleFleet` is called UNWRAPPED from both `FleetWatcher.tick()`
+ * and the `/ws/fleet` connect handler, and `node:sqlite` throws
+ * SYNCHRONOUSLY on a closed connection or a lock race. Because this is now
+ * ONE call per assembly rather than one per session, a broken box warns
+ * ONCE per tick/connect/request here, not once per session — the "20
+ * near-identical lines a second, burying the one warn that names the real
+ * cause" the reviewer measured is gone by construction, not by an
+ * extra dedup flag. */
+function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
+  if (!coord || childIds.length === 0) return new Map();
   try {
-    return coord.currentAskFor(childId);
+    return coord.currentAsksFor(childIds);
   } catch (err) {
-    console.warn(`ccrc-server: currentAskFor(${childId}) failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
-    return null;
+    console.warn(`ccrc-server: currentAsksFor failed for ${childIds.length} session(s) (${childIds.join(', ')}) — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
+    return new Map();
   }
 }
 
@@ -320,6 +352,13 @@ export async function assembleFleet(
   coord?: CoordStore,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
+  // outside the per-session map below — never one `currentAskFor` per row.
+  // `now` here is SECONDS (this function's own parameter contract); `asks`
+  // rows carry millisecond timestamps (`settleAsk`'s callers all pass
+  // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
+  const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
@@ -491,10 +530,11 @@ export async function assembleFleet(
       // Task 19's chip. No `coord` at all (a dark box, or a caller that
       // predates the lane) reads exactly like "no ask row for this child" —
       // see `fleetAsk`/`FleetSession.ask`'s own docstrings for the state
-      // fold. `readCurrentAsk` (fix round 1) is the guarded read: a broken
-      // coord.db degrades to null here rather than throwing out of
+      // fold. `asksByChild` (fix round 1, item 3) is the whole assembly's
+      // ONE batched, guarded read, computed once above this map — a broken
+      // coord.db degrades every row to null rather than throwing out of
       // `assembleFleet`, which neither caller wraps.
-      ask: fleetAsk(readCurrentAsk(coord, r.id)),
+      ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       subagents: hs?.subagents ?? null,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them

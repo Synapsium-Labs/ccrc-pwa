@@ -44,6 +44,11 @@ Numbers **D-2168 … D-2177**, issued as one contiguous block by `POST /api/ledg
 - **D-2176** — The ask routes are NAMED in the coordinator corpus, not EXEMPTed. This corrects the design doc's §8.2, which recommended a fifth EXEMPT class: `coordinator-skill.test.ts`'s EXEMPT set is a blocklist of routes the coordinator must never be *taught about*, and every existing member is an operator-only door. A coordinator IS a parent and does call these routes, so naming them is the truthful entry and no EXEMPT change is needed. *(Task 17)*
 - **D-2177** — `cmd_swap` is the one live-pane-destroying operation not serialized against `answerAsk`'s capture-then-send window, and `answerAsk` does not check `sendKey`'s return, so a swap landing mid-answer reports `ok: true` for a keystroke that never arrived. Pre-existing, surfaced by this design because the lane makes a second principal press keys. *(Task 20)*
 
+Two more, minted 2026-09-09 during Task 19's coordinator review ("fix round 1"), non-contiguous with the block above — other work minted numbers between D-2177 and these in the interim:
+
+- **D-2310** — The chip (Task 19) is computed server-side in `assembleFleet`, reading `CoordStore` directly, NOT by consuming `GET /api/asks`. Every other `FleetSession` field is computed there, and routing the fleet frame through an HTTP call to the server's own route would be a new pattern for no gain. This corrects both this plan (Task 11's and Task 19's own "Interfaces" lines) and the tracked design doc (§2.8), which both said the opposite at the time Task 19 shipped — the routing sentence was written before ruling F5 was decided and never updated to match. `GET /api/asks` keeps the parent's cross-sibling read and any later PWA list view; as of this ruling it has zero PWA consumers. *(Task 19)*
+- **D-2311** — `reviveFleetSessions` discards the WHOLE snapshot array on the first unrevivable session, so a strict field reader is not a local decision: a malformed `ask.parentId` on one session would have cost the operator their entire `state-cache.json` and the whole PWA offline cache — the two surfaces an operator falls back to when things are already bad. `reviveAsk`'s original form rejected the session on a malformed shape, the `reviveSwapBlocked`/`reviveSubstrate` stance, but that stance exists for fields that flag a FAULT an operator must not have silently laundered into "nothing wrong" — the ask chip gates no action at all, so a bad chip and no chip are the same outcome, and there is no direction a degrade could get backwards. Fixed: `reviveAsk` degrades a malformed `ask` (non-object, or a missing/wrong-type/empty `parentId`) to `null` — never a rejection of the whole session. `state` still degrades onto `AskState`'s `unknown` member when unrecognised, unchanged. *(Task 19)*
+
 ---
 
 ## File Structure
@@ -1124,7 +1129,10 @@ Add `releaseHeldAsk(childId: string): void` to `FleetWatcher`: it deletes the en
 
 **Files:** Modify `server/src/coord/routes.ts`; test in `server/test/asks-routes.test.ts`.
 
-**Interfaces:** Consumes `asksForParent` (Task 5). Produces the parent's cross-sibling read and the PWA's chip source (Task 19).
+**Interfaces:** Consumes `asksForParent` (Task 5). Produces the parent's cross-sibling read. **Corrected by
+D-2310 (fix round 1):** Task 19's PWA chip does NOT consume this route — it reads `CoordStore` directly
+inside `assembleFleet`. Post-D-2310 this route has zero PWA consumers; it remains available for any
+later PWA list view.
 
 - [ ] **Step 1: Write the failing test** — assert BOTH credentials work and that neither being present 401s:
 
@@ -1450,7 +1458,10 @@ parent and calls these, so naming them is the truthful entry."
 
 **Files:** Modify `shared/api.ts` (`FleetSession`, `reviveFleetSession`), `server/src/fleet.ts`, `pwa/src/**`, `pwa/test/**`.
 
-**Interfaces:** Consumes `GET /api/asks` (Task 11). Additive field only — do NOT bump `FLEET_PROTO`.
+**Interfaces:** ~~Consumes `GET /api/asks` (Task 11).~~ **Corrected by D-2310 (fix round 1):** the chip
+is computed SERVER-SIDE in `assembleFleet`, reading `CoordStore` directly — never `GET /api/asks`. Every
+other `FleetSession` field is computed in `assembleFleet`, and routing this one through an HTTP call to
+the server's own route would be a new pattern for no gain. Additive field only — do NOT bump `FLEET_PROTO`.
 
 - [ ] **Step 1: Write the failing PWA test** — a session carrying `ask: { state: 'held', parentId: 'coord-1' }` renders "held — coord-1 may answer"; one carrying `answered` by a parent renders "ruled by coord-1"; a session with no `ask` renders neither.
 

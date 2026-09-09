@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { graphGateCount, type FleetSession } from '../../shared/api';
+import { graphGateCount, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -595,6 +595,23 @@ describe('ask chip', () => {
     expect(screen.getByText('Deploy now?')).toHaveClass('sess-ask');
     expect(screen.getByText('held — coord-1 may answer')).toHaveClass('sess-ask-state');
   });
+
+  // Fix round 1: `sessionAsk` passes ANY valid `AskState` through honestly
+  // (its own contract, pinned above) — `released`/`stale`/`unknown` are all
+  // vocabulary `isAskState` accepts, and a server ahead of or behind this
+  // build could genuinely send one on a live frame. The fold to "no chip"
+  // for those four has to happen HERE, not by trusting "only held/answered
+  // ever arrive" — a claim only true of a same-build server.
+  it('renders no chip for a valid-but-unrendered ask state — released/stale/unknown are not held or answered', () => {
+    for (const state of ['released', 'stale', 'unknown'] as const) {
+      const { container, unmount } = render(
+        <SessionLine session={s({ ask: { state, parentId: 'coord-1' } })}
+                     onOpen={() => {}} onActions={() => {}} />,
+      );
+      expect(container.querySelector('.sess-ask-state'), state).not.toBeInTheDocument();
+      unmount();
+    }
+  });
 });
 
 // Registry ladder (Task 2): a degraded row's small, honest note — the
@@ -1082,5 +1099,50 @@ describe('graphGateCount — the one reader of graphGateDenials, pinned directly
     expect(graphGateCount({ graphGateDenials: 3 })).toBe(3);
     expect(graphGateCount({ graphGateDenials: Number.NaN })).toBeNull();
     expect(graphGateCount({ graphGateDenials: '2' as unknown as number })).toBeNull();
+  });
+});
+
+// Fix round 1, item 2 (coordinator review): `sessionAsk` had zero tests —
+// every degrade branch below was reachable only from a server ahead of or
+// behind this build, exactly the seam a suite driven through `SessionLine`
+// alone cannot reach (the server never SENDS a malformed `ask`; this reader
+// exists for the case where it does). Pinned directly, the `graphGateCount`/
+// `substrateFault` pattern: `return s.ask ?? null` — no validation at all —
+// would stay green without this describe block.
+describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned directly (fix round 1)', () => {
+  it('reads absent, explicit null, and a well-formed pair straight through', () => {
+    expect(sessionAsk({})).toBeNull();
+    expect(sessionAsk({ ask: null })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: 'coord-1' } }))
+      .toEqual({ state: 'held', parentId: 'coord-1' });
+    expect(sessionAsk({ ask: { state: 'answered', parentId: 'coord-2' } }))
+      .toEqual({ state: 'answered', parentId: 'coord-2' });
+  });
+
+  it('degrades the WHOLE pair to null on any malformed half — the pair only means something together', () => {
+    // Not an object at all — the shape a hand-rolled or adversarial frame
+    // could carry despite the type calling `ask` an object.
+    expect(sessionAsk({ ask: 'held' as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: 5 as unknown as FleetSession['ask'] })).toBeNull();
+    // `parentId` missing, wrong type, or empty.
+    expect(sessionAsk({ ask: { state: 'held' } as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: 5 } as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: '' } })).toBeNull();
+    // `state` out of the six-member vocabulary entirely (not even `unknown`
+    // — a token `isAskState` itself rejects, e.g. a 7th member a build ahead
+    // of this one shipped).
+    expect(sessionAsk({ ask: { state: 'bogus' as AskState, parentId: 'coord-1' } })).toBeNull();
+  });
+
+  it('passes a valid-but-unrendered state through unchanged — folding those to "no chip" is SessionLine\'s job, not this reader\'s', () => {
+    // `released`/`stale`/`unknown` are all in `AskState`'s six-member
+    // vocabulary, so `isAskState` accepts them; this function's own
+    // contract is "read the wire honestly", not "decide what the design
+    // doc has words for" — that fold lives where the design doc's two
+    // sentences do, in `SessionLine.tsx`.
+    expect(sessionAsk({ ask: { state: 'released', parentId: 'coord-1' } }))
+      .toEqual({ state: 'released', parentId: 'coord-1' });
+    expect(sessionAsk({ ask: { state: 'unknown', parentId: 'coord-1' } }))
+      .toEqual({ state: 'unknown', parentId: 'coord-1' });
   });
 });

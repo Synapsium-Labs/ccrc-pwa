@@ -112,9 +112,12 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.subagents).toBeNull();
     expect(s?.graphQueries).toBeNull();
     expect(s?.graphGateDenials).toBeNull();
+    // Task 19: an older-build snapshot predates the ask pre-emption lane
+    // entirely, so `ask` degrades exactly like its siblings above.
+    expect(s?.ask).toBeNull();
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
       ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries',
-       'graphGateDenials'],
+       'graphGateDenials', 'ask'],
     ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');
@@ -523,6 +526,92 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
       expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
     }
+  });
+
+  // Fix round 1, item 1 (coordinator review) — `reviveAsk` had NO test at all;
+  // `const reviveAsk = () => null` kept the full server/pwa suites green.
+  // This block is the mutation-table guard: every branch below must fail
+  // under that mutant (a session that should carry a live `ask` reads null
+  // instead) or under a naive `return v as any` passthrough (a malformed
+  // shape would survive uncaught). Deliberately the OPPOSITE stance from
+  // `stoppedBy`/`swapBlocked` just above: this field degrades a malformed
+  // value to `null`, it never rejects the session — `reviveAsk`'s own
+  // docstring (`shared/api.ts`) has the full argument (D-2311).
+  describe('ask (Task 19, corrected by fix round 1 / D-2311)', () => {
+    it('round-trips a populated HELD ask — the present half, not just absent→null', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      const populated: FleetSession = {
+        ...session('claude-quiet-basin'),
+        ask: { state: 'held', parentId: 'coord-1' },
+      };
+      await saveSnapshot([populated], cachePath);
+      expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+    });
+
+    it('round-trips a populated ANSWERED ask', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      const populated: FleetSession = {
+        ...session('claude-quiet-basin'),
+        ask: { state: 'answered', parentId: 'coord-2' },
+      };
+      await saveSnapshot([populated], cachePath);
+      expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+    });
+
+    it('degrades an unrecognised state token to "unknown", keeping the valid parentId — the reviveStoppedBy pattern', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{
+        ...v1Session('claude-quiet-basin'),
+        ask: { state: 'a-future-build-invented-this', parentId: 'coord-1' },
+      }]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap, 'the session must still revive').not.toBeNull();
+      expect(snap?.sessions[0]?.ask).toEqual({ state: 'unknown', parentId: 'coord-1' });
+    });
+
+    it('degrades a non-object ask to null — the SESSION still revives, unlike stoppedBy/swapBlocked', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ask: 'held' }]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap, 'a malformed ask must NOT reject the session').not.toBeNull();
+      expect(snap?.sessions[0]?.ask).toBeNull();
+      expect(snap?.sessions[0]?.id).toBe('claude-quiet-basin');
+    });
+
+    it('degrades a missing/wrong-type/empty parentId to null — the whole pair, not a partial object', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      for (const bad of [
+        { ask: { state: 'held' } },                          // no parentId
+        { ask: { state: 'held', parentId: 7 } },              // wrong type
+        { ask: { state: 'held', parentId: '' } },             // empty
+      ]) {
+        writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+        const snap = await loadSnapshot(cachePath);
+        expect(snap, JSON.stringify(bad)).not.toBeNull();
+        expect(snap?.sessions[0]?.ask, JSON.stringify(bad)).toBeNull();
+      }
+    });
+
+    it('a malformed ask on ONE session does not cost the OTHER sessions in the same snapshot', async () => {
+      // The blast-radius correction, pinned directly: `reviveFleetSessions`
+      // still discards the WHOLE array on the first session it cannot
+      // revive AT ALL — but a malformed `ask` no longer makes a session
+      // unrevivable, so a snapshot with N-1 clean sessions and one bad
+      // `ask` now loads all N, rather than losing every one of them to a
+      // single chip field.
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [
+        { ...v1Session('claude-alpha'), ask: { state: 'held', parentId: 'coord-1' } },
+        { ...v1Session('claude-beta'), ask: 'not an object' },
+        { ...v1Session('claude-gamma') },
+      ]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap).not.toBeNull();
+      expect(snap?.sessions.map((x) => x.id)).toEqual(['claude-alpha', 'claude-beta', 'claude-gamma']);
+      expect(snap?.sessions[0]?.ask).toEqual({ state: 'held', parentId: 'coord-1' });
+      expect(snap?.sessions[1]?.ask).toBeNull();
+      expect(snap?.sessions[2]?.ask).toBeNull();
+    });
   });
 });
 

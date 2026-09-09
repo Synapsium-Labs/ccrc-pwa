@@ -207,8 +207,14 @@ PWA gains is small and additive:
   hold time and again on a parent answer. `/mail`'s existing `NotifyEvent` rendering shows both without
   a new component; the second event is what answers "what was decided in my name, and by whom".
 
-`GET /api/asks` serves the PWA's chip and the parent's cross-sibling read (§6.1) from one route. It is
-the third of the three new lanes §8.1 counts.
+`GET /api/asks` serves the parent's cross-sibling read (§6.1). **Corrected by D-2310 (Task 19, fix
+round 1):** the PWA's chip is NOT served from this route — it is computed server-side in `fleet.ts`'s
+`assembleFleet`, reading `CoordStore` directly, the same way every other `FleetSession` field is
+computed. Routing the fleet frame through an HTTP call to the server's own route would be a new
+pattern for no gain. As of that ruling, `GET /api/asks` has zero PWA consumers; it remains the
+parent's cross-sibling read and is available for any later PWA list view. It is still the third of
+the three new lanes §8.1 counts — the route exists exactly as built, only its PWA-chip consumer
+does not.
 
 ---
 

@@ -769,7 +769,11 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
   });
 
-  it('reads a settled ask row as the "answered" chip, once a parent has ruled', async () => {
+  // `assembleFleet`'s `now` (1784600000) is SECONDS; `answeredAt` is
+  // MILLISECONDS (`settleAsk`'s real callers all pass `Date.now()`) — one
+  // minute before "now" in ms, comfortably inside `ASK_ANSWERED_CHIP_WINDOW_MS`
+  // (30 minutes).
+  it('reads a recently-settled ask row as the "answered" chip, once a parent has ruled', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-demo', 'claude');
@@ -779,12 +783,55 @@ describe('the ask chip (Task 19)', () => {
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
     });
     coord.takeAskForAnswer(id, 1000);
-    coord.settleAsk(id, 'coord-1', 'a', 2000); // answering -> answered
+    coord.settleAsk(id, 'coord-1', 'a', 1784600000 * 1000 - 60_000); // answering -> answered, 1 min ago
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'answered', parentId: 'coord-1' });
+  });
+
+  // Fix round 1, item 4 (coordinator review, RULING): left unbounded, "ruled
+  // by <parent>" would sit on the row FOREVER — the window bounds it to
+  // while the chip is still explaining something recent.
+  it('folds a STALE-ANSWERED chip (past ASK_ANSWERED_CHIP_WINDOW_MS) to no chip', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
+    });
+    coord.takeAskForAnswer(id, 1000);
+    // 40 minutes before "now" — past the 30-minute window.
+    coord.settleAsk(id, 'coord-1', 'a', 1784600000 * 1000 - 40 * 60_000);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
+  it('the held chip is UNAFFECTED by the window — a held ask is live by definition', async () => {
+    // A held row minted 40 minutes ago (well past the answered-chip window)
+    // must still show "held": the window only bounds `answered`, per the
+    // ruling's own words — nothing about a live, still-open question goes
+    // stale just because the clock has moved.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'],
+      now: 1784600000 - 40 * 60,
+    });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1' });
   });
 
   it('folds RELEASED to no chip — the operator\'s own ordinary push already fired', async () => {
@@ -865,16 +912,36 @@ describe('the ask chip (Task 19)', () => {
       askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: 1,
     });
     coord.db.close();
-    await expect(assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    )).resolves.toBeTruthy();
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
-    expect(warnSpy.mock.calls.some(([line]) => String(line).includes('currentAskFor'))).toBe(true);
+    expect(warnSpy.mock.calls.some(([line]) => String(line).includes('currentAsksFor'))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  // Fix round 1, item 3 (coordinator review): the whole point of collapsing
+  // N per-session reads into one batched query is that a broken box warns
+  // ONCE per assembly, not once per session — pinned directly with a
+  // multi-session fleet, since the single-session test above cannot tell
+  // "warned once" from "warned once per session" apart.
+  it('warns exactly ONCE per assembly on a broken coord.db, however many sessions are in the fleet', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-alpha', 'claude');
+    seedSession(home, 'claude-beta', 'claude');
+    seedSession(home, 'claude-gamma', 'claude');
+    const coord = mkCoord();
+    coord.db.close();
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet).toHaveLength(3);
+    expect(fleet.every((x) => x.ask === null)).toBe(true);
+    expect(warnSpy.mock.calls.filter(([line]) => String(line).includes('currentAsksFor')).length).toBe(1);
     warnSpy.mockRestore();
   });
 });

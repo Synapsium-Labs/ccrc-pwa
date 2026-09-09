@@ -193,4 +193,57 @@ describe('ask store methods', () => {
       expect(s.currentAskFor('c')).toBeNull();
     });
   });
+
+  // Fix round 1, item 3 (coordinator review): `currentAskFor`'s batched
+  // form, for `assembleFleet`'s one-query-per-frame read.
+  describe('currentAsksFor — the batched form, one query for many children', () => {
+    it('answers an empty map for an empty id list, without touching the db', () => {
+      const s = mk();
+      expect(s.currentAsksFor([])).toEqual(new Map());
+    });
+
+    it('answers an empty map when none of the named children has ever had a row', () => {
+      const s = mk();
+      expect(s.currentAsksFor(['nobody', 'nobody-else'])).toEqual(new Map());
+    });
+
+    it('is keyed by childId, one entry per child that has a row, absent entirely for one that does not', () => {
+      const s = mk();
+      s.insertAsk({ childId: 'a', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['x'], now: 1 });
+      const out = s.currentAsksFor(['a', 'b']);
+      expect(out.size).toBe(1);
+      expect(out.get('a')!.state).toBe('held');
+      expect(out.has('b')).toBe(false);
+    });
+
+    it('matches currentAskFor row-for-row across every state, for the same set of children', () => {
+      const s = mk();
+      s.insertAsk({ childId: 'held-child', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+      const answering = s.insertAsk({ childId: 'answering-child', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+      s.takeAskForAnswer(answering, 1000);
+      const answered = s.insertAsk({ childId: 'answered-child', parentId: 'p', runId: null, askKey: 'k',
+        askAt: 1000, dialogId: 'd', question: 'q', options: ['a'], now: 1 });
+      s.takeAskForAnswer(answered, 1000);
+      s.settleAsk(answered, 'p', 'a', 2000);
+      const children = ['held-child', 'answering-child', 'answered-child'];
+      const batch = s.currentAsksFor(children);
+      for (const c of children) expect(batch.get(c)).toEqual(s.currentAskFor(c));
+    });
+
+    it('answers the NEWEST row per child, the same precedence currentAskFor gives one child', () => {
+      const s = mk();
+      const first = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k1',
+        askAt: 1000, dialogId: 'd1', question: 'first?', options: ['a'], now: 1 });
+      s.takeAskForAnswer(first, 1000);
+      s.settleAsk(first, 'p', 'a', 2000);
+      const second = s.insertAsk({ childId: 'c', parentId: 'p', runId: null, askKey: 'k2',
+        askAt: 3000, dialogId: 'd2', question: 'second?', options: ['a'], now: 3 });
+      const out = s.currentAsksFor(['c']);
+      expect(out.get('c')!.id).toBe(second);
+      expect(out.get('c')!.question).toBe('second?');
+    });
+  });
 });

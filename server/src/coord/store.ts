@@ -3866,6 +3866,41 @@ export class CoordStore {
     return row === undefined ? null : this.hydrateAsk(row);
   }
 
+  /** `currentAskFor`'s BATCHED form (fix round 1, item 3 — coordinator
+   *  review): `assembleFleet` needs "the newest ask row per child" for the
+   *  WHOLE registry every tick, and a point lookup per child meant one
+   *  `db.prepare` + one indexed `.get` PER SESSION — ~20 statement
+   *  compilations every 2s tick alone, before the `/ws/fleet` connect,
+   *  `GET /api/fleet`, `GET /api/peers` and `POST /api/claims`-conflict
+   *  call sites that each assemble the fleet again. One query instead:
+   *  `MAX(id) … GROUP BY childId` names the newest id per matching child in
+   *  a single pass keyed on `asks_by_child` (the same index the singular
+   *  form already leans on), and the outer `WHERE id IN (…)` is a second,
+   *  primary-key lookup for the full rows — cheap, and it keeps this
+   *  method, like every other in this file, off `SELECT *`.
+   *
+   *  `placeholders` (D-1141, above) builds the `IN (...)` — never bare
+   *  string interpolation of `childIds` itself, so every value still
+   *  travels as a positional bind. Empty `childIds` short-circuits to an
+   *  empty map without preparing a statement at all: `assembleFleet` on a
+   *  registry with no rows (a fresh box) is the common case this guards,
+   *  and `placeholders(0)` would otherwise emit a syntactically invalid
+   *  `IN ()`. A child with no ask row at all is simply ABSENT from the
+   *  returned map — the caller's `.get(id) ?? null` fold, not a `null`
+   *  entry here. */
+  currentAsksFor(childIds: readonly string[]): Map<string, AskRow> {
+    const out = new Map<string, AskRow>();
+    if (childIds.length === 0) return out;
+    const ph = placeholders(childIds.length);
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE id IN (` +
+        `SELECT MAX(id) FROM asks WHERE childId IN (${ph}) GROUP BY childId` +
+      ')',
+    ).all(...childIds) as Parameters<CoordStore['hydrateAsk']>[0][];
+    for (const r of rows) out.set(r.childId, this.hydrateAsk(r));
+    return out;
+  }
+
   /** THE GUARD IS IN THE `WHERE` (the `endClaim` shape). Two predicates, and
    *  they are DIFFERENT refusals a caller acts on differently: `not-held`
    *  means another principal already took this row (D-2171); `ask-moved`
