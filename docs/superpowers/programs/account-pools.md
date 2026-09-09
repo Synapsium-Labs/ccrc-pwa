@@ -1411,3 +1411,58 @@ they own its semantics rather than me.
 D-TBD-mv-symlink-dir → D-TBD-doctor-models-timer. No numbers minted for the two TBDs: a `D-N` is DEFINED
 in a plan, and one written into this ledger without a plan definition raises `deviation-refs.test.ts`'s
 tree scan without raising its plan scan.
+
+## 2026-09-09 — the ccd queue gets a plan and a workspace, and memory follows the ACCOUNT
+
+**Operator ruling:** spawn a workspace for the two ccd queue items once #69 merges, and reconcile
+project memory across the fleet, consulting every running session first.
+
+### The ccd queue is now a plan, not two TBDs
+
+`docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`, defining
+**D-2187–D-2193** (minted in one call, floor 2194, defined in the same act). Part A is
+`_plat_mv_notdir`'s Darwin arm; Part B is `_check_services`' unit coverage. Base is `origin/main` AFTER
+#69 merges — neither part touches a file #69 touches, so they are independent of that merge, but one
+tree is one tree.
+
+The plan is deliberately shaped so the smaller half is not the easier half: **B2 comes before B1**,
+because adding `ccrc-models.timer` to `known` is a MEASURED no-op against the current suite (350 passed
+| 3 skipped, before and after), so the one-liner without its fixture is a request rather than a
+mechanism. `deviation-refs` caught the plan while it was untracked — the tree scan could not see the
+numbers the plan scan could, which is the publish-then-sweep discipline doing exactly its job.
+
+### Memory follows the ACCOUNT — and there are FIVE roots, not four
+
+Correcting my own entry from yesterday, which said four. `CLAUDE_CONFIG_DIR` is set **by the wrapper**,
+so the memory store is keyed on the ACCOUNT:
+
+    claude -> ~/.claude 30 | claude-corp -> ~/.claude-corp 15 | claude-dev0 -> ~/.claude-dev0 10
+    claude-expoai -> ~/.claude-expoai 7 | claude2 -> ~/.claude-personal 6
+
+The root I missed is `~/.claude-personal` — **the one this program's WORKER runs on.** An enumeration
+that looked exhaustive over the wrong set, again, and this time I had already written the lesson down.
+
+59 distinct filenames. **54 exist in exactly one root**; only 3 names diverge in content (`MEMORY.md`,
+which is a per-root index and is supposed to; `account-pools-program.md`, three versions;
+`graph-sweep-exit-code-is-a-claim.md`, two). So the problem was never "the stores disagree" — they
+barely overlap enough to disagree. It is that 54 facts are each invisible to four fifths of the fleet.
+
+Two facts that sharpen it:
+
+- **`account-pools-program.md` exists in `.claude`, `.claude-corp` and `.claude-dev0` — and in neither
+  root this program actually runs on.** Neither its coordinator nor its worker can read the memory file
+  about their own program. That is the whole explanation for the "invented rule" incident.
+- **The two largest stores belong to accounts with no running `ccrc-pwa` session.** `~/.claude` (30) and
+  `~/.claude-corp` (15) are reachable only by `soft-harbor` and `calm-mesa`, both stopped. Most of this
+  project's accumulated memory is invisible to every live session right now.
+
+**And the structural one, which this program owns: auto-swap moves a session between accounts, so it
+moves the session between memory stores.** A rescued session silently changes which project memory it
+can see. Nothing shipped is at fault — it falls out of memory being keyed on the config dir — but
+"write it to memory so the next session sees it" has never been true across a swap, and this program's
+entire purpose is moving sessions between accounts.
+
+Method: all five stores backed up first; consult mailed to all five running `ccrc-pwa` sessions asking
+whether any file of theirs is wrong, whether they are writing memory now, and whether they object;
+**union, never overwrite**; a memory measurement has since falsified is DROPPED rather than copied into
+five places; the three divergent files merged on content with every drop evidenced.
