@@ -5,15 +5,16 @@ operator 2026-09-08; inherits every 2026-08-11 ruling from `2026-08-11-crossrepo
 Plan: three wave plans, written before the program opened —
 `docs/superpowers/plans/2026-09-08-crossrepo-wave{1-server,2-skills-pwa,3-docs-flip}.md`
 Workspace: worker workspace spawned by wave 1's dispatch (recorded in the Waves table once it exists)
-Coordinator: operator-designated at open (ruled 2026-09-09, the clean path): a FRESH main-checkout session
-of ccrc-pwa started from the run board's Start Program door, which queues the standing kickoff
-(`programKickoff`, `shared/api.ts`) that invokes the `ccrc-coordinator` skill — the operator types no skill.
-Opened only AFTER account-pools has closed: the sheet refuses a project with an open run, and the refusal
-is real — coordinator-role mail carrying no `runId` resolves to the single active programme FLEET-wide
-(`coord/routes.ts`, the mail ingress's role resolution), so two open programmes make every such mail
-`unknown-recipient`. The operator stops the live main checkout of ccrc-pwa first (the sheet starts a main
-checkout and refuses while one is alive). NOT the account-pools coordinator, which owns a live program of
-its own.
+Coordinator: `claude-ccrc-pwa`, the live main checkout of ccrc-pwa — designated by the operator's "start
+program" at 13:34 UTC 2026-09-09. This line earlier said a FRESH main checkout opened only after
+account-pools had closed; the operator chose not to wait, and this session is what the run board's Start
+door would have spawned. Measured at open: account-pools (run 35, wave 4/6, this project) and a second
+programme in another project (run 31) were BOTH active, so `resolveCoordinator(null)` — fleet-wide,
+`SELECT slug FROM programs WHERE state = 'active'`, `active.length !== 1 → null` (`server/src/coord/store.ts`)
+— already answered `unknown-recipient` to every runId-less coordinator mail before this programme opened.
+Opening a third changes nothing; every mail in this programme names its `runId`. The coordinator carries no
+hold (`ccd ws-hold` refuses a main checkout); `GET /api/runs` is the resume point, and the id survives an
+account swap. NOT the account-pools coordinator, which owns a live programme of its own.
 
 The spec, the three plans and this ledger merge to `main` BEFORE wave 1 is dispatched, so every worker
 workspace is cut with its requirements in the tree. This ledger moves on the coordinator's branch (pushed
@@ -46,6 +47,11 @@ acceptance list, verbatim.
 
 ## Decisions & deviations
 
+- **Opened without waiting for account-pools (2026-09-09, operator):** the run board's Start door refuses a
+  project with an open run, and its copy names the single-active-programme fallback as the reason. Measured
+  before opening: that fallback is fleet-wide and was already ambiguous with two live programmes, so the
+  refusal guarded nothing here. The one cost that is real — two live workspaces, two concurrency slots, two
+  of the daily budget — is the caps', and the dispatch route measures it.
 - **Order (2026-09-08, operator):** of the three genuinely open roadmap items (Build 5 remnants, the
   review-notes → prompt loop, cross-repo programmes) this one is built first — the spec and rulings
   existed, and the four seams re-measured today were open exactly as the Aug draft described them.
